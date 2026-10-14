@@ -135,6 +135,7 @@ async fn service_action(
         "start" => tokio::task::spawn_blocking(move || sup.start(&name)).await,
         "stop" => tokio::task::spawn_blocking(move || sup.stop(&name)).await,
         "restart" => tokio::task::spawn_blocking(move || sup.restart(&name)).await,
+        "promote" => tokio::task::spawn_blocking(move || sup.promote(&name)).await,
         _ => return err(StatusCode::NOT_FOUND, format!("unknown action `{action}`")),
     };
     match result {

@@ -69,6 +69,25 @@ pub struct Supervisor {
     /// Runs the proxies (ADR-0010).
     rt: tokio::runtime::Handle,
     proxies: Mutex<BTreeMap<String, Proxy>>,
+    /// Changes seen by the watcher, per service, not yet in a candidate.
+    changes: Mutex<BTreeMap<String, Changes>>,
+    /// Built candidates waiting for `promote` (ADR-0013), per service.
+    held: Mutex<BTreeMap<String, (String, PathBuf)>>,
+    /// Debounced restarts (dev servers, containers): last change, worker running.
+    quiet: Mutex<BTreeMap<String, (Instant, bool)>>,
+}
+
+/// What the watcher saw for one service since its last candidate.
+#[derive(Default)]
+struct Changes {
+    paths: BTreeSet<String>,
+    last: Option<Instant>,
+    /// Bumped by every change; a build of an older epoch is superseded.
+    epoch: u64,
+    /// A pipeline thread runs for the service.
+    worker: bool,
+    /// The epoch a manual restart covered: changes up to it need no candidate.
+    absorbed: u64,
 }
 
 impl Supervisor {
@@ -142,6 +161,9 @@ impl Supervisor {
             events,
             rt,
             proxies: Mutex::new(BTreeMap::new()),
+            changes: Mutex::new(BTreeMap::new()),
+            held: Mutex::new(BTreeMap::new()),
+            quiet: Mutex::new(BTreeMap::new()),
         }))
     }
 
@@ -568,7 +590,7 @@ impl Supervisor {
     fn start_locked(self: &Arc<Self>, name: &str, svc: &Service) -> Result<(), String> {
         // 1. Build into an artifact (services and jobs with `build`).
         let artifact = if svc.build.is_some() {
-            Some(self.build_locked(name, svc)?)
+            Some(self.build_locked(name, svc, &|| false)?)
         } else {
             None
         };
@@ -735,24 +757,45 @@ impl Supervisor {
     }
 
     /// Sync the main lane and build `name` unless its artifact exists.
-    fn build_locked(&self, name: &str, svc: &Service) -> Result<(String, PathBuf), String> {
-        self.set_status(name, Status::Building { build_id: None });
+    fn build_locked(
+        &self,
+        name: &str,
+        svc: &Service,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<(String, PathBuf), String> {
+        // While an instance serves, the build is the candidate's business: the
+        // service itself stays "healthy", it still answers (ADR-0003).
+        let serving = self.slots.lock().unwrap()[name].main.is_some();
+        let building = |id: Option<String>| {
+            if serving {
+                self.set_candidate(name, Some(Candidate::new("building", id, None)));
+            } else {
+                self.set_status(name, Status::Building { build_id: id });
+            }
+        };
+        building(None);
         let mut snap = self.snapshot.lock().unwrap();
         snap.sync().map_err(|e| e.to_string())?;
         let id = build_id(&snap.manifest, svc).map_err(|e| e.to_string())?;
         if self.builder.artifact(name, &id).is_none() {
-            self.set_status(
-                name,
-                Status::Building {
-                    build_id: Some(id.clone()),
-                },
-            );
+            building(Some(id.clone()));
             let mut running = self
                 .builder
                 .start("main", &snap, name, svc)
                 .map_err(|e| e.to_string())?;
             drop(snap); // other services may sync while this one builds
-            match self.builder.wait(&mut running).map_err(|e| e.to_string())? {
+            // A newer change supersedes the build: kill it (ADR-0003, spike b).
+            let outcome = loop {
+                if let Some(o) = self.builder.poll(&mut running).map_err(|e| e.to_string())? {
+                    break o;
+                }
+                if cancel() {
+                    self.builder.cancel(&mut running);
+                    return Err(SUPERSEDED.into());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            };
+            match outcome {
                 Outcome::Published { .. } => {}
                 Outcome::Failed { exit_code, log, .. } => {
                     // Point compiler messages at the repository, not at the
@@ -955,11 +998,12 @@ impl Supervisor {
     /// over without dropping a request; otherwise a restart in place.
     pub fn restart(self: &Arc<Self>, name: &str) -> Result<(), String> {
         let svc = self.service(name)?.clone();
+        self.absorb(name);
         let mut artifact = None;
         if svc.build.is_some() {
             let _op = self.op_locks[name].lock().unwrap();
             let before = self.slots.lock().unwrap()[name].view.status.clone();
-            match self.build_locked(name, &svc) {
+            match self.build_locked(name, &svc, &|| false) {
                 Ok(a) => artifact = Some(a),
                 Err(e) => {
                     // Back to what is actually running; the error goes to the caller.
@@ -996,6 +1040,7 @@ The running instance was left as it was."
         if svc.proxied() && running {
             return self.replace(name, &svc, artifact);
         }
+        self.set_candidate(name, None);
         self.stop(name)?;
         self.start(name)
     }
@@ -1134,6 +1179,294 @@ The running instance was left as it was."
         Err(reason)
     }
 
+    // ------------------------------------------- candidate pipeline (ADR-0003)
+
+    /// The watcher saw `path` change, and `name` watches it. Debounced: a
+    /// pipeline thread builds a candidate once the tree has been quiet for a
+    /// moment; a newer change kills a build in progress and starts over.
+    pub fn changed(self: &Arc<Self>, name: &str, path: &str) {
+        let spawn = {
+            let mut changes = self.changes.lock().unwrap();
+            let c = changes.entry(name.to_string()).or_default();
+            c.paths.insert(path.to_string());
+            c.last = Some(Instant::now());
+            c.epoch += 1;
+            !std::mem::replace(&mut c.worker, true)
+        };
+        let (serving, state) = {
+            let slots = self.slots.lock().unwrap();
+            let v = &slots[name].view;
+            (
+                slots[name].main.is_some(),
+                v.candidate.as_ref().map(|c| c.state.clone()),
+            )
+        };
+        // A starting or switching candidate finishes first; the change follows.
+        if serving && !matches!(state.as_deref(), Some("starting" | "switching")) {
+            self.set_candidate(
+                name,
+                Some(Candidate::new("changed", None, Some(path.into()))),
+            );
+            if let Some(p) = self.proxy(name) {
+                p.set_pending(Some("change detected".into()));
+            }
+        }
+        if spawn {
+            let (me, n) = (Arc::clone(self), name.to_string());
+            let _ = std::thread::Builder::new()
+                .name(format!("pipeline-{n}"))
+                .spawn(move || me.pipeline(&n));
+        }
+    }
+
+    fn pipeline(self: &Arc<Self>, name: &str) {
+        loop {
+            let (paths, epoch) = loop {
+                {
+                    let mut changes = self.changes.lock().unwrap();
+                    let c = changes.get_mut(name).expect("changed() created it");
+                    if c.last.is_some_and(|t| t.elapsed() >= DEBOUNCE) {
+                        if c.absorbed >= c.epoch {
+                            // A manual restart already took these changes in.
+                            c.paths.clear();
+                            c.worker = false;
+                            c.last = None;
+                            drop(changes);
+                            self.clear_changed(name);
+                            return;
+                        }
+                        break (std::mem::take(&mut c.paths), c.epoch);
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            };
+            let superseded = self.candidate_from(name, &paths, epoch);
+            let mut changes = self.changes.lock().unwrap();
+            let c = changes.get_mut(name).expect("changed() created it");
+            if superseded {
+                c.paths.extend(paths); // the next candidate covers them too
+            }
+            if c.epoch == epoch {
+                c.worker = false;
+                c.last = None;
+                return;
+            }
+        }
+    }
+
+    /// Build a candidate from the current tree and promote it unless a gate
+    /// holds it. Returns true if a newer change superseded the build.
+    fn candidate_from(self: &Arc<Self>, name: &str, paths: &BTreeSet<String>, epoch: u64) -> bool {
+        let Ok(svc) = self.service(name).cloned() else {
+            return false;
+        };
+        let clear = || {
+            self.set_candidate(name, None);
+            if let Some(p) = self.proxy(name) {
+                p.set_pending(None);
+            }
+        };
+        // Nothing runs: nothing to replace. The next start builds anyway.
+        if self.slots.lock().unwrap()[name].main.is_none() {
+            clear();
+            return false;
+        }
+        let newer = || {
+            self.changes
+                .lock()
+                .unwrap()
+                .get(name)
+                .is_some_and(|c| c.epoch != epoch)
+        };
+        if let Some(p) = self.proxy(name) {
+            p.set_pending(Some("building".into()));
+        }
+        let artifact = {
+            let _op = self.op_locks[name].lock().unwrap();
+            match self.build_locked(name, &svc, &newer) {
+                Ok(a) => a,
+                Err(e) if e == SUPERSEDED => {
+                    self.set_candidate(name, Some(Candidate::new("superseded", None, None)));
+                    return true;
+                }
+                Err(e) => {
+                    self.set_candidate(
+                        name,
+                        Some(Candidate::new("failed", None, Some(first_lines(&e, 8)))),
+                    );
+                    if let Some(p) = self.proxy(name) {
+                        p.set_pending(Some("failed".into()));
+                    }
+                    return false;
+                }
+            }
+        };
+        // A manual restart came in meanwhile and covers this change.
+        if self
+            .changes
+            .lock()
+            .unwrap()
+            .get(name)
+            .is_some_and(|c| c.absorbed >= epoch)
+        {
+            clear();
+            return false;
+        }
+        // The change did not touch the service's inputs after all.
+        if self.slots.lock().unwrap()[name].view.build_id.as_deref() == Some(artifact.0.as_str()) {
+            clear();
+            return false;
+        }
+        if let Some(reason) = hold_reason(&svc, paths) {
+            self.held
+                .lock()
+                .unwrap()
+                .insert(name.into(), artifact.clone());
+            self.set_candidate(
+                name,
+                Some(Candidate::new(
+                    "held",
+                    Some(artifact.0.clone()),
+                    Some(format!("{reason}; `devstack promote {name}` takes it over")),
+                )),
+            );
+            if let Some(p) = self.proxy(name) {
+                p.set_pending(Some(format!("held {}", artifact.0)));
+            }
+            return false;
+        }
+        if let Err(e) = self.take_over(name, &svc, artifact) {
+            // replace() has set the candidate to failed already where it applies.
+            let already = self.slots.lock().unwrap()[name]
+                .view
+                .candidate
+                .as_ref()
+                .is_some_and(|c| c.state == "failed");
+            if !already {
+                self.set_candidate(
+                    name,
+                    Some(Candidate::new("failed", None, Some(first_lines(&e, 8)))),
+                );
+            }
+        }
+        false
+    }
+
+    /// Run the jobs `svc` comes after (a schema migrator), then put the
+    /// artifact into the main slot: through a candidate behind the proxy, or by
+    /// a restart in place.
+    fn take_over(
+        self: &Arc<Self>,
+        name: &str,
+        svc: &Service,
+        artifact: (String, PathBuf),
+    ) -> Result<(), String> {
+        for dep in &svc.after {
+            if self
+                .stack
+                .services
+                .get(dep)
+                .is_some_and(|d| d.kind == Kind::Job)
+            {
+                self.restart(dep).map_err(|e| {
+                    format!("`{dep}` failed:\n{e}\nThe running instance was left as it was.")
+                })?;
+            }
+        }
+        if svc.proxied() && self.slots.lock().unwrap()[name].main.is_some() {
+            return self.replace(name, svc, Some(artifact));
+        }
+        self.set_candidate(name, None);
+        self.stop(name)?;
+        self.start(name)
+    }
+
+    /// Run `action` once the changes for `key` have been quiet for a moment.
+    pub(crate) fn debounce(
+        self: &Arc<Self>,
+        key: String,
+        action: impl FnOnce(&Arc<Self>) + Send + 'static,
+    ) {
+        let spawn = {
+            let mut q = self.quiet.lock().unwrap();
+            let e = q.entry(key.clone()).or_insert((Instant::now(), false));
+            e.0 = Instant::now();
+            !std::mem::replace(&mut e.1, true)
+        };
+        if !spawn {
+            return; // the running worker sees the new time and waits longer
+        }
+        let me = Arc::clone(self);
+        let _ = std::thread::Builder::new()
+            .name(format!("debounce-{key}"))
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(Duration::from_millis(200));
+                    let mut q = me.quiet.lock().unwrap();
+                    let e = q.get_mut(&key).expect("inserted above");
+                    if e.0.elapsed() >= DEBOUNCE {
+                        e.1 = false;
+                        break;
+                    }
+                }
+                action(&me);
+            });
+    }
+
+    pub(crate) fn service_running(&self, name: &str) -> bool {
+        self.slots
+            .lock()
+            .unwrap()
+            .get(name)
+            .is_some_and(|s| s.main.is_some())
+    }
+
+    /// `restart_on` of a Compose service: restart the container.
+    pub(crate) fn restart_container(&self, group: &str, service: &str) {
+        let message = match self.docker.restart(&self.compose_group(group), service) {
+            Ok(()) => format!("{service}: restarted after a change"),
+            Err(e) => format!("{service}: restart after a change failed: {e}"),
+        };
+        self.emit(EventBody::Infra {
+            group: group.into(),
+            message,
+        });
+        self.refresh_containers();
+    }
+
+    /// A manual restart takes in every change seen so far: the watcher does
+    /// not build them again.
+    fn absorb(&self, name: &str) {
+        if let Some(c) = self.changes.lock().unwrap().get_mut(name) {
+            c.paths.clear();
+            c.absorbed = c.epoch;
+        }
+    }
+
+    /// Drop a "changed" marker that no candidate will follow.
+    fn clear_changed(&self, name: &str) {
+        let changed = self.slots.lock().unwrap()[name]
+            .view
+            .candidate
+            .as_ref()
+            .is_some_and(|c| c.state == "changed");
+        if changed {
+            self.set_candidate(name, None);
+            if let Some(p) = self.proxy(name) {
+                p.set_pending(None);
+            }
+        }
+    }
+
+    /// Take over a candidate that a promotion gate holds (ADR-0013).
+    pub fn promote(self: &Arc<Self>, name: &str) -> Result<(), String> {
+        let svc = self.service(name)?.clone();
+        let Some(artifact) = self.held.lock().unwrap().remove(name) else {
+            return Err(format!("no candidate of `{name}` waits for promotion"));
+        };
+        self.take_over(name, &svc, artifact)
+    }
+
     /// Start what `svc` comes after and is not ready yet (services, jobs that
     /// have not completed). Compose services are the infra plane's job (`up`).
     fn ensure_after(self: &Arc<Self>, svc: &Service) -> Result<(), String> {
@@ -1156,6 +1489,30 @@ The running instance was left as it was."
         }
         Ok(())
     }
+}
+
+/// The error text of a build killed for a newer change.
+pub(crate) const SUPERSEDED: &str = "superseded by a newer change";
+
+/// Quiet period after the last change before a candidate is built (plan §3.2).
+const DEBOUNCE: Duration = Duration::from_secs(2);
+
+/// Why a built candidate waits for `promote` (ADR-0013): auto-promotion is
+/// off, or the change touched paths the service declares as schema inputs.
+fn hold_reason(svc: &Service, paths: &BTreeSet<String>) -> Option<String> {
+    let p = svc.promote.as_ref()?;
+    if !p.auto {
+        return Some("auto-promotion is off".into());
+    }
+    let set = devstack_build::watch_set(&p.hold_if_changed)
+        .ok()
+        .flatten()?;
+    let hit: Vec<&str> = paths
+        .iter()
+        .filter(|x| set.is_match(x.as_str()))
+        .map(String::as_str)
+        .collect();
+    (!hit.is_empty()).then(|| format!("changes schema inputs ({})", hit.join(", ")))
 }
 
 /// A free local port for an instance behind the proxy.

@@ -20,7 +20,11 @@ services built from the working tree, plus the infrastructure from the project's
 files. Start with `status`. `restart_service` rebuilds the service from the current files and \
 replaces the running instance only if the build succeeds; compiler errors come back in the \
 result, and the old instance keeps running. `logs` shows a service's console output. \
-Commands (`run_command`) are scripts the stack file declares, such as a database reset; \
+Changes to watched files are built and swapped in by devstack itself: after an edit, `status` \
+shows `not yet active: building | starting | failed | held` until the change runs, and the \
+old build answers meanwhile; do not test the change before that line is gone. A `held` \
+candidate (a schema change) needs the user's go-ahead before `promote_service`. Commands \
+(`run_command`) are scripts the stack file declares, such as a database reset; \
 some ask for confirmation, which must come from the user.";
 
 type Out = Arc<Mutex<std::io::Stdout>>;
@@ -182,6 +186,13 @@ pub fn tools() -> Vec<Value> {
             false,
         ),
         tool(
+            "promote_service",
+            "Take over a candidate that waits for promotion, e.g. because it changes the database schema: runs the jobs the service comes after (a migrator), then switches. Ask the user first; `status` shows what waits and why. POST /v1/services/{service}/promote.",
+            service.clone(),
+            &["service"],
+            false,
+        ),
+        tool(
             "logs",
             "Console output of the service's current instance. GET /v1/services/{service}/logs.",
             json!({
@@ -270,7 +281,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 "services stopped; infrastructure keeps running".into()
             })
         }
-        "start_service" | "stop_service" | "restart_service" => {
+        "start_service" | "stop_service" | "restart_service" | "promote_service" => {
             let action = name.trim_end_matches("_service");
             let svc = name_arg(args, "service")?;
             let (status, body) =

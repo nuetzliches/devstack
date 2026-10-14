@@ -10,6 +10,7 @@ pub mod state;
 pub mod supervisor;
 pub mod token;
 pub mod usage;
+pub mod watch;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -59,7 +60,20 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     // One spelling of the repository everywhere (compiler messages use the long one).
     let repo = devstack_proc::long_path(&repo);
     let state_dir = repo.join(".devstack");
-    let _lock = devstack_proc::StateLock::acquire(&state_dir).map_err(|e| e.to_string())?;
+    // A previous instance that just died may still be closing its handles (a
+    // process killed hard is torn down asynchronously): wait a moment for it.
+    let t0 = std::time::Instant::now();
+    let _lock = loop {
+        match devstack_proc::StateLock::acquire(&state_dir) {
+            Ok(l) => break l,
+            Err(devstack_proc::LockError::Held(_))
+                if t0.elapsed() < std::time::Duration::from_secs(5) =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    };
     devstack_proc::ensure_console().map_err(|e| e.to_string())?;
     let token = token::load_or_create().map_err(|e| format!("token: {e}"))?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -77,6 +91,8 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     )?;
     sup.refresh_infra();
     let usage = usage::Sampler::start(sup.clone());
+    // Kept for the daemon's lifetime; changes become candidates (ADR-0003).
+    let _watcher = watch::start(sup.clone());
 
     rt.block_on(async move {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))

@@ -116,7 +116,8 @@ pub fn build_id(manifest: &Manifest, svc: &Service) -> Result<String> {
     Ok(h.finalize().to_hex()[..16].to_string())
 }
 
-fn watch_set(patterns: &[String]) -> Result<Option<globset::GlobSet>> {
+/// The `watch` patterns as a glob set (`None`: no patterns).
+pub fn watch_set(patterns: &[String]) -> Result<Option<globset::GlobSet>> {
     if patterns.is_empty() {
         return Ok(None);
     }

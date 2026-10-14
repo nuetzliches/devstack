@@ -82,6 +82,7 @@ port = {port}
 health = {{ http = "/health", timeout = "90s" }}
 env = {{ ASPNETCORE_URLS = "http://127.0.0.1:{{port}}" }}
 workers = {{ env = {{ Jobs__Enabled = "{{is_main}}" }} }}
+promote = {{ hold_if_changed = ["src/Api/Schema/**"] }}
 after = ["prep"]
 
 # A job before the API, like a schema migrator: it must end as `completed`.
@@ -698,7 +699,14 @@ fn lifecycle(with_compose: bool) {
 
     // up again: same artifact, no build (ADR-0016).
     let artifacts = s.artifacts();
-    s.cli(&["up"], None); // `broken` fails again
+    let up = s.cli(&["up"], None); // `broken` fails again
+    assert!(
+        s.api("/info").is_some(),
+        "api not back after up:\n{}{}\n{}",
+        String::from_utf8_lossy(&up.stdout),
+        String::from_utf8_lossy(&up.stderr),
+        s.diag()
+    );
     assert_eq!(s.info()["build"], second_build.as_str());
     assert_eq!(s.artifacts(), artifacts, "no new build after a restart");
 
@@ -765,4 +773,109 @@ fn mcp_without_a_daemon() {
     let bad = m.request("no/such", serde_json::json!({}));
     assert_eq!(bad["error"]["code"], -32601, "{bad}");
     m.close();
+}
+
+/// Phase 2 (ADR-0003, ADR-0010, ADR-0013): saved edits become candidates on
+/// their own and are swapped in behind the proxy, without a single `restart`.
+#[test]
+fn edits_become_candidates() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1 (needs the .NET 10 SDK)");
+        return;
+    }
+    let s = Stack::new(false);
+    s.cli(&["up"], None); // `broken` fails, the API runs
+    let program = s.dir.path().join("src/Api/Program.cs");
+    let source = std::fs::read_to_string(&program).unwrap();
+    let build = || s.info()["build"].as_str().unwrap().to_string();
+    let candidate = || s.service_view("api")["candidate"].clone();
+    let wait = |what: &str, cond: &dyn Fn() -> bool| {
+        assert!(
+            wait_for(cond, Duration::from_secs(120)),
+            "{what}\ncandidate: {}\n{}",
+            candidate(),
+            s.diag()
+        );
+    };
+
+    // 1. A saved edit goes live, no request fails meanwhile.
+    let b0 = build();
+    let artifacts = s.artifacts();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let poller = {
+        let (stop, port) = (stop.clone(), s.port);
+        std::thread::spawn(move || {
+            let agent = ureq::Agent::config_builder()
+                .timeout_global(Some(Duration::from_secs(5)))
+                .http_status_as_error(false)
+                .build()
+                .new_agent();
+            let mut failed = Vec::new();
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                match agent.get(&format!("http://127.0.0.1:{port}/health")).call() {
+                    Ok(r) if r.status() == 200 => {}
+                    Ok(r) => failed.push(r.status().to_string()),
+                    Err(e) => failed.push(e.to_string()),
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            failed
+        })
+    };
+    std::fs::write(&program, format!("{source}\n// edit 1\n")).unwrap();
+    wait("the edit goes live", &|| {
+        build() != b0 && candidate().is_null()
+    });
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    let failed = poller.join().unwrap();
+    assert!(
+        failed.is_empty(),
+        "requests failed during the swap: {failed:?}"
+    );
+    assert_eq!(s.artifacts(), artifacts + 1);
+    assert_eq!(s.info()["workers"], true, "workers on after the relay");
+
+    // 2. A change during the build supersedes it: only the latest is published.
+    let b1 = build();
+    let artifacts = s.artifacts();
+    std::fs::write(&program, format!("{source}\n// edit 2\n")).unwrap();
+    wait("a build starts", &|| candidate()["state"] == "building");
+    std::fs::write(&program, format!("{source}\n// edit 3\n")).unwrap();
+    wait("the latest edit goes live", &|| {
+        build() != b1 && candidate().is_null()
+    });
+    assert_eq!(
+        s.artifacts(),
+        artifacts + 1,
+        "the superseded build published nothing"
+    );
+
+    // 3. A broken edit never replaces main; it shows as a failed candidate.
+    let b2 = build();
+    std::fs::write(&program, format!("{source}\nthis is not C#\n")).unwrap();
+    wait("the broken edit fails", &|| {
+        candidate()["state"] == "failed"
+    });
+    assert_eq!(build(), b2, "main keeps running");
+    let reason = candidate()["reason"].as_str().unwrap_or("").to_string();
+    assert!(reason.contains("Program.cs"), "{reason}");
+    std::fs::write(&program, format!("{source}\n// edit 4\n")).unwrap();
+    wait("the fix goes live", &|| {
+        build() != b2 && candidate().is_null()
+    });
+
+    // 4. A schema change waits for an explicit promote (ADR-0013).
+    let b3 = build();
+    let schema = s.dir.path().join("src/Api/Schema");
+    std::fs::create_dir_all(&schema).unwrap();
+    std::fs::write(schema.join("v2.txt"), "a new table").unwrap();
+    wait("the schema change is held", &|| {
+        candidate()["state"] == "held"
+    });
+    assert_eq!(build(), b3, "held: main unchanged");
+    s.ok(&["promote", "api"]);
+    assert_ne!(build(), b3, "promoted");
+    assert!(candidate().is_null());
+
+    s.ok(&["down"]);
 }

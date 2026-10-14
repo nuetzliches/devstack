@@ -54,6 +54,10 @@ enum Cmd {
     Restart {
         service: String,
     },
+    /// Take over a candidate that waits for promotion (a schema change, ADR-0013).
+    Promote {
+        service: String,
+    },
     /// Console output of a service.
     Logs {
         service: String,
@@ -200,6 +204,7 @@ fn main() -> Result<()> {
         Cmd::Start { service } => client::service_action(&cli.file, &service, "start"),
         Cmd::Stop { service } => client::service_action(&cli.file, &service, "stop"),
         Cmd::Restart { service } => client::service_action(&cli.file, &service, "restart"),
+        Cmd::Promote { service } => client::service_action(&cli.file, &service, "promote"),
         Cmd::Logs {
             service,
             tail,
