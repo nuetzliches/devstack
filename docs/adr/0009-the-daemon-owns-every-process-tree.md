@@ -23,7 +23,15 @@ container that guarantees termination of the whole tree:
   daemon holds the handle, so the tree dies with the daemon even if the daemon
   crashes. Each service gets its own console process group so a Ctrl+C/Ctrl+Break
   can be delivered to it without touching others.
+  The guarantee holds only if (1) the job handle is **never inheritable**, since a
+  child holding a copy keeps the job open and nothing is killed, and (2)
+  **breakaway is not allowed** (`JOB_OBJECT_LIMIT_BREAKAWAY_OK` unset), so no
+  process can leave the job with `CREATE_BREAKAWAY_FROM_JOB`.
 - **Unix:** a process group (and, on Linux, `PR_SET_PDEATHSIG` for the leader).
+  This covers only the direct child: grandchildren (`dotnet run` → app,
+  `npm` → `node`) survive a daemon crash. Linux therefore uses a cgroup v2 per
+  service where delegation is available, and the restart cleanup of
+  [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md) otherwise.
 
 Stopping is two-stage: graceful signal, wait up to a per-service timeout
 (default 20 s), then terminate the job/group. Services are started from their

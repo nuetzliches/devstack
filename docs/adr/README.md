@@ -52,3 +52,4 @@ before code exists it names where it *will* live.
 | [0013](0013-schema-changes-hold-promotion.md) | A build that changes schema inputs is not promoted automatically | Proposed |
 | [0014](0014-native-services-take-their-configuration-from-compose.md) | Native services take their configuration from the Compose service they replace | Proposed |
 | [0015](0015-devstack-is-optional.md) | devstack accelerates a stack, it is never required to run one | Proposed |
+| [0016](0016-a-daemon-restart-is-a-clean-restart.md) | A daemon restart is a clean restart from the last promoted artifacts | Proposed |

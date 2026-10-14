@@ -153,6 +153,16 @@ shared between lanes at all is open and not built in the first phases
 non-main lane runs its candidates **without workers** and therefore never talks
 to coordinators that dispatch work (schedulers, pull queues).
 
+### 3.6 Daemon crash, restart and update
+
+The daemon takes the whole application plane down with it and never re-attaches
+([ADR-0016](adr/0016-a-daemon-restart-is-a-clean-restart.md)). A restart takes
+the OS lock on the state directory, removes what a previous instance may have
+left (Linux process groups / cgroups, incomplete builds), checks the Compose
+groups without restarting them, and starts every service from the artifact that
+was last promoted to main, without building. An update is the same path after a
+graceful stop.
+
 ## 4. Stack file (sketch, not final)
 
 Format and name are not decided (open question O-1). Illustration only:
@@ -256,11 +266,29 @@ downstream stack.
 
 | Phase | Content | Exit criterion |
 |---|---|---|
-| **0: Spikes** | (a) Windows Job Objects + graceful stop from Rust, incl. `dotnet` and `node` trees; (b) cancelling an MSBuild tree mid-build and resuming incrementally; (c) snapshot sync cost for the reference tree; (d) platform benchmark for [ADR-0011](adr/0011-platform-windows-native-first.md) | Each spike answers its question with numbers, recorded in the relevant ADR |
+| **0: Spikes** | (a) process ownership, see §7.1; (b) cancelling an MSBuild tree mid-build and resuming incrementally; (c) snapshot sync cost for the reference tree; (d) platform benchmark for [ADR-0011](adr/0011-platform-windows-native-first.md) | Each spike answers its question with numbers, recorded in the relevant ADR |
 | **1: Run plane + CLI** | Stack file, compose driver, `devstack check`, `devstack env --export`, port preflight, artifact builds on demand (`devstack build api`), main slot, jobs, health, logs, job-object ownership, build-id env, CLI, MCP | Reference stack runs end to end without the previous orchestrator; no file-lock failure possible by construction |
 | **2: Candidate pipeline** | Watch, debounce, supersede/cancel, candidates without workers, promotion gate, rollback, SSE events, first dashboard | A broken edit never replaces main; three concurrent writers produce at most one running build per service |
 | **3: Lanes** | Worktree lanes, per-lane resources, `promote --lane`, static frontend artifacts for e2e | Two worktrees run side by side without touching each other's database or the main slot |
 | **4: Adoption** | Migrate the downstream stack, delete its old orchestrator, publish | Downstream runbook shrinks to the stack file and a page of notes |
+
+### 7.1 Spike (a): process ownership
+
+A small Rust program (not yet the daemon) that starts process trees the way the
+daemon will and answers, on Windows and Linux/WSL:
+
+| # | Test | Pass when |
+|---|---|---|
+| a1 | Start `dotnet run` (app with a background worker) and `npm run …` (node under npm under a shell) in a Job Object / process group | Both trees are listed as one unit per service |
+| a2 | Graceful stop: deliver Ctrl+C to one service's console group only | That service runs its shutdown handlers (marker written on stop); the other service keeps running |
+| a3 | A process that ignores Ctrl+C | Terminated after the timeout, whole tree gone |
+| a4 | Kill the spike program hard (`taskkill /F`, `kill -9`) | **No** process of either tree survives (Windows by kernel; Linux after the restart cleanup) |
+| a5 | A child inherits handles (e.g. a shell that spawns further shells) | The job still closes on a4: the job handle is not inheritable |
+| a6 | A child requests breakaway (`CREATE_BREAKAWAY_FROM_JOB`) | Refused; the child stays in the job |
+| a7 | Tools that create their own job objects inside ours (test runner, `dotnet watch`) | Nested jobs work; a4 still holds |
+| a8 | Restart after a4: lock file reacquired, Linux cleanup by cgroup and by recorded process group + start time | No stale lock; only recorded processes are killed (a decoy process with a reused PID survives) |
+
+Results go into ADR-0009 and ADR-0016.
 
 ## 8. Open questions
 

@@ -19,7 +19,10 @@ devstack builds every application service from a **snapshot** of the lane's
 source (`.devstack/lanes/<lane>/src`) into an **artifact directory** named by the
 input hash (`.devstack/artifacts/<service>/<build-id>/`). Processes are started
 only from artifact directories, which are never written again after the build
-succeeds. The build id is passed to the process (`DEVSTACK_BUILD_ID`) and shown
+succeeds. A build writes into a temporary directory that is renamed to its
+final name only on success, so an artifact directory is either complete or
+absent, also after a crash ([ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md)).
+The build id is passed to the process (`DEVSTACK_BUILD_ID`) and shown
 by every client.
 
 The snapshot copies changed files only and stamps copied files with the current
