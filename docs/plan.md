@@ -213,6 +213,7 @@ Format: TOML, `devstack.toml` in the repository root, no profiles in version 1
 |---|---|---|
 | `version` | integer | Schema version, `1` |
 | `stack.name` | string | Display name; prefix for daemon state |
+| `stack.requires` | string | Oldest devstack that can run the file (`"0.1.0"`); checked before the strict parse, so an old devstack asks to be updated |
 | `stack.env_files` | list | Env files `${VAR}` resolves against in every service and command; a service's Compose group files and the process environment win ([ADR-0014](adr/0014-native-services-take-their-configuration-from-compose.md), acceptance finding) |
 | `compose.<group>` | table | A Compose project (ADR-0004) |
 | `services.<name>` | table | A native process managed by devstack |

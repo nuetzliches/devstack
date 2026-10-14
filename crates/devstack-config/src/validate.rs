@@ -107,6 +107,14 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
     if stack.stack.name.trim().is_empty() {
         c.err("stack.name", "must not be empty");
     }
+    if let Some(r) = &stack.stack.requires
+        && crate::version_triple(r).is_none()
+    {
+        c.err(
+            "stack.requires",
+            format!("`{r}` is not a version like `0.1.0`"),
+        );
+    }
 
     // ---------------------------------------------------------- compose groups
     let mut projects = BTreeMap::new();

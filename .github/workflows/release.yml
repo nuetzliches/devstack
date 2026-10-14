@@ -1,0 +1,82 @@
+name: release
+
+# A tag v<version> builds devstack for Windows and Linux and publishes a GitHub
+# release with the archives, SHA256SUMS and the install scripts. Asset names
+# carry no version, so ".../releases/latest/download/<asset>" stays stable.
+# workflow_dispatch builds the same archives without publishing (dry run).
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: devstack-x86_64-pc-windows-msvc.zip
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl   # static: runs on any glibc
+            archive: devstack-x86_64-unknown-linux-musl.tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: musl tools
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: tag matches the crate version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          crate=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          [ "v$crate" = "${GITHUB_REF_NAME}" ] || { echo "::error::tag ${GITHUB_REF_NAME} != Cargo.toml version $crate"; exit 1; }
+      - name: build
+        run: cargo build --release --locked -p devstack --target ${{ matrix.target }}
+      - name: package
+        shell: bash
+        run: |
+          dir=target/${{ matrix.target }}/release
+          mkdir -p dist
+          if [ "${{ matrix.os }}" = windows-latest ]; then
+            7z a -tzip "dist/${{ matrix.archive }}" "./$dir/devstack.exe" README.md
+          else
+            tar -czf "dist/${{ matrix.archive }}" -C "$dir" devstack -C "$GITHUB_WORKSPACE" README.md
+          fi
+          "$dir/devstack${{ matrix.os == 'windows-latest' && '.exe' || '' }}" --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/${{ matrix.archive }}
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: checksums and install scripts
+        run: |
+          cp install.ps1 install.sh dist/
+          (cd dist && sha256sum devstack-* > SHA256SUMS && cat SHA256SUMS)
+      - name: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "devstack ${GITHUB_REF_NAME#v}" --generate-notes

@@ -6,11 +6,37 @@ containers, application processes built from immutable artifacts, and a
 checks**. Changes flow through candidate builds that are cancelled the moment a
 newer change lands.
 
-> **Status: phase 1 in progress.** Daemon, CLI and MCP server run a stack's
+> **Status: phase 1 done (0.1.0).** Daemon, CLI and MCP server run a stack's
 > main slot (builds on demand, health, logs, commands, resource usage) on
 > Windows and Linux; candidates, promotion and the dashboard are phase 2. See
 > [`docs/plan.md`](docs/plan.md) and the decision log in
 > [`docs/adr/`](docs/adr/README.md).
+
+## Install
+
+Windows (PowerShell) and Linux (x86_64, static build). The scripts check the
+download against the release's `SHA256SUMS`; run them again to update. With
+`gh` installed and logged in they also work while the repository is private.
+
+```powershell
+# Windows: installs to %LOCALAPPDATA%\Programs\devstack and adds it to PATH
+gh release download -R nuetzliches/devstack -p install.ps1 -D $env:TEMP --clobber
+& "$env:TEMP\install.ps1"            # or: -Version 0.1.0
+```
+
+```sh
+# Linux: installs to ~/.local/bin
+gh release download -R nuetzliches/devstack -p install.sh -D /tmp --clobber
+sh /tmp/install.sh                   # or: --version 0.1.0
+```
+
+Without `gh` (public repository): `irm .../releases/latest/download/install.ps1 | iex`
+or `curl -fsSL .../releases/latest/download/install.sh | sh`. From source:
+`cargo install --git https://github.com/nuetzliches/devstack devstack`.
+
+An update under a running daemon is fine; `devstack down` and `devstack up`
+switch to the new version. A stack file can name the oldest devstack it needs
+(`[stack] requires = "0.1.0"`); an older one then asks to be updated.
 
 ## Use
 

@@ -88,6 +88,10 @@ impl Group {
 pub struct StackMeta {
     /// Display name; also the prefix of the daemon's state.
     pub name: String,
+    /// Oldest devstack that can run this file, e.g. `"0.1.0"`. Checked before
+    /// anything else, so an old devstack asks to be updated instead of failing
+    /// on a key it does not know.
+    pub requires: Option<String>,
     /// Env files read for `${VAR}` in every service and command, relative to the
     /// repository; missing files are skipped. A service's Compose group files and
     /// the process environment win over them.

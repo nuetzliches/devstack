@@ -613,7 +613,7 @@ run = "x"
     #[test]
     fn glob_patterns() {
         assert!(glob("Mail__*", "Mail__Send__X"));
-        assert!(glob("*__StorageId", "Journal__Mail__StorageId"));
+        assert!(glob("*__StorageId", "Orders__Mail__StorageId"));
         assert!(glob("A*B*C", "AxxByyC"));
         assert!(!glob("A*B*C", "AxxC"));
         assert!(!glob("AB*BA", "ABA"), "no overlap of prefix and suffix");
