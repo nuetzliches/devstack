@@ -13,7 +13,9 @@ publish = false
 
 [workspace.dependencies]
 anyhow = "1"
+blake3 = "1"
 clap = { version = "4", features = ["derive"] }
+globset = "0.4"
 libc = "0.2"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
@@ -35,6 +37,7 @@ devstack-config = { path = "crates/devstack-config" }
 devstack-proc = { path = "crates/devstack-proc" }
 devstack-compose = { path = "crates/devstack-compose" }
 devstack-env = { path = "crates/devstack-env" }
+devstack-build = { path = "crates/devstack-build" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

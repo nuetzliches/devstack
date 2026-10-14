@@ -198,7 +198,7 @@ Format: TOML, `devstack.toml` in the repository root, no profiles in version 1
 | Key | Meaning |
 |---|---|
 | `kind` | `service` (default), `job` (runs to completion), `devserver` (builds and serves in one process, plan §3.4), `tool` (long-running, interactive, no health) |
-| `build` | Command run in the lane's snapshot, with the toolchain's normal output directories (ADR-0002); absent for `devserver`/`tool` |
+| `build` | Command run in the lane's snapshot, with the toolchain's normal output directories (ADR-0002); absent for `devserver`/`tool`. It runs again and again in the same snapshot and must be repeatable (incremental build tools are) |
 | `output` | Directory (relative to the repository) copied into the artifact after a successful build |
 | `run` | Command started from the artifact (or `cwd` for `devserver`/`tool`) |
 | `cwd` | Working directory relative to the repository |

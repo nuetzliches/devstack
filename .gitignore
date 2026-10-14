@@ -18,3 +18,5 @@ spikes/process-ownership/results/
 spikes/build-cancel/results/
 spikes/build-cancel/scenarios/*.local.json
 spikes/build-cancel/results-run.log
+examples/**/bin/
+examples/**/obj/

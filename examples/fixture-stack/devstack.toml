@@ -14,8 +14,16 @@ services  = ["db", "cache"]
 [services.api]
 compose       = { group = "app", service = "api" }
 rewrite_hosts = ["db", "cache"]
-run           = "echo api"
+watch         = ["src/Api/**"]
+build         = "dotnet build src/Api/Api.csproj -c Debug -nologo -v q"
+output        = "src/Api/bin/Debug/net10.0"
+run           = "dotnet {artifact}/Api.dll"   # same command line on every platform
 port          = 5080
+health        = { http = "/health", timeout = "60s" }
 
 [services.api.env]
+ASPNETCORE_URLS     = "http://127.0.0.1:{port}"
 Telemetry__Endpoint = "http://127.0.0.1:4317"
+
+[services.api.workers]
+env = { Jobs__Enabled = "{is_main}" }

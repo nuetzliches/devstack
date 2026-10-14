@@ -5,6 +5,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
 
+mod buildcmd;
 mod envcmd;
 
 #[derive(Parser)]
@@ -24,6 +25,13 @@ enum Cmd {
         /// Also validate every Compose group on its own (`docker compose config -q`, ADR-0015).
         #[arg(long)]
         compose: bool,
+    },
+    /// Sync the lane's snapshot and build a service into an artifact (ADR-0002).
+    Build {
+        service: String,
+        /// Lane to build from; `main` is the repository itself.
+        #[arg(long, default_value = "main")]
+        lane: String,
     },
     /// Show the environment a service gets, with the origin of every variable
     /// (ADR-0014), or export it as a dotenv file for use without devstack (ADR-0015).
@@ -97,6 +105,10 @@ fn main() -> Result<()> {
                 }
             }
             Ok(())
+        }
+        Cmd::Build { service, lane } => {
+            let stack = load(&cli.file);
+            buildcmd::run(&stack, &repo_of(&cli.file)?, &service, &lane)
         }
         Cmd::Env {
             service,
