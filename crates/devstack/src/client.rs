@@ -1,0 +1,380 @@
+//! The CLI as a client of the daemon's API (ADR-0007): it implements no
+//! lifecycle logic of its own.
+
+use anyhow::{Context, Result, anyhow, bail};
+use serde_json::Value;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+pub struct Client {
+    base: String,
+    token: String,
+    agent: ureq::Agent,
+}
+
+impl Client {
+    /// Connect to a running daemon of this stack, if there is one.
+    pub fn connect(state_dir: &Path) -> Option<Self> {
+        let info = devstack_daemon::read_info(state_dir)?;
+        let token = devstack_daemon::token::load()?;
+        let agent = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(600)))
+            .http_status_as_error(false)
+            .build()
+            .new_agent();
+        let c = Self {
+            base: format!("http://127.0.0.1:{}", info.port),
+            token,
+            agent,
+        };
+        c.get("/v1/stack").ok().map(|_| c)
+    }
+
+    fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<(u16, String)> {
+        let req = ureq::http::Request::builder()
+            .method(method)
+            .uri(format!("{}{path}", self.base))
+            .header("Authorization", format!("Bearer {}", self.token));
+        let resp = match body {
+            Some(b) => self.agent.run(
+                req.header("Content-Type", "application/json")
+                    .body(b.to_string())?,
+            ),
+            None => self.agent.run(req.body(())?),
+        };
+        let mut resp = resp.map_err(|e| anyhow!("daemon: {e}"))?;
+        let status = resp.status().as_u16();
+        Ok((status, resp.body_mut().read_to_string().unwrap_or_default()))
+    }
+
+    pub fn get(&self, path: &str) -> Result<String> {
+        let (status, body) = self.call("GET", path, None)?;
+        if status >= 400 {
+            bail!("{}", error_text(&body));
+        }
+        Ok(body)
+    }
+
+    pub fn post(&self, path: &str, body: Option<Value>) -> Result<(u16, String)> {
+        self.call("POST", path, body)
+    }
+
+    pub fn stack(&self) -> Result<Value> {
+        Ok(serde_json::from_str(&self.get("/v1/stack")?)?)
+    }
+}
+
+fn error_text(body: &str) -> String {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v["error"].as_str().map(str::to_string))
+        .unwrap_or_else(|| body.to_string())
+}
+
+/// Start the daemon in the background unless it runs; wait until it answers.
+pub fn ensure_daemon(stack_file: &Path, state_dir: &Path) -> Result<Client> {
+    if let Some(c) = Client::connect(state_dir) {
+        return Ok(c);
+    }
+    std::fs::create_dir_all(state_dir)?;
+    let log = std::fs::File::create(state_dir.join("daemon.log"))?;
+    let exe = std::env::current_exe()?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("daemon")
+        .arg("-f")
+        .arg(std::path::absolute(stack_file)?)
+        .stdin(std::process::Stdio::null())
+        .stdout(log.try_clone()?)
+        .stderr(log);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // No console of the caller's: the daemon allocates a hidden one (ADR-0009).
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setsid is async-signal-safe; detaches from the terminal's session.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+    }
+    let mut child = cmd.spawn().context("start the daemon")?;
+    let t0 = Instant::now();
+    while t0.elapsed() < Duration::from_secs(20) {
+        if let Some(c) = Client::connect(state_dir) {
+            return Ok(c);
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            let log = std::fs::read_to_string(state_dir.join("daemon.log")).unwrap_or_default();
+            bail!("the daemon exited ({status}):\n{log}");
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    bail!(
+        "the daemon did not answer within 20 s; see {}",
+        state_dir.join("daemon.log").display()
+    )
+}
+
+pub fn state_dir(stack_file: &Path) -> Result<PathBuf> {
+    let abs = std::path::absolute(stack_file)?;
+    Ok(abs
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or(abs)
+        .join(".devstack"))
+}
+
+pub fn need(state_dir: &Path) -> Result<Client> {
+    Client::connect(state_dir)
+        .ok_or_else(|| anyhow!("no daemon is running for this stack (start it with `devstack up`)"))
+}
+
+fn state_of(s: &Value) -> String {
+    let st = &s["status"];
+    match st["state"].as_str().unwrap_or("?") {
+        "failed" => format!(
+            "failed: {}",
+            st["reason"]
+                .as_str()
+                .unwrap_or("")
+                .lines()
+                .next()
+                .unwrap_or("")
+        ),
+        "unhealthy" => format!("unhealthy: {}", st["reason"].as_str().unwrap_or("")),
+        "exited" | "completed" => {
+            format!("{} ({})", st["state"].as_str().unwrap(), st["exit_code"])
+        }
+        "building" => match st["build_id"].as_str() {
+            Some(id) => format!("building {id}"),
+            None => "building".into(),
+        },
+        other => other.to_string(),
+    }
+}
+
+pub fn print_status(stack: &Value) {
+    println!(
+        "{:<22} {:<38} {:<17} {:>6} {:>7}",
+        "SERVICE", "STATE", "BUILD", "PORT", "PID"
+    );
+    for s in stack["services"].as_array().into_iter().flatten() {
+        println!(
+            "{:<22} {:<38} {:<17} {:>6} {:>7}",
+            s["name"].as_str().unwrap_or(""),
+            truncate(&state_of(s), 38),
+            s["build_id"].as_str().unwrap_or("-"),
+            s["port"].as_u64().map_or("-".into(), |p| p.to_string()),
+            s["pid"].as_u64().map_or("-".into(), |p| p.to_string()),
+        );
+    }
+    for g in stack["infra"].as_array().into_iter().flatten() {
+        println!(
+            "\ncompose.{} ({})",
+            g["group"].as_str().unwrap_or(""),
+            g["project"].as_str().unwrap_or("")
+        );
+        if let Some(e) = g["error"].as_str() {
+            println!("  error: {e}");
+        }
+        for c in g["containers"].as_array().into_iter().flatten() {
+            let health = c["health"]
+                .as_str()
+                .filter(|h| !h.is_empty())
+                .map(|h| format!(" ({h})"))
+                .unwrap_or_default();
+            let ports: Vec<&str> = c["ports"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|p| p.as_str())
+                .collect();
+            println!(
+                "  {:<20} {}{health}  {}",
+                c["service"].as_str().unwrap_or(""),
+                c["state"].as_str().unwrap_or(""),
+                ports.join(", ")
+            );
+        }
+    }
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.into()
+    } else {
+        format!("{}…", s.chars().take(n - 1).collect::<String>())
+    }
+}
+
+/// `devstack up`: infra, then autostart services; follow until all are ready
+/// or one fails. Exit code 1 on failure.
+pub fn up(stack_file: &Path) -> Result<()> {
+    let sd = state_dir(stack_file)?;
+    let c = ensure_daemon(stack_file, &sd)?;
+    let (status, body) = c.post("/v1/up", None)?;
+    if status >= 400 {
+        bail!("{}", error_text(&body));
+    }
+    let stack_cfg = devstack_config::load(stack_file)?;
+    let expected: Vec<String> = stack_cfg
+        .services
+        .iter()
+        .filter(|(_, s)| {
+            s.autostart
+                && (s.platforms.is_empty()
+                    || s.platforms
+                        .contains(&devstack_config::model::Platform::current()))
+        })
+        .map(|(n, _)| n.clone())
+        .collect();
+    let mut last: std::collections::BTreeMap<String, String> = Default::default();
+    let t0 = Instant::now();
+    loop {
+        let stack = c.stack()?;
+        let mut done = true;
+        let mut failed = None;
+        for s in stack["services"].as_array().into_iter().flatten() {
+            let name = s["name"].as_str().unwrap_or("").to_string();
+            let st = state_of(s);
+            if last.get(&name) != Some(&st) {
+                println!("{:>6.1}s  {name:<22} {st}", t0.elapsed().as_secs_f64());
+                last.insert(name.clone(), st);
+            }
+            if expected.contains(&name) {
+                let state = s["status"]["state"].as_str().unwrap_or("");
+                match state {
+                    "healthy" | "running" => {}
+                    "completed" if s["status"]["exit_code"] == 0 => {}
+                    "failed" | "exited" => {
+                        failed = Some((
+                            name.clone(),
+                            s["status"]["reason"].as_str().unwrap_or("").to_string(),
+                        ))
+                    }
+                    _ => done = false,
+                }
+            }
+        }
+        if let Some((name, reason)) = failed {
+            eprintln!("\n{name} failed:\n{reason}");
+            std::process::exit(1);
+        }
+        if done {
+            println!();
+            print_status(&stack);
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(400));
+    }
+}
+
+pub fn service_action(stack_file: &Path, name: &str, action: &str) -> Result<()> {
+    let c = need(&state_dir(stack_file)?)?;
+    let (status, body) = c.post(&format!("/v1/services/{name}/{action}"), None)?;
+    if status >= 400 {
+        bail!("{}", error_text(&body));
+    }
+    print_status(&serde_json::from_str(&body)?);
+    Ok(())
+}
+
+pub fn logs(stack_file: &Path, name: &str, tail: usize, follow: bool) -> Result<()> {
+    let c = need(&state_dir(stack_file)?)?;
+    let mut shown = c.get(&format!("/v1/services/{name}/logs?tail={tail}"))?;
+    print!("{shown}");
+    if !shown.is_empty() {
+        println!();
+    }
+    if !follow {
+        return Ok(());
+    }
+    loop {
+        std::thread::sleep(Duration::from_millis(700));
+        let now = c.get(&format!("/v1/services/{name}/logs?tail=100000"))?;
+        if now.len() > shown.len() && now.starts_with(&shown) {
+            print!("{}", &now[shown.len()..]);
+        } else if now != shown && !shown.ends_with(&now) {
+            println!("{now}"); // a new instance started
+        }
+        shown = now;
+    }
+}
+
+pub fn run_command(stack_file: &Path, name: &str, yes: bool) -> Result<()> {
+    let c = need(&state_dir(stack_file)?)?;
+    let (mut status, mut body) = c.post(
+        &format!("/v1/commands/{name}"),
+        Some(serde_json::json!({ "confirm": yes })),
+    )?;
+    if status == 428 {
+        let text = serde_json::from_str::<Value>(&body)?["confirm"]
+            .as_str()
+            .unwrap_or("Continue?")
+            .to_string();
+        eprint!("{text} [y/N] ");
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim(), "y" | "Y" | "yes" | "j" | "J" | "ja") {
+            bail!("not confirmed");
+        }
+        (status, body) = c.post(
+            &format!("/v1/commands/{name}"),
+            Some(serde_json::json!({ "confirm": true })),
+        )?;
+    }
+    if status >= 400 {
+        bail!("{}", error_text(&body));
+    }
+    let run = serde_json::from_str::<Value>(&body)?["run"]
+        .as_u64()
+        .unwrap_or(0);
+    loop {
+        let info: Value = serde_json::from_str(&c.get(&format!("/v1/runs/{run}"))?)?;
+        if info["status"] != "running" {
+            println!("{}", c.get(&format!("/v1/runs/{run}/log"))?);
+            if info["status"] == "succeeded" {
+                return Ok(());
+            }
+            bail!(
+                "command `{name}` failed: {}",
+                info["error"].as_str().unwrap_or("")
+            );
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+}
+
+pub fn down(stack_file: &Path, infra: bool) -> Result<()> {
+    let sd = state_dir(stack_file)?;
+    let Some(c) = Client::connect(&sd) else {
+        println!("no daemon is running for this stack");
+        return Ok(());
+    };
+    let (status, body) = c.post(&format!("/v1/down?infra={infra}"), None)?;
+    if status >= 400 {
+        bail!("{}", error_text(&body));
+    }
+    let _ = c.post("/v1/shutdown", None);
+    let t0 = Instant::now();
+    while devstack_daemon::read_info(&sd).is_some() && t0.elapsed() < Duration::from_secs(30) {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    println!(
+        "stopped{}",
+        if infra {
+            ", infrastructure removed"
+        } else {
+            "; infrastructure keeps running (`down --infra` to stop it)"
+        }
+    );
+    Ok(())
+}

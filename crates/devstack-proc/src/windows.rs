@@ -30,6 +30,9 @@ pub(crate) struct Job(HANDLE);
 
 // The handle is only used through &self/&mut self of the owning Tree.
 unsafe impl Send for Job {}
+// Kernel handles may be used from several threads at once; the calls made on
+// it (query, assign, terminate) are thread-safe Win32 functions.
+unsafe impl Sync for Job {}
 
 impl Job {
     pub(crate) fn new() -> Result<Self> {

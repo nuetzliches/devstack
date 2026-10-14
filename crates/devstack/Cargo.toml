@@ -12,9 +12,14 @@ clap.workspace = true
 devstack-build.workspace = true
 devstack-compose.workspace = true
 devstack-config.workspace = true
+devstack-daemon.workspace = true
 devstack-env.workspace = true
 devstack-proc.workspace = true
 serde_json.workspace = true
+ureq.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
 
 [lints]
 workspace = true

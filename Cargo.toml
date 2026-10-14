@@ -13,16 +13,21 @@ publish = false
 
 [workspace.dependencies]
 anyhow = "1"
+axum = { version = "0.8", features = ["json"] }
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 globset = "0.4"
 libc = "0.2"
+rand = "0.9"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
 thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time", "signal"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 toml = "0.9"
+ureq = "3"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -38,6 +43,7 @@ devstack-proc = { path = "crates/devstack-proc" }
 devstack-compose = { path = "crates/devstack-compose" }
 devstack-env = { path = "crates/devstack-env" }
 devstack-build = { path = "crates/devstack-build" }
+devstack-daemon = { path = "crates/devstack-daemon" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

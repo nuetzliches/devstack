@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
 
 mod buildcmd;
+mod client;
 mod envcmd;
 
 #[derive(Parser)]
@@ -33,6 +34,42 @@ enum Cmd {
         #[arg(long, default_value = "main")]
         lane: String,
     },
+    /// Start the stack: daemon (if needed), infrastructure, services in order.
+    Up,
+    /// Stop the services and the daemon; `--infra` also removes the containers.
+    Down {
+        #[arg(long)]
+        infra: bool,
+    },
+    /// State of services and infrastructure.
+    Status,
+    Start {
+        service: String,
+    },
+    Stop {
+        service: String,
+    },
+    Restart {
+        service: String,
+    },
+    /// Console output of a service.
+    Logs {
+        service: String,
+        #[arg(long, short = 'n', default_value_t = 200)]
+        tail: usize,
+        #[arg(long)]
+        follow: bool,
+    },
+    /// Run a command from the stack file (e.g. a database reset).
+    Run {
+        command: String,
+        /// Confirm without asking.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Internal: the daemon in the foreground (`devstack up` starts it in the background).
+    #[command(hide = true)]
+    Daemon,
     /// Show the environment a service gets, with the origin of every variable
     /// (ADR-0014), or export it as a dotenv file for use without devstack (ADR-0015).
     Env {
@@ -106,6 +143,23 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Up => client::up(&cli.file),
+        Cmd::Down { infra } => client::down(&cli.file, infra),
+        Cmd::Status => {
+            let c = client::need(&client::state_dir(&cli.file)?)?;
+            client::print_status(&c.stack()?);
+            Ok(())
+        }
+        Cmd::Start { service } => client::service_action(&cli.file, &service, "start"),
+        Cmd::Stop { service } => client::service_action(&cli.file, &service, "stop"),
+        Cmd::Restart { service } => client::service_action(&cli.file, &service, "restart"),
+        Cmd::Logs {
+            service,
+            tail,
+            follow,
+        } => client::logs(&cli.file, &service, tail, follow),
+        Cmd::Run { command, yes } => client::run_command(&cli.file, &command, yes),
+        Cmd::Daemon => devstack_daemon::serve(&cli.file).map_err(|e| anyhow::anyhow!(e)),
         Cmd::Build { service, lane } => {
             let stack = load(&cli.file);
             buildcmd::run(&stack, &repo_of(&cli.file)?, &service, &lane)
