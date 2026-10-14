@@ -247,7 +247,7 @@ Format: TOML, `devstack.toml` in the repository root, no profiles in version 1
 | `after` | Services or `compose.<group>.<service>` that must be healthy (jobs: completed) first |
 | `autostart` | `false` = started on demand only |
 | `platforms` | Restrict to `windows`, `linux`, `macos` |
-| `compose` | `{ group, service }` whose environment is the base (ADR-0014) |
+| `compose` | `{ group, service }` whose environment is the base (ADR-0014); `inherit = false` makes it a reference only, `ignore` lists variables left out on purpose, `check --compose` reports the rest |
 | `rewrite_hosts` | Compose services rewritten to published host addresses (ADR-0014): `<service>` of the own group, `<group>.<service>` of another |
 | `env` | Wins over the Compose environment |
 | `workers.env` | Worker switches, `{is_main}` = `true`/`false` (ADR-0008) |
@@ -476,6 +476,23 @@ acceptance found five defects, all fixed with tests:
   `[stack].env_files` and the ADR-0014 finding.
 - Linux: a tree started from a short-lived thread died with it
   (`PR_SET_PDEATHSIG`, ADR-0009), found earlier by the daemon integration test.
+
+Hardening right after, against the same stack (code changes, an agent over MCP,
+a hard daemon kill, stopped containers):
+
+- `start` and `restart` ignored `after`: a restart after a new migration skipped
+  the migrator and the new instance failed its pending-migration guard. Now
+  `start` starts what is not ready, and `restart` reruns the jobs the service
+  comes after, before the old instance is replaced; a failing job leaves it.
+- A failed .NET build showed its last 15 lines, which were NuGet warnings; the
+  message now shows the error lines.
+- Container states were read only at `up`/`down`; a stopped container showed as
+  running. They are re-read every 5 s (`compose ps`), each change is an event.
+- `http` steps could not send a body.
+- The environment link gained a reference mode with a drift report
+  (ADR-0014, `inherit = false`).
+
+Not tested: a machine reboot and a Docker Desktop restart.
 
 Phase 1 delivers builds on demand and the main slot; candidates, auto-promotion
 and the dashboard are phase 2. Exit criterion unchanged: the reference stack

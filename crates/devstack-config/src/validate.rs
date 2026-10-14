@@ -323,6 +323,9 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                     for (k, v) in &step.headers {
                         c.text(&format!("{sp}.headers.{k}"), v);
                     }
+                    if let Some(b) = &step.body {
+                        c.text(&format!("{sp}.body"), b);
+                    }
                 }
                 Ok(StepAction::Start(s) | StepAction::Stop(s) | StepAction::Restart(s)) => {
                     c.service_ref(&sp, s);

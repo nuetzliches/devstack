@@ -150,6 +150,43 @@ fn main() -> Result<()> {
                 if failed {
                     std::process::exit(1);
                 }
+                // Reference-only links (ADR-0014): what the deployment sets that
+                // the stack file neither sets nor ignores. A notice, not an error.
+                for (name, svc) in &stack.services {
+                    let Some(r) = svc.compose.as_ref().filter(|r| !r.inherit) else {
+                        continue;
+                    };
+                    let group = devstack_compose::Group::from_config(
+                        &r.group,
+                        &stack.compose[&r.group],
+                        &repo,
+                    );
+                    let model = docker.config(&group)?;
+                    let Some(m) = model.services.get(&r.service) else {
+                        eprintln!(
+                            "services.{name}: compose.{}.{} not found",
+                            r.group, r.service
+                        );
+                        std::process::exit(1);
+                    };
+                    let drift = devstack_env::drift(svc, m.environment.keys().map(String::as_str));
+                    if drift.is_empty() {
+                        println!(
+                            "services.{name}: no drift against compose.{}.{}",
+                            r.group, r.service
+                        );
+                    } else {
+                        println!(
+                            "services.{name}: {} variable(s) of compose.{}.{} neither set nor ignored here:",
+                            drift.len(),
+                            r.group,
+                            r.service
+                        );
+                        for k in drift {
+                            println!("  {k}");
+                        }
+                    }
+                }
             }
             Ok(())
         }

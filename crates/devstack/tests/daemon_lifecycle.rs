@@ -87,7 +87,11 @@ after = ["prep"]
 # A job before the API, like a schema migrator: it must end as `completed`.
 [services.prep]
 kind = "job"
-run = "git --version"
+run = "echo run>>prep.count"
+
+# Independent of everything and broken: `up` reports it and starts the rest.
+[services.broken]
+run = "exit 3"
 
 [commands.ping]
 description = "health"
@@ -257,6 +261,12 @@ members = [\"api\", \"command.ping\"]
         info["pid"].as_u64().unwrap() as u32
     }
 
+    fn prep_runs(&self) -> usize {
+        std::fs::read_to_string(self.dir.path().join("prep.count"))
+            .map(|t| t.lines().count())
+            .unwrap_or(0)
+    }
+
     fn artifacts(&self) -> usize {
         std::fs::read_dir(self.dir.path().join(".devstack/artifacts/api"))
             .map(|d| d.count())
@@ -364,8 +374,16 @@ fn wait_for(cond: impl Fn() -> bool, timeout: Duration) -> bool {
 fn lifecycle(with_compose: bool) {
     let s = Stack::new(with_compose);
 
-    // up: built, started, healthy; the API sees what devstack gives it.
-    s.ok(&["up"]);
+    // up: built, started, healthy; the API sees what devstack gives it. One
+    // independent service fails: `up` says so and still starts the rest.
+    let out = s.cli(&["up"], None);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!out.status.success() && text.contains("broken"), "{text}");
+    assert_eq!(s.prep_runs(), 1, "the job before the API ran once");
     let info = s.info();
     let first_build = info["build"]
         .as_str()
@@ -580,9 +598,17 @@ fn lifecycle(with_compose: bool) {
         "the old instance keeps running"
     );
 
-    // Fixed: a new build replaces it.
+    assert_eq!(s.prep_runs(), 1, "a failed build runs no job");
+
+    // Fixed: a new build replaces it, and the job it comes after runs again
+    // first (a migration that came with the change).
     std::fs::write(&program, format!("{source}\n// changed\n")).unwrap();
     s.ok(&["restart", "api"]);
+    assert_eq!(
+        s.prep_runs(),
+        2,
+        "restart reruns the jobs the service comes after"
+    );
     let second = s.info();
     let second_build = second["build"].as_str().unwrap().to_string();
     assert_ne!(second_build, first_build);
@@ -597,7 +623,7 @@ fn lifecycle(with_compose: bool) {
 
     // up again: same artifact, no build (ADR-0016).
     let artifacts = s.artifacts();
-    s.ok(&["up"]);
+    s.cli(&["up"], None); // `broken` fails again
     assert_eq!(s.info()["build"], second_build.as_str());
     assert_eq!(s.artifacts(), artifacts, "no new build after a restart");
 

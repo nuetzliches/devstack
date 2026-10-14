@@ -268,6 +268,79 @@ impl Supervisor {
         Ok(())
     }
 
+    /// Re-read only the containers' states (`compose ps`, no `config`): cheap
+    /// enough to run every few seconds, so a container that stopped or turned
+    /// unhealthy shows as such. Every change is an event.
+    pub fn refresh_containers(&self) {
+        for g in self.group_order() {
+            let group = self.compose_group(&g);
+            let Ok(containers) = self.docker.ps(&group) else {
+                continue; // Docker unreachable: keep what is known, the sampler reports it
+            };
+            let mut changes = Vec::new();
+            {
+                let mut cache = self.infra.lock().unwrap();
+                let cache = &mut *cache;
+                let Some(view) = cache.views.iter_mut().find(|v| v.group == g) else {
+                    continue;
+                };
+                let mut next = Vec::new();
+                for c in containers {
+                    let mut ports = Vec::new();
+                    for p in &c.publishers {
+                        if let Some(addr) = c.published(p.target_port) {
+                            cache.published.insert(
+                                (g.clone(), c.service.clone(), p.target_port),
+                                addr.clone(),
+                            );
+                            let s = format!("{}->{addr}", p.target_port);
+                            if !ports.contains(&s) {
+                                ports.push(s);
+                            }
+                        }
+                    }
+                    let state = |s: &str, h: &str| {
+                        if h.is_empty() {
+                            s.to_string()
+                        } else {
+                            format!("{s} ({h})")
+                        }
+                    };
+                    let before = view
+                        .containers
+                        .iter()
+                        .find(|o| o.service == c.service)
+                        .map(|o| state(&o.state, &o.health));
+                    let now = state(&c.state, &c.health);
+                    if before.as_deref() != Some(now.as_str()) {
+                        changes.push(format!("{}: {now}", c.service));
+                    }
+                    next.push(ContainerView {
+                        service: c.service,
+                        name: c.name,
+                        state: c.state,
+                        health: c.health,
+                        ports,
+                    });
+                }
+                for gone in view
+                    .containers
+                    .iter()
+                    .filter(|o| !next.iter().any(|n| n.service == o.service))
+                {
+                    changes.push(format!("{}: removed", gone.service));
+                }
+                view.containers = next;
+            }
+            for message in changes {
+                self.emit(EventBody::Infra {
+                    group: g.clone(),
+                    message,
+                });
+            }
+        }
+    }
+
     /// Re-read Compose: environments of every service (also parked ones) and
     /// published addresses of running containers.
     pub fn refresh_infra(&self) {
@@ -417,6 +490,10 @@ impl Supervisor {
         if !runs_here(&svc) {
             return Err(format!("`{name}` does not run on this platform"));
         }
+        if let Err(e) = self.ensure_after(&svc) {
+            self.set_status(name, Status::Failed { reason: e.clone() });
+            return Err(e);
+        }
         let _op = self.op_locks[name].lock().unwrap();
         if self.slots.lock().unwrap()[name].view.status.is_active() {
             return Ok(());
@@ -539,7 +616,7 @@ impl Supervisor {
                     // Point compiler messages at the repository, not at the
                     // snapshot, so they stay clickable in the IDE.
                     let snap_dir = self.layout.lane("main").join("src");
-                    let text = tail(&log, 15).replace(
+                    let text = build_errors(&log).replace(
                         &snap_dir.to_string_lossy().into_owned(),
                         &self.repo.to_string_lossy(),
                     );
@@ -743,13 +820,73 @@ The running instance was left as it was."
                 ));
             }
         }
+        // Jobs this service comes after run again first (a schema migrator for a
+        // migration that came with the change); their build is cached when
+        // nothing changed. A failing job leaves the running instance alone.
+        for dep in &svc.after {
+            if self
+                .stack
+                .services
+                .get(dep)
+                .is_some_and(|d| d.kind == Kind::Job)
+            {
+                self.restart(dep).map_err(|e| {
+                    format!("`{dep}` failed:\n{e}\nThe running instance was left as it was.")
+                })?;
+            }
+        }
         self.stop(name)?;
         self.start(name)
+    }
+
+    /// Start what `svc` comes after and is not ready yet (services, jobs that
+    /// have not completed). Compose services are the infra plane's job (`up`).
+    fn ensure_after(self: &Arc<Self>, svc: &Service) -> Result<(), String> {
+        for dep in &svc.after {
+            let Some(d) = self.stack.services.get(dep) else {
+                continue;
+            };
+            if !runs_here(d) {
+                continue;
+            }
+            let status = self.slots.lock().unwrap()[dep].view.status.clone();
+            let ready = match d.kind {
+                Kind::Job => status == Status::Completed { exit_code: 0 },
+                _ => status.is_ready(),
+            };
+            if !ready {
+                self.start(dep)
+                    .map_err(|e| format!("`{dep}` (needed first) failed: {e}"))?;
+            }
+        }
+        Ok(())
     }
 }
 
 fn runs_here(svc: &Service) -> bool {
     svc.platforms.is_empty() || svc.platforms.contains(&Platform::current())
+}
+
+/// What a failed build said: its error lines (compiler conventions `: error`,
+/// `error:`, `error[`), each once and at most 20; without any, the last 15
+/// lines. A .NET build ends with pages of warnings, which would bury the error.
+fn build_errors(path: &Path) -> String {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let mut seen = BTreeSet::new();
+    let errors: Vec<&str> = text
+        .lines()
+        .filter(|l| {
+            let lower = l.to_ascii_lowercase();
+            lower.contains(": error") || lower.starts_with("error:") || lower.contains("error[")
+        })
+        .filter(|l| seen.insert(l.trim()))
+        .take(20)
+        .collect();
+    if errors.is_empty() {
+        tail(path, 15)
+    } else {
+        errors.join("\n")
+    }
 }
 
 fn tail(path: &Path, n: usize) -> String {
@@ -819,5 +956,34 @@ mod port_tests {
     fn a_port_held_on_ipv4_loopback_is_in_use() {
         let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         assert!(super::port_in_use(l.local_addr().unwrap().port()));
+    }
+}
+
+#[cfg(test)]
+mod build_error_tests {
+    #[test]
+    fn errors_are_found_under_pages_of_warnings() {
+        let d = tempfile::tempdir().unwrap();
+        let log = d.path().join("build.log");
+        let mut text = String::from("Program.cs(413,90): error CS1002: ; expected [Api.csproj]\n");
+        for i in 0..40 {
+            text.push_str(&format!(
+                "x.csproj : warning NU1903: package {i} is vulnerable\n"
+            ));
+        }
+        text.push_str("Program.cs(413,90): error CS1002: ; expected [Api.csproj]\n    0 Warning(s)\n    1 Error(s)\n");
+        std::fs::write(&log, text).unwrap();
+        assert_eq!(
+            super::build_errors(&log),
+            "Program.cs(413,90): error CS1002: ; expected [Api.csproj]"
+        );
+    }
+
+    #[test]
+    fn without_error_lines_the_end_of_the_log() {
+        let d = tempfile::tempdir().unwrap();
+        let log = d.path().join("build.log");
+        std::fs::write(&log, "a\nb\nsomething went wrong\n").unwrap();
+        assert!(super::build_errors(&log).ends_with("something went wrong"));
     }
 }

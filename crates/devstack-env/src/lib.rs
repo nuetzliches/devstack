@@ -151,8 +151,8 @@ pub fn compose(
 ) -> Result<Env, EnvError> {
     let mut env = Env::new();
 
-    // 1 + 2: Compose environment, hosts rewritten.
-    if let Some(r) = &svc.compose {
+    // 1 + 2: Compose environment, hosts rewritten (not for a reference-only link).
+    if let Some(r) = svc.compose.as_ref().filter(|r| r.inherit) {
         let key = (r.group.clone(), r.service.clone());
         let base = compose_envs
             .get(&key)
@@ -310,6 +310,48 @@ fn find_host(s: &str, host: &str) -> Option<usize> {
     None
 }
 
+// ------------------------------------------------------------------ drift
+
+/// For a reference-only Compose link (`inherit = false`): the variables of the
+/// Compose service that the stack file neither sets (`env`, worker switches)
+/// nor ignores. Sorted. Empty for an inheriting link.
+pub fn drift<'a>(svc: &Service, compose_keys: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let Some(r) = svc.compose.as_ref().filter(|r| !r.inherit) else {
+        return Vec::new();
+    };
+    let set = |k: &str| {
+        svc.env.contains_key(k) || svc.workers.as_ref().is_some_and(|w| w.env.contains_key(k))
+    };
+    let mut out: Vec<String> = compose_keys
+        .into_iter()
+        .filter(|k| !set(k) && !r.ignore.iter().any(|p| glob(p, k)))
+        .map(str::to_string)
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// `*` matches any run of characters; everything else literally.
+fn glob(pattern: &str, text: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return pattern == text;
+    }
+    let (first, last) = (parts[0], parts[parts.len() - 1]);
+    if text.len() < first.len() + last.len() || !text.starts_with(first) || !text.ends_with(last) {
+        return false;
+    }
+    let mut rest = &text[first.len()..text.len() - last.len()];
+    for mid in &parts[1..parts.len() - 1] {
+        match rest.find(mid) {
+            Some(i) => rest = &rest[i + mid.len()..],
+            None => return false,
+        }
+    }
+    true
+}
+
 // ------------------------------------------------------------------ ${VAR}
 
 /// The values `${VAR}` resolves against, later sources winning: the stack's
@@ -403,6 +445,8 @@ mod tests {
         s.compose = Some(ComposeRef {
             group: "app".into(),
             service: "api".into(),
+            inherit: true,
+            ignore: Vec::new(),
         });
         s.rewrite_hosts = rewrite.iter().map(|s| s.to_string()).collect();
         s.env = env
@@ -564,5 +608,47 @@ run = "x"
         );
         let command = variables(&stack, None, dir.path());
         assert_eq!(command["B"], "stack");
+    }
+
+    #[test]
+    fn glob_patterns() {
+        assert!(glob("Mail__*", "Mail__Send__X"));
+        assert!(glob("*__StorageId", "Journal__Mail__StorageId"));
+        assert!(glob("A*B*C", "AxxByyC"));
+        assert!(!glob("A*B*C", "AxxC"));
+        assert!(!glob("AB*BA", "ABA"), "no overlap of prefix and suffix");
+        assert!(glob("TZ", "TZ") && !glob("TZ", "TZX"));
+    }
+
+    #[test]
+    fn drift_lists_what_a_reference_link_leaves_unset() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+version = 1
+[stack]
+name = "t"
+[compose.g]
+project = "p"
+files = ["c.yml"]
+services = ["db"]
+[services.api]
+compose = { group = "g", service = "api", inherit = false, ignore = ["Mail__*", "TZ"] }
+run = "x"
+env = { Db = "x" }
+workers = { env = { Jobs = "{is_main}" } }
+[services.full]
+compose = { group = "g", service = "api" }
+run = "x"
+"#;
+        let stack = devstack_config::from_str(toml, &dir.path().join("devstack.toml")).unwrap();
+        let keys = ["Db", "Jobs", "Mail__Send", "TZ", "NewSetting", "Other"];
+        assert_eq!(
+            drift(&stack.services["api"], keys),
+            vec!["NewSetting".to_string(), "Other".to_string()]
+        );
+        assert!(
+            drift(&stack.services["full"], keys).is_empty(),
+            "inheriting links have no drift"
+        );
     }
 }

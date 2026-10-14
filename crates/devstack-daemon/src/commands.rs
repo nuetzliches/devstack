@@ -224,8 +224,14 @@ fn execute(
                 for (k, v) in &step.headers {
                     req = req.header(k, expand(v, &ctx, &env).map_err(|e| e.to_string())?);
                 }
-                let req = req.body(()).map_err(|e| e.to_string())?;
-                match agent.run(req) {
+                let sent = match &step.body {
+                    Some(b) => {
+                        let b = expand(b, &ctx, &env).map_err(|e| e.to_string())?;
+                        agent.run(req.body(b).map_err(|e| e.to_string())?)
+                    }
+                    None => agent.run(req.body(()).map_err(|e| e.to_string())?),
+                };
+                match sent {
                     Ok(mut resp) => {
                         let status = resp.status();
                         let body = resp.body_mut().read_to_string().unwrap_or_default();

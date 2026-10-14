@@ -224,6 +224,15 @@ pub struct Health {
 pub struct ComposeRef {
     pub group: String,
     pub service: String,
+    /// `false`: the Compose service is a reference only. Its environment is not
+    /// taken over (it describes a deployment, not this service, ADR-0014), and
+    /// `devstack check --compose` lists its variables the stack file does not
+    /// set, so a new one is noticed instead of silently missing.
+    #[serde(default = "yes")]
+    pub inherit: bool,
+    /// With `inherit = false`: variables left out on purpose (globs, `*`).
+    #[serde(default)]
+    pub ignore: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -268,6 +277,8 @@ pub struct Step {
     pub http: Option<String>,
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
+    /// Request body of an `http` step (placeholders and `${VAR}` expanded).
+    pub body: Option<String>,
     #[schemars(with = "Option<String>")]
     #[serde(default, deserialize_with = "opt_duration")]
     pub timeout: Option<Duration>,

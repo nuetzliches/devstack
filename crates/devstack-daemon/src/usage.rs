@@ -251,6 +251,9 @@ impl Sampler {
     }
 
     fn sample_containers(&self, sup: &Supervisor) {
+        // The container states themselves, so `status` and the dashboard see a
+        // stopped or unhealthy container (they were read only at up/down before).
+        sup.refresh_containers();
         let mut running = BTreeMap::new();
         for g in sup.view().infra {
             for c in g.containers {

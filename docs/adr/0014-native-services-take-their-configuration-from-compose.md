@@ -65,16 +65,19 @@ opposite of the development one (an outbound mail catch-all defaults to
 `false`). Taken as the base, every empty value overrides the service's own
 development configuration, silently.
 
-So `compose = { group, service }` stays optional, and a service whose Compose
-environment is such a contract leaves it out and states its environment in the
-stack file in full. To make that practical without repeating development
+So such a service states its environment in the stack file in full and links
+the Compose service as a reference only: `compose = { group, service, inherit =
+false, ignore = [...] }`. Nothing is taken over; `devstack check --compose`
+lists every variable of the deployment that the stack file neither sets nor
+ignores (globs). The benefit of one contract remains, a new production setting
+is noticed, without its production default overriding a development one. To make that practical without repeating development
 values, the stack file gained `[stack].env_files`: env files that `${VAR}`
 resolves against in every service and command, under the Compose group's files
 and the process environment.
 
 Rule of thumb: link the Compose service when its environment describes the
 service (hosts, ports, feature switches with sensible defaults); do not link it
-when it describes a deployment.
+when it describes a deployment, and then link it with `inherit = false`.
 
 ## Alternatives considered
 
