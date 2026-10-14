@@ -204,6 +204,23 @@ pub fn status_text(stack: &Value) -> String {
             s["port"].as_u64().map_or("-".into(), |p| p.to_string()),
             s["pid"].as_u64().map_or("-".into(), |p| p.to_string()),
         );
+        // A newer build on its way, or why it did not arrive: the running one
+        // is not the latest change (ADR-0003).
+        let c = &s["candidate"];
+        if c.is_object() {
+            let reason = c["reason"]
+                .as_str()
+                .and_then(|r| r.lines().find(|l| !l.trim().is_empty()))
+                .map(|r| format!(": {}", r.trim()))
+                .unwrap_or_default();
+            let _ = writeln!(
+                out,
+                "  -> not yet active: {} {}{}",
+                c["state"].as_str().unwrap_or("?"),
+                c["build_id"].as_str().unwrap_or(""),
+                truncate(&reason, 100)
+            );
+        }
     }
     for g in stack["infra"].as_array().into_iter().flatten() {
         let _ = writeln!(

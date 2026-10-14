@@ -203,6 +203,11 @@ pub struct Service {
     #[serde(default)]
     pub ensure_dirs: Vec<String>,
     pub promote: Option<Promote>,
+    /// Serve the fixed port through devstack's proxy (ADR-0010): instances run
+    /// on internal ports and a new one takes over without dropped requests.
+    /// Default on for long-running services with a port; `false` restarts in
+    /// place on the fixed port.
+    pub proxy: Option<bool>,
 }
 
 fn yes() -> bool {
@@ -386,4 +391,11 @@ fn opt_duration<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Duratio
     let s = Option::<String>::deserialize(d)?;
     s.map(|s| parse_duration(&s).map_err(serde::de::Error::custom))
         .transpose()
+}
+
+impl Service {
+    /// Behind devstack's proxy (ADR-0010).
+    pub fn proxied(&self) -> bool {
+        self.kind == Kind::Service && self.port.is_some() && self.proxy.unwrap_or(true)
+    }
 }

@@ -67,6 +67,34 @@ pub struct ServiceView {
     /// Unix ms.
     pub since: u128,
     pub log: Option<PathBuf>,
+    /// Port the running instance listens on; behind the proxy an internal one.
+    pub instance_port: Option<u16>,
+    /// The proxy on the fixed port (ADR-0010).
+    pub proxy: Option<crate::proxy::ProxyView>,
+    /// A newer build on its way into the main slot, or why it did not arrive.
+    pub candidate: Option<Candidate>,
+}
+
+/// A replacement for the main instance in progress (ADR-0003).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Candidate {
+    /// `building`, `starting`, `switching`, `held`, `failed`.
+    pub state: String,
+    pub build_id: Option<String>,
+    /// Unix ms.
+    pub since: u128,
+    pub reason: Option<String>,
+}
+
+impl Candidate {
+    pub fn new(state: &str, build_id: Option<String>, reason: Option<String>) -> Self {
+        Self {
+            state: state.into(),
+            build_id,
+            since: now_ms(),
+            reason,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -140,6 +168,11 @@ pub enum EventBody {
         command: String,
         run: u64,
         status: String,
+    },
+    /// A candidate appeared, changed state or is gone (`None`: promoted or dropped).
+    Candidate {
+        service: String,
+        candidate: Option<Candidate>,
     },
     /// Current load, every native sample (plan §12); history via `/v1/usage`.
     Usage(Box<crate::usage::UsageReport>),

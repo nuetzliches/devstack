@@ -1,12 +1,14 @@
-//! The supervisor (phase 1): brings the infra plane up, builds services into
-//! artifacts and runs them in the main slot in `after` order, watches their
-//! processes and health, and stops them. Candidates and auto-promotion come in
-//! phase 2 (ADR-0003); a rebuild here replaces the main slot by restart.
+//! The supervisor: brings the infra plane up, builds services into artifacts
+//! and runs them in the main slot in `after` order, watches their processes
+//! and health, and stops them. A service behind the proxy (ADR-0010) runs on an
+//! internal port, and a rebuild replaces it through a candidate without
+//! dropping a request (ADR-0003); without the proxy it restarts in place.
 
 use crate::health::Checker;
+use crate::proxy::{Proxy, Upstream, Waiting};
 use crate::state::{
-    CommandView, ContainerView, Event, EventBody, GroupView, InfraView, Persisted, ServiceView,
-    StackView, Status, now_ms,
+    Candidate, CommandView, ContainerView, Event, EventBody, GroupView, InfraView, Persisted,
+    ServiceView, StackView, Status, now_ms,
 };
 use devstack_build::{Builder, Layout, Outcome, Snapshot, build_id};
 use devstack_compose::{Docker, Group};
@@ -21,10 +23,21 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
+/// One running process of a service.
+struct Instance {
+    tree: Owned,
+    /// The port it listens on (internal behind the proxy), if it has one.
+    port: Option<u16>,
+    build_id: Option<String>,
+    log: PathBuf,
+    /// Its cleanup record's name (ADR-0016), `<service>@<port>`.
+    record: String,
+}
+
 pub(crate) struct Slot {
     pub view: ServiceView,
-    tree: Option<Owned>,
-    /// Bumped by every start and stop; a monitor of an older generation retires.
+    main: Option<Instance>,
+    /// Bumped by every start, stop and switch; a monitor of an older generation retires.
     generation: u64,
 }
 
@@ -53,6 +66,9 @@ pub struct Supervisor {
     persisted: Mutex<Persisted>,
     seq: AtomicU64,
     pub events: broadcast::Sender<Event>,
+    /// Runs the proxies (ADR-0010).
+    rt: tokio::runtime::Handle,
+    proxies: Mutex<BTreeMap<String, Proxy>>,
 }
 
 impl Supervisor {
@@ -61,6 +77,7 @@ impl Supervisor {
         repo: PathBuf,
         state_dir: PathBuf,
         proc_opts: devstack_proc::Options,
+        rt: tokio::runtime::Handle,
     ) -> Result<Arc<Self>, String> {
         let layout = Layout::new(&state_dir);
         let builder = Builder::new(layout.clone(), &proc_opts).map_err(|e| e.to_string())?;
@@ -90,8 +107,11 @@ impl Supervisor {
                         pid: None,
                         since: now_ms(),
                         log: None,
+                        instance_port: None,
+                        proxy: None,
+                        candidate: None,
                     },
-                    tree: None,
+                    main: None,
                     generation: 0,
                 },
             );
@@ -120,6 +140,8 @@ impl Supervisor {
             }),
             seq: AtomicU64::new(0),
             events,
+            rt,
+            proxies: Mutex::new(BTreeMap::new()),
         }))
     }
 
@@ -151,13 +173,31 @@ impl Supervisor {
         });
     }
 
+    fn set_candidate(&self, name: &str, candidate: Option<Candidate>) {
+        if let Some(slot) = self.slots.lock().unwrap().get_mut(name) {
+            if slot.view.candidate == candidate {
+                return;
+            }
+            slot.view.candidate = candidate.clone();
+        }
+        self.emit(EventBody::Candidate {
+            service: name.into(),
+            candidate,
+        });
+    }
+
     pub fn view(&self) -> StackView {
+        let proxies = self.proxies.lock().unwrap().clone();
         let services = self
             .slots
             .lock()
             .unwrap()
             .values()
-            .map(|s| s.view.clone())
+            .map(|s| {
+                let mut v = s.view.clone();
+                v.proxy = proxies.get(&v.name).map(Proxy::view);
+                v
+            })
             .collect();
         let infra = self.infra.lock().unwrap().views.clone();
         let groups = self
@@ -198,7 +238,7 @@ impl Supervisor {
             .lock()
             .unwrap()
             .iter_mut()
-            .filter_map(|(name, slot)| slot.tree.as_mut().map(|t| (name.clone(), t.usage())))
+            .filter_map(|(name, slot)| slot.main.as_mut().map(|i| (name.clone(), i.tree.usage())))
             .collect()
     }
 
@@ -505,6 +545,26 @@ impl Supervisor {
         result
     }
 
+    /// The proxy on the service's fixed port, bound on first use (ADR-0010).
+    fn ensure_proxy(&self, name: &str, svc: &Service) -> Result<Proxy, String> {
+        let mut proxies = self.proxies.lock().unwrap();
+        if let Some(p) = proxies.get(name) {
+            return Ok(p.clone());
+        }
+        let port = svc.port.expect("proxied services have a port");
+        if port_in_use(port) {
+            return Err(format!("port {port} is already in use by another process"));
+        }
+        let p =
+            Proxy::bind(name, port, &self.rt).map_err(|e| format!("proxy on port {port}: {e}"))?;
+        proxies.insert(name.into(), p.clone());
+        Ok(p)
+    }
+
+    fn proxy(&self, name: &str) -> Option<Proxy> {
+        self.proxies.lock().unwrap().get(name).cloned()
+    }
+
     fn start_locked(self: &Arc<Self>, name: &str, svc: &Service) -> Result<(), String> {
         // 1. Build into an artifact (services and jobs with `build`).
         let artifact = if svc.build.is_some() {
@@ -513,15 +573,104 @@ impl Supervisor {
             None
         };
 
-        // 2. Port free?
-        if let Some(port) = svc.port
-            && port_in_use(port)
-        {
-            return Err(format!("port {port} is already in use by another process"));
-        }
+        // 2. The port: behind the proxy an internal one, else the fixed one, free.
+        let proxy = if svc.proxied() {
+            let p = self.ensure_proxy(name, svc)?;
+            let hold = svc
+                .health
+                .as_ref()
+                .map_or(Duration::from_secs(60), |h| h.timeout);
+            p.set_waiting(Waiting::Hold(hold));
+            Some(p)
+        } else {
+            if let Some(port) = svc.port
+                && port_in_use(port)
+            {
+                return Err(format!("port {port} is already in use by another process"));
+            }
+            None
+        };
+        let port = match &proxy {
+            Some(_) => Some(free_port()?),
+            None => svc.port,
+        };
 
-        // 3. Environment (ADR-0014) and command line.
-        let ctx = self.context(svc, artifact.as_ref().map(|(_, d)| d.as_path()));
+        // 3. Start and wait until ready (jobs: until done).
+        let refuse = |reason: &str| {
+            if let Some(p) = &proxy {
+                p.set_waiting(Waiting::Refuse(format!(
+                    "`{name}` failed to start: {}",
+                    reason.lines().next().unwrap_or("")
+                )));
+            }
+        };
+        let mut inst = match self.launch(name, svc, artifact.as_ref(), port, true) {
+            Ok(i) => i,
+            Err(e) => {
+                refuse(&e);
+                return Err(e);
+            }
+        };
+        {
+            let mut slots = self.slots.lock().unwrap();
+            let v = &mut slots.get_mut(name).unwrap().view;
+            v.pid = Some(inst.tree.root_pid());
+            v.log = Some(inst.log.clone());
+            v.build_id = inst.build_id.clone();
+            v.instance_port = inst.port;
+        }
+        self.set_status(name, Status::Starting);
+        let ready = match self.wait_instance(svc, &mut inst) {
+            Ok(s) => s,
+            Err(e) => {
+                inst.tree.kill();
+                self.forget_record(&inst.record);
+                refuse(&e);
+                return Err(e);
+            }
+        };
+
+        // 4. In service: behind the proxy, switch it on; record it; watch it.
+        if let Some(p) = &proxy {
+            p.set_upstream(Some(Upstream {
+                port: inst.port.expect("internal port"),
+                build: inst.build_id.clone(),
+            }));
+            p.set_pending(None);
+        }
+        if let Some((id, _)) = &artifact {
+            let mut pers = self.persisted.lock().unwrap();
+            pers.main.insert(name.into(), id.clone());
+            pers.save(&self.state_dir);
+        }
+        if svc.kind == Kind::Job {
+            self.forget_record(&inst.record);
+            self.set_status(name, ready);
+            return Ok(());
+        }
+        let generation = {
+            let mut slots = self.slots.lock().unwrap();
+            let slot = slots.get_mut(name).unwrap();
+            slot.generation += 1;
+            slot.main = Some(inst);
+            slot.generation
+        };
+        self.set_status(name, ready);
+        self.spawn_monitor(name.to_string(), svc.clone(), generation);
+        Ok(())
+    }
+
+    /// Start one process of `svc` on `port`; `is_main` decides its worker
+    /// switches (ADR-0008). Its cleanup record is persisted (ADR-0016).
+    fn launch(
+        &self,
+        name: &str,
+        svc: &Service,
+        artifact: Option<&(String, PathBuf)>,
+        port: Option<u16>,
+        is_main: bool,
+    ) -> Result<Instance, String> {
+        let ctx = self.context(svc, artifact.map(|(_, d)| d.as_path()), port, is_main);
         let env = {
             let infra = self.infra.lock().unwrap();
             devstack_env::compose(name, svc, &ctx, &infra.envs, true).map_err(|e| e.to_string())?
@@ -534,7 +683,7 @@ impl Supervisor {
                 .map_err(|e| format!("ensure_dirs: {e}"))?;
             std::fs::create_dir_all(&dir).map_err(|e| format!("create {dir}: {e}"))?;
         }
-        let cwd = match (&artifact, &svc.cwd) {
+        let cwd = match (artifact, &svc.cwd) {
             // Built services run from their artifact (ADR-0002); its files are their content root.
             (Some((_, dir)), _) => dir.clone(),
             (None, Some(c)) => self.repo.join(c),
@@ -542,54 +691,47 @@ impl Supervisor {
         };
         let mut env_map: BTreeMap<String, String> =
             env.into_iter().map(|(k, v)| (k, v.value)).collect();
-        if let Some((id, _)) = &artifact {
+        if let Some((id, _)) = artifact {
             env_map.insert("DEVSTACK_BUILD_ID".into(), id.clone());
         }
-
-        // 4. Start in an owned tree (ADR-0009).
-        let log = self
-            .state_dir
-            .join("logs")
-            .join(name)
-            .join(format!("run-{}.log", now_ms()));
+        let record = match port {
+            Some(p) => format!("{name}@{p}"),
+            None => name.to_string(),
+        };
+        let log = self.state_dir.join("logs").join(name).join(format!(
+            "run-{}-{}.log",
+            now_ms(),
+            port.unwrap_or(0)
+        ));
         std::fs::create_dir_all(log.parent().unwrap()).map_err(|e| e.to_string())?;
         let file = std::fs::File::create(&log).map_err(|e| e.to_string())?;
         let spec = Spec {
-            name: name.into(),
+            name: record.clone(),
             command,
             cwd,
             env: env_map,
             log: file,
         };
-        let (tree, record) =
-            devstack_proc::spawn(spec, &self.proc_opts).map_err(|e| e.to_string())?;
-        let generation = {
-            let mut slots = self.slots.lock().unwrap();
-            let slot = slots.get_mut(name).unwrap();
-            slot.generation += 1;
-            slot.view.pid = Some(tree.root_pid());
-            slot.view.log = Some(log.clone());
-            slot.view.build_id = artifact.as_ref().map(|(id, _)| id.clone());
-            slot.tree = Some(tree);
-            slot.generation
-        };
+        let (tree, rec) = devstack_proc::spawn(spec, &self.proc_opts).map_err(|e| e.to_string())?;
         {
             let mut p = self.persisted.lock().unwrap();
-            p.records.retain(|r| r.name != name);
-            p.records.push(record);
-            if let Some((id, _)) = &artifact {
-                p.main.insert(name.into(), id.clone());
-            }
+            p.records.retain(|r| r.name != record);
+            p.records.push(rec);
             p.save(&self.state_dir);
         }
-        self.set_status(name, Status::Starting);
+        Ok(Instance {
+            tree,
+            port,
+            build_id: artifact.map(|(id, _)| id.clone()),
+            log,
+            record,
+        })
+    }
 
-        // 5. Ready: job finished, health passed, or simply running.
-        let ready = self.wait_ready(name, svc, generation, &log);
-        if ready.is_ok() {
-            self.spawn_monitor(name.to_string(), svc.clone(), generation);
-        }
-        ready
+    fn forget_record(&self, record: &str) {
+        let mut p = self.persisted.lock().unwrap();
+        p.records.retain(|r| r.name != record);
+        p.save(&self.state_dir);
     }
 
     /// Sync the main lane and build `name` unless its artifact exists.
@@ -628,17 +770,25 @@ impl Supervisor {
         Ok((id.clone(), self.layout.artifact(name, &id)))
     }
 
-    fn context(&self, svc: &Service, artifact: Option<&Path>) -> Context {
+    fn context(
+        &self,
+        svc: &Service,
+        artifact: Option<&Path>,
+        port: Option<u16>,
+        is_main: bool,
+    ) -> Context {
         let infra = self.infra.lock().unwrap();
         let mut ctx = Context {
             repo: self.repo.clone(),
             artifact: artifact.map(Path::to_path_buf),
-            port: svc.port,
-            is_main: true,
+            port,
+            is_main,
             published: infra.published.clone(),
             pending: infra.pending.clone(),
             ..Default::default()
         };
+        // Other services are reached on their fixed port: through the proxy, at
+        // whichever instance is current.
         for (n, s) in &self.stack.services {
             if let Some(p) = s.port {
                 let tls = s.health.as_ref().is_some_and(|h| h.insecure_tls);
@@ -653,64 +803,40 @@ impl Supervisor {
         ctx
     }
 
-    fn wait_ready(
-        &self,
-        name: &str,
-        svc: &Service,
-        generation: u64,
-        log: &Path,
-    ) -> Result<(), String> {
-        let exited = |s: &Self| -> Option<i32> {
-            let mut slots = s.slots.lock().unwrap();
-            let slot = slots.get_mut(name)?;
-            if slot.generation != generation {
-                return Some(-1);
-            }
-            slot.tree.as_mut().and_then(|t| t.try_exit_code())
-        };
+    /// Until the instance is ready: a job until it finished, a service with a
+    /// health check until it answers (on the instance's own port, never through
+    /// the proxy: ADR-0010 condition 1), else a moment to fail fast. Returns the
+    /// status to show.
+    fn wait_instance(&self, svc: &Service, inst: &mut Instance) -> Result<Status, String> {
         match svc.kind {
             Kind::Job => loop {
-                if let Some(code) = exited(self) {
+                if let Some(code) = inst.tree.try_exit_code() {
                     if code == 0 {
-                        self.set_status(name, Status::Completed { exit_code: 0 });
-                        return Ok(());
+                        return Ok(Status::Completed { exit_code: 0 });
                     }
-                    return Err(format!("job exited with code {code}\n{}", tail(log, 15)));
+                    return Err(format!(
+                        "job exited with code {code}\n{}",
+                        tail(&inst.log, 15)
+                    ));
                 }
                 std::thread::sleep(Duration::from_millis(100));
             },
-            _ => match &svc.health {
-                None => {
-                    // Give it a moment to fail fast, e.g. on a wrong command line.
-                    std::thread::sleep(Duration::from_millis(500));
-                    if let Some(code) = exited(self) {
-                        return Err(format!(
-                            "exited with code {code} right after start\n{}",
-                            tail(log, 15)
-                        ));
-                    }
-                    self.set_status(name, Status::Running);
-                    Ok(())
-                }
-                Some(h) => {
+            _ => match (&svc.health, inst.port) {
+                (Some(h), Some(port)) => {
                     let t0 = Instant::now();
-                    let port = svc.port.expect("validated: health needs a port");
                     let mut last = String::new();
                     while t0.elapsed() < h.timeout {
-                        if let Some(code) = exited(self) {
+                        if let Some(code) = inst.tree.try_exit_code() {
                             return Err(format!(
                                 "exited with code {code} before it became healthy\n{}",
-                                tail(log, 15)
+                                tail(&inst.log, 15)
                             ));
                         }
                         match self
                             .health
                             .check(port, &h.http, h.insecure_tls, h.insecure_tls)
                         {
-                            Ok(()) => {
-                                self.set_status(name, Status::Healthy);
-                                return Ok(());
-                            }
+                            Ok(()) => return Ok(Status::Healthy),
                             Err(e) => last = e,
                         }
                         std::thread::sleep(Duration::from_millis(300));
@@ -720,11 +846,22 @@ impl Supervisor {
                         h.timeout.as_secs()
                     ))
                 }
+                _ => {
+                    // Give it a moment to fail fast, e.g. on a wrong command line.
+                    std::thread::sleep(Duration::from_millis(500));
+                    if let Some(code) = inst.tree.try_exit_code() {
+                        return Err(format!(
+                            "exited with code {code} right after start\n{}",
+                            tail(&inst.log, 15)
+                        ));
+                    }
+                    Ok(Status::Running)
+                }
             },
         }
     }
 
-    /// Watch a started instance: exit and health changes become events.
+    /// Watch the main instance: exit and health changes become events.
     fn spawn_monitor(self: &Arc<Self>, name: String, svc: Service, generation: u64) {
         let me = Arc::clone(self);
         let _ = std::thread::Builder::new()
@@ -733,7 +870,7 @@ impl Supervisor {
                 let mut last_health = Instant::now();
                 loop {
                     std::thread::sleep(Duration::from_millis(500));
-                    let exit = {
+                    let (exit, port) = {
                         let mut slots = me.slots.lock().unwrap();
                         let Some(slot) = slots.get_mut(&name) else {
                             return;
@@ -741,31 +878,33 @@ impl Supervisor {
                         if slot.generation != generation {
                             return;
                         }
-                        slot.tree.as_mut().and_then(|t| t.try_exit_code())
+                        let Some(inst) = slot.main.as_mut() else {
+                            return;
+                        };
+                        (inst.tree.try_exit_code(), inst.port)
                     };
                     if let Some(code) = exit {
                         // Let the rest of the tree go too.
-                        if let Some(mut t) = me
-                            .slots
-                            .lock()
-                            .unwrap()
-                            .get_mut(&name)
-                            .and_then(|s| s.tree.take())
-                        {
-                            t.kill();
+                        let inst = {
+                            let mut slots = me.slots.lock().unwrap();
+                            let slot = slots.get_mut(&name).unwrap();
+                            slot.view.pid = None;
+                            slot.main.take()
+                        };
+                        if let Some(mut i) = inst {
+                            i.tree.kill();
+                            me.forget_record(&i.record);
                         }
-                        // A job's end is its result, not a crash.
-                        me.set_status(
-                            &name,
-                            if svc.kind == Kind::Job {
-                                Status::Completed { exit_code: code }
-                            } else {
-                                Status::Exited { exit_code: code }
-                            },
-                        );
+                        if let Some(p) = me.proxy(&name) {
+                            p.set_upstream(None);
+                            p.set_waiting(Waiting::Refuse(format!(
+                                "`{name}` exited with code {code} (devstack logs {name})"
+                            )));
+                        }
+                        me.set_status(&name, Status::Exited { exit_code: code });
                         return;
                     }
-                    if let (Some(h), Some(port)) = (&svc.health, svc.port)
+                    if let (Some(h), Some(port)) = (&svc.health, port)
                         && last_health.elapsed() >= Duration::from_secs(5)
                     {
                         last_health = Instant::now();
@@ -781,43 +920,61 @@ impl Supervisor {
             });
     }
 
-    /// Graceful stop, then kill (ADR-0009).
+    /// Graceful stop, then kill (ADR-0009). Behind the proxy, requests are
+    /// refused with the reason from now on and running ones may finish briefly.
     pub fn stop(&self, name: &str) -> Result<(), String> {
         self.service(name)?;
         let _op = self.op_locks[name].lock().unwrap();
-        let tree = {
+        let inst = {
             let mut slots = self.slots.lock().unwrap();
             let slot = slots.get_mut(name).unwrap();
             slot.generation += 1;
             slot.view.pid = None;
-            slot.tree.take()
+            slot.view.instance_port = None;
+            slot.main.take()
         };
-        if let Some(mut t) = tree {
-            t.stop(Duration::from_secs(20));
+        if let Some(p) = self.proxy(name) {
+            p.set_upstream(None);
+            p.set_waiting(Waiting::Refuse(format!(
+                "`{name}` is stopped (devstack start {name})"
+            )));
+            if let Some(port) = inst.as_ref().and_then(|i| i.port) {
+                p.drain(port, Duration::from_secs(2));
+            }
         }
-        let mut p = self.persisted.lock().unwrap();
-        p.records.retain(|r| r.name != name);
-        p.save(&self.state_dir);
-        drop(p);
+        if let Some(mut i) = inst {
+            i.tree.stop(Duration::from_secs(20));
+            self.forget_record(&i.record);
+        }
         self.set_status(name, Status::Stopped);
         Ok(())
     }
 
-    /// Build first; only a successful build replaces the running instance (the
-    /// rule of ADR-0003, ahead of candidates in phase 2). A failed build leaves
-    /// the running instance as it was.
+    /// Build first; only a successful build replaces the running instance
+    /// (ADR-0003). Behind the proxy the replacement is a candidate that takes
+    /// over without dropping a request; otherwise a restart in place.
     pub fn restart(self: &Arc<Self>, name: &str) -> Result<(), String> {
         let svc = self.service(name)?.clone();
+        let mut artifact = None;
         if svc.build.is_some() {
             let _op = self.op_locks[name].lock().unwrap();
             let before = self.slots.lock().unwrap()[name].view.status.clone();
-            if let Err(e) = self.build_locked(name, &svc) {
-                // Back to what is actually running; the error goes to the caller.
-                self.set_status(name, before);
-                return Err(format!(
-                    "{e}
+            match self.build_locked(name, &svc) {
+                Ok(a) => artifact = Some(a),
+                Err(e) => {
+                    // Back to what is actually running; the error goes to the caller.
+                    self.set_status(name, before);
+                    if svc.proxied() && self.slots.lock().unwrap()[name].main.is_some() {
+                        self.set_candidate(
+                            name,
+                            Some(Candidate::new("failed", None, Some(first_lines(&e, 5)))),
+                        );
+                    }
+                    return Err(format!(
+                        "{e}
 The running instance was left as it was."
-                ));
+                    ));
+                }
             }
         }
         // Jobs this service comes after run again first (a schema migrator for a
@@ -835,8 +992,146 @@ The running instance was left as it was."
                 })?;
             }
         }
+        let running = self.slots.lock().unwrap()[name].main.is_some();
+        if svc.proxied() && running {
+            return self.replace(name, &svc, artifact);
+        }
         self.stop(name)?;
         self.start(name)
+    }
+
+    /// Replace the running main instance behind the proxy (ADR-0003, ADR-0010):
+    ///
+    /// 1. the candidate starts on a free port without workers (ADR-0008) and
+    ///    must pass its health check; if not, it goes and main stays;
+    /// 2. the proxy switches to it; the old instance drains and stops;
+    /// 3. a service with worker switches gets the same artifact once more with
+    ///    workers on, which takes over the same way ("relay"): requests never
+    ///    wait, background work pauses for one start-up.
+    fn replace(
+        self: &Arc<Self>,
+        name: &str,
+        svc: &Service,
+        artifact: Option<(String, PathBuf)>,
+    ) -> Result<(), String> {
+        let _op = self.op_locks[name].lock().unwrap();
+        let proxy = self.ensure_proxy(name, svc)?;
+        let build = artifact.as_ref().map(|(id, _)| id.clone());
+        let relay = svc.workers.is_some();
+        let fail = |e: String| -> Result<(), String> {
+            self.set_candidate(
+                name,
+                Some(Candidate::new(
+                    "failed",
+                    build.clone(),
+                    Some(first_lines(&e, 5)),
+                )),
+            );
+            proxy.set_pending(None);
+            Err(format!("{e}\nThe running instance was left as it was."))
+        };
+
+        self.set_candidate(name, Some(Candidate::new("starting", build.clone(), None)));
+        proxy.set_pending(Some(format!(
+            "starting {}",
+            build.as_deref().unwrap_or("a new instance")
+        )));
+        let mut candidate =
+            match self.launch(name, svc, artifact.as_ref(), Some(free_port()?), !relay) {
+                Ok(i) => i,
+                Err(e) => return fail(e),
+            };
+        if let Err(e) = self.wait_instance(svc, &mut candidate) {
+            candidate.tree.kill();
+            self.forget_record(&candidate.record);
+            return fail(e);
+        }
+
+        self.set_candidate(name, Some(Candidate::new("switching", build.clone(), None)));
+        let old = self.switch_to(name, &proxy, candidate);
+        self.retire(&proxy, old);
+
+        if relay {
+            let mut fin = match self.launch(name, svc, artifact.as_ref(), Some(free_port()?), true)
+            {
+                Ok(i) => i,
+                Err(e) => return self.running_without_workers(name, svc, e),
+            };
+            if let Err(e) = self.wait_instance(svc, &mut fin) {
+                fin.tree.kill();
+                self.forget_record(&fin.record);
+                return self.running_without_workers(name, svc, e);
+            }
+            let without_workers = self.switch_to(name, &proxy, fin);
+            self.retire(&proxy, without_workers);
+        }
+
+        if let Some(id) = &build {
+            let mut pers = self.persisted.lock().unwrap();
+            pers.main.insert(name.into(), id.clone());
+            pers.save(&self.state_dir);
+        }
+        proxy.set_pending(None);
+        self.set_candidate(name, None);
+        let generation = self.slots.lock().unwrap()[name].generation;
+        self.set_status(name, Status::Healthy);
+        self.spawn_monitor(name.to_string(), svc.clone(), generation);
+        Ok(())
+    }
+
+    /// Point the proxy at `inst` and make it main; returns the previous main.
+    fn switch_to(&self, name: &str, proxy: &Proxy, inst: Instance) -> Option<Instance> {
+        proxy.set_upstream(Some(Upstream {
+            port: inst.port.expect("instances behind the proxy have a port"),
+            build: inst.build_id.clone(),
+        }));
+        let mut slots = self.slots.lock().unwrap();
+        let slot = slots.get_mut(name).unwrap();
+        slot.generation += 1;
+        slot.view.pid = Some(inst.tree.root_pid());
+        slot.view.log = Some(inst.log.clone());
+        slot.view.build_id = inst.build_id.clone();
+        slot.view.instance_port = inst.port;
+        slot.main.replace(inst)
+    }
+
+    /// Let a replaced instance finish what it serves (streams get a deadline,
+    /// then the proxy closes them, ADR-0010 condition 4), then stop it.
+    fn retire(&self, proxy: &Proxy, old: Option<Instance>) {
+        if let Some(mut old) = old {
+            if let Some(port) = old.port {
+                proxy.drain(port, Duration::from_secs(5));
+            }
+            old.tree.stop(Duration::from_secs(10));
+            self.forget_record(&old.record);
+        }
+    }
+
+    /// The relay's second start failed: the new build serves, but without its
+    /// background workers. Said loudly, since nothing else would notice.
+    fn running_without_workers(
+        self: &Arc<Self>,
+        name: &str,
+        svc: &Service,
+        e: String,
+    ) -> Result<(), String> {
+        let reason = format!(
+            "serving without background workers: their start failed: {}",
+            first_lines(&e, 3)
+        );
+        self.set_candidate(name, None);
+        if let Some(p) = self.proxy(name) {
+            p.set_pending(None);
+        }
+        self.set_status(
+            name,
+            Status::Unhealthy {
+                reason: reason.clone(),
+            },
+        );
+        let generation = self.slots.lock().unwrap()[name].generation;
+        self.spawn_monitor(name.to_string(), svc.clone(), generation);
+        Err(reason)
     }
 
     /// Start what `svc` comes after and is not ready yet (services, jobs that
@@ -861,6 +1156,18 @@ The running instance was left as it was."
         }
         Ok(())
     }
+}
+
+/// A free local port for an instance behind the proxy.
+fn free_port() -> Result<u16, String> {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .and_then(|l| l.local_addr())
+        .map(|a| a.port())
+        .map_err(|e| format!("no free port: {e}"))
+}
+
+fn first_lines(text: &str, n: usize) -> String {
+    text.lines().take(n).collect::<Vec<_>>().join("\n")
 }
 
 fn runs_here(svc: &Service) -> bool {

@@ -5,6 +5,7 @@
 pub mod api;
 pub mod commands;
 pub mod health;
+pub mod proxy;
 pub mod state;
 pub mod supervisor;
 pub mod token;
@@ -66,11 +67,17 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
         cgroup_root: cgroup_root(&stack.stack.name),
         shim: vec![exe.to_string_lossy().into_owned(), "shim".into()],
     };
-    let sup = supervisor::Supervisor::new(stack, repo, state_dir.clone(), proc_opts)?;
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let sup = supervisor::Supervisor::new(
+        stack,
+        repo,
+        state_dir.clone(),
+        proc_opts,
+        rt.handle().clone(),
+    )?;
     sup.refresh_infra();
     let usage = usage::Sampler::start(sup.clone());
 
-    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     rt.block_on(async move {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await

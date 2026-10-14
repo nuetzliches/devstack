@@ -195,6 +195,12 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         if svc.kind == Kind::Tool && svc.health.is_some() {
             c.err(format!("{p}.health"), "a tool has no health check");
         }
+        if svc.proxy == Some(true) && (svc.kind != Kind::Service || svc.port.is_none()) {
+            c.err(
+                format!("{p}.proxy"),
+                "only a long-running service with a `port` can sit behind the proxy",
+            );
+        }
         if svc.health.is_some() && svc.port.is_none() {
             c.err(format!("{p}.health"), "an HTTP health check needs `port`");
         }

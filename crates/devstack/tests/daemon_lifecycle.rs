@@ -261,6 +261,27 @@ members = [\"api\", \"command.ping\"]
         info["pid"].as_u64().unwrap() as u32
     }
 
+    /// The daemon's view of one service (`GET /v1/stack`).
+    fn service_view(&self, name: &str) -> Value {
+        let daemon: Value = serde_json::from_slice(
+            &std::fs::read(self.dir.path().join(".devstack/daemon.json")).unwrap(),
+        )
+        .unwrap();
+        let token = std::fs::read_to_string(self.token_home.path().join("devstack/token")).unwrap();
+        let mut r = ureq::get(&format!("http://127.0.0.1:{}/v1/stack", daemon["port"]))
+            .header("Authorization", &format!("Bearer {token}"))
+            .call()
+            .unwrap();
+        let stack: Value = serde_json::from_str(&r.body_mut().read_to_string().unwrap()).unwrap();
+        stack["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["name"] == name)
+            .cloned()
+            .unwrap_or(Value::Null)
+    }
+
     fn prep_runs(&self) -> usize {
         std::fs::read_to_string(self.dir.path().join("prep.count"))
             .map(|t| t.lines().count())
@@ -599,11 +620,45 @@ fn lifecycle(with_compose: bool) {
     );
 
     assert_eq!(s.prep_runs(), 1, "a failed build runs no job");
+    let candidate = &s.service_view("api")["candidate"];
+    assert_eq!(
+        candidate["state"], "failed",
+        "the failed build is visible as a candidate: {candidate}"
+    );
 
     // Fixed: a new build replaces it, and the job it comes after runs again
-    // first (a migration that came with the change).
+    // first (a migration that came with the change). Behind the proxy the
+    // replacement drops no request (ADR-0010): a poller hits the fixed port
+    // throughout.
     std::fs::write(&program, format!("{source}\n// changed\n")).unwrap();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let poller = {
+        let (stop, port) = (stop.clone(), s.port);
+        std::thread::spawn(move || {
+            let agent = ureq::Agent::config_builder()
+                .timeout_global(Some(Duration::from_secs(5)))
+                .http_status_as_error(false)
+                .build()
+                .new_agent();
+            let (mut ok, mut failed) = (0, Vec::new());
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                match agent.get(&format!("http://127.0.0.1:{port}/health")).call() {
+                    Ok(r) if r.status() == 200 => ok += 1,
+                    Ok(r) => failed.push(r.status().to_string()),
+                    Err(e) => failed.push(e.to_string()),
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            (ok, failed)
+        })
+    };
     s.ok(&["restart", "api"]);
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    let (ok, failed) = poller.join().unwrap();
+    assert!(
+        ok > 10 && failed.is_empty(),
+        "{ok} served, failed: {failed:?}"
+    );
     assert_eq!(
         s.prep_runs(),
         2,
@@ -612,6 +667,26 @@ fn lifecycle(with_compose: bool) {
     let second = s.info();
     let second_build = second["build"].as_str().unwrap().to_string();
     assert_ne!(second_build, first_build);
+    assert_eq!(
+        second["workers"], true,
+        "the relay ends with workers on (ADR-0008)"
+    );
+    assert!(
+        s.service_view("api")["candidate"].is_null(),
+        "nothing pending after the switch"
+    );
+    let tagged = ureq::get(&format!("http://127.0.0.1:{}/health", s.port))
+        .call()
+        .unwrap()
+        .headers()
+        .get("x-devstack-build")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    assert_eq!(
+        tagged.as_deref(),
+        Some(second_build.as_str()),
+        "the proxy names the build"
+    );
 
     // The daemon dies hard: its services die with it (ADR-0009).
     let api_pid = second["pid"].as_u64().unwrap();
