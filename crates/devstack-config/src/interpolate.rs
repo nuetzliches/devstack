@@ -1,0 +1,316 @@
+//! Interpolation (plan §4.5): a closed set of `{…}` placeholders and `${VAR}` /
+//! `${VAR:-default}` environment references. Placeholders inside a default are
+//! resolved too (`"${AI_URL:-{service.ai-mock.url}/v1}"`), which is the plan's
+//! "`{…}` first, then `${…}`". `{{` and `}}` are literal braces.
+
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Placeholder {
+    /// `{repo}`: absolute path of the lane's source root.
+    Repo,
+    /// `{artifact}`: artifact directory of the build being started.
+    Artifact,
+    /// `{port}`: port of the instance being started.
+    Port,
+    /// `{is_main}`: `true` in the main slot, `false` otherwise.
+    IsMain,
+    /// `{service.<name>.url}`: URL of that service's main slot.
+    ServiceUrl(String),
+    /// `{compose.<group>.<service>.<port>}`: published host address of a container port.
+    ComposePort {
+        group: String,
+        service: String,
+        port: u16,
+    },
+}
+
+impl fmt::Display for Placeholder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Placeholder::Repo => write!(f, "{{repo}}"),
+            Placeholder::Artifact => write!(f, "{{artifact}}"),
+            Placeholder::Port => write!(f, "{{port}}"),
+            Placeholder::IsMain => write!(f, "{{is_main}}"),
+            Placeholder::ServiceUrl(s) => write!(f, "{{service.{s}.url}}"),
+            Placeholder::ComposePort {
+                group,
+                service,
+                port,
+            } => write!(f, "{{compose.{group}.{service}.{port}}}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Segment {
+    Literal(String),
+    Placeholder(Placeholder),
+    Env {
+        name: String,
+        default: Option<Vec<Segment>>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum InterpError {
+    #[error(
+        "unknown placeholder `{{{0}}}` (allowed: repo, artifact, port, is_main, service.<name>.url, compose.<group>.<service>.<port>)"
+    )]
+    UnknownPlaceholder(String),
+    #[error("unclosed `{0}`")]
+    Unclosed(&'static str),
+    #[error("unmatched `}}` (write `}}}}` for a literal brace)")]
+    Unmatched,
+    #[error("invalid variable name in `${{{0}}}`")]
+    BadVarName(String),
+    #[error("environment variable `{0}` is not set and has no default")]
+    MissingVar(String),
+    #[error("{0}")]
+    Unresolved(String),
+}
+
+/// Parse a string into segments. Errors are syntax errors only.
+pub fn parse(input: &str) -> Result<Vec<Segment>, InterpError> {
+    let chars: Vec<char> = input.chars().collect();
+    let mut pos = 0;
+    let segs = parse_until(&chars, &mut pos, false)?;
+    Ok(segs)
+}
+
+fn push_lit(out: &mut Vec<Segment>, c: char) {
+    if let Some(Segment::Literal(s)) = out.last_mut() {
+        s.push(c);
+    } else {
+        out.push(Segment::Literal(c.to_string()));
+    }
+}
+
+fn parse_until(c: &[char], pos: &mut usize, in_default: bool) -> Result<Vec<Segment>, InterpError> {
+    let mut out = Vec::new();
+    while *pos < c.len() {
+        match c[*pos] {
+            '{' if c.get(*pos + 1) == Some(&'{') => {
+                push_lit(&mut out, '{');
+                *pos += 2;
+            }
+            '}' if in_default => {
+                return Ok(out); // caller consumes the closing brace
+            }
+            '}' if c.get(*pos + 1) == Some(&'}') => {
+                push_lit(&mut out, '}');
+                *pos += 2;
+            }
+            '}' => return Err(InterpError::Unmatched),
+            '$' if c.get(*pos + 1) == Some(&'{') => {
+                *pos += 2;
+                let start = *pos;
+                while *pos < c.len() && (c[*pos].is_ascii_alphanumeric() || c[*pos] == '_') {
+                    *pos += 1;
+                }
+                let name: String = c[start..*pos].iter().collect();
+                if name.is_empty() || name.starts_with(|ch: char| ch.is_ascii_digit()) {
+                    let rest: String = c[start..].iter().take_while(|&&ch| ch != '}').collect();
+                    return Err(InterpError::BadVarName(rest));
+                }
+                let default = if c.get(*pos) == Some(&':') && c.get(*pos + 1) == Some(&'-') {
+                    *pos += 2;
+                    Some(parse_until(c, pos, true)?)
+                } else {
+                    None
+                };
+                if c.get(*pos) != Some(&'}') {
+                    return Err(InterpError::Unclosed("${"));
+                }
+                *pos += 1;
+                out.push(Segment::Env { name, default });
+            }
+            '{' => {
+                *pos += 1;
+                let start = *pos;
+                while *pos < c.len() && c[*pos] != '}' {
+                    if c[*pos] == '{' {
+                        return Err(InterpError::Unclosed("{"));
+                    }
+                    *pos += 1;
+                }
+                if *pos >= c.len() {
+                    return Err(InterpError::Unclosed("{"));
+                }
+                let body: String = c[start..*pos].iter().collect();
+                *pos += 1;
+                out.push(Segment::Placeholder(placeholder(&body)?));
+            }
+            ch => {
+                push_lit(&mut out, ch);
+                *pos += 1;
+            }
+        }
+    }
+    if in_default {
+        return Err(InterpError::Unclosed("${"));
+    }
+    Ok(out)
+}
+
+fn placeholder(body: &str) -> Result<Placeholder, InterpError> {
+    let parts: Vec<&str> = body.split('.').collect();
+    let unknown = || InterpError::UnknownPlaceholder(body.to_string());
+    match parts.as_slice() {
+        ["repo"] => Ok(Placeholder::Repo),
+        ["artifact"] => Ok(Placeholder::Artifact),
+        ["port"] => Ok(Placeholder::Port),
+        ["is_main"] => Ok(Placeholder::IsMain),
+        ["service", name, "url"] if !name.is_empty() => {
+            Ok(Placeholder::ServiceUrl(name.to_string()))
+        }
+        ["compose", group, service, port] if !group.is_empty() && !service.is_empty() => {
+            Ok(Placeholder::ComposePort {
+                group: group.to_string(),
+                service: service.to_string(),
+                port: port.parse().map_err(|_| unknown())?,
+            })
+        }
+        _ => Err(unknown()),
+    }
+}
+
+/// Every placeholder in a parsed string, including those inside defaults.
+pub fn placeholders(segs: &[Segment]) -> Vec<&Placeholder> {
+    let mut out = Vec::new();
+    for s in segs {
+        match s {
+            Segment::Placeholder(p) => out.push(p),
+            Segment::Env {
+                default: Some(d), ..
+            } => out.extend(placeholders(d)),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Supplies the values of placeholders at the moment a string is expanded.
+pub trait Resolve {
+    fn resolve(&self, p: &Placeholder) -> Result<String, String>;
+}
+
+/// Expand a string. `env` looks variables up (process environment and the
+/// Compose group's env files, in the caller's order).
+pub fn expand(
+    input: &str,
+    r: &dyn Resolve,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<String, InterpError> {
+    let segs = parse(input)?;
+    eval(&segs, r, env)
+}
+
+fn eval(
+    segs: &[Segment],
+    r: &dyn Resolve,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<String, InterpError> {
+    let mut out = String::new();
+    for s in segs {
+        match s {
+            Segment::Literal(l) => out.push_str(l),
+            Segment::Placeholder(p) => {
+                out.push_str(&r.resolve(p).map_err(InterpError::Unresolved)?)
+            }
+            Segment::Env { name, default } => match (env(name), default) {
+                (Some(v), _) => out.push_str(&v),
+                (None, Some(d)) => out.push_str(&eval(d, r, env)?),
+                (None, None) => return Err(InterpError::MissingVar(name.clone())),
+            },
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct R;
+    impl Resolve for R {
+        fn resolve(&self, p: &Placeholder) -> Result<String, String> {
+            Ok(match p {
+                Placeholder::Repo => "/repo".into(),
+                Placeholder::Artifact => "/art".into(),
+                Placeholder::Port => "5000".into(),
+                Placeholder::IsMain => "true".into(),
+                Placeholder::ServiceUrl(s) => format!("http://127.0.0.1:1/{s}"),
+                Placeholder::ComposePort { service, port, .. } => {
+                    format!("http://127.0.0.1:9{port}/{service}")
+                }
+            })
+        }
+    }
+    fn env(k: &str) -> Option<String> {
+        (k == "SET").then(|| "value".to_string())
+    }
+    fn x(s: &str) -> Result<String, InterpError> {
+        expand(s, &R, &env)
+    }
+
+    #[test]
+    fn placeholders_and_literals() {
+        assert_eq!(x("{repo}/dev/{port}").unwrap(), "/repo/dev/5000");
+        assert_eq!(
+            x("{service.api.url}/v1").unwrap(),
+            "http://127.0.0.1:1/api/v1"
+        );
+        assert_eq!(
+            x("{compose.app.hooks.8080}/x").unwrap(),
+            "http://127.0.0.1:98080/hooks/x"
+        );
+        assert_eq!(x("plain").unwrap(), "plain");
+    }
+
+    #[test]
+    fn env_refs_and_nested_defaults() {
+        assert_eq!(x("${SET}").unwrap(), "value");
+        assert_eq!(x("${UNSET:-fallback}").unwrap(), "fallback");
+        assert_eq!(x("${UNSET:-}").unwrap(), "");
+        assert_eq!(
+            x("${UNSET:-{service.ai.url}/v1}").unwrap(),
+            "http://127.0.0.1:1/ai/v1"
+        );
+        assert_eq!(x("${SET:-{service.ai.url}}").unwrap(), "value");
+        assert_eq!(x("${UNSET}"), Err(InterpError::MissingVar("UNSET".into())));
+    }
+
+    #[test]
+    fn escapes() {
+        assert_eq!(x("{{\"json\": 1}}").unwrap(), "{\"json\": 1}");
+        assert_eq!(x("$HOME and $ alone").unwrap(), "$HOME and $ alone");
+    }
+
+    #[test]
+    fn syntax_errors() {
+        assert!(matches!(
+            x("{nope}"),
+            Err(InterpError::UnknownPlaceholder(_))
+        ));
+        assert!(matches!(
+            x("{service.api}"),
+            Err(InterpError::UnknownPlaceholder(_))
+        ));
+        assert!(matches!(
+            x("{compose.a.b.port}"),
+            Err(InterpError::UnknownPlaceholder(_))
+        ));
+        assert_eq!(x("{repo"), Err(InterpError::Unclosed("{")));
+        assert_eq!(x("${A:-x"), Err(InterpError::Unclosed("${")));
+        assert_eq!(x("a}b"), Err(InterpError::Unmatched));
+        assert!(matches!(x("${1A}"), Err(InterpError::BadVarName(_))));
+    }
+
+    #[test]
+    fn collects_nested_placeholders() {
+        let segs = parse("${A:-{service.x.url}}{port}").unwrap();
+        let p = placeholders(&segs);
+        assert_eq!(p.len(), 2);
+    }
+}

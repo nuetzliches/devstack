@@ -209,7 +209,7 @@ Format: TOML, `devstack.toml` in the repository root, no profiles in version 1
 | `autostart` | `false` = started on demand only |
 | `platforms` | Restrict to `windows`, `linux`, `macos` |
 | `compose` | `{ group, service }` whose environment is the base (ADR-0014) |
-| `rewrite_hosts` | Compose service names rewritten to published host addresses (ADR-0014) |
+| `rewrite_hosts` | Compose services rewritten to published host addresses (ADR-0014): `<service>` of the own group, `<group>.<service>` of another |
 | `env` | Wins over the Compose environment |
 | `workers.env` | Worker switches, `{is_main}` = `true`/`false` (ADR-0008) |
 | `ensure_dirs` | Directories created before start |
