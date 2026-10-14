@@ -9,7 +9,9 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+devstack-compose.workspace = true
 devstack-config.workspace = true
+devstack-env.workspace = true
 devstack-proc.workspace = true
 serde_json.workspace = true
 

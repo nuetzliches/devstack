@@ -1,0 +1,19 @@
+# Deployment Compose file of the fixture stack, as a project would have it for
+# its servers. devstack uses it unchanged (ADR-0004).
+services:
+  api:
+    image: busybox:1.37
+    command: ["sh", "-c", "trap 'exit 0' TERM; while true; do sleep 1; done"]
+    environment:
+      ConnectionStrings__Db: "Server=db:5432;Database=app"
+      Cache__Url: "redis://cache:6379"
+      Mode: "${APP_MODE:-production}"
+      Telemetry__Endpoint: "http://otel:4317"
+    depends_on: [db, cache]
+  db:
+    image: busybox:1.37
+    command: ["sh", "-c", "trap 'exit 0' TERM; while true; do sleep 1; done"]
+    healthcheck: { test: ["CMD", "true"], interval: 1s }
+  cache:
+    image: busybox:1.37
+    command: ["sh", "-c", "trap 'exit 0' TERM; while true; do sleep 1; done"]

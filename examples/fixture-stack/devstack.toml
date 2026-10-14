@@ -1,0 +1,21 @@
+# Fixture stack for devstack's own integration tests (plan §10). Grows with
+# the implementation; today it covers the infra plane and ADR-0014.
+version = 1
+
+[stack]
+name = "fixture"
+
+[compose.app]
+project   = "devstack-fixture"
+files     = ["deploy/compose.yml", "dev/compose.dev.yml"]
+env_files = ["dev/.env.defaults", "dev/.env"]
+services  = ["db", "cache"]
+
+[services.api]
+compose       = { group = "app", service = "api" }
+rewrite_hosts = ["db", "cache"]
+run           = "echo api"
+port          = 5080
+
+[services.api.env]
+Telemetry__Endpoint = "http://127.0.0.1:4317"

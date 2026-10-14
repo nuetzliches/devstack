@@ -1,0 +1,13 @@
+# Dev overlay: only the differences from deploy/compose.yml (ADR-0004).
+services:
+  api:
+    # Runs natively under devstack; still available as a container with
+    # `--profile container-app` (ADR-0015).
+    profiles: [container-app]
+    depends_on: !override
+      db: { condition: service_started, required: false }
+      cache: { condition: service_started, required: false }
+  db:
+    ports: ["127.0.0.1:15432:5432"]
+  cache:
+    ports: ["127.0.0.1::6379"]

@@ -122,7 +122,9 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "devstack-compose",
  "devstack-config",
+ "devstack-env",
  "devstack-proc",
  "serde_json",
 ]
@@ -147,6 +149,14 @@ dependencies = [
  "serde_json",
  "thiserror",
  "toml",
+]
+
+[[package]]
+name = "devstack-env"
+version = "0.0.0"
+dependencies = [
+ "devstack-config",
+ "thiserror",
 ]
 
 [[package]]

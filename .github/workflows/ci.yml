@@ -36,5 +36,10 @@ jobs:
         env:
           # Linux runners have a Docker engine with Linux containers; Windows runners do not.
           DEVSTACK_DOCKER_TESTS: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
-      - name: example stack file
-        run: cargo run -q -p devstack -- check -f examples/devstack.toml
+      - name: example stack files
+        run: |
+          cargo run -q -p devstack -- check -f examples/devstack.toml
+          cargo run -q -p devstack -- check -f examples/fixture-stack/devstack.toml
+      - name: fixture stack compose groups
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo run -q -p devstack -- check --compose -f examples/fixture-stack/devstack.toml
