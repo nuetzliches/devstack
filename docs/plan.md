@@ -328,6 +328,10 @@ daemon will and answers, on Windows and Linux/WSL:
 
 Results go into ADR-0009 and ADR-0016.
 
+**Status 2026-10-14:** Windows done, a1-a8 pass, with `CTRL_BREAK` plus a hidden
+daemon console as the stop method; ConPTY fails to stop node (open). Linux half
+open. See `spikes/process-ownership/README.md`.
+
 ### 7.2 Spike (b): build cancellation
 
 ADR-0003 cancels a superseded build by killing its process tree. That only works

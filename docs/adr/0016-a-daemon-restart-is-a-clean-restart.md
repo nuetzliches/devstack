@@ -44,6 +44,10 @@ A daemon update is the same path preceded by a graceful stop of every service.
 devstack does not restart itself after a crash. CLI, MCP and dashboard report
 "daemon not running" and offer `devstack up`.
 
+Verified on Windows by spike (a): a second daemon on the same state directory
+is refused; after a hard kill of the first, the lock is free at once and the
+new instance starts. The Linux cleanup path is not verified yet.
+
 ## Alternatives considered
 
 - **Re-attach to running processes.** Saves the restart of the application

@@ -21,8 +21,9 @@ container that guarantees termination of the whole tree:
 
 - **Windows:** a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`; the
   daemon holds the handle, so the tree dies with the daemon even if the daemon
-  crashes. Each service gets its own console process group so a Ctrl+C/Ctrl+Break
-  can be delivered to it without touching others.
+  crashes. Each service gets its own console process group so a Ctrl+Break can be
+  delivered to it without touching others (Ctrl+C is disabled for a new
+  process group by Windows).
   The guarantee holds only if (1) the job handle is **never inheritable**, since a
   child holding a copy keeps the job open and nothing is killed, and (2)
   **breakaway is not allowed** (`JOB_OBJECT_LIMIT_BREAKAWAY_OK` unset), so no
@@ -36,6 +37,25 @@ container that guarantees termination of the whole tree:
 Stopping is two-stage: graceful signal, wait up to a per-service timeout
 (default 20 s), then terminate the job/group. Services are started from their
 real executable where possible, not through wrappers.
+
+## Spike (a) results (2026-10-14, Windows)
+
+Verified with `spikes/process-ownership` (details in its README):
+
+- A hard kill of the supervisor leaves **no** process of any tree, including a
+  detached, unref'd grandchild and a `dotnet watch` that creates job objects of
+  its own (nested jobs work).
+- Both conditions above are real: with an inheritable job handle every process
+  survived the supervisor; with breakaway allowed a child escaped. With both
+  guarded, breakaway is refused (access denied).
+- **Graceful stop uses `CTRL_BREAK_EVENT` to the service's process group.**
+  Services are started with `CREATE_NEW_PROCESS_GROUP` on the daemon's console;
+  .NET hosts run their regular shutdown, node receives `SIGBREAK`, 100 ms each,
+  and the signal reaches only the addressed service. A daemon started without a
+  console allocates a hidden one at start; without it the signal fails and every
+  service opens a console window of its own.
+- A pseudo console per service (ConPTY) stopped .NET but not node; it is not
+  used for stopping until that is understood.
 
 ## Alternatives considered
 

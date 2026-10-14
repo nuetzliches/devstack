@@ -9,3 +9,7 @@ node_modules/
 spikes/platform-bench/results/
 spikes/platform-bench/scenarios/*.local.json
 examples/*.local.toml
+spikes/**/target/
+spikes/**/bin/
+spikes/**/obj/
+spikes/process-ownership/results/

@@ -1,0 +1,27 @@
+[package]
+name = "procspike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Spike (a): process-tree ownership and graceful stop (plan §7.1)"
+
+# Standalone on purpose: a spike is not part of the future workspace.
+[workspace]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+portable-pty = "0.9"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
