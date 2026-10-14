@@ -163,74 +163,107 @@ groups without restarting them, and starts every service from the artifact that
 was last promoted to main, without building. An update is the same path after a
 graceful stop.
 
-## 4. Stack file (sketch, not final)
+## 4. Stack file (schema version 1, draft)
 
-Format and name are not decided (open question O-1). Illustration only:
+Format: TOML, `devstack.toml` in the repository root, no profiles in version 1
+([ADR-0017](adr/0017-stack-file-is-toml.md), provisional). A complete example is
+[`examples/devstack.toml`](../examples/devstack.toml).
 
-```toml
-[stack]
-name = "example"
+### 4.1 Top level
 
-# Infra plane: the project's own deployment Compose files plus a dev overlay
-# (ADR-0004). One group per Compose project; order = start order.
-[[compose]]
-name     = "search"                                   # project name, fixed
-files    = ["deploy/app-host/compose.search.yml", "dev/search.dev.yml"]
-env_file = "dev/.env"
-networks = ["edge"]                                   # external, created before `up`
-services = ["search"]
+| Key | Type | Meaning |
+|---|---|---|
+| `version` | integer | Schema version, `1` |
+| `stack.name` | string | Display name; prefix for daemon state |
+| `compose.<group>` | table | A Compose project (ADR-0004) |
+| `services.<name>` | table | A native process managed by devstack |
+| `commands.<name>` | table | An operation users and agents can run |
 
-[[compose]]
-name     = "app"
-files    = ["deploy/app-host/compose.yml", "dev/app-host.dev.yml"]
-env_file = "dev/.env"
-services = ["db", "scheduler", "renderer", "otel-collector", "dashboard", "webhooks"]
-restart_on = { scheduler = ["config/scheduler/**"] }  # bind mounts do not notify
+### 4.2 `compose.<group>`
 
-[profiles]
-local  = "dev/profile.local.toml"
-shared = "dev/profile.shared.toml"
+| Key | Meaning |
+|---|---|
+| `project` | Compose project name (fixed, never derived from a path) |
+| `files` | Deployment Compose files first, then the dev overlay |
+| `env_files` | Later files win; typically tracked defaults, then an untracked `.env` |
+| `networks` | External networks created before `up` |
+| `services` | Services started (`--no-deps`); everything else stays down |
+| `after` | Groups that must be healthy first |
+| `restart_on.<service>` | Paths whose change restarts that container |
 
-[services.migrate]
-kind    = "job"
-compose = { group = "app", service = "migrate" }      # environment from Compose (ADR-0014)
-rewrite_hosts = ["db"]
-watch   = ["src/**/*.cs", "src/**/*.csproj"]
-build   = "dotnet build src/Migrate -c Debug -o {artifact}"
-run     = "{artifact}/Migrate.exe"
+### 4.3 `services.<name>`
 
-[services.api]
-compose = { group = "app", service = "api" }
-rewrite_hosts = ["db", "scheduler", "renderer", "otel-collector"]
-watch   = ["src/**/*.cs", "src/**/*.csproj", "src/**/appsettings*.json"]
-build   = "dotnet build src/Api -c Debug -o {artifact}"
-run     = "{artifact}/Api.exe"
-port    = 5000
-after   = ["migrate"]
-health  = { http = "/health", timeout = "60s" }
-workers = { env = { Jobs__Enabled = "{is_main}", Queue__Consumer__Enabled = "{is_main}" } }
-promote = { hold_if_changed = ["src/Data/Migrations/**"] }
+| Key | Meaning |
+|---|---|
+| `kind` | `service` (default), `job` (runs to completion), `devserver` (builds and serves in one process, plan §3.4), `tool` (long-running, interactive, no health) |
+| `build` | Command producing the artifact in `{artifact}` (ADR-0002); absent for `devserver`/`tool` |
+| `run` | Command started from the artifact (or `cwd` for `devserver`/`tool`) |
+| `cwd` | Working directory relative to the repository |
+| `watch` | Paths whose change starts a candidate build (ADR-0003) |
+| `restart_on` | Paths whose change restarts a `devserver` |
+| `port` | Fixed port of the main slot; `{port}` resolves to it (or a candidate's port) |
+| `health` | `{ http, timeout, insecure_tls }` |
+| `after` | Services or `compose.<group>.<service>` that must be healthy (jobs: completed) first |
+| `autostart` | `false` = started on demand only |
+| `platforms` | Restrict to `windows`, `linux`, `macos` |
+| `compose` | `{ group, service }` whose environment is the base (ADR-0014) |
+| `rewrite_hosts` | Compose service names rewritten to published host addresses (ADR-0014) |
+| `env` | Wins over the Compose environment |
+| `workers.env` | Worker switches, `{is_main}` = `true`/`false` (ADR-0008) |
+| `ensure_dirs` | Directories created before start |
+| `promote` | `{ auto, hold_if_changed }` (ADR-0003, ADR-0013) |
 
-[services.payment-mock]                               # mock with code in the repo: native
-watch = ["tools/payment-mock/**"]
-build = "dotnet build tools/payment-mock -c Debug -o {artifact}"
-run   = "{artifact}/PaymentMock.exe"
-port  = 5310
-health = { http = "/health", timeout = "30s" }
+### 4.4 `commands.<name>`
 
-[services.web]
-kind   = "devserver"
-cwd    = "web"
-run    = "npx ng serve --port {port} --ssl"
-port   = 4200
-health = { http = "/", timeout = "180s", insecure_tls = true }
-restart_on = ["web/tsconfig*.json", "web/angular.json"]
+| Key | Meaning |
+|---|---|
+| `description` | Shown in CLI, MCP and dashboard |
+| `confirm` | Confirmation text; the command does not run without it being acknowledged |
+| `requires` | Services that must be healthy for the command to be enabled |
+| `steps` | Ordered list: `{ exec, cwd }`, `{ http = "METHOD url", headers, timeout }`, `{ start }`, `{ stop }`, `{ restart }`, `{ run }` (a job) |
 
-[commands.reset-db]
-description = "Drop and rebuild the local database"
-confirm     = true
-steps       = ["stop api", "exec dev/reset-db.sh", "run migrate", "start api"]
-```
+Anything beyond these steps (parsing a response, opening a browser) belongs in a
+script the downstream project owns and calls with `exec`.
+
+### 4.5 Interpolation
+
+Closed set; an unknown placeholder is an error.
+
+| Placeholder | Value |
+|---|---|
+| `{repo}` | Absolute path of the lane's source root |
+| `{artifact}` | Artifact directory of the current build |
+| `{port}` | Port of the instance being started |
+| `{is_main}` | `true` in the main slot, `false` otherwise |
+| `{service.<name>.url}` | `http(s)://127.0.0.1:<port>` of that service's main slot |
+| `{compose.<group>.<service>.<container port>}` | `http://127.0.0.1:<published host port>` |
+| `${VAR}`, `${VAR:-default}` | From the process environment and the group's env files |
+
+Resolution order: `{…}` first, then `${…}`, so a default may contain a placeholder.
+
+### 4.6 Deliberately not in version 1
+
+Profiles and layering of stack files, conditionals and expressions, per-lane
+overrides and lane placeholders such as `{lane}` (phase 3, plan §3.5), secrets management of its own (secrets come from env files, which the
+downstream secret tooling fills).
+
+### 4.7 Findings from writing the first real stack file
+
+The reference stack (12 native services, 5 commands, 2 Compose groups) fits the
+schema. Four points it surfaced, now part of the draft:
+
+1. **Placeholders inside env defaults** are needed
+   (`"${AI_URL:-{service.ai-mock.url}/v1}"`): `{…}` placeholders are resolved
+   first, then `${…}`.
+2. **Two services may share a port** when one of them is on demand (a dev server
+   and a container-like host for the same SPA). Allowed; starting one while the
+   other holds the port is refused with the owner named.
+3. **Native services that are not parked Compose services** (a portal API that
+   lives in another host's Compose file) carried many `env` entries. Pulling
+   that service into the dev overlay with `extends` and parking it makes it a
+   `compose = { … }` source as well (ADR-0014) and removes those entries.
+4. **Commands that parse responses or open a browser** become small scripts in
+   the downstream repository (`exec`), as §4.4 intends; no new step types.
 
 ## 5. Control API (sketch)
 
@@ -294,7 +327,7 @@ Results go into ADR-0009 and ADR-0016.
 
 | # | Question | Where it is tracked |
 |---|---|---|
-| O-1 | Stack file format and name (TOML, YAML, own DSL like Croniqfile) | Becomes an ADR in phase 1 |
+| O-1 | Stack file format: TOML, provisional | [ADR-0017](adr/0017-stack-file-is-toml.md), reviewed at the end of phase 1 |
 | O-2 | Promotion mechanism: restart on fixed port vs. reverse proxy | [ADR-0010](adr/0010-promotion-mechanism.md) (leaning: proxy) |
 | O-3 | Windows-native vs. WSL | [ADR-0011](adr/0011-platform-windows-native-first.md) |
 | O-4 | Which infrastructure may be shared between lanes | [ADR-0012](adr/0012-shared-infrastructure-between-lanes.md), deliberately deferred |

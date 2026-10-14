@@ -21,6 +21,7 @@ changelog.
 |---|---|
 | `Proposed` | Written, not yet agreed. Code may be spiked against it, not merged. |
 | `Accepted` | Agreed. Code builds on it. |
+| `Accepted, provisional` | Agreed for now, with a named point at which it is confirmed or superseded. Code builds on it; until that point it may change without a migration path. |
 | `Open` | A recorded question with the options laid out. **Nothing builds on either side** until it moves to `Proposed`/`Accepted`. |
 | `Superseded by ADR-NNNN` | Reversed. The file stays; its outcome is never edited. |
 
@@ -53,3 +54,4 @@ before code exists it names where it *will* live.
 | [0014](0014-native-services-take-their-configuration-from-compose.md) | Native services take their configuration from the Compose service they replace | Proposed |
 | [0015](0015-devstack-is-optional.md) | devstack accelerates a stack, it is never required to run one | Proposed |
 | [0016](0016-a-daemon-restart-is-a-clean-restart.md) | A daemon restart is a clean restart from the last promoted artifacts | Proposed |
+| [0017](0017-stack-file-is-toml.md) | The stack file is TOML, without profiles in version 1 | Accepted, provisional |

@@ -8,3 +8,4 @@ node_modules/
 !.env.example
 spikes/platform-bench/results/
 spikes/platform-bench/scenarios/*.local.json
+examples/*.local.toml
