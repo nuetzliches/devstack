@@ -58,6 +58,10 @@ enum Cmd {
     Promote {
         service: String,
     },
+    /// Go back to the build that ran before the last replacement (no build, no jobs).
+    Rollback {
+        service: String,
+    },
     /// Console output of a service.
     Logs {
         service: String,
@@ -205,6 +209,7 @@ fn main() -> Result<()> {
         Cmd::Stop { service } => client::service_action(&cli.file, &service, "stop"),
         Cmd::Restart { service } => client::service_action(&cli.file, &service, "restart"),
         Cmd::Promote { service } => client::service_action(&cli.file, &service, "promote"),
+        Cmd::Rollback { service } => client::service_action(&cli.file, &service, "rollback"),
         Cmd::Logs {
             service,
             tail,

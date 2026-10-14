@@ -877,5 +877,11 @@ fn edits_become_candidates() {
     assert_ne!(build(), b3, "promoted");
     assert!(candidate().is_null());
 
+    // 5. Rollback: the build before the last replacement, without a build.
+    let artifacts = s.artifacts();
+    s.ok(&["rollback", "api"]);
+    assert_eq!(build(), b3, "back to the previous build");
+    assert_eq!(s.artifacts(), artifacts, "no build for a rollback");
+
     s.ok(&["down"]);
 }

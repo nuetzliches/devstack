@@ -193,6 +193,13 @@ pub fn tools() -> Vec<Value> {
             false,
         ),
         tool(
+            "rollback_service",
+            "Go back to the build that ran before the last replacement, without building and without running jobs (a schema migration stays). POST /v1/services/{service}/rollback.",
+            service.clone(),
+            &["service"],
+            false,
+        ),
+        tool(
             "logs",
             "Console output of the service's current instance. GET /v1/services/{service}/logs.",
             json!({
@@ -281,7 +288,8 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 "services stopped; infrastructure keeps running".into()
             })
         }
-        "start_service" | "stop_service" | "restart_service" | "promote_service" => {
+        "start_service" | "stop_service" | "restart_service" | "promote_service"
+        | "rollback_service" => {
             let action = name.trim_end_matches("_service");
             let svc = name_arg(args, "service")?;
             let (status, body) =

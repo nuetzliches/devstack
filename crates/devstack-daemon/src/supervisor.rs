@@ -37,6 +37,8 @@ struct Instance {
 pub(crate) struct Slot {
     pub view: ServiceView,
     main: Option<Instance>,
+    /// The build main ran before its last replacement: `rollback` (plan §3.2).
+    previous: Option<String>,
     /// Bumped by every start, stop and switch; a monitor of an older generation retires.
     generation: u64,
 }
@@ -131,6 +133,7 @@ impl Supervisor {
                         candidate: None,
                     },
                     main: None,
+                    previous: None,
                     generation: 0,
                 },
             );
@@ -1137,7 +1140,14 @@ The running instance was left as it was."
         slot.view.log = Some(inst.log.clone());
         slot.view.build_id = inst.build_id.clone();
         slot.view.instance_port = inst.port;
-        slot.main.replace(inst)
+        let old = slot.main.replace(inst);
+        // The relay swaps a build for itself; only a different build is a step back.
+        if let Some(prev) = old.as_ref().and_then(|o| o.build_id.clone())
+            && Some(&prev) != slot.view.build_id.as_ref()
+        {
+            slot.previous = Some(prev);
+        }
+        old
     }
 
     /// Let a replaced instance finish what it serves (streams get a deadline,
@@ -1456,6 +1466,30 @@ The running instance was left as it was."
                 p.set_pending(None);
             }
         }
+    }
+
+    /// Put the build that ran before the last replacement back into the main
+    /// slot, without building and without running jobs: a schema migration is
+    /// never rolled back. Behind the proxy only (the replacement is a candidate).
+    pub fn rollback(self: &Arc<Self>, name: &str) -> Result<(), String> {
+        let svc = self.service(name)?.clone();
+        if !svc.proxied() {
+            return Err(format!(
+                "`{name}` does not run behind the proxy; rollback needs it"
+            ));
+        }
+        let Some(id) = self.slots.lock().unwrap()[name].previous.clone() else {
+            return Err(format!("`{name}` has no previous build to go back to"));
+        };
+        let dir = self.layout.artifact(name, &id);
+        if !dir.is_dir() {
+            return Err(format!("the artifact of build {id} is gone"));
+        }
+        if !self.service_running(name) {
+            return Err(format!("`{name}` is not running"));
+        }
+        self.absorb(name);
+        self.replace(name, &svc, Some((id, dir)))
     }
 
     /// Take over a candidate that a promotion gate holds (ADR-0013).
