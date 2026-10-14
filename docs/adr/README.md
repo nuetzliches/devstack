@@ -40,7 +40,7 @@ before code exists it names where it *will* live.
 | [0001](0001-development-is-adr-driven.md) | Development is ADR-driven | Accepted |
 | [0002](0002-processes-run-from-immutable-artifacts.md) | Processes run from immutable artifacts, never from the build output of the source tree | Proposed |
 | [0003](0003-changes-flow-through-candidates.md) | Changes flow through candidates; the main slot only holds a stack that built and passed health | Proposed |
-| [0004](0004-infrastructure-is-delegated-to-compose.md) | Infrastructure is delegated to Docker Compose | Proposed |
+| [0004](0004-infrastructure-is-delegated-to-compose.md) | Infrastructure comes from the project's existing Compose files plus a dev overlay | Proposed |
 | [0005](0005-rust-for-daemon-and-cli.md) | Rust for daemon and CLI | Accepted |
 | [0006](0006-dashboard-vue-same-origin.md) | The dashboard is a Vue 3 SPA served same-origin by the daemon | Accepted |
 | [0007](0007-one-http-api-is-the-control-surface.md) | One HTTP API is the control surface; CLI, MCP and dashboard are its clients | Proposed |
@@ -50,3 +50,4 @@ before code exists it names where it *will* live.
 | [0011](0011-platform-windows-native-first.md) | Windows-native first; WSL is decided by measurement | Open |
 | [0012](0012-shared-infrastructure-between-lanes.md) | Which infrastructure may be shared between lanes | Open (deferred) |
 | [0013](0013-schema-changes-hold-promotion.md) | A build that changes schema inputs is not promoted automatically | Proposed |
+| [0014](0014-native-services-take-their-configuration-from-compose.md) | Native services take their configuration from the Compose service they replace | Proposed |

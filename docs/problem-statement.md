@@ -85,24 +85,27 @@ lifecycle at once, and its state is not inspectable.
 
 1. **Infrastructure is long-lived** and independent of application changes;
    containers are health-gated with timeouts and named failure reasons.
-2. **A main slot on fixed ports** that only changes to a stack that built and
+2. **No second description of the stack.** Development reuses the project's
+   existing deployment Compose files; differences live in an overlay. Native
+   processes take their configuration from the Compose service they replace.
+3. **A main slot on fixed ports** that only changes to a stack that built and
    passed health checks. A broken build never replaces a working stack.
-3. **Build identity is observable:** every running process and served bundle
+4. **Build identity is observable:** every running process and served bundle
    reports which input it was built from.
-4. **Building never touches what is running.**
-5. **Changes are coalesced and superseded:** a newer change cancels the build of
+5. **Building never touches what is running.**
+6. **Changes are coalesced and superseded:** a newer change cancels the build of
    an older one.
-6. **Ordered startup** including run-to-completion jobs (migrations) before
+7. **Ordered startup** including run-to-completion jobs (migrations) before
    dependants, with timeouts.
-7. **Profiles and secrets** without layered overrides: one declarative stack
+8. **Profiles and secrets** without layered overrides: one declarative stack
    file plus profile overlays plus an untracked secrets file.
-8. **Clean shutdown:** graceful stop first, then a guaranteed kill of the whole
+9. **Clean shutdown:** graceful stop first, then a guaranteed kill of the whole
    process tree. No orphans, ever, including when the daemon itself dies.
-9. **One control surface** usable by people (CLI, dashboard) and agents (MCP)
+10. **One control surface** usable by people (CLI, dashboard) and agents (MCP)
    with identical semantics: status, logs, build history, promote, rollback,
    restart, custom commands (e.g. "reset database").
-10. **Telemetry sink** for OTLP traces, logs and metrics.
-11. **Windows-native operation** (see ADR-0011).
+11. **Telemetry sink** for OTLP traces, logs and metrics.
+12. **Windows-native operation** (see ADR-0011).
 
 ### Should
 

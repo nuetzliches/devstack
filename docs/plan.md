@@ -40,7 +40,8 @@ build on either.
 
 | Plane | Owner | Lifetime | Decision |
 |---|---|---|---|
-| Infrastructure (databases, brokers, schedulers, telemetry sink) | Docker Compose, driven by the daemon | Long-lived; survives daemon restarts | [ADR-0004](adr/0004-infrastructure-is-delegated-to-compose.md) |
+| Infrastructure (databases, brokers, schedulers, telemetry sink) | Docker Compose, driven by the daemon: the project's existing deployment Compose files plus a dev overlay | Long-lived; survives daemon restarts | [ADR-0004](adr/0004-infrastructure-is-delegated-to-compose.md) |
+| Configuration of native services | The Compose service each one replaces, with explicit host rewriting | Read at every start | [ADR-0014](adr/0014-native-services-take-their-configuration-from-compose.md) |
 | Build | Daemon | Per change | [ADR-0002](adr/0002-processes-run-from-immutable-artifacts.md), [ADR-0003](adr/0003-changes-flow-through-candidates.md) |
 | Run (application processes) | Daemon | Per promotion | [ADR-0008](adr/0008-background-workers-run-only-in-the-active-slot.md), [ADR-0009](adr/0009-the-daemon-owns-every-process-tree.md) |
 
@@ -63,14 +64,34 @@ build on either.
    validate (unknown keys are errors).
 2. Port preflight: every fixed port is free, or owned by the daemon's own
    children; otherwise report the owning process by name and stop.
-3. `docker compose up -d --wait` for the infra plane, with a per-service timeout.
-   Failure names the service and its last health output.
+3. For every Compose group in declared order: create declared external
+   networks, then `docker compose -p <name> -f <deployment files> -f <dev overlay>
+   --env-file <dev env> up -d --wait --no-deps <selected services>`, with a
+   per-service timeout. Failure names the group, the service and its last health
+   output.
 4. For every application service: snapshot → build → artifact (§3.2), unless an
    artifact for the current input hash already exists.
 5. Run jobs (`kind = "job"`, e.g. schema migrations) to completion in
    dependency order; a non-zero exit stops the start with the job's log tail.
 6. Start long-running services into the **main** slot with workers enabled;
-   wait for health with timeout.
+   wait for health with timeout. A service that names a Compose service gets its
+   environment from it ([ADR-0014](adr/0014-native-services-take-their-configuration-from-compose.md)).
+
+### 3.1a What lives where (infra plane)
+
+| Kind | Where | Example |
+|---|---|---|
+| Infrastructure that is also deployed | Existing deployment Compose file, unchanged | database, scheduler, renderer |
+| Application containers that run natively in development | Same file, **parked** by the dev overlay (`profiles: [container-app]`) | API, migrator, SPA host |
+| Development-only replacements | Dev overlay | telemetry dashboard instead of telemetry store, local database instead of an external one |
+| Services of other deployment hosts | Dev overlay, `extends: { file, service }` | webhook ingress, portal database |
+| Mock servers with code in the repository | Stack file, native service | third-party API mocks |
+| Image-only mocks | Dev overlay | an off-the-shelf fake SMTP server |
+
+The overlay is the complete, reviewable list of differences between deployment
+and development. ADR-0004 lists the two Compose merge behaviours an overlay has
+to handle (parked services under hard `depends_on`, `extends` carrying
+references).
 
 ### 3.2 Change → candidate → main
 
@@ -137,20 +158,38 @@ Format and name are not decided (open question O-1). Illustration only:
 ```toml
 [stack]
 name = "example"
-compose = "dev/docker-compose.yml"   # infra plane
-compose_project = "example-dev"      # fixed: no path-derived names
+
+# Infra plane: the project's own deployment Compose files plus a dev overlay
+# (ADR-0004). One group per Compose project; order = start order.
+[[compose]]
+name     = "search"                                   # project name, fixed
+files    = ["deploy/app-host/compose.search.yml", "dev/search.dev.yml"]
+env_file = "dev/.env"
+networks = ["edge"]                                   # external, created before `up`
+services = ["search"]
+
+[[compose]]
+name     = "app"
+files    = ["deploy/app-host/compose.yml", "dev/app-host.dev.yml"]
+env_file = "dev/.env"
+services = ["db", "scheduler", "renderer", "otel-collector", "dashboard", "webhooks"]
+restart_on = { scheduler = ["config/scheduler/**"] }  # bind mounts do not notify
 
 [profiles]
 local  = "dev/profile.local.toml"
 shared = "dev/profile.shared.toml"
 
 [services.migrate]
-kind  = "job"
-watch = ["src/**/*.cs", "src/**/*.csproj"]
-build = "dotnet build src/Migrate -c Debug -o {artifact}"
-run   = "{artifact}/Migrate.exe"
+kind    = "job"
+compose = { group = "app", service = "migrate" }      # environment from Compose (ADR-0014)
+rewrite_hosts = ["db"]
+watch   = ["src/**/*.cs", "src/**/*.csproj"]
+build   = "dotnet build src/Migrate -c Debug -o {artifact}"
+run     = "{artifact}/Migrate.exe"
 
 [services.api]
+compose = { group = "app", service = "api" }
+rewrite_hosts = ["db", "scheduler", "renderer", "otel-collector"]
 watch   = ["src/**/*.cs", "src/**/*.csproj", "src/**/appsettings*.json"]
 build   = "dotnet build src/Api -c Debug -o {artifact}"
 run     = "{artifact}/Api.exe"
@@ -159,6 +198,13 @@ after   = ["migrate"]
 health  = { http = "/health", timeout = "60s" }
 workers = { env = { Jobs__Enabled = "{is_main}", Queue__Consumer__Enabled = "{is_main}" } }
 promote = { hold_if_changed = ["src/Data/Migrations/**"] }
+
+[services.payment-mock]                               # mock with code in the repo: native
+watch = ["tools/payment-mock/**"]
+build = "dotnet build tools/payment-mock -c Debug -o {artifact}"
+run   = "{artifact}/PaymentMock.exe"
+port  = 5310
+health = { http = "/health", timeout = "30s" }
 
 [services.web]
 kind   = "devserver"
@@ -225,6 +271,8 @@ downstream stack.
 | O-5 | Licence (Croniq uses MIT OR Apache-2.0) | Before going public |
 | O-6 | Default daemon port | Phase 1 |
 | O-7 | Lanes per worktree only, or also per agent session in one tree | Phase 3 |
+| O-8 | Development values that are not secret (local passwords, dev API keys): a tracked `dev/.env.defaults` next to the untracked `dev/.env`, or everything through the downstream secret chain | Downstream decision; devstack supports several env files per group either way |
+| O-9 | Minimum Docker Compose version (overlays rely on `!reset`, `!override`, `required: false`) | Phase 1, checked by `devstack check` |
 
 ## 9. Risks
 
