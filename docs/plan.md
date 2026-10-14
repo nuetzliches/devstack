@@ -279,10 +279,9 @@ schema. Four points it surfaced, now part of the draft:
 | `POST /v1/commands/{name}` | Custom commands from the stack file |
 | `POST /v1/infra/{service}/restart` | Container restart (e.g. after a config change the container cannot see) |
 
-**Security:** loopback only; every mutating request requires a token stored in
-the user profile (readable by the CLI and MCP, embedded by the daemon into the
-dashboard it serves) and an `Origin` check, so an arbitrary web page in the same
-browser cannot drive the daemon. To be written up as an ADR in phase 1.
+**Security:** loopback only, a token file for CLI and MCP, a one-time code
+exchanged for an `HttpOnly` cookie for the dashboard, `Host` and `Origin`
+checks ([ADR-0019](adr/0019-control-api-security.md)).
 
 ## 6. Dashboard scope (phase 2 and later)
 
@@ -352,6 +351,30 @@ small harness, kills them at defined points and builds again.
 Results go into ADR-0003 (cancellation) and ADR-0009 (job layout for build
 servers).
 
+**Status 2026-10-14:** done on Windows. All cancelled builds resumed correctly and
+byte-identically; hard kill recommended; build servers must outlive a build
+(open design question, ADR-0009). See `spikes/build-cancel/README.md`.
+
+### 7.3 Phase 1 work packages
+
+Starts once the ADRs phase 1 builds on are accepted (0002, 0003, 0004, 0007,
+0008, 0009, 0011, 0013, 0014, 0015, 0016, 0019). One Cargo workspace, one binary
+(ADR-0005); crates in dependency order:
+
+| # | Crate | Content | Taken from |
+|---|---|---|---|
+| 1 | `devstack-config` | Stack file model, strict loading, validation, interpolation (§4.5), JSON Schema | ADR-0017, plan §4 |
+| 2 | `devstack-proc` | Process ownership per platform: Windows job + process group + hidden console; Linux shim + cgroup + process group; restart cleanup; OS lock | Spike (a) code |
+| 3 | `devstack-compose` | Compose groups: `config --format json`, `up --wait --no-deps`, `ps`, restart, external networks, published ports | ADR-0004 |
+| 4 | `devstack-env` | Environment composition from Compose service + stack file + devstack variables, host rewriting, `--export dotenv` | ADR-0014, ADR-0015 |
+| 5 | `devstack-build` | Snapshot sync, build in lane, publish by copy, build ids, cancellation, retention | ADR-0002, spike (b), (c) |
+| 6 | `devstack-daemon` | Supervisor (main slot, jobs, `after`, health, ports), state persistence, HTTP API with auth, SSE, logs | ADR-0007, 0016, 0019, plan §5, §11 |
+| 7 | `devstack` (bin) | CLI subcommands, `devstack mcp`, `devstack check`, `devstack env` | ADR-0007, 0015 |
+
+Phase 1 delivers builds on demand and the main slot; candidates, auto-promotion
+and the dashboard are phase 2. Exit criterion unchanged: the reference stack
+runs end to end without its previous orchestrator.
+
 ## 8. Open questions
 
 | # | Question | Where it is tracked |
@@ -364,6 +387,7 @@ servers).
 | O-6 | Default daemon port | Phase 1 |
 | O-7 | Lanes per worktree only, or also per agent session in one tree | Phase 3 |
 | O-8 | Development values that are not secret (local passwords, dev API keys): a tracked `dev/.env.defaults` next to the untracked `dev/.env`, or everything through the downstream secret chain | Downstream decision; devstack supports several env files per group either way |
+| O-10 | How build servers outlive a single build but die with the daemon (spike (b)) | ADR-0009, decided in phase 1 work package 5 |
 | O-9 | Minimum Docker Compose version (overlays rely on `!reset`, `!override`, `required: false`) | Phase 1, checked by `devstack check` |
 
 ## 9. Risks
@@ -377,3 +401,40 @@ servers).
   place for services whose output directory is not the run directory.
 - **A reverse proxy reintroduces an opaque layer** if chosen. ADR-0010 lists
   the conditions it must meet.
+
+## 10. Testing devstack itself
+
+devstack manages processes, files and ports on three operating systems; most of
+its failures are platform behaviour, not logic. The test layout follows that.
+
+| Layer | What | Where it runs |
+|---|---|---|
+| Unit | Stack-file parsing and validation, interpolation (§4.5, including the resolution order), env composition (ADR-0014), promotion gate, snapshot diff | `cargo test`, every OS |
+| Platform | Process ownership and stop (the spike (a) scenarios, kept as tests), file lock, snapshot sync with real files | `windows-latest`, `ubuntu-latest` (cgroup scenarios in a privileged container job) |
+| Integration | A small example stack in the repository (`examples/fixture-stack`: a .NET API, a node dev server, a job, one Compose service) started end to end: candidate, promotion, rollback, daemon crash and restart | `windows-latest` and `ubuntu-latest`, nightly and on release branches |
+| Fault injection | A service that hangs on stop, a build that is cancelled mid-way (spike (b) cases), a port held by a foreign process, a Compose service that never becomes healthy | Same as integration |
+| Downstream | The first downstream stack, run by its developers | Their machines; feedback as issues |
+
+Rules: no test talks to the network beyond the container registry; platform
+tests assert on the outside (process liveness, files, exit codes), like the
+spikes, not on internal state.
+
+## 11. Logs and diagnostics
+
+Replaces what the previous orchestrator's console-log view and its MCP tools
+provided, with the build id as the organising key.
+
+- **Capture:** stdout and stderr of every process into a ring buffer per
+  process instance (default 10 000 lines) and a file per instance under
+  `.devstack/logs/<service>/<build-id>-<slot>.log`, rotated by size, kept for
+  the last N artifacts (ADR-0002 retention).
+- **Query:** `GET /v1/services/{name}/logs?slot=&build=&since=&grep=&tail=`;
+  the same parameters in `devstack logs` and the MCP tool. A search over all
+  services at once (`/v1/logs?grep=`) answers "where did this error come from".
+- **Stream:** log lines on the SSE stream for the dashboard and `devstack logs -f`.
+- **Daemon log:** structured (JSON lines) under `.devstack/daemon.log`, every
+  decision with its reason: build superseded, candidate held and why, promotion,
+  escalation to kill, port owner found.
+- **Not devstack's job:** application traces and metrics. They go to the OTLP
+  sink in the downstream Compose file; devstack only passes the build id along
+  (§3.3) so traces can be filtered by it.

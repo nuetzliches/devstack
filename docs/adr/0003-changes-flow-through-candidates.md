@@ -23,6 +23,14 @@ main, automatically unless a promotion gate holds it
 auto-promotion. A failed build or failed health check leaves main untouched and
 is reported.
 
+**Verified by spike (b), 2026-10-14** (`spikes/build-cancel`): 14 builds of the
+reference API host killed at random moments (restore, compilation, copy); every
+following build succeeded with byte-identical assemblies and was at most 6 %
+slower than an uninterrupted one, often much faster. A hard kill takes 2–10 ms;
+a graceful `CTRL_BREAK` takes up to 14 s and buys nothing. **Superseded builds
+are therefore killed, not asked to stop.** The same holds for the Angular
+production build.
+
 ## Alternatives considered
 
 - **Restart on change (status quo of most tools).** See context.

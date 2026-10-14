@@ -1,0 +1,14 @@
+{
+  "description": "Template. Copy to <name>.local.json (git-ignored).",
+  "repo": "D:/path/to/repo",
+  "ref": "<commit sha>",
+  "root": "D:/bench/build-cancel",
+  "project": "src/Api/Api.csproj",
+  "output": "src/Api/bin/Debug/net10.0",
+  "touch": "src/Shared/SomeFile.cs",
+  "iterations": 15,
+  "gracefulIterations": 5,
+  "serverIterations": 4,
+  "ng": { "cwd": "web", "cmd": "npx ng build app", "output": "dist/app" },
+  "ngIterations": 4
+}

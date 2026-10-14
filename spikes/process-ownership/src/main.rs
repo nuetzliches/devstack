@@ -88,6 +88,17 @@ enum Cmd {
         #[arg(long)]
         records: Option<PathBuf>,
     },
+    /// Run one command line in a fresh job; optionally stop it after N ms (spike b).
+    Exec {
+        #[arg(long)]
+        log: PathBuf,
+        #[arg(long)]
+        stop_after_ms: Option<u64>,
+        /// Stop with CTRL_BREAK first instead of terminating the job.
+        #[arg(long)]
+        graceful: bool,
+        cmdline: String,
+    },
     /// Fixture: try to start a child outside the current job.
     Breakaway {
         /// File to write the outcome to.
@@ -181,6 +192,24 @@ fn main() -> Result<()> {
             {
                 let _ = (state, records);
                 anyhow::bail!("Unix only")
+            }
+        }
+        Cmd::Exec {
+            log,
+            stop_after_ms,
+            graceful,
+            cmdline,
+        } => {
+            #[cfg(windows)]
+            {
+                let r = win::exec(&cmdline, File::create(log)?, stop_after_ms, graceful)?;
+                println!("{}", serde_json::to_string(&r)?);
+                Ok(())
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = (log, stop_after_ms, graceful, cmdline);
+                anyhow::bail!("Windows only in this spike")
             }
         }
         Cmd::Breakaway { out } => breakaway(out),

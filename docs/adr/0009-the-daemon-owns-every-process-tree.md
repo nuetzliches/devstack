@@ -75,6 +75,26 @@ The Unix bullet of the decision therefore reads, after acceptance: **a shim per
 service, holding the service in its own cgroup v2 where delegation is available
 and in its own process group always.**
 
+## Build servers (spike (b), 2026-10-14)
+
+`dotnet build` starts long-lived servers (MSBuild node reuse, the shared C#
+compiler), 32 processes for the reference host. Started inside a per-build job
+they die with every build, and every build is cold: 31–35 s instead of 12–16 s
+with warm servers (42 s with servers switched off). They must outlive a build
+and still die with the daemon. Because a process inherits its parent's job,
+that needs a deliberate design; candidates, to be decided in phase 1:
+
+- one **daemon-wide build job** (kill-on-close) for all builds, and cancellation
+  of a single build by terminating its process tree **except** recognised build
+  servers;
+- servers started by the daemon itself in its own job before the first build
+  (would need a supported way to start them; none is documented);
+- per-build jobs and a deliberately slower build (rejected unless the others
+  fail).
+
+Also: a build's root process exits while its servers stay in the job, so a
+build is finished when its root exits, not when its job is empty.
+
 ## Alternatives considered
 
 - **Kill by PID tree walk.** Races with processes spawned during shutdown;

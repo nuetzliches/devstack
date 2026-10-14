@@ -369,3 +369,108 @@ impl Service {
         }
     }
 }
+
+/// Outcome of `procspike exec`.
+#[derive(serde::Serialize)]
+pub struct ExecReport {
+    /// Exit code of the command, or None when it was stopped.
+    pub exit_code: Option<i32>,
+    pub stopped: bool,
+    pub graceful: bool,
+    /// Time from start until the stop request.
+    pub stop_requested_after_ms: u128,
+    /// Time from the stop request until no process of the job was left.
+    pub gone_after_ms: u128,
+    /// The graceful stop did not finish in time and the job was terminated.
+    pub escalated: bool,
+    pub total_ms: u128,
+    /// Processes still in the job after the root exited (build servers).
+    pub stragglers_killed: u32,
+}
+
+/// Run a command line in a fresh job. Optionally stop it after `stop_after_ms`:
+/// gracefully (CTRL_BREAK to its group, escalating after 30 s) or hard (job
+/// terminated). Used by spike (b) to cancel builds the way the daemon will.
+pub fn exec(
+    cmdline: &str,
+    log: File,
+    stop_after_ms: Option<u64>,
+    graceful: bool,
+) -> Result<ExecReport> {
+    use std::time::{Duration, Instant};
+    let job = Job::new(false, false)?;
+    let err = log.try_clone()?;
+    let mut child = Command::new("cmd")
+        .args(["/d", "/s", "/c"])
+        .raw_arg(format!("\"{cmdline}\""))
+        .stdin(Stdio::null())
+        .stdout(log)
+        .stderr(err)
+        .creation_flags(CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP)
+        .spawn()?;
+    job.assign_child(&child)?;
+    resume_process(child.id())?;
+    let t0 = Instant::now();
+    let deadline = stop_after_ms.map(|ms| t0 + Duration::from_millis(ms));
+    loop {
+        if let Some(status) = child.try_wait()? {
+            // The root exited on its own. Build servers (MSBuild node reuse, the
+            // shared compiler) stay alive in the job; the build is done when its
+            // root exits, not when the job is empty. Give stragglers 2 s, then
+            // end the job and report how many there were.
+            let t_exit = Instant::now();
+            while job.active_processes() > 0 && t_exit.elapsed() < Duration::from_secs(2) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let stragglers = job.active_processes();
+            if stragglers > 0 {
+                job.terminate();
+            }
+            return Ok(ExecReport {
+                stragglers_killed: stragglers,
+                exit_code: status.code(),
+                stopped: false,
+                graceful: false,
+                stop_requested_after_ms: 0,
+                gone_after_ms: 0,
+                escalated: false,
+                total_ms: t0.elapsed().as_millis(),
+            });
+        }
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let requested = t0.elapsed().as_millis();
+    let t1 = Instant::now();
+    let mut escalated = false;
+    if graceful {
+        unsafe {
+            GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child.id());
+        }
+        while job.active_processes() > 0 && t1.elapsed() < Duration::from_secs(30) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if job.active_processes() > 0 {
+            escalated = true;
+            job.terminate();
+        }
+    } else {
+        job.terminate();
+    }
+    while job.active_processes() > 0 {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let _ = child.wait();
+    Ok(ExecReport {
+        exit_code: None,
+        stopped: true,
+        graceful,
+        stop_requested_after_ms: requested,
+        gone_after_ms: t1.elapsed().as_millis(),
+        escalated,
+        total_ms: t0.elapsed().as_millis(),
+        stragglers_killed: 0,
+    })
+}
