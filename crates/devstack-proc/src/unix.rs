@@ -261,7 +261,7 @@ pub fn shim_main(args: &[String]) -> ! {
         Ok(c) => c,
         Err(e) => fail(&format!("start {}: {e}", cmd[0])),
     };
-    let mut code = 0;
+    let mut code: Option<i32> = None;
     loop {
         if PARENT_DIED.load(Ordering::SeqCst) {
             if let Some(cg) = &cgroup {
@@ -270,14 +270,21 @@ pub fn shim_main(args: &[String]) -> ! {
             let _ = kill_group(pgid, libc::SIGKILL);
             std::process::exit(137);
         }
-        if let Ok(Some(status)) = child.try_wait() {
-            code = status.code().unwrap_or(1);
+        if code.is_none()
+            && let Ok(Some(status)) = child.try_wait()
+        {
+            code = Some(status.code().unwrap_or(1));
         }
         let others = match &cgroup {
             Some(cg) => cgroup_members(cg),
             None => group_members(pgid),
         };
         if others.iter().all(|&p| p == me) {
+            // The service may have exited between try_wait and the membership
+            // check (zombies do not count as members): collect its code now,
+            // never report a guess.
+            let code =
+                code.unwrap_or_else(|| child.wait().ok().and_then(|s| s.code()).unwrap_or(1));
             std::process::exit(code);
         }
         std::thread::sleep(Duration::from_millis(50));
