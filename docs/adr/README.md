@@ -47,7 +47,7 @@ before code exists it names where it *will* live.
 | [0007](0007-one-http-api-is-the-control-surface.md) | One HTTP API is the control surface; CLI, MCP and dashboard are its clients | Accepted |
 | [0008](0008-background-workers-run-only-in-the-active-slot.md) | Background workers run only in the active slot | Accepted |
 | [0009](0009-the-daemon-owns-every-process-tree.md) | The daemon owns every process tree it starts | Accepted |
-| [0010](0010-promotion-mechanism.md) | Promotion mechanism: restart on the fixed port or switch a reverse proxy | Open |
+| [0010](0010-promotion-mechanism.md) | Promotion mechanism: restart on the fixed port or switch a reverse proxy | Proposed: B (measured) |
 | [0011](0011-platform-windows-native-first.md) | Windows-native first; WSL is decided by measurement | Accepted |
 | [0012](0012-shared-infrastructure-between-lanes.md) | Which infrastructure may be shared between lanes | Open (deferred) |
 | [0013](0013-schema-changes-hold-promotion.md) | A build that changes schema inputs is not promoted automatically | Accepted |

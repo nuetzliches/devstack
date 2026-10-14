@@ -1,6 +1,6 @@
 # ADR-0010: Promotion mechanism: restart on the fixed port or switch a reverse proxy
 
-- **Status:** Open (leaning: reverse proxy)
+- **Status:** Proposed: B (measured 2026-10-15, see "Comparison")
 - **Date:** 2026-10-14
 - **Related:** [ADR-0003](0003-changes-flow-through-candidates.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md)
 
@@ -56,6 +56,47 @@ switch workers on in the new one (ADR-0008 forbids two instances with workers).
   restart (B loses much of its advantage for the API, keeps it for pure HTTP
   services).
 - How important side-by-side lane addressing becomes in phase 3.
+
+## Comparison (2026-10-15)
+
+Measured on Windows with `spikes/promote-proxy` (an L7 proxy with hyper that
+runs two instances on internal ports, picks the upstream per request, passes
+SSE and WebSocket through and tags every response with `x-devstack-upstream`)
+and `spikes/promote-proxy/bench.py` (pollers every 50 ms, an SSE client and a
+WebSocket client that reconnect at once). A = `devstack restart` as built in
+phase 1; B = the spike's promote. No code change between the instances, so
+only the switch is measured.
+
+| Scenario | Failed requests | Longest outage | Long-lived connections |
+|---|---|---|---|
+| A, fixture API, SSE + WebSocket open | 9 (each a 2 s Windows connect retry) | **18.4 s** for new connections | SSE kept the old instance in its graceful shutdown until devstack killed it at the 20 s stop deadline; Kestrel refuses new connections meanwhile |
+| B, fixture API, SSE + WebSocket open | **0** | 0 (max latency 40 ms) | each dropped once when the old instance stopped, back on the new one after 0.2-0.3 s |
+| A, reference API (no stream open) | 78 of 347 through the SPA dev server proxy (502) | **3.9 s** | the reference API's SSE stream ends only when the client leaves, not at shutdown: with a browser tab open every restart waits for the stop deadline (as in row 1) |
+| B, reference API | **0** (direct and through the SPA dev server proxy) | 0 (max latency 40 ms) | new instance healthy after 4.8 s while the old one served; old stopped gracefully |
+
+Findings beyond the numbers:
+
+- Under A, an open stream turns a restart of a few seconds into one of the stop
+  deadline. Browsers keep such streams open as a matter of course.
+- The proxy cost no measurable latency (40 ms maximum, the same as direct).
+- At the drain deadline the old instance still held the streams and could not
+  stop gracefully; the proxy owns the client side of those connections and
+  should close them itself (condition 4), then the old instance stops at once.
+- Workers (ADR-0008): the reference API switches its workers only at start.
+  Under B the promoted instance starts with workers off; switching them on
+  needs a restart behind the proxy (requests wait, HTTP keeps working once the
+  proxy holds requests during it) or a runtime switch in the service, which is
+  the smooth variant and a small change downstream.
+
+## Recommendation
+
+B, with A as the per-service fallback (condition 3). It is the only option that
+meets the goal of a smooth experience: the developer and an agent keep a
+working service while a change builds and starts, and the switch is invisible
+to requests. Transparency comes from the same place: the proxy knows which
+instance serves, so `x-devstack-build` on every response, `status`, MCP and the
+dashboard can say "a newer build is pending / building / failed" while the old
+one still answers.
 
 ## Conditions a proxy must meet if chosen
 

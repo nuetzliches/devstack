@@ -1,0 +1,18 @@
+[package]
+name = "promote-proxy"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Spike for ADR-0010: a reverse proxy that promotes a new instance behind a
+# fixed port, measured against restart-in-place (bench.py).
+
+[dependencies]
+bytes = "1"
+devstack-proc = { path = "../../crates/devstack-proc" }
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+tokio = { version = "1", features = ["full"] }
+
+[workspace]
