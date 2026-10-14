@@ -1,7 +1,8 @@
 # ADR-0020: Builds share one long-lived build job; a cancel ends only the cancelled build's tree
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
+- **Deciders:** project owner
 - **Related:** [ADR-0003](0003-changes-flow-through-candidates.md), [ADR-0009](0009-the-daemon-owns-every-process-tree.md), plan O-10, spike (b)
 
 ## Context
@@ -36,6 +37,13 @@ disconnect are restarted by the next build, which is therefore cold. That cost
 is measured and accepted: it is the same in every layout.
 
 Services keep one job each (ADR-0009); only builds share.
+
+**On Linux** the build job is a long-lived shim holding a cgroup for builds
+(`devstack shim` with a placeholder command); every build joins that cgroup
+before `exec`. Cancel kills the build's process group. Without writable cgroups
+nothing holds the servers: they outlive a crashed daemon until their own idle
+timeouts end them (MSBuild nodes, the compiler server); that is documented, not
+prevented.
 
 ## Alternatives considered
 
