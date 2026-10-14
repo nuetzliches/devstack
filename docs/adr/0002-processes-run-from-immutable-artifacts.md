@@ -1,7 +1,8 @@
 # ADR-0002: Processes run from immutable artifacts, never from the build output of the source tree
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
+- **Deciders:** project owner
 - **Related:** [problem statement, root cause A](../problem-statement.md#root-cause-a-building-and-running-share-one-output-directory), [plan §3.2](../plan.md#32-change--candidate--main)
 
 ## Context

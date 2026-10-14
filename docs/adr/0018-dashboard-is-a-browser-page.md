@@ -1,7 +1,8 @@
 # ADR-0018: The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
+- **Deciders:** project owner
 - **Related:** [ADR-0006](0006-dashboard-vue-same-origin.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md), plan §6
 
 ## Context

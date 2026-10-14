@@ -1,7 +1,8 @@
 # ADR-0003: Changes flow through candidates; the main slot only holds a stack that built and passed health
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
+- **Deciders:** project owner
 - **Related:** [problem statement, root cause B](../problem-statement.md#root-cause-b-the-watcher-restarts-on-every-change-regardless-of-outcome), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0010](0010-promotion-mechanism.md)
 
 ## Context

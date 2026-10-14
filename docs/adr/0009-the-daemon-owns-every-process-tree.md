@@ -1,7 +1,8 @@
 # ADR-0009: The daemon owns every process tree it starts
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
+- **Deciders:** project owner
 - **Related:** [ADR-0005](0005-rust-for-daemon-and-cli.md), plan phase 0 spike (a)
 
 ## Context
@@ -28,11 +29,14 @@ container that guarantees termination of the whole tree:
   child holding a copy keeps the job open and nothing is killed, and (2)
   **breakaway is not allowed** (`JOB_OBJECT_LIMIT_BREAKAWAY_OK` unset), so no
   process can leave the job with `CREATE_BREAKAWAY_FROM_JOB`.
-- **Unix:** a process group (and, on Linux, `PR_SET_PDEATHSIG` for the leader).
-  This covers only the direct child: grandchildren (`dotnet run` → app,
-  `npm` → `node`) survive a daemon crash. Linux therefore uses a cgroup v2 per
-  service where delegation is available, and the restart cleanup of
-  [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md) otherwise.
+- **Linux/Unix:** a **shim** per service (`devstack shim`) between daemon and
+  service. The shim holds the service in its own process group always and in its
+  own cgroup v2 where delegation is available; it receives `PR_SET_PDEATHSIG`
+  when the daemon dies and then kills the cgroup (`cgroup.kill`) and the process
+  group. Without writable cgroups, children that leave the process group with
+  `setsid` escape; the restart cleanup of
+  [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md) covers the rest.
+  Graceful stop is `SIGTERM` to the process group.
 
 Stopping is two-stage: graceful signal, wait up to a per-service timeout
 (default 20 s), then terminate the job/group. Services are started from their
@@ -70,10 +74,6 @@ Verified with `spikes/process-ownership` (details in its README):
   children escape. That is the documented degradation.
 - Graceful stop: `SIGTERM` to the process group; the shim survives it through a
   no-op handler (not `SIG_IGN`, which the service would inherit).
-
-The Unix bullet of the decision therefore reads, after acceptance: **a shim per
-service, holding the service in its own cgroup v2 where delegation is available
-and in its own process group always.**
 
 ## Build servers (spike (b), 2026-10-14)
 

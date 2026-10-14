@@ -1,7 +1,8 @@
 # ADR-0007: One HTTP API is the control surface; CLI, MCP and dashboard are its clients
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
+- **Deciders:** project owner
 - **Related:** [plan §5](../plan.md#5-control-api-sketch)
 
 ## Context

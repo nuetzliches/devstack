@@ -1,7 +1,8 @@
 # ADR-0011: Windows-native first; WSL is decided by measurement
 
-- **Status:** Proposed (was Open; measured 2026-10-14, recommendation below awaits acceptance)
+- **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
+- **Deciders:** project owner
 - **Related:** plan phase 0 spike (d)
 
 ## Context

@@ -1,7 +1,8 @@
 # ADR-0004: Infrastructure comes from the project's existing Compose files plus a dev overlay
 
-- **Status:** Proposed (revised 2026-10-14 before acceptance: the first draft asked downstream projects for a separate dev Compose file)
+- **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
+- **Deciders:** project owner
 - **Related:** [problem statement, root cause C](../problem-statement.md#root-cause-c-an-opaque-orchestration-layer-between-host-and-services), [ADR-0014](0014-native-services-take-their-configuration-from-compose.md)
 
 ## Context

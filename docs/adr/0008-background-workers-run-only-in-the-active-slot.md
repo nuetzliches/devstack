@@ -1,7 +1,8 @@
 # ADR-0008: Background workers run only in the active slot
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
+- **Deciders:** project owner
 - **Related:** [ADR-0003](0003-changes-flow-through-candidates.md), [ADR-0012](0012-shared-infrastructure-between-lanes.md)
 
 ## Context

@@ -1,7 +1,8 @@
 # ADR-0014: Native services take their configuration from the Compose service they replace
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
+- **Deciders:** project owner
 - **Related:** [ADR-0004](0004-infrastructure-is-delegated-to-compose.md), [ADR-0002](0002-processes-run-from-immutable-artifacts.md)
 
 ## Context

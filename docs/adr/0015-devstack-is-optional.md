@@ -1,7 +1,8 @@
 # ADR-0015: devstack accelerates a stack, it is never required to run one
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
+- **Deciders:** project owner
 - **Related:** [ADR-0004](0004-infrastructure-is-delegated-to-compose.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0014](0014-native-services-take-their-configuration-from-compose.md)
 
 ## Context

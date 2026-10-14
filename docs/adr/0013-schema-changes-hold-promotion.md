@@ -1,7 +1,8 @@
 # ADR-0013: A build that changes schema inputs is not promoted automatically
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
+- **Deciders:** project owner
 - **Related:** [ADR-0003](0003-changes-flow-through-candidates.md)
 
 ## Context

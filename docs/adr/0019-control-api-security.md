@@ -1,7 +1,8 @@
 # ADR-0019: The control API trusts the user's own processes, never a web page
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
+- **Deciders:** project owner
 - **Related:** [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0018](0018-dashboard-is-a-browser-page.md), plan §5
 
 ## Context

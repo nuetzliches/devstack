@@ -39,21 +39,21 @@ before code exists it names where it *will* live.
 | ADR | Title | Status |
 |---|---|---|
 | [0001](0001-development-is-adr-driven.md) | Development is ADR-driven | Accepted |
-| [0002](0002-processes-run-from-immutable-artifacts.md) | Processes run from immutable artifacts, never from the build output of the source tree | Proposed |
-| [0003](0003-changes-flow-through-candidates.md) | Changes flow through candidates; the main slot only holds a stack that built and passed health | Proposed |
-| [0004](0004-infrastructure-is-delegated-to-compose.md) | Infrastructure comes from the project's existing Compose files plus a dev overlay | Proposed |
+| [0002](0002-processes-run-from-immutable-artifacts.md) | Processes run from immutable artifacts, never from the build output of the source tree | Accepted |
+| [0003](0003-changes-flow-through-candidates.md) | Changes flow through candidates; the main slot only holds a stack that built and passed health | Accepted |
+| [0004](0004-infrastructure-is-delegated-to-compose.md) | Infrastructure comes from the project's existing Compose files plus a dev overlay | Accepted |
 | [0005](0005-rust-for-daemon-and-cli.md) | Rust for daemon and CLI | Accepted |
 | [0006](0006-dashboard-vue-same-origin.md) | The dashboard is a Vue 3 SPA served same-origin by the daemon | Accepted |
-| [0007](0007-one-http-api-is-the-control-surface.md) | One HTTP API is the control surface; CLI, MCP and dashboard are its clients | Proposed |
-| [0008](0008-background-workers-run-only-in-the-active-slot.md) | Background workers run only in the active slot | Proposed |
-| [0009](0009-the-daemon-owns-every-process-tree.md) | The daemon owns every process tree it starts | Proposed |
+| [0007](0007-one-http-api-is-the-control-surface.md) | One HTTP API is the control surface; CLI, MCP and dashboard are its clients | Accepted |
+| [0008](0008-background-workers-run-only-in-the-active-slot.md) | Background workers run only in the active slot | Accepted |
+| [0009](0009-the-daemon-owns-every-process-tree.md) | The daemon owns every process tree it starts | Accepted |
 | [0010](0010-promotion-mechanism.md) | Promotion mechanism: restart on the fixed port or switch a reverse proxy | Open |
-| [0011](0011-platform-windows-native-first.md) | Windows-native first; WSL is decided by measurement | Proposed (measured) |
+| [0011](0011-platform-windows-native-first.md) | Windows-native first; WSL is decided by measurement | Accepted |
 | [0012](0012-shared-infrastructure-between-lanes.md) | Which infrastructure may be shared between lanes | Open (deferred) |
-| [0013](0013-schema-changes-hold-promotion.md) | A build that changes schema inputs is not promoted automatically | Proposed |
-| [0014](0014-native-services-take-their-configuration-from-compose.md) | Native services take their configuration from the Compose service they replace | Proposed |
-| [0015](0015-devstack-is-optional.md) | devstack accelerates a stack, it is never required to run one | Proposed |
-| [0016](0016-a-daemon-restart-is-a-clean-restart.md) | A daemon restart is a clean restart from the last promoted artifacts | Proposed |
+| [0013](0013-schema-changes-hold-promotion.md) | A build that changes schema inputs is not promoted automatically | Accepted |
+| [0014](0014-native-services-take-their-configuration-from-compose.md) | Native services take their configuration from the Compose service they replace | Accepted |
+| [0015](0015-devstack-is-optional.md) | devstack accelerates a stack, it is never required to run one | Accepted |
+| [0016](0016-a-daemon-restart-is-a-clean-restart.md) | A daemon restart is a clean restart from the last promoted artifacts | Accepted |
 | [0017](0017-stack-file-is-toml.md) | The stack file is TOML, without profiles in version 1 | Accepted, provisional |
-| [0018](0018-dashboard-is-a-browser-page.md) | The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper | Proposed |
-| [0019](0019-control-api-security.md) | The control API trusts the user's own processes, never a web page | Proposed |
+| [0018](0018-dashboard-is-a-browser-page.md) | The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper | Accepted |
+| [0019](0019-control-api-security.md) | The control API trusts the user's own processes, never a web page | Accepted |

@@ -1,7 +1,8 @@
 # ADR-0016: A daemon restart is a clean restart from the last promoted artifacts
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
+- **Deciders:** project owner
 - **Related:** [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0009](0009-the-daemon-owns-every-process-tree.md), plan phase 0 spike (a)
 
 ## Context
