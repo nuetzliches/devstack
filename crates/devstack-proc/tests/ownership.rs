@@ -262,3 +262,33 @@ fn cleanup_spares_a_process_that_only_shares_a_number() {
     decoy.kill().unwrap();
     decoy.wait().unwrap();
 }
+
+/// Linux `PR_SET_PDEATHSIG` fires when the *thread* that started the child
+/// exits, not only the process. A tree started from a short-lived thread (a
+/// command run, a blocking task of the async runtime) must still live on.
+#[test]
+fn a_tree_outlives_the_thread_that_started_it() {
+    ensure_console().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path().to_path_buf();
+    let o = opts("thread");
+    // The thread lives until the service runs (as a command run waiting for
+    // health does), so the shim's death signal is armed before the thread ends.
+    let mut tree = std::thread::spawn(move || {
+        let (tree, _) = spawn(spec(&d, "svc", ""), &o).unwrap();
+        assert!(wait_for(
+            || marker(&d, "svc.started"),
+            Duration::from_secs(10)
+        ));
+        std::thread::sleep(Duration::from_millis(300));
+        tree
+    })
+    .join()
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        tree.is_alive(),
+        "the tree died with the thread that started it"
+    );
+    assert!(tree.stop(Duration::from_secs(10)).graceful);
+}

@@ -87,6 +87,40 @@ pub(crate) fn kill_cgroup(cg: &Path) {
     let _ = fs::write(cg.join("cgroup.kill"), "1");
 }
 
+type SpawnJob = (Command, std::sync::mpsc::Sender<std::io::Result<Child>>);
+
+/// Start a shim from a thread that lives as long as the process.
+///
+/// `PR_SET_PDEATHSIG` fires when the *thread* that forked the child exits, not
+/// only the process. A tree started from a short-lived thread (a command run,
+/// a blocking task of the async runtime) would lose its shim when that thread
+/// ends. Every shim is therefore forked by this one thread (ADR-0009).
+pub(crate) fn spawn_from_keeper(cmd: Command) -> std::io::Result<Child> {
+    static KEEPER: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Sender<SpawnJob>>> =
+        std::sync::OnceLock::new();
+    let keeper = KEEPER.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<SpawnJob>();
+        std::thread::Builder::new()
+            .name("devstack-spawner".into())
+            .spawn(move || {
+                for (mut cmd, reply) in rx {
+                    let _ = reply.send(cmd.spawn());
+                }
+            })
+            .expect("start the spawner thread");
+        std::sync::Mutex::new(tx)
+    });
+    let (reply, answer) = std::sync::mpsc::channel();
+    keeper
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .send((cmd, reply))
+        .map_err(|_| std::io::Error::other("spawner thread is gone"))?;
+    answer
+        .recv()
+        .map_err(|_| std::io::Error::other("spawner thread is gone"))?
+}
+
 pub(crate) fn spawn(spec: Spec, opts: &Options) -> Result<(Tree, Record)> {
     let Some((shim_exe, shim_args)) = opts.shim.split_first() else {
         return Err(ProcError::Other(
@@ -115,20 +149,18 @@ pub(crate) fn spawn(spec: Spec, opts: &Options) -> Result<(Tree, Record)> {
     if let Some(cg) = &cgroup {
         cmd.arg("--cgroup").arg(cg);
     }
-    let child = cmd
-        .arg("--")
+    cmd.arg("--")
         .args(["sh", "-c", &spec.command])
         .current_dir(&spec.cwd)
         .envs(&spec.env)
         .process_group(0)
         .stdin(Stdio::null())
         .stdout(spec.log)
-        .stderr(err)
-        .spawn()
-        .map_err(|e| ProcError::Os {
-            what: format!("start {}", spec.name),
-            source: e,
-        })?;
+        .stderr(err);
+    let child = spawn_from_keeper(cmd).map_err(|e| ProcError::Os {
+        what: format!("start {}", spec.name),
+        source: e,
+    })?;
     let pgid = child.id() as i32;
     let record = Record {
         name: spec.name,

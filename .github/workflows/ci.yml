@@ -43,3 +43,24 @@ jobs:
       - name: fixture stack compose groups
         if: matrix.os == 'ubuntu-latest'
         run: cargo run -q -p devstack -- check --compose -f examples/fixture-stack/devstack.toml
+
+  integration:
+    # Black-box test of the daemon against the example stack (needs the .NET SDK).
+    # Linux also runs the compose groups; Windows runners have no Linux containers.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: daemon lifecycle
+        run: cargo test -p devstack --test daemon_lifecycle -- --nocapture
+        env:
+          DEVSTACK_INTEGRATION: '1'
+          DEVSTACK_INTEGRATION_COMPOSE: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}

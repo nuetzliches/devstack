@@ -50,20 +50,19 @@ impl BuildJob {
                         source: e,
                     })?;
                     use std::os::unix::process::CommandExt;
-                    let shim = std::process::Command::new(exe)
-                        .args(args)
+                    let mut cmd = std::process::Command::new(exe);
+                    cmd.args(args)
                         .arg("--ppid")
                         .arg(std::process::id().to_string())
                         .arg("--cgroup")
                         .arg(&cgroup)
                         .args(["--", "sh", "-c", "while :; do sleep 3600; done"])
                         .process_group(0)
-                        .stdin(std::process::Stdio::null())
-                        .spawn()
-                        .map_err(|e| ProcError::Os {
-                            what: "start build holder".into(),
-                            source: e,
-                        })?;
+                        .stdin(std::process::Stdio::null());
+                    let shim = crate::unix::spawn_from_keeper(cmd).map_err(|e| ProcError::Os {
+                        what: "start build holder".into(),
+                        source: e,
+                    })?;
                     Some(Holder { shim, cgroup })
                 }
                 _ => None,

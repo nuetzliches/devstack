@@ -74,6 +74,13 @@ Verified with `spikes/process-ownership` (details in its README):
   children escape. That is the documented degradation.
 - Graceful stop: `SIGTERM` to the process group; the shim survives it through a
   no-op handler (not `SIG_IGN`, which the service would inherit).
+- **`PR_SET_PDEATHSIG` is tied to the thread, not the process** (found
+  2026-10-14 by the daemon integration test): the signal fires when the
+  *thread* that forked the shim exits. Command runs and blocking tasks of the
+  async runtime run on short-lived threads, so a service restarted from a
+  command run died a moment later. Every shim (services and the build holder)
+  is therefore forked by one spawner thread that lives as long as the daemon.
+  Test: `a_tree_outlives_the_thread_that_started_it`.
 
 ## Build servers (spike (b), 2026-10-14)
 
@@ -110,4 +117,7 @@ build is finished when its root exits, not when its job is empty.
 
 ## Enforced by
 
-- Platform process module (planned), one implementation per OS behind a trait.
+- `crates/devstack-proc`, one implementation per OS; the spawner thread is
+  `unix::spawn_from_keeper`.
+- `crates/devstack-proc/tests/ownership.rs` and the daemon integration test
+  `crates/devstack/tests/daemon_lifecycle.rs` (CI job `integration`).

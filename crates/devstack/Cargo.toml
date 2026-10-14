@@ -18,6 +18,11 @@ devstack-proc.workspace = true
 serde_json.workspace = true
 ureq.workspace = true
 
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+ureq.workspace = true
+
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
