@@ -89,6 +89,22 @@ pub fn ensure_daemon(stack_file: &Path, state_dir: &Path) -> Result<Client> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+        use windows_sys::Win32::System::Console::{
+            GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+        };
+        // Our own stdio may be a pipe (`devstack up | grep …`). Inheritable, the
+        // daemon would hold it open for its whole life and the reader would
+        // never see the end. The daemon gets its own log file instead.
+        for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            // SAFETY: plain Win32 calls on this process's standard handles.
+            unsafe {
+                let h = GetStdHandle(which);
+                if !h.is_null() {
+                    SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
+                }
+            }
+        }
         // No console of the caller's: the daemon allocates a hidden one (ADR-0009).
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;

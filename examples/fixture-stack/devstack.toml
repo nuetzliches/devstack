@@ -27,3 +27,17 @@ Telemetry__Endpoint = "http://127.0.0.1:4317"
 
 [services.api.workers]
 env = { Jobs__Enabled = "{is_main}" }
+
+[commands.ping]
+description = "Call the API's health endpoint"
+requires    = ["api"]
+steps       = [{ http = "GET {service.api.url}/health" }]
+
+[commands.reset]
+description = "Stop the API, run a step, start it again (shape of a database reset)"
+confirm     = "This restarts the API. Continue?"
+steps       = [{ stop = "api" }, { exec = "git --version" }, { start = "api" }]
+
+[groups.app]
+label   = "Application"
+members = ["api", "compose.app.db", "compose.app.cache", "command.ping", "command.reset"]

@@ -122,6 +122,12 @@ references).
 8. The previous main artifact is kept. `devstack rollback <service>` promotes it
    again without a build. Retention: last N artifacts per service (default 5).
 
+**Until candidates exist (phase 2)**, `restart` of a built service follows the
+same rule in a simpler form: it builds first and replaces the running instance
+only if the build succeeded; a failed build leaves the running instance as it
+was. Compiler messages are mapped from the snapshot back to repository paths,
+so they stay clickable.
+
 ### 3.3 Build identity
 
 Every process the daemon starts receives `DEVSTACK_BUILD_ID`,
@@ -140,6 +146,37 @@ the candidate model does not fit it directly. Plan:
 - **Immutable variant:** `kind = "static"` builds the production bundle into an
   artifact and serves it from the daemon on its own port. Intended for
   end-to-end runs that must pin a build id.
+
+### 3.4a Hot reload of backend services
+
+devstack does **not** use `dotnet watch` (or any in-place watcher) for its
+services by default. It builds in the source tree's own `bin/`, from which the
+running process is loaded, and restarts on every change whether the build
+succeeds or not: root causes A and B of the problem statement. The default is
+the candidate pipeline: build in the snapshot, start only a healthy build
+(ADR-0002, ADR-0003); an incremental change costs about 2-3 s of build plus the
+start. What it does not give is in-process code replacement (.NET Hot Reload,
+edit and continue) that keeps the process and its state.
+
+When a developer wants that for a debugging session, a service can be switched
+to a **hot-reload mode**: it runs as a `devserver` with the toolchain's own
+watcher.
+
+```toml
+[services.api]
+kind = "devserver"
+cwd  = "src/Api"
+run  = "dotnet watch run --non-interactive"
+port = 5000
+```
+
+What the mode gives up, deliberately, for that service: no snapshot, no
+artifact and no build id (it runs from the source tree); no candidates and no
+"a broken build never replaces a working one"; the file locks and duplicate
+launches of the problem statement come back for it. It is a per-service choice
+for a session, not a stack-wide default. Planned follow-up: switch a service
+into and out of the mode at runtime (`devstack hot-reload api on|off`), without
+editing the stack file; the frontend dev server (§3.4) already works this way.
 
 ### 3.5 Lanes
 

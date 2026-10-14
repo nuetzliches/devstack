@@ -478,10 +478,14 @@ impl Supervisor {
             match self.builder.wait(&mut running).map_err(|e| e.to_string())? {
                 Outcome::Published { .. } => {}
                 Outcome::Failed { exit_code, log, .. } => {
-                    return Err(format!(
-                        "build failed with exit code {exit_code}\n{}",
-                        tail(&log, 15)
-                    ));
+                    // Point compiler messages at the repository, not at the
+                    // snapshot, so they stay clickable in the IDE.
+                    let snap_dir = self.layout.lane("main").join("src");
+                    let text = tail(&log, 15).replace(
+                        &snap_dir.to_string_lossy().into_owned(),
+                        &self.repo.to_string_lossy(),
+                    );
+                    return Err(format!("build failed with exit code {exit_code}\n{text}"));
                 }
                 Outcome::Cancelled { .. } => return Err("build cancelled".into()),
             }
@@ -664,7 +668,23 @@ impl Supervisor {
         Ok(())
     }
 
+    /// Build first; only a successful build replaces the running instance (the
+    /// rule of ADR-0003, ahead of candidates in phase 2). A failed build leaves
+    /// the running instance as it was.
     pub fn restart(self: &Arc<Self>, name: &str) -> Result<(), String> {
+        let svc = self.service(name)?.clone();
+        if svc.build.is_some() {
+            let _op = self.op_locks[name].lock().unwrap();
+            let before = self.slots.lock().unwrap()[name].view.status.clone();
+            if let Err(e) = self.build_locked(name, &svc) {
+                // Back to what is actually running; the error goes to the caller.
+                self.set_status(name, before);
+                return Err(format!(
+                    "{e}
+The running instance was left as it was."
+                ));
+            }
+        }
         self.stop(name)?;
         self.start(name)
     }
