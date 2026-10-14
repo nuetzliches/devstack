@@ -17,6 +17,8 @@ build on either.
 4. Several concurrent writers (IDE, terminals, AI agents, worktrees) are the
    design case.
 5. Windows-native first, without closing the door on WSL.
+6. No lock-in: every stack devstack runs also runs with Compose and the
+   stack file's commands alone ([ADR-0015](adr/0015-devstack-is-optional.md)).
 
 ## 2. Architecture
 
@@ -255,7 +257,7 @@ downstream stack.
 | Phase | Content | Exit criterion |
 |---|---|---|
 | **0: Spikes** | (a) Windows Job Objects + graceful stop from Rust, incl. `dotnet` and `node` trees; (b) cancelling an MSBuild tree mid-build and resuming incrementally; (c) snapshot sync cost for the reference tree; (d) platform benchmark for [ADR-0011](adr/0011-platform-windows-native-first.md) | Each spike answers its question with numbers, recorded in the relevant ADR |
-| **1: Run plane + CLI** | Stack file, compose driver, port preflight, artifact builds on demand (`devstack build api`), main slot, jobs, health, logs, job-object ownership, build-id env, CLI, MCP | Reference stack runs end to end without the previous orchestrator; no file-lock failure possible by construction |
+| **1: Run plane + CLI** | Stack file, compose driver, `devstack check`, `devstack env --export`, port preflight, artifact builds on demand (`devstack build api`), main slot, jobs, health, logs, job-object ownership, build-id env, CLI, MCP | Reference stack runs end to end without the previous orchestrator; no file-lock failure possible by construction |
 | **2: Candidate pipeline** | Watch, debounce, supersede/cancel, candidates without workers, promotion gate, rollback, SSE events, first dashboard | A broken edit never replaces main; three concurrent writers produce at most one running build per service |
 | **3: Lanes** | Worktree lanes, per-lane resources, `promote --lane`, static frontend artifacts for e2e | Two worktrees run side by side without touching each other's database or the main slot |
 | **4: Adoption** | Migrate the downstream stack, delete its old orchestrator, publish | Downstream runbook shrinks to the stack file and a page of notes |

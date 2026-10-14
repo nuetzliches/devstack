@@ -46,6 +46,14 @@ What differs between development and deployment is expressed the way it is for
 every other environment: in the development env file. `devstack env <service>`
 prints the resolved environment with the origin of each variable.
 
+**The rule is a documented function, not a devstack-only mechanism**
+([ADR-0015](0015-devstack-is-optional.md)). Steps 1–3 depend only on Compose and
+the stack file; any script can reproduce them. `devstack env <service> --export
+dotenv [--out <file>]` writes the result (steps 1–3, without devstack's own
+variables) to a file, so a service can be started by hand or from an IDE launch
+profile without a running daemon. Exported files contain development secrets
+and belong in git-ignored locations.
+
 ## Alternatives considered
 
 - **Configuration in the stack file.** A third copy of the same settings.
@@ -69,4 +77,7 @@ prints the resolved environment with the origin of each variable.
 ## Enforced by
 
 - Process environment builder (planned).
-- `devstack env <service>` (planned) for inspection.
+- `devstack env <service>` (planned) for inspection, `--export dotenv` for use
+  without devstack.
+- `devstack check` (planned): every native service's environment must be
+  exportable (ADR-0015).
