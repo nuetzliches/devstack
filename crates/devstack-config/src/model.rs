@@ -26,6 +26,61 @@ pub struct Stack {
     /// Operations users and agents can run, keyed by command name.
     #[serde(default)]
     pub commands: BTreeMap<String, Command>,
+    /// Views over services, Compose services and commands (plan §4.4a). Labels,
+    /// not parents: no member depends on another, a member may be in several.
+    #[serde(default)]
+    pub groups: BTreeMap<String, Group>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Group {
+    /// Display name; defaults to the group's key.
+    pub label: Option<String>,
+    /// `<service>`, `compose.<group>.<service>` or `command.<name>`.
+    pub members: Vec<String>,
+    /// Sort position in the dashboard; groups without one follow alphabetically.
+    pub order: Option<i32>,
+}
+
+/// A group member, resolved from its string form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Member<'a> {
+    Service(&'a str),
+    ComposeService { group: &'a str, service: &'a str },
+    Command(&'a str),
+}
+
+impl Group {
+    /// Parse every member; `Err` carries the members that are not well-formed.
+    pub fn parsed_members(&self) -> Vec<Result<Member<'_>, &str>> {
+        self.members
+            .iter()
+            .map(|m| {
+                if let Some(rest) = m.strip_prefix("compose.") {
+                    match rest.split_once('.') {
+                        Some((g, s)) if !g.is_empty() && !s.is_empty() && !s.contains('.') => {
+                            Ok(Member::ComposeService {
+                                group: g,
+                                service: s,
+                            })
+                        }
+                        _ => Err(m.as_str()),
+                    }
+                } else if let Some(c) = m.strip_prefix("command.") {
+                    if c.is_empty() {
+                        Err(m.as_str())
+                    } else {
+                        Ok(Member::Command(c))
+                    }
+                } else if m.is_empty() || m.contains('.') {
+                    Err(m.as_str())
+                } else {
+                    Ok(Member::Service(m))
+                }
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

@@ -2,7 +2,7 @@
 //! collected and reported together, each with the path of the offending key.
 
 use crate::interpolate::{self, Placeholder};
-use crate::model::{Kind, SCHEMA_VERSION, Stack, StepAction};
+use crate::model::{Kind, Member, SCHEMA_VERSION, Stack, StepAction};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -333,6 +333,38 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                             &sp,
                             format!("`run` needs a service of kind `job`; `{s}` is not one"),
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ groups
+    for (n, group) in &stack.groups {
+        let p = format!("groups.{n}");
+        c.name(&p, n);
+        if group.members.is_empty() {
+            c.err(format!("{p}.members"), "needs at least one member");
+        }
+        let mut seen = BTreeSet::new();
+        for (i, m) in group.parsed_members().into_iter().enumerate() {
+            let mp = format!("{p}.members[{i}]");
+            match m {
+                Err(raw) => c.err(&mp, format!("`{raw}`: expected `<service>`, `compose.<group>.<service>` or `command.<name>`")),
+                Ok(member) => {
+                    if !seen.insert(group.members[i].clone()) {
+                        c.err(&mp, format!("`{}` is listed twice", group.members[i]));
+                    }
+                    match member {
+                        Member::Service(s) => {
+                            c.service_ref(&mp, s);
+                        }
+                        Member::ComposeService { group: g, service } => c.compose_service(&mp, &group.members[i], g, service),
+                        Member::Command(cmd) => {
+                            if !stack.commands.contains_key(cmd) {
+                                c.err(&mp, format!("no command `{cmd}`"));
+                            }
+                        }
                     }
                 }
             }

@@ -57,3 +57,4 @@ before code exists it names where it *will* live.
 | [0017](0017-stack-file-is-toml.md) | The stack file is TOML, without profiles in version 1 | Accepted, provisional |
 | [0018](0018-dashboard-is-a-browser-page.md) | The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper | Accepted |
 | [0019](0019-control-api-security.md) | The control API trusts the user's own processes, never a web page | Accepted |
+| [0020](0020-builds-share-one-long-lived-build-job.md) | Builds share one long-lived build job; a cancel ends only the cancelled build's tree | Proposed |

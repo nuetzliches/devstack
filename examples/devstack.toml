@@ -122,3 +122,21 @@ steps = [
   { run = "migrate" },
   { start = "api" },
 ]
+
+# -------------------------------------------------------------------- groups
+# Views for the dashboard and for acting on several members at once (plan
+# §4.4a). Labels, not parents: a member may be in several groups.
+
+[groups.backend]
+label   = "Backend"
+order   = 1
+members = ["api", "migrate", "compose.app.db", "compose.app.scheduler", "command.reset-db", "command.seed"]
+
+[groups.frontend]
+label   = "Frontend"
+order   = 2
+members = ["web", "e2e-ui", "command.install"]
+
+[groups.integrations]
+label   = "Third parties"
+members = ["payment-mock", "compose.app.webhooks", "api"]

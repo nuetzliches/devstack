@@ -179,6 +179,7 @@ Format: TOML, `devstack.toml` in the repository root, no profiles in version 1
 | `compose.<group>` | table | A Compose project (ADR-0004) |
 | `services.<name>` | table | A native process managed by devstack |
 | `commands.<name>` | table | An operation users and agents can run |
+| `groups.<name>` | table | A view over services, Compose services and commands (§4.4a) |
 
 ### 4.2 `compose.<group>`
 
@@ -226,6 +227,32 @@ Format: TOML, `devstack.toml` in the repository root, no profiles in version 1
 
 Anything beyond these steps (parsing a response, opening a browser) belongs in a
 script the downstream project owns and calls with `exec`.
+
+### 4.4a `groups.<name>` (views, not hierarchy)
+
+Groups organise services, Compose services and commands for display and for
+acting on several at once. They are **labels, not parents**: no member needs
+another member to exist, a member may be in several groups, and nothing starts
+or stops because of the group it is in (dependencies are `after`, nothing
+else). Members that are in no group appear under "Other".
+
+| Key | Meaning |
+|---|---|
+| `label` | Display name (default: the group's key) |
+| `members` | `<service>`, `compose.<group>.<service>`, `command.<name>` |
+| `order` | Sort position in the dashboard (default: alphabetical) |
+
+```toml
+[groups.portal]
+label   = "Customer portal"
+members = ["portal-api", "portal-spa", "compose.app.portal-db", "command.portal-onboard"]
+
+[groups.telephony]
+members = ["telephony-mock", "compose.app.webhooks", "api"]   # api is in two groups
+```
+
+CLI and API accept a group wherever they accept a service list
+(`devstack restart --group portal`, `devstack logs --group telephony`).
 
 ### 4.5 Interpolation
 
@@ -276,7 +303,9 @@ schema. Four points it surfaced, now part of the draft:
 | `GET /v1/builds?service=` | Build history (queued / running / superseded / failed / succeeded) |
 | `GET /v1/services/{name}/logs?slot=&tail=` | Log tail |
 | `POST /v1/services/{name}/promote` / `rollback` / `restart` / `stop` / `start` | Lifecycle |
-| `POST /v1/commands/{name}` | Custom commands from the stack file |
+| `POST /v1/commands/{name}` | Run a command from the stack file; returns a run id |
+| `GET /v1/commands/{name}/runs` / `…/runs/{id}` | Command run history and output |
+| `GET /v1/usage?by=service\|group\|lane` | Resource usage, current and recent (§12) |
 | `POST /v1/infra/{service}/restart` | Container restart (e.g. after a config change the container cannot see) |
 
 **Security:** loopback only, a token file for CLI and MCP, a one-time code
@@ -288,13 +317,26 @@ checks ([ADR-0019](adr/0019-control-api-security.md)).
 Delivery: a browser page served by the daemon, opened with `devstack ui`; status
 icon and notifications through a tray in the daemon binary ([ADR-0018](adr/0018-dashboard-is-a-browser-page.md)).
 
-- Stack overview: infra and services, health, slot, build id, ports, lane.
-- Build timeline per service, including superseded builds and durations.
-- Live logs per process.
-- Actions: promote, rollback, restart, custom commands (with confirmation).
-- Lane switcher.
+- **Overview by group** (§4.4a): one panel per group, ungrouped members under
+  "Other", a member shown in every group it belongs to. Per member: state,
+  health, slot, build id, ports, lane, resource usage (§12). Collapsible, the
+  layout remembered per browser.
+- **Console per service:** live output of every process instance (main slot and
+  candidates, selectable), ANSI colours rendered, search, filter by build id and
+  time, jump to the line where the last failure started. The same view for
+  Compose services (their `docker compose logs`).
+- **Actions:** start, stop, restart, promote, rollback per service and per group;
+  the stack file's `commands` (e.g. reset the database) as buttons on the group
+  they belong to and in a command palette. A command with `confirm` asks first;
+  while it runs its steps and their output stream into a panel; every run is kept
+  with start, end, exit code and output (`.devstack/logs/commands/<name>/`), so
+  "what did the last reset do" has an answer.
+- **Build timeline** per service, including superseded and held builds.
+- **Resource view** (§12): per service, group and lane, now and over the last
+  minutes.
+- **Lane switcher.**
 - Explicitly not: a telemetry viewer. Traces and metrics go to an OTLP sink
-  defined in the downstream compose file.
+  defined in the downstream Compose file.
 
 ## 7. Phases
 
@@ -363,12 +405,12 @@ Starts once the ADRs phase 1 builds on are accepted (0002, 0003, 0004, 0007,
 
 | # | Crate | Content | Taken from |
 |---|---|---|---|
-| 1 | `devstack-config` | Stack file model, strict loading, validation, interpolation (§4.5), JSON Schema | ADR-0017, plan §4 |
-| 2 | `devstack-proc` | Process ownership per platform: Windows job + process group + hidden console; Linux shim + cgroup + process group; restart cleanup; OS lock | Spike (a) code |
+| 1 | `devstack-config` | Stack file model, strict loading, validation, interpolation (§4.5), groups (§4.4a), JSON Schema | ADR-0017, plan §4 |
+| 2 | `devstack-proc` | Process ownership per platform: Windows job + process group + hidden console; Linux shim + cgroup + process group; restart cleanup; OS lock; resource usage per tree (§12) | Spike (a) code |
 | 3 | `devstack-compose` | Compose groups: `config --format json`, `up --wait --no-deps`, `ps`, restart, external networks, published ports | ADR-0004 |
 | 4 | `devstack-env` | Environment composition from Compose service + stack file + devstack variables, host rewriting, `--export dotenv` | ADR-0014, ADR-0015 |
-| 5 | `devstack-build` | Snapshot sync, build in lane, publish by copy, build ids, cancellation, retention | ADR-0002, spike (b), (c) |
-| 6 | `devstack-daemon` | Supervisor (main slot, jobs, `after`, health, ports), state persistence, HTTP API with auth, SSE, logs | ADR-0007, 0016, 0019, plan §5, §11 |
+| 5 | `devstack-build` | Snapshot sync, build in lane, publish by copy, build ids, shared build job and cancellation (ADR-0020), retention | ADR-0002, spike (b), (c) |
+| 6 | `devstack-daemon` | Supervisor (main slot, jobs, `after`, health, ports), state persistence, HTTP API with auth, SSE, logs, command runs, usage sampling (§12) | ADR-0007, 0016, 0019, plan §5, §11 |
 | 7 | `devstack` (bin) | CLI subcommands, `devstack mcp`, `devstack check`, `devstack env` | ADR-0007, 0015 |
 
 Phase 1 delivers builds on demand and the main slot; candidates, auto-promotion
@@ -387,7 +429,7 @@ runs end to end without its previous orchestrator.
 | O-6 | Default daemon port | Phase 1 |
 | O-7 | Lanes per worktree only, or also per agent session in one tree | Phase 3 |
 | O-8 | Development values that are not secret (local passwords, dev API keys): a tracked `dev/.env.defaults` next to the untracked `dev/.env`, or everything through the downstream secret chain | Downstream decision; devstack supports several env files per group either way |
-| O-10 | How build servers outlive a single build but die with the daemon (spike (b)) | ADR-0009, decided in phase 1 work package 5 |
+| O-10 | How build servers outlive a single build but die with the daemon (spike (b)) | [ADR-0020](adr/0020-builds-share-one-long-lived-build-job.md), proposed |
 | O-9 | Minimum Docker Compose version (overlays rely on `!reset`, `!override`, `required: false`) | Phase 1, checked by `devstack check` |
 
 ## 9. Risks
@@ -438,3 +480,26 @@ provided, with the build id as the organising key.
 - **Not devstack's job:** application traces and metrics. They go to the OTLP
   sink in the downstream Compose file; devstack only passes the build id along
   (§3.3) so traces can be filtered by it.
+
+## 12. Resource usage
+
+What a stack costs the machine is visible per service, per group and per lane,
+because "which lane eats the memory" is the question that comes up as soon as a
+second worktree runs.
+
+| Measure | Native processes | Containers |
+|---|---|---|
+| CPU (% of one core, and total CPU time) | Windows: job accounting of the service's job; Linux: the service's cgroup (`cpu.stat`), else the sum over its process group | `docker stats` of the Compose services |
+| Memory (working set / RSS) | Windows: sum over the job's processes; Linux: cgroup `memory.current`, else sum over the process group | `docker stats` |
+| Processes | job / cgroup membership (ADR-0009) | — |
+| Disk | per lane: snapshot, artifacts, logs under `.devstack/` | named volumes of the Compose project (`docker system df -v`), sampled rarely |
+
+- The daemon samples every 2 s (containers every 5 s) and keeps 10 minutes per
+  instance in memory for the dashboard's sparklines; nothing is persisted.
+- Builds are accounted separately (the build job, ADR-0020), so a running build
+  is visible as such and not as the service's load.
+- Aggregation: a service sums its instances (main plus candidates), a group its
+  members, a lane its services and its own Compose project if it has one
+  (ADR-0012).
+- Exposed through `GET /v1/usage`, the SSE stream, `devstack top` and the
+  dashboard (§6).

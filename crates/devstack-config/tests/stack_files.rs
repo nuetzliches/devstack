@@ -193,3 +193,38 @@ fn json_schema_names_the_top_level_tables() {
         assert!(props.get(key).is_some(), "missing {key}");
     }
 }
+
+#[test]
+fn groups_are_views_with_checked_members() {
+    let ok = format!(
+        "{MINIMAL}
+[commands.reset]
+description = \"d\"
+steps = [{{ exec = \"x\" }}]
+[groups.core]
+members = [\"api\", \"compose.app.db\", \"command.reset\"]
+[groups.data]
+label = \"Data\"
+order = 1
+members = [\"api\", \"compose.app.queue\"]
+"
+    );
+    let s = from_str(&ok, Path::new("t")).unwrap();
+    assert_eq!(s.groups.len(), 2, "a member may be in several groups");
+    let bad = ok.replace(
+        "\"command.reset\"]",
+        "\"command.nope\", \"ghost\", \"compose.app.cache\", \"a.b\", \"api\"]",
+    );
+    let all = invalid(&bad).join(
+        "
+",
+    );
+    assert!(all.contains("no command `nope`"), "{all}");
+    assert!(all.contains("no service `ghost`"), "{all}");
+    assert!(
+        all.contains("`cache` is not started by compose group `app`"),
+        "{all}"
+    );
+    assert!(all.contains("`a.b`: expected"), "{all}");
+    assert!(all.contains("`api` is listed twice"), "{all}");
+}
