@@ -286,6 +286,9 @@ browser cannot drive the daemon. To be written up as an ADR in phase 1.
 
 ## 6. Dashboard scope (phase 2 and later)
 
+Delivery: a browser page served by the daemon, opened with `devstack ui`; status
+icon and notifications through a tray in the daemon binary ([ADR-0018](adr/0018-dashboard-is-a-browser-page.md)).
+
 - Stack overview: infra and services, health, slot, build id, ports, lane.
 - Build timeline per service, including superseded builds and durations.
 - Live logs per process.

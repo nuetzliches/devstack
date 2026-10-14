@@ -55,3 +55,4 @@ before code exists it names where it *will* live.
 | [0015](0015-devstack-is-optional.md) | devstack accelerates a stack, it is never required to run one | Proposed |
 | [0016](0016-a-daemon-restart-is-a-clean-restart.md) | A daemon restart is a clean restart from the last promoted artifacts | Proposed |
 | [0017](0017-stack-file-is-toml.md) | The stack file is TOML, without profiles in version 1 | Accepted, provisional |
+| [0018](0018-dashboard-is-a-browser-page.md) | The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper | Proposed |
