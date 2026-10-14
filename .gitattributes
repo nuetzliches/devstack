@@ -1,0 +1,17 @@
+# LF everywhere in the repository and the working copy, regardless of core.autocrlf.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets.
+*.png binary
+*.jpg binary
+*.ico binary
+*.gif binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.exe binary
