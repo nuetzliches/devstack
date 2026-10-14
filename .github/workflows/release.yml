@@ -40,6 +40,12 @@ jobs:
         run: |
           crate=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
           [ "v$crate" = "${GITHUB_REF_NAME}" ] || { echo "::error::tag ${GITHUB_REF_NAME} != Cargo.toml version $crate"; exit 1; }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: dashboard (embedded into the binary)
+        working-directory: ui
+        run: npm ci && npm run build
       - name: build
         run: cargo build --release --locked -p devstack --target ${{ matrix.target }}
       - name: package

@@ -122,6 +122,11 @@ references).
 8. The previous main artifact is kept. `devstack rollback <service>` promotes it
    again without a build. Retention: last N artifacts per service (default 5).
 
+**Status 0.2.0:** steps 1-8 are implemented (`crates/devstack-daemon`:
+`watch.rs`, the candidate pipeline and `replace` in `supervisor.rs`, `proxy.rs`),
+with option B of ADR-0010; `restart` takes the same path. Phase 2 additionally
+brought the hub and the dashboard (ADR-0021).
+
 **Until candidates exist (phase 2)**, `restart` of a built service follows the
 same rule in a simpler form: it builds first and replaces the running instance
 only if the build succeeded; a failed build leaves the running instance as it

@@ -6,9 +6,11 @@ containers, application processes built from immutable artifacts, and a
 checks**. Changes flow through candidate builds that are cancelled the moment a
 newer change lands.
 
-> **Status: phase 1 done (0.1.0).** Daemon, CLI and MCP server run a stack's
-> main slot (builds on demand, health, logs, commands, resource usage) on
-> Windows and Linux; candidates, promotion and the dashboard are phase 2. See
+> **Status: 0.2.0 (phase 2).** Daemon, CLI and MCP server run a stack on Windows
+> and Linux. Saved edits are built in the background and swapped in behind a
+> proxy only once they are healthy, without a failed request; a broken build
+> never replaces what runs. A dashboard (a progressive web app served by the
+> hub) shows every stack live. Lanes for several worktrees are phase 3. See
 > [`docs/plan.md`](docs/plan.md) and the decision log in
 > [`docs/adr/`](docs/adr/README.md).
 
@@ -49,7 +51,10 @@ JSON Schema).
 devstack check            # validate the stack file (with --compose: the Compose groups too)
 devstack up               # daemon, infrastructure, autostart services
 devstack status
-devstack restart api      # rebuild; the running instance is replaced only if the build succeeds
+devstack ui               # the dashboard in the browser (every stack, live)
+devstack restart api      # rebuild now; the running instance is replaced once the new one is healthy
+devstack promote api      # take over a candidate held back by a schema change (ADR-0013)
+devstack rollback api     # back to the build that ran before the last replacement
 devstack logs api --follow
 devstack run reset        # a command from the stack file
 devstack top --watch      # CPU, memory and disk per service, container, group and lane
@@ -57,12 +62,25 @@ devstack env api --export dotenv   # run the service without devstack (ADR-0015)
 devstack down --infra
 ```
 
+### How a change arrives
+
+A service with `watch` patterns is rebuilt when a watched file changes (after a
+quiet period of 2 s; a newer change kills the build in progress). The new build
+starts as a **candidate** on an internal port without background workers; once
+it is healthy, the proxy on the service's fixed port switches to it, the old
+instance drains and stops, and a second start with workers on takes over the
+same way (ADR-0003, ADR-0008, ADR-0010). Until then `devstack status`, MCP and
+the dashboard say `not yet active: building | starting | failed | held`, and
+every response carries `x-devstack-build` and, while something is pending,
+`x-devstack-pending`. A change to `promote.hold_if_changed` paths (a schema
+migration) waits for `devstack promote`.
+
 ### Agents (MCP)
 
 `devstack mcp` is an MCP server on stdio. It is a client of the daemon's API
 like the CLI: every tool maps to one endpoint (`status`, `up`, `down`,
-`start_service`, `stop_service`, `restart_service`, `logs`, `run_command`,
-`usage`). Register it in the repository, e.g. `.mcp.json`:
+`start_service`, `stop_service`, `restart_service`, `promote_service`,
+`rollback_service`, `logs`, `run_command`, `usage`, `hub_status`, `hub_start`). Register it in the repository, e.g. `.mcp.json`:
 
 ```json
 { "mcpServers": { "devstack": { "command": "devstack", "args": ["mcp"] } } }

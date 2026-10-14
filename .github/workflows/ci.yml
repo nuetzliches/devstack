@@ -64,3 +64,15 @@ jobs:
         env:
           DEVSTACK_INTEGRATION: '1'
           DEVSTACK_INTEGRATION_COMPOSE: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
+
+  ui:
+    # The dashboard: type check and production build (the hub embeds ui/dist).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: build
+        working-directory: ui
+        run: npm ci && npm run build
