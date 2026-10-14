@@ -47,7 +47,7 @@ before code exists it names where it *will* live.
 | [0007](0007-one-http-api-is-the-control-surface.md) | One HTTP API is the control surface; CLI, MCP and dashboard are its clients | Accepted |
 | [0008](0008-background-workers-run-only-in-the-active-slot.md) | Background workers run only in the active slot | Accepted |
 | [0009](0009-the-daemon-owns-every-process-tree.md) | The daemon owns every process tree it starts | Accepted |
-| [0010](0010-promotion-mechanism.md) | Promotion mechanism: restart on the fixed port or switch a reverse proxy | Proposed: B (measured) |
+| [0010](0010-promotion-mechanism.md) | Promotion mechanism: restart on the fixed port or switch a reverse proxy | Accepted: B (measured) |
 | [0011](0011-platform-windows-native-first.md) | Windows-native first; WSL is decided by measurement | Accepted |
 | [0012](0012-shared-infrastructure-between-lanes.md) | Which infrastructure may be shared between lanes | Open (deferred) |
 | [0013](0013-schema-changes-hold-promotion.md) | A build that changes schema inputs is not promoted automatically | Accepted |
@@ -58,3 +58,5 @@ before code exists it names where it *will* live.
 | [0018](0018-dashboard-is-a-browser-page.md) | The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper | Accepted |
 | [0019](0019-control-api-security.md) | The control API trusts the user's own processes, never a web page | Accepted |
 | [0020](0020-builds-share-one-long-lived-build-job.md) | Builds share one long-lived build job; a cancel ends only the cancelled build's tree | Accepted |
+| [0021](0021-a-hub-serves-the-dashboard.md) | A hub on a fixed port serves the dashboard for every stack | Accepted |
+| [0022](0022-network-egress-sandbox.md) | Outbound network calls of supervised services are visible and need an allow rule | Proposed |

@@ -137,6 +137,8 @@ pub struct CommandView {
 pub struct StackView {
     pub name: String,
     pub repo: PathBuf,
+    /// Version of the daemon.
+    pub version: String,
     pub services: Vec<ServiceView>,
     pub infra: Vec<InfraView>,
     pub groups: Vec<GroupView>,
@@ -155,6 +157,10 @@ pub struct Event {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum EventBody {
+    /// The whole state; the first event of every stream (ADR-0021: no polling).
+    Snapshot {
+        stack: Box<StackView>,
+    },
     Service {
         service: String,
         status: Status,

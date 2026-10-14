@@ -6,6 +6,7 @@ pub mod api;
 pub mod commands;
 pub mod health;
 pub mod proxy;
+pub mod registry;
 pub mod state;
 pub mod supervisor;
 pub mod token;
@@ -22,6 +23,8 @@ pub struct DaemonInfo {
     pub pid: u32,
     pub port: u16,
     pub started: u128,
+    #[serde(default)]
+    pub version: String,
 }
 
 pub fn info_path(state_dir: &Path) -> PathBuf {
@@ -56,6 +59,7 @@ fn cgroup_root(stack: &str) -> Option<PathBuf> {
 pub fn serve(stack_file: &Path) -> Result<(), String> {
     let stack = devstack_config::load(stack_file).map_err(|e| e.to_string())?;
     let abs = std::path::absolute(stack_file).map_err(|e| e.to_string())?;
+    let abs_file = devstack_proc::long_path(&abs);
     let repo = abs.parent().map(Path::to_path_buf).unwrap_or(abs);
     // One spelling of the repository everywhere (compiler messages use the long one).
     let repo = devstack_proc::long_path(&repo);
@@ -76,6 +80,13 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     };
     devstack_proc::ensure_console().map_err(|e| e.to_string())?;
     let token = token::load_or_create().map_err(|e| format!("token: {e}"))?;
+    // Known to the hub from now on (ADR-0021); a failure costs only the listing.
+    let _ = registry::register(&registry::Entry {
+        id: registry::id_for(&abs_file),
+        name: stack.stack.name.clone(),
+        file: abs_file.clone(),
+        repo: repo.clone(),
+    });
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let proc_opts = devstack_proc::Options {
         cgroup_root: cgroup_root(&stack.stack.name),
@@ -103,6 +114,7 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
             pid: std::process::id(),
             port,
             started: state::now_ms(),
+            version: devstack_config::VERSION.into(),
         };
         std::fs::write(
             info_path(&state_dir),

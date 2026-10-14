@@ -269,6 +269,7 @@ fn truncate(s: &str, n: usize) -> String {
 pub fn up(stack_file: &Path) -> Result<()> {
     let sd = state_dir(stack_file)?;
     let c = ensure_daemon(stack_file, &sd)?;
+    crate::hubcmd::ensure_quietly();
     let t0 = Instant::now();
     let outcome = start_and_wait(&c, stack_file, None, |name, st| {
         println!("{:>6.1}s  {name:<22} {st}", t0.elapsed().as_secs_f64());

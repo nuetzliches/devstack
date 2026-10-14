@@ -34,12 +34,19 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/shutdown", post(shutdown))
         .route("/v1/services/{name}/{action}", post(service_action))
         .route("/v1/services/{name}/logs", get(logs))
+        .route("/v1/services/{name}/logs/stream", get(log_stream))
+        .route("/v1/services/{name}/build-log", get(build_log))
+        .route(
+            "/v1/infra/{group}/{service}/restart",
+            post(restart_container),
+        )
         .route("/v1/events", get(events))
         .route("/v1/usage", get(usage))
         .route("/v1/commands/{name}", post(run_command))
         .route("/v1/commands/{name}/runs", get(command_runs))
         .route("/v1/runs/{id}", get(run_info))
         .route("/v1/runs/{id}/log", get(run_log))
+        .route("/v1/runs/{id}/log/stream", get(run_log_stream))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
 }
@@ -179,9 +186,20 @@ fn text_tail(path: &std::path::Path, n: usize) -> Response {
         .into_response()
 }
 
+/// The event stream starts with a snapshot of the whole state, so a client
+/// never needs to ask for it on a timer (ADR-0021). Subscribed before the
+/// snapshot is taken: nothing that happens in between is lost.
 async fn events(State(s): State<AppState>) -> Response {
-    let stream = BroadcastStream::new(s.sup.events.subscribe())
-        .filter_map(|e| e.ok())
+    let rx = s.sup.events.subscribe();
+    let snapshot = crate::state::Event {
+        seq: 0,
+        at: crate::state::now_ms(),
+        body: crate::state::EventBody::Snapshot {
+            stack: Box::new(s.sup.view()),
+        },
+    };
+    let stream = tokio_stream::once(snapshot)
+        .chain(BroadcastStream::new(rx).filter_map(|e| e.ok()))
         .map(|e| {
             Ok::<_, std::convert::Infallible>(SseEvent::default().json_data(e).unwrap_or_default())
         });
@@ -241,5 +259,198 @@ async fn run_log(State(s): State<AppState>, Path(id): Path<u64>) -> Response {
     match s.runs.get(id) {
         Some(r) => text_tail(&r.log, usize::MAX),
         None => err(StatusCode::NOT_FOUND, format!("no run {id}")),
+    }
+}
+
+// ------------------------------------------------------------ log streams
+
+fn sse_json(rx: tokio::sync::mpsc::Receiver<serde_json::Value>) -> Response {
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
+        .map(|v| Ok::<_, std::convert::Infallible>(SseEvent::default().data(v.to_string())));
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
+/// Lines appended to `path` since `pos`; a trailing partial line waits.
+fn read_new(path: &std::path::Path, pos: &mut u64, partial: &mut String) -> Vec<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    if len < *pos {
+        *pos = 0; // truncated or replaced
+        partial.clear();
+    }
+    if len == *pos || f.seek(SeekFrom::Start(*pos)).is_err() {
+        return Vec::new();
+    }
+    let mut buf = Vec::new();
+    let _ = f.read_to_end(&mut buf);
+    *pos += buf.len() as u64;
+    partial.push_str(&String::from_utf8_lossy(&buf));
+    let mut lines: Vec<String> = partial
+        .split('\n')
+        .map(|l| l.trim_end_matches('\r').to_string())
+        .collect();
+    *partial = lines.pop().unwrap_or_default();
+    lines
+}
+
+fn last_lines(path: &std::path::Path, n: usize) -> (Vec<String>, u64) {
+    let text = std::fs::read(path).unwrap_or_default();
+    let len = text.len() as u64;
+    let text = String::from_utf8_lossy(&text);
+    let mut lines: Vec<String> = text.lines().rev().take(n).map(str::to_string).collect();
+    lines.reverse();
+    (lines, len)
+}
+
+#[derive(Deserialize)]
+struct StreamQuery {
+    tail: Option<usize>,
+}
+
+fn line(text: String) -> serde_json::Value {
+    serde_json::json!({"type": "line", "text": text})
+}
+
+/// The current instance's console output, then every new line; follows the
+/// service across a replacement (an `instance` event marks the switch).
+async fn log_stream(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Query(q): Query<StreamQuery>,
+) -> Response {
+    if !s.sup.stack.services.contains_key(&name) {
+        return err(StatusCode::NOT_FOUND, format!("no service `{name}`"));
+    }
+    let (tx, rx) = tokio::sync::mpsc::channel(512);
+    let sup = s.sup.clone();
+    let tail = q.tail.unwrap_or(200).min(5000);
+    std::thread::spawn(move || {
+        let mut current: Option<std::path::PathBuf> = None;
+        let (mut pos, mut partial) = (0u64, String::new());
+        let mut first = true;
+        loop {
+            let path = sup.service_log(&name);
+            if path != current {
+                if !first {
+                    let build = sup
+                        .view()
+                        .services
+                        .into_iter()
+                        .find(|v| v.name == name)
+                        .and_then(|v| v.build_id);
+                    let ev = serde_json::json!({"type": "instance", "build_id": build});
+                    if tx.blocking_send(ev).is_err() {
+                        return;
+                    }
+                }
+                current = path;
+                partial.clear();
+                pos = 0;
+                if first && let Some(p) = &current {
+                    let (lines, len) = last_lines(p, tail);
+                    pos = len;
+                    for l in lines {
+                        if tx.blocking_send(line(l)).is_err() {
+                            return;
+                        }
+                    }
+                }
+                first = false;
+            }
+            if let Some(p) = &current {
+                for l in read_new(p, &mut pos, &mut partial) {
+                    if tx.blocking_send(line(l)).is_err() {
+                        return;
+                    }
+                }
+            }
+            if tx.is_closed() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+    });
+    sse_json(rx)
+}
+
+/// A command run's output as it is written, then its end.
+async fn run_log_stream(State(s): State<AppState>, Path(id): Path<u64>) -> Response {
+    if s.runs.get(id).is_none() {
+        return err(StatusCode::NOT_FOUND, format!("no run {id}"));
+    }
+    let (tx, rx) = tokio::sync::mpsc::channel(512);
+    let runs = s.runs.clone();
+    std::thread::spawn(move || {
+        let (mut pos, mut partial) = (0u64, String::new());
+        loop {
+            let Some(run) = runs.get(id) else { return };
+            let done = run.status != "running";
+            let mut lines = read_new(&run.log, &mut pos, &mut partial);
+            if done && !partial.is_empty() {
+                lines.push(std::mem::take(&mut partial));
+            }
+            for l in lines {
+                if tx.blocking_send(line(l)).is_err() {
+                    return;
+                }
+            }
+            if done {
+                let end =
+                    serde_json::json!({"type": "end", "status": run.status, "error": run.error});
+                let _ = tx.blocking_send(end);
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    });
+    sse_json(rx)
+}
+
+/// The latest build log of a service, compiler paths pointing at the repository.
+async fn build_log(State(s): State<AppState>, Path(name): Path<String>) -> Response {
+    if !s.sup.stack.services.contains_key(&name) {
+        return err(StatusCode::NOT_FOUND, format!("no service `{name}`"));
+    }
+    match s.sup.latest_build_log(&name) {
+        Some(text) => {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::CONTENT_TYPE,
+                "text/plain; charset=utf-8".parse().unwrap(),
+            );
+            (headers, text).into_response()
+        }
+        None => err(
+            StatusCode::NOT_FOUND,
+            format!("`{name}` has no build log yet"),
+        ),
+    }
+}
+
+async fn restart_container(
+    State(s): State<AppState>,
+    Path((group, service)): Path<(String, String)>,
+) -> Response {
+    let known = s
+        .sup
+        .stack
+        .compose
+        .get(&group)
+        .is_some_and(|g| g.services.contains(&service));
+    if !known {
+        return err(
+            StatusCode::NOT_FOUND,
+            format!("no compose service `{group}.{service}`"),
+        );
+    }
+    let sup = s.sup.clone();
+    match tokio::task::spawn_blocking(move || sup.restart_container(&group, &service)).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }

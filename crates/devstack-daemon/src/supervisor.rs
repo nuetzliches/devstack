@@ -250,6 +250,7 @@ impl Supervisor {
         StackView {
             name: self.stack.stack.name.clone(),
             repo: self.repo.clone(),
+            version: devstack_config::VERSION.into(),
             services,
             infra,
             groups,
@@ -281,6 +282,23 @@ impl Supervisor {
 
     pub(crate) fn proc_options(&self) -> &devstack_proc::Options {
         &self.proc_opts
+    }
+
+    /// The newest build log of `name` (last 3000 lines), compiler paths
+    /// mapped from the snapshot to the repository.
+    pub fn latest_build_log(&self, name: &str) -> Option<String> {
+        let dir = self.state_dir.join("logs").join(name);
+        let newest = std::fs::read_dir(dir)
+            .ok()?
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("build-"))
+            .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())?;
+        let text = tail(&newest.path(), 3000);
+        let snap_dir = self.layout.lane("main").join("src");
+        Some(text.replace(
+            &snap_dir.to_string_lossy().into_owned(),
+            &self.repo.to_string_lossy(),
+        ))
     }
 
     pub fn service_log(&self, name: &str) -> Option<PathBuf> {

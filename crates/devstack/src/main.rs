@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 mod buildcmd;
 mod client;
 mod envcmd;
+mod hubcmd;
 mod mcp;
 mod topcmd;
 
@@ -98,6 +99,18 @@ enum Cmd {
     },
     /// MCP server on stdio for coding agents; a client of the daemon like the CLI.
     Mcp,
+    /// Open the dashboard: starts the hub if needed and pairs the browser (ADR-0021).
+    Ui {
+        /// Print the one-time pairing link instead of opening a browser.
+        #[arg(long)]
+        print: bool,
+    },
+    /// The hub that serves the dashboard for every stack; without an action it
+    /// runs in the foreground (normally started by `devstack up` / `devstack ui`).
+    Hub {
+        #[command(subcommand)]
+        action: Option<HubAction>,
+    },
     /// Print the JSON Schema of the stack file (for editors).
     Schema,
     /// Internal (Linux): the shim between daemon and service (ADR-0009).
@@ -106,6 +119,14 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum HubAction {
+    /// Is the hub running, and where.
+    Status,
+    /// Stop the hub (stacks keep running).
+    Stop,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -216,6 +237,17 @@ fn main() -> Result<()> {
             follow,
         } => client::logs(&cli.file, &service, tail, follow),
         Cmd::Mcp => mcp::serve(&cli.file),
+        Cmd::Ui { print } => hubcmd::ui(print),
+        Cmd::Hub { action: None } => devstack_hub::serve().map_err(|e| anyhow::anyhow!(e)),
+        Cmd::Hub {
+            action: Some(HubAction::Status),
+        } => {
+            println!("{}", hubcmd::status_text());
+            Ok(())
+        }
+        Cmd::Hub {
+            action: Some(HubAction::Stop),
+        } => hubcmd::stop(),
         Cmd::Top { watch } => topcmd::run(&cli.file, watch),
         Cmd::Run { command, yes } => client::run_command(&cli.file, &command, yes),
         Cmd::Daemon => devstack_daemon::serve(&cli.file).map_err(|e| anyhow::anyhow!(e)),

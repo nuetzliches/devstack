@@ -220,6 +220,20 @@ pub fn tools() -> Vec<Value> {
             false,
         ),
         tool(
+            "hub_status",
+            "Is the dashboard hub running (it serves the dashboard for every stack on a fixed port)? Local check, no daemon needed.",
+            json!({}),
+            &[],
+            true,
+        ),
+        tool(
+            "hub_start",
+            "Start the dashboard hub if it is not running and return a one-time pairing link (valid 60 s) for the user to open the dashboard in a browser. POST /hub/pair.",
+            json!({}),
+            &[],
+            false,
+        ),
+        tool(
             "usage",
             "CPU, memory and disk per service, build job, container, group and lane. GET /v1/usage.",
             json!({}),
@@ -308,6 +322,15 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             })
         }
         "run_command" => run_command(file, name_arg(args, "command")?, args),
+        "hub_status" => Ok(crate::hubcmd::status_text()),
+        "hub_start" => {
+            let url = crate::hubcmd::pairing_url()?;
+            Ok(format!(
+                "{}
+pairing link for the user (single use, 60 s): {url}",
+                crate::hubcmd::status_text()
+            ))
+        }
         "usage" => {
             let report: Value = serde_json::from_str(&connect(file)?.get("/v1/usage")?)?;
             Ok(crate::topcmd::render(&report))

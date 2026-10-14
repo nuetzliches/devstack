@@ -1,0 +1,33 @@
+[package]
+name = "devstack-hub"
+description = "The hub: serves the dashboard for every stack and forwards to the daemons (ADR-0021)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+axum.workspace = true
+bytes.workspace = true
+devstack-daemon.workspace = true
+devstack-proc.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+include_dir.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+ureq.workspace = true
+
+[lints]
+workspace = true

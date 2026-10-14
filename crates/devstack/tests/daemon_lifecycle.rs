@@ -141,7 +141,8 @@ members = [\"api\", \"command.ping\"]
         let mut cmd = Command::new(BIN);
         cmd.args(args).arg("-f").arg(self.file());
         cmd.env("LOCALAPPDATA", self.token_home.path())
-            .env("XDG_STATE_HOME", self.token_home.path());
+            .env("XDG_STATE_HOME", self.token_home.path())
+            .env("DEVSTACK_NO_HUB", "1");
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         cmd.stdin(if stdin.is_some() {
             Stdio::piped()
@@ -168,6 +169,7 @@ members = [\"api\", \"command.ping\"]
             .arg(self.file())
             .env("LOCALAPPDATA", self.token_home.path())
             .env("XDG_STATE_HOME", self.token_home.path())
+            .env("DEVSTACK_NO_HUB", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

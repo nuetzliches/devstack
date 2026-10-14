@@ -1,6 +1,6 @@
 # ADR-0010: Promotion mechanism: restart on the fixed port or switch a reverse proxy
 
-- **Status:** Proposed: B (measured 2026-10-15, see "Comparison")
+- **Status:** Accepted: B (2026-10-15, measured, see "Comparison")
 - **Date:** 2026-10-14
 - **Related:** [ADR-0003](0003-changes-flow-through-candidates.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md)
 
