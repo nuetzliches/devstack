@@ -310,6 +310,33 @@ fn find_host(s: &str, host: &str) -> Option<usize> {
     None
 }
 
+// ------------------------------------------------------------------ ${VAR}
+
+/// The values `${VAR}` resolves against, later sources winning: the stack's
+/// `env_files`, the env files of the service's Compose group (a service without
+/// one, or a command, has none), the process environment. Missing files are
+/// skipped, so an untracked `.env` may be absent.
+pub fn variables(
+    stack: &devstack_config::Stack,
+    service: Option<&Service>,
+    repo: &std::path::Path,
+) -> BTreeMap<String, String> {
+    let mut files: Vec<&String> = stack.stack.env_files.iter().collect();
+    if let Some(r) = service.and_then(|s| s.compose.as_ref())
+        && let Some(g) = stack.compose.get(&r.group)
+    {
+        files.extend(&g.env_files);
+    }
+    let mut vars = BTreeMap::new();
+    for f in files {
+        if let Ok(text) = std::fs::read_to_string(repo.join(f)) {
+            vars.extend(parse_env_file(&text));
+        }
+    }
+    vars.extend(std::env::vars());
+    vars
+}
+
 // ------------------------------------------------------------------ dotenv
 
 /// Parse an env file in Compose's format: `KEY=VALUE`, `#` comments, optional
@@ -501,5 +528,41 @@ mod tests {
             },
         );
         assert!(to_dotenv(&env).contains("Q=\"a\\\"b\\$c\""));
+    }
+
+    #[test]
+    fn variables_from_stack_files_then_group_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("stack.env"), "A=stack\nB=stack\n").unwrap();
+        std::fs::write(dir.path().join("group.env"), "B=group\n").unwrap();
+        let toml = r#"
+version = 1
+[stack]
+name = "t"
+env_files = ["stack.env", "missing.env"]
+[compose.g]
+project = "p"
+files = ["c.yml"]
+env_files = ["group.env"]
+services = ["db"]
+[services.linked]
+compose = { group = "g", service = "x" }
+run = "x"
+[services.plain]
+run = "x"
+"#;
+        let stack = devstack_config::from_str(toml, &dir.path().join("devstack.toml")).unwrap();
+        let linked = variables(&stack, Some(&stack.services["linked"]), dir.path());
+        assert_eq!(
+            (linked["A"].as_str(), linked["B"].as_str()),
+            ("stack", "group")
+        );
+        let plain = variables(&stack, Some(&stack.services["plain"]), dir.path());
+        assert_eq!(
+            (plain["A"].as_str(), plain["B"].as_str()),
+            ("stack", "stack")
+        );
+        let command = variables(&stack, None, dir.path());
+        assert_eq!(command["B"], "stack");
     }
 }

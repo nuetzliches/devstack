@@ -172,7 +172,8 @@ fn execute(
         repo: sup.repo.clone(),
         urls,
     };
-    let env = |k: &str| std::env::var(k).ok();
+    let vars = devstack_env::variables(&sup.stack, None, &sup.repo);
+    let env = |k: &str| vars.get(k).cloned();
     let mut out = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

@@ -88,6 +88,11 @@ impl Group {
 pub struct StackMeta {
     /// Display name; also the prefix of the daemon's state.
     pub name: String,
+    /// Env files read for `${VAR}` in every service and command, relative to the
+    /// repository; missing files are skipped. A service's Compose group files and
+    /// the process environment win over them.
+    #[serde(default)]
+    pub env_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

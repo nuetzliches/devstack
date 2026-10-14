@@ -55,6 +55,27 @@ variables) to a file, so a service can be started by hand or from an IDE launch
 profile without a running daemon. Exported files contain development secrets
 and belong in git-ignored locations.
 
+## Found in the first downstream acceptance (2026-10-14)
+
+The Compose service a native process replaces is not always a usable base. In
+the reference stack the API's `environment` is the production contract: more
+than a hundred variables, many with an empty default (`${X:-}`), container
+paths (`/keys`, `/shares`) and safety switches whose production default is the
+opposite of the development one (an outbound mail catch-all defaults to
+`false`). Taken as the base, every empty value overrides the service's own
+development configuration, silently.
+
+So `compose = { group, service }` stays optional, and a service whose Compose
+environment is such a contract leaves it out and states its environment in the
+stack file in full. To make that practical without repeating development
+values, the stack file gained `[stack].env_files`: env files that `${VAR}`
+resolves against in every service and command, under the Compose group's files
+and the process environment.
+
+Rule of thumb: link the Compose service when its environment describes the
+service (hosts, ports, feature switches with sensible defaults); do not link it
+when it describes a deployment.
+
 ## Alternatives considered
 
 - **Configuration in the stack file.** A third copy of the same settings.

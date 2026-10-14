@@ -213,6 +213,7 @@ Format: TOML, `devstack.toml` in the repository root, no profiles in version 1
 |---|---|---|
 | `version` | integer | Schema version, `1` |
 | `stack.name` | string | Display name; prefix for daemon state |
+| `stack.env_files` | list | Env files `${VAR}` resolves against in every service and command; a service's Compose group files and the process environment win ([ADR-0014](adr/0014-native-services-take-their-configuration-from-compose.md), acceptance finding) |
 | `compose.<group>` | table | A Compose project (ADR-0004) |
 | `services.<name>` | table | A native process managed by devstack |
 | `commands.<name>` | table | An operation users and agents can run |
@@ -458,6 +459,23 @@ own thread, so `ping` is answered during a restart that builds for minutes.
 Agent-supplied names are checked to be plain names before they become path
 segments. A command's confirmation is never given by the server: the tool
 returns the text, the agent has to ask.
+
+**Acceptance 2026-10-14:** the reference stack (14 containers in two Compose
+groups, 9 native services, 7 commands) runs end to end under devstack on
+Windows: `devstack up` from a warm artifact store in under a minute, every
+autostart service ready, its jobs, webhooks, seeds and telemetry working. The
+acceptance found five defects, all fixed with tests:
+
+- `up` stopped at the first failed service; now only what comes `after` it is
+  held back.
+- A finished job was reported as `exited` (read as a crash) instead of
+  `completed`.
+- Health checks and the port check knew only `127.0.0.1`; a dev server on
+  `localhost` may listen on `::1` only (Node on Windows).
+- `${VAR}` resolved only for services linked to a Compose service; hence
+  `[stack].env_files` and the ADR-0014 finding.
+- Linux: a tree started from a short-lived thread died with it
+  (`PR_SET_PDEATHSIG`, ADR-0009), found earlier by the daemon integration test.
 
 Phase 1 delivers builds on demand and the main slot; candidates, auto-promotion
 and the dashboard are phase 2. Exit criterion unchanged: the reference stack

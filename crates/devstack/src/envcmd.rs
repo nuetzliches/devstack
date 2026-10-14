@@ -57,16 +57,9 @@ pub fn context_for(
         }
     }
 
-    // `${VAR}`: env files of the service's group (later win), then the process
-    // environment, which wins as it does for Compose itself.
-    if let Some(r) = &svc.compose {
-        for f in &stack.compose[&r.group].env_files {
-            if let Ok(text) = std::fs::read_to_string(repo.join(f)) {
-                ctx.vars.extend(devstack_env::parse_env_file(&text));
-            }
-        }
-    }
-    ctx.vars.extend(std::env::vars());
+    // `${VAR}`: the stack's env files, the group's, then the process environment.
+    ctx.vars
+        .extend(devstack_env::variables(stack, Some(svc), repo));
 
     let mut envs = ComposeEnvs::new();
     for g in &groups {

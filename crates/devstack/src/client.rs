@@ -306,7 +306,7 @@ pub fn start_and_wait(
     loop {
         let stack = c.stack()?;
         let mut done = true;
-        let mut failed = None;
+        let mut failed: Vec<(String, String)> = Vec::new();
         for s in stack["services"].as_array().into_iter().flatten() {
             let name = s["name"].as_str().unwrap_or("").to_string();
             let st = state_of(s);
@@ -319,18 +319,29 @@ pub fn start_and_wait(
                 match state {
                     "healthy" | "running" => {}
                     "completed" if s["status"]["exit_code"] == 0 => {}
-                    "failed" | "exited" => {
-                        failed = Some((
-                            name.clone(),
-                            s["status"]["reason"].as_str().unwrap_or("").to_string(),
-                        ))
-                    }
+                    "failed" | "exited" => failed.push((
+                        name.clone(),
+                        s["status"]["reason"].as_str().unwrap_or("").to_string(),
+                    )),
                     _ => done = false,
                 }
             }
         }
-        if let Some((service, reason)) = failed {
-            return Ok(UpOutcome::Failed { service, reason });
+        // Wait until every autostart service is ready or failed: one failure
+        // does not stop the others (the daemon starts what does not depend on it).
+        if done && !failed.is_empty() {
+            return Ok(UpOutcome::Failed {
+                service: failed
+                    .iter()
+                    .map(|(n, _)| n.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                reason: failed
+                    .iter()
+                    .map(|(n, r)| format!("{n}: {r}"))
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            });
         }
         if done {
             return Ok(UpOutcome::Ready(stack));

@@ -344,6 +344,7 @@ name = "devstack-env"
 version = "0.0.0"
 dependencies = [
  "devstack-config",
+ "tempfile",
  "thiserror",
 ]
 

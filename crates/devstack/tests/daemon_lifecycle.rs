@@ -82,6 +82,12 @@ port = {port}
 health = {{ http = "/health", timeout = "90s" }}
 env = {{ ASPNETCORE_URLS = "http://127.0.0.1:{{port}}" }}
 workers = {{ env = {{ Jobs__Enabled = "{{is_main}}" }} }}
+after = ["prep"]
+
+# A job before the API, like a schema migrator: it must end as `completed`.
+[services.prep]
+kind = "job"
+run = "git --version"
 
 [commands.ping]
 description = "health"
@@ -382,7 +388,14 @@ fn lifecycle(with_compose: bool) {
             "value from the dev env file"
         );
     }
-    assert!(s.ok(&["status"]).contains("healthy"));
+    let status = s.ok(&["status"]);
+    assert!(status.contains("healthy"), "{status}");
+    assert!(
+        status
+            .lines()
+            .any(|l| l.starts_with("prep") && l.contains("completed (0)")),
+        "a finished job stays `completed`, it is no crash: {status}"
+    );
 
     // The API refuses requests that are not from the user's own processes (ADR-0019).
     let daemon: Value =

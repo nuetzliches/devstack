@@ -364,14 +364,37 @@ impl Supervisor {
     /// the first service that does not become ready.
     pub fn up(self: &Arc<Self>) -> Result<(), String> {
         self.infra_up()?;
+        // A failed service holds back only what comes `after` it; everything
+        // independent of it still starts (one broken build must not keep the
+        // rest of the stack down).
+        let mut failed: BTreeSet<String> = BTreeSet::new();
         for name in self.service_order() {
             let svc = self.service(&name)?;
             if !svc.autostart || !runs_here(svc) {
                 continue;
             }
-            self.start(&name)?;
+            if let Some(dep) = svc.after.iter().find(|d| failed.contains(*d)) {
+                self.set_status(
+                    &name,
+                    Status::Failed {
+                        reason: format!("not started: `{dep}` failed"),
+                    },
+                );
+                failed.insert(name);
+                continue;
+            }
+            if self.start(&name).is_err() {
+                failed.insert(name);
+            }
         }
-        Ok(())
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "failed: {}",
+                failed.into_iter().collect::<Vec<_>>().join(", ")
+            ))
+        }
     }
 
     /// Stop every service, last started first. Infra stays up (ADR-0004: it is
@@ -415,7 +438,7 @@ impl Supervisor {
 
         // 2. Port free?
         if let Some(port) = svc.port
-            && std::net::TcpListener::bind(("127.0.0.1", port)).is_err()
+            && port_in_use(port)
         {
             return Err(format!("port {port} is already in use by another process"));
         }
@@ -548,16 +571,8 @@ impl Supervisor {
                 );
             }
         }
-        if let Some(r) = &svc.compose
-            && let Some(g) = self.stack.compose.get(&r.group)
-        {
-            for f in &g.env_files {
-                if let Ok(text) = std::fs::read_to_string(self.repo.join(f)) {
-                    ctx.vars.extend(devstack_env::parse_env_file(&text));
-                }
-            }
-        }
-        ctx.vars.extend(std::env::vars());
+        ctx.vars
+            .extend(devstack_env::variables(&self.stack, Some(svc), &self.repo));
         ctx
     }
 
@@ -662,7 +677,15 @@ impl Supervisor {
                         {
                             t.kill();
                         }
-                        me.set_status(&name, Status::Exited { exit_code: code });
+                        // A job's end is its result, not a crash.
+                        me.set_status(
+                            &name,
+                            if svc.kind == Kind::Job {
+                                Status::Completed { exit_code: code }
+                            } else {
+                                Status::Exited { exit_code: code }
+                            },
+                        );
                         return;
                     }
                     if let (Some(h), Some(port)) = (&svc.health, svc.port)
@@ -760,4 +783,41 @@ fn topo(deps: BTreeMap<String, Vec<String>>) -> Vec<String> {
         visit(n, &deps, &mut seen, &mut out);
     }
     out
+}
+
+/// Taken on IPv4 or IPv6 loopback. A dev server bound to `localhost` may hold
+/// only `::1` (Node on Windows); binding `127.0.0.1` would still succeed. A host
+/// without IPv6 fails the `::1` bind with another error, which is not "in use".
+fn port_in_use(port: u16) -> bool {
+    // Windows reports a port held exclusively by another process as access denied.
+    let taken = |r: std::io::Result<std::net::TcpListener>| {
+        r.err().is_some_and(|e| {
+            matches!(
+                e.kind(),
+                std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied
+            )
+        })
+    };
+    taken(std::net::TcpListener::bind(("127.0.0.1", port)))
+        || taken(std::net::TcpListener::bind(("::1", port)))
+}
+
+#[cfg(test)]
+mod port_tests {
+    #[test]
+    fn a_port_held_on_ipv6_loopback_only_is_in_use() {
+        let Ok(l) = std::net::TcpListener::bind(("::1", 0)) else {
+            return; // no IPv6 on this host
+        };
+        let port = l.local_addr().unwrap().port();
+        assert!(super::port_in_use(port));
+        drop(l);
+        assert!(!super::port_in_use(port));
+    }
+
+    #[test]
+    fn a_port_held_on_ipv4_loopback_is_in_use() {
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        assert!(super::port_in_use(l.local_addr().unwrap().port()));
+    }
 }

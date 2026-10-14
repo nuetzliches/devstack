@@ -29,21 +29,26 @@ impl Default for Checker {
 }
 
 impl Checker {
-    /// `Ok(())` on a 2xx answer, otherwise a short reason.
+    /// `Ok(())` on a 2xx answer, otherwise a short reason. Tries IPv4 and IPv6
+    /// loopback: a dev server bound to `localhost` may listen on `::1` only
+    /// (Node does, on Windows).
     pub fn check(&self, port: u16, path: &str, tls: bool, insecure: bool) -> Result<(), String> {
-        let url = format!(
-            "{}://127.0.0.1:{port}{path}",
-            if tls { "https" } else { "http" }
-        );
         let agent = if insecure {
             &self.insecure
         } else {
             &self.agent
         };
-        match agent.get(&url).call() {
-            Ok(r) if r.status().is_success() => Ok(()),
-            Ok(r) => Err(format!("{url} answered {}", r.status())),
-            Err(e) => Err(format!("{url}: {e}")),
+        let scheme = if tls { "https" } else { "http" };
+        let mut first_error = None;
+        for host in ["127.0.0.1", "[::1]"] {
+            let url = format!("{scheme}://{host}:{port}{path}");
+            let result = match agent.get(&url).call() {
+                Ok(r) if r.status().is_success() => return Ok(()),
+                Ok(r) => Err(format!("{url} answered {}", r.status())),
+                Err(e) => Err(format!("{url}: {e}")),
+            };
+            first_error.get_or_insert(result);
         }
+        first_error.unwrap_or(Ok(()))
     }
 }
