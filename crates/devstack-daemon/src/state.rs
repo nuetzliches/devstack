@@ -96,12 +96,23 @@ pub struct GroupView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct CommandView {
+    pub name: String,
+    pub description: String,
+    /// Text to confirm before the command runs; `None` runs without asking.
+    pub confirm: Option<String>,
+    /// Services that must be healthy for the command to be enabled.
+    pub requires: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct StackView {
     pub name: String,
     pub repo: PathBuf,
     pub services: Vec<ServiceView>,
     pub infra: Vec<InfraView>,
     pub groups: Vec<GroupView>,
+    pub commands: Vec<CommandView>,
 }
 
 #[derive(Debug, Clone, Serialize)]

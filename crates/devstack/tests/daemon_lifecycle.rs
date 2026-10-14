@@ -150,6 +150,39 @@ members = [\"api\", \"command.ping\"]
         child.wait_with_output().unwrap()
     }
 
+    /// `devstack mcp` as an agent would start it.
+    fn mcp(&self) -> Mcp {
+        let mut child = Command::new(BIN)
+            .args(["mcp", "-f"])
+            .arg(self.file())
+            .env("LOCALAPPDATA", self.token_home.path())
+            .env("XDG_STATE_HOME", self.token_home.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Mcp {
+            stdin: child.stdin.take(),
+            child,
+            lines: rx,
+            next_id: 1,
+        }
+    }
+
     fn ok(&self, args: &[&str]) -> String {
         let out = self.cli(args, None);
         let text = format!(
@@ -228,6 +261,76 @@ members = [\"api\", \"command.ping\"]
 impl Drop for Stack {
     fn drop(&mut self) {
         let _ = self.cli(&["down", "--infra"], None);
+    }
+}
+
+struct Mcp {
+    child: std::process::Child,
+    stdin: Option<std::process::ChildStdin>,
+    lines: std::sync::mpsc::Receiver<String>,
+    next_id: u64,
+}
+
+impl Mcp {
+    fn request(&mut self, method: &str, params: Value) -> Value {
+        use std::io::Write;
+        let id = self.next_id;
+        self.next_id += 1;
+        let msg =
+            serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+        let stdin = self.stdin.as_mut().unwrap();
+        writeln!(stdin, "{msg}").unwrap();
+        stdin.flush().unwrap();
+        loop {
+            let line = self
+                .lines
+                .recv_timeout(Duration::from_secs(120))
+                .unwrap_or_else(|_| panic!("no answer to {method}"));
+            let v: Value = serde_json::from_str(&line).expect("stdout carries JSON-RPC only");
+            if v["id"] == id {
+                return v;
+            }
+        }
+    }
+
+    fn notify(&mut self, method: &str) {
+        use std::io::Write;
+        let stdin = self.stdin.as_mut().unwrap();
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({ "jsonrpc": "2.0", "method": method })
+        )
+        .unwrap();
+        stdin.flush().unwrap();
+    }
+
+    /// (text, isError) of a tool call.
+    fn call(&mut self, tool: &str, args: Value) -> (String, bool) {
+        let r = self.request(
+            "tools/call",
+            serde_json::json!({ "name": tool, "arguments": args }),
+        );
+        let res = &r["result"];
+        assert!(res.is_object(), "{tool}: {r}");
+        (
+            res["content"][0]["text"].as_str().unwrap_or("").to_string(),
+            res["isError"].as_bool().unwrap_or(false),
+        )
+    }
+
+    /// Closing stdin ends the session.
+    fn close(mut self) {
+        drop(self.stdin.take());
+        let t0 = Instant::now();
+        while t0.elapsed() < Duration::from_secs(10) {
+            if let Ok(Some(_)) = self.child.try_wait() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = self.child.kill();
+        panic!("devstack mcp did not end when stdin closed");
     }
 }
 
@@ -366,6 +469,62 @@ fn lifecycle(with_compose: bool) {
     );
     let top = s.ok(&["top"]);
     assert!(top.contains("api") && top.contains("lane main"), "{top}");
+
+    // The MCP server: a client of the same API, one endpoint per tool.
+    let mut m = s.mcp();
+    let init = m.request(
+        "initialize",
+        serde_json::json!({ "protocolVersion": "2025-06-18", "capabilities": {},
+                            "clientInfo": { "name": "it", "version": "0" } }),
+    );
+    assert_eq!(init["result"]["protocolVersion"], "2025-06-18", "{init}");
+    assert_eq!(init["result"]["serverInfo"]["name"], "devstack");
+    m.notify("notifications/initialized");
+    let list = m.request("tools/list", serde_json::json!({}));
+    let names: Vec<&str> = list["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    for t in [
+        "status",
+        "up",
+        "restart_service",
+        "logs",
+        "run_command",
+        "usage",
+    ] {
+        assert!(names.contains(&t), "{t} missing: {names:?}");
+    }
+    let (text, err) = m.call("status", serde_json::json!({}));
+    assert!(
+        !err && text.contains("api") && text.contains("healthy"),
+        "{text}"
+    );
+    let (text, err) = m.call("logs", serde_json::json!({ "service": "api", "tail": 5 }));
+    assert!(!err && !text.is_empty(), "{text}");
+    let (text, err) = m.call("run_command", serde_json::json!({ "command": "reset" }));
+    assert!(
+        err && text.contains("Restart?"),
+        "a confirmation is the user's: {text}"
+    );
+    let (text, err) = m.call("run_command", serde_json::json!({ "command": "ping" }));
+    assert!(!err, "{text}");
+    let (text, err) = m.call("usage", serde_json::json!({}));
+    assert!(!err && text.contains("lane main"), "{text}");
+    let (text, err) = m.call("logs", serde_json::json!({ "service": "../x" }));
+    assert!(err, "{text}");
+    let unknown = m.request(
+        "tools/call",
+        serde_json::json!({ "name": "nope", "arguments": {} }),
+    );
+    assert_eq!(unknown["error"]["code"], -32602, "{unknown}");
+    assert!(
+        s.api("/health").is_some(),
+        "the session changed nothing it was not asked to"
+    );
+    m.close();
     let rebinding = agent
         .get(&format!("{base}/v1/stack"))
         .header("Authorization", &format!("Bearer {token}"))
@@ -463,4 +622,33 @@ fn lifecycle_with_compose() {
         return;
     }
     lifecycle(true);
+}
+
+/// Without a daemon the MCP tools say so instead of starting anything; only
+/// `up` would. Needs neither .NET nor Docker.
+#[test]
+fn mcp_without_a_daemon() {
+    let s = Stack::new(false);
+    let mut m = s.mcp();
+    let init = m.request(
+        "initialize",
+        serde_json::json!({ "protocolVersion": "1999-01-01" }),
+    );
+    assert_eq!(
+        init["result"]["protocolVersion"], "2025-06-18",
+        "an unknown version is answered with ours: {init}"
+    );
+    assert_eq!(
+        m.request("ping", serde_json::json!({}))["result"],
+        serde_json::json!({})
+    );
+    let (text, err) = m.call("status", serde_json::json!({}));
+    assert!(err && text.contains("call `up` first"), "{text}");
+    assert!(
+        !s.dir.path().join(".devstack/daemon.json").exists(),
+        "status must not start a daemon"
+    );
+    let bad = m.request("no/such", serde_json::json!({}));
+    assert_eq!(bad["error"]["code"], -32601, "{bad}");
+    m.close();
 }

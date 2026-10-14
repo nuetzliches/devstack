@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 mod buildcmd;
 mod client;
 mod envcmd;
+mod mcp;
 mod topcmd;
 
 #[derive(Parser)]
@@ -87,6 +88,8 @@ enum Cmd {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// MCP server on stdio for coding agents; a client of the daemon like the CLI.
+    Mcp,
     /// Print the JSON Schema of the stack file (for editors).
     Schema,
     /// Internal (Linux): the shim between daemon and service (ADR-0009).
@@ -165,6 +168,7 @@ fn main() -> Result<()> {
             tail,
             follow,
         } => client::logs(&cli.file, &service, tail, follow),
+        Cmd::Mcp => mcp::serve(&cli.file),
         Cmd::Top { watch } => topcmd::run(&cli.file, watch),
         Cmd::Run { command, yes } => client::run_command(&cli.file, &command, yes),
         Cmd::Daemon => devstack_daemon::serve(&cli.file).map_err(|e| anyhow::anyhow!(e)),

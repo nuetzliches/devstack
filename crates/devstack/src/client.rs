@@ -64,7 +64,7 @@ impl Client {
     }
 }
 
-fn error_text(body: &str) -> String {
+pub fn error_text(body: &str) -> String {
     serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|v| v["error"].as_str().map(str::to_string))
@@ -153,7 +153,7 @@ pub fn need(state_dir: &Path) -> Result<Client> {
         .ok_or_else(|| anyhow!("no daemon is running for this stack (start it with `devstack up`)"))
 }
 
-fn state_of(s: &Value) -> String {
+pub fn state_of(s: &Value) -> String {
     let st = &s["status"];
     match st["state"].as_str().unwrap_or("?") {
         "failed" => format!(
@@ -178,12 +178,21 @@ fn state_of(s: &Value) -> String {
 }
 
 pub fn print_status(stack: &Value) {
-    println!(
+    print!("{}", status_text(stack));
+}
+
+/// The service table and the infrastructure, as `devstack status` shows them.
+pub fn status_text(stack: &Value) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
         "{:<22} {:<38} {:<17} {:>6} {:>7}",
         "SERVICE", "STATE", "BUILD", "PORT", "PID"
     );
     for s in stack["services"].as_array().into_iter().flatten() {
-        println!(
+        let _ = writeln!(
+            out,
             "{:<22} {:<38} {:<17} {:>6} {:>7}",
             s["name"].as_str().unwrap_or(""),
             truncate(&state_of(s), 38),
@@ -193,13 +202,14 @@ pub fn print_status(stack: &Value) {
         );
     }
     for g in stack["infra"].as_array().into_iter().flatten() {
-        println!(
+        let _ = writeln!(
+            out,
             "\ncompose.{} ({})",
             g["group"].as_str().unwrap_or(""),
             g["project"].as_str().unwrap_or("")
         );
         if let Some(e) = g["error"].as_str() {
-            println!("  error: {e}");
+            let _ = writeln!(out, "  error: {e}");
         }
         for c in g["containers"].as_array().into_iter().flatten() {
             let health = c["health"]
@@ -213,7 +223,8 @@ pub fn print_status(stack: &Value) {
                 .flatten()
                 .filter_map(|p| p.as_str())
                 .collect();
-            println!(
+            let _ = writeln!(
+                out,
                 "  {:<20} {}{health}  {}",
                 c["service"].as_str().unwrap_or(""),
                 c["state"].as_str().unwrap_or(""),
@@ -221,6 +232,7 @@ pub fn print_status(stack: &Value) {
             );
         }
     }
+    out
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -236,6 +248,43 @@ fn truncate(s: &str, n: usize) -> String {
 pub fn up(stack_file: &Path) -> Result<()> {
     let sd = state_dir(stack_file)?;
     let c = ensure_daemon(stack_file, &sd)?;
+    let t0 = Instant::now();
+    let outcome = start_and_wait(&c, stack_file, None, |name, st| {
+        println!("{:>6.1}s  {name:<22} {st}", t0.elapsed().as_secs_f64());
+    })?;
+    match outcome {
+        UpOutcome::Ready(stack) => {
+            println!();
+            print_status(&stack);
+            Ok(())
+        }
+        UpOutcome::Failed { service, reason } => {
+            eprintln!("\n{service} failed:\n{reason}");
+            std::process::exit(1);
+        }
+        UpOutcome::TimedOut(_) => unreachable!("no timeout given"),
+    }
+}
+
+pub enum UpOutcome {
+    /// Every autostart service is ready; the stack view at that moment.
+    Ready(Value),
+    Failed {
+        service: String,
+        reason: String,
+    },
+    /// Still starting when the timeout ran out; the stack view at that moment.
+    TimedOut(Value),
+}
+
+/// `POST /v1/up`, then follow the stack until every autostart service is
+/// ready or one fails. `progress` hears every change of a service's state.
+pub fn start_and_wait(
+    c: &Client,
+    stack_file: &Path,
+    timeout: Option<Duration>,
+    mut progress: impl FnMut(&str, &str),
+) -> Result<UpOutcome> {
     let (status, body) = c.post("/v1/up", None)?;
     if status >= 400 {
         bail!("{}", error_text(&body));
@@ -262,7 +311,7 @@ pub fn up(stack_file: &Path) -> Result<()> {
             let name = s["name"].as_str().unwrap_or("").to_string();
             let st = state_of(s);
             if last.get(&name) != Some(&st) {
-                println!("{:>6.1}s  {name:<22} {st}", t0.elapsed().as_secs_f64());
+                progress(&name, &st);
                 last.insert(name.clone(), st);
             }
             if expected.contains(&name) {
@@ -280,14 +329,14 @@ pub fn up(stack_file: &Path) -> Result<()> {
                 }
             }
         }
-        if let Some((name, reason)) = failed {
-            eprintln!("\n{name} failed:\n{reason}");
-            std::process::exit(1);
+        if let Some((service, reason)) = failed {
+            return Ok(UpOutcome::Failed { service, reason });
         }
         if done {
-            println!();
-            print_status(&stack);
-            return Ok(());
+            return Ok(UpOutcome::Ready(stack));
+        }
+        if timeout.is_some_and(|t| t0.elapsed() >= t) {
+            return Ok(UpOutcome::TimedOut(stack));
         }
         std::thread::sleep(Duration::from_millis(400));
     }

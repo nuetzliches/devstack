@@ -450,6 +450,15 @@ Starts once the ADRs phase 1 builds on are accepted (0002, 0003, 0004, 0007,
 | 6 | `devstack-daemon` | Supervisor (main slot, jobs, `after`, health, ports), state persistence, HTTP API with auth, SSE, logs, command runs, usage sampling (§12) | ADR-0007, 0016, 0019, plan §5, §11 |
 | 7 | `devstack` (bin) | CLI subcommands, `devstack mcp`, `devstack check`, `devstack env` | ADR-0007, 0015 |
 
+**Status 2026-10-14:** WP1 to WP6 done; WP7 done with `devstack mcp`. The MCP
+server speaks JSON-RPC over stdio itself (protocol versions 2024-11-05 to
+2025-06-18, tools only) rather than through an SDK crate: three methods do not
+justify a dependency that moves faster than the protocol. Each tool runs on its
+own thread, so `ping` is answered during a restart that builds for minutes.
+Agent-supplied names are checked to be plain names before they become path
+segments. A command's confirmation is never given by the server: the tool
+returns the text, the agent has to ask.
+
 Phase 1 delivers builds on demand and the main slot; candidates, auto-promotion
 and the dashboard are phase 2. Exit criterion unchanged: the reference stack
 runs end to end without its previous orchestrator.

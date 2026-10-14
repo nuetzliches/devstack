@@ -5,8 +5,8 @@
 
 use crate::health::Checker;
 use crate::state::{
-    ContainerView, Event, EventBody, GroupView, InfraView, Persisted, ServiceView, StackView,
-    Status, now_ms,
+    CommandView, ContainerView, Event, EventBody, GroupView, InfraView, Persisted, ServiceView,
+    StackView, Status, now_ms,
 };
 use devstack_build::{Builder, Layout, Outcome, Snapshot, build_id};
 use devstack_compose::{Docker, Group};
@@ -171,12 +171,24 @@ impl Supervisor {
                 members: g.members.clone(),
             })
             .collect();
+        let commands = self
+            .stack
+            .commands
+            .iter()
+            .map(|(k, c)| CommandView {
+                name: k.clone(),
+                description: c.description.clone(),
+                confirm: c.confirm.clone(),
+                requires: c.requires.clone(),
+            })
+            .collect();
         StackView {
             name: self.stack.stack.name.clone(),
             repo: self.repo.clone(),
             services,
             infra,
             groups,
+            commands,
         }
     }
 
