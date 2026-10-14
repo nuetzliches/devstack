@@ -5,6 +5,8 @@
 //!   `N.stopped` (unless stubborn), optionally with a child and a detached child.
 //! - `supervise --state DIR --markers DIR [--cgroup-root DIR]`: owns one tree
 //!   like the daemon does and runs until killed (for the supervisor-death test).
+//! - `launch --markers DIR`: starts a long-lived `server` and exits, like a
+//!   build that leaves a build server behind.
 //! - `shim …`: the Linux shim.
 
 use std::path::PathBuf;
@@ -24,6 +26,15 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("serve") => serve(&args[1..]),
         Some("supervise") => supervise(&args[1..]),
+        // Like a build that starts a build server and exits.
+        Some("launch") => {
+            let m = arg(&args[1..], "--markers").expect("--markers");
+            spawn_self(&["serve", "--markers", &m, "--name", "server"], false);
+            let marker = PathBuf::from(&m).join("server.started");
+            while !marker.exists() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
         #[cfg(unix)]
         Some("shim") => devstack_proc::shim_main(&args[1..]),
         _ => {

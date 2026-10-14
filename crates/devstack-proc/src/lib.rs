@@ -20,7 +20,9 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+mod builds;
 mod lock;
+pub use builds::{Build, BuildJob};
 pub use lock::{LockError, StateLock};
 
 #[cfg(unix)]

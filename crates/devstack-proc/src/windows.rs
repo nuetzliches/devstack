@@ -26,13 +26,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
 /// A Job Object with kill-on-close. The handle is created non-inheritable and
 /// breakaway stays forbidden: the two conditions spike (a) showed the guarantee
 /// depends on.
-struct Job(HANDLE);
+pub(crate) struct Job(HANDLE);
 
 // The handle is only used through &self/&mut self of the owning Tree.
 unsafe impl Send for Job {}
 
 impl Job {
-    fn new() -> Result<Self> {
+    pub(crate) fn new() -> Result<Self> {
         // SAFETY: plain Win32 calls with valid arguments; the handle is checked.
         unsafe {
             let h = CreateJobObjectW(ptr::null(), ptr::null());
@@ -56,7 +56,7 @@ impl Job {
         }
     }
 
-    fn pids(&self) -> Vec<u32> {
+    pub(crate) fn pids(&self) -> Vec<u32> {
         // Room for 4096 ids; JOBOBJECT_BASIC_PROCESS_ID_LIST is two counts and the ids.
         let mut buf = vec![0usize; 2 + 4096];
         // SAFETY: buffer is large enough and correctly aligned for the struct.
@@ -80,7 +80,7 @@ impl Job {
         }
     }
 
-    fn terminate(&self) {
+    pub(crate) fn terminate(&self) {
         // SAFETY: valid job handle.
         unsafe {
             TerminateJobObject(self.0, 1);
@@ -105,7 +105,7 @@ pub(crate) struct Tree {
 
 /// Resume every thread of a process created suspended (std's Child does not
 /// expose the main thread handle).
-fn resume_process(pid: u32) -> Result<()> {
+pub(crate) fn resume_process(pid: u32) -> Result<()> {
     // SAFETY: snapshot and thread handles are checked and closed.
     unsafe {
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
@@ -140,16 +140,16 @@ fn resume_process(pid: u32) -> Result<()> {
     }
 }
 
-pub(crate) fn spawn(spec: Spec) -> Result<(Tree, Record)> {
-    let job = Job::new()?;
+/// Start a command line in `job`: created suspended, so it cannot start
+/// anything before it is in the job; in its own process group, so CTRL_BREAK
+/// reaches this tree only.
+pub(crate) fn start_in_job(job: &Job, spec: Spec) -> Result<Child> {
     let err = spec.log.try_clone().map_err(|e| crate::ProcError::Os {
         what: "clone log handle".into(),
         source: e,
     })?;
-    // Created suspended, so it cannot start anything before it is in the job;
-    // in its own process group, so CTRL_BREAK reaches this tree only.
     // `cmd /s /c` strips the first and last quote of the line: wrap the line once more.
-    let child = Command::new("cmd")
+    let mut child = Command::new("cmd")
         .args(["/d", "/s", "/c"])
         .raw_arg(format!("\"{}\"", spec.command))
         .current_dir(&spec.cwd)
@@ -167,13 +167,19 @@ pub(crate) fn spawn(spec: Spec) -> Result<(Tree, Record)> {
     let assigned = unsafe { AssignProcessToJobObject(job.0, child.as_raw_handle() as HANDLE) };
     if assigned == 0 {
         let e = os("AssignProcessToJobObject");
-        let mut child = child;
         let _ = child.kill();
         return Err(e);
     }
     resume_process(child.id())?;
+    Ok(child)
+}
+
+pub(crate) fn spawn(spec: Spec) -> Result<(Tree, Record)> {
+    let job = Job::new()?;
+    let name = spec.name.clone();
+    let child = start_in_job(&job, spec)?;
     let record = Record {
-        name: spec.name,
+        name,
         pgid: child.id() as i64,
         leader_start: 0,
         cgroup: None,
@@ -249,5 +255,87 @@ pub(crate) fn ensure_console() -> Result<bool> {
             ShowWindow(w, SW_HIDE);
         }
         Ok(true)
+    }
+}
+
+/// Creation time of a process (100 ns ticks), or None if it cannot be opened.
+fn creation_time(pid: u32) -> Option<u64> {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: handle checked and closed; out-parameters are valid.
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return None;
+        }
+        let mut c: FILETIME = mem::zeroed();
+        let (mut e, mut k, mut u): (FILETIME, FILETIME, FILETIME) =
+            (mem::zeroed(), mem::zeroed(), mem::zeroed());
+        let ok = GetProcessTimes(h, &mut c, &mut e, &mut k, &mut u);
+        CloseHandle(h);
+        (ok != 0).then_some(((c.dwHighDateTime as u64) << 32) | c.dwLowDateTime as u64)
+    }
+}
+
+/// End `root` and every descendant (ADR-0020: cancelling one build in the
+/// shared build job). A child only counts if it was created after its parent,
+/// so a process that reuses a dead parent's id is never mistaken for a child.
+pub(crate) fn kill_tree(root: u32) {
+    use std::collections::HashMap;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    // SAFETY: snapshot handle checked and closed.
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == INVALID_HANDLE_VALUE {
+            return;
+        }
+        let mut pe: PROCESSENTRY32W = mem::zeroed();
+        pe.dwSize = mem::size_of::<PROCESSENTRY32W>() as u32;
+        if Process32FirstW(snap, &mut pe) != 0 {
+            loop {
+                children
+                    .entry(pe.th32ParentProcessID)
+                    .or_default()
+                    .push(pe.th32ProcessID);
+                if Process32NextW(snap, &mut pe) == 0 {
+                    break;
+                }
+            }
+        }
+        CloseHandle(snap);
+    }
+    let mut tree = vec![root];
+    let mut i = 0;
+    while i < tree.len() {
+        let parent = tree[i];
+        let parent_created = creation_time(parent);
+        for &c in children.get(&parent).map(Vec::as_slice).unwrap_or_default() {
+            let newer = match (parent_created, creation_time(c)) {
+                (Some(p), Some(t)) => t >= p,
+                // The parent has exited: its recorded children are still its own.
+                (None, Some(_)) => true,
+                _ => false,
+            };
+            if newer && !tree.contains(&c) {
+                tree.push(c);
+            }
+        }
+        i += 1;
+    }
+    for pid in tree {
+        // SAFETY: handle checked and closed.
+        unsafe {
+            let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if !h.is_null() {
+                TerminateProcess(h, 1);
+                CloseHandle(h);
+            }
+        }
     }
 }

@@ -73,7 +73,7 @@ fn cgroup_members(cg: &Path) -> Vec<i32> {
         .collect()
 }
 
-fn kill_group(pgid: i32, sig: i32) -> std::io::Result<()> {
+pub(crate) fn kill_group(pgid: i32, sig: i32) -> std::io::Result<()> {
     // SAFETY: plain syscall.
     if unsafe { libc::kill(-pgid, sig) } == 0 {
         Ok(())
@@ -82,7 +82,7 @@ fn kill_group(pgid: i32, sig: i32) -> std::io::Result<()> {
     }
 }
 
-fn kill_cgroup(cg: &Path) {
+pub(crate) fn kill_cgroup(cg: &Path) {
     // cgroup.kill (Linux 5.14+) SIGKILLs every process in the cgroup and below.
     let _ = fs::write(cg.join("cgroup.kill"), "1");
 }
