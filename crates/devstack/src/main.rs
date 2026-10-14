@@ -21,6 +21,12 @@ enum Cmd {
     Check,
     /// Print the JSON Schema of the stack file (for editors).
     Schema,
+    /// Internal (Linux): the shim between daemon and service (ADR-0009).
+    #[command(hide = true)]
+    Shim {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -42,6 +48,15 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
         },
+        Cmd::Shim { args } => {
+            #[cfg(unix)]
+            devstack_proc::shim_main(&args);
+            #[cfg(not(unix))]
+            {
+                let _ = args;
+                anyhow::bail!("the shim is only used on Linux")
+            }
+        }
         Cmd::Schema => {
             println!(
                 "{}",
