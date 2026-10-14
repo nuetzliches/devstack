@@ -540,3 +540,19 @@ second worktree runs.
   (ADR-0012).
 - Exposed through `GET /v1/usage`, the SSE stream, `devstack top` and the
   dashboard (§6).
+
+**Status 2026-10-14:** implemented for phase 1 (one lane, no candidates):
+`devstack-proc` `Owned::usage` / `BuildJob::usage`, the sampler in
+`devstack-daemon` (`usage.rs`), `GET /v1/usage[?history=true]`, a `usage` event
+per native sample, `devstack top [--watch]`; the dashboard follows in phase 2.
+Known limits of the numbers:
+
+- Windows memory is the summed working set, so pages shared between the tree's
+  processes count more than once.
+- Linux without a writable cgroup sums CPU time over the live processes; it can
+  drop when a process exits, which the sampler reads as "no rate this round".
+  Builds on such a host are not measured (they have no common cgroup).
+- `docker stats` measures for about two seconds per call; containers lag the
+  native numbers by up to five seconds plus that.
+- Disk is the logical size of the files (no deduplication, no compression);
+  links and junctions are not followed.

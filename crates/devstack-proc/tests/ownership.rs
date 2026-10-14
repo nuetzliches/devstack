@@ -292,3 +292,31 @@ fn a_tree_outlives_the_thread_that_started_it() {
     );
     assert!(tree.stop(Duration::from_secs(10)).graceful);
 }
+
+/// Plan §12: usage covers the whole tree, and CPU time only grows.
+#[test]
+fn usage_covers_the_whole_tree() {
+    ensure_console().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let (mut tree, _) = spawn(
+        spec(dir.path(), "svc", "--child --alloc-mb 64 --burn-ms 300"),
+        &opts("usage"),
+    )
+    .unwrap();
+    assert!(wait_for(
+        || marker(dir.path(), "svc.started") && marker(dir.path(), "child.started"),
+        Duration::from_secs(10)
+    ));
+    let u1 = tree.usage();
+    assert_eq!(u1.processes as usize, tree.pids().len(), "{u1:?}");
+    assert!(u1.processes >= 2, "{u1:?}");
+    assert!(
+        u1.memory >= 64 * 1024 * 1024,
+        "the 64 MiB are missing: {u1:?}"
+    );
+    assert!(u1.cpu_us >= 200_000, "the 300 ms burn is missing: {u1:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    let u2 = tree.usage();
+    assert!(u2.cpu_us >= u1.cpu_us, "{u1:?} -> {u2:?}");
+    assert!(tree.stop(Duration::from_secs(10)).graceful);
+}

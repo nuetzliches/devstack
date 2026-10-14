@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 mod buildcmd;
 mod client;
 mod envcmd;
+mod topcmd;
 
 #[derive(Parser)]
 #[command(version, about = "Local development orchestrator")]
@@ -59,6 +60,12 @@ enum Cmd {
         tail: usize,
         #[arg(long)]
         follow: bool,
+    },
+    /// CPU, memory and disk per service, container, group and lane (plan §12).
+    Top {
+        /// Refresh every two seconds.
+        #[arg(long, short = 'w')]
+        watch: bool,
     },
     /// Run a command from the stack file (e.g. a database reset).
     Run {
@@ -158,6 +165,7 @@ fn main() -> Result<()> {
             tail,
             follow,
         } => client::logs(&cli.file, &service, tail, follow),
+        Cmd::Top { watch } => topcmd::run(&cli.file, watch),
         Cmd::Run { command, yes } => client::run_command(&cli.file, &command, yes),
         Cmd::Daemon => devstack_daemon::serve(&cli.file).map_err(|e| anyhow::anyhow!(e)),
         Cmd::Build { service, lane } => {

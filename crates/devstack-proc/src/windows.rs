@@ -1,6 +1,6 @@
 //! Windows: one Job Object per tree (spike (a), ADR-0009).
 
-use crate::{Record, Result, Spec, os};
+use crate::{Record, Result, Spec, Usage, os};
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
@@ -14,7 +14,8 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_BASIC_PROCESS_ID_LIST, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_BASIC_PROCESS_ID_LIST,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicAccountingInformation,
     JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation, QueryInformationJobObject,
     SetInformationJobObject, TerminateJobObject,
 };
@@ -80,6 +81,34 @@ impl Job {
                 .iter()
                 .map(|&p| p as u32)
                 .collect()
+        }
+    }
+
+    /// Job accounting for CPU time (it includes exited processes), the summed
+    /// working sets of the live ones for memory.
+    pub(crate) fn usage(&self) -> Usage {
+        // SAFETY: valid job handle, correctly sized out struct.
+        let cpu_us = unsafe {
+            let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = mem::zeroed();
+            if QueryInformationJobObject(
+                self.0,
+                JobObjectBasicAccountingInformation,
+                &mut info as *mut _ as *mut _,
+                mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                ptr::null_mut(),
+            ) == 0
+            {
+                0
+            } else {
+                // 100 ns units.
+                (info.TotalUserTime as u64 + info.TotalKernelTime as u64) / 10
+            }
+        };
+        let pids = self.pids();
+        Usage {
+            cpu_us,
+            memory: pids.iter().map(|&p| working_set(p)).sum(),
+            processes: pids.len() as u32,
         }
     }
 
@@ -226,9 +255,35 @@ impl Tree {
         Ok(())
     }
 
+    pub(crate) fn usage(&mut self) -> Usage {
+        let _ = self.try_exit_code();
+        self.job.usage()
+    }
+
     pub(crate) fn kill(&mut self) {
         self.job.terminate();
         let _ = self.child.wait();
+    }
+}
+
+fn working_set(pid: u32) -> u64 {
+    use windows_sys::Win32::System::ProcessStatus::{
+        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+    };
+    // SAFETY: plain Win32 calls; handle checked and closed.
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid);
+        if h.is_null() {
+            return 0;
+        }
+        let mut c: PROCESS_MEMORY_COUNTERS = mem::zeroed();
+        c.cb = mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        let ok = K32GetProcessMemoryInfo(h, &mut c, c.cb);
+        CloseHandle(h);
+        if ok == 0 { 0 } else { c.WorkingSetSize as u64 }
     }
 }
 

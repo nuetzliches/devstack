@@ -20,6 +20,7 @@ use tokio_stream::wrappers::BroadcastStream;
 pub struct AppState {
     pub sup: Arc<Supervisor>,
     pub runs: Arc<Runs>,
+    pub usage: Arc<crate::usage::Sampler>,
     pub token: Arc<String>,
     pub port: u16,
     pub shutdown: Arc<tokio::sync::Notify>,
@@ -34,6 +35,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/services/{name}/{action}", post(service_action))
         .route("/v1/services/{name}/logs", get(logs))
         .route("/v1/events", get(events))
+        .route("/v1/usage", get(usage))
         .route("/v1/commands/{name}", post(run_command))
         .route("/v1/commands/{name}/runs", get(command_runs))
         .route("/v1/runs/{id}", get(run_info))
@@ -184,6 +186,18 @@ async fn events(State(s): State<AppState>) -> Response {
     Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response()
+}
+
+#[derive(Deserialize)]
+struct UsageQuery {
+    #[serde(default)]
+    history: bool,
+}
+
+/// Plan §12: current load per service, build job, container, group and lane;
+/// `?history=true` adds the last ten minutes per series.
+async fn usage(State(s): State<AppState>, Query(q): Query<UsageQuery>) -> Response {
+    Json(s.usage.report(&s.sup, q.history)).into_response()
 }
 
 #[derive(Deserialize, Default)]

@@ -106,6 +106,16 @@ fn serve(args: &[String]) {
     let name = arg(args, "--name").unwrap_or_else(|| "svc".into());
     let stubborn = args.iter().any(|a| a == "--stubborn");
     install_stop_handler();
+    // Load for the usage test: hold touched memory, spend CPU time.
+    let alloc_mb: usize = arg(args, "--alloc-mb").map_or(0, |v| v.parse().unwrap());
+    let held = vec![1u8; alloc_mb * 1024 * 1024];
+    if let Some(ms) = arg(args, "--burn-ms") {
+        let until = std::time::Instant::now() + Duration::from_millis(ms.parse().unwrap());
+        let mut x = 0u64;
+        while std::time::Instant::now() < until {
+            x = std::hint::black_box(x.wrapping_mul(31).wrapping_add(7));
+        }
+    }
     std::fs::write(
         markers.join(format!("{name}.started")),
         std::process::id().to_string(),
@@ -119,6 +129,7 @@ fn serve(args: &[String]) {
         spawn_self(&["serve", "--markers", &m, "--name", "orphan"], true);
     }
     loop {
+        std::hint::black_box(&held);
         if STOP.load(Ordering::SeqCst) && !stubborn {
             std::fs::write(markers.join(format!("{name}.stopped")), "graceful").unwrap();
             std::process::exit(0);

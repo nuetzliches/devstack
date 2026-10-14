@@ -2,7 +2,7 @@
 //! (spike (a), ADR-0009). Other Unixes get the process group and the shim; the
 //! cgroup parts are Linux-only.
 
-use crate::{Options, ProcError, Record, Result, Spec};
+use crate::{Options, ProcError, Record, Result, Spec, Usage};
 use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -194,6 +194,11 @@ impl Tree {
         v.into_iter().map(|p| p as u32).collect()
     }
 
+    pub(crate) fn usage(&mut self) -> Usage {
+        let pids = self.pids();
+        usage_of(self.cgroup.as_deref(), &pids)
+    }
+
     pub(crate) fn try_exit_code(&mut self) -> Option<i32> {
         if self.exit.is_none()
             && let Ok(Some(status)) = self.child.try_wait()
@@ -353,4 +358,52 @@ pub(crate) fn cleanup(records: &[Record]) -> Vec<(String, usize)> {
             (r.name.clone(), n)
         })
         .collect()
+}
+
+/// Usage from the cgroup where there is one (`cpu.stat`, `memory.current`),
+/// else summed over the processes from `/proc`.
+pub(crate) fn usage_of(cgroup: Option<&Path>, pids: &[u32]) -> Usage {
+    let read = |name: &str| cgroup.and_then(|cg| fs::read_to_string(cg.join(name)).ok());
+    let cpu_us = read("cpu.stat")
+        .and_then(|s| {
+            s.lines()
+                .find_map(|l| l.strip_prefix("usage_usec "))
+                .and_then(|v| v.trim().parse().ok())
+        })
+        .unwrap_or_else(|| pids.iter().map(|&p| proc_cpu_us(p)).sum());
+    let memory = read("memory.current")
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or_else(|| pids.iter().map(|&p| proc_rss(p)).sum());
+    Usage {
+        cpu_us,
+        memory,
+        processes: pids.len() as u32,
+    }
+}
+
+fn proc_cpu_us(pid: u32) -> u64 {
+    let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return 0;
+    };
+    // After the command name: state is field 3, utime 14, stime 15.
+    let Some(rest) = stat.rfind(')').map(|i| &stat[i + 2..]) else {
+        return 0;
+    };
+    let f: Vec<&str> = rest.split_whitespace().collect();
+    let ticks: u64 = [11, 12]
+        .iter()
+        .filter_map(|&i| f.get(i).and_then(|v| v.parse::<u64>().ok()))
+        .sum();
+    // SAFETY: plain libc call.
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as u64;
+    ticks * 1_000_000 / hz
+}
+
+fn proc_rss(pid: u32) -> u64 {
+    let pages: u64 = fs::read_to_string(format!("/proc/{pid}/statm"))
+        .ok()
+        .and_then(|s| s.split_whitespace().nth(1).and_then(|v| v.parse().ok()))
+        .unwrap_or(0);
+    // SAFETY: plain libc call.
+    pages * unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(1) as u64
 }

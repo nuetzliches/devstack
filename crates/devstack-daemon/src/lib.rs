@@ -8,6 +8,7 @@ pub mod health;
 pub mod state;
 pub mod supervisor;
 pub mod token;
+pub mod usage;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -67,6 +68,7 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     };
     let sup = supervisor::Supervisor::new(stack, repo, state_dir.clone(), proc_opts)?;
     sup.refresh_infra();
+    let usage = usage::Sampler::start(sup.clone());
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     rt.block_on(async move {
@@ -88,6 +90,7 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
         let app = api::router(api::AppState {
             sup: sup.clone(),
             runs: Arc::new(commands::Runs::default()),
+            usage,
             token: Arc::new(token),
             port,
             shutdown: shutdown.clone(),

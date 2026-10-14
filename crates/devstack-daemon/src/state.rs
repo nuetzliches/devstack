@@ -72,6 +72,8 @@ pub struct ServiceView {
 #[derive(Debug, Clone, Serialize)]
 pub struct ContainerView {
     pub service: String,
+    /// Container name, as `docker stats` knows it.
+    pub name: String,
     pub state: String,
     pub health: String,
     pub ports: Vec<String>,
@@ -128,6 +130,8 @@ pub enum EventBody {
         run: u64,
         status: String,
     },
+    /// Current load, every native sample (plan §12); history via `/v1/usage`.
+    Usage(Box<crate::usage::UsageReport>),
 }
 
 /// Persisted in `<state>/state.json`.

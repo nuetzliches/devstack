@@ -54,6 +54,20 @@ pub(crate) fn os(what: impl Into<String>) -> ProcError {
     }
 }
 
+/// What a process tree costs right now (plan §12). Callers derive CPU load
+/// from two samples of `cpu_us`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Usage {
+    /// CPU time spent so far, user plus kernel, in microseconds. Windows and
+    /// Linux with a cgroup count processes that already exited; without a
+    /// cgroup it is the sum over the live processes and may drop.
+    pub cpu_us: u64,
+    /// Bytes: the summed working sets (Windows), `memory.current` of the
+    /// cgroup, else the summed resident sets (Linux).
+    pub memory: u64,
+    pub processes: u32,
+}
+
 /// What to start.
 #[derive(Debug)]
 pub struct Spec {
@@ -132,6 +146,11 @@ impl Owned {
     /// Every live process of the tree (exact membership, not a tree walk).
     pub fn pids(&mut self) -> Vec<u32> {
         self.inner.pids()
+    }
+
+    /// CPU time, memory and process count of the whole tree (plan §12).
+    pub fn usage(&mut self) -> Usage {
+        self.inner.usage()
     }
 
     /// True while any process of the tree is alive.

@@ -180,6 +180,28 @@ impl Supervisor {
         }
     }
 
+    /// Usage of every running service tree (plan §12).
+    pub(crate) fn tree_usage(&self) -> Vec<(String, devstack_proc::Usage)> {
+        self.slots
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .filter_map(|(name, slot)| slot.tree.as_mut().map(|t| (name.clone(), t.usage())))
+            .collect()
+    }
+
+    pub(crate) fn build_usage(&self) -> devstack_proc::Usage {
+        self.builder.usage()
+    }
+
+    pub(crate) fn docker(&self) -> &Docker {
+        &self.docker
+    }
+
+    pub(crate) fn layout(&self) -> &Layout {
+        &self.layout
+    }
+
     pub(crate) fn proc_options(&self) -> &devstack_proc::Options {
         &self.proc_opts
     }
@@ -283,6 +305,7 @@ impl Supervisor {
                         }
                         view.containers.push(ContainerView {
                             service: c.service,
+                            name: c.name,
                             state: c.state,
                             health: c.health,
                             ports,

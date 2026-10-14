@@ -111,6 +111,22 @@ impl BuildJob {
         }
     }
 
+    /// What the build job costs: builds and their servers together (plan §12,
+    /// ADR-0020). Linux without a cgroup root reports nothing.
+    pub fn usage(&self) -> crate::Usage {
+        #[cfg(windows)]
+        {
+            self.job.usage()
+        }
+        #[cfg(unix)]
+        {
+            match &self.holder {
+                Some(h) => crate::unix::usage_of(Some(&h.cgroup), &self.pids()),
+                None => crate::Usage::default(),
+            }
+        }
+    }
+
     /// Every process in the build job (builds and their servers).
     pub fn pids(&self) -> Vec<u32> {
         #[cfg(windows)]

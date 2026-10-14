@@ -302,6 +302,145 @@ impl Docker {
     }
 }
 
+/// Live load of one container (`docker stats`, plan §12).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContainerStats {
+    pub name: String,
+    /// Percent of one core.
+    pub cpu: f64,
+    /// Bytes.
+    pub memory: u64,
+}
+
+/// One named volume with its size (`docker system df -v`, plan §12).
+#[derive(Debug, Clone, PartialEq)]
+pub struct VolumeSize {
+    pub name: String,
+    pub project: Option<String>,
+    pub size: u64,
+}
+
+impl Docker {
+    /// One `docker stats --no-stream` sample of the named containers. Takes
+    /// about two seconds: Docker measures over an interval.
+    pub fn stats(&self, names: &[String]) -> Result<Vec<ContainerStats>> {
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut a: Vec<OsString> = vec![
+            "stats".into(),
+            "--no-stream".into(),
+            "--format".into(),
+            "json".into(),
+        ];
+        a.extend(names.iter().map(OsString::from));
+        let out = self.run(Path::new("."), &a)?;
+        parse_stats(&String::from_utf8_lossy(&out.stdout)).map_err(|message| ComposeError::Parse {
+            command: describe(&self.program, &a),
+            message,
+        })
+    }
+
+    /// Every volume with its size. Slow (Docker walks the volumes): sample rarely.
+    pub fn volumes(&self) -> Result<Vec<VolumeSize>> {
+        let a: Vec<OsString> = vec![
+            "system".into(),
+            "df".into(),
+            "-v".into(),
+            "--format".into(),
+            "json".into(),
+        ];
+        let out = self.run(Path::new("."), &a)?;
+        parse_volumes(&String::from_utf8_lossy(&out.stdout)).map_err(|message| {
+            ComposeError::Parse {
+                command: describe(&self.program, &a),
+                message,
+            }
+        })
+    }
+}
+
+pub fn parse_stats(text: &str) -> std::result::Result<Vec<ContainerStats>, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Line {
+        name: String,
+        #[serde(rename = "CPUPerc")]
+        cpu_perc: String,
+        mem_usage: String,
+    }
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            let line: Line = serde_json::from_str(l).map_err(|e| e.to_string())?;
+            let used = line.mem_usage.split('/').next().unwrap_or("").trim();
+            Ok(ContainerStats {
+                name: line.name,
+                cpu: line
+                    .cpu_perc
+                    .trim()
+                    .trim_end_matches('%')
+                    .parse()
+                    .unwrap_or(0.0),
+                memory: parse_size(used).unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+pub fn parse_volumes(json: &str) -> std::result::Result<Vec<VolumeSize>, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Df {
+        #[serde(default)]
+        volumes: Vec<Volume>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Volume {
+        name: String,
+        #[serde(default)]
+        labels: String,
+        #[serde(default)]
+        size: String,
+    }
+    let df: Df = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    Ok(df
+        .volumes
+        .into_iter()
+        .map(|v| VolumeSize {
+            project: v
+                .labels
+                .split(',')
+                .find_map(|kv| kv.strip_prefix("com.docker.compose.project="))
+                .map(str::to_string),
+            size: parse_size(&v.size).unwrap_or(0),
+            name: v.name,
+        })
+        .collect())
+}
+
+/// Docker's human sizes: `12B`, `37.56kB`, `1.2MB` (SI), `35.27MiB`, `31.35GiB` (binary).
+pub fn parse_size(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let split = s.find(|c: char| !(c.is_ascii_digit() || c == '.'))?;
+    let (num, unit) = s.split_at(split);
+    let n: f64 = num.parse().ok()?;
+    let mult: f64 = match unit.trim() {
+        "B" => 1.0,
+        "kB" | "KB" => 1e3,
+        "MB" => 1e6,
+        "GB" => 1e9,
+        "TB" => 1e12,
+        "KiB" => 1024.0,
+        "MiB" => 1024.0 * 1024.0,
+        "GiB" => 1024.0 * 1024.0 * 1024.0,
+        "TiB" => 1024.0f64.powi(4),
+        _ => return None,
+    };
+    Some((n * mult).round() as u64)
+}
+
 fn describe(program: &str, args: &[OsString]) -> String {
     let mut s = program.to_string();
     for a in args {
@@ -322,6 +461,24 @@ mod tests {
 
     const PS: &str = r#"{"Service":"db","Name":"probe-db-1","State":"running","Health":"healthy","ExitCode":0,"Publishers":[{"URL":"::","TargetPort":8081,"PublishedPort":54804,"Protocol":"tcp"},{"URL":"0.0.0.0","TargetPort":8081,"PublishedPort":54804,"Protocol":"tcp"},{"URL":"127.0.0.1","TargetPort":5432,"PublishedPort":15432,"Protocol":"tcp"}],"Status":"Up"}
 {"Service":"queue","Name":"probe-queue-1","State":"running","Health":"starting","Publishers":[]}"#;
+
+    #[test]
+    fn stats_and_sizes() {
+        let text = r#"{"BlockIO":"1.63GB / 0B","CPUPerc":"12.50%","Container":"cb21","ID":"cb21","MemPerc":"0.11%","MemUsage":"35.27MiB / 31.35GiB","Name":"probe-db-1","NetIO":"1MB / 1MB","PIDs":"11"}"#;
+        let s = parse_stats(text).unwrap();
+        assert_eq!(s[0].name, "probe-db-1");
+        assert_eq!(s[0].cpu, 12.5);
+        assert_eq!(s[0].memory, (35.27 * 1024.0 * 1024.0f64).round() as u64);
+        assert_eq!(parse_size("0B"), Some(0));
+        assert_eq!(parse_size("37.56kB"), Some(37_560));
+        assert_eq!(parse_size("1.5GiB"), Some(1_610_612_736));
+        assert_eq!(parse_size("N/A"), None);
+        let df = r#"{"Images":[],"Volumes":[{"Labels":"com.docker.compose.project=probe,com.docker.compose.volume=data","Name":"probe_data","Size":"122.4MB"},{"Labels":"","Name":"loose","Size":"N/A"}]}"#;
+        let v = parse_volumes(df).unwrap();
+        assert_eq!(v[0].project.as_deref(), Some("probe"));
+        assert_eq!(v[0].size, 122_400_000);
+        assert_eq!((v[1].project.as_deref(), v[1].size), (None, 0));
+    }
 
     #[test]
     fn config_model() {

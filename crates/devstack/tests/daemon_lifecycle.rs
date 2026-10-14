@@ -94,6 +94,17 @@ confirm = "Restart?"
 steps = [{{ stop = "api" }}, {{ exec = "git --version" }}, {{ start = "api" }}]
 "#
         ));
+        toml.push_str(if with_compose {
+            "
+[groups.app]
+members = [\"api\", \"compose.app.db\", \"command.ping\"]
+"
+        } else {
+            "
+[groups.app]
+members = [\"api\", \"command.ping\"]
+"
+        });
         std::fs::write(dir.path().join("devstack.toml"), toml).unwrap();
         let ok = Command::new("git")
             .args(["init", "-q"])
@@ -296,6 +307,65 @@ fn lifecycle(with_compose: bool) {
         .send_empty()
         .unwrap();
     assert_eq!(foreign_origin.status(), 403, "foreign Origin");
+
+    // Resource usage (plan §12): the running API is measured, and with
+    // compose its containers too.
+    let usage = || -> Value {
+        let mut r = agent
+            .get(&format!("{base}/v1/usage?history=true"))
+            .header("Authorization", &format!("Bearer {token}"))
+            .call()
+            .unwrap();
+        serde_json::from_str(&r.body_mut().read_to_string().unwrap()).unwrap()
+    };
+    let api_measured = |u: &Value| {
+        u["services"].as_array().unwrap().iter().any(|e| {
+            e["name"] == "api"
+                && e["processes"].as_u64().unwrap_or(0) >= 1
+                && e["memory"].as_u64().unwrap_or(0) > 10 * 1024 * 1024
+                && e["history"].as_array().is_some_and(|h| !h.is_empty())
+        })
+    };
+    let db_measured = |u: &Value| {
+        u["containers"].as_array().unwrap().iter().any(|c| {
+            c["group"] == "app" && c["service"] == "db" && c["memory"].as_u64().unwrap_or(0) > 0
+        })
+    };
+    assert!(
+        wait_for(
+            || {
+                let u = usage();
+                api_measured(&u) && (!with_compose || db_measured(&u))
+            },
+            Duration::from_secs(30)
+        ),
+        "usage not measured: {}
+{}",
+        usage(),
+        s.diag()
+    );
+    let u = usage();
+    assert!(u["lanes"][0]["disk"].is_object(), "disk: {u}");
+    let app = u["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["name"] == "app")
+        .unwrap_or_else(|| panic!("groups: {u}"));
+    let api_mem = u["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "api")
+        .unwrap()["memory"]
+        .as_u64()
+        .unwrap();
+    assert!(
+        app["memory"].as_u64().unwrap() >= api_mem,
+        "a group sums its members: {u}"
+    );
+    let top = s.ok(&["top"]);
+    assert!(top.contains("api") && top.contains("lane main"), "{top}");
     let rebinding = agent
         .get(&format!("{base}/v1/stack"))
         .header("Authorization", &format!("Bearer {token}"))

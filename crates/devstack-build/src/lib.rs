@@ -194,6 +194,11 @@ impl Builder {
         })
     }
 
+    /// What the shared build job costs right now (plan §12, ADR-0020).
+    pub fn usage(&self) -> devstack_proc::Usage {
+        self.job.usage()
+    }
+
     pub fn artifact(&self, service: &str, id: &str) -> Option<ArtifactMeta> {
         let meta = fs::read(self.layout.artifact(service, id).join(META_FILE)).ok()?;
         serde_json::from_slice(&meta).ok()
