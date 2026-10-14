@@ -6,6 +6,8 @@ node_modules/
 .env
 .env.*
 !.env.example
+# Tracked, non-secret development defaults (plan O-8).
+!.env.defaults
 spikes/platform-bench/results/
 spikes/platform-bench/scenarios/*.local.json
 examples/*.local.toml
