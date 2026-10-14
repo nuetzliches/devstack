@@ -105,8 +105,9 @@ references).
    newer than their outputs. The snapshot directory persists, so `obj/` and
    other incremental state stay warm.
 3. **Input hash** over the service's declared inputs = build id.
-4. **Build** in the snapshot directory into
-   `.devstack/artifacts/<service>/<build-id>/`. If a newer change for the same
+4. **Build** in the snapshot directory with the normal output directories,
+   then **publish** by copying the output into
+   `.devstack/artifacts/<service>/<build-id>/` (ADR-0002). If a newer change for the same
    lane and service arrives, the running build's process tree is killed and the
    cycle restarts at step 2. A superseded build is recorded as `superseded`,
    not `failed`.
@@ -196,7 +197,8 @@ Format: TOML, `devstack.toml` in the repository root, no profiles in version 1
 | Key | Meaning |
 |---|---|
 | `kind` | `service` (default), `job` (runs to completion), `devserver` (builds and serves in one process, plan §3.4), `tool` (long-running, interactive, no health) |
-| `build` | Command producing the artifact in `{artifact}` (ADR-0002); absent for `devserver`/`tool` |
+| `build` | Command run in the lane's snapshot, with the toolchain's normal output directories (ADR-0002); absent for `devserver`/`tool` |
+| `output` | Directory (relative to the repository) copied into the artifact after a successful build |
 | `run` | Command started from the artifact (or `cwd` for `devserver`/`tool`) |
 | `cwd` | Working directory relative to the repository |
 | `watch` | Paths whose change starts a candidate build (ADR-0003) |
@@ -232,7 +234,7 @@ Closed set; an unknown placeholder is an error.
 | Placeholder | Value |
 |---|---|
 | `{repo}` | Absolute path of the lane's source root |
-| `{artifact}` | Artifact directory of the current build |
+| `{artifact}` | Artifact directory of the build being started (used in `run`) |
 | `{port}` | Port of the instance being started |
 | `{is_main}` | `true` in the main slot, `false` otherwise |
 | `{service.<name>.url}` | `http(s)://127.0.0.1:<port>` of that service's main slot |
@@ -299,7 +301,7 @@ downstream stack.
 
 | Phase | Content | Exit criterion |
 |---|---|---|
-| **0: Spikes** | (a) process ownership, see §7.1; (b) cancelling an MSBuild tree mid-build and resuming incrementally; (c) snapshot sync cost for the reference tree; (d) platform benchmark for [ADR-0011](adr/0011-platform-windows-native-first.md) | Each spike answers its question with numbers, recorded in the relevant ADR |
+| **0: Spikes** | (a) process ownership, see §7.1; (b) build cancellation, see §7.2; (c) snapshot sync cost for the reference tree; (d) platform benchmark for [ADR-0011](adr/0011-platform-windows-native-first.md) | Each spike answers its question with numbers, recorded in the relevant ADR |
 | **1: Run plane + CLI** | Stack file, compose driver, `devstack check`, `devstack env --export`, port preflight, artifact builds on demand (`devstack build api`), main slot, jobs, health, logs, job-object ownership, build-id env, CLI, MCP | Reference stack runs end to end without the previous orchestrator; no file-lock failure possible by construction |
 | **2: Candidate pipeline** | Watch, debounce, supersede/cancel, candidates without workers, promotion gate, rollback, SSE events, first dashboard | A broken edit never replaces main; three concurrent writers produce at most one running build per service |
 | **3: Lanes** | Worktree lanes, per-lane resources, `promote --lane`, static frontend artifacts for e2e | Two worktrees run side by side without touching each other's database or the main slot |
@@ -322,6 +324,25 @@ daemon will and answers, on Windows and Linux/WSL:
 | a8 | Restart after a4: lock file reacquired, Linux cleanup by cgroup and by recorded process group + start time | No stale lock; only recorded processes are killed (a decoy process with a reused PID survives) |
 
 Results go into ADR-0009 and ADR-0016.
+
+### 7.2 Spike (b): build cancellation
+
+ADR-0003 cancels a superseded build by killing its process tree. That only works
+if a killed build leaves nothing behind that breaks or slows the next one. The
+spike drives the reference stack's API build and its SPA production build from a
+small harness, kills them at defined points and builds again.
+
+| # | Test | Pass when |
+|---|---|---|
+| b1 | Kill the .NET build during restore, during compilation and during the output copy (each 10×, random offset within the phase) | The following incremental build succeeds every time, and its output equals a clean build's output (file list and assembly hashes, excluding timestamps) |
+| b2 | Time from cancel to "no process of the build alive, no file of the lane locked" | Under 2 s; the next build can start immediately |
+| b3 | Duration of the build after a cancel, compared with a normal incremental build of the same change | Within 20 % (a cancel must not regularly turn the next build into a cold one) |
+| b4 | Graceful cancel (Ctrl+C to the build's console group) versus hard kill | Recorded; if graceful is reliably faster to resume, the builder tries it first with a short timeout |
+| b5 | Long-lived build servers (MSBuild node reuse, the shared C# compiler server): killed with every cancelled build when they live in the build's job, versus living in a separate daemon-wide job | Recorded with build times for both; decides whether build servers get their own job |
+| b6 | SPA production build: kill during bundling, rebuild | Succeeds; the build cache is either reused or detected as corrupt and rebuilt, never silently wrong |
+
+Results go into ADR-0003 (cancellation) and ADR-0009 (job layout for build
+servers).
 
 ## 8. Open questions
 

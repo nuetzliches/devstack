@@ -11,13 +11,16 @@ or inside WSL2, compared with plain NTFS?
 | `fs-micro` | Raw many-small-files cost (write, stat, read, delete 20k files), no toolchain involved |
 | `git-status` | What every agent and IDE does constantly |
 | `dotnet-build-cold` / `-noop` / `-incremental` | API host build from clean, with nothing changed, after a one-line change in a leaf project |
+| `snapshot` | Spike (c): full sync of the source into a lane, no-op sync, sync after 1 and 50 changed files (prototype of ADR-0002's sync) |
+| `lane-build-*` | Build from the lane directly into a fresh artifact directory (`-o`): cold, no-op, incremental |
+| `lane-build-inplace-*` | Build in the lane with its normal output directory: cold, no-op, incremental |
+| `artifact-copy` / `-hardlink` | Publish the lane's build output as an artifact by copying or hard-linking |
 | `dotnet-test-build` / `-run` | One unit-test project |
 | `npm-install` | Dependency install with a warm package cache |
 | `ng-build-cold` / `-warm-cache` | Production SPA build without and with the Angular build cache |
 | `ng-serve-rebuild` | Dev server: time to first bundle (`ready`) and to each rebuild after a one-line change (`rebuilds`) |
 
-Not measured here: snapshot sync and save-to-promoted (need devstack itself,
-phase 1), container bind mounts (the outcome is already known: no change
+Not measured here: save-to-promoted (needs devstack itself, phase 1), container bind mounts (the outcome is already known: no change
 notifications from NTFS, see the problem statement).
 
 ## Setups

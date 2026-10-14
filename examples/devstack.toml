@@ -39,7 +39,8 @@ kind    = "job"                                   # runs to completion before de
 compose = { group = "app", service = "migrate" }  # environment source (ADR-0014)
 rewrite_hosts = ["db"]
 watch   = ["src/**/*.cs", "src/**/*.csproj"]
-build   = "dotnet build src/Migrate/Migrate.csproj -c Debug -o {artifact}"
+build   = "dotnet build src/Migrate/Migrate.csproj -c Debug"
+output  = "src/Migrate/bin/Debug/net10.0"   # published to the artifact (ADR-0002)
 run     = "{artifact}/Migrate"                    # platform executable suffix added on Windows
 after   = ["compose.app.db"]
 
@@ -47,7 +48,8 @@ after   = ["compose.app.db"]
 compose = { group = "app", service = "api" }
 rewrite_hosts = ["db", "scheduler", "webhooks", "renderer", "otel-collector"]
 watch   = ["src/**/*.cs", "src/**/*.csproj", "src/**/appsettings*.json"]
-build   = "dotnet build src/Api/Api.csproj -c Debug -o {artifact}"
+build   = "dotnet build src/Api/Api.csproj -c Debug"
+output  = "src/Api/bin/Debug/net10.0"   # published to the artifact (ADR-0002)
 run     = "{artifact}/Api"
 port    = 5000
 after   = ["migrate", "compose.app.scheduler"]
@@ -66,7 +68,8 @@ Mail__Graph__ClientSecret = "${MAIL_GRAPH_CLIENT_SECRET:-}"   # optional, from t
 
 [services.payment-mock]                           # mock with code in the repo: native
 watch  = ["tools/payment-mock/**"]
-build  = "dotnet build tools/payment-mock/PaymentMock.csproj -c Debug -o {artifact}"
+build   = "dotnet build tools/payment-mock/PaymentMock.csproj -c Debug"
+output  = "tools/payment-mock/bin/Debug/net10.0"   # published to the artifact (ADR-0002)
 run    = "{artifact}/PaymentMock"
 port   = 5310
 health = { http = "/health", timeout = "30s" }
@@ -85,7 +88,8 @@ restart_on = ["web/tsconfig*.json", "web/angular.json"]
 [services.tray-helper]
 platforms = ["windows"]                           # skipped elsewhere
 autostart = false                                 # started on demand
-build = "dotnet build src/TrayHelper/TrayHelper.csproj -c Debug -o {artifact}"
+build   = "dotnet build src/TrayHelper/TrayHelper.csproj -c Debug"
+output  = "src/TrayHelper/bin/Debug/net10.0"   # published to the artifact (ADR-0002)
 run   = "{artifact}/TrayHelper"
 
 [services.e2e-ui]

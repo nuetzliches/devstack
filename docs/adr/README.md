@@ -48,7 +48,7 @@ before code exists it names where it *will* live.
 | [0008](0008-background-workers-run-only-in-the-active-slot.md) | Background workers run only in the active slot | Proposed |
 | [0009](0009-the-daemon-owns-every-process-tree.md) | The daemon owns every process tree it starts | Proposed |
 | [0010](0010-promotion-mechanism.md) | Promotion mechanism: restart on the fixed port or switch a reverse proxy | Open |
-| [0011](0011-platform-windows-native-first.md) | Windows-native first; WSL is decided by measurement | Open |
+| [0011](0011-platform-windows-native-first.md) | Windows-native first; WSL is decided by measurement | Proposed (measured) |
 | [0012](0012-shared-infrastructure-between-lanes.md) | Which infrastructure may be shared between lanes | Open (deferred) |
 | [0013](0013-schema-changes-hold-promotion.md) | A build that changes schema inputs is not promoted automatically | Proposed |
 | [0014](0014-native-services-take-their-configuration-from-compose.md) | Native services take their configuration from the Compose service they replace | Proposed |

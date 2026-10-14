@@ -1,36 +1,197 @@
 {
   "description": "Template. Copy to <name>.local.json (git-ignored) and point it at a real stack.",
-  "source": { "repo": "/path/to/repo", "ref": "<commit sha>" },
+  "source": {
+    "repo": "/path/to/repo",
+    "ref": "<commit sha>"
+  },
   "env": {
     "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
     "DOTNET_NOLOGO": "1",
     "NG_CLI_ANALYTICS": "false"
   },
   "setup": [
-    { "run": "npm ci --no-audit --no-fund", "cwd": "web" }
+    {
+      "run": "npm ci --no-audit --no-fund",
+      "cwd": "web"
+    }
   ],
   "steps": [
-    { "name": "fs-micro", "kind": "fs-micro", "files": 20000 },
-    { "name": "git-status", "run": "git status --porcelain", "warmup": 1, "repeat": 5 },
-
-    { "name": "dotnet-build-cold",
-      "prepare": [{ "clean": ["src"], "keep": ["node_modules"] }],
-      "run": "dotnet build src/Api/Api.csproj -c Debug", "warmup": 1 },
-    { "name": "dotnet-build-noop", "run": "dotnet build src/Api/Api.csproj -c Debug --no-restore" },
-    { "name": "dotnet-build-incremental",
-      "prepare": [{ "append": "src/Feature/Module.cs" }],
-      "after": [{ "restore": "src/Feature/Module.cs" }],
-      "run": "dotnet build src/Api/Api.csproj -c Debug --no-restore" },
-
-    { "name": "npm-ci",
-      "prepare": [{ "rm": ["web/node_modules"] }],
-      "run": "npm ci --no-audit --no-fund", "cwd": "web", "repeat": 2 },
-    { "name": "ng-build-cold",
-      "prepare": [{ "rm": ["web/.angular", "web/dist"] }],
-      "run": "npx ng build app", "cwd": "web", "repeat": 2 },
-    { "name": "ng-serve-rebuild", "kind": "watch", "cwd": "web",
+    {
+      "name": "fs-micro",
+      "kind": "fs-micro",
+      "files": 20000
+    },
+    {
+      "name": "git-status",
+      "run": "git status --porcelain",
+      "warmup": 1,
+      "repeat": 5
+    },
+    {
+      "name": "dotnet-build-cold",
+      "prepare": [
+        {
+          "clean": [
+            "src"
+          ],
+          "keep": [
+            "node_modules"
+          ]
+        }
+      ],
+      "run": "dotnet build src/Api/Api.csproj -c Debug",
+      "warmup": 1
+    },
+    {
+      "name": "dotnet-build-noop",
+      "run": "dotnet build src/Api/Api.csproj -c Debug --no-restore"
+    },
+    {
+      "name": "dotnet-build-incremental",
+      "prepare": [
+        {
+          "append": "src/Feature/Module.cs"
+        }
+      ],
+      "after": [
+        {
+          "restore": "src/Feature/Module.cs"
+        }
+      ],
+      "run": "dotnet build src/Api/Api.csproj -c Debug --no-restore"
+    },
+    {
+      "name": "snapshot",
+      "kind": "snapshot",
+      "lane": "snap",
+      "modify": "^src/.*\\.cs$",
+      "changes": [
+        1,
+        50
+      ]
+    },
+    {
+      "name": "lane-build-cold",
+      "prepare": [
+        {
+          "resetLane": "a"
+        },
+        {
+          "sync": "a"
+        }
+      ],
+      "run": "dotnet build {lane:a}/src/Api/Api.csproj -c Debug -o {artifact}"
+    },
+    {
+      "name": "lane-build-noop-new-artifact",
+      "run": "dotnet build {lane:a}/src/Api/Api.csproj -c Debug -o {artifact}"
+    },
+    {
+      "name": "lane-build-incremental",
+      "prepare": [
+        {
+          "append": "src/Feature/Module.cs"
+        },
+        {
+          "sync": "a"
+        }
+      ],
+      "after": [
+        {
+          "restore": "src/Feature/Module.cs"
+        },
+        {
+          "sync": "a"
+        }
+      ],
+      "run": "dotnet build {lane:a}/src/Api/Api.csproj -c Debug -o {artifact}"
+    },
+    {
+      "name": "lane-build-inplace-cold",
+      "prepare": [
+        {
+          "resetLane": "a"
+        },
+        {
+          "sync": "a"
+        }
+      ],
+      "run": "dotnet build {lane:a}/src/Api/Api.csproj -c Debug"
+    },
+    {
+      "name": "lane-build-inplace-noop",
+      "run": "dotnet build {lane:a}/src/Api/Api.csproj -c Debug"
+    },
+    {
+      "name": "lane-build-inplace-incremental",
+      "prepare": [
+        {
+          "append": "src/Feature/Module.cs"
+        },
+        {
+          "sync": "a"
+        }
+      ],
+      "after": [
+        {
+          "restore": "src/Feature/Module.cs"
+        },
+        {
+          "sync": "a"
+        }
+      ],
+      "run": "dotnet build {lane:a}/src/Api/Api.csproj -c Debug"
+    },
+    {
+      "name": "artifact-copy",
+      "kind": "copy-dir",
+      "from": "{lane:a}/src/Api/bin/Debug/net10.0",
+      "mode": "copy",
+      "repeat": 3
+    },
+    {
+      "name": "artifact-hardlink",
+      "kind": "copy-dir",
+      "from": "{lane:a}/src/Api/bin/Debug/net10.0",
+      "mode": "hardlink",
+      "repeat": 3
+    },
+    {
+      "name": "npm-ci",
+      "prepare": [
+        {
+          "rm": [
+            "web/node_modules"
+          ]
+        }
+      ],
+      "run": "npm ci --no-audit --no-fund",
+      "cwd": "web",
+      "repeat": 2
+    },
+    {
+      "name": "ng-build-cold",
+      "prepare": [
+        {
+          "rm": [
+            "web/.angular",
+            "web/dist"
+          ]
+        }
+      ],
+      "run": "npx ng build app",
+      "cwd": "web",
+      "repeat": 2
+    },
+    {
+      "name": "ng-serve-rebuild",
+      "kind": "watch",
+      "cwd": "web",
       "run": "npx ng serve app -c development --port 4310",
-      "doneRegex": "bundle generation complete", "file": "web/src/app/app.component.ts",
-      "changes": 5, "repeat": 1 }
+      "doneRegex": "bundle generation complete",
+      "file": "web/src/app/app.component.ts",
+      "changes": 5,
+      "repeat": 1
+    }
   ]
 }

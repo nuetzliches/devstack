@@ -30,6 +30,8 @@ for (const [i, run] of runs.entries()) {
     for (const [metric, s] of Object.entries(r.summary)) {
       const key = metric === 'totalMs' ? step : `${step} · ${metric.replace(/Ms$/, '')}`;
       if (!rows.has(key)) rows.set(key, Array(runs.length).fill(''));
+      // Every metric is a duration in ms, except these counts.
+      if (['files', 'copied', 'removed'].includes(metric)) { rows.get(key)[i] = String(s.medianMs); continue; }
       const spread = s.n > 1 ? ` (${(s.minMs / 1000).toFixed(1)}–${(s.maxMs / 1000).toFixed(1)})` : '';
       rows.get(key)[i] = `${(s.medianMs / 1000).toFixed(2)}${spread}`;
     }

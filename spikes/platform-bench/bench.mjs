@@ -73,14 +73,135 @@ function killTree(child) {
   else try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone */ }
 }
 
-const rel = (p) => path.join(root, p);
+// Lanes live next to the clone, not inside it, so they never show up in the
+// clone's `git status` or `git ls-files`.
+const lanesRoot = `${root}-lanes`;
+const laneDir = (lane) => path.join(lanesRoot, lane);
+let currentArtifact = null;
+
+// Placeholders usable in run, cwd and prepare paths:
+//   {lane:<name>}  snapshot directory of a lane
+//   {artifact}     fresh artifact directory of the current sample
+function expand(s) {
+  if (typeof s !== 'string') return s;
+  return s
+    .replace(/\{lane:([\w-]+)\}/g, (_, l) => laneDir(l))
+    .replace(/\{artifact\}/g, () => currentArtifact ?? '');
+}
+const rel = (p) => path.resolve(root, expand(p));
+
+// ------------------------------------------------------------ snapshot sync
+//
+// Prototype of the sync ADR-0002 plans: copy tracked plus untracked, non-ignored
+// files of the source into a lane directory; afterwards copy only files whose
+// size or mtime changed, stamping copies with the current time so incremental
+// build tools see them as newer than their outputs. The manifest lives in
+// memory for the duration of the run (the daemon would persist it).
+
+const manifests = new Map(); // lane -> Map(relPath -> "size:mtimeMs")
+
+function listSourceFiles() {
+  const r = spawnSync('git', ['ls-files', '-co', '--exclude-standard', '-z'], { cwd: root, encoding: 'utf8', maxBuffer: 1 << 28 });
+  if (r.status !== 0) throw new Error(`git ls-files failed: ${r.stderr}`);
+  return r.stdout.split('\0').filter(Boolean);
+}
+
+function syncLane(lane) {
+  const t = {};
+  let t0 = performance.now();
+  const files = listSourceFiles();
+  t.list = performance.now() - t0;
+
+  t0 = performance.now();
+  const manifest = manifests.get(lane) ?? new Map();
+  const next = new Map();
+  const changed = [];
+  for (const f of files) {
+    let st;
+    try { st = fs.statSync(path.join(root, f)); } catch { continue; } // deleted between list and stat
+    if (!st.isFile()) continue;
+    const key = `${st.size}:${st.mtimeMs}`;
+    next.set(f, key);
+    if (manifest.get(f) !== key) changed.push(f);
+  }
+  const removed = [...manifest.keys()].filter((f) => !next.has(f));
+  t.scan = performance.now() - t0;
+
+  t0 = performance.now();
+  const dest = laneDir(lane);
+  const madeDirs = new Set();
+  const now = new Date();
+  for (const f of changed) {
+    const target = path.join(dest, f);
+    const dir = path.dirname(target);
+    if (!madeDirs.has(dir)) { fs.mkdirSync(dir, { recursive: true }); madeDirs.add(dir); }
+    fs.copyFileSync(path.join(root, f), target);
+    fs.utimesSync(target, now, now);
+  }
+  for (const f of removed) fs.rmSync(path.join(dest, f), { force: true });
+  t.copy = performance.now() - t0;
+  t.copied = changed.length;
+  t.removed = removed.length;
+  t.total = t.list + t.scan + t.copy;
+  manifests.set(lane, next);
+  return t;
+}
+
+// One sample of the snapshot step: full sync into a fresh lane, then no-op and
+// incremental syncs after modifying N source files.
+function snapshotStep(step) {
+  const lane = step.lane ?? 'bench';
+  fs.rmSync(laneDir(lane), { recursive: true, force: true });
+  manifests.delete(lane);
+  const sample = { full: syncLane(lane).total, noop: syncLane(lane).total };
+  const pattern = new RegExp(step.modify ?? '\\.cs$');
+  const candidates = listSourceFiles().filter((f) => pattern.test(f)).sort();
+  for (const n of step.changes ?? [1, 50]) {
+    const picked = candidates.slice(0, n);
+    for (const f of picked) fs.appendFileSync(path.join(root, f), `\n// bench ${Date.now()}\n`);
+    const r = syncLane(lane);
+    if (r.copied < picked.length) throw new Error(`sync copied ${r.copied} of ${picked.length} changed files`);
+    sample[`changed${n}`] = r.total;
+    run(`git checkout -- ${picked.join(' ')}`);
+    syncLane(lane); // back to the committed state, not measured
+  }
+  sample.files = listSourceFiles().length;
+  return sample;
+}
+
+// Publish a build output directory as an artifact: plain copies or hard links.
+// Hard links share the file data, so this only works on one volume, and the
+// output must never be written in place afterwards (MSBuild replaces files,
+// it does not rewrite them, but this is what the measurement is for).
+function copyDirStep(step) {
+  const from = rel(step.from);
+  const to = currentArtifact;
+  const t0 = performance.now();
+  let files = 0;
+  const walk = (src, dst) => {
+    fs.mkdirSync(dst, { recursive: true });
+    for (const e of fs.readdirSync(src, { withFileTypes: true })) {
+      const s = path.join(src, e.name);
+      const d = path.join(dst, e.name);
+      if (e.isDirectory()) walk(s, d);
+      else { step.mode === 'hardlink' ? fs.linkSync(s, d) : fs.copyFileSync(s, d); files++; }
+    }
+  };
+  walk(from, to);
+  return { totalMs: performance.now() - t0, files };
+}
 
 // Prepare operations are not timed. They run in JS so that no shell syntax
 // differs between platforms.
 function prepare(ops = []) {
   for (const op of ops) {
     if (args.dry) { log('(dry) prepare', JSON.stringify(op)); continue; }
-    if (op.clean) {
+    if (op.sync) {
+      syncLane(op.sync);
+    } else if (op.resetLane) {
+      fs.rmSync(laneDir(op.resetLane), { recursive: true, force: true });
+      manifests.delete(op.resetLane);
+    } else if (op.clean) {
       // -x ignores .gitignore, the -e patterns still protect what we keep.
       const keep = (op.keep ?? []).map((k) => `-e ${k}`).join(' ');
       run(`git clean -xfdq ${keep} -- ${op.clean.join(' ')}`);
@@ -93,7 +214,7 @@ function prepare(ops = []) {
       const now = new Date();
       fs.utimesSync(rel(op.restore), now, now); // checkout may keep an old mtime
     } else if (op.run) {
-      run(op.run, { cwd: op.cwd ? rel(op.cwd) : root });
+      run(expand(op.run), { cwd: op.cwd ? rel(op.cwd) : root });
     } else {
       throw new Error(`unknown prepare op ${JSON.stringify(op)}`);
     }
@@ -238,17 +359,21 @@ for (const step of scenario.steps) {
   try {
     for (let i = 0; i < (step.warmup ?? 0) + repeat; i++) {
       const warm = i < (step.warmup ?? 0);
+      currentArtifact = path.join(lanesRoot, 'artifacts', `${step.name}-${i}`);
+      fs.rmSync(currentArtifact, { recursive: true, force: true });
       prepare(step.prepare);
       const logName = `${step.name}-${warm ? 'warmup' : 'run'}${i}`;
       let sample;
       if (step.kind === 'fs-micro') sample = fsMicro(step);
+      else if (step.kind === 'snapshot') sample = snapshotStep(step);
+      else if (step.kind === 'copy-dir') sample = copyDirStep(step);
       else if (step.kind === 'watch') sample = await watchLatency(step, logName);
       else {
         // A failed attempt is data, not noise: on Windows, transient file locks
         // (EBUSY from scanners or indexers) are one of the things measured.
         // Retry up to step.retries times and count the failures.
         for (let attempt = 0; ; attempt++) {
-          const r = run(step.run, { cwd: step.cwd ? rel(step.cwd) : root, logName: `${logName}-a${attempt}`, allowFail: true });
+          const r = run(expand(step.run), { cwd: step.cwd ? rel(step.cwd) : root, logName: `${logName}-a${attempt}`, allowFail: true });
           if (r.code === 0) { sample = { totalMs: r.ms }; break; }
           failures.push({ iteration: i, attempt, code: r.code });
           log(`  attempt ${attempt} failed (exit ${r.code})`);

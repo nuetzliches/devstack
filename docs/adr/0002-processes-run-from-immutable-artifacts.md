@@ -16,8 +16,10 @@ A second writer to the same `bin/`/`obj/` (the IDE) adds its own collisions.
 ## Decision
 
 devstack builds every application service from a **snapshot** of the lane's
-source (`.devstack/lanes/<lane>/src`) into an **artifact directory** named by the
-input hash (`.devstack/artifacts/<service>/<build-id>/`). Processes are started
+source (`.devstack/lanes/<lane>/src`), **in place** with the toolchain's normal
+output directories, and then **publishes** the build output by copying it into
+an **artifact directory** named by the input hash
+(`.devstack/artifacts/<service>/<build-id>/`). Processes are started
 only from artifact directories, which are never written again after the build
 succeeds. A build writes into a temporary directory that is renamed to its
 final name only on success, so an artifact directory is either complete or
@@ -29,6 +31,20 @@ The snapshot copies changed files only and stamps copied files with the current
 time, so incremental build tools see them as newer than their outputs. Snapshot
 directories persist to keep incremental state warm.
 
+
+*Amended 2026-10-14 after spike (c), before acceptance.* The first draft let the
+build write straight into the artifact directory (`-o <artifact>`). Measured on
+the reference API host, that turns every build into a near-full rebuild,
+because each new output path invalidates the build's incremental state:
+
+| | NTFS | ReFS | WSL ext4 |
+|---|---:|---:|---:|
+| Build into a fresh artifact directory, one-line change | 12.4 s | 11.0 s | 10.2 s |
+| Build in place in the lane, one-line change | 2.6 s | 2.8 s | 2.0 s |
+| Publish by copy (240 files) | 0.14 s | 0.11 s | 0.12 s |
+| Publish by hard link | 0.04 s | 0.02 s | 0.01 s |
+| Snapshot sync: full (7,140 files) / 50 changed | 3.4 / 0.21 s | 2.4 / 0.24 s | 1.0 / 0.07 s |
+
 ## Alternatives considered
 
 - **Build in place, stop the process first.** Removes the lock, keeps the
@@ -37,6 +53,14 @@ directories persist to keep incremental state warm.
 - **Build in place, copy output to an artifact afterwards.** No lock on the run
   directory, but the build still shares `obj/` with the IDE, and the input of
   the artifact is whatever the tree looked like at some point during the build.
+- **Build into the artifact directory (`-o`).** See the amendment above: four
+  to five times slower per change.
+- **Publish by hard link instead of copy.** Faster still, but a hard link is the
+  same file: a running process locks it, and the lane's next build, writing to
+  the very same file in `bin/`, fails on that lock, which is exactly what this
+  ADR removes; a toolchain that rewrites a file in place would also change the
+  published artifact. Copy-on-write cloning (ReFS block cloning, reflinks) keeps
+  copy semantics and may replace the plain copy later.
 - **Container images per build.** Strong isolation, but image builds for every
   change are slow on Windows and lose native debugging of the process.
 
