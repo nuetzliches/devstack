@@ -105,10 +105,14 @@ pub fn ensure_daemon(stack_file: &Path, state_dir: &Path) -> Result<Client> {
                 }
             }
         }
-        // No console of the caller's: the daemon allocates a hidden one (ADR-0009).
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        // Not the caller's console, but a console of its own without a window:
+        // the daemon needs one to send CTRL_BREAK to its services (ADR-0009).
+        // Letting the daemon AllocConsole and hide the window does not work where
+        // Windows Terminal is the default terminal: the console then opens a
+        // terminal window that the console's window handle does not refer to.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
     }
     #[cfg(unix)]
     {
