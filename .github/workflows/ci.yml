@@ -33,5 +33,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test
         run: cargo test --workspace
+        env:
+          # Linux runners have a Docker engine with Linux containers; Windows runners do not.
+          DEVSTACK_DOCKER_TESTS: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
       - name: example stack file
         run: cargo run -q -p devstack -- check -f examples/devstack.toml

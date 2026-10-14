@@ -33,6 +33,7 @@ windows-sys = { version = "0.59", features = [
 
 devstack-config = { path = "crates/devstack-config" }
 devstack-proc = { path = "crates/devstack-proc" }
+devstack-compose = { path = "crates/devstack-compose" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

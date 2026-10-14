@@ -128,6 +128,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "devstack-compose"
+version = "0.0.0"
+dependencies = [
+ "devstack-config",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "devstack-config"
 version = "0.0.0"
 dependencies = [
