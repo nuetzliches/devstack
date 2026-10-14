@@ -342,3 +342,54 @@ pub(crate) fn kill_tree(root: u32) {
         }
     }
 }
+
+pub(crate) fn long_path(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows_sys::Win32::Storage::FileSystem::GetLongPathNameW;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let mut buf = vec![0u16; 512];
+    loop {
+        // SAFETY: `wide` is NUL-terminated, `buf` is writable for its length.
+        let n =
+            unsafe { GetLongPathNameW(wide.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) } as usize;
+        if n == 0 {
+            return None;
+        }
+        if n < buf.len() {
+            buf.truncate(n);
+            return Some(std::ffi::OsString::from_wide(&buf).into());
+        }
+        buf.resize(n, 0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_short_path_becomes_the_long_one() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+        let dir = tempfile::tempdir().unwrap();
+        let long = dir.path().join("a rather long directory name");
+        std::fs::create_dir(&long).unwrap();
+        let wide: Vec<u16> = long.as_os_str().encode_wide().chain([0]).collect();
+        let mut buf = vec![0u16; 512];
+        // SAFETY: `wide` is NUL-terminated, `buf` is writable for its length.
+        let n = unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) }
+            as usize;
+        buf.truncate(n);
+        let short = std::path::PathBuf::from(std::ffi::OsString::from_wide(&buf));
+        if n == 0 || short.file_name() == long.file_name() {
+            eprintln!("skipped: the volume keeps no 8.3 names");
+            return;
+        }
+        let back = super::long_path(&short).unwrap();
+        assert_eq!(
+            back.file_name(),
+            long.file_name(),
+            "{} -> {}",
+            short.display(),
+            back.display()
+        );
+    }
+}

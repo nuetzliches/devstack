@@ -192,6 +192,22 @@ pub fn ensure_console() -> Result<bool> {
     }
 }
 
+/// Windows: the long form of a path (`C:\Users\RUNNER~1` becomes
+/// `C:\Users\runneradmin`). Compilers report long paths; a repository known
+/// by its 8.3 name would not be recognised in their messages. Unlike
+/// `canonicalize`, `subst` drives and junctions stay as they are. Returns the
+/// path unchanged elsewhere and when the lookup fails.
+pub fn long_path(path: &std::path::Path) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        windows::long_path(path).unwrap_or_else(|| path.to_path_buf())
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_path_buf()
+    }
+}
+
 /// Kill what a previous instance recorded and left behind (ADR-0016). Returns
 /// the number of processes signalled per record. Windows needs nothing: its
 /// trees die with their owner.

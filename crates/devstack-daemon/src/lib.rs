@@ -54,6 +54,8 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     let stack = devstack_config::load(stack_file).map_err(|e| e.to_string())?;
     let abs = std::path::absolute(stack_file).map_err(|e| e.to_string())?;
     let repo = abs.parent().map(Path::to_path_buf).unwrap_or(abs);
+    // One spelling of the repository everywhere (compiler messages use the long one).
+    let repo = devstack_proc::long_path(&repo);
     let state_dir = repo.join(".devstack");
     let _lock = devstack_proc::StateLock::acquire(&state_dir).map_err(|e| e.to_string())?;
     devstack_proc::ensure_console().map_err(|e| e.to_string())?;
