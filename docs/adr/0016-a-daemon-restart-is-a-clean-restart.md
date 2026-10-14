@@ -46,7 +46,10 @@ devstack does not restart itself after a crash. CLI, MCP and dashboard report
 
 Verified on Windows by spike (a): a second daemon on the same state directory
 is refused; after a hard kill of the first, the lock is free at once and the
-new instance starts. The Linux cleanup path is not verified yet.
+new instance starts. On Linux (container) the same holds for `flock`, the
+cleanup by `cgroup.kill` removes everything a dead instance left, the cleanup by
+recorded process group removes all but `setsid` children, and a process that
+only shares a number with a recorded group is spared (start-time check).
 
 ## Alternatives considered
 

@@ -57,6 +57,24 @@ Verified with `spikes/process-ownership` (details in its README):
 - A pseudo console per service (ConPTY) stopped .NET but not node; it is not
   used for stopping until that is understood.
 
+## Spike (a) results (2026-10-14, Linux container)
+
+- A process group or a cgroup alone does **not** die with the supervisor (8 of
+  11 processes survived a hard kill in both cases).
+- **A shim per service plus a cgroup per service gives the Windows guarantee:**
+  the shim receives `PR_SET_PDEATHSIG` when the daemon dies and kills the
+  service's cgroup (`cgroup.kill`) and process group; nothing survived, before
+  any cleanup. The cgroup is what catches a child that left the process group
+  with `setsid`.
+- Without writable cgroups the shim still kills the process group; `setsid`
+  children escape. That is the documented degradation.
+- Graceful stop: `SIGTERM` to the process group; the shim survives it through a
+  no-op handler (not `SIG_IGN`, which the service would inherit).
+
+The Unix bullet of the decision therefore reads, after acceptance: **a shim per
+service, holding the service in its own cgroup v2 where delegation is available
+and in its own process group always.**
+
 ## Alternatives considered
 
 - **Kill by PID tree walk.** Races with processes spawned during shutdown;

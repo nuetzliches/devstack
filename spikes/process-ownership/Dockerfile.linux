@@ -1,0 +1,20 @@
+# Linux half of spike (a): .NET SDK, Node and Rust in one image, procspike and
+# the fixtures built inside.
+#   docker build -f Dockerfile.linux -t procspike-linux .
+#   docker run --rm --privileged --cgroupns=private --init -v "<dir>:/out" procspike-linux
+FROM mcr.microsoft.com/dotnet/sdk:10.0
+
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends curl xz-utils build-essential procps \
+ && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.98.0
+ENV PATH="/root/.cargo/bin:${PATH}" DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 OUT_DIR=/out
+
+WORKDIR /spike
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo build --release
+COPY fixtures ./fixtures
+RUN dotnet build fixtures/dotnet-host -v q
+COPY run-tests-linux.mjs ./
+CMD ["node", "run-tests-linux.mjs"]

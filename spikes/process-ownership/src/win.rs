@@ -330,6 +330,18 @@ pub fn spawn_conpty(name: &str, cmdline: &str, mut log: File, job: Job) -> Resul
 }
 
 impl Service {
+    pub fn pids(&mut self) -> Vec<u32> {
+        self.job.pids()
+    }
+
+    pub fn active_processes(&mut self) -> u32 {
+        self.job.active_processes()
+    }
+
+    pub fn terminate(&mut self) {
+        self.job.terminate();
+    }
+
     /// Ask the service to stop the way a user in its terminal would.
     pub fn request_stop(&mut self) -> Result<()> {
         match &mut self.stop {

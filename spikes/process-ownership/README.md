@@ -9,6 +9,7 @@ at a time, and guarantee that nothing survives its own death?
 
 | Path | What |
 |---|---|
+| `src/unix.rs` | Linux: process group per service, optional cgroup v2, optional shim, restart cleanup |
 | `src/win.rs` | One Job Object per service (`KILL_ON_JOB_CLOSE`, no breakaway, non-inheritable handle), two ways to start and stop a service |
 | `src/main.rs` | `procspike run`: start services, record job membership, hold, stop one by one, escalate to kill; OS file lock for single instance |
 | `fixtures/dotnet-host` | Generic host with a background worker; writes `dotnet.stopped` only on a regular shutdown |
@@ -61,9 +62,44 @@ node run-tests.mjs            # all scenarios; or name some: node run-tests.mjs 
 4. **Exact membership beats tree walks.** `JobObjectBasicProcessIdList` lists
    what belongs to a service, including processes whose parent already exited.
 
+## Results (Linux, container, 2026-10-14)
+
+`Dockerfile.linux` builds procspike and the fixtures in one image;
+`run-tests-linux.mjs` runs the matrix. Privileged with a private cgroup
+namespace for the cgroup scenarios; unprivileged they are skipped.
+
+```bash
+docker build -f Dockerfile.linux -t procspike-linux .
+docker run --rm --privileged --cgroupns=private --init -v "$PWD/results:/out" procspike-linux
+```
+
+| # | Scenario | Result |
+|---|---|---|
+| a1/a2 | Process group per service, `SIGTERM` to the group: .NET and node incl. grandchild stop gracefully, 100 ms, only the addressed service | pass |
+| a1/a2 | Same with shim and cgroup | pass |
+| a3 | Service ignoring signals: killed after the timeout | pass |
+| a4 | Supervisor killed, **process group only**: 8 of 11 processes survive (only the leader has `PDEATHSIG`); cleanup kills all but the `setsid` child, which left the group | as expected |
+| a4 | **cgroup only**: 8 survive; cleanup with `cgroup.kill` gets everything | as expected |
+| a4 | **shim, process group only**: the shim kills its group; the `setsid` child survives, also after cleanup | as expected |
+| a4 | **shim and cgroup**: nothing survives, before any cleanup | pass |
+| a8 | OS lock (`flock`): second instance refused, free right after a hard kill | pass |
+| a8 | Cleanup with a record whose leader start time does not match: the unrelated process is spared | pass |
+
+## Findings for the daemon
+
+5. **Linux needs shim plus cgroup for the Windows guarantee.** A process group
+   or a cgroup alone does not die with the supervisor; the shim
+   (`PR_SET_PDEATHSIG`) does the killing, the cgroup makes sure a `setsid`
+   child is included. Where cgroups are not writable (no delegation), the
+   guarantee degrades to "everything except processes that call `setsid`", and
+   restart cleanup cannot catch those either.
+6. **The shim must not ignore the stop signal with `SIG_IGN`**, which children
+   inherit across `exec`; it installs a no-op handler instead.
+7. **Linux stop signal: `SIGTERM` to the group.** .NET hosts and node handle it
+   gracefully.
+
 ## Not covered yet
 
-- **Linux half** (process groups, cgroup v2, restart cleanup by recorded group
-  and start time, a8 on Linux). Needs a Linux host or container; the WSL
-  distribution used for spike (d) was removed after ADR-0011.
 - ConPTY with node (see above).
+- cgroup delegation on a real Linux desktop (systemd user slice) as opposed to a
+  privileged container.
