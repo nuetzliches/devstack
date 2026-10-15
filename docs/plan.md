@@ -562,7 +562,7 @@ search across services (`/v1/logs?grep=`, `devstack logs --grep`, MCP `logs`);
 draft, or copy a prompt for a coding agent); stack file compatibility rules
 ([ADR-0023](adr/0023-stack-file-compatibility.md)).
 
-**In `main`, for 0.5.0:** "Choose folder…" in "Add a stack" shows the
+**Released as 0.5.0 (2026-10-15):** "Choose folder…" in "Add a stack" shows the
 system's folder dialog through the hub (`POST /hub/pick-folder`; Windows
 Explorer picker, XDG portal on Linux); the CLI says when the daemon is older
 than itself instead of an empty error; earlier logs of a service by build
@@ -583,6 +583,11 @@ worktree` runs as a lane of the main tree's daemon with `devstack up`, ports
 moved per lane, `promote --lane`, a lane switcher in the dashboard; "Add a
 stack" scans a folder of repositories, and a fresh dashboard opens with that
 scan.
+
+**Released as 0.5.1:** terminal colour codes in service output are rendered
+in the dashboard's console and stripped where they would show as noise (other
+text views, `grep` matching, the MCP tools, `devstack logs` into a file or a
+pipe); the hub's first start after `devstack update` gets 30 s instead of 10.
 
 **Not covered by an automated test:** a machine reboot, a Docker Desktop
 restart, the `devstack://` link opened from a browser, an IDE terminal closing.

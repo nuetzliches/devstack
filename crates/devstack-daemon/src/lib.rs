@@ -2,6 +2,7 @@
 //! (ADR-0009), restarting cleanly (ADR-0016), controlled through one HTTP API
 //! (ADR-0007, ADR-0019).
 
+pub mod ansi;
 pub mod api;
 pub mod commands;
 pub mod diag;

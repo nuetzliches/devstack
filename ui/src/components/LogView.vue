@@ -7,10 +7,12 @@ import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue
 import { api, type StreamState, type Subscription } from '@/api';
 import type { LogStreamEvent, RunLogEvent } from '@/api/types';
 import { shortBuild } from '@/lib/format';
+import { parseAnsi, stripAnsi, type AnsiSeg } from '@/lib/ansi';
 import Icon from './icons/Icon.vue';
 
 type Level = 'error' | 'warn' | 'debug' | 'info';
-type LogLine = { id: number; text: string; level: Level; marker?: 'instance' | 'reconnect' | 'end-ok' | 'end-fail' };
+/** `text` is what a terminal shows (search and levels use it); `segs` its colours, if it had any. */
+type LogLine = { id: number; text: string; segs?: AnsiSeg[] | null; level: Level; marker?: 'instance' | 'reconnect' | 'end-ok' | 'end-fail' };
 
 const props = withDefaults(
   defineProps<{
@@ -112,7 +114,10 @@ function connect(path: string | null) {
   if (!path) return;
   sub = api().subscribe<LogStreamEvent | RunLogEvent>(path, {
     onMessage(ev) {
-      if (ev.type === 'line') push({ text: ev.text, level: level(ev.text) });
+      if (ev.type === 'line') {
+        const text = stripAnsi(ev.text);
+        push({ text, segs: parseAnsi(ev.text), level: level(text) });
+      }
       else if (ev.type === 'instance') push({ text: `New instance took over · build ${shortBuild(ev.build_id)}`, level: 'info', marker: 'instance' });
       else if (ev.type === 'end') {
         ended.value = true;
@@ -265,6 +270,7 @@ defineExpose({ clear });
           <div v-if="l.marker" class="marker" :class="l.marker" data-testid="log-marker">
             <span>{{ l.text }}</span>
           </div>
+          <div v-else-if="l.segs" class="line" :class="[l.level, { flash: flashId === l.id }]" :data-line="l.id"><span v-for="(s, k) in l.segs" :key="k" :class="s.cls" :style="s.style"><template v-for="(p, i) in parts(s.text)" :key="i"><mark v-if="p.m">{{ p.t }}</mark><template v-else>{{ p.t }}</template></template></span></div>
           <div v-else class="line" :class="[l.level, { flash: flashId === l.id }]" :data-line="l.id"><template v-for="(p, i) in parts(l.text)" :key="i"><mark v-if="p.m">{{ p.t }}</mark><template v-else>{{ p.t }}</template></template></div>
         </template>
       </div>
@@ -350,6 +356,37 @@ defineExpose({ clear });
 .log-scroll:focus-visible {
   box-shadow: inset var(--focus);
   border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+.logview {
+  /* terminal colours (SGR 30-37, 90-97), readable on the log's dark and light background */
+  --ansi-0: #4a525b;
+  --ansi-1: #d1453b;
+  --ansi-2: #3f9a45;
+  --ansi-3: #b7841c;
+  --ansi-4: #3b82d6;
+  --ansi-5: #9a62d8;
+  --ansi-6: #1d9fa8;
+  --ansi-7: #8c959f;
+  --ansi-8: #768390;
+  --ansi-9: #ef6a5f;
+  --ansi-10: #5cb85f;
+  --ansi-11: #d4a72c;
+  --ansi-12: #5ea2f0;
+  --ansi-13: #c08bf0;
+  --ansi-14: #39c5cf;
+  --ansi-15: #c9d1d9;
+}
+.ansi-bold {
+  font-weight: 700;
+}
+.ansi-dim {
+  opacity: 0.65;
+}
+.ansi-italic {
+  font-style: italic;
+}
+.ansi-underline {
+  text-decoration: underline;
 }
 .line {
   padding: 0 12px;

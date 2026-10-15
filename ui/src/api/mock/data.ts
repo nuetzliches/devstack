@@ -238,6 +238,8 @@ export function logLine(service: string, kind: string): string {
   const r = Math.random();
   if (kind === 'devserver') {
     if (r < 0.08) return `${ts()} [vite] warning: "./legacy/format.ts" is imported by both a dynamic and a static import`;
+    // A dev server colours its output for a terminal (rendered by the log view).
+    if (r < 0.2) return `\u001b[33m▲ \u001b[43;33m[\u001b[43;30mWARNING\u001b[43;33m]\u001b[0m \u001b[1mNG8113: NeoButtonComponent is not used within the template\u001b[0m \u001b[1m\u001b[35m[plugin angular-compiler]\u001b[0m`;
     if (r < 0.5) return `${ts()} [vite] hmr update /src/components/${pick(['Cart', 'ProductCard', 'Header', 'Checkout'])}.vue`;
     return `${ts()} [vite] page reload src/${pick(['main.ts', 'router.ts', 'App.vue'])}`;
   }

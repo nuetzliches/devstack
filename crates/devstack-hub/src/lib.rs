@@ -1167,14 +1167,20 @@ pub fn ensure_running() -> Result<u16, String> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     devstack_proc::spawn_detached(&mut cmd).map_err(|e| format!("start the hub: {e}"))?;
+    // The first start of a freshly installed binary can take a while (a virus
+    // scanner reads it first): 15 s were measured on Windows after an update.
+    const WAIT: Duration = Duration::from_secs(30);
     let t0 = Instant::now();
-    while t0.elapsed() < Duration::from_secs(10) {
+    while t0.elapsed() < WAIT {
         if answers(port) {
             return Ok(port);
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    Err(format!("the hub did not answer on port {port} within 10 s"))
+    Err(format!(
+        "the hub did not answer on port {port} within {} s",
+        WAIT.as_secs()
+    ))
 }
 
 /// Is a hub (or anything) answering on `port`?

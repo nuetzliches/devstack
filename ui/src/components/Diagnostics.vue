@@ -2,6 +2,7 @@
 // Compiler output, readable: file(line,col) / file:line:col emphasised,
 // "error" and "warning" coloured. Works for MSBuild/C#, tsc, rustc-style and
 // eslint-style lines; anything else is shown as plain text.
+import { stripAnsi } from '@/lib/ansi';
 import { computed } from 'vue';
 
 const props = defineProps<{ text: string; maxHeight?: string }>();
@@ -18,7 +19,7 @@ const rustHead = /^(\s*)(error|warning)(\[[A-Z]\d+\])?:\s*(.*)$/i;
 const rustLoc = /^(\s*-->\s*)(.+?):(\d+):(\d+)(.*)$/;
 
 const lines = computed<Line[]>(() =>
-  props.text.split(/\r?\n/).map((raw) => {
+  stripAnsi(props.text).split(/\r?\n/).map((raw) => {
     let m = msbuild.exec(raw) ?? colon.exec(raw);
     if (m) {
       const [, ws, file, line, col, sev, code, msg] = m;

@@ -396,7 +396,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 return Ok(if text.is_empty() {
                     format!("no service log contains `{g}`")
                 } else {
-                    text
+                    devstack_daemon::ansi::strip(&text).into_owned()
                 });
             }
             let svc = name_arg(args, "service")?;
@@ -404,7 +404,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             Ok(if text.is_empty() {
                 format!("`{svc}` has written nothing yet (or nothing matching)")
             } else {
-                text
+                devstack_daemon::ansi::strip(&text).into_owned()
             })
         }
         "lanes" => {

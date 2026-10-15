@@ -588,7 +588,7 @@ pub fn logs_grep(stack_file: &Path, service: Option<&str>, grep: &str, tail: usi
     if text.is_empty() {
         println!("no line contains `{grep}`");
     } else {
-        println!("{text}");
+        println!("{}", for_terminal(&text));
     }
     Ok(())
 }
@@ -635,7 +635,7 @@ pub fn logs_kept(stack_file: &Path, service: Option<&str>, f: LogFilter) -> Resu
     if text.is_empty() {
         println!("no kept log matches");
     } else {
-        println!("{text}");
+        println!("{}", for_terminal(&text));
     }
     Ok(())
 }
@@ -821,10 +821,21 @@ pub fn enc(s: &str) -> String {
         .collect()
 }
 
+/// Service output for this terminal: colour codes stay where a terminal shows
+/// them, and are dropped when the output goes to a file or a pipe.
+pub fn for_terminal(text: &str) -> std::borrow::Cow<'_, str> {
+    use std::io::IsTerminal;
+    if std::io::stdout().is_terminal() {
+        std::borrow::Cow::Borrowed(text)
+    } else {
+        devstack_daemon::ansi::strip(text)
+    }
+}
+
 pub fn logs(stack_file: &Path, name: &str, tail: usize, follow: bool) -> Result<()> {
     let c = need(&state_dir(stack_file)?)?;
     let mut shown = c.get(&format!("/v1/services/{name}/logs?tail={tail}"))?;
-    print!("{shown}");
+    print!("{}", for_terminal(&shown));
     if !shown.is_empty() {
         println!();
     }
@@ -835,9 +846,9 @@ pub fn logs(stack_file: &Path, name: &str, tail: usize, follow: bool) -> Result<
         std::thread::sleep(Duration::from_millis(700));
         let now = c.get(&format!("/v1/services/{name}/logs?tail=100000"))?;
         if now.len() > shown.len() && now.starts_with(&shown) {
-            print!("{}", &now[shown.len()..]);
+            print!("{}", for_terminal(&now[shown.len()..]));
         } else if now != shown && !shown.ends_with(&now) {
-            println!("{now}"); // a new instance started
+            println!("{}", for_terminal(&now)); // a new instance started
         }
         shown = now;
     }

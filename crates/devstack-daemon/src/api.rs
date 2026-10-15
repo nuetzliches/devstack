@@ -553,7 +553,12 @@ fn matching(path: &std::path::Path, n: usize, grep: Option<&str>) -> Vec<String>
     let mut lines: Vec<String> = text
         .lines()
         .rev()
-        .filter(|l| needle.as_ref().is_none_or(|g| l.to_lowercase().contains(g)))
+        // `grep` matches what a terminal shows, not the colour codes around it.
+        .filter(|l| {
+            needle
+                .as_ref()
+                .is_none_or(|g| crate::ansi::strip(l).to_lowercase().contains(g))
+        })
         .take(n)
         .map(str::to_string)
         .collect();
@@ -878,7 +883,11 @@ async fn container_logs(s: &AppState, group: String, service: String, q: &LogQue
             let mut lines: Vec<&str> = out
                 .lines()
                 .rev()
-                .filter(|l| needle.as_ref().is_none_or(|g| l.to_lowercase().contains(g)))
+                .filter(|l| {
+                    needle
+                        .as_ref()
+                        .is_none_or(|g| crate::ansi::strip(l).to_lowercase().contains(g))
+                })
                 .take(tail)
                 .collect();
             lines.reverse();
