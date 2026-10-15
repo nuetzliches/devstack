@@ -56,6 +56,9 @@ fn cgroup_root(stack: &str) -> Option<PathBuf> {
 
 /// Run the daemon in the foreground until it is told to shut down. Services
 /// are stopped on the way out; infrastructure stays up (ADR-0004).
+/// How long a stopping daemon waits for open requests before it stops anyway.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
 pub fn serve(stack_file: &Path) -> Result<(), String> {
     let stack = devstack_config::load(stack_file).map_err(|e| e.to_string())?;
     let abs = std::path::absolute(stack_file).map_err(|e| e.to_string())?;
@@ -130,16 +133,25 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
             port,
             shutdown: shutdown.clone(),
         });
+        let (stopping_tx, stopping_rx) = tokio::sync::oneshot::channel::<()>();
         let stop = async move {
             tokio::select! {
                 _ = shutdown.notified() => {}
                 _ = tokio::signal::ctrl_c() => {}
             }
+            let _ = stopping_tx.send(());
         };
-        let served = axum::serve(listener, app)
-            .with_graceful_shutdown(stop)
-            .await
-            .map_err(|e| e.to_string());
+        let serve = axum::serve(listener, app).with_graceful_shutdown(stop);
+        // A graceful shutdown waits for every open request, and event and log
+        // streams (dashboard, `logs --follow`) never end on their own: give them
+        // a moment, then stop anyway. Dropping the runtime closes them.
+        let served = tokio::select! {
+            r = serve => r.map_err(|e| e.to_string()),
+            _ = async {
+                let _ = stopping_rx.await;
+                tokio::time::sleep(SHUTDOWN_GRACE).await;
+            } => Ok(()),
+        };
         let s = sup.clone();
         let _ = tokio::task::spawn_blocking(move || s.down(false)).await;
         let _ = std::fs::remove_file(info_path(&state_dir));

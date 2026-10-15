@@ -40,7 +40,14 @@ dashboard do not fit that:
    the hub with the user's token and opens `/auth?code=…`, which sets an
    `HttpOnly; SameSite=Strict` cookie), mutating requests need the hub's own
    `Origin`, no CORS. The daemons keep their own token-only API; the browser
-   never talks to them directly.
+   never talks to them directly. A pairing outlives a hub restart (an update,
+   a new login): the hub keeps a hash of each session cookie in
+   `hub/hub-sessions.json` next to the token, never the cookie, for the
+   cookie's lifetime of a year. Deleting the file unpairs every browser.
+6. **Stopping does not wait for the dashboard.** Every open tab holds event
+   streams that never end on their own, and a graceful shutdown waits for open
+   requests. Hub and daemon give requests two seconds after a stop, then exit;
+   the dashboard sees the connection drop and shows the last known state.
 
 ADR-0018 stands otherwise: a browser page, no desktop wrapper, a tray later.
 The tray belongs to the hub, which is the long-lived process now.

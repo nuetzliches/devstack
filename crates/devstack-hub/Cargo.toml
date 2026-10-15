@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 axum.workspace = true
+blake3.workspace = true
 bytes.workspace = true
 devstack-daemon.workspace = true
 devstack-proc.workspace = true

@@ -85,7 +85,8 @@ pub struct StackEntry {
 struct AppState {
     port: u16,
     token: Arc<String>,
-    sessions: Arc<Mutex<HashMap<String, Instant>>>,
+    /// blake3 of each session cookie -> created (ms); persisted, see `Sessions`.
+    sessions: Arc<Mutex<Sessions>>,
     codes: Arc<Mutex<HashMap<String, Instant>>>,
     stacks: watch::Receiver<Vec<StackEntry>>,
     shutdown: Arc<tokio::sync::Notify>,
@@ -139,6 +140,57 @@ fn scan(last_seen: &mut HashMap<String, u128>) -> Vec<StackEntry> {
 
 /// Run the hub in the foreground until `POST /hub/shutdown` or Ctrl+C. A second
 /// hub on the same port exits at once (the first one serves).
+/// Paired browsers survive a hub restart (an update, a new login): the hub
+/// keeps a hash of each session cookie here, never the cookie itself. Deleting
+/// the file unpairs every browser.
+const SESSIONS_FILE: &str = "hub-sessions.json";
+/// A session lives as long as its cookie (`Max-Age`).
+const SESSION_LIFETIME_MS: u128 = 365 * 24 * 60 * 60 * 1000;
+
+struct Sessions {
+    path: PathBuf,
+    by_hash: HashMap<String, u128>,
+}
+
+impl Sessions {
+    fn load(path: PathBuf) -> Self {
+        let now = now_ms();
+        let by_hash: HashMap<String, u128> = std::fs::read(&path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        let by_hash = by_hash
+            .into_iter()
+            .filter(|(_, created)| now.saturating_sub(*created) < SESSION_LIFETIME_MS)
+            .collect();
+        Self { path, by_hash }
+    }
+
+    fn hash(cookie: &str) -> String {
+        blake3::hash(cookie.as_bytes()).to_hex().to_string()
+    }
+
+    fn contains(&self, cookie: &str) -> bool {
+        self.by_hash
+            .get(&Self::hash(cookie))
+            .is_some_and(|created| now_ms().saturating_sub(*created) < SESSION_LIFETIME_MS)
+    }
+
+    fn add(&mut self, cookie: &str) {
+        self.by_hash.insert(Self::hash(cookie), now_ms());
+        // Best effort: without the file, the session still works until the hub stops.
+        if let Ok(json) = serde_json::to_vec_pretty(&self.by_hash) {
+            let tmp = self.path.with_extension("json.tmp");
+            if std::fs::write(&tmp, json).is_ok() {
+                let _ = std::fs::rename(&tmp, &self.path);
+            }
+        }
+    }
+}
+
+/// How long a stopping hub waits for open requests before it exits anyway.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+
 pub fn serve() -> Result<(), String> {
     let port = port();
     let dir = state_dir();
@@ -187,7 +239,7 @@ pub fn serve() -> Result<(), String> {
         let state = AppState {
             port,
             token: Arc::new(token),
-            sessions: Arc::new(Mutex::new(HashMap::new())),
+            sessions: Arc::new(Mutex::new(Sessions::load(dir.join(SESSIONS_FILE)))),
             codes: Arc::new(Mutex::new(HashMap::new())),
             stacks: rx,
             shutdown: shutdown.clone(),
@@ -202,11 +254,19 @@ pub fn serve() -> Result<(), String> {
                     .await;
             });
         }
+        let hub_json = dir.join("hub.json");
         let stop = async move {
             tokio::select! {
                 _ = shutdown.notified() => {}
                 _ = tokio::signal::ctrl_c() => {}
             }
+            // Open streams (every dashboard tab holds one) never end on their own,
+            // and a graceful shutdown waits for them. Give requests a moment, then go.
+            std::thread::spawn(move || {
+                std::thread::sleep(SHUTDOWN_GRACE);
+                let _ = std::fs::remove_file(hub_json);
+                std::process::exit(0);
+            });
         };
         let served = axum::serve(v4, app)
             .with_graceful_shutdown(stop)
@@ -287,7 +347,7 @@ async fn guard(State(s): State<AppState>, req: Request, next: Next) -> Response 
         return next.run(req).await;
     }
     if path.starts_with("/hub/") {
-        let ok = cookie_session(h).is_some_and(|c| s.sessions.lock().unwrap().contains_key(&c))
+        let ok = cookie_session(h).is_some_and(|c| s.sessions.lock().unwrap().contains(&c))
             || bearer_ok(h, &s.token);
         if !ok {
             return err(StatusCode::UNAUTHORIZED, "not paired: run `devstack ui`");
@@ -326,10 +386,7 @@ async fn auth(State(s): State<AppState>, Query(q): Query<CodeQuery>) -> Response
             .into_response();
     }
     let id = random_hex();
-    s.sessions
-        .lock()
-        .unwrap()
-        .insert(id.clone(), Instant::now());
+    s.sessions.lock().unwrap().add(&id);
     let cookie = format!("{COOKIE}={id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000");
     (
         StatusCode::SEE_OTHER,

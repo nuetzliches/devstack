@@ -31,8 +31,10 @@ fn free_port() -> u16 {
 }
 
 fn start() -> Hub {
-    let home = tempfile::tempdir().unwrap();
-    let port = free_port();
+    start_in(tempfile::tempdir().unwrap(), free_port())
+}
+
+fn start_in(home: tempfile::TempDir, port: u16) -> Hub {
     let child = Command::new(BIN)
         .arg("hub")
         .env("DEVSTACK_HUB_PORT", port.to_string())
@@ -213,5 +215,66 @@ fn pairing_cookie_and_checks() {
     assert!(
         line.contains("\"type\":\"stacks\"") && line.contains("shop"),
         "{line}"
+    );
+}
+
+/// The cookie from a fresh pairing (`name=value`).
+fn paired_cookie(h: &Hub) -> String {
+    let code = pair(h);
+    let (_, head, _) = get(h.port, &format!("/auth?code={code}"), "");
+    head.lines()
+        .find_map(|l| l.strip_prefix("set-cookie: "))
+        .expect("a cookie")
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn stops_with_an_open_stream_and_keeps_the_pairing() {
+    let mut h = start();
+    let p = h.port;
+    let with = format!("Cookie: {}\r\n", paired_cookie(&h));
+
+    // A dashboard tab holds the stack stream open.
+    let mut st = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+    write!(
+        st,
+        "GET /hub/events HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\n{with}\r\n"
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+
+    let (s, _, _) = http(
+        p,
+        &format!(
+            "POST /hub/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\nAuthorization: Bearer {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            token(&h)
+        ),
+    );
+    assert_eq!(s, 202);
+    let t0 = Instant::now();
+    while h.child.try_wait().unwrap().is_none() {
+        assert!(
+            t0.elapsed() < Duration::from_secs(10),
+            "the open stream kept the hub alive"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    drop(st);
+
+    // Same profile, new process: the browser is still paired.
+    let home = std::mem::replace(&mut h.home, tempfile::tempdir().unwrap());
+    let h2 = start_in(home, p);
+    let (s, _, body) = get(p, "/hub/session", &with);
+    assert_eq!(s, 200, "{body}");
+    let (s, _, _) = get(p, "/hub/session", "Cookie: devstack_hub=forged\r\n");
+    assert_eq!(s, 401);
+    let stored =
+        std::fs::read_to_string(h2.home.path().join("devstack/hub/hub-sessions.json")).unwrap();
+    assert!(
+        !stored.contains(with.trim_start_matches("Cookie: devstack_hub=").trim()),
+        "cookie stored in clear"
     );
 }

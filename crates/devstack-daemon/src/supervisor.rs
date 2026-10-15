@@ -1155,6 +1155,8 @@ The running instance was left as it was."
         let slot = slots.get_mut(name).unwrap();
         slot.generation += 1;
         slot.view.pid = Some(inst.tree.root_pid());
+        // A new instance is a new "since", even when the status stays healthy.
+        slot.view.since = now_ms();
         slot.view.log = Some(inst.log.clone());
         slot.view.build_id = inst.build_id.clone();
         slot.view.instance_port = inst.port;

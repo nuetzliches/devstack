@@ -361,6 +361,7 @@ name = "devstack-hub"
 version = "0.2.0"
 dependencies = [
  "axum",
+ "blake3",
  "bytes",
  "devstack-daemon",
  "devstack-proc",

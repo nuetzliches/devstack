@@ -393,8 +393,10 @@ mod tests {
         assert_eq!(names.len(), tools.len());
         for t in &tools {
             assert_eq!(t["inputSchema"]["type"], "object", "{t}");
+            // Daemon tools name their endpoint; the hub tools are local checks.
+            let local = t["name"].as_str().unwrap().starts_with("hub_");
             assert!(
-                t["description"].as_str().unwrap().contains("/v1/"),
+                local || t["description"].as_str().unwrap().contains("/v1/"),
                 "names its endpoint: {t}"
             );
         }

@@ -18,7 +18,7 @@ Origin `http://127.0.0.1:4250` (or `localhost:4250`).
 | Method and path | Auth | Answer |
 |---|---|---|
 | `GET /`, `/assets/*`, `/manifest.webmanifest`, `/sw.js` | none | the app shell (works offline once cached) |
-| `GET /auth?code=<code>` | none | sets the session cookie, redirects to `/` |
+| `GET /auth?code=<code>` | none | sets the session cookie (one year, survives a hub restart), redirects to `/` |
 | `GET /hub/session` | cookie | `200 {"version": "0.2.0"}`, or `401` (not paired: show "run `devstack ui`") |
 | `GET /hub/stacks` | cookie | `[StackEntry]` |
 | `GET /hub/events` | cookie | SSE: `{"type":"stacks","stacks":[StackEntry]}` first and on every change |
