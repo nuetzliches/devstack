@@ -93,6 +93,14 @@ src/
 Theme: follows `prefers-color-scheme`; the top-bar button cycles system, light
 and dark (stored in `localStorage`).
 
+## Conventions
+
+- **Every table is sortable by its column headers.** Use `useSort`
+  (`src/lib/sort.ts`) for the rows and `<SortTh>` for each header: a click
+  sorts (numbers largest first, text A to Z), a second turns the order round,
+  a third returns to the table's own order; the choice is remembered per
+  table in the browser. A column of sparklines sorts by its peak.
+
 ## Test hooks
 
 Key elements carry `data-testid` for Playwright: `stack-switcher`,

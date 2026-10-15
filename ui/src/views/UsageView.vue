@@ -2,8 +2,10 @@
 import { computed, ref } from 'vue';
 import type { LaneDisk } from '@/api/types';
 import { bytes, percent } from '@/lib/format';
+import { useSort } from '@/lib/sort';
 import { useStack } from '@/stores/stack';
 import Sparkline from '@/components/Sparkline.vue';
+import SortTh from '@/components/SortTh.vue';
 import Icon from '@/components/icons/Icon.vue';
 
 const stack = useStack();
@@ -27,7 +29,23 @@ const rows = computed<Row[]>(() => {
   }
   return out;
 });
-const shown = computed(() => (filter.value === 'all' ? rows.value : rows.value.filter((r) => r.kind === filter.value)));
+const filtered = computed(() => (filter.value === 'all' ? rows.value : rows.value.filter((r) => r.kind === filter.value)));
+// The sparkline columns sort by the peak of the last 10 minutes.
+const peak = (xs: number[]) => (xs.length ? Math.max(...xs) : null);
+const sort = useSort(
+  filtered,
+  {
+    name: (r) => r.name,
+    kind: (r) => kindLabel[r.kind],
+    cpu: (r) => r.cpu,
+    cpuPeak: (r) => peak(cpuSeries(r.key)),
+    memory: (r) => r.memory,
+    memoryPeak: (r) => peak(memSeries(r.key)),
+    processes: (r) => r.processes,
+  },
+  { id: 'usage' },
+);
+const shown = sort.sorted;
 
 function cpuSeries(key: string) {
   return (stack.history.get(key) ?? []).map((p) => p.cpu);
@@ -119,13 +137,13 @@ const filters: { v: 'all' | Kind; label: string }[] = [
           <table class="table" data-testid="usage-table">
             <thead>
               <tr>
-                <th>Name</th>
-                <th class="hide-sm">Type</th>
-                <th class="num">CPU</th>
-                <th class="hide-md">Last 10 min</th>
-                <th class="num">Memory</th>
-                <th class="hide-md">Last 10 min</th>
-                <th class="num hide-sm">Procs</th>
+                <SortTh label="Name" :dir="sort.dirOf('name')" @toggle="sort.toggle('name')" />
+                <SortTh label="Type" class="hide-sm" :dir="sort.dirOf('kind')" @toggle="sort.toggle('kind')" />
+                <SortTh label="CPU" class="num" :dir="sort.dirOf('cpu')" @toggle="sort.toggle('cpu')" />
+                <SortTh label="Last 10 min" class="hide-md" :dir="sort.dirOf('cpuPeak')" @toggle="sort.toggle('cpuPeak')" />
+                <SortTh label="Memory" class="num" :dir="sort.dirOf('memory')" @toggle="sort.toggle('memory')" />
+                <SortTh label="Last 10 min" class="hide-md" :dir="sort.dirOf('memoryPeak')" @toggle="sort.toggle('memoryPeak')" />
+                <SortTh label="Procs" class="num hide-sm" :dir="sort.dirOf('processes')" @toggle="sort.toggle('processes')" />
               </tr>
             </thead>
             <tbody>

@@ -3,11 +3,13 @@ import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { paths, v1 } from '@/api';
 import type { Run } from '@/api/types';
+import { useSort } from '@/lib/sort';
 import { ago, clock, duration, useNow } from '@/lib/format';
 import { containerLook, statusLook, type StatusLook } from '@/lib/status';
 import { useStack } from '@/stores/stack';
 import LogView from '@/components/LogView.vue';
 import StatusPill from '@/components/StatusPill.vue';
+import SortTh from '@/components/SortTh.vue';
 import Icon from '@/components/icons/Icon.vue';
 
 const route = useRoute();
@@ -20,6 +22,17 @@ const commands = computed(() => stack.view?.commands ?? []);
 const selectedName = computed(() => (route.query.cmd as string | undefined) ?? commands.value[0]?.name ?? null);
 const selected = computed(() => commands.value.find((c) => c.name === selectedName.value) ?? null);
 const runs = computed<Run[]>(() => (selectedName.value ? (stack.runs[selectedName.value] ?? []) : []));
+const runSort = useSort(
+  runs,
+  {
+    id: (r) => r.id,
+    status: (r) => r.status,
+    started: (r) => r.started,
+    duration: (r) => (r.finished ?? now.value) - r.started,
+    error: (r) => r.error,
+  },
+  { id: 'command-runs' },
+);
 const runId = computed(() => (route.query.run ? Number(route.query.run) : (runs.value[0]?.id ?? null)));
 const activeRun = computed(() => runs.value.find((r) => r.id === runId.value) ?? null);
 const runLogPath = computed(() => (stack.id && stack.running && runId.value !== null ? paths.api(stack.id, v1.runLogStream(runId.value)) : null));
@@ -143,15 +156,15 @@ function runTone(r: Run) {
             <table class="table" data-testid="runs-table">
               <thead>
                 <tr>
-                  <th>Run</th>
-                  <th>Status</th>
-                  <th>Started</th>
-                  <th class="num">Duration</th>
-                  <th class="hide-sm">Error</th>
+                  <SortTh label="Run" :dir="runSort.dirOf('id')" @toggle="runSort.toggle('id')" />
+                  <SortTh label="Status" :dir="runSort.dirOf('status')" @toggle="runSort.toggle('status')" />
+                  <SortTh label="Started" :dir="runSort.dirOf('started')" @toggle="runSort.toggle('started')" />
+                  <SortTh label="Duration" class="num" :dir="runSort.dirOf('duration')" @toggle="runSort.toggle('duration')" />
+                  <SortTh label="Error" class="hide-sm" :dir="runSort.dirOf('error')" @toggle="runSort.toggle('error')" />
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="r in runs" :key="r.id" class="run-row" :class="{ sel: r.id === runId }" tabindex="0" @click="openRun(r.id)" @keydown.enter="openRun(r.id)">
+                <tr v-for="r in runSort.sorted.value" :key="r.id" class="run-row" :class="{ sel: r.id === runId }" tabindex="0" @click="openRun(r.id)" @keydown.enter="openRun(r.id)">
                   <td class="mono">#{{ r.id }}</td>
                   <td><StatusPill :tone="runTone(r)" :label="r.status" :busy="r.status === 'running'" size="sm" /></td>
                   <td class="nowrap" :title="new Date(r.started).toLocaleString()">{{ clock(r.started) }} <span class="faint">· {{ ago(r.started, now) }}</span></td>
