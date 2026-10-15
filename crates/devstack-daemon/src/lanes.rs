@@ -3,13 +3,18 @@
 //! main working tree, inside the same daemon.
 //!
 //! **The lanes are the repository's worktrees.** `git worktree list` is the
-//! source of truth: a worktree added with `git worktree add` (or
-//! `devstack lane add`) is a lane at once, not started; one removed with
-//! `git worktree remove` is gone, its state with it. `.devstack/lanes.json`
-//! only remembers each lane's number, so its ports stay the same.
+//! source of truth, and git (or whatever tool the developer uses) creates and
+//! removes worktrees; devstack never does. A worktree added is a lane at once,
+//! not started; one removed is gone, its state with it. The daemon follows
+//! `<git common dir>/worktrees` and tells the clients right away (a `lanes`
+//! event). `.devstack/lanes.json` only remembers each lane's number, so its
+//! ports stay the same.
 //!
-//! A started lane is a [`Supervisor`] of its own: its source root is the
-//! worktree, its state lives in `.devstack/lane-<name>/` (snapshot, logs), and
+//! A started lane is a [`Supervisor`] of its own: its source is the worktree,
+//! but nothing runs there. Builds run in its snapshot, and so do its dev
+//! servers and tools, which the snapshot follows within moments of a change
+//! (ADR-0024): the worktree stays free for git to remove at any time. Its
+//! state lives in `.devstack/lane-<name>/` (snapshot, logs), and
 //! every service port is moved by `port_step` times the lane's number, so a
 //! lane's proxies, candidates and dev servers do not meet the main lane's.
 //! The infrastructure is the main lane's: a lane reads its published ports,
@@ -198,6 +203,24 @@ fn worktrees(repo: &Path) -> Option<Vec<Worktree>> {
     )
 }
 
+/// What changes in `<git common dir>/worktrees` when a worktree is added or
+/// removed or checks out another branch: its entries and their `HEAD`s.
+fn fingerprint(dir: &Path) -> Vec<(std::ffi::OsString, Option<std::time::SystemTime>)> {
+    let mut out: Vec<_> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| {
+            let head = std::fs::metadata(e.path().join("HEAD"))
+                .and_then(|m| m.modified())
+                .ok();
+            (e.file_name(), head)
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 impl Lanes {
     fn file(&self) -> PathBuf {
         self.root_state.join("lanes.json")
@@ -274,6 +297,7 @@ impl Lanes {
         me.main.set_lane_pins(Box::new(move |service| {
             weak.upgrade().map(|l| l.pins(service)).unwrap_or_default()
         }));
+        me.follow();
         me
     }
 
@@ -289,6 +313,7 @@ impl Lanes {
             .filter(|w| !same_tree(&w.path, &self.main.repo))
             .collect();
         let gone: Vec<String>;
+        let changed;
         {
             let mut known = self.known.lock().unwrap();
             let before = known.len();
@@ -298,12 +323,16 @@ impl Lanes {
                 .map(|(n, _)| n.clone())
                 .collect();
             let mut added = false;
+            let mut moved = false;
             for w in &trees {
                 if let Some(k) = known
                     .values_mut()
                     .find(|k| same_tree(&k.entry.path, &w.path))
                 {
-                    k.branch = w.branch.clone();
+                    if k.branch != w.branch {
+                        k.branch = w.branch.clone();
+                        moved = true;
+                    }
                     continue;
                 }
                 let base = lane_name(
@@ -351,10 +380,60 @@ impl Lanes {
             if added || before != known.len() {
                 self.save(&known);
             }
+            changed = added || moved;
         }
-        for name in gone {
-            self.forget(&name, "its worktree is gone");
+        for name in &gone {
+            self.forget(name, "its worktree is gone");
         }
+        if changed {
+            self.announce();
+        }
+    }
+
+    /// Tell every client what the lanes are now (a `lanes` event): the main
+    /// tree's and those of each started lane, whichever the dashboard shows.
+    fn announce(&self) {
+        let lanes = self.views();
+        let started: Vec<Arc<Lane>> = self.map.lock().unwrap().values().cloned().collect();
+        for sup in std::iter::once(&self.main).chain(started.iter().map(|l| &l.sup)) {
+            sup.emit(crate::state::EventBody::Lanes {
+                lanes: lanes.clone(),
+            });
+        }
+    }
+
+    /// Follow the repository's worktrees while the daemon runs: git keeps one
+    /// directory per linked worktree under `<git common dir>/worktrees`, with
+    /// its `HEAD`. A change there (a worktree added or removed, a branch
+    /// checked out) is a [`Self::sync`] within a second; reading the
+    /// directory is all devstack does. A full sync every half minute catches
+    /// a worktree deleted without git.
+    pub fn follow(self: &Arc<Self>) {
+        let Ok(common) = git(&self.main.repo, &["rev-parse", "--git-common-dir"]) else {
+            return;
+        };
+        let common = self.main.repo.join(common.trim());
+        let dir = common.join("worktrees");
+        let weak = Arc::downgrade(self);
+        let _ = std::thread::Builder::new()
+            .name("lanes-follow".into())
+            .spawn(move || {
+                let mut last = fingerprint(&dir);
+                let mut since = std::time::Instant::now();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    let Some(me) = weak.upgrade() else { return };
+                    if me.main.closed() {
+                        return;
+                    }
+                    let now = fingerprint(&dir);
+                    if now != last || since.elapsed() >= std::time::Duration::from_secs(30) {
+                        last = now;
+                        since = std::time::Instant::now();
+                        me.sync();
+                    }
+                }
+            });
     }
 
     /// The first lane number whose port range collides with nothing: the main
@@ -403,6 +482,7 @@ impl Lanes {
             "lane_removed",
             serde_json::json!({ "lane": name, "why": why }),
         );
+        self.announce();
     }
 
     fn open(&self, entry: &LaneEntry) -> Result<Arc<Lane>, String> {
@@ -487,6 +567,11 @@ impl Lanes {
 
     pub fn list(&self) -> Vec<LaneView> {
         self.sync();
+        self.views()
+    }
+
+    /// The lanes as they are known now, without asking git.
+    fn views(&self) -> Vec<LaneView> {
         let map = self.map.lock().unwrap();
         let services = self.main.stack.services.len();
         self.known
@@ -535,7 +620,7 @@ impl Lanes {
             .map(|k| k.entry.clone())
             .ok_or_else(|| {
                 format!(
-                    "{} is no worktree of {} (`devstack lane add <name>` creates one)",
+                    "{} is no worktree of {} (`git worktree add` makes one)",
                     path.display(),
                     self.main.repo.display()
                 )
@@ -579,114 +664,28 @@ impl Lanes {
             Ok(lane)
         })();
         self.pending.lock().unwrap().remove(&name);
+        if result.is_ok() {
+            self.announce();
+        }
         result
     }
 
-    /// `devstack lane add`: a new worktree beside the main one
-    /// (`<repo>-<name>` unless `path` is given) on `branch` (default: the
-    /// lane's name; created from `from`, else the main tree's HEAD, when it
-    /// does not exist). It is a lane at once, not started.
-    pub fn create(
-        &self,
-        name: &str,
-        branch: Option<&str>,
-        path: Option<&Path>,
-        from: Option<&str>,
-    ) -> Result<LaneView, String> {
-        let lane = lane_name(name);
-        if lane.is_empty() || lane == "main" {
-            return Err(format!("`{name}` cannot name a lane"));
-        }
-        self.sync();
-        if self.known.lock().unwrap().contains_key(&lane) {
-            return Err(format!("a lane `{lane}` exists already"));
-        }
-        let repo = &self.main.repo;
-        let path = match path {
-            Some(p) if p.is_absolute() => p.to_path_buf(),
-            Some(p) => repo.join(p),
-            None => {
-                let dir = repo
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "repo".into());
-                repo.parent().unwrap_or(repo).join(format!("{dir}-{lane}"))
-            }
-        };
-        if path.exists() {
-            return Err(format!("{} exists already", path.display()));
-        }
-        let branch = branch.unwrap_or(&lane);
-        let p = path.to_string_lossy().into_owned();
-        let exists = git(
-            repo,
-            &[
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                &format!("refs/heads/{branch}"),
-            ],
-        )
-        .is_ok();
-        let mut args = vec!["worktree", "add"];
-        if exists {
-            args.extend([p.as_str(), branch]);
-        } else {
-            args.extend(["-b", branch, p.as_str()]);
-            args.extend(from);
-        }
-        git(repo, &args).map_err(|e| format!("git worktree add: {e}"))?;
-        self.sync();
-        // The directory's name gives the lane its name; a different one is
-        // renamed to what was asked for.
-        {
-            let mut known = self.known.lock().unwrap();
-            if let Some(found) = known
-                .values()
-                .find(|k| same_tree(&k.entry.path, &path))
-                .map(|k| k.entry.name.clone())
-                && found != lane
-                && let Some(mut k) = known.remove(&found)
-            {
-                k.entry.name = lane.clone();
-                known.insert(lane.clone(), k);
-                self.save(&known);
-            }
-        }
-        self.list()
-            .into_iter()
-            .find(|v| v.name == lane)
-            .ok_or_else(|| format!("{} was created but git does not list it", path.display()))
-    }
-
-    /// Stop a lane and remove its worktree (`git worktree remove`, which
-    /// refuses a worktree with changes that are not committed); its state
-    /// goes with it. With `keep_worktree` only the state goes: the worktree
-    /// stays a lane, not started.
-    pub fn remove(&self, name: &str, keep_worktree: bool) -> Result<(), String> {
-        let lane = self.get(name).ok();
-        let path = match self.known.lock().unwrap().get(name) {
-            Some(k) => k.entry.path.clone(),
-            None => return Err(format!("no lane `{name}` (see `devstack lane list`)")),
-        };
-        if lane.as_ref().is_some_and(|l| l.sup.owns_main()) {
+    /// `devstack lane stop`: the lane's services stop and it is no longer
+    /// started; its snapshot and builds stay for the next start. The worktree
+    /// is git's business and stays as it is.
+    pub fn stop(&self, name: &str) -> Result<(), String> {
+        let lane = self.started(name)?;
+        if lane.sup.owns_main() {
             return Err(format!(
                 "lane `{name}` serves the main slot: `devstack promote --lane main` first"
             ));
         }
+        lane.sup.down(false);
         if let Some(l) = self.map.lock().unwrap().remove(name) {
             l.sup.close();
         }
-        drop(lane);
-        if keep_worktree {
-            let _ = std::fs::remove_dir_all(self.state_dir(name));
-            crate::diag::info("lane_reset", serde_json::json!({ "lane": name }));
-            return Ok(());
-        }
-        let p = path.to_string_lossy().into_owned();
-        git(&self.main.repo, &["worktree", "remove", &p])
-            .map_err(|e| format!("lane `{name}` is stopped, but git kept its worktree: {e}"))?;
-        self.forget(name, "removed");
+        crate::diag::info("lane_stopped", serde_json::json!({ "lane": name }));
+        self.announce();
         Ok(())
     }
 
@@ -810,6 +809,7 @@ impl Lanes {
             }
         }
         crate::diag::info("main_slot", serde_json::json!({ "lane": t }));
+        self.announce();
         if failed.is_empty() {
             Ok(())
         } else {
@@ -854,6 +854,7 @@ impl Lanes {
         }
         ho.stopped.clear();
         crate::diag::info("main_slot", serde_json::json!({ "lane": "main" }));
+        self.announce();
         if failed.is_empty() {
             Ok(())
         } else {

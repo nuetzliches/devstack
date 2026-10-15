@@ -766,9 +766,7 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
     let c = main_client(stack_file)?;
     let lanes: Vec<Value> = serde_json::from_str(&c.get("/v1/lanes")?)?;
     if lanes.is_empty() {
-        println!(
-            "no lanes: this repository has no other worktree (`devstack lane add <name>` creates one)"
-        );
+        println!("no lanes: this repository has no other worktree (`git worktree add` makes one)");
         return Ok(());
     }
     println!(
@@ -794,67 +792,13 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn lane_add(
-    stack_file: &Path,
-    name: &str,
-    branch: Option<&str>,
-    from: Option<&str>,
-    path: Option<&Path>,
-    up: bool,
-) -> Result<()> {
+pub fn lane_stop(stack_file: &Path, name: &str) -> Result<()> {
     let c = main_client(stack_file)?;
-    let dir = path.map(std::path::absolute).transpose()?;
-    let (status, body) = c.call_raw(
-        "POST",
-        "/v1/lanes",
-        Some(serde_json::json!({ "name": name, "branch": branch, "from": from, "dir": dir })),
-    )?;
+    let (status, body) = c.call_raw("POST", &format!("/v1/lanes/{name}/stop"), None)?;
     if status >= 400 {
         bail!("{}", error_text(&body));
     }
-    let v: Value = serde_json::from_str(&body)?;
-    let wt = PathBuf::from(v["path"].as_str().unwrap_or(""));
-    println!(
-        "lane `{}`: worktree {} on branch {}, ports +{}",
-        v["name"].as_str().unwrap_or(""),
-        wt.display(),
-        v["branch"].as_str().unwrap_or("(detached)"),
-        v["port_offset"],
-    );
-    if !up {
-        println!("`devstack up` in {} starts it", wt.display());
-        return Ok(());
-    }
-    // `up` as if run in the worktree, so it prints its progress as usual.
-    let file = wt.join(stack_file.file_name().unwrap_or("devstack.toml".as_ref()));
-    let status = std::process::Command::new(std::env::current_exe()?)
-        .arg("up")
-        .arg("-f")
-        .arg(&file)
-        .current_dir(&wt)
-        .status()?;
-    if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
-    }
-    Ok(())
-}
-
-pub fn lane_remove(stack_file: &Path, name: &str, keep_worktree: bool) -> Result<()> {
-    let c = main_client(stack_file)?;
-    let q = if keep_worktree {
-        "?keep_worktree=true"
-    } else {
-        ""
-    };
-    let (status, body) = c.call_raw("DELETE", &format!("/v1/lanes/{name}{q}"), None)?;
-    if status >= 400 {
-        bail!("{}", error_text(&body));
-    }
-    if keep_worktree {
-        println!("lane `{name}` stopped, its builds and logs deleted; the worktree stays");
-    } else {
-        println!("lane `{name}` stopped, its worktree removed (the branch stays)");
-    }
+    println!("lane `{name}` stopped; `devstack up` in its worktree starts it again");
     Ok(())
 }
 
@@ -976,9 +920,7 @@ pub fn down(stack_file: &Path, infra: bool) -> Result<()> {
         if status >= 400 {
             bail!("{}", error_text(&body));
         }
-        println!(
-            "lane `{lane}` stopped; `devstack lane remove {lane}` in the main tree forgets it"
-        );
+        println!("lane `{lane}` stopped");
         return Ok(());
     }
     let (status, body) = c.post(&format!("/v1/down?infra={infra}"), None)?;

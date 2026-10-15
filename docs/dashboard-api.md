@@ -102,6 +102,7 @@ type Event = { seq: number; at: number } & (
   | { type: "infra"; group: string; message: string }        // a container changed: fetch /v1/stack once
   | { type: "command"; command: string; run: number; status: "running" | "succeeded" | "failed" }
   | { type: "config"; changed: boolean }   // the stack file changed since start (true) or back (false)
+  | { type: "lanes"; lanes: LaneView[] }  // a worktree added or removed, a branch checked out, a lane started or stopped, the main ports moved
   | { type: "usage" } & UsageReport                           // every 2 s, without history
 );
 ```
@@ -137,8 +138,8 @@ type UsageReport = {
 | `POST /v1/infra/check` | probe every running container's published ports from this machine: `[{group, service, ports}]` that accept and close at once (Docker lost the port forward, or nothing listens inside); recorded as `ContainerView.unreachable`. A service with `after = ["compose.<group>.<service>"]` restarts such a container once before it starts |
 | `GET /v1/infra/{group}/{service}/logs?tail=200&grep=&since=` | text, a container's output (`docker compose logs`), stdout and stderr merged by Docker's timestamps, each line starting with one; `since` as Docker takes it (`30m`); `502` when Docker fails. `/v1/services/{name}/logs` answers the same for a name that is no service but exactly one Compose service |
 | `GET /v1/lanes` | JSON, the lanes: the repository's other worktrees ([ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md)), `[{name, path, branch, number, port_offset, active, owns_main, running, services}]`; `active`: started |
-| `POST /v1/lanes` | `{"path", "infra"?}`: start the lane of that worktree (what `devstack up` in it does; `infra` starts the shared infrastructure if needed), then `/v1/lanes/{lane}/v1/up` starts its services. `{"name", "branch"?, "from"?, "dir"?}`: create a worktree for a new lane (`git worktree add`), not started. `201` with its entry |
-| `DELETE /v1/lanes/{lane}[?keep_worktree=true]` | stop the lane and remove its worktree (`git worktree remove`; `409` when git refuses, e.g. changes not committed) and its state; with `keep_worktree` only its state; `409` while it serves the main ports |
+| `POST /v1/lanes` | `{"path", "infra"?}`: start the lane of that worktree (what `devstack up` in it does; `infra` starts the shared infrastructure if needed), then `/v1/lanes/{lane}/v1/up` starts its services. `201` with its entry. Worktrees are git's: there is no route that creates or removes one |
+| `POST /v1/lanes/{lane}/stop` | its services stop and it is no longer started (its builds stay); `409` while it serves the main ports. The lanes after it |
 | `POST /v1/lanes/{lane}/main` | that lane serves the main ports (`main`: the main tree again), workers move with them |
 | `/v1/lanes/{lane}/v1/...` | the lane's own API, every route of this table; `StackView` then carries `lane`, the main one `main_served_by` while a lane serves its ports |
 | `GET /v1/services/{name}/builds?limit=50` | JSON, the builds of the service newest first, read from the diagnostic log (so across daemon restarts): `[{build, started_ms, updated_ms, outcome, reason, current}]`; `outcome` is `live`, `failed`, `superseded` (a newer change replaced it before it went live), `held`, or the state it is in now |

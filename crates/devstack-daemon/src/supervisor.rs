@@ -77,6 +77,8 @@ pub struct Supervisor {
     held: Mutex<BTreeMap<String, (String, PathBuf)>>,
     /// Debounced restarts (dev servers, containers): last change, worker running.
     quiet: Mutex<BTreeMap<String, (Instant, bool)>>,
+    /// One `prepare` at a time: two in the same directory would collide.
+    preparing: Mutex<()>,
     /// The stack file this daemon runs from, and a hash of what it read at start.
     /// The daemon does not reload it: a change waits for the next start, and the
     /// status says so instead of keeping quiet.
@@ -109,7 +111,11 @@ pub(crate) type LanePins = Box<dyn Fn(&str) -> Vec<String> + Send + Sync>;
 /// the clients see it, as a warning when something failed. Snapshots and load
 /// samples stay out (no decision in them, and they would drown the rest).
 fn record(body: &EventBody, lane: &str) {
-    if matches!(body, EventBody::Snapshot { .. } | EventBody::Usage(_)) {
+    // Lanes have log lines of their own (`lane_found`, `lane_started`, ...).
+    if matches!(
+        body,
+        EventBody::Snapshot { .. } | EventBody::Usage(_) | EventBody::Lanes { .. }
+    ) {
         return;
     }
     let Ok(serde_json::Value::Object(mut v)) = serde_json::to_value(body) else {
@@ -270,6 +276,7 @@ impl Supervisor {
             changes: Mutex::new(BTreeMap::new()),
             held: Mutex::new(BTreeMap::new()),
             quiet: Mutex::new(BTreeMap::new()),
+            preparing: Mutex::new(()),
             stack_file_hash: stack_file_hash(&stack_file),
             stack_file,
             config_changed: std::sync::atomic::AtomicBool::new(false),
@@ -438,6 +445,139 @@ impl Supervisor {
     /// Where the kept logs of `name` are (plan §11).
     pub fn log_dir(&self, name: &str) -> PathBuf {
         self.state_dir.join("logs").join(name)
+    }
+
+    /// A lane runs from a copy of its worktree, never from the worktree itself
+    /// (ADR-0024): git and the tools that manage worktrees can remove one at
+    /// any time, and a process inside it would hold it open (Windows).
+    fn runs_from_copy(&self) -> bool {
+        !self.lane.is_empty()
+    }
+
+    /// Where processes without an artifact run and what `{repo}` means for
+    /// them: the main tree itself, or a lane's snapshot.
+    pub fn run_root(&self) -> PathBuf {
+        if self.runs_from_copy() {
+            self.layout.lane("main").join("src")
+        } else {
+            self.repo.clone()
+        }
+    }
+
+    /// What `prepare` of `svc` would run in `snap`; `None` when it ran for the
+    /// same command and inputs already.
+    fn prepare_job(
+        &self,
+        name: &str,
+        svc: &Service,
+        snap: &Snapshot,
+    ) -> Result<Option<PrepareJob>, String> {
+        let Some(p) = &svc.prepare else {
+            return Ok(None);
+        };
+        let cwd = p.cwd.as_ref().or(svc.cwd.as_ref());
+        let mut h = blake3::Hasher::new();
+        h.update(p.run.as_bytes());
+        h.update(cwd.map_or("", String::as_str).as_bytes());
+        if let Some(g) = devstack_build::watch_set(&p.inputs).map_err(|e| e.to_string())? {
+            for (rel, e) in snap
+                .manifest
+                .files
+                .iter()
+                .filter(|(r, _)| g.is_match(r.as_str()))
+            {
+                h.update(rel.as_bytes());
+                h.update(e.hash.as_bytes());
+            }
+        }
+        let key = h.finalize().to_hex().to_string();
+        let mark = self.layout.lane("main").join("prepared").join(name);
+        if std::fs::read_to_string(&mark).is_ok_and(|k| k == key) {
+            return Ok(None);
+        }
+        Ok(Some(PrepareJob {
+            key,
+            mark,
+            cwd: cwd.map_or_else(|| snap.dir.clone(), |c| snap.dir.join(c)),
+            run: p.run.clone(),
+        }))
+    }
+
+    /// Run a `prepare` to completion; its output goes to a log of its own.
+    fn run_prepare(&self, name: &str, job: PrepareJob) -> Result<(), String> {
+        let _one = self.preparing.lock().unwrap();
+        let dir = self.log_dir(name);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        crate::diag::prune(&dir, "prepare-", KEEP_BUILD_LOGS);
+        let log = dir.join(format!("prepare-{}.log", now_ms()));
+        let file = std::fs::File::create(&log).map_err(|e| e.to_string())?;
+        crate::diag::info(
+            "prepare",
+            serde_json::json!({ "lane": self.lane, "service": name, "run": job.run }),
+        );
+        std::fs::create_dir_all(&job.cwd).map_err(|e| e.to_string())?;
+        let spec = Spec {
+            name: format!("{name}-prepare"),
+            command: job.run.clone(),
+            cwd: job.cwd,
+            env: BTreeMap::new(),
+            log: file,
+        };
+        let (mut tree, _) =
+            devstack_proc::spawn(spec, &self.proc_opts).map_err(|e| e.to_string())?;
+        let code = loop {
+            if let Some(code) = tree.try_exit_code() {
+                break code;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        if code != 0 {
+            return Err(format!(
+                "prepare `{}` exited with code {code}\n{}",
+                job.run,
+                tail(&log, 15)
+            ));
+        }
+        if let Some(parent) = job.mark.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&job.mark, job.key).map_err(|e| e.to_string())
+    }
+
+    /// A lane's copy, current and prepared for `svc`, before it starts from it.
+    fn copy_ready(&self, name: &str, svc: &Service) -> Result<(), String> {
+        let job = {
+            let mut snap = self.snapshot.lock().unwrap();
+            snap.sync().map_err(|e| e.to_string())?;
+            self.prepare_job(name, svc, &snap)?
+        };
+        match job {
+            Some(job) => self.run_prepare(name, job),
+            None => Ok(()),
+        }
+    }
+
+    /// Something changed in a lane's worktree: bring the copy its dev servers
+    /// and tools run from up to date, after a short quiet time, so their own
+    /// watchers (hot module replacement) see the change.
+    pub fn copy_changed(self: &Arc<Self>) {
+        if !self.runs_from_copy() {
+            return;
+        }
+        self.debounce_for("copy".into(), COPY_QUIET, |s| {
+            let from_copy = s
+                .slots
+                .lock()
+                .unwrap()
+                .values()
+                .any(|slot| slot.main.as_ref().is_some_and(|i| i.build_id.is_none()));
+            if from_copy && let Err(e) = s.snapshot.lock().unwrap().sync() {
+                crate::diag::warn(
+                    "copy_not_synced",
+                    serde_json::json!({ "lane": s.lane, "error": e.to_string() }),
+                );
+            }
+        });
     }
 
     pub fn service_log(&self, name: &str) -> Option<PathBuf> {
@@ -1160,6 +1300,9 @@ impl Supervisor {
         port: Option<u16>,
         is_main: bool,
     ) -> Result<Instance, String> {
+        if artifact.is_none() && self.runs_from_copy() {
+            self.copy_ready(name, svc)?;
+        }
         let ctx = self.context(svc, artifact.map(|(_, d)| d.as_path()), port, is_main);
         let env = {
             let infra = self.infra.lock().unwrap();
@@ -1176,8 +1319,8 @@ impl Supervisor {
         let cwd = match (artifact, &svc.cwd) {
             // Built services run from their artifact (ADR-0002); its files are their content root.
             (Some((_, dir)), _) => dir.clone(),
-            (None, Some(c)) => self.repo.join(c),
-            (None, None) => self.repo.clone(),
+            (None, Some(c)) => self.run_root().join(c),
+            (None, None) => self.run_root(),
         };
         let mut env_map: BTreeMap<String, String> =
             env.into_iter().map(|(k, v)| (k, v.value)).collect();
@@ -1251,6 +1394,11 @@ impl Supervisor {
         let id = build_id(&snap.manifest, svc).map_err(|e| e.to_string())?;
         if self.builder.artifact(name, &id).is_none() {
             building(Some(id.clone()));
+            if let Some(job) = self.prepare_job(name, svc, &snap)? {
+                drop(snap);
+                self.run_prepare(name, job)?;
+                snap = self.snapshot.lock().unwrap();
+            }
             let mut running = self
                 .builder
                 .start("main", &snap, name, svc)
@@ -1294,7 +1442,7 @@ impl Supervisor {
     ) -> Context {
         let infra = self.infra.lock().unwrap();
         let mut ctx = Context {
-            repo: self.repo.clone(),
+            repo: self.run_root(),
             artifact: artifact.map(Path::to_path_buf),
             port,
             // A lane without the main slot never runs workers (ADR-0012 interim rule).
@@ -1882,6 +2030,16 @@ The running instance was left as it was."
         key: String,
         action: impl FnOnce(&Arc<Self>) + Send + 'static,
     ) {
+        self.debounce_for(key, DEBOUNCE, action);
+    }
+
+    /// [`Self::debounce`] with a quiet time of `quiet`.
+    pub(crate) fn debounce_for(
+        self: &Arc<Self>,
+        key: String,
+        quiet: Duration,
+        action: impl FnOnce(&Arc<Self>) + Send + 'static,
+    ) {
         let spawn = {
             let mut q = self.quiet.lock().unwrap();
             let e = q.entry(key.clone()).or_insert((Instant::now(), false));
@@ -1896,10 +2054,10 @@ The running instance was left as it was."
             .name(format!("debounce-{key}"))
             .spawn(move || {
                 loop {
-                    std::thread::sleep(Duration::from_millis(200));
+                    std::thread::sleep((quiet / 4).min(Duration::from_millis(200)));
                     let mut q = me.quiet.lock().unwrap();
                     let e = q.get_mut(&key).expect("inserted above");
-                    if e.0.elapsed() >= DEBOUNCE {
+                    if e.0.elapsed() >= quiet {
                         e.1 = false;
                         break;
                     }
@@ -2286,6 +2444,18 @@ pub const KEEP_ARTIFACTS: usize = 5;
 pub const KEEP_BUILD_LOGS: usize = 10;
 
 const DEBOUNCE: Duration = Duration::from_secs(2);
+/// How long a lane's worktree has to be quiet before its copy follows: short,
+/// a dev server's hot reload waits for it.
+const COPY_QUIET: Duration = Duration::from_millis(150);
+
+/// A `prepare` to run ([`Supervisor::prepare_job`]).
+struct PrepareJob {
+    key: String,
+    /// Holds `key` once it succeeded.
+    mark: PathBuf,
+    cwd: PathBuf,
+    run: String,
+}
 
 /// Why a built candidate waits for `promote` (ADR-0013): auto-promotion is
 /// off, or the change touched paths the service declares as schema inputs.

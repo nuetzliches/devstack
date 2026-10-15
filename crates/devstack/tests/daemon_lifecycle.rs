@@ -1125,7 +1125,7 @@ fn a_worktree_runs_as_a_lane() {
     let web_port = free_port();
     let mut toml = std::fs::read_to_string(s.file()).unwrap();
     toml.push_str(&format!(
-        "\n[services.web]\nkind = \"devserver\"\nrun = '\"{BIN}\" serve-static src/Site --port {{port}}'\nport = {web_port}\n"
+        "\n[services.web]\nkind = \"devserver\"\nrun = '\"{BIN}\" serve-static src/Site --port {{port}}'\nport = {web_port}\nprepare = {{ run = \"echo x>>prepared.count\" }}\n"
     ));
     std::fs::write(s.file(), toml).unwrap();
     s.cli(&["up"], None); // `broken` fails, the API runs
@@ -1150,7 +1150,11 @@ fn a_worktree_runs_as_a_lane() {
             String::from_utf8_lossy(&out.stderr)
         );
     };
-    std::fs::write(s.dir.path().join(".gitignore"), ".devstack/\nprep.count\n").unwrap();
+    std::fs::write(
+        s.dir.path().join(".gitignore"),
+        ".devstack/\nprep.count\nprepared.count\n",
+    )
+    .unwrap();
     // Checkouts as the files are (no CRLF on Windows), so main and worktree hash alike.
     git(s.dir.path(), &["config", "core.autocrlf", "false"]);
     git(s.dir.path(), &["add", "-A"]);
@@ -1322,33 +1326,72 @@ fn a_worktree_runs_as_a_lane() {
         s.ok(&["status"])
     );
 
-    // 5. down in the worktree stops the lane only.
-    let down = wt_cli(&["down"]);
-    assert!(down.contains("stopped"), "{down}");
-    assert!(get_on(lane_port, "/health").is_none(), "lane stopped");
+    // 5. The lane runs from a copy of its worktree: `prepare` ran there, an
+    //    edit reaches its dev server within moments, and nothing runs in the
+    //    worktree, so git removes it while the lane runs; the lane goes with it.
+    let copy = s
+        .dir
+        .path()
+        .join(".devstack")
+        .join(format!("lane-{lane}"))
+        .join("lanes/main/src");
+    assert!(
+        copy.join("prepared.count").is_file(),
+        "prepare ran in the lane's copy"
+    );
+    assert!(
+        !wt.join("prepared.count").exists(),
+        "and never in the worktree"
+    );
+    std::fs::write(wt.join("src/Site/index.html"), "<p>lane site 2</p>").unwrap();
+    assert!(
+        wait_for(
+            || get_on(web_port + offset, "/").is_some_and(|b| b.contains("lane site 2")),
+            Duration::from_secs(15)
+        ),
+        "the copy follows the worktree"
+    );
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["commit", "-qm", "lane edit"]);
+    git(s.dir.path(), &["worktree", "remove", wt.to_str().unwrap()]);
+    assert!(!wt.exists(), "git removed the worktree of a running lane");
+    assert!(
+        wait_for(
+            || get_on(lane_port, "/health").is_none() && get_on(web_port + offset, "/").is_none(),
+            Duration::from_secs(15)
+        ),
+        "the lane stopped with its worktree\n{}",
+        s.diag()
+    );
+    assert!(!s.ok(&["lane", "list"]).contains(&lane));
     assert!(s.api("/health").is_some(), "main still runs");
 
-    // 6. remove takes the worktree with it; git refuses one with changes.
-    let refused = s.cli(&["lane", "remove", &lane], None);
-    assert!(!refused.status.success(), "a worktree with an edit stays");
-    assert!(wt.is_dir());
-    git(&wt, &["commit", "-qam", "lane edit"]);
-    s.ok(&["lane", "remove", &lane]);
-    assert!(!wt.exists(), "the worktree is removed");
-    assert!(!s.ok(&["lane", "list"]).contains(&lane));
-
-    // 7. `lane add` creates a worktree and its lane; a worktree removed with
-    //    git is no lane any more.
-    let added = s.ok(&["lane", "add", "extra"]);
-    assert!(added.contains("lane `extra`"), "{added}");
-    let extra = PathBuf::from(format!("{}-extra", s.dir.path().display()));
-    assert!(extra.join("devstack.toml").is_file(), "{added}");
-    assert!(s.ok(&["lane", "list"]).contains("extra"));
+    // 6. A worktree added with git is a lane at once: the daemon notices it
+    //    without being asked.
+    let extra_name = format!("extra-{}", s.port);
+    let extra = s.dir.path().parent().unwrap().join(&extra_name);
     git(
         s.dir.path(),
-        &["worktree", "remove", extra.to_str().unwrap()],
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "extra",
+            extra.to_str().unwrap(),
+        ],
     );
-    assert!(!s.ok(&["lane", "list"]).contains("extra"));
+    let log = s.dir.path().join(".devstack").join("daemon.log");
+    assert!(
+        wait_for(
+            || std::fs::read_to_string(&log).is_ok_and(|t| t
+                .lines()
+                .any(|l| l.contains("lane_found") && l.contains(&extra_name))),
+            Duration::from_secs(10)
+        ),
+        "the new worktree is found without a request"
+    );
+    assert!(s.ok(&["lane", "list"]).contains(&extra_name));
 
     s.ok(&["down"]);
     for dir in [&wt, &extra] {

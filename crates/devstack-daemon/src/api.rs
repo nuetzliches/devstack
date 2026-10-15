@@ -56,8 +56,8 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/runs/{id}", get(run_info))
         .route("/v1/runs/{id}/log", get(run_log))
         .route("/v1/runs/{id}/log/stream", get(run_log_stream))
-        .route("/v1/lanes", get(lanes_list).post(lanes_add))
-        .route("/v1/lanes/{lane}", axum::routing::delete(lanes_remove))
+        .route("/v1/lanes", get(lanes_list).post(lanes_start))
+        .route("/v1/lanes/{lane}/stop", post(lanes_stop))
         .route("/v1/lanes/{lane}/main", post(lanes_take_main))
         .route(
             "/v1/lanes/{lane}/v1/{*rest}",
@@ -219,55 +219,31 @@ async fn lanes_list(State(s): State<AppState>) -> Response {
 }
 
 #[derive(Deserialize)]
-struct LaneAdd {
-    /// An existing worktree of the repository: start its lane.
-    path: Option<std::path::PathBuf>,
-    /// Without `path`: create a worktree for a new lane of this name.
-    name: Option<String>,
-    /// For a new worktree: its branch (default: the lane's name; created when
-    /// it does not exist), what a new branch starts from (default: the main
-    /// tree's HEAD), and where it goes (default: `<repo>-<name>` beside it).
-    branch: Option<String>,
-    from: Option<String>,
-    dir: Option<std::path::PathBuf>,
+struct LaneStart {
+    /// A worktree of the repository (git makes them; devstack never does).
+    path: std::path::PathBuf,
     /// Make sure the shared infrastructure runs (the main lane's).
     #[serde(default)]
     infra: bool,
 }
 
-/// `POST /v1/lanes`: with `{"path", "infra"?}` start the lane of that
+/// `POST /v1/lanes` with `{"path", "infra"?}`: start the lane of that
 /// worktree (`devstack up` in it does this; with `infra` the shared
-/// infrastructure is started if it is not up), `/v1/lanes/<name>/v1/up`
-/// then starts its services. With `{"name", "branch"?, "from"?, "dir"?}`
-/// create a worktree for a new lane (`devstack lane add`), not started.
-async fn lanes_add(State(s): State<AppState>, Json(body): Json<LaneAdd>) -> Response {
+/// infrastructure is started if it is not up); `/v1/lanes/<name>/v1/up`
+/// then starts its services.
+async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> Response {
     let lanes = match lanes_of(&s) {
         Ok(l) => l.clone(),
         Err(r) => return r,
     };
     let main = s.sup.clone();
     let res = tokio::task::spawn_blocking(move || {
-        let name = match (&body.path, &body.name) {
-            (Some(path), _) => {
-                let lane = lanes.activate(path)?;
-                if body.infra {
-                    main.infra_up()?;
-                    lane.sup.refresh_infra();
-                }
-                lane.entry.name.clone()
-            }
-            (None, Some(name)) => {
-                lanes
-                    .create(
-                        name,
-                        body.branch.as_deref(),
-                        body.dir.as_deref(),
-                        body.from.as_deref(),
-                    )?
-                    .name
-            }
-            (None, None) => return Err("`path` or `name` is needed".to_string()),
-        };
+        let lane = lanes.activate(&body.path)?;
+        if body.infra {
+            main.infra_up()?;
+            lane.sup.refresh_infra();
+        }
+        let name = lane.entry.name.clone();
         lanes
             .list()
             .into_iter()
@@ -282,26 +258,15 @@ async fn lanes_add(State(s): State<AppState>, Json(body): Json<LaneAdd>) -> Resp
     }
 }
 
-#[derive(Deserialize)]
-struct LaneRemove {
-    #[serde(default)]
-    keep_worktree: bool,
-}
-
-/// `DELETE /v1/lanes/{lane}[?keep_worktree=true]`: stop it and remove its
-/// worktree (`git worktree remove`: refused with changes not committed) and
-/// its state; with `keep_worktree` only its state (builds, logs) goes.
-async fn lanes_remove(
-    State(s): State<AppState>,
-    Path(lane): Path<String>,
-    Query(q): Query<LaneRemove>,
-) -> Response {
+/// `POST /v1/lanes/{lane}/stop`: its services stop and it is no longer
+/// started (`devstack lane stop`); the worktree stays as it is.
+async fn lanes_stop(State(s): State<AppState>, Path(lane): Path<String>) -> Response {
     let lanes = match lanes_of(&s) {
         Ok(l) => l.clone(),
         Err(r) => return r,
     };
-    match tokio::task::spawn_blocking(move || lanes.remove(&lane, q.keep_worktree)).await {
-        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+    match tokio::task::spawn_blocking(move || lanes.stop(&lane).map(|()| lanes.list())).await {
+        Ok(Ok(v)) => Json(v).into_response(),
         Ok(Err(e)) => err(StatusCode::CONFLICT, e),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }

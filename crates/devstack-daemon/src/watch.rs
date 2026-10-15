@@ -5,7 +5,9 @@
 //! - dev servers with `restart_on`: a restart in place;
 //! - Compose services with `restart_on`: a container restart;
 //! - the stack file itself: the status says it changed since the daemon started
-//!   (the daemon does not reload it).
+//!   (the daemon does not reload it);
+//! - in a lane, anything: the copy its dev servers and tools run from follows
+//!   (ADR-0024).
 //!
 //! Generated directories never count (`bin`, `obj`, `node_modules`, `target`,
 //! `.git`, `.devstack`): a build in the repository would otherwise see its own
@@ -69,7 +71,9 @@ pub fn start(sup: Arc<Supervisor>) -> Option<Watcher> {
                 .filter_map(move |(s, p)| set(p).map(|set| (g.clone(), s.clone(), set)))
         })
         .collect();
-    let only_stack_file = built.is_empty() && devservers.is_empty() && containers.is_empty();
+    let lane = !sup.lane.is_empty();
+    let only_stack_file =
+        built.is_empty() && devservers.is_empty() && containers.is_empty() && !lane;
     let stack_rel = sup
         .stack_file()
         .strip_prefix(&sup.repo)
@@ -108,6 +112,9 @@ pub fn start(sup: Arc<Supervisor>) -> Option<Watcher> {
             let rel = rel.to_string_lossy().replace('\\', "/");
             if rel.is_empty() || ignored(&rel) {
                 continue;
+            }
+            if lane {
+                me.copy_changed();
             }
             if stack_rel.as_deref() == Some(rel.as_str()) {
                 me.stack_file_touched();

@@ -27,9 +27,11 @@ placement decision, so this ADR has to move that guard on purpose.
 
 1. **The unit is the lane.** A lane (a worktree, run by a supervisor in the
    main tree's daemon, ADR-0024) has a **placement**: `local` (ADR-0024) or a
-   **node**, chosen when it starts (`devstack up --on <node>`, `devstack lane
-   add <name> --on <node>`). The worktree, and with it the source, stays on the
-   developer's machine. All of a lane runs on its node: infrastructure,
+   **node**, chosen when it starts (`devstack up --on <node>` in the
+   worktree, or the dashboard). The worktree, and with it the source, stays on
+   the developer's machine; git creates and removes it, never devstack. A local
+   lane already runs from a copy of its worktree (ADR-0024); a remote one runs
+   from a copy on the node, so a lane runs the same way wherever it is. All of a lane runs on its node: infrastructure,
    builds, services, dev servers. devstack never places a single service or a
    single build elsewhere.
 2. **A node runs `devstack-node`**, an agent binary from this repository, on any
