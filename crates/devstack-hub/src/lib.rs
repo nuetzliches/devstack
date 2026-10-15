@@ -462,7 +462,7 @@ async fn shutdown(State(s): State<AppState>) -> Response {
 }
 
 /// The landing page (and only it) may ask whether a hub runs on this machine.
-const PING_ORIGINS: &[&str] = &["https://dev.nuetzliche.it"];
+const PING_ORIGINS: &[&str] = &["https://nuetzliches.github.io"];
 
 /// `PING_ORIGINS` plus `DEVSTACK_HUB_PING_ORIGINS` (comma-separated), for a
 /// team that hosts its own copy of the page.

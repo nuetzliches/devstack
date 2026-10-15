@@ -17,7 +17,7 @@ newer change lands.
 ## Install
 
 Windows (PowerShell) and Linux (x86_64, static build), or see
-[dev.nuetzliche.it](https://dev.nuetzliche.it), which also tells whether
+[the landing page](https://nuetzliches.github.io/devstack/), which also tells whether
 devstack runs on your machine. The scripts check the download against the
 release's `SHA256SUMS`; run them again to update.
 

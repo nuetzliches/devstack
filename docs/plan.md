@@ -402,7 +402,7 @@ downstream stack.
 | **1: Run plane + CLI** | Stack file, compose driver, `devstack check`, `devstack env --export`, port preflight, artifact builds on demand (`devstack build api`), main slot, jobs, health, logs, job-object ownership, build-id env, CLI, MCP | Reference stack runs end to end without the previous orchestrator; no file-lock failure possible by construction | Done, released as 0.1.0 (§7.3) |
 | **2: Candidate pipeline** | Watch, debounce, supersede/cancel, candidates without workers, promotion gate, rollback, SSE events, first dashboard | A broken edit never replaces main; three concurrent writers produce at most one running build per service | Done, released as 0.2.0 (§7.4) |
 | **3: Lanes** | Worktree lanes, per-lane resources, `promote --lane`, static frontend artifacts for e2e | Two worktrees run side by side without touching each other's database or the main slot | Not started; needs [ADR-0012](adr/0012-shared-infrastructure-between-lanes.md) far enough for one rule per resource |
-| **4: Adoption** | Migrate the downstream stack, delete its old orchestrator, publish | Downstream runbook shrinks to the stack file and a page of notes | Under way: the reference stack runs on devstack and its runbook is a generated skill plus one page; its old orchestrator stays as a fallback for now; not public yet (licence, O-5) |
+| **4: Adoption** | Migrate the downstream stack, delete its old orchestrator, publish | Downstream runbook shrinks to the stack file and a page of notes | Under way: the reference stack runs on devstack and its runbook is a generated skill plus one page; its old orchestrator stays as a fallback for now; public since 2026-10-15 with a landing page on GitHub Pages |
 
 ### 7.1 Spike (a): process ownership
 
@@ -524,7 +524,7 @@ by a hub ([ADR-0021](adr/0021-a-hub-serves-the-dashboard.md)). Exit criterion: a
 broken edit leaves main running (integration test `edits_become_candidates`);
 a newer change cancels the running build, so one service has at most one build.
 
-**Added after 0.2.0, from running the reference stack (not released yet):**
+**Released as 0.3.0 (2026-10-15), from running the reference stack:**
 
 - Docker engine check: `up` starts Docker Desktop, the hub reports the engine
   and starts it from the dashboard.
@@ -538,6 +538,8 @@ a newer change cancels the running build, so one service has at most one build.
   reference for the stack file (`docs/stack-file.md`).
 - The diagnostic log of §11.
 - The dashboard loads the current version on reload and follows a hub update.
+- `devstack doctor`, `devstack self uninstall`, `GET /hub/ping` and the landing
+  page (`site/`, GitHub Pages); licence MIT OR Apache-2.0, `cargo deny` in CI.
 
 **Not covered by an automated test:** a machine reboot, a Docker Desktop
 restart, the `devstack://` link opened from a browser, an IDE terminal closing.
@@ -550,7 +552,7 @@ restart, the `devstack://` link opened from a browser, an IDE terminal closing.
 | O-2 | Promotion mechanism: restart on fixed port vs. reverse proxy | [ADR-0010](adr/0010-promotion-mechanism.md): resolved, proxy (B), measured |
 | O-3 | Windows-native vs. WSL | [ADR-0011](adr/0011-platform-windows-native-first.md) |
 | O-4 | Which infrastructure may be shared between lanes | [ADR-0012](adr/0012-shared-infrastructure-between-lanes.md), deliberately deferred |
-| O-5 | Licence (Croniq uses MIT OR Apache-2.0) | Before going public |
+| O-5 | Licence | Resolved: MIT OR Apache-2.0; the repository is public since 2026-10-15 |
 | O-6 | Default daemon port | Resolved: the daemon takes a free port and writes it to `.devstack/daemon.json`; the hub has a fixed one (4250, `DEVSTACK_HUB_PORT`) |
 | O-7 | Lanes per worktree only, or also per agent session in one tree | Phase 3 |
 | O-8 | Development values that are not secret (local passwords, dev API keys): a tracked `dev/.env.defaults` next to the untracked `dev/.env`, or everything through the downstream secret chain | Downstream decision; devstack supports several env files per group either way |
@@ -665,10 +667,9 @@ What is open, roughly in the order it pays off, and where it comes from.
 
 | Item | From | Size |
 |---|---|---|
-| Release 0.3.0 with what came after 0.2.0 (§7.4) | | small |
 | Lanes: one stack per worktree, per-lane resources, `promote --lane` | phase 3, §3.5, O-4, O-7 | large |
 | Static frontend artifacts (`kind = "static"`) for e2e runs on a pinned build | phase 3, §3.4 | medium |
-| Publish: licence, a hygiene pass over docs and examples, public repository | phase 4, O-5 | small |
+| Own domain for the landing page (now on GitHub Pages); code signing of the Windows binary | phase 4 | small |
 | Remove the downstream stack's old orchestrator once its team works without it | phase 4 | downstream |
 | Hot-reload switch per service at runtime (`devstack hot-reload api on/off`) | §3.4a | medium |
 | Search over all service logs (`/v1/logs?grep=`), log filters by build and time | §11 | small |

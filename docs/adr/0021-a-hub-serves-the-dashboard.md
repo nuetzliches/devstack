@@ -52,12 +52,13 @@ dashboard do not fit that:
    `hub/hub-sessions.json` next to the token, never the cookie, for the
    cookie's lifetime of a year. Deleting the file unpairs every browser.
 6. **One public question: `GET /hub/ping`.** The landing page
-   (`https://dev.nuetzliche.it`, built from `site/`) asks the local hub whether
+   (`https://nuetzliches.github.io/devstack/`, built from `site/`) asks the local hub whether
    it runs and which version, to offer "open the dashboard", "update available"
    or the install command. The endpoint needs no session, answers name and
    version only, changes nothing, and its CORS header names only the landing
-   page (more origins through `DEVSTACK_HUB_PING_ORIGINS`, for a team hosting
-   its own copy); it also answers Chrome's private-network preflight. The rest
+   page's origin `https://nuetzliches.github.io` (shared by the organisation's
+   Pages sites, which is acceptable for a version number; more origins through
+   `DEVSTACK_HUB_PING_ORIGINS`, for a team hosting its own copy); it also answers Chrome's private-network preflight. The rest
    of the hub keeps ADR-0019: no CORS, cookie and own `Origin`. The dashboard
    itself is never loaded from that site.
 7. **Stopping does not wait for the dashboard.** Every open tab holds event

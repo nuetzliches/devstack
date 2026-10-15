@@ -32,7 +32,7 @@ irm https://github.com/nuetzliches/devstack/releases/latest/download/install.ps1
 curl -fsSL https://github.com/nuetzliches/devstack/releases/latest/download/install.sh | sh
 ```
 
-https://dev.nuetzliche.it shows the same commands and whether devstack runs on
+https://nuetzliches.github.io/devstack/ shows the same commands and whether devstack runs on
 the user's machine.
 
 The installer updates in place; a running daemon keeps the old version until

@@ -284,14 +284,14 @@ fn ping_is_public_but_tells_only_the_landing_page() {
     let h = start();
     let p = h.port;
     // No session needed, and nothing but the version in it.
-    let (s, head, body) = get(p, "/hub/ping", "Origin: https://dev.nuetzliche.it\r\n");
+    let (s, head, body) = get(p, "/hub/ping", "Origin: https://nuetzliches.github.io\r\n");
     assert_eq!(s, 200, "{body}");
     let v: serde_json::Value = serde_json::from_str(body.trim()).unwrap();
     assert_eq!(v["devstack"], true);
     assert!(v["version"].is_string());
     assert_eq!(v.as_object().unwrap().len(), 2, "{body}");
     assert!(
-        head.contains("access-control-allow-origin: https://dev.nuetzliche.it"),
+        head.contains("access-control-allow-origin: https://nuetzliches.github.io"),
         "{head}"
     );
     assert!(
@@ -308,13 +308,17 @@ fn ping_is_public_but_tells_only_the_landing_page() {
     let (s, head, _) = http(
         p,
         &format!(
-            "OPTIONS /hub/ping HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\nOrigin: https://dev.nuetzliche.it\r\nAccess-Control-Request-Method: GET\r\nAccess-Control-Request-Private-Network: true\r\nConnection: close\r\n\r\n"
+            "OPTIONS /hub/ping HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\nOrigin: https://nuetzliches.github.io\r\nAccess-Control-Request-Method: GET\r\nAccess-Control-Request-Private-Network: true\r\nConnection: close\r\n\r\n"
         ),
     );
     assert_eq!(s, 204, "{head}");
     assert!(head.contains("access-control-allow-methods: get"), "{head}");
 
     // The rest of /hub stays closed.
-    let (s, _, _) = get(p, "/hub/stacks", "Origin: https://dev.nuetzliche.it\r\n");
+    let (s, _, _) = get(
+        p,
+        "/hub/stacks",
+        "Origin: https://nuetzliches.github.io\r\n",
+    );
     assert_eq!(s, 401);
 }
