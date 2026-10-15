@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devstack</title>
+<meta name="description" content="devstack runs your local development stack: containers from Compose, your services built in the background, a change goes live only once it is healthy.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233a6df0'/%3E%3Cpath d='M9 11h14M9 16h14M9 21h9' stroke='white' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f7f8fa; --panel: #ffffff; --text: #16191f; --muted: #5d6573; --line: #e3e6eb;
+    --accent: #3a6df0; --accent-ink: #ffffff; --ok: #1f9d55; --warn: #b7791f; --code: #f0f2f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --panel: #171a21; --text: #e6e8ec; --muted: #9aa3b2; --line: #262b35;
+      --accent: #5b8cff; --accent-ink: #0f1115; --ok: #3ccb7f; --warn: #e2b04a; --code: #1e222b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 56px 16px 64px; }
+  h1 { font-size: 34px; margin: 0 0 8px; letter-spacing: -0.02em; }
+  h2 { font-size: 18px; margin: 0 0 12px; }
+  p { margin: 0 0 12px; }
+  .lead { color: var(--muted); font-size: 18px; margin-bottom: 28px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+  .status { display: flex; gap: 12px; align-items: flex-start; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 8px; flex: none; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); }
+  .muted { color: var(--muted); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border-radius: 8px; padding: 8px 14px;
+         font: inherit; font-size: 15px; text-decoration: none; cursor: pointer; border: 1px solid var(--line);
+         background: var(--panel); color: var(--text); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  .tab { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 8px; padding: 4px 12px; font: inherit; font-size: 14px; cursor: pointer; }
+  .tab[aria-selected="true"] { color: var(--text); border-color: var(--accent); }
+  .cmd { display: flex; align-items: center; gap: 8px; background: var(--code); border-radius: 8px; padding: 10px 12px; }
+  .cmd code { flex: 1; white-space: pre-wrap; word-break: break-all; font: 14px/1.4 ui-monospace, "Cascadia Code", Consolas, monospace; }
+  .copy { flex: none; font-size: 13px; padding: 4px 10px; }
+  ol { margin: 0; padding-left: 20px; } li { margin-bottom: 6px; }
+  code.inline { background: var(--code); border-radius: 5px; padding: 1px 5px; font: 14px ui-monospace, Consolas, monospace; }
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+  .features div { font-size: 15px; } .features strong { display: block; margin-bottom: 2px; }
+  footer { color: var(--muted); font-size: 14px; margin-top: 32px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>devstack</h1>
+  <p class="lead">Runs your local development stack: containers from your Compose files, your
+    services built in the background. A change goes live only once it is healthy, and you can
+    always see whether it has.</p>
+
+  <section class="panel" aria-live="polite">
+    <h2>On this machine</h2>
+    <div class="status">
+      <span id="dot" class="dot"></span>
+      <div>
+        <p id="state">Looking for devstack on this machine…</p>
+        <p id="detail" class="muted"></p>
+        <div id="actions" class="row"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="install">
+    <h2>Install</h2>
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" data-os="windows">Windows (PowerShell)</button>
+      <button class="tab" role="tab" data-os="linux">Linux</button>
+    </div>
+    <div class="cmd"><code id="cmd"></code><button class="btn copy" id="copy" type="button">Copy</button></div>
+    <p class="muted" style="margin-top:10px">No admin rights needed. The script checks the download
+      against the release's checksums, puts devstack on your PATH and lets the dashboard start at
+      logon. Run it again to update. <span id="ver"></span></p>
+  </section>
+
+  <section class="panel">
+    <h2>Then, in your repository</h2>
+    <ol>
+      <li><code class="inline">devstack doctor</code> says what this machine still needs for the stack (Docker, tools, ports).</li>
+      <li><code class="inline">devstack up</code> starts it; <code class="inline">devstack ui</code> opens the dashboard.</li>
+      <li><code class="inline">devstack skills install</code> gives your coding agent the skills to run and configure it.</li>
+    </ol>
+    <p class="muted" style="margin-top:10px">No <code class="inline">devstack.toml</code> yet? The
+      <a href="https://github.com/nuetzliches/devstack/blob/main/docs/stack-file.md">stack file reference</a>
+      and the <a href="https://github.com/nuetzliches/devstack/blob/main/examples/devstack.toml">example</a> show how.</p>
+  </section>
+
+  <section class="features">
+    <div><strong>Your change, live or not</strong>Every service says whether the code you saved is running yet, building, or failed and why.</div>
+    <div><strong>No broken restarts</strong>A new build takes over only when it is healthy; a compiler error leaves the old one running.</div>
+    <div><strong>Your Compose files</strong>Infrastructure comes from the Compose files you deploy with, plus a small dev overlay.</div>
+    <div><strong>Agents included</strong>An MCP server and generated skills let coding agents run, check and fix the stack.</div>
+  </section>
+
+  <footer>
+    Windows and Linux. Open source, MIT or Apache-2.0.
+    <a href="https://github.com/nuetzliches/devstack">GitHub</a> ·
+    <a href="https://github.com/nuetzliches/devstack/releases">Releases</a> ·
+    <a href="https://github.com/nuetzliches/devstack/issues">Issues</a>
+  </footer>
+</main>
+
+<script>
+(() => {
+  const REPO = 'nuetzliches/devstack';
+  const params = new URLSearchParams(location.search);
+  const HUB = 'http://127.0.0.1:' + (Number(params.get('port')) || 4250);
+  const CMDS = {
+    windows: `irm https://github.com/${REPO}/releases/latest/download/install.ps1 | iex`,
+    linux: `curl -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sh`,
+  };
+  const $ = (id) => document.getElementById(id);
+
+  // ---------------------------------------------------------------- install command
+  let os = /windows/i.test(navigator.userAgentData?.platform || navigator.userAgent) ? 'windows' : 'linux';
+  function showOs(next) {
+    os = next;
+    $('cmd').textContent = CMDS[os];
+    for (const t of document.querySelectorAll('.tab')) t.setAttribute('aria-selected', String(t.dataset.os === os));
+  }
+  for (const t of document.querySelectorAll('.tab')) t.addEventListener('click', () => showOs(t.dataset.os));
+  showOs(os);
+  $('copy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(CMDS[os]);
+      $('copy').textContent = 'Copied';
+    } catch {
+      $('copy').textContent = 'Select and copy';
+    }
+    setTimeout(() => ($('copy').textContent = 'Copy'), 1800);
+  });
+
+  // ---------------------------------------------------------------- versions
+  const newer = (a, b) => {
+    const p = (v) => String(v).replace(/^v/, '').split(/[.-]/).slice(0, 3).map((n) => parseInt(n, 10) || 0);
+    const [x, y] = [p(a), p(b)];
+    for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
+    return false;
+  };
+  const latest = fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => (j && j.tag_name ? j.tag_name.replace(/^v/, '') : null))
+    .catch(() => null);
+  latest.then((v) => { if (v) $('ver').textContent = `Current release: ${v}.`; });
+
+  // ---------------------------------------------------------------- local hub
+  // GET /hub/ping is the one public endpoint of the local hub: it answers with
+  // its version, and only this page may read it (CORS). The dashboard itself
+  // runs on the local hub, never from this site.
+  async function ping() {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 2000);
+    try {
+      const r = await fetch(`${HUB}/hub/ping`, { signal: ctl.signal, cache: 'no-store' });
+      return r.ok ? await r.json() : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function render(local, rel) {
+    const actions = $('actions');
+    actions.replaceChildren();
+    const link = (text, href, primary) => {
+      const a = document.createElement('a');
+      a.className = 'btn' + (primary ? ' primary' : '');
+      a.textContent = text;
+      a.href = href;
+      actions.append(a);
+      return a;
+    };
+    if (local) {
+      $('dot').className = 'dot ok';
+      $('state').textContent = `devstack ${local.version} is running.`;
+      if (rel && newer(rel, local.version)) {
+        $('dot').className = 'dot warn';
+        $('detail').textContent = `Version ${rel} is out. Run the install command below again to update; \`devstack down\` and \`devstack up\` then switch your stacks over.`;
+      } else {
+        $('detail').textContent = rel ? 'Up to date.' : '';
+      }
+      link('Open the dashboard', HUB + '/', true);
+    } else {
+      $('dot').className = 'dot';
+      $('state').textContent = 'No devstack answers on this machine.';
+      $('detail').textContent = 'Installed already? Start its dashboard hub (your browser asks once). Otherwise install it below.';
+      const start = link('Start devstack', 'devstack://hub/start', true);
+      start.addEventListener('click', () => watch(20));
+      link('Install', '#install', false);
+    }
+  }
+
+  let watching = 0;
+  async function watch(seconds) {
+    const id = ++watching;
+    for (let i = 0; i < seconds && id === watching; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const local = await ping();
+      if (local) return render(local, await latest);
+    }
+  }
+
+  Promise.all([ping(), latest]).then(([local, rel]) => render(local, rel));
+})();
+</script>
+</body>
+</html>

@@ -2,6 +2,7 @@
 name = "devstack-proc"
 description = "Process ownership: one owned process tree per service, graceful stop, kill on daemon death (ADR-0009, ADR-0016)"
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true

@@ -23,15 +23,17 @@ Missing (`command not found`) or too old: tell the user how to install, do not
 install it yourself.
 
 ```powershell
-# Windows (needs `gh` with access to the devstack repository while it is private)
-gh release download -R nuetzliches/devstack -p install.ps1 -D $env:TEMP --clobber
-& "$env:TEMP\install.ps1"
+# Windows
+irm https://github.com/nuetzliches/devstack/releases/latest/download/install.ps1 | iex
 ```
 
 ```bash
 # Linux
-gh release download -R nuetzliches/devstack -p install.sh -D /tmp --clobber && sh /tmp/install.sh
+curl -fsSL https://github.com/nuetzliches/devstack/releases/latest/download/install.sh | sh
 ```
+
+https://dev.nuetzliche.it shows the same commands and whether devstack runs on
+the user's machine.
 
 The installer updates in place; a running daemon keeps the old version until
 `devstack down` + `devstack up`. A freshly installed devstack may not be on the

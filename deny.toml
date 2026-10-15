@@ -1,0 +1,40 @@
+# cargo-deny (CI job `deny`): dependencies keep to permissive licences
+# (AGENTS.md: MIT-compatible only) and come from crates.io.
+
+[graph]
+all-features = true
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unlicense",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "Unicode-3.0",
+]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+# The workspace crates depend on each other by path (not published).
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+
+[advisories]
+# Not part of the CI job (`check licenses bans sources`): a new advisory for an
+# old dependency should not turn every push red. Run `cargo deny check
+# advisories` before a release.
+yanked = "warn"

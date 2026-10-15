@@ -304,6 +304,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/pair", post(pair))
         .route("/hub/shutdown", post(shutdown))
         .route("/hub/session", get(session))
+        .route("/hub/ping", get(ping).options(ping_preflight))
         .route("/hub/stacks", get(stacks))
         .route("/hub/docker", get(docker))
         .route("/hub/docker/start", post(docker_start))
@@ -322,7 +323,7 @@ fn router(state: AppState) -> axum::Router {
 /// this is the outer layer). Paths only: no query (a pairing code), no body.
 async fn audit(req: Request, next: Next) -> Response {
     let method = req.method().clone();
-    if method == Method::GET || method == Method::HEAD {
+    if method == Method::GET || method == Method::HEAD || method == Method::OPTIONS {
         return next.run(req).await;
     }
     let path = req.uri().path().to_string();
@@ -382,6 +383,9 @@ async fn guard(State(s): State<AppState>, req: Request, next: Next) -> Response 
         return err(StatusCode::FORBIDDEN, "unexpected Host");
     }
     let path = req.uri().path();
+    if path == "/hub/ping" {
+        return next.run(req).await; // public on purpose, see `ping`
+    }
     if path == "/hub/pair" || path == "/hub/shutdown" {
         if !bearer_ok(h, &s.token) {
             return err(StatusCode::UNAUTHORIZED, "missing or wrong token");
@@ -455,6 +459,67 @@ async fn pair(State(s): State<AppState>) -> Response {
 async fn shutdown(State(s): State<AppState>) -> Response {
     s.shutdown.notify_waiters();
     StatusCode::ACCEPTED.into_response()
+}
+
+/// The landing page (and only it) may ask whether a hub runs on this machine.
+const PING_ORIGINS: &[&str] = &["https://dev.nuetzliche.it"];
+
+/// `PING_ORIGINS` plus `DEVSTACK_HUB_PING_ORIGINS` (comma-separated), for a
+/// team that hosts its own copy of the page.
+fn ping_origin_allowed(origin: &str) -> bool {
+    PING_ORIGINS.contains(&origin)
+        || std::env::var("DEVSTACK_HUB_PING_ORIGINS")
+            .is_ok_and(|v| v.split(',').any(|o| o.trim() == origin))
+}
+
+fn ping_cors(h: &HeaderMap) -> Vec<(header::HeaderName, HeaderValue)> {
+    let Some(origin) = h
+        .get(header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .filter(|o| ping_origin_allowed(o))
+    else {
+        return Vec::new();
+    };
+    vec![
+        (
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_str(origin).expect("checked origin"),
+        ),
+        (header::VARY, HeaderValue::from_static("Origin")),
+        // Chrome asks a public page's request to the local machine first
+        // (Private Network Access preflight).
+        (
+            header::HeaderName::from_static("access-control-allow-private-network"),
+            HeaderValue::from_static("true"),
+        ),
+    ]
+}
+
+/// `GET /hub/ping`: is a hub running, which version. No session, no stack
+/// names, nothing that changes state: the one thing a web page may learn about
+/// this machine, and only the landing page (CORS). The landing page uses it to
+/// show "open the dashboard", "update available" or the install command.
+async fn ping(h: HeaderMap) -> Response {
+    let mut res = Json(serde_json::json!({ "devstack": true, "version": VERSION })).into_response();
+    for (k, v) in ping_cors(&h) {
+        res.headers_mut().insert(k, v);
+    }
+    res
+}
+
+async fn ping_preflight(h: HeaderMap) -> Response {
+    let mut res = StatusCode::NO_CONTENT.into_response();
+    let cors = ping_cors(&h);
+    if !cors.is_empty() {
+        for (k, v) in cors {
+            res.headers_mut().insert(k, v);
+        }
+        res.headers_mut().insert(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            HeaderValue::from_static("GET"),
+        );
+    }
+    res
 }
 
 async fn session() -> Response {

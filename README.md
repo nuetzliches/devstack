@@ -16,24 +16,23 @@ newer change lands.
 
 ## Install
 
-Windows (PowerShell) and Linux (x86_64, static build). The scripts check the
-download against the release's `SHA256SUMS`; run them again to update. With
-`gh` installed and logged in they also work while the repository is private.
+Windows (PowerShell) and Linux (x86_64, static build), or see
+[dev.nuetzliche.it](https://dev.nuetzliche.it), which also tells whether
+devstack runs on your machine. The scripts check the download against the
+release's `SHA256SUMS`; run them again to update.
 
 ```powershell
 # Windows: installs to %LOCALAPPDATA%\Programs\devstack and adds it to PATH
-gh release download -R nuetzliches/devstack -p install.ps1 -D $env:TEMP --clobber
-& "$env:TEMP\install.ps1"            # or: -Version 0.1.0
+irm https://github.com/nuetzliches/devstack/releases/latest/download/install.ps1 | iex
 ```
 
 ```sh
 # Linux: installs to ~/.local/bin
-gh release download -R nuetzliches/devstack -p install.sh -D /tmp --clobber
-sh /tmp/install.sh                   # or: --version 0.1.0
+curl -fsSL https://github.com/nuetzliches/devstack/releases/latest/download/install.sh | sh
 ```
 
-Without `gh` (public repository): `irm .../releases/latest/download/install.ps1 | iex`
-or `curl -fsSL .../releases/latest/download/install.sh | sh`. From source:
+A specific version: download the script and run it with `-Version 0.3.0`
+(`--version 0.3.0` on Linux). From source:
 `cargo install --git https://github.com/nuetzliches/devstack devstack`.
 
 The installer also registers the dashboard hub to start at logon and a
@@ -146,3 +145,8 @@ MCP (agents) ───┘         │
   [`docs/adr/README.md`](docs/adr/README.md) and [`AGENTS.md`](AGENTS.md).
 - The project is generic. Downstream stacks that use it keep their stack file,
   compose file and secrets in their own repositories.
+
+## License
+
+MIT or Apache-2.0, at your option ([LICENSE-MIT](LICENSE-MIT),
+[LICENSE-APACHE](LICENSE-APACHE)). Security reports: [SECURITY.md](SECURITY.md).

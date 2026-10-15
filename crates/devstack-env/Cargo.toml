@@ -2,6 +2,7 @@
 name = "devstack-env"
 description = "Environment of native services: Compose service, host rewriting, stack file, devstack variables (ADR-0014, ADR-0015)"
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true

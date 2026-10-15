@@ -7,7 +7,7 @@
     release's SHA256SUMS and puts devstack.exe into a directory on the user's
     PATH (default %LOCALAPPDATA%\Programs\devstack).
 
-    Uses `gh` when it is installed and logged in (works for a private
+    Uses `gh` when it is installed and logged in (also for a private
     repository), otherwise downloads anonymously from GitHub.
 
     Updating while a daemon runs is fine: the running devstack.exe is renamed

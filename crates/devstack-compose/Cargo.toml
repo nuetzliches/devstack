@@ -2,6 +2,7 @@
 name = "devstack-compose"
 description = "Compose groups of the infra plane: config, up, ps, restart, networks (ADR-0004)"
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true

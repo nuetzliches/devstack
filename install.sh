@@ -4,7 +4,7 @@
 #   curl -fsSL https://github.com/nuetzliches/devstack/releases/latest/download/install.sh | sh
 #   sh install.sh [--version 0.1.0] [--dir ~/.local/bin]
 #
-# Uses `gh` when it is installed and logged in (works for a private repository),
+# Uses `gh` when it is installed and logged in (also for a private fork),
 # otherwise downloads anonymously from GitHub. Checks the archive against the
 # release's SHA256SUMS. Replacing the binary under a running daemon is fine on
 # Linux; restart the daemon (`devstack down`, `devstack up`) to use the new one.

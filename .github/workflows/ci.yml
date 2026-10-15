@@ -38,6 +38,7 @@ jobs:
               - 'examples/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
+              - 'deny.toml'
               - '.github/workflows/ci.yml'
             ui:
               - 'ui/**'
@@ -77,6 +78,17 @@ jobs:
       - name: fixture stack compose groups
         if: matrix.os == 'ubuntu-latest'
         run: target/debug/devstack check --compose -f examples/fixture-stack/devstack.toml
+
+  deny:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    # Licences and sources of every dependency (deny.toml).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans sources
 
   integration:
     needs: changes

@@ -19,6 +19,7 @@ Origin `http://127.0.0.1:4250` (or `localhost:4250`).
 |---|---|---|
 | `GET /`, `/assets/*`, `/manifest.webmanifest`, `/sw.js` | none | the app shell (works offline once cached) |
 | `GET /auth?code=<code>` | none | sets the session cookie (one year, survives a hub restart), redirects to `/` |
+| `GET /hub/ping` | none | `{"devstack":true,"version":"0.3.0"}`; CORS for the landing page only (ADR-0021) |
 | `GET /hub/session` | cookie | `200 {"version": "0.2.0"}`, or `401` (not paired: show "run `devstack ui`") |
 | `GET /hub/stacks` | cookie | `[StackEntry]` |
 | `GET /hub/events` | cookie | SSE: `{"type":"stacks","stacks":[StackEntry]}` and `{"type":"docker","docker":DockerEngine}`, each first and on every change |

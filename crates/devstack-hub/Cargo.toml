@@ -2,6 +2,7 @@
 name = "devstack-hub"
 description = "The hub: serves the dashboard for every stack and forwards to the daemons (ADR-0021)"
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
