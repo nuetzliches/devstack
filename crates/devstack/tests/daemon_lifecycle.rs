@@ -31,6 +31,8 @@ struct Stack {
     dir: tempfile::TempDir,
     token_home: tempfile::TempDir,
     port: u16,
+    /// The `kind = "static"` site.
+    site_port: u16,
     project: Option<String>,
 }
 
@@ -44,7 +46,16 @@ impl Stack {
             std::fs::copy(fixture.join("src/Api").join(f), api.join(f)).unwrap();
         }
         std::fs::write(dir.path().join(".gitignore"), ".devstack/\nbin/\nobj/\n").unwrap();
+        // A built frontend, as `kind = "static"` serves it (the build is a no-op).
+        std::fs::create_dir_all(dir.path().join("src/Site/assets")).unwrap();
+        std::fs::write(dir.path().join("src/Site/index.html"), "<p>static site</p>").unwrap();
+        std::fs::write(
+            dir.path().join("src/Site/assets/app-1.js"),
+            "console.log(1)",
+        )
+        .unwrap();
         let port = free_port();
+        let site_port = free_port();
         let project = with_compose.then(|| format!("devstack-it-{}-{port}", std::process::id()));
         let mut toml = String::from("version = 1\n[stack]\nname = \"it\"\n");
         if let Some(p) = &project {
@@ -95,6 +106,13 @@ run = "echo run>>prep.count"
 [services.broken]
 run = "exit 3"
 
+[services.site]
+kind = "static"
+build = "git --version"
+output = "src/Site"
+watch = ["src/Site/**"]
+port = {site_port}
+
 [commands.ping]
 description = "health"
 requires = ["api"]
@@ -129,6 +147,7 @@ members = [\"api\", \"command.ping\"]
             dir,
             token_home: tempfile::tempdir().unwrap(),
             port,
+            site_port,
             project,
         }
     }
@@ -487,6 +506,31 @@ fn lifecycle(with_compose: bool) {
             "{only}"
         );
     }
+    // kind = "static": devstack serves the built files, with the SPA fallback.
+    assert!(
+        wait_for(
+            || get_on(s.site_port, "/").is_some(),
+            Duration::from_secs(60)
+        ),
+        "the static site answers\n{}",
+        s.diag()
+    );
+    assert!(get_on(s.site_port, "/").unwrap().contains("static site"));
+    assert!(
+        get_on(s.site_port, "/assets/app-1.js")
+            .unwrap()
+            .contains("console.log")
+    );
+    assert!(
+        get_on(s.site_port, "/customers/42")
+            .unwrap()
+            .contains("static site"),
+        "a client route gets index.html"
+    );
+    assert!(
+        get_on(s.site_port, "/assets/missing.js").is_none(),
+        "a missing file is a 404"
+    );
     let status = s.ok(&["status"]);
     assert!(status.contains("healthy"), "{status}");
     assert!(

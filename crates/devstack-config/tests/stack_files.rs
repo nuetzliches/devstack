@@ -246,3 +246,29 @@ fn hot_reload_only_for_built_services() {
         "{issues:?}"
     );
 }
+
+#[test]
+fn a_static_site_needs_a_build_output_and_port_but_no_run() {
+    let ok = format!(
+        "{MINIMAL}[services.web]\nkind = \"static\"\nbuild = \"npm run build\"\noutput = \"dist/web/browser\"\nport = 4300\n"
+    );
+    from_str(&ok, Path::new("t")).unwrap();
+    let with_run = ok.replace("port = 4300\n", "port = 4300\nrun = \"x\"\n");
+    assert!(
+        invalid(&with_run)
+            .iter()
+            .any(|i| i.contains("services.web.run"))
+    );
+    let no_port = ok.replace("port = 4300\n", "");
+    assert!(
+        invalid(&no_port)
+            .iter()
+            .any(|i| i.contains("kind `static` needs"))
+    );
+    let missing_run = format!("{MINIMAL}[services.job]\nkind = \"job\"\n");
+    assert!(
+        invalid(&missing_run)
+            .iter()
+            .any(|i| i.contains("missing `run`"))
+    );
+}

@@ -200,6 +200,26 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                     c.err(&p, format!("kind `{:?}` builds and runs in one process; `build`/`output` do not apply", svc.kind).to_lowercase());
                 }
             }
+            Kind::Static => {
+                if svc.build.is_none() || svc.output.is_none() || svc.port.is_none() {
+                    c.err(&p, "kind `static` needs `build`, `output` (the bundle's directory, e.g. `dist/app/browser`) and `port`");
+                }
+                if !svc.run.is_empty() {
+                    c.err(
+                        format!("{p}.run"),
+                        "kind `static` has no `run`: devstack serves the built files itself",
+                    );
+                }
+            }
+        }
+        if svc.kind != Kind::Static && svc.run.trim().is_empty() {
+            c.err(
+                format!("{p}.run"),
+                "missing `run`: the command that starts the service",
+            );
+        }
+        if svc.spa.is_some() && svc.kind != Kind::Static {
+            c.err(format!("{p}.spa"), "`spa` belongs to `kind = \"static\"`");
         }
         if svc.hot_reload.is_some() && (svc.kind != Kind::Service || svc.build.is_none()) {
             c.err(
@@ -216,7 +236,9 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         if svc.kind == Kind::Tool && svc.health.is_some() {
             c.err(format!("{p}.health"), "a tool has no health check");
         }
-        if svc.proxy == Some(true) && (svc.kind != Kind::Service || svc.port.is_none()) {
+        if svc.proxy == Some(true)
+            && (!matches!(svc.kind, Kind::Service | Kind::Static) || svc.port.is_none())
+        {
             c.err(
                 format!("{p}.proxy"),
                 "only a long-running service with a `port` can sit behind the proxy",

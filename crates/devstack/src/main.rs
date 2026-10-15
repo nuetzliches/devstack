@@ -131,6 +131,17 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Serve a directory as a static site (what a `kind = "static"` service
+    /// runs; started by the daemon).
+    #[command(name = "serve-static", hide = true)]
+    ServeStatic {
+        dir: PathBuf,
+        #[arg(long)]
+        port: u16,
+        /// Without the single-page-app fallback to index.html.
+        #[arg(long)]
+        no_spa: bool,
+    },
     /// The builds of a service, newest first: which went live, failed, were
     /// replaced by a newer change or wait for promote.
     Builds {
@@ -530,6 +541,9 @@ fn main() -> Result<()> {
                 None => println!("skills: up to date (or not installed in the default directory)"),
             }
             Ok(())
+        }
+        Cmd::ServeStatic { dir, port, no_spa } => {
+            devstack_daemon::staticsrv::serve(dir, port, !no_spa).map_err(|e| anyhow::anyhow!(e))
         }
         Cmd::Builds { service, limit } => client::builds(&cli.file, &service, limit),
         Cmd::Top { watch } => topcmd::run(&cli.file, watch),

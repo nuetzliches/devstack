@@ -166,6 +166,9 @@ pub enum Kind {
     Devserver,
     /// Long-running and interactive, no health check (e.g. a test UI).
     Tool,
+    /// A frontend's production bundle, built into an artifact and served as
+    /// files by devstack (plan §3.4): for end-to-end runs on a pinned build.
+    Static,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -197,8 +200,13 @@ pub struct Service {
     pub build: Option<String>,
     /// Directory, relative to the repository, copied into the artifact after a successful build.
     pub output: Option<String>,
-    /// Command that starts the service.
+    /// Command that starts the service (not for `kind = "static"`: devstack
+    /// serves the artifact itself).
+    #[serde(default)]
     pub run: String,
+    /// `kind = "static"`: answer paths without a file extension with
+    /// `index.html` (client-side routes of a single-page app). Default `true`.
+    pub spa: Option<bool>,
     /// Working directory relative to the repository.
     pub cwd: Option<String>,
     /// Paths whose change starts a candidate build (ADR-0003).
@@ -454,6 +462,8 @@ impl Service {
 
     /// Behind devstack's proxy (ADR-0010).
     pub fn proxied(&self) -> bool {
-        self.kind == Kind::Service && self.port.is_some() && self.proxy.unwrap_or(true)
+        matches!(self.kind, Kind::Service | Kind::Static)
+            && self.port.is_some()
+            && self.proxy.unwrap_or(true)
     }
 }

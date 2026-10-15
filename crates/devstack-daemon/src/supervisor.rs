@@ -183,6 +183,7 @@ impl Supervisor {
         rt: tokio::runtime::Handle,
         lane: String,
     ) -> Result<Arc<Self>, String> {
+        let stack = with_static_servers(stack);
         // A lane (`.devstack/lane-<name>/`) shares the main tree's artifact store.
         let layout = match state_dir.parent() {
             Some(root) if !lane.is_empty() => Layout::shared(&state_dir, root.join("artifacts")),
@@ -2174,6 +2175,28 @@ The running instance was left as it was."
         }
         Ok(())
     }
+}
+
+/// `kind = "static"` services run devstack's own file server on their
+/// artifact (plan §3.4); with that command they are ordinary services for the
+/// pipeline, the proxy and the health check.
+fn with_static_servers(mut stack: Stack) -> Stack {
+    let exe = std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "devstack".into());
+    for svc in stack.services.values_mut() {
+        if svc.kind == Kind::Static && svc.run.is_empty() {
+            svc.run = format!(
+                "\"{exe}\" serve-static \"{{artifact}}\" --port {{port}}{}",
+                if svc.spa == Some(false) {
+                    " --no-spa"
+                } else {
+                    ""
+                }
+            );
+        }
+    }
+    stack
 }
 
 /// The published ports (`5432->127.0.0.1:5432`) whose forward is lost.

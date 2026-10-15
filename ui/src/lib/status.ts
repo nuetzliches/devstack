@@ -108,11 +108,11 @@ function cap(s: string): string {
 }
 
 export function kindLabel(s: ServiceView): string {
-  return { service: 'service', job: 'job', devserver: 'dev server', tool: 'tool' }[s.kind];
+  return { service: 'service', job: 'job', devserver: 'dev server', tool: 'tool', static: 'static site' }[s.kind];
 }
 
 export function kindIcon(s: ServiceView): IconName {
-  return ({ service: 'server', job: 'play', devserver: 'globe', tool: 'wrench' } as const)[s.kind];
+  return ({ service: 'server', job: 'play', devserver: 'globe', tool: 'wrench', static: 'file' } as const)[s.kind];
 }
 
 /** "compose.<group>.<service>" -> [group, service]. Group names do not contain dots. */

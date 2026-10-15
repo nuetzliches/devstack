@@ -149,8 +149,10 @@ the candidate model does not fit it directly. Plan:
 - **Main slot:** the dev server runs supervised (health, logs, restart on
   config-file changes such as path aliases, which it cannot pick up live).
 - **Immutable variant:** `kind = "static"` builds the production bundle into an
-  artifact and serves it from the daemon on its own port. Intended for
-  end-to-end runs that must pin a build id.
+  artifact and serves it on its own port. Intended for end-to-end runs that
+  must pin a build id. **Built (0.6.0):** the artifact is served by
+  `devstack serve-static` as the service's process, so candidates, the proxy
+  and the health check work as for any service.
 
 ### 3.4a Hot reload of backend services
 
@@ -600,7 +602,8 @@ once), after `up`, in `devstack status`, `devstack doctor` and the dashboard.
 the lane's (TLS and WebSockets pass). Lanes share the main tree's artifact
 store (a worktree on the same sources starts without building), and artifacts
 are pruned for the first time: the newest five per service plus everything
-some tree runs or may roll back to (ADR-0002 retention).
+some tree runs or may roll back to (ADR-0002 retention). `kind = "static"`
+serves a frontend's production bundle from an artifact (§3.4).
 
 **Not covered by an automated test:** a machine reboot, a Docker Desktop
 restart, the `devstack://` link opened from a browser, an IDE terminal closing.
@@ -733,7 +736,6 @@ What is open, roughly in the order it pays off, and where it comes from.
 | Item | From | Size |
 |---|---|---|
 | Lanes on other machines | drafts RL1 to RL5 | large |
-| Static frontend artifacts (`kind = "static"`) for e2e runs on a pinned build | phase 3, §3.4 | medium |
 | Own domain for the landing page (now on GitHub Pages) | phase 4 | small |
 | Code signing of the Windows binary (deferred) | [#3](https://github.com/nuetzliches/devstack/issues/3) | small |
 | Remove the downstream stack's old orchestrator once its team works without it | phase 4 | downstream |

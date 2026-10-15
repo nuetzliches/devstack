@@ -12,6 +12,7 @@ pub mod logfiles;
 pub mod proxy;
 pub mod registry;
 pub mod state;
+pub mod staticsrv;
 pub mod supervisor;
 pub mod tcpfwd;
 pub mod timeline;

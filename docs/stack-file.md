@@ -85,6 +85,28 @@ watch  = ["src/Api/**", "Directory.Packages.props"]
 | `job` | runs to completion before its dependants start | exit code | schema migrator, seed |
 | `devserver` | builds and serves in one process, hot reload | `health` | `ng serve`, `vite` |
 | `tool` | long-running, interactive, no health check | none | a test UI |
+| `static` | a frontend's production bundle, built into an artifact and served by devstack | `health` | end-to-end runs on a pinned build |
+
+### A static frontend (`kind = "static"`)
+
+```toml
+[services.web-e2e]
+kind   = "static"
+cwd    = "web"
+build  = "npm run build -- --configuration production"
+output = "web/dist/web/browser"   # the directory with index.html
+port   = 4300
+watch  = ["web/src/**", "web/angular.json"]
+# spa = false                      # no index.html for unknown paths
+```
+
+devstack builds the bundle into an artifact like any service and serves its
+files itself (no `run`), behind the proxy, with candidates: a test run against
+`:4300` knows the build id it ran against (`x-devstack-build`). Paths without a
+file extension get `index.html` (client-side routes) unless `spa = false`;
+`index.html` is sent with `no-cache`. The API the bundle calls must be
+reachable from the browser as the bundle expects it (an absolute URL, or the
+same origin through your own proxy setup).
 
 ### Builds and artifacts ([ADR-0002](adr/0002-processes-run-from-immutable-artifacts.md))
 

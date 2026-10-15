@@ -31,7 +31,7 @@ export type HubEvent =
 
 // ---------------------------------------------------------------- daemon state
 
-export type ServiceKind = 'service' | 'job' | 'devserver' | 'tool';
+export type ServiceKind = 'service' | 'job' | 'devserver' | 'tool' | 'static';
 
 export type Status =
   | { state: 'stopped' | 'starting' | 'running' | 'healthy' }
