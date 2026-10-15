@@ -16,7 +16,7 @@ once it is healthy, so the stack keeps answering while you work.
 
 ```bash
 devstack --version          # this file needs {{devstack:requires}} or newer
-devstack check              # validates the stack file, names a version that is too old
+devstack doctor             # Docker, Compose, the tools this stack runs, ports, hub, PATH
 ```
 
 Missing (`command not found`) or too old: tell the user how to install, do not
@@ -96,7 +96,7 @@ port tell within a second, and they are the evidence to quote.
 
 `devstack mcp` is an MCP server (stdio) with `status`, `up`, `down`,
 `start_service`, `stop_service`, `restart_service`, `promote_service`,
-`rollback_service`, `logs`, `diagnostics`, `run_command`, `usage`, `hub_status`, `hub_start`.
+`rollback_service`, `logs`, `diagnostics`, `doctor`, `run_command`, `usage`, `hub_status`, `hub_start`.
 Register it once (project `.mcp.json` or user configuration):
 
 ```json
@@ -110,6 +110,7 @@ Register it once (project `.mcp.json` or user configuration):
 
 | Symptom | Cause and fix |
 | --- | --- |
+| anything does not start, before guessing | `devstack doctor` (MCP `doctor`): what this machine lacks for this stack, one line each, with the fix |
 | something happened and nothing says why (a restart, a switch, a stop) | `devstack logs --daemon --grep <service>` (MCP `diagnostics`): service and candidate states with reasons, every request that changed something, daemon start and stop; it works with the daemon stopped |
 | `devstack up`: Docker is not running | `up` starts Docker Desktop and waits; with Docker Engine as a Linux service it names `sudo systemctl start docker` for the user |
 | a port is taken | another process (often a second copy of the stack, an IDE run, a leftover process) holds it; find it (`Get-NetTCPConnection -LocalPort <p>` / `ss -ltnp`) and ask before ending it |

@@ -36,6 +36,13 @@ Without `gh` (public repository): `irm .../releases/latest/download/install.ps1 
 or `curl -fsSL .../releases/latest/download/install.sh | sh`. From source:
 `cargo install --git https://github.com/nuetzliches/devstack devstack`.
 
+The installer also registers the dashboard hub to start at logon and a
+`devstack://` link the dashboard uses to start it (`-NoHubIntegration` /
+`DEVSTACK_NO_HUB_INTEGRATION=1` skip that). After installing, `devstack doctor`
+in a repository says whether the machine is ready for its stack.
+`devstack self uninstall` removes devstack again (hub, its registrations, the
+per-user state, the PATH entry and the binary; repositories keep `.devstack/`).
+
 An update under a running daemon is fine; `devstack down` and `devstack up`
 switch to the new version. A stack file can name the oldest devstack it needs
 (`[stack] requires = "0.1.0"`); an older one then asks to be updated.
@@ -48,6 +55,7 @@ the infrastructure and the services devstack builds and runs
 JSON Schema).
 
 ```
+devstack doctor           # is this machine ready: Docker, Compose, tools, ports, hub, PATH
 devstack check            # validate the stack file (with --compose: the Compose groups too)
 devstack up               # daemon, infrastructure, autostart services
 devstack status
@@ -83,7 +91,7 @@ migration) waits for `devstack promote`.
 `devstack mcp` is an MCP server on stdio. It is a client of the daemon's API
 like the CLI: every tool maps to one endpoint (`status`, `up`, `down`,
 `start_service`, `stop_service`, `restart_service`, `promote_service`,
-`rollback_service`, `logs`, `diagnostics`, `run_command`, `usage`, `hub_status`, `hub_start`). Register it in the repository, e.g. `.mcp.json`:
+`rollback_service`, `logs`, `diagnostics`, `doctor`, `run_command`, `usage`, `hub_status`, `hub_start`). Register it in the repository, e.g. `.mcp.json`:
 
 ```json
 { "mcpServers": { "devstack": { "command": "devstack", "args": ["mcp"] } } }

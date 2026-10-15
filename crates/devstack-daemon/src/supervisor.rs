@@ -1717,7 +1717,7 @@ fn topo(deps: BTreeMap<String, Vec<String>>) -> Vec<String> {
 /// Taken on IPv4 or IPv6 loopback. A dev server bound to `localhost` may hold
 /// only `::1` (Node on Windows); binding `127.0.0.1` would still succeed. A host
 /// without IPv6 fails the `::1` bind with another error, which is not "in use".
-fn port_in_use(port: u16) -> bool {
+pub fn port_in_use(port: u16) -> bool {
     // Windows reports a port held exclusively by another process as access denied.
     let taken = |r: std::io::Result<std::net::TcpListener>| {
         r.err().is_some_and(|e| {

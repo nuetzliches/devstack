@@ -210,6 +210,13 @@ pub fn tools() -> Vec<Value> {
             true,
         ),
         tool(
+            "doctor",
+            "Is this machine ready for the stack: Docker engine and Compose version, the tools the stack file runs, ports, the hub, PATH. Read-only. Local file and process checks, no daemon needed. Run it before guessing why something does not start.",
+            json!({}),
+            &[],
+            true,
+        ),
+        tool(
             "diagnostics",
             "devstack's own log: every decision of the daemon (service and candidate states with reasons, requests that changed something, start and stop) or of the dashboard hub (Docker, pairing, stack start/stop). The place to look when something happened and the service log does not say why. Local file, works with the daemon stopped.",
             json!({
@@ -338,6 +345,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 text
             })
         }
+        "doctor" => Ok(crate::doctor::text(&crate::doctor::run(file))),
         "diagnostics" => {
             let path = if args["source"].as_str() == Some("hub") {
                 devstack_hub::log_path()

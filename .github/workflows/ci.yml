@@ -12,8 +12,40 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Line tables are enough for test backtraces; full debug info makes builds,
+  # links (Windows above all) and the cache larger for nothing.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
 jobs:
+  changes:
+    # Which parts a push touches: docs alone need no Rust build, Rust alone no
+    # dashboard build. Skills are compiled into the binary, so they count as Rust.
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.f.outputs.rust }}
+      ui: ${{ steps.f.outputs.ui }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: f
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'skills/**'
+              - 'examples/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/ci.yml'
+            ui:
+              - 'ui/**'
+              - '.github/workflows/ci.yml'
+
   check:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     # Windows is a first-class target (ADR-0011): every job runs on both.
     strategy:
       fail-fast: false
@@ -36,15 +68,19 @@ jobs:
         env:
           # Linux runners have a Docker engine with Linux containers; Windows runners do not.
           DEVSTACK_DOCKER_TESTS: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
+      # The binary the tests just built; `cargo run` would build it once more.
       - name: example stack files
+        shell: bash
         run: |
-          cargo run -q -p devstack -- check -f examples/devstack.toml
-          cargo run -q -p devstack -- check -f examples/fixture-stack/devstack.toml
+          target/debug/devstack check -f examples/devstack.toml
+          target/debug/devstack check -f examples/fixture-stack/devstack.toml
       - name: fixture stack compose groups
         if: matrix.os == 'ubuntu-latest'
-        run: cargo run -q -p devstack -- check --compose -f examples/fixture-stack/devstack.toml
+        run: target/debug/devstack check --compose -f examples/fixture-stack/devstack.toml
 
   integration:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     # Black-box test of the daemon against the example stack (needs the .NET SDK).
     # Linux also runs the compose groups; Windows runners have no Linux containers.
     strategy:
@@ -59,6 +95,11 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      # The fixture's NuGet packages: every test copies the fixture and restores it.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('examples/fixture-stack/**/*.csproj') }}
       - name: daemon lifecycle
         run: cargo test -p devstack --test daemon_lifecycle -- --nocapture
         env:
@@ -66,6 +107,8 @@ jobs:
           DEVSTACK_INTEGRATION_COMPOSE: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
 
   ui:
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
     # The dashboard: type check and production build (the hub embeds ui/dist).
     runs-on: ubuntu-latest
     steps:
@@ -73,6 +116,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
       - name: build
         working-directory: ui
         run: npm ci && npm run build

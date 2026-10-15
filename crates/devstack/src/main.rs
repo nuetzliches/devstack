@@ -7,10 +7,12 @@ use std::path::{Path, PathBuf};
 
 mod buildcmd;
 mod client;
+mod doctor;
 mod envcmd;
 mod hubcmd;
 mod integration;
 mod mcp;
+mod selfcmd;
 mod skills;
 mod topcmd;
 
@@ -128,6 +130,15 @@ enum Cmd {
     },
     /// Print the JSON Schema of the stack file (for editors).
     Schema,
+    /// Is this machine ready for the stack? Docker, Compose, the tools the stack
+    /// file runs, ports, the hub, PATH. Read-only; exits 1 when something fails.
+    Doctor,
+    /// devstack itself on this machine.
+    #[command(name = "self")]
+    Myself {
+        #[command(subcommand)]
+        action: SelfAction,
+    },
     /// Agent skills for this repository, generated from the stack file.
     Skills {
         #[command(subcommand)]
@@ -163,6 +174,18 @@ enum HubAction {
     },
     /// Remove both again; `devstack up` then leaves them alone.
     Uninstall,
+}
+
+#[derive(Subcommand)]
+enum SelfAction {
+    /// Remove devstack for this user: hub, its start at logon and link, the
+    /// per-user state, the PATH entry and the installed binary. Repositories keep
+    /// their .devstack/ directories. Refuses while a stack runs.
+    Uninstall {
+        /// Do not ask.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -340,6 +363,15 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::OpenUrl { url } => integration::open_url(&url),
+        Cmd::Doctor => {
+            if !doctor::print(&doctor::run(&cli.file)) {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
+        Cmd::Myself {
+            action: SelfAction::Uninstall { yes },
+        } => selfcmd::uninstall(yes),
         Cmd::Skills {
             action: SkillsAction::Install { dir, force },
         } => {

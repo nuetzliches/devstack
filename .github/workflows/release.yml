@@ -3,18 +3,43 @@ name: release
 # A tag v<version> builds devstack for Windows and Linux and publishes a GitHub
 # release with the archives, SHA256SUMS and the install scripts. Asset names
 # carry no version, so ".../releases/latest/download/<asset>" stays stable.
-# workflow_dispatch builds the same archives without publishing (dry run).
+#
+# workflow_dispatch and the schedule build the same archives without publishing
+# (dry run). On main they also keep the release build cache warm: a tag run can
+# read caches of main but not of another tag, and GitHub drops a cache unused
+# for 7 days, hence twice a week.
 
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1,4'
 
 permissions:
   contents: read
 
 jobs:
+  ui:
+    # The dashboard is the same for every target: build it once.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: dashboard
+        working-directory: ui
+        run: npm ci && npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist
+
   build:
+    needs: ui
     strategy:
       fail-fast: true
       matrix:
@@ -31,6 +56,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+          # Only main writes the cache; tag runs read it.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: musl tools
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
@@ -40,12 +70,10 @@ jobs:
         run: |
           crate=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
           [ "v$crate" = "${GITHUB_REF_NAME}" ] || { echo "::error::tag ${GITHUB_REF_NAME} != Cargo.toml version $crate"; exit 1; }
-      - uses: actions/setup-node@v4
+      - uses: actions/download-artifact@v4
         with:
-          node-version: 24
-      - name: dashboard (embedded into the binary)
-        working-directory: ui
-        run: npm ci && npm run build
+          name: ui-dist
+          path: ui/dist
       - name: build
         run: cargo build --release --locked -p devstack --target ${{ matrix.target }}
       - name: package
@@ -75,6 +103,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: x86_64-*
           merge-multiple: true
       - name: checksums and install scripts
         run: |

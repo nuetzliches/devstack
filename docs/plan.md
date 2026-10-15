@@ -555,7 +555,7 @@ restart, the `devstack://` link opened from a browser, an IDE terminal closing.
 | O-7 | Lanes per worktree only, or also per agent session in one tree | Phase 3 |
 | O-8 | Development values that are not secret (local passwords, dev API keys): a tracked `dev/.env.defaults` next to the untracked `dev/.env`, or everything through the downstream secret chain | Downstream decision; devstack supports several env files per group either way |
 | O-10 | How build servers outlive a single build but die with the daemon (spike (b)) | [ADR-0020](adr/0020-builds-share-one-long-lived-build-job.md), accepted |
-| O-9 | Minimum Docker Compose version (overlays rely on `!reset`, `!override`, `required: false`) | Open: not checked yet (§13) |
+| O-9 | Minimum Docker Compose version (overlays rely on `!reset`, `!override`, `required: false`) | Resolved: 2.24.4, checked by `devstack doctor` |
 
 ## 9. Risks
 
@@ -672,7 +672,6 @@ What is open, roughly in the order it pays off, and where it comes from.
 | Remove the downstream stack's old orchestrator once its team works without it | phase 4 | downstream |
 | Hot-reload switch per service at runtime (`devstack hot-reload api on/off`) | §3.4a | medium |
 | Search over all service logs (`/v1/logs?grep=`), log filters by build and time | §11 | small |
-| Minimum Docker Compose version in `devstack check` | O-9 | small |
 | Dashboard: container logs, build timeline, candidate console, group actions, command palette, first error line | §6 | medium |
 | Tray icon with status and notifications | §6, ADR-0018 | medium |
 | Network egress sandbox, stage 1 (cooperative proxy) | [ADR-0022](adr/0022-network-egress-sandbox.md) (proposed) | medium |

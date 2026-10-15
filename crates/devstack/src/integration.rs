@@ -50,7 +50,7 @@ fn write_marker(installed: bool) {
 
 /// A cargo build (`.../target/...`) is not where the user keeps devstack; a
 /// registration pointing there breaks with the next `cargo clean`.
-fn is_dev_build(exe: &Path) -> bool {
+pub(crate) fn is_dev_build(exe: &Path) -> bool {
     exe.components().any(|c| c.as_os_str() == "target")
 }
 
