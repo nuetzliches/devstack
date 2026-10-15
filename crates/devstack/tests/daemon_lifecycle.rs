@@ -936,5 +936,26 @@ fn edits_become_candidates() {
         "{readable}"
     );
 
+    // 8. Earlier instances stay readable: by build, by time, one by one.
+    let out = |args: &[&str]| s.ok(args);
+    let list = out(&["logs", "api", "--list"]);
+    assert!(list.contains("(running now)"), "{list}");
+    assert!(
+        list.contains(&b0[..12]) && list.contains("build "),
+        "{list}"
+    );
+    let by_build = out(&["logs", "api", "--build", &b0[..8]]);
+    assert!(
+        by_build.contains(&format!("── build {b0}")) && by_build.contains("── started"),
+        "build log and the instance that ran it:\n{by_build}"
+    );
+    let since = out(&["logs", "api", "--since", "1h"]);
+    assert!(
+        since.matches("── started").count() >= 4,
+        "every instance of the last hour:\n{since}"
+    );
+    let bad = s.cli(&["logs", "api", "--log", "../daemon.log"], None);
+    assert!(!bad.status.success(), "only kept logs, no other path");
+
     s.ok(&["down"]);
 }

@@ -67,6 +67,7 @@ devstack promote api      # take over a candidate held back by a schema change (
 devstack rollback api     # back to the build that ran before the last replacement
 devstack logs api --follow
 devstack logs --grep timeout  # every service's log, matching lines
+devstack logs api --since 2h  # earlier instances too (--build <id>, --list, --log <file>)
 devstack update           # the latest release; the dashboard says when there is one
 devstack logs --daemon    # devstack's own decisions with their reasons (--hub: the dashboard hub)
 devstack run reset        # a command from the stack file

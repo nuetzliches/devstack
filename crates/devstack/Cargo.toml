@@ -18,6 +18,7 @@ devstack-env.workspace = true
 devstack-hub.workspace = true
 devstack-proc.workspace = true
 serde.workspace = true
+jiff.workspace = true
 serde_json.workspace = true
 ureq.workspace = true
 

@@ -459,6 +459,100 @@ pub fn logs_grep(stack_file: &Path, service: Option<&str>, grep: &str, tail: usi
     Ok(())
 }
 
+/// Which kept logs `logs_kept` reads.
+pub struct LogFilter<'a> {
+    pub tail: usize,
+    pub grep: Option<&'a str>,
+    pub build: Option<&'a str>,
+    pub since: Option<&'a str>,
+    pub file: Option<&'a str>,
+}
+
+impl LogFilter<'_> {
+    pub fn query(&self) -> String {
+        let mut q = format!("tail={}", self.tail);
+        for (k, v) in [
+            ("grep", self.grep),
+            ("build", self.build),
+            ("since", self.since),
+            ("file", self.file),
+        ] {
+            if let Some(v) = v.filter(|v| !v.is_empty()) {
+                q.push_str(&format!("&{k}={}", enc(v)));
+            }
+        }
+        q
+    }
+}
+
+/// Earlier logs of a service (by build, by time, or one file), or with
+/// `since` and `grep` and no service a search across every service.
+pub fn logs_kept(stack_file: &Path, service: Option<&str>, f: LogFilter) -> Result<()> {
+    let c = need(&state_dir(stack_file)?)?;
+    let text = match service {
+        Some(s) => c.get(&format!("/v1/services/{s}/logs?{}", f.query()))?,
+        None if f.grep.is_some() && f.build.is_none() && f.file.is_none() => {
+            c.get(&format!("/v1/logs?{}", f.query()))?
+        }
+        None => {
+            anyhow::bail!("name a service (without one, only --grep with --since searches all)")
+        }
+    };
+    if text.is_empty() {
+        println!("no kept log matches");
+    } else {
+        println!("{text}");
+    }
+    Ok(())
+}
+
+/// The kept logs of a service, newest first.
+pub fn log_files(stack_file: &Path, service: &str) -> Result<()> {
+    let c = need(&state_dir(stack_file)?)?;
+    let files: Vec<Value> =
+        serde_json::from_str(&c.get(&format!("/v1/services/{service}/logs/files"))?)?;
+    if files.is_empty() {
+        println!("`{service}` has no kept log");
+    }
+    for f in files {
+        let at = jiff::Timestamp::from_millisecond(f["started_ms"].as_i64().unwrap_or(0))
+            .map(|t| {
+                t.to_zoned(jiff::tz::TimeZone::system())
+                    .strftime("%Y-%m-%d %H:%M:%S")
+                    .to_string()
+            })
+            .unwrap_or_default();
+        let build = f["build"]
+            .as_str()
+            .map(|b| &b[..b.len().min(12)])
+            .unwrap_or("-");
+        let port = f["port"]
+            .as_u64()
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "-".into());
+        println!(
+            "{at}  {:<5}  build {build:<12}  port {port:<5}  {:>8}  {}{}",
+            f["kind"].as_str().unwrap_or(""),
+            human_bytes(f["bytes"].as_u64().unwrap_or(0)),
+            f["file"].as_str().unwrap_or(""),
+            if f["current"].as_bool() == Some(true) {
+                "  (running now)"
+            } else {
+                ""
+            },
+        );
+    }
+    Ok(())
+}
+
+fn human_bytes(b: u64) -> String {
+    match b {
+        0..1024 => format!("{b} B"),
+        1024..1_048_576 => format!("{:.0} KB", b as f64 / 1024.0),
+        _ => format!("{:.1} MB", b as f64 / 1_048_576.0),
+    }
+}
+
 /// Percent-encoding for a query value (no dependency for one parameter).
 pub fn enc(s: &str) -> String {
     s.bytes()

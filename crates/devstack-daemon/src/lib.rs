@@ -6,6 +6,7 @@ pub mod api;
 pub mod commands;
 pub mod diag;
 pub mod health;
+pub mod logfiles;
 pub mod proxy;
 pub mod registry;
 pub mod state;

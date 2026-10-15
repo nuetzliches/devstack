@@ -50,6 +50,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack status` | state per service and container; `-> not yet active: …` means the latest change is not running yet |
 | `devstack logs <service> --follow` | console output (`-n 500` for more history) |
 | `devstack logs --grep <text>` | matching lines of every service's log ("where did this error come from"); with a service only its log |
+| `devstack logs <service> --since 2h` | every instance of that time, not only the current one: what a crashed or replaced instance printed (`--build <id>`: that build's log and its instances; `--list`, `--log <file>`) |
 | `devstack logs --daemon` | devstack's own log: every decision with its reason (`--grep <service>`, `--hub` for the dashboard hub) |
 | `devstack restart <service>` | rebuild now; the running instance stays until the new one is healthy |
 | `devstack promote <service>` | take over a candidate that is held (schema change, see below) |

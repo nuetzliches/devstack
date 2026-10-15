@@ -550,6 +550,13 @@ search across services (`/v1/logs?grep=`, `devstack logs --grep`, MCP `logs`);
 draft, or copy a prompt for a coding agent); stack file compatibility rules
 ([ADR-0023](adr/0023-stack-file-compatibility.md)).
 
+**In `main`, for 0.5.0:** "Choose folder…" in "Add a stack" shows the
+system's folder dialog through the hub (`POST /hub/pick-folder`; Windows
+Explorer picker, XDG portal on Linux); the CLI says when the daemon is older
+than itself instead of an empty error; earlier logs of a service by build
+and by time (`devstack logs api --build/--since/--list`, MCP `logs`,
+"Earlier logs" in the dashboard), every instance's log names its build.
+
 **Not covered by an automated test:** a machine reboot, a Docker Desktop
 restart, the `devstack://` link opened from a browser, an IDE terminal closing.
 
@@ -619,12 +626,16 @@ provided, with the build id as the organising key.
 
 **Status 2026-10-15:** built differently in places.
 
-- One file per started instance, `.devstack/logs/<service>/run-<ms>-<port>.log`,
+- One file per started instance, `.devstack/logs/<service>/run-<ms>-<port>-<build>.log`,
   and one per build, `build-<id>.log`; the newest 20 runs and 10 builds per
   service and 20 runs per command are kept. No ring buffer: the API reads the
   file's tail.
-- `devstack logs <service>` and the MCP tool take `tail`, not the other filters;
-  the search over all services (`/v1/logs?grep=`) is open (§13).
+- `devstack logs <service>` and the MCP tool take `tail`, `grep`, `build`
+  (the build log and every instance that ran it) and `since` (every instance
+  written to within that time); `--list` / `logs/files` shows the kept logs,
+  the dashboard as "Earlier logs". A process writes into its file directly,
+  so lines have no timestamp of their own: `since` selects whole logs. The
+  search over all services is `/v1/logs?grep=` (with `since` as well).
 - The daemon log is built as planned: `.devstack/daemon.log`, JSON lines, every
   state change and every request that changed something, with its answer; the
   hub writes `hub.log` next to the token. Both rotate at 5 MB. Read with
@@ -683,7 +694,6 @@ What is open, roughly in the order it pays off, and where it comes from.
 | Hot-reload switch per service at runtime (`devstack hot-reload api on/off`) | §3.4a | medium |
 | `devstack init` beyond .NET and Node (Go, Python, Java), and from a second real repository | §13 | medium |
 | `devstack migrate`, once devstack has outside users | [ADR-0023](adr/0023-stack-file-compatibility.md) | medium |
-| Log filters by build and time (the search over all services is done) | §11 | small |
 | Dashboard: container logs, build timeline, candidate console, group actions, command palette, first error line | §6 | medium |
 | Tray icon with status and notifications | §6, ADR-0018 | medium |
 | Network egress sandbox, stage 1 (cooperative proxy) | [ADR-0022](adr/0022-network-egress-sandbox.md) (proposed) | medium |

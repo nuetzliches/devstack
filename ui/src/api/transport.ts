@@ -65,6 +65,8 @@ export const v1 = {
   up: '/v1/up',
   logStream: (service: string, tail = 500) => `/v1/services/${enc(service)}/logs/stream?tail=${tail}`,
   buildLog: (service: string) => `/v1/services/${enc(service)}/build-log`,
+  logFiles: (service: string) => `/v1/services/${enc(service)}/logs/files`,
+  keptLog: (service: string, file: string, tail = 2000) => `/v1/services/${enc(service)}/logs?file=${enc(file)}&tail=${tail}`,
   serviceAction: (service: string, action: ServiceAction) => `/v1/services/${enc(service)}/${action}`,
   infraRestart: (group: string, service: string) => `/v1/infra/${enc(group)}/${enc(service)}/restart`,
   command: (name: string) => `/v1/commands/${enc(name)}`,

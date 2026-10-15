@@ -87,6 +87,20 @@ enum Cmd {
         /// every service's current log, each line prefixed with its service.
         #[arg(long)]
         grep: Option<String>,
+        /// The logs of this build: its build log and every instance that ran
+        /// it (a prefix of the id is enough).
+        #[arg(long, conflicts_with_all = ["follow", "daemon", "hub"])]
+        build: Option<String>,
+        /// Every instance's log written to within this time (`30m`, `2h`),
+        /// not only the current one. Lines carry no time of their own.
+        #[arg(long, conflicts_with_all = ["follow", "daemon", "hub"])]
+        since: Option<String>,
+        /// The service's kept logs (instances and builds), newest first.
+        #[arg(long, requires = "service", conflicts_with_all = ["follow", "grep", "build", "since", "log"])]
+        list: bool,
+        /// One kept log by its file name (see --list).
+        #[arg(long, requires = "service", conflicts_with_all = ["follow", "build", "since"])]
+        log: Option<String>,
         /// With --daemon / --hub: the raw JSON lines instead of readable ones.
         #[arg(long)]
         json: bool,
@@ -344,9 +358,27 @@ fn main() -> Result<()> {
             daemon,
             hub,
             grep,
+            build,
+            since,
+            list,
+            log,
             json,
         } => {
-            if daemon || hub {
+            if list {
+                client::log_files(&cli.file, service.as_deref().unwrap_or_default())
+            } else if build.is_some() || since.is_some() || log.is_some() {
+                client::logs_kept(
+                    &cli.file,
+                    service.as_deref(),
+                    client::LogFilter {
+                        tail,
+                        grep: grep.as_deref(),
+                        build: build.as_deref(),
+                        since: since.as_deref(),
+                        file: log.as_deref(),
+                    },
+                )
+            } else if daemon || hub {
                 let path = if hub {
                     devstack_hub::log_path()
                 } else {

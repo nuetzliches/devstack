@@ -243,6 +243,18 @@ export class MockTransport implements Transport {
     if (p === '/v1/usage' && method === 'GET') return json(200, s.usageWithHistory());
     if (p === '/v1/up' && method === 'POST') return empty(202);
 
+    if (/^\/v1\/services\/[^/]+\/logs\/files$/.test(p)) {
+      const t = Date.now();
+      return json(200, [
+        { file: `run-${t - 60_000}-5101-a1b2c3d4e5f6a7b8.log`, kind: 'run', started_ms: t - 60_000, modified_ms: t, build: 'a1b2c3d4e5f6a7b8', port: 5101, bytes: 18_400, current: true },
+        { file: 'build-a1b2c3d4e5f6a7b8.log', kind: 'build', started_ms: t - 70_000, modified_ms: t - 70_000, build: 'a1b2c3d4e5f6a7b8', port: null, bytes: 6_100, current: false },
+        { file: `run-${t - 3_600_000}-5100-99aa88bb77cc66dd.log`, kind: 'run', started_ms: t - 3_600_000, modified_ms: t - 90_000, build: '99aa88bb77cc66dd', port: 5100, bytes: 52_300, current: false },
+      ]);
+    }
+    if (/^\/v1\/services\/[^/]+\/logs$/.test(p) && q.get('file')) {
+      return text(200, `info: started\nwarn: something went wrong in ${q.get('file')}\nfail: Unhandled exception`);
+    }
+
     let m = /^\/v1\/services\/([^/]+)\/(start|stop|restart|promote|rollback|build-log|logs)$/.exec(p);
     if (m) {
       const name = decodeURIComponent(m[1]);

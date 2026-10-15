@@ -9,6 +9,7 @@ import StatusPill from '@/components/StatusPill.vue';
 import CandidatePanel from '@/components/CandidatePanel.vue';
 import LogView from '@/components/LogView.vue';
 import BuildLogModal from '@/components/BuildLogModal.vue';
+import KeptLogsModal from '@/components/KeptLogsModal.vue';
 import Sparkline from '@/components/Sparkline.vue';
 import Icon from '@/components/icons/Icon.vue';
 import type { IconName } from '@/components/icons/icons';
@@ -17,6 +18,7 @@ const route = useRoute();
 const stack = useStack();
 const now = useNow();
 const showBuildLog = ref(false);
+const showKeptLogs = ref(false);
 
 const name = computed(() => route.params.name as string);
 const svc = computed(() => stack.view?.services.find((s) => s.name === name.value) ?? null);
@@ -187,6 +189,7 @@ const kv = computed(() => {
           <h2>Log</h2>
           <span class="count">current instance, live</span>
           <span class="grow" />
+          <button type="button" class="btn btn-sm" data-testid="action-kept-logs" title="What earlier instances printed, by start" @click="showKeptLogs = true"><Icon name="history" :size="14" /> Earlier logs</button>
           <button type="button" class="btn btn-sm" data-testid="action-build-log" @click="showBuildLog = true"><Icon name="file" :size="14" /> Build log</button>
         </header>
         <LogView v-if="logPath" :path="logPath" height="min(60vh, 560px)" empty-text="No output from this instance yet." />
@@ -198,6 +201,7 @@ const kv = computed(() => {
       </section>
 
       <BuildLogModal v-if="stack.id" :open="showBuildLog" :stack-id="stack.id" :service="svc.name" @close="showBuildLog = false" />
+      <KeptLogsModal v-if="stack.id" :open="showKeptLogs" :stack-id="stack.id" :service="svc.name" @close="showKeptLogs = false" />
     </template>
 
     <div v-else class="card">

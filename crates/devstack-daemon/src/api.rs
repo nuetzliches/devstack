@@ -3,6 +3,7 @@
 //! checked on mutating requests, no CORS.
 
 use crate::commands::{self, RunError, Runs};
+use crate::logfiles;
 use crate::supervisor::Supervisor;
 use axum::Json;
 use axum::extract::{Path, Query, Request, State};
@@ -36,6 +37,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/logs", get(logs_all))
         .route("/v1/services/{name}/logs", get(logs))
         .route("/v1/services/{name}/logs/stream", get(log_stream))
+        .route("/v1/services/{name}/logs/files", get(log_files))
         .route("/v1/services/{name}/build-log", get(build_log))
         .route(
             "/v1/infra/{group}/{service}/restart",
@@ -179,6 +181,24 @@ struct LogQuery {
     tail: Option<usize>,
     /// Only lines containing this, case-insensitive.
     grep: Option<String>,
+    /// The build log of this build and the logs of the instances that ran it
+    /// (a prefix of the id is enough).
+    build: Option<String>,
+    /// The logs of the instances written to within this duration (`30m`, `2h`).
+    since: Option<String>,
+    /// One kept log by its name (see `logs/files`).
+    file: Option<String>,
+}
+
+impl LogQuery {
+    fn since(&self) -> Result<Option<std::time::Duration>, String> {
+        self.since
+            .as_deref()
+            .filter(|v| !v.is_empty())
+            .map(devstack_config::model::parse_duration)
+            .transpose()
+            .map_err(|e| format!("since: {e}"))
+    }
 }
 
 async fn logs(
@@ -186,10 +206,102 @@ async fn logs(
     Path(name): Path<String>,
     Query(q): Query<LogQuery>,
 ) -> Response {
-    match s.sup.service_log(&name) {
-        None => err(StatusCode::NOT_FOUND, format!("`{name}` has no log yet")),
-        Some(p) => text(matching(&p, q.tail.unwrap_or(200), q.grep.as_deref()).join("\n")),
+    if !s.sup.stack.services.contains_key(&name) {
+        return err(StatusCode::NOT_FOUND, format!("no service `{name}`"));
     }
+    let tail = q.tail.unwrap_or(200);
+    let grep = q.grep.as_deref().filter(|g| !g.is_empty());
+    let dir = s.sup.log_dir(&name);
+    let current = s.sup.service_log(&name);
+    if let Some(file) = q.file.as_deref() {
+        let Some(path) = logfiles::resolve(&dir, file) else {
+            return err(
+                StatusCode::NOT_FOUND,
+                format!("`{name}` has no log `{file}`"),
+            );
+        };
+        let lines = matching(&path, tail, grep).join("\n");
+        return text(if file.starts_with("build-") {
+            s.sup.repo_paths(&lines)
+        } else {
+            lines
+        });
+    }
+    let since = match q.since() {
+        Ok(v) => v,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    };
+    let build = q.build.as_deref().filter(|b| !b.is_empty());
+    if build.is_none() && since.is_none() {
+        return match current {
+            None => err(StatusCode::NOT_FOUND, format!("`{name}` has no log yet")),
+            Some(p) => text(matching(&p, tail, grep).join("\n")),
+        };
+    }
+    let sel = logfiles::select(&logfiles::list(&dir, current.as_deref()), build, since);
+    if sel.is_empty() {
+        return match build {
+            Some(b) => err(
+                StatusCode::NOT_FOUND,
+                format!("`{name}` has no kept log of build `{b}`"),
+            ),
+            None => text(String::new()),
+        };
+    }
+    text(s.sup.repo_paths(&combined(&dir, &sel, tail, grep, None)))
+}
+
+/// `GET /v1/services/{name}/logs/files`: the kept logs, newest first.
+async fn log_files(State(s): State<AppState>, Path(name): Path<String>) -> Response {
+    if !s.sup.stack.services.contains_key(&name) {
+        return err(StatusCode::NOT_FOUND, format!("no service `{name}`"));
+    }
+    let current = s.sup.service_log(&name);
+    Json(logfiles::list(&s.sup.log_dir(&name), current.as_deref())).into_response()
+}
+
+/// Several logs as one text, oldest first, each after a header line; `tail`
+/// counts the lines of the logs, not the headers. With `prefix`, every line
+/// starts with it (the service, when searching all).
+fn combined(
+    dir: &std::path::Path,
+    sel: &[logfiles::LogFile],
+    tail: usize,
+    grep: Option<&str>,
+    prefix: Option<&str>,
+) -> String {
+    let mut parts: Vec<(String, Vec<String>)> = sel
+        .iter()
+        .map(|f| {
+            (
+                logfiles::header(f),
+                matching(&dir.join(&f.file), usize::MAX, grep),
+            )
+        })
+        .filter(|(_, lines)| grep.is_none() || !lines.is_empty())
+        .collect();
+    // Keep the last `tail` lines across all parts; every part keeps its
+    // header, so what was cut is visible.
+    let mut left = tail;
+    let mut cut = vec![0usize; parts.len()];
+    for (i, (_, lines)) in parts.iter_mut().enumerate().rev() {
+        let keep = lines.len().min(left);
+        cut[i] = lines.len() - keep;
+        lines.drain(..cut[i]);
+        left -= keep;
+    }
+    let pre = prefix.map(|p| format!("{p} | ")).unwrap_or_default();
+    let mut out = Vec::new();
+    for ((h, lines), cut) in parts.into_iter().zip(cut) {
+        out.push(format!("{pre}{h}"));
+        if cut > 0 {
+            out.push(format!(
+                "{pre}… {cut} earlier line(s) not shown (raise `tail`)"
+            ));
+        }
+        out.extend(lines.into_iter().map(|l| format!("{pre}{l}")));
+    }
+    out.join("\n")
 }
 
 /// `GET /v1/logs?grep=…`: "where did this come from" across every service's
@@ -198,10 +310,24 @@ async fn logs_all(State(s): State<AppState>, Query(q): Query<LogQuery>) -> Respo
     let Some(grep) = q.grep.as_deref().filter(|g| !g.is_empty()) else {
         return err(StatusCode::BAD_REQUEST, "`grep` is required");
     };
+    let since = match q.since() {
+        Ok(v) => v,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    };
     let tail = q.tail.unwrap_or(50);
     let mut out = Vec::new();
     for svc in s.sup.view().services {
-        if let Some(p) = s.sup.service_log(&svc.name) {
+        if let Some(since) = since {
+            // Every instance written to within `since`, not only the current one.
+            let dir = s.sup.log_dir(&svc.name);
+            let current = s.sup.service_log(&svc.name);
+            let sel =
+                logfiles::select(&logfiles::list(&dir, current.as_deref()), None, Some(since));
+            let text = combined(&dir, &sel, tail, Some(grep), Some(&svc.name));
+            if !text.is_empty() {
+                out.push(text);
+            }
+        } else if let Some(p) = s.sup.service_log(&svc.name) {
             for line in matching(&p, tail, Some(grep)) {
                 out.push(format!("{} | {line}", svc.name));
             }

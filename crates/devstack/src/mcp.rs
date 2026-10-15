@@ -201,11 +201,15 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "logs",
-            "Console output of the service's current instance. With `grep` only matching lines; without `service` but with `grep`, every service is searched (\"where did this error come from\"). GET /v1/services/{service}/logs, GET /v1/logs.",
+            "Console output of the service's current instance, or of earlier ones (`build`, `since`, `file`, `list`: an instance that crashed or was replaced). With `grep` only matching lines; without `service` but with `grep`, every service is searched (\"where did this error come from\"). GET /v1/services/{service}/logs, GET /v1/logs.",
             json!({
                 "service": service["service"],
                 "tail": { "type": "integer", "minimum": 1, "default": 200, "description": "Number of last (matching) lines, per service when searching all" },
                 "grep": { "type": "string", "description": "Only lines containing this (case-insensitive)" },
+                "build": { "type": "string", "description": "Instead of the current instance: the build log of this build and the logs of every instance that ran it (an id prefix is enough)" },
+                "since": { "type": "string", "description": "Instead of the current instance: every instance's log written to within this time, e.g. `30m` (lines carry no time of their own). Also for the search across all services" },
+                "file": { "type": "string", "description": "One kept log by its file name (from `list`)" },
+                "list": { "type": "boolean", "description": "List the service's kept logs (instances and builds, newest first) instead of reading one" },
             }),
             &[],
             true,
@@ -339,14 +343,23 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
         "logs" => {
             let tail = args["tail"].as_u64().unwrap_or(200);
             let grep = args["grep"].as_str().filter(|g| !g.is_empty());
-            let q = grep
-                .map(|g| format!("&grep={}", client::enc(g)))
-                .unwrap_or_default();
+            let filter = client::LogFilter {
+                tail: tail as usize,
+                grep,
+                build: args["build"].as_str(),
+                since: args["since"].as_str(),
+                file: args["file"].as_str(),
+            };
+            let q = filter.query();
+            if args["list"].as_bool() == Some(true) {
+                let svc = name_arg(args, "service")?;
+                return connect(file)?.get(&format!("/v1/services/{svc}/logs/files"));
+            }
             if args["service"].is_null() {
                 let Some(g) = grep else {
                     anyhow::bail!("name a `service`, or search every service with `grep`");
                 };
-                let text = connect(file)?.get(&format!("/v1/logs?tail={tail}{q}"))?;
+                let text = connect(file)?.get(&format!("/v1/logs?{q}"))?;
                 return Ok(if text.is_empty() {
                     format!("no service log contains `{g}`")
                 } else {
@@ -354,7 +367,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 });
             }
             let svc = name_arg(args, "service")?;
-            let text = connect(file)?.get(&format!("/v1/services/{svc}/logs?tail={tail}{q}"))?;
+            let text = connect(file)?.get(&format!("/v1/services/{svc}/logs?{q}"))?;
             Ok(if text.is_empty() {
                 format!("`{svc}` has written nothing yet (or nothing matching)")
             } else {

@@ -353,18 +353,28 @@ impl Supervisor {
     /// The newest build log of `name` (last 3000 lines), compiler paths
     /// mapped from the snapshot to the repository.
     pub fn latest_build_log(&self, name: &str) -> Option<String> {
-        let dir = self.state_dir.join("logs").join(name);
+        let dir = self.log_dir(name);
         let newest = std::fs::read_dir(dir)
             .ok()?
             .flatten()
             .filter(|e| e.file_name().to_string_lossy().starts_with("build-"))
             .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())?;
-        let text = tail(&newest.path(), 3000);
+        Some(self.repo_paths(&tail(&newest.path(), 3000)))
+    }
+
+    /// Compiler paths in a build log point into the snapshot; map them to the
+    /// repository, where the user's files are.
+    pub fn repo_paths(&self, text: &str) -> String {
         let snap_dir = self.layout.lane("main").join("src");
-        Some(text.replace(
+        text.replace(
             &snap_dir.to_string_lossy().into_owned(),
             &self.repo.to_string_lossy(),
-        ))
+        )
+    }
+
+    /// Where the kept logs of `name` are (plan §11).
+    pub fn log_dir(&self, name: &str) -> PathBuf {
+        self.state_dir.join("logs").join(name)
     }
 
     pub fn service_log(&self, name: &str) -> Option<PathBuf> {
@@ -829,10 +839,10 @@ impl Supervisor {
             Some(p) => format!("{name}@{p}"),
             None => name.to_string(),
         };
-        let log = self.state_dir.join("logs").join(name).join(format!(
-            "run-{}-{}.log",
+        let log = self.log_dir(name).join(crate::logfiles::run_name(
             now_ms(),
-            port.unwrap_or(0)
+            port,
+            artifact.map(|(id, _)| id.as_str()),
         ));
         std::fs::create_dir_all(log.parent().unwrap()).map_err(|e| e.to_string())?;
         let file = std::fs::File::create(&log).map_err(|e| e.to_string())?;
