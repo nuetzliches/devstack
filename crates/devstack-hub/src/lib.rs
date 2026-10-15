@@ -7,7 +7,8 @@
 //! with a one-time code (`POST /hub/pair` with the user's token, then
 //! `/auth?code=`) and holds an `HttpOnly; SameSite=Strict` cookie; mutating
 //! requests need the hub's own `Origin`; no CORS. The daemons keep their
-//! token-only API; the hub adds the token when it forwards.
+//! token-only API; the hub adds the token when it forwards. The dashboard's
+//! live streams come over WebSocket (`ws`), which needs the own `Origin` too.
 
 use axum::Json;
 use axum::body::Body;
@@ -33,6 +34,7 @@ static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 
 mod dialog;
 pub mod release;
+mod ws;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const DEFAULT_PORT: u16 = 4250;
@@ -328,6 +330,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/docker", get(docker))
         .route("/hub/docker/start", post(docker_start))
         .route("/hub/events", get(events))
+        .route("/hub/ws", get(ws::ws))
         .route("/hub/inspect", get(inspect))
         .route("/hub/pick-folder", post(pick_folder))
         .route("/hub/stacks/add", post(stack_add))
@@ -422,7 +425,8 @@ async fn guard(State(s): State<AppState>, req: Request, next: Next) -> Response 
         if !ok {
             return err(StatusCode::UNAUTHORIZED, "not paired: run `devstack ui`");
         }
-        if req.method() != Method::GET && req.method() != Method::HEAD {
+        // A WebSocket handshake is a GET, but a page of any origin may open one.
+        if (req.method() != Method::GET && req.method() != Method::HEAD) || path == "/hub/ws" {
             let origin = h.get(header::ORIGIN).and_then(|v| v.to_str().ok());
             let cookie_auth = !bearer_ok(h, &s.token);
             let own = origin.is_some_and(|o| allowed.iter().any(|a| o == format!("http://{a}")));
@@ -650,18 +654,23 @@ async fn stacks(State(s): State<AppState>) -> Response {
 
 /// The stack list and the Docker engine first, then each on every change.
 async fn events(State(s): State<AppState>) -> Response {
+    let stream = hub_events(&s).map(|v| {
+        Ok::<_, std::convert::Infallible>(SseEvent::default().json_data(v).unwrap_or_default())
+    });
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
+/// What `/hub/events` sends, as values (also over WebSocket, `ws`).
+fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Value> + Send + use<> {
     let stacks = tokio_stream::wrappers::WatchStream::new(s.stacks.clone())
         .map(|stacks| serde_json::json!({ "type": "stacks", "stacks": stacks }));
     let docker = tokio_stream::wrappers::WatchStream::new(s.engine.clone())
         .map(|engine| serde_json::json!({ "type": "docker", "docker": engine }));
     let release = tokio_stream::wrappers::WatchStream::new(s.newer.clone())
         .map(|newer| serde_json::json!({ "type": "release", "current": VERSION, "newer": newer }));
-    let stream = stacks.merge(docker).merge(release).map(|v| {
-        Ok::<_, std::convert::Infallible>(SseEvent::default().json_data(v).unwrap_or_default())
-    });
-    Sse::new(stream)
-        .keep_alive(KeepAlive::default())
-        .into_response()
+    stacks.merge(docker).merge(release)
 }
 
 fn entry(s: &AppState, id: &str) -> Option<StackEntry> {
@@ -1093,31 +1102,56 @@ async fn forward(
         header::AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {}", s.token)).unwrap(),
     );
-    let stream = match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
-        Ok(st) => st,
-        Err(e) => {
-            return err(
-                StatusCode::SERVICE_UNAVAILABLE,
-                format!("stack not running: {e}"),
-            );
-        }
-    };
-    let (mut sender, conn) = match hyper::client::conn::http1::handshake(TokioIo::new(stream)).await
-    {
-        Ok(x) => x,
-        Err(e) => return err(StatusCode::BAD_GATEWAY, e.to_string()),
-    };
-    tokio::spawn(conn);
-    match sender
-        .send_request(hyper::Request::from_parts(parts, body))
-        .await
-    {
+    match daemon_send(port, hyper::Request::from_parts(parts, body)).await {
         Ok(resp) => {
             let (parts, body) = resp.into_parts();
             Response::from_parts(parts, Body::new(body))
         }
-        Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()),
+        Err((status, msg)) => err(status, msg),
     }
+}
+
+/// Why the hub could not reach a daemon: the status and message to answer with.
+type DaemonError = (StatusCode, String);
+
+/// `GET <path>` on the daemon of stack `id`, with the token (the `ws` bridge).
+async fn daemon_get(
+    s: &AppState,
+    id: &str,
+    path: &str,
+) -> Result<hyper::Response<hyper::body::Incoming>, DaemonError> {
+    let Some(port) = entry(s, id).and_then(|e| e.daemon).map(|d| d.port) else {
+        return Err((StatusCode::SERVICE_UNAVAILABLE, "stack not running".into()));
+    };
+    let req = hyper::Request::get(path)
+        .header(header::HOST, format!("127.0.0.1:{port}"))
+        .header(header::AUTHORIZATION, format!("Bearer {}", s.token))
+        .header(header::ACCEPT, "text/event-stream")
+        .body(Body::empty())
+        .map_err(|_| (StatusCode::BAD_REQUEST, "bad path".to_string()))?;
+    daemon_send(port, req).await
+}
+
+async fn daemon_send(
+    port: u16,
+    req: hyper::Request<Body>,
+) -> Result<hyper::Response<hyper::body::Incoming>, DaemonError> {
+    let stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("stack not running: {e}"),
+            )
+        })?;
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    tokio::spawn(conn);
+    sender
+        .send_request(req)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))
 }
 
 /// The embedded dashboard; unknown paths get `index.html` (client-side routes).

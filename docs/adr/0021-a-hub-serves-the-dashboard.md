@@ -1,6 +1,6 @@
 # ADR-0021: A hub on a fixed port serves the dashboard for every stack
 
-- **Status:** Accepted (2026-10-15)
+- **Status:** Accepted (2026-10-15), amended 2026-10-15 (the dashboard's streams come over WebSocket)
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** [ADR-0018](0018-dashboard-is-a-browser-page.md) (amended here), [ADR-0019](0019-control-api-security.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md)
@@ -41,12 +41,18 @@ dashboard do not fit that:
 4. **Event streams only.** The hub publishes the list of stacks and their
    running state as a stream (`/hub/events`); a daemon's stream starts with a
    snapshot of its state, then sends changes; logs are streams too. The
-   dashboard holds no timers that ask for state.
+   dashboard holds no timers that ask for state. **The dashboard receives
+   every stream over a WebSocket** (`/hub/ws?path=<stream>`): the hub opens
+   the server-sent event stream at that path, its own or a daemon's, and sends
+   each event's data as one message. The streams themselves stay server-sent
+   events, for the CLI and for anything else that reads them.
 5. **Security per ADR-0019**, now on the hub: loopback only, `Host` checked,
    the browser authenticates by pairing (`devstack ui` gets a one-time code from
    the hub with the user's token and opens `/auth?code=…`, which sets an
    `HttpOnly; SameSite=Strict` cookie), mutating requests need the hub's own
-   `Origin`, no CORS. The daemons keep their own token-only API; the browser
+   `Origin`, no CORS; so does the WebSocket handshake, although it is a
+   `GET`, because a page of any origin may open one. The daemons keep their own
+   token-only API; the browser
    never talks to them directly. A pairing outlives a hub restart (an update,
    a new login): the hub keeps a hash of each session cookie in
    `hub/hub-sessions.json` next to the token, never the cookie, for the
@@ -66,6 +72,15 @@ dashboard do not fit that:
    requests. Hub and daemon give requests two seconds after a stop, then exit;
    the dashboard sees the connection drop and shows the last known state.
 
+*Amended 2026-10-15.* The dashboard read its streams as `EventSource`s.
+A browser keeps at most six HTTP/1.1 connections per host, across every tab
+and installed-app window of a profile, and each dashboard window holds two to
+four streams open. Two or three windows used the six up; every request after
+that, a restart click included, waited in the browser's queue without end
+while the window showed "Connecting…". Measured with eight windows: a request
+answered in 2 ms over WebSockets, and not within 8 s once each window held one
+`EventSource` as well. WebSockets do not count against that limit.
+
 ADR-0018 stands otherwise: a browser page, no desktop wrapper, a tray later.
 The tray belongs to the hub, which is the long-lived process now.
 
@@ -77,6 +92,14 @@ The tray belongs to the hub, which is the long-lived process now.
   the project switch would still need something that knows all of them.
 - **The first daemon to start binds a shared dashboard port.** The dashboard
   would die with whichever stack happened to start first.
+- **HTTP/2 instead of WebSockets** (many streams over one connection). Browsers
+  speak HTTP/2 only over TLS; a certificate for a loopback hub is a setup step
+  of its own and a trust problem.
+- **One multiplexed stream per window, or one per browser** (a shared
+  worker). Fewer connections, still counted against the six, and a second
+  protocol on top of the streams.
+- **Streams paused in hidden tabs.** Helps, but two visible windows with a log
+  open still reach the limit.
 
 ## Consequences
 
@@ -88,6 +111,8 @@ The tray belongs to the hub, which is the long-lived process now.
 ## Enforced by
 
 - `crates/devstack-hub` (registry, pairing, forwarding, serving the embedded
-  dashboard), `devstack hub`, `devstack ui`.
+  dashboard; `ws.rs`, the WebSocket bridge), `devstack hub`, `devstack ui`.
+- `ui/src/api/real.ts` (`subscribe` over WebSocket); `crates/devstack/tests/hub.rs`
+  (`live_streams_come_over_websocket`).
 - `ui/` (Vue 3, Vite, TypeScript), built into the binary.
 - [`docs/dashboard-api.md`](../dashboard-api.md): the contract between them.

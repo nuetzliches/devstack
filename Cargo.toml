@@ -14,7 +14,7 @@ publish = false
 
 [workspace.dependencies]
 anyhow = "1"
-axum = { version = "0.8", features = ["json"] }
+axum = { version = "0.8", features = ["json", "ws"] }
 tower = { version = "0.5", features = ["util"] }
 blake3 = "1"
 bytes = "1"

@@ -1,0 +1,176 @@
+//! The dashboard's live streams over WebSocket (ADR-0021, amended).
+//!
+//! A browser opens at most six HTTP/1.1 connections per host, across every
+//! tab and installed-app window of a profile. Each dashboard window holds
+//! server-sent event streams open (the hub's, the stack's, a log), so two or
+//! three windows used up the six and every further request, a restart click
+//! included, waited in the browser's queue without end. WebSockets do not
+//! count against that limit.
+//!
+//! `GET /hub/ws?path=<path>` upgrades to a WebSocket that carries the server-sent
+//! event stream at `path` (`/hub/events` or `/hub/stacks/<id>/api/...`): every
+//! event's `data` is one text message. The streams themselves stay as they
+//! are, so the CLI and older dashboards keep using them. The upstream is
+//! opened before the upgrade: a stack that is not running answers the
+//! handshake with an error, as the event stream did.
+
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use bytes::{Buf, Bytes, BytesMut};
+use http_body_util::BodyExt;
+use serde::Deserialize;
+use std::pin::Pin;
+use std::time::Duration;
+use tokio_stream::{Stream, StreamExt};
+
+use crate::{AppState, err};
+
+type Messages = Pin<Box<dyn Stream<Item = String> + Send>>;
+
+#[derive(Deserialize)]
+pub(crate) struct WsQuery {
+    path: String,
+}
+
+pub(crate) async fn ws(
+    State(s): State<AppState>,
+    Query(q): Query<WsQuery>,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    let messages: Messages = if q.path == "/hub/events" {
+        Box::pin(crate::hub_events(&s).map(|v| v.to_string()))
+    } else if let Some((id, rest)) = q
+        .path
+        .strip_prefix("/hub/stacks/")
+        .and_then(|r| r.split_once("/api/"))
+    {
+        let resp = match crate::daemon_get(&s, id, &format!("/{rest}")).await {
+            Ok(r) => r,
+            Err((status, msg)) => return err(status, msg),
+        };
+        if resp.status() != StatusCode::OK {
+            let status = resp.status();
+            let body = resp
+                .into_body()
+                .collect()
+                .await
+                .map(|b| String::from_utf8_lossy(&b.to_bytes()).into_owned())
+                .unwrap_or_default();
+            return (status, body).into_response();
+        }
+        Box::pin(sse_data(resp.into_body().into_data_stream()))
+    } else {
+        return err(StatusCode::BAD_REQUEST, "no stream at that path");
+    };
+    upgrade.on_upgrade(move |socket| pump(socket, messages))
+}
+
+/// Until either side ends: messages out, pings so a closed tab is noticed
+/// even on a quiet stream. When the stream ends the socket closes, and the
+/// dashboard reconnects as it did after an event stream ended.
+async fn pump(mut socket: WebSocket, mut messages: Messages) {
+    let mut ping = tokio::time::interval(Duration::from_secs(20));
+    ping.tick().await;
+    loop {
+        tokio::select! {
+            m = messages.next() => match m {
+                Some(text) => {
+                    if socket.send(Message::Text(text.into())).await.is_err() {
+                        return;
+                    }
+                }
+                None => {
+                    let _ = socket.send(Message::Close(None)).await;
+                    return;
+                }
+            },
+            incoming = socket.recv() => match incoming {
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
+                Some(Ok(_)) => {}
+            },
+            _ = ping.tick() => {
+                if socket.send(Message::Ping(Bytes::new())).await.is_err() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// The `data` of each server-sent event in a body; comments (keep-alives)
+/// and other fields are dropped, multi-line data joined with `\n`.
+fn sse_data<S, E>(body: S) -> impl Stream<Item = String> + Send
+where
+    S: Stream<Item = Result<Bytes, E>> + Send + 'static,
+    E: Send + 'static,
+{
+    let mut buf = BytesMut::new();
+    let mut body = Box::pin(body);
+    async_stream(move |tx| async move {
+        while let Some(Ok(chunk)) = body.next().await {
+            buf.extend_from_slice(&chunk);
+            while let Some(end) = frame_end(&buf) {
+                let (len, sep) = end;
+                let frame = String::from_utf8_lossy(&buf[..len]).into_owned();
+                buf.advance(len + sep);
+                if let Some(data) = frame_data(&frame)
+                    && tx.send(data).await.is_err()
+                {
+                    return;
+                }
+            }
+        }
+    })
+}
+
+/// Where the first event in `buf` ends: its length and the blank line's.
+fn frame_end(buf: &[u8]) -> Option<(usize, usize)> {
+    (0..buf.len()).find_map(|i| {
+        if buf[i..].starts_with(b"\r\n\r\n") {
+            Some((i, 4))
+        } else if buf[i..].starts_with(b"\n\n") {
+            Some((i, 2))
+        } else {
+            None
+        }
+    })
+}
+
+fn frame_data(frame: &str) -> Option<String> {
+    let lines: Vec<&str> = frame
+        .lines()
+        .filter_map(|l| l.strip_prefix("data:"))
+        .map(|l| l.strip_prefix(' ').unwrap_or(l))
+        .collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// A stream fed by a task: `f` gets the sending half of a channel.
+fn async_stream<F, Fut>(f: F) -> impl Stream<Item = String> + Send
+where
+    F: FnOnce(tokio::sync::mpsc::Sender<String>) -> Fut,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let (tx, rx) = tokio::sync::mpsc::channel(64);
+    tokio::spawn(f(tx));
+    tokio_stream::wrappers::ReceiverStream::new(rx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn events_are_split_and_keep_alives_dropped() {
+        let chunks: Vec<Result<Bytes, std::convert::Infallible>> = vec![
+            Ok(Bytes::from_static(b"data: {\"a\":1}\n\n:\n\nda")),
+            Ok(Bytes::from_static(
+                b"ta: {\"b\":2}\r\n\r\nevent: x\ndata: one\ndata: two\n\n",
+            )),
+        ];
+        let got: Vec<String> = sse_data(tokio_stream::iter(chunks)).collect().await;
+        assert_eq!(got, vec!["{\"a\":1}", "{\"b\":2}", "one\ntwo"]);
+    }
+}

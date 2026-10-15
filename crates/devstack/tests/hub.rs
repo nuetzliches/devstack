@@ -413,3 +413,91 @@ fn enc(s: &str) -> String {
         })
         .collect()
 }
+
+/// A WebSocket handshake on `/hub/ws?path=<path>`: status, headers lowercased
+/// and, after a 101, the payload of the first text frame.
+fn ws_open(port: u16, path: &str, extra: &str) -> (u16, String, Option<String>) {
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    write!(
+        s,
+        "GET /hub/ws?path={} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{extra}\r\n",
+        enc(path)
+    )
+    .unwrap();
+    let mut r = BufReader::new(s);
+    let mut head = String::new();
+    loop {
+        let mut line = String::new();
+        if r.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+            break;
+        }
+        head.push_str(&line);
+    }
+    let status = head.get(9..12).and_then(|s| s.parse().ok()).unwrap_or(0);
+    if status != 101 {
+        return (status, head.to_ascii_lowercase(), None);
+    }
+    let mut hdr = [0u8; 2];
+    r.read_exact(&mut hdr).unwrap();
+    assert_eq!(hdr[0], 0x81, "a final text frame");
+    let len = match hdr[1] & 0x7f {
+        126 => {
+            let mut b = [0u8; 2];
+            r.read_exact(&mut b).unwrap();
+            u16::from_be_bytes(b) as usize
+        }
+        127 => {
+            let mut b = [0u8; 8];
+            r.read_exact(&mut b).unwrap();
+            u64::from_be_bytes(b) as usize
+        }
+        n => n as usize,
+    };
+    let mut payload = vec![0u8; len];
+    r.read_exact(&mut payload).unwrap();
+    (
+        status,
+        head.to_ascii_lowercase(),
+        Some(String::from_utf8(payload).unwrap()),
+    )
+}
+
+#[test]
+fn live_streams_come_over_websocket() {
+    let h = start();
+    let p = h.port;
+    let cookie = format!("Cookie: {}\r\n", paired_cookie(&h));
+    let own = format!("Origin: http://127.0.0.1:{p}\r\n");
+
+    // Paired, from the hub's own page: the hub's stream, one event per message.
+    let (s, head, first) = ws_open(p, "/hub/events", &format!("{cookie}{own}"));
+    assert_eq!(s, 101, "{head}");
+    let v: serde_json::Value = serde_json::from_str(&first.unwrap()).unwrap();
+    assert!(
+        ["stacks", "docker", "release"].contains(&v["type"].as_str().unwrap()),
+        "{v}"
+    );
+
+    // ADR-0019: a page of another origin, or no pairing, gets nothing.
+    let (s, _, _) = ws_open(
+        p,
+        "/hub/events",
+        &format!("{cookie}Origin: http://evil.example\r\n"),
+    );
+    assert_eq!(s, 403);
+    let (s, _, _) = ws_open(p, "/hub/events", &cookie);
+    assert_eq!(s, 403, "no Origin at all");
+    let (s, _, _) = ws_open(p, "/hub/events", &own);
+    assert_eq!(s, 401);
+
+    // A stack that is not running answers the handshake, as its stream did.
+    let (s, _, _) = ws_open(
+        p,
+        "/hub/stacks/nope/api/v1/events",
+        &format!("{cookie}{own}"),
+    );
+    assert_eq!(s, 503);
+    let (s, _, _) = ws_open(p, "/elsewhere", &format!("{cookie}{own}"));
+    assert_eq!(s, 400);
+}

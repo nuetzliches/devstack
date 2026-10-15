@@ -40,36 +40,46 @@ export class RealTransport implements Transport {
     return { status: res.status, ok: res.ok, body: parsed };
   }
 
+  /**
+   * A live stream over WebSocket (`/hub/ws?path=`): the hub carries the
+   * server-sent event stream at `path`, one message per event. Not as an
+   * EventSource, because a browser keeps at most six HTTP/1.1 connections
+   * per host across all tabs and app windows; a few dashboard windows with
+   * their streams used them up, and every request after that hung in the
+   * browser's queue. WebSockets do not count against that limit.
+   */
   subscribe<T = unknown>(path: string, handlers: StreamHandlers<T>): Subscription {
     let closed = false;
-    let es: EventSource | null = null;
+    let ws: WebSocket | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
 
     const setState = (s: StreamState) => handlers.onState?.(s);
+    const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/hub/ws?path=${encodeURIComponent(path)}`;
 
     const connect = () => {
       if (closed) return;
       setState('connecting');
-      es = new EventSource(path, { withCredentials: true });
-      es.onopen = () => {
+      const socket = new WebSocket(url);
+      ws = socket;
+      socket.onopen = () => {
         attempt = 0;
         setState('open');
       };
-      es.onmessage = (ev: MessageEvent<string>) => {
+      socket.onmessage = (ev: MessageEvent<string>) => {
         let data: T;
         try {
           data = JSON.parse(ev.data) as T;
         } catch {
-          return; // a keep-alive or a malformed line; ignore
+          return; // a malformed message; ignore
         }
         handlers.onMessage(data);
       };
-      es.onerror = () => {
-        // EventSource retries on its own only for some failures; take over so
-        // that the delay grows and a 401/503 does not end the stream for good.
-        es?.close();
-        es = null;
+      // An error is always followed by close: reconnect there, once, with a
+      // growing delay, so a 401/503 does not end the stream for good.
+      socket.onclose = () => {
+        if (ws !== socket) return;
+        ws = null;
         if (closed) return;
         setState('error');
         timer = setTimeout(connect, backoff(attempt++));
@@ -81,8 +91,9 @@ export class RealTransport implements Transport {
       close() {
         closed = true;
         if (timer) clearTimeout(timer);
-        es?.close();
-        es = null;
+        const socket = ws;
+        ws = null;
+        socket?.close();
       },
     };
   }
