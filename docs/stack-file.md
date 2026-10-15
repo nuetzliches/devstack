@@ -209,7 +209,7 @@ devstack command and the MCP server in the worktree act on its lane.
 - A dev server runs in a lane only if its `run` takes `{port}` (otherwise its
   fixed port is the main tree's).
 - `devstack promote --lane <name>` lets a lane's services answer on the main
-  ports (dev servers stay); `--lane main` gives them back. `devstack lane list`,
+  ports (dev servers through a TCP forward); `--lane main` gives them back. `devstack lane list`,
   `devstack lane remove <name>`.
 
 ## `[commands.<name>]`: operations

@@ -32,7 +32,7 @@ function pick(e: Event) {
       type="button"
       class="btn btn-sm"
       :disabled="busy"
-      title="This lane's services answer on the main ports; workers move with them. Dev servers stay with the main tree."
+      title="This lane's services, dev servers included, answer on the main ports; workers move with them."
       data-testid="lane-take-main"
       @click="stack.laneMain(current.name)"
     >

@@ -378,6 +378,23 @@ impl Lanes {
                 for s in main.proxied_services() {
                     let _ = main.stop(&s);
                 }
+                // Dev servers too, when the lane runs one: its port gets a
+                // byte-for-byte forward to the lane's (TLS passes through).
+                if let Some(l) = &lane {
+                    let running: Vec<String> = l
+                        .sup
+                        .view()
+                        .services
+                        .iter()
+                        .filter(|v| v.status.is_active())
+                        .map(|v| v.name.clone())
+                        .collect();
+                    for s in main.unproxied_services() {
+                        if running.contains(&s) {
+                            let _ = main.stop(&s);
+                        }
+                    }
+                }
                 for s in main.running_worker_services() {
                     let _ = main.relaunch(&s);
                 }
@@ -397,6 +414,12 @@ impl Lanes {
                         )?;
                     }
                 }
+                for s in main.unproxied_services() {
+                    let v = views.iter().find(|v| v.name == s && v.status.is_active());
+                    if let Some(port) = v.and_then(|v| v.port) {
+                        main.tcp_forward(&s, Some(port))?;
+                    }
+                }
                 l.sup.set_owns_main(true);
                 for s in l.sup.running_worker_services() {
                     let _ = l.sup.relaunch(&s);
@@ -410,6 +433,12 @@ impl Lanes {
                 }
                 for s in main.proxied_services() {
                     let _ = main.start(&s);
+                }
+                for s in main.unproxied_services() {
+                    let forwarded = main.tcp_forward(&s, None).is_ok();
+                    if forwarded {
+                        let _ = main.start(&s);
+                    }
                 }
                 for s in main.running_worker_services() {
                     let _ = main.relaunch(&s);

@@ -816,7 +816,7 @@ pub fn promote_lane(stack_file: &Path, lane: &str) -> Result<()> {
         println!("the main working tree serves the main ports again");
     } else {
         println!(
-            "lane `{lane}` serves the main ports now (dev servers stay with the main tree); `devstack promote --lane main` gives them back"
+            "lane `{lane}` serves the main ports now, dev servers included; `devstack promote --lane main` gives them back"
         );
     }
     Ok(())

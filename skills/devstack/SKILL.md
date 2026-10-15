@@ -55,7 +55,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack builds <service>` | the service's builds, newest first: live, failed (with the reason), superseded by a newer change, held; answers "did my change ever go live" and "since when is it broken" |
 | `devstack hot-reload <service> on\|off` | for a debugging session: the toolchain's watcher (e.g. `dotnet watch`) from the source tree instead of builds and candidates; needs `hot_reload` in the stack file. Switch it off again afterwards |
 | `devstack up` in a `git worktree` | runs that worktree as a **lane** of the main tree's daemon: its own builds, ports moved by +100 (+200, ...), the same infrastructure, no background workers. Every command in the worktree then acts on the lane (`devstack lane list` shows all) |
-| `devstack promote --lane <name>` | the lane's services answer on the main ports (dev servers stay); ask the user first, `--lane main` gives them back |
+| `devstack promote --lane <name>` | the lane's services, dev servers included, answer on the main ports; ask the user first, `--lane main` gives them back |
 | `devstack logs --daemon` | devstack's own log: every decision with its reason (`--grep <service>`, `--hub` for the dashboard hub) |
 | `devstack restart <service>` | rebuild now; the running instance stays until the new one is healthy |
 | `devstack restart <group>` | every service of a group from the stack file, built at the same time, and its containers (`start`/`stop` take a group too) |

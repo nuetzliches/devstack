@@ -45,9 +45,11 @@ names (the containers of one tree served the other), workers twice.
    proxied service forwards to the lane's port, and the workers move: the old
    owner restarts its worker services without them, the new owner with them.
    `--lane main` gives everything back. Dev servers and services with
-   `proxy = false` keep their fixed port in the main tree (a forwarding HTTP
-   proxy in front of a TLS dev server would break it). While a lane holds the
-   main slot, the main tree builds no candidates for the moved services.
+   `proxy = false` that run in the lane get a plain TCP forward on their fixed
+   port instead (an HTTP proxy in front of a TLS dev server would break it;
+   bytes pass unchanged, WebSockets included); one that does not run in the
+   lane keeps running in the main tree. While a lane holds the main slot, the
+   main tree builds no candidates for the moved services.
 6. **Who owns the main slot is runtime state.** A daemon restart starts clean
    (ADR-0016) with the main tree owning it; the registered lanes are remembered
    (`.devstack/lanes.json`) but start only with `devstack up` in their worktree.
@@ -66,8 +68,8 @@ names (the containers of one tree served the other), workers twice.
   identical inputs could reuse a build). Saves cold builds, but prune and
   concurrent publishing across supervisors need care. Deferred; each lane has
   its own artifact store for now.
-- **Forwarding dev servers too.** Needs a TCP-level forwarder and TLS
-  passthrough; deferred until it is needed.
+- **An HTTP proxy for dev servers as well.** Would break TLS dev servers
+  (`ng serve --ssl`); a TCP forward needs no knowledge of the protocol.
 
 ## Consequences
 

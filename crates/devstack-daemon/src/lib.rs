@@ -13,6 +13,7 @@ pub mod proxy;
 pub mod registry;
 pub mod state;
 pub mod supervisor;
+pub mod tcpfwd;
 pub mod timeline;
 pub mod token;
 pub mod usage;

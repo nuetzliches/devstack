@@ -92,6 +92,9 @@ pub struct Supervisor {
     owns_main: std::sync::atomic::AtomicBool,
     /// Main lane only: the lane its fixed ports forward to (`promote --lane`).
     served_by: Mutex<Option<String>>,
+    /// Main lane only: TCP forwards on the ports of services without the HTTP
+    /// proxy (dev servers) while a lane serves the main ports.
+    forwards: Mutex<BTreeMap<String, crate::tcpfwd::Forward>>,
 }
 
 /// Hash of the stack file, line endings ignored (a checkout may flip them).
@@ -258,6 +261,7 @@ impl Supervisor {
             hot: Mutex::new(BTreeSet::new()),
             owns_main: std::sync::atomic::AtomicBool::new(lane.is_empty()),
             served_by: Mutex::new(None),
+            forwards: Mutex::new(BTreeMap::new()),
             lane,
         }))
     }
@@ -827,6 +831,34 @@ impl Supervisor {
             .collect()
     }
 
+    /// Long-running services with a fixed port but without devstack's HTTP
+    /// proxy (dev servers, `proxy = false`): `promote --lane` forwards their
+    /// port byte for byte.
+    pub fn unproxied_services(&self) -> Vec<String> {
+        self.stack
+            .services
+            .iter()
+            .filter(|(_, s)| {
+                s.port.is_some() && !s.proxied() && s.kind != Kind::Job && runs_here(s)
+            })
+            .map(|(n, _)| n.clone())
+            .collect()
+    }
+
+    /// Main lane: forward the fixed port of `name` to `target` (`None` ends
+    /// the forward and frees the port).
+    pub fn tcp_forward(&self, name: &str, target: Option<u16>) -> Result<(), String> {
+        let svc = self.service(name)?.clone();
+        let mut fw = self.forwards.lock().unwrap();
+        fw.remove(name); // dropping it closes the listener
+        if let (Some(port), Some(t)) = (svc.port, target) {
+            let f = crate::tcpfwd::start(port, t, &self.rt)
+                .map_err(|e| format!("forward port {port} to {t}: {e}"))?;
+            fw.insert(name.to_string(), f);
+        }
+        Ok(())
+    }
+
     /// Running services that have worker switches (ADR-0008).
     pub fn running_worker_services(&self) -> Vec<String> {
         let slots = self.slots.lock().unwrap();
@@ -871,7 +903,10 @@ impl Supervisor {
 
     pub fn start(self: &Arc<Self>, name: &str) -> Result<(), String> {
         let svc = self.effective(name, self.service(name)?);
-        if let Some(lane) = self.served_by().filter(|_| svc.proxied()) {
+        if let Some(lane) = self
+            .served_by()
+            .filter(|_| svc.proxied() || self.forwards.lock().unwrap().contains_key(name))
+        {
             return Err(format!(
                 "lane `{lane}` serves the main ports: `devstack promote --lane main` first"
             ));
