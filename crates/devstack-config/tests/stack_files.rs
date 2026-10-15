@@ -228,3 +228,15 @@ members = [\"api\", \"compose.app.queue\"]
     assert!(all.contains("`a.b`: expected"), "{all}");
     assert!(all.contains("`api` is listed twice"), "{all}");
 }
+
+#[test]
+fn hot_reload_only_for_built_services() {
+    let ok = format!("{MINIMAL}hot_reload = {{ run = \"dotnet watch run\" }}\n");
+    let s = from_str(&ok, Path::new("t")).unwrap();
+    assert_eq!(s.services["api"].hot_reload.as_ref().unwrap().run, "dotnet watch run");
+    let dev = format!(
+        "{MINIMAL}[services.web]\nkind = \"devserver\"\nrun = \"npm start\"\nhot_reload = {{ run = \"x\" }}\n"
+    );
+    let issues = invalid(&dev);
+    assert!(issues.iter().any(|i| i.contains("services.web.hot_reload")), "{issues:?}");
+}

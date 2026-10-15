@@ -71,6 +71,7 @@ devstack logs --grep timeout  # every service's log, matching lines
 devstack logs api --since 2h  # earlier instances too (--build <id>, --list, --log <file>)
 devstack logs postgres       # a container's output, by its Compose service name
 devstack builds api          # its builds: which went live, failed, were replaced
+devstack hot-reload api on   # the toolchain's watcher from the source tree (`hot_reload` in the stack file)
 devstack update           # the latest release; the dashboard says when there is one
 devstack logs --daemon    # devstack's own decisions with their reasons (--hub: the dashboard hub)
 devstack run reset        # a command from the stack file

@@ -46,6 +46,10 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   instance, only one of them may run schedulers and queue consumers: put their
   switches into `[services.<name>.workers] env = { X = "{is_main}" }`, not into
   `env`.
+- **Hot reload is opt-in per session.** `[services.<name>.hot_reload]` with
+  the watcher's `run` (`dotnet watch run --non-interactive`) only makes
+  `devstack hot-reload <name> on` possible; the service still builds by
+  default. Built services only.
 - **Schema changes wait.** Paths that mean "this build needs a migration" go
   into `promote = { hold_if_changed = [...] }`; such a candidate waits for
   `devstack promote` instead of switching.

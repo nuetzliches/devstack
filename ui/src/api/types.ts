@@ -76,6 +76,10 @@ export type ServiceView = {
   instance_port: number | null;
   proxy: ProxyView | null;
   candidate: Candidate | null;
+  /** Runs the toolchain's watcher from the source tree instead of a build (older daemons omit it). */
+  hot_reload?: boolean;
+  /** The stack file gives the service a hot-reload mode. */
+  hot_reload_available?: boolean;
 };
 
 export type ContainerView = {

@@ -26,6 +26,7 @@ const to = computed(() => ({ name: 'service', params: { stack: stack.id ?? '', n
       <div class="grow name-col">
         <RouterLink :to="to" class="name" data-testid="service-link">{{ service.name }}</RouterLink>
         <div class="meta">
+          <span v-if="service.hot_reload" class="tag hot" title="hot-reload mode: the toolchain's watcher runs from the source tree" data-testid="service-hot-reload">hot reload</span>
           <span v-if="service.build_id" class="tag" :title="`running build ${service.build_id}`" data-testid="service-build">{{ shortBuild(service.build_id) }}</span>
           <a v-if="service.port" class="m port-link" :href="serviceUrl(service)" target="_blank" rel="noopener" :title="`open ${serviceUrl(service)}`" data-testid="service-url"><Icon name="link" :size="12" />:{{ service.port }}</a>
           <span v-if="service.pid" class="m hide-sm">pid {{ service.pid }}</span>

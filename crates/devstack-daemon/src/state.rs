@@ -75,6 +75,11 @@ pub struct ServiceView {
     pub proxy: Option<crate::proxy::ProxyView>,
     /// A newer build on its way into the main slot, or why it did not arrive.
     pub candidate: Option<Candidate>,
+    /// Runs in hot-reload mode: the toolchain's watcher from the source tree
+    /// instead of a build (plan §3.4a).
+    pub hot_reload: bool,
+    /// The stack file gives it a hot-reload mode.
+    pub hot_reload_available: bool,
 }
 
 /// A replacement for the main instance in progress (ADR-0003).

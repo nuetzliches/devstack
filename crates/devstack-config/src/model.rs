@@ -213,6 +213,21 @@ pub struct Service {
     /// Default on for long-running services with a port; `false` restarts in
     /// place on the fixed port.
     pub proxy: Option<bool>,
+    /// The command for hot-reload mode (plan §3.4a): `devstack hot-reload
+    /// <service> on` runs it from the source tree instead of the build, until
+    /// switched off. Built services only.
+    pub hot_reload: Option<HotReload>,
+}
+
+/// Hot-reload mode of a built service: the toolchain's own watcher, from
+/// the source tree, behind the same port (plan §3.4a).
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HotReload {
+    /// Command started instead of `run`, e.g. `dotnet watch run --non-interactive`.
+    pub run: String,
+    /// Working directory relative to the repository; the service's `cwd` by default.
+    pub cwd: Option<String>,
 }
 
 fn yes() -> bool {

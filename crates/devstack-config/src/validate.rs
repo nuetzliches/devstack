@@ -201,6 +201,12 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                 }
             }
         }
+        if svc.hot_reload.is_some() && (svc.kind != Kind::Service || svc.build.is_none()) {
+            c.err(
+                format!("{p}.hot_reload"),
+                "hot-reload mode replaces a build: only for services with `build` (a dev server reloads itself)",
+            );
+        }
         if svc.kind == Kind::Job && (svc.port.is_some() || svc.health.is_some()) {
             c.err(
                 &p,

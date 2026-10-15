@@ -67,6 +67,14 @@ enum Cmd {
         /// A service or a group of the stack file.
         service: String,
     },
+    /// Run a built service with its toolchain's watcher from the source tree
+    /// (`hot_reload` in the stack file), or back to builds (plan §3.4a).
+    #[command(name = "hot-reload")]
+    HotReload {
+        service: String,
+        #[arg(value_parser = ["on", "off"])]
+        state: String,
+    },
     /// Take over a candidate that waits for promotion (a schema change, ADR-0013).
     Promote { service: String },
     /// Go back to the build that ran before the last replacement (no build, no jobs).
@@ -357,6 +365,9 @@ fn main() -> Result<()> {
         Cmd::Start { service } => client::service_action(&cli.file, &service, "start"),
         Cmd::Stop { service } => client::service_action(&cli.file, &service, "stop"),
         Cmd::Restart { service } => client::service_action(&cli.file, &service, "restart"),
+        Cmd::HotReload { service, state } => {
+            client::service_action(&cli.file, &service, &format!("hot-reload-{state}"))
+        }
         Cmd::Promote { service } => client::service_action(&cli.file, &service, "promote"),
         Cmd::Rollback { service } => client::service_action(&cli.file, &service, "rollback"),
         Cmd::Logs {

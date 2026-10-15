@@ -57,6 +57,10 @@ health  = { http = "/health", timeout = "60s" }
 ensure_dirs = ["{repo}/dev/storage/files", "{repo}/dev/storage/invoices"]
 promote = { hold_if_changed = ["src/Data/Migrations/**"] }
 
+[services.api.hot_reload]                         # `devstack hot-reload api on`, plan §3.4a
+run = "dotnet watch run --non-interactive"
+cwd = "src/Api"
+
 [services.api.workers]                            # ADR-0008
 env = { Jobs__Runner__Enabled = "{is_main}", Webhooks__Consumer__Enabled = "{is_main}" }
 

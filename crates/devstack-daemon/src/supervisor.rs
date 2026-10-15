@@ -83,6 +83,8 @@ pub struct Supervisor {
     stack_file: PathBuf,
     stack_file_hash: Option<blake3::Hash>,
     config_changed: std::sync::atomic::AtomicBool,
+    /// Services switched to hot-reload mode (plan §3.4a), for this daemon's life.
+    hot: Mutex<BTreeSet<String>>,
 }
 
 /// Hash of the stack file, line endings ignored (a checkout may flip them).
@@ -179,6 +181,8 @@ impl Supervisor {
                         instance_port: None,
                         proxy: None,
                         candidate: None,
+                        hot_reload: false,
+                        hot_reload_available: svc.hot_reload.is_some(),
                     },
                     main: None,
                     previous: None,
@@ -218,6 +222,7 @@ impl Supervisor {
             stack_file_hash: stack_file_hash(&stack_file),
             stack_file,
             config_changed: std::sync::atomic::AtomicBool::new(false),
+            hot: Mutex::new(BTreeSet::new()),
         }))
     }
 
@@ -666,8 +671,70 @@ impl Supervisor {
     }
 
     /// Build if needed, then start and wait until ready (jobs: until done).
-    pub fn start(self: &Arc<Self>, name: &str) -> Result<(), String> {
+    fn is_hot(&self, name: &str) -> bool {
+        self.hot.lock().unwrap().contains(name)
+    }
+
+    /// The service as it runs now: in hot-reload mode its `hot_reload`
+    /// command from the source tree, without a build (plan §3.4a).
+    fn effective(&self, name: &str, svc: &Service) -> Service {
+        match (&svc.hot_reload, self.is_hot(name)) {
+            (Some(h), true) => {
+                let mut s = svc.clone();
+                s.build = None;
+                s.output = None;
+                s.run = h.run.clone();
+                if h.cwd.is_some() {
+                    s.cwd = h.cwd.clone();
+                }
+                s.watch.clear();
+                s.promote = None;
+                s
+            }
+            _ => svc.clone(),
+        }
+    }
+
+    /// Switch hot-reload mode on or off (plan §3.4a): on, the running
+    /// instance and any candidate make way for the toolchain's watcher from
+    /// the source tree on the same port; off, the service is built and
+    /// started as usual again.
+    pub fn hot_reload(self: &Arc<Self>, name: &str, on: bool) -> Result<(), String> {
         let svc = self.service(name)?.clone();
+        if svc.hot_reload.is_none() {
+            return Err(format!(
+                "`{name}` has no hot-reload mode: add [services.{name}.hot_reload] with the watcher's `run` to the stack file"
+            ));
+        }
+        if self.is_hot(name) == on {
+            return Ok(());
+        }
+        {
+            let mut hot = self.hot.lock().unwrap();
+            if on {
+                hot.insert(name.to_string());
+            } else {
+                hot.remove(name);
+            }
+        }
+        if let Some(slot) = self.slots.lock().unwrap().get_mut(name) {
+            slot.view.hot_reload = on;
+            slot.previous = None;
+        }
+        self.absorb(name);
+        self.held.lock().unwrap().remove(name);
+        self.set_candidate(name, None);
+        crate::diag::log(
+            "info",
+            "hot_reload",
+            serde_json::json!({ "service": name, "on": on }),
+        );
+        self.stop(name)?;
+        self.start(name)
+    }
+
+    pub fn start(self: &Arc<Self>, name: &str) -> Result<(), String> {
+        let svc = self.effective(name, self.service(name)?);
         if !runs_here(&svc) {
             return Err(format!("`{name}` does not run on this platform"));
         }
@@ -1120,6 +1187,11 @@ impl Supervisor {
     /// (ADR-0003). Behind the proxy the replacement is a candidate that takes
     /// over without dropping a request; otherwise a restart in place.
     pub fn restart(self: &Arc<Self>, name: &str) -> Result<(), String> {
+        if self.is_hot(name) {
+            // The watcher builds by itself; a restart starts it afresh.
+            self.stop(name)?;
+            return self.start(name);
+        }
         let svc = self.service(name)?.clone();
         self.absorb(name);
         let mut artifact = None;
@@ -1317,6 +1389,9 @@ The running instance was left as it was."
     /// pipeline thread builds a candidate once the tree has been quiet for a
     /// moment; a newer change kills a build in progress and starts over.
     pub fn changed(self: &Arc<Self>, name: &str, path: &str) {
+        if self.is_hot(name) {
+            return; // its own watcher reloads it
+        }
         let spawn = {
             let mut changes = self.changes.lock().unwrap();
             let c = changes.entry(name.to_string()).or_default();
@@ -1696,6 +1771,11 @@ The running instance was left as it was."
     /// slot, without building and without running jobs: a schema migration is
     /// never rolled back. Behind the proxy only (the replacement is a candidate).
     pub fn rollback(self: &Arc<Self>, name: &str) -> Result<(), String> {
+        if self.is_hot(name) {
+            return Err(format!(
+                "`{name}` runs in hot-reload mode: switch it off first"
+            ));
+        }
         let svc = self.service(name)?.clone();
         if !svc.proxied() {
             return Err(format!(
@@ -1718,6 +1798,11 @@ The running instance was left as it was."
 
     /// Take over a candidate that a promotion gate holds (ADR-0013).
     pub fn promote(self: &Arc<Self>, name: &str) -> Result<(), String> {
+        if self.is_hot(name) {
+            return Err(format!(
+                "`{name}` runs in hot-reload mode: switch it off first"
+            ));
+        }
         let svc = self.service(name)?.clone();
         let Some(artifact) = self.held.lock().unwrap().remove(name) else {
             return Err(format!("no candidate of `{name}` waits for promotion"));

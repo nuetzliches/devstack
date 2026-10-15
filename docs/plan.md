@@ -179,9 +179,13 @@ What the mode gives up, deliberately, for that service: no snapshot, no
 artifact and no build id (it runs from the source tree); no candidates and no
 "a broken build never replaces a working one"; the file locks and duplicate
 launches of the problem statement come back for it. It is a per-service choice
-for a session, not a stack-wide default. Planned follow-up: switch a service
-into and out of the mode at runtime (`devstack hot-reload api on|off`), without
-editing the stack file; the frontend dev server (§3.4) already works this way.
+for a session, not a stack-wide default.
+
+**Built (0.5.0):** `devstack hot-reload api on|off` switches a built service
+into the mode at runtime and back, from `[services.api.hot_reload]` (`run`,
+`cwd`) in the stack file; the dashboard and the MCP tool `hot_reload` do the
+same. While it is on, the watcher and candidates leave the service alone,
+`restart` starts the watcher afresh, `promote` and `rollback` refuse.
 
 ### 3.5 Lanes
 
@@ -564,7 +568,7 @@ every console ("Last error", again for the ones before); a candidate's own
 console while it starts (`logs/stream?build=`); a build timeline per service
 (`devstack builds`, MCP `builds`, "Builds" in the service view), read back
 from the diagnostic log; a command palette (Ctrl+K / Cmd+K) for views, stacks,
-services, groups, containers and commands.
+services, groups, containers and commands; the hot-reload switch (§3.4a).
 
 **Not covered by an automated test:** a machine reboot, a Docker Desktop
 restart, the `devstack://` link opened from a browser, an IDE terminal closing.
@@ -700,7 +704,6 @@ What is open, roughly in the order it pays off, and where it comes from.
 | Static frontend artifacts (`kind = "static"`) for e2e runs on a pinned build | phase 3, §3.4 | medium |
 | Own domain for the landing page (now on GitHub Pages); code signing of the Windows binary | phase 4 | small |
 | Remove the downstream stack's old orchestrator once its team works without it | phase 4 | downstream |
-| Hot-reload switch per service at runtime (`devstack hot-reload api on/off`) | §3.4a | medium |
 | `devstack init` beyond .NET and Node (Go, Python, Java), and from a second real repository | §13 | medium |
 | `devstack migrate`, once devstack has outside users | [ADR-0023](adr/0023-stack-file-compatibility.md) | medium |
 | Tray icon with status and notifications | §6, ADR-0018 | medium |

@@ -45,7 +45,16 @@ const actions = computed<Act[]>(() => {
     { action: 'start', label: 'Start', icon: 'play', show: isDown.value, primary: true, title: 'Start the service from its current build' },
     { action: 'restart', label: 'Restart', icon: 'restart', show: !isDown.value, title: 'Rebuild; the running instance is replaced only if the build succeeds and is healthy' },
     // promote lives in the candidate panel, next to the reason it is held
-    { action: 'rollback', label: 'Roll back', icon: 'rollback', show: !!s.build_id && !isDown.value, title: 'Switch back to the previous build' },
+    { action: 'rollback', label: 'Roll back', icon: 'rollback', show: !!s.build_id && !isDown.value && !s.hot_reload, title: 'Switch back to the previous build' },
+    {
+      action: s.hot_reload ? 'hot-reload-off' : 'hot-reload-on',
+      label: s.hot_reload ? 'Hot reload off' : 'Hot reload',
+      icon: 'zap',
+      show: !!s.hot_reload_available,
+      title: s.hot_reload
+        ? 'Back to builds: the service is built and started as usual, changes become candidates again'
+        : "Run the toolchain's watcher from the source tree on the same port: edits apply in place, but a broken edit is no longer kept away",
+    },
     { action: 'stop', label: 'Stop', icon: 'stop', show: !isDown.value, title: 'Stop the service' },
   ];
 });
@@ -54,7 +63,7 @@ const kv = computed(() => {
   const s = svc.value;
   if (!s) return [];
   return [
-    { k: 'Running build', v: s.build_id ?? '—', mono: true, testid: 'detail-build' },
+    { k: 'Running build', v: s.hot_reload ? 'hot reload, from the source tree' : (s.build_id ?? '—'), mono: !s.hot_reload, testid: 'detail-build' },
     { k: 'Since', v: `${ago(s.since, now.value)} (${dateTime(s.since)})` },
     { k: 'Kind', v: kindLabel(s) },
     { k: 'Process', v: s.pid ? `pid ${s.pid}` : '—' },

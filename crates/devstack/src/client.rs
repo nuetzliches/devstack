@@ -204,7 +204,11 @@ pub fn status_text(stack: &Value) -> String {
             "{:<22} {:<38} {:<17} {:>6} {:>7}",
             s["name"].as_str().unwrap_or(""),
             truncate(&state_of(s), 38),
-            s["build_id"].as_str().unwrap_or("-"),
+            if s["hot_reload"] == true {
+                "hot reload"
+            } else {
+                s["build_id"].as_str().unwrap_or("-")
+            },
             s["port"].as_u64().map_or("-".into(), |p| p.to_string()),
             s["pid"].as_u64().map_or("-".into(), |p| p.to_string()),
         );

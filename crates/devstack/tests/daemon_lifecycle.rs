@@ -84,6 +84,7 @@ env = {{ ASPNETCORE_URLS = "http://127.0.0.1:{{port}}" }}
 workers = {{ env = {{ Jobs__Enabled = "{{is_main}}" }} }}
 promote = {{ hold_if_changed = ["src/Api/Schema/**"] }}
 after = ["prep"]
+hot_reload = {{ run = "dotnet run --project src/Api/Api.csproj --no-launch-profile -nologo" }}
 
 # A job before the API, like a schema migrator: it must end as `completed`.
 [services.prep]
@@ -1013,6 +1014,30 @@ fn edits_become_candidates() {
             && builds.contains("live")
             && builds.contains("superseded"),
         "{builds}"
+    );
+
+    // Hot-reload mode: the source tree runs on the same port, edits do not
+    // become candidates, and off brings builds back (plan §3.4a).
+    s.ok(&["hot-reload", "api", "on"]);
+    assert!(
+        wait_for(|| s.api("/health").is_some(), Duration::from_secs(120)),
+        "api answers in hot-reload mode\n{}",
+        s.diag()
+    );
+    assert_eq!(s.service_view("api")["hot_reload"], true);
+    assert!(
+        s.ok(&["status"]).contains("hot reload"),
+        "status names the mode"
+    );
+    std::fs::write(&program, format!("{source}\n// edit in hot reload\n")).unwrap();
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(candidate().is_null(), "no candidate in hot-reload mode");
+    s.ok(&["hot-reload", "api", "off"]);
+    assert!(
+        s.service_view("api")["build_id"].is_string()
+            && s.service_view("api")["hot_reload"] == false,
+        "built again: {}",
+        s.service_view("api")
     );
 
     // The console of one build (what a candidate's panel shows).

@@ -48,7 +48,7 @@ export type MockStackSeed = {
 export function shopSeed(now: number): MockStackSeed {
   const repo = 'C:\\work\\shop';
   const services: ServiceView[] = [
-    service({ name: 'api', kind: 'service', groups: ['app'], port: 5080 }, repo, now),
+    service({ name: 'api', kind: 'service', groups: ['app'], port: 5080, hot_reload_available: true }, repo, now),
     service({ name: 'worker', kind: 'service', groups: ['app'] }, repo, now),
     service({ name: 'web', kind: 'devserver', groups: ['app'], port: 4200 }, repo, now),
     service(

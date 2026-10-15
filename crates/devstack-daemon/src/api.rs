@@ -174,6 +174,8 @@ async fn service_action(
         "restart" => tokio::task::spawn_blocking(move || sup.restart(&name)).await,
         "promote" => tokio::task::spawn_blocking(move || sup.promote(&name)).await,
         "rollback" => tokio::task::spawn_blocking(move || sup.rollback(&name)).await,
+        "hot-reload-on" => tokio::task::spawn_blocking(move || sup.hot_reload(&name, true)).await,
+        "hot-reload-off" => tokio::task::spawn_blocking(move || sup.hot_reload(&name, false)).await,
         _ => return err(StatusCode::NOT_FOUND, format!("unknown action `{action}`")),
     };
     match result {

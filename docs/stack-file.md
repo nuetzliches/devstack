@@ -165,6 +165,22 @@ Telemetry__Endpoint = "http://127.0.0.1:4317"
   every variable; `--export dotenv --out <file>` exports it for running the
   service without devstack ([ADR-0015](adr/0015-devstack-is-optional.md)).
 
+### Hot-reload mode
+
+```toml
+[services.api.hot_reload]
+run = "dotnet watch run --non-interactive"   # instead of the build and `run`
+cwd = "src/Api"                              # default: the service's `cwd`
+```
+
+`devstack hot-reload api on` (or the dashboard) stops the built instance and
+any candidate and runs this command from the **source tree** behind the same
+port, with the same environment and health check. Edits are applied by the
+toolchain's own watcher in place; devstack's watcher and candidates stay quiet
+for the service, and a broken edit is no longer kept away from it. `off` builds
+and starts it as usual again. For a debugging session, not as the default
+([plan §3.4a](plan.md)); only for services with `build`.
+
 ### Other keys
 
 | Key | Meaning |

@@ -186,6 +186,16 @@ pub fn tools() -> Vec<Value> {
             false,
         ),
         tool(
+            "hot_reload",
+            "Switch a built service into hot-reload mode (`on`: the toolchain's own watcher, e.g. `dotnet watch`, runs from the source tree on the same port; edits apply in place, but a broken edit is no longer kept away from the running service) or back to builds and candidates (`off`). Needs `hot_reload` for the service in the stack file. POST /v1/services/{service}/hot-reload-on|off.",
+            json!({
+                "service": service["service"],
+                "on": { "type": "boolean" },
+            }),
+            &["service", "on"],
+            false,
+        ),
+        tool(
             "promote_service",
             "Take over a candidate that waits for promotion, e.g. because it changes the database schema: runs the jobs the service comes after (a migrator), then switches. Ask the user first; `status` shows what waits and why. POST /v1/services/{service}/promote.",
             service.clone(),
@@ -391,6 +401,21 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 &connect(file)?.get(&format!("/v1/services/{svc}/builds?limit={limit}"))?,
             )?;
             Ok(client::builds_text(&list))
+        }
+        "hot_reload" => {
+            let svc = name_arg(args, "service")?;
+            let on = args["on"]
+                .as_bool()
+                .ok_or_else(|| anyhow::anyhow!("`on` (true or false) is required"))?;
+            let action = if on {
+                "hot-reload-on"
+            } else {
+                "hot-reload-off"
+            };
+            let (status, body) =
+                connect(file)?.post(&format!("/v1/services/{svc}/{action}"), None)?;
+            let body = checked(status, body)?;
+            Ok(client::status_text(&serde_json::from_str(&body)?))
         }
         "doctor" => Ok(crate::doctor::text(&crate::doctor::run(file))),
         "diagnostics" => {

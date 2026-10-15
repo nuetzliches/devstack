@@ -282,7 +282,7 @@ export class MockTransport implements Transport {
       }
       return view();
     }
-    let m = /^\/v1\/services\/([^/]+)\/(start|stop|restart|promote|rollback|build-log|logs)$/.exec(p);
+    let m = /^\/v1\/services\/([^/]+)\/(start|stop|restart|promote|rollback|build-log|logs|hot-reload-on|hot-reload-off)$/.exec(p);
     if (m) {
       const name = decodeURIComponent(m[1]);
       const action = m[2];
@@ -290,6 +290,12 @@ export class MockTransport implements Transport {
       if (!svc) return json(404, { error: `no service ${name}` });
       if (action === 'build-log') return text(200, s.buildLog(name));
       if (action === 'logs') return text(200, '');
+      if (action === 'hot-reload-on' || action === 'hot-reload-off') {
+        await sleep(1500);
+        svc.hot_reload = action === 'hot-reload-on';
+        svc.candidate = null;
+        return view();
+      }
       try {
         switch (action) {
           case 'start':
