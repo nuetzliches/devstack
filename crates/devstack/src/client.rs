@@ -49,8 +49,15 @@ impl Client {
 
     pub fn get(&self, path: &str) -> Result<String> {
         let (status, body) = self.call("GET", path, None)?;
+        if status == 404 && body.trim().is_empty() {
+            // No route at all: a daemon older than this devstack.
+            bail!(
+                "the running daemon does not know `{}`; it is probably older than this devstack: restart the stack (`devstack down` + `devstack up`)",
+                path.split('?').next().unwrap_or(path)
+            );
+        }
         if status >= 400 {
-            bail!("{}", error_text(&body));
+            bail!("{} (HTTP {status})", error_text(&body));
         }
         Ok(body)
     }
