@@ -18,7 +18,8 @@ async function start() {
   // Not in mock builds served by the dev server.
   if (import.meta.env.PROD && 'serviceWorker' in navigator && !isMock) {
     const { registerSW } = await import('virtual:pwa-register');
-    registerSW({ immediate: true });
+    const { rememberRegistration } = await import('./lib/app-update');
+    registerSW({ immediate: true, onRegisteredSW: (_url, r) => rememberRegistration(r) });
   }
 }
 
