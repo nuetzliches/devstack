@@ -136,7 +136,7 @@ type UsageReport = {
 | `GET /v1/infra/{group}/{service}/logs?tail=200&grep=&since=` | text, a container's output (`docker compose logs`), stdout and stderr merged by Docker's timestamps, each line starting with one; `since` as Docker takes it (`30m`); `502` when Docker fails. `/v1/services/{name}/logs` answers the same for a name that is no service but exactly one Compose service |
 | `GET /v1/services/{name}/logs/files` | JSON, the kept logs newest first: `[{file, kind: "run"\|"build", started_ms, modified_ms, build, port, bytes, current}]` |
 | `GET /v1/logs?grep=…&tail=50` | text, matching lines of every service's current log as `service \| line`; with `since=` every instance written to within that time |
-| `GET /v1/services/{name}/logs/stream?tail=200` | SSE: `{"type":"line","text":"..."}` for the last lines, then every new one; `{"type":"instance","build_id":...}` when another instance takes over (the lines that follow are the new one's) |
+| `GET /v1/services/{name}/logs/stream?tail=200` | SSE: `{"type":"line","text":"..."}` for the last lines, then every new one; `{"type":"instance","build_id":...}` when another instance takes over (the lines that follow are the new one's). With `build=<id>` it follows the newest instance of that build instead (a candidate's console), from before it exists to after it takes over |
 | `GET /v1/services/{name}/build-log` | text, the latest build log of the service (full compiler output) |
 | `GET /v1/runs/{id}/log/stream` | SSE: `{"type":"line","text":"..."}`, then `{"type":"end","status":"succeeded"|"failed","error":...}` |
 

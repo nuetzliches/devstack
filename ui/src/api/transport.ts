@@ -63,7 +63,8 @@ export const v1 = {
   events: '/v1/events',
   usage: '/v1/usage?history=true',
   up: '/v1/up',
-  logStream: (service: string, tail = 500) => `/v1/services/${enc(service)}/logs/stream?tail=${tail}`,
+  logStream: (service: string, tail = 500, build?: string) =>
+    `/v1/services/${enc(service)}/logs/stream?tail=${tail}${build ? `&build=${enc(build)}` : ''}`,
   buildLog: (service: string) => `/v1/services/${enc(service)}/build-log`,
   logFiles: (service: string) => `/v1/services/${enc(service)}/logs/files`,
   keptLog: (service: string, file: string, tail = 2000) => `/v1/services/${enc(service)}/logs?file=${enc(file)}&tail=${tail}`,

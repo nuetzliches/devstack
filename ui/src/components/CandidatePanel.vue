@@ -1,12 +1,15 @@
 <script setup lang="ts">
 // The prominent "not yet active" panel of a service: what is on its way, how
-// far it got, and why it did not arrive (compiler errors, schema hold).
-import { computed } from 'vue';
+// far it got, and why it did not arrive (compiler errors, schema hold), and
+// the console of the candidate's own process while it starts.
+import { computed, ref } from 'vue';
+import { paths, v1 } from '@/api';
 import type { ServiceView } from '@/api/types';
 import { ago, shortBuild, useNow } from '@/lib/format';
 import { candidateLook } from '@/lib/status';
 import { useStack } from '@/stores/stack';
 import Diagnostics from './Diagnostics.vue';
+import LogView from './LogView.vue';
 import Icon from './icons/Icon.vue';
 
 const props = defineProps<{ service: ServiceView; readonly?: boolean }>();
@@ -26,6 +29,14 @@ const stepIndex = computed(() => {
   if (s === 'failed') return c.value.build_id ? 1 : 0;
   return steps.indexOf(s as (typeof steps)[number]);
 });
+
+// A candidate has a process of its own from the health check on (and a
+// failed one may have printed why it did not come up).
+const hasProcess = computed(() => !!c.value.build_id && ['starting', 'switching', 'failed'].includes(c.value.state));
+const showConsole = ref(false);
+const consolePath = computed(() =>
+  showConsole.value && hasProcess.value && stack.id && stack.running ? paths.api(stack.id, v1.logStream(props.service.name, 500, c.value.build_id!)) : null,
+);
 
 const heldParts = computed(() => (c.value.reason ?? '').split(/(devstack promote \S+)/g).filter(Boolean));
 </script>
@@ -47,6 +58,17 @@ const heldParts = computed(() => (c.value.reason ?? '').split(/(devstack promote
         <p class="explain">{{ look.explain }}</p>
       </div>
       <div v-if="!readonly" class="cand-actions">
+        <button
+          v-if="hasProcess"
+          type="button"
+          class="btn"
+          :aria-pressed="showConsole"
+          data-testid="action-candidate-console"
+          title="Output of the candidate's process"
+          @click="showConsole = !showConsole"
+        >
+          <Icon name="terminal" /> Console
+        </button>
         <button
           v-if="c.state === 'held'"
           type="button"
@@ -82,6 +104,9 @@ const heldParts = computed(() => (c.value.reason ?? '').split(/(devstack promote
       <li v-if="c.state === 'held'" class="current held"><span class="bullet" aria-hidden="true" />Waiting for promote</li>
     </ol>
 
+    <div v-if="consolePath" class="cand-console">
+      <LogView :path="consolePath" height="260px" empty-text="The candidate has printed nothing yet." testid="candidate-log" />
+    </div>
     <div v-if="c.state === 'failed' && c.reason" class="cand-reason">
       <Diagnostics :text="c.reason" max-height="260px" />
     </div>
@@ -96,6 +121,12 @@ const heldParts = computed(() => (c.value.reason ?? '').split(/(devstack promote
 </template>
 
 <style scoped>
+.cand-console {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
 .cand {
   --tone: var(--accent);
   --tone-soft: var(--accent-soft);

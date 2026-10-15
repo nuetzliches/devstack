@@ -523,6 +523,9 @@ fn last_lines(path: &std::path::Path, n: usize) -> (Vec<String>, u64) {
 #[derive(Deserialize)]
 struct StreamQuery {
     tail: Option<usize>,
+    /// Follow the newest instance of this build (a candidate) instead of the
+    /// current one; a prefix of the id is enough.
+    build: Option<String>,
 }
 
 fn line(text: String) -> serde_json::Value {
@@ -542,14 +545,30 @@ async fn log_stream(
     let (tx, rx) = tokio::sync::mpsc::channel(512);
     let sup = s.sup.clone();
     let tail = q.tail.unwrap_or(200).min(5000);
+    let build = q.build.filter(|b| !b.is_empty());
     std::thread::spawn(move || {
         let mut current: Option<std::path::PathBuf> = None;
         let (mut pos, mut partial) = (0u64, String::new());
         let mut first = true;
         loop {
-            let path = sup.service_log(&name);
+            let path = match &build {
+                None => sup.service_log(&name),
+                Some(b) => {
+                    let dir = sup.log_dir(&name);
+                    logfiles::list(&dir, None)
+                        .into_iter()
+                        .find(|f| {
+                            f.kind == "run"
+                                && f.build
+                                    .as_deref()
+                                    .is_some_and(|id| id.starts_with(b.as_str()))
+                        })
+                        .map(|f| dir.join(f.file))
+                }
+            };
             if path != current {
-                if !first {
+                // A build's newest instance starting is no "another instance took over".
+                if !first && build.is_none() {
                     let build = sup
                         .view()
                         .services

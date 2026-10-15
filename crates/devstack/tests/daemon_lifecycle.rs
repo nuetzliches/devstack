@@ -296,6 +296,36 @@ members = [\"api\", \"command.ping\"]
         serde_json::from_str(&r.body_mut().read_to_string().unwrap()).unwrap()
     }
 
+    /// The first event of a daemon SSE stream.
+    fn sse_first(&self, path: &str) -> String {
+        use std::io::Read;
+        let daemon: Value = serde_json::from_slice(
+            &std::fs::read(self.dir.path().join(".devstack/daemon.json")).unwrap(),
+        )
+        .unwrap();
+        let token = std::fs::read_to_string(self.token_home.path().join("devstack/token")).unwrap();
+        let agent = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(10)))
+            .build()
+            .new_agent();
+        let mut r = agent
+            .get(&format!("http://127.0.0.1:{}{path}", daemon["port"]))
+            .header("Authorization", &format!("Bearer {token}"))
+            .call()
+            .unwrap();
+        let mut reader = r.body_mut().as_reader();
+        let mut text = String::new();
+        let mut buf = [0u8; 4096];
+        while !text.contains("data:") || !text.contains("\n\n") {
+            let n = reader.read(&mut buf).unwrap_or(0);
+            if n == 0 {
+                break;
+            }
+            text.push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+        text
+    }
+
     fn prep_runs(&self) -> usize {
         std::fs::read_to_string(self.dir.path().join("prep.count"))
             .map(|t| t.lines().count())
@@ -975,6 +1005,15 @@ fn edits_become_candidates() {
     assert!(
         since.matches("── started").count() >= 4,
         "every instance of the last hour:\n{since}"
+    );
+    // The console of one build (what a candidate's panel shows).
+    let ev = s.sse_first(&format!(
+        "/v1/services/api/logs/stream?tail=5&build={}",
+        &b0[..8]
+    ));
+    assert!(
+        ev.contains("\"type\":\"line\""),
+        "stream of build {b0}: {ev}"
     );
     let bad = s.cli(&["logs", "api", "--log", "../daemon.log"], None);
     assert!(!bad.status.success(), "only kept logs, no other path");
