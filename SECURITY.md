@@ -31,7 +31,9 @@ already runs under your account.
 
 devstack calls out only to ask GitHub for the latest release (the hub at start
 and every 12 hours, `devstack doctor`, `devstack update`), and Docker pulls
-images your Compose files name. `DEVSTACK_NO_UPDATE_CHECK=1` turns the release
+images your Compose files name. With `DEVSTACK_OTLP_ENDPOINT` set, daemon and
+hub also send their diagnostic log to that OTLP collector (it holds service
+names, build ids and paths of your repository). `DEVSTACK_NO_UPDATE_CHECK=1` turns the release
 check off.
 
 ## Out of scope

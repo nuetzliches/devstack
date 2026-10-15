@@ -570,7 +570,8 @@ console while it starts (`logs/stream?build=`); a build timeline per service
 from the diagnostic log; a command palette (Ctrl+K / Cmd+K) for views, stacks,
 services, groups, containers and commands; the hot-reload switch (§3.4a);
 `devstack init` for Go, Python (Django, FastAPI, Flask) and Spring Boot, with
-unique ports and a hot-reload section for .NET.
+unique ports and a hot-reload section for .NET; the diagnostic log also as OTLP
+log records (`DEVSTACK_OTLP_ENDPOINT`).
 
 **Not covered by an automated test:** a machine reboot, a Docker Desktop
 restart, the `devstack://` link opened from a browser, an IDE terminal closing.
@@ -710,4 +711,3 @@ What is open, roughly in the order it pays off, and where it comes from.
 | `devstack migrate`, once devstack has outside users | [ADR-0023](adr/0023-stack-file-compatibility.md) | medium |
 | Tray icon with status and notifications | §6, ADR-0018 | medium |
 | Network egress sandbox, stage 1 (cooperative proxy) | [ADR-0022](adr/0022-network-egress-sandbox.md) (proposed) | medium |
-| Optional OTLP export of devstack's own events, next to the diagnostic log | follow-up to §11 | small |

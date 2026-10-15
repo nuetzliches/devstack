@@ -16,6 +16,11 @@
 //!
 //! What a process writes to stdout/stderr (a panic, say) goes to `<name>.out`
 //! next to it, not here: this file stays parseable.
+//!
+//! With `DEVSTACK_OTLP_ENDPOINT` (e.g. `http://127.0.0.1:4318`) every line is
+//! also sent as an OTLP log record (HTTP/JSON, `/v1/logs`), batched, as
+//! `service.name` `devstack-daemon` or `devstack-hub`. Optional and lossy by
+//! design: a collector that is down costs nothing but the records.
 
 use serde_json::{Map, Value};
 use std::fs::File;
@@ -58,6 +63,9 @@ impl DiagLog {
             for (k, v) in f {
                 line.entry(k).or_insert(v);
             }
+        }
+        if let Some(tx) = OTLP.get().and_then(Option::as_ref) {
+            let _ = tx.try_send(Value::Object(line.clone()));
         }
         let mut text = Value::Object(line).to_string();
         text.push('\n');
@@ -102,9 +110,107 @@ fn now() -> String {
 
 static GLOBAL: OnceLock<DiagLog> = OnceLock::new();
 
+static OTLP: OnceLock<Option<std::sync::mpsc::SyncSender<Value>>> = OnceLock::new();
+
 /// The process's log (the daemon's or the hub's); set once at start.
 pub fn init(path: impl Into<PathBuf>) -> &'static DiagLog {
+    let path = path.into();
+    let service = match path.file_stem().and_then(|s| s.to_str()) {
+        Some("hub") => "devstack-hub",
+        _ => "devstack-daemon",
+    };
+    OTLP.get_or_init(|| {
+        let endpoint = std::env::var("DEVSTACK_OTLP_ENDPOINT")
+            .ok()
+            .filter(|e| !e.trim().is_empty())?;
+        let (tx, rx) = std::sync::mpsc::sync_channel(4096);
+        let url = format!("{}/v1/logs", endpoint.trim_end_matches('/'));
+        std::thread::Builder::new()
+            .name("otlp-export".into())
+            .spawn(move || export_loop(&url, service, &rx))
+            .ok()?;
+        Some(tx)
+    });
     GLOBAL.get_or_init(|| DiagLog::open(path))
+}
+
+/// Sends what arrives, in batches of up to 200 or every 2 s.
+fn export_loop(url: &str, service: &str, rx: &std::sync::mpsc::Receiver<Value>) {
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(3)))
+        .http_status_as_error(false)
+        .build()
+        .new_agent();
+    loop {
+        let Ok(first) = rx.recv() else { return };
+        let mut batch = vec![first];
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while batch.len() < 200 {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match rx.recv_timeout(left) {
+                Ok(v) => batch.push(v),
+                Err(_) => break,
+            }
+        }
+        let _ = agent
+            .post(url)
+            .header("Content-Type", "application/json")
+            .send(otlp_body(service, &batch).to_string());
+    }
+}
+
+/// OTLP/JSON `ExportLogsServiceRequest` for diagnostic lines.
+pub fn otlp_body(service: &str, lines: &[Value]) -> Value {
+    let attr = |k: &str, v: &Value| {
+        let value = match v {
+            Value::String(s) => serde_json::json!({ "stringValue": s }),
+            Value::Bool(b) => serde_json::json!({ "boolValue": b }),
+            Value::Number(n) if n.is_i64() || n.is_u64() => {
+                serde_json::json!({ "intValue": n.to_string() })
+            }
+            Value::Number(n) => serde_json::json!({ "doubleValue": n.as_f64() }),
+            other => serde_json::json!({ "stringValue": other.to_string() }),
+        };
+        serde_json::json!({ "key": k, "value": value })
+    };
+    let records: Vec<Value> = lines
+        .iter()
+        .filter_map(Value::as_object)
+        .map(|m| {
+            let level = m.get("level").and_then(Value::as_str).unwrap_or("info");
+            let (num, text) = match level {
+                "error" => (17, "ERROR"),
+                "warn" => (13, "WARN"),
+                _ => (9, "INFO"),
+            };
+            let nanos = m
+                .get("at")
+                .and_then(Value::as_str)
+                .and_then(|a| a.parse::<jiff::Timestamp>().ok())
+                .map(|t| t.as_nanosecond().to_string())
+                .unwrap_or_default();
+            let attributes: Vec<Value> = m
+                .iter()
+                .filter(|(k, _)| !matches!(k.as_str(), "at" | "level" | "event"))
+                .filter(|(_, v)| !v.is_null())
+                .map(|(k, v)| attr(&format!("devstack.{k}"), v))
+                .collect();
+            serde_json::json!({
+                "timeUnixNano": nanos,
+                "severityNumber": num,
+                "severityText": text,
+                "body": { "stringValue": m.get("event").and_then(Value::as_str).unwrap_or("") },
+                "attributes": attributes,
+            })
+        })
+        .collect();
+    serde_json::json!({ "resourceLogs": [{
+        "resource": { "attributes": [
+            attr("service.name", &Value::String(service.into())),
+            attr("service.version", &Value::String(devstack_config::VERSION.into())),
+        ]},
+        "scopeLogs": [{ "scope": { "name": "devstack" }, "logRecords": records }],
+    }]})
 }
 
 /// Write to the process's log, if [`init`] ran (tests and the CLI skip it).
@@ -216,6 +322,25 @@ mod tests {
         assert!(
             p.contains(" service=api") && p.contains(" reason=\"build failed\""),
             "{p}"
+        );
+    }
+
+    #[test]
+    fn diagnostic_lines_become_otlp_log_records() {
+        let line = json!({"at":"2026-10-15T12:00:00.000+02:00","level":"warn","event":"candidate","service":"api","code":3,"candidate":{"state":"failed"},"gone":null});
+        let body = otlp_body("devstack-daemon", &[line]);
+        let rec = &body["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0];
+        assert_eq!(rec["body"]["stringValue"], "candidate");
+        assert_eq!(rec["severityText"], "WARN");
+        assert_eq!(rec["timeUnixNano"], "1792058400000000000");
+        let attrs = rec["attributes"].as_array().unwrap();
+        assert!(attrs.contains(&json!({"key":"devstack.service","value":{"stringValue":"api"}})));
+        assert!(attrs.contains(&json!({"key":"devstack.code","value":{"intValue":"3"}})));
+        assert!(attrs.iter().any(|a| a["key"] == "devstack.candidate"));
+        assert!(!attrs.iter().any(|a| a["key"] == "devstack.gone"));
+        assert_eq!(
+            body["resourceLogs"][0]["resource"]["attributes"][0]["value"]["stringValue"],
+            "devstack-daemon"
         );
     }
 
