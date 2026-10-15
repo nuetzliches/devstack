@@ -67,11 +67,24 @@ enum Cmd {
     },
     /// Console output of a service.
     Logs {
-        service: String,
+        /// The service; not with --daemon / --hub.
+        service: Option<String>,
         #[arg(long, short = 'n', default_value_t = 200)]
         tail: usize,
         #[arg(long)]
         follow: bool,
+        /// devstack's own log for this stack: every decision with its reason (JSON lines).
+        #[arg(long, conflicts_with_all = ["service", "hub"])]
+        daemon: bool,
+        /// The dashboard hub's log.
+        #[arg(long, conflicts_with = "service")]
+        hub: bool,
+        /// With --daemon / --hub: only lines containing this (case-insensitive).
+        #[arg(long)]
+        grep: Option<String>,
+        /// With --daemon / --hub: the raw JSON lines instead of readable ones.
+        #[arg(long)]
+        json: bool,
     },
     /// CPU, memory and disk per service, container, group and lane (plan §12).
     Top {
@@ -274,7 +287,25 @@ fn main() -> Result<()> {
             service,
             tail,
             follow,
-        } => client::logs(&cli.file, &service, tail, follow),
+            daemon,
+            hub,
+            grep,
+            json,
+        } => {
+            if daemon || hub {
+                let path = if hub {
+                    devstack_hub::log_path()
+                } else {
+                    client::state_dir(&cli.file)?.join("daemon.log")
+                };
+                client::diag_log(&path, tail, grep.as_deref(), follow, json)
+            } else {
+                let service = service.ok_or_else(|| {
+                    anyhow::anyhow!("name a service, or --daemon / --hub for devstack's own log")
+                })?;
+                client::logs(&cli.file, &service, tail, follow)
+            }
+        }
         Cmd::Mcp => mcp::serve(&cli.file),
         Cmd::Ui { print } => hubcmd::ui(print),
         Cmd::Hub { action: None } => devstack_hub::serve().map_err(|e| anyhow::anyhow!(e)),

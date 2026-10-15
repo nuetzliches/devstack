@@ -81,6 +81,9 @@ impl Resolve for CommandContext {
     }
 }
 
+/// Run logs kept per command.
+const KEEP_COMMAND_LOGS: usize = 20;
+
 /// Start a run in the background; returns its id.
 pub fn start(
     sup: &Arc<Supervisor>,
@@ -117,6 +120,7 @@ pub fn start(
         .join(name)
         .join(format!("{}-{id}.log", now_ms()));
     let _ = std::fs::create_dir_all(log.parent().unwrap());
+    crate::diag::prune(log.parent().unwrap(), "", KEEP_COMMAND_LOGS);
     runs.runs.lock().unwrap().insert(
         id,
         RunInfo {

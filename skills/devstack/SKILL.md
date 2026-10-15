@@ -47,6 +47,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack up` | Docker check, infrastructure, jobs, every autostart service; starts the dashboard hub. First run takes minutes (images, builds), later ones well under a minute |
 | `devstack status` | state per service and container; `-> not yet active: …` means the latest change is not running yet |
 | `devstack logs <service> --follow` | console output (`-n 500` for more history) |
+| `devstack logs --daemon` | devstack's own log: every decision with its reason (`--grep <service>`, `--hub` for the dashboard hub) |
 | `devstack restart <service>` | rebuild now; the running instance stays until the new one is healthy |
 | `devstack promote <service>` | take over a candidate that is held (schema change, see below) |
 | `devstack rollback <service>` | back to the build before the last replacement, without building |
@@ -95,7 +96,7 @@ port tell within a second, and they are the evidence to quote.
 
 `devstack mcp` is an MCP server (stdio) with `status`, `up`, `down`,
 `start_service`, `stop_service`, `restart_service`, `promote_service`,
-`rollback_service`, `logs`, `run_command`, `usage`, `hub_status`, `hub_start`.
+`rollback_service`, `logs`, `diagnostics`, `run_command`, `usage`, `hub_status`, `hub_start`.
 Register it once (project `.mcp.json` or user configuration):
 
 ```json
@@ -109,6 +110,7 @@ Register it once (project `.mcp.json` or user configuration):
 
 | Symptom | Cause and fix |
 | --- | --- |
+| something happened and nothing says why (a restart, a switch, a stop) | `devstack logs --daemon --grep <service>` (MCP `diagnostics`): service and candidate states with reasons, every request that changed something, daemon start and stop; it works with the daemon stopped |
 | `devstack up`: Docker is not running | `up` starts Docker Desktop and waits; with Docker Engine as a Linux service it names `sudo systemctl start docker` for the user |
 | a port is taken | another process (often a second copy of the stack, an IDE run, a leftover process) holds it; find it (`Get-NetTCPConnection -LocalPort <p>` / `ss -ltnp`) and ask before ending it |
 | `failed` candidate | the old build keeps running; `devstack status` shows the reason, the build log is in `.devstack/logs/<service>/build-<id>.log` |
@@ -127,8 +129,9 @@ not say enough), ask the user for permission to open an issue in
 `nuetzliches/devstack`.** Do not open it without a yes.
 
 What the issue needs: devstack version (`devstack --version`), OS, what you did,
-what happened and what you expected, the relevant lines of `devstack status` /
-the logs, and a minimal stack file excerpt that shows it.
+what happened and what you expected, the relevant lines of `devstack status`,
+`devstack logs --daemon` and the service log, and a minimal stack file excerpt
+that shows it.
 
 **Keep the project out of it.** The issue goes to another repository (and may
 become public): no names of this project, its customers, hosts, internal paths,

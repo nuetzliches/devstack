@@ -48,7 +48,27 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/runs/{id}/log", get(run_log))
         .route("/v1/runs/{id}/log/stream", get(run_log_stream))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
+        .layer(middleware::from_fn(audit))
         .with_state(state)
+}
+
+/// Every request that changes something goes to the diagnostic log with its
+/// answer, refused ones included (outermost layer): "who restarted that, and
+/// did it work" is answerable afterwards.
+async fn audit(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    if method == axum::http::Method::GET || method == axum::http::Method::HEAD {
+        return next.run(req).await;
+    }
+    let path = req.uri().path().to_string();
+    let res = next.run(req).await;
+    let status = res.status().as_u16();
+    crate::diag::log(
+        if status >= 400 { "warn" } else { "info" },
+        "request",
+        serde_json::json!({ "method": method.as_str(), "path": path, "status": status }),
+    );
+    res
 }
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {

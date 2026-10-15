@@ -77,7 +77,8 @@ pub fn ensure_daemon(stack_file: &Path, state_dir: &Path) -> Result<Client> {
         return Ok(c);
     }
     std::fs::create_dir_all(state_dir)?;
-    let log = std::fs::File::create(state_dir.join("daemon.log"))?;
+    // stdout/stderr (a panic, say); the daemon's own diagnostic log is daemon.log.
+    let log = std::fs::File::create(state_dir.join("daemon.out"))?;
     let exe = std::env::current_exe()?;
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("daemon")
@@ -95,14 +96,32 @@ pub fn ensure_daemon(stack_file: &Path, state_dir: &Path) -> Result<Client> {
             return Ok(c);
         }
         if let Ok(Some(status)) = child.try_wait() {
-            let log = std::fs::read_to_string(state_dir.join("daemon.log")).unwrap_or_default();
-            bail!("the daemon exited ({status}):\n{log}");
+            bail!(
+                "the daemon exited ({status}):\n{}",
+                daemon_report(state_dir)
+            );
         }
         std::thread::sleep(Duration::from_millis(200));
     }
     bail!(
-        "the daemon did not answer within 20 s; see {}",
-        state_dir.join("daemon.log").display()
+        "the daemon did not answer within 20 s:\n{}",
+        daemon_report(state_dir)
+    )
+}
+
+/// What a daemon that did not come up left behind: its output and the end of
+/// its diagnostic log.
+fn daemon_report(state_dir: &Path) -> String {
+    let out = std::fs::read_to_string(state_dir.join("daemon.out")).unwrap_or_default();
+    let log: Vec<String> = devstack_daemon::diag::tail(&state_dir.join("daemon.log"), 20, None)
+        .iter()
+        .map(|l| devstack_daemon::diag::pretty(l))
+        .collect();
+    format!(
+        "{}\n--- {} (last lines)\n{}",
+        out.trim_end(),
+        state_dir.join("daemon.log").display(),
+        log.join("\n")
     )
 }
 
@@ -362,6 +381,58 @@ pub fn service_action(stack_file: &Path, name: &str, action: &str) -> Result<()>
     }
     print_status(&serde_json::from_str(&body)?);
     Ok(())
+}
+
+/// `devstack logs --daemon` / `--hub`: the diagnostic log, readable or raw.
+/// Reads the file directly, so it works after the daemon is gone too.
+pub fn diag_log(
+    path: &Path,
+    tail: usize,
+    grep: Option<&str>,
+    follow: bool,
+    json: bool,
+) -> Result<()> {
+    use devstack_daemon::diag;
+    let show = |l: &str| {
+        if json {
+            println!("{l}");
+        } else {
+            println!("{}", diag::pretty(l));
+        }
+    };
+    let lines = diag::tail(path, tail, grep);
+    if lines.is_empty() && !path.exists() {
+        println!("no log yet at {}", path.display());
+    }
+    for l in &lines {
+        show(l);
+    }
+    if !follow {
+        return Ok(());
+    }
+    let mut seen = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let needle = grep.map(str::to_lowercase);
+    loop {
+        std::thread::sleep(Duration::from_millis(500));
+        let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        if len < seen {
+            seen = 0; // rotated
+        }
+        if len == seen {
+            continue;
+        }
+        use std::io::{Read, Seek, SeekFrom};
+        let mut f = std::fs::File::open(path)?;
+        f.seek(SeekFrom::Start(seen))?;
+        let mut text = String::new();
+        f.read_to_string(&mut text)?;
+        seen = len;
+        for l in text.lines() {
+            if needle.as_ref().is_none_or(|g| l.to_lowercase().contains(g)) {
+                show(l);
+            }
+        }
+    }
 }
 
 pub fn logs(stack_file: &Path, name: &str, tail: usize, follow: bool) -> Result<()> {

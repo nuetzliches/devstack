@@ -4,6 +4,7 @@
 
 pub mod api;
 pub mod commands;
+pub mod diag;
 pub mod health;
 pub mod proxy;
 pub mod registry;
@@ -81,6 +82,8 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
             Err(e) => return Err(e.to_string()),
         }
     };
+    // Only the lock holder writes the diagnostic log (plan §11).
+    diag::init(state_dir.join("daemon.log"));
     devstack_proc::ensure_console().map_err(|e| e.to_string())?;
     let token = token::load_or_create().map_err(|e| format!("token: {e}"))?;
     // Known to the hub from now on (ADR-0021); a failure costs only the listing.
@@ -125,6 +128,15 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
             serde_json::to_vec_pretty(&info).unwrap(),
         )
         .map_err(|e| e.to_string())?;
+        diag::info(
+            "daemon_start",
+            serde_json::json!({
+                "version": devstack_config::VERSION,
+                "pid": info.pid,
+                "port": port,
+                "stack": sup.stack.stack.name,
+            }),
+        );
         let shutdown = Arc::new(tokio::sync::Notify::new());
         let app = api::router(api::AppState {
             sup: sup.clone(),
@@ -136,10 +148,11 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
         });
         let (stopping_tx, stopping_rx) = tokio::sync::oneshot::channel::<()>();
         let stop = async move {
-            tokio::select! {
-                _ = shutdown.notified() => {}
-                _ = tokio::signal::ctrl_c() => {}
-            }
+            let why = tokio::select! {
+                _ = shutdown.notified() => "shutdown requested",
+                _ = tokio::signal::ctrl_c() => "ctrl-c",
+            };
+            diag::info("daemon_stopping", serde_json::json!({ "reason": why }));
             let _ = stopping_tx.send(());
         };
         let serve = axum::serve(listener, app).with_graceful_shutdown(stop);
@@ -151,11 +164,15 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
             _ = async {
                 let _ = stopping_rx.await;
                 tokio::time::sleep(SHUTDOWN_GRACE).await;
-            } => Ok(()),
+            } => {
+                diag::info("daemon_streams_cut", serde_json::json!({ "after_s": SHUTDOWN_GRACE.as_secs() }));
+                Ok(())
+            }
         };
         let s = sup.clone();
         let _ = tokio::task::spawn_blocking(move || s.down(false)).await;
         let _ = std::fs::remove_file(info_path(&state_dir));
+        diag::info("daemon_stop", serde_json::json!({}));
         served
     })
 }

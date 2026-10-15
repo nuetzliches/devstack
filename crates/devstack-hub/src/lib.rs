@@ -18,7 +18,7 @@ use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, delete, get, post};
 use devstack_compose::engine::{self, Engine};
-use devstack_daemon::registry;
+use devstack_daemon::{diag, registry};
 use hyper_util::rt::TokioIo;
 use include_dir::{Dir, include_dir};
 use serde::{Deserialize, Serialize};
@@ -57,6 +57,11 @@ fn state_dir() -> PathBuf {
         .parent()
         .expect("token path has a parent")
         .join("hub")
+}
+
+/// The hub's diagnostic log (`devstack logs --hub`).
+pub fn log_path() -> PathBuf {
+    state_dir().join("hub.log")
 }
 
 pub fn read_info() -> Option<HubInfo> {
@@ -201,6 +206,7 @@ pub fn serve() -> Result<(), String> {
     let dir = state_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let _lock = devstack_proc::StateLock::acquire(&dir).map_err(|e| e.to_string())?;
+    diag::init(log_path());
     let token = devstack_daemon::token::load_or_create().map_err(|e| format!("token: {e}"))?;
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     rt.block_on(async move {
@@ -265,11 +271,16 @@ pub fn serve() -> Result<(), String> {
             });
         }
         let hub_json = dir.join("hub.json");
+        diag::info(
+            "hub_start",
+            serde_json::json!({ "version": VERSION, "pid": std::process::id(), "port": port }),
+        );
         let stop = async move {
-            tokio::select! {
-                _ = shutdown.notified() => {}
-                _ = tokio::signal::ctrl_c() => {}
-            }
+            let why = tokio::select! {
+                _ = shutdown.notified() => "shutdown requested",
+                _ = tokio::signal::ctrl_c() => "ctrl-c",
+            };
+            diag::info("hub_stop", serde_json::json!({ "reason": why }));
             // Open streams (every dashboard tab holds one) never end on their own,
             // and a graceful shutdown waits for them. Give requests a moment, then go.
             std::thread::spawn(move || {
@@ -303,7 +314,26 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/stacks/{id}/api/{*rest}", any(forward))
         .fallback(get(asset))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
+        .layer(middleware::from_fn(audit))
         .with_state(state)
+}
+
+/// Every request that changes something, with its answer (refused ones too,
+/// this is the outer layer). Paths only: no query (a pairing code), no body.
+async fn audit(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    if method == Method::GET || method == Method::HEAD {
+        return next.run(req).await;
+    }
+    let path = req.uri().path().to_string();
+    let res = next.run(req).await;
+    let status = res.status().as_u16();
+    diag::log(
+        if status >= 400 { "warn" } else { "info" },
+        "request",
+        serde_json::json!({ "method": method.as_str(), "path": path, "status": status }),
+    );
+    res
 }
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
@@ -389,6 +419,11 @@ async fn auth(State(s): State<AppState>, Query(q): Query<CodeQuery>) -> Response
         .unwrap()
         .remove(&q.code)
         .is_some_and(|t| t.elapsed() < Duration::from_secs(60));
+    diag::log(
+        if valid { "info" } else { "warn" },
+        if valid { "paired" } else { "pairing_refused" },
+        serde_json::json!({}),
+    );
     if !valid {
         return (
             StatusCode::UNAUTHORIZED,
@@ -443,6 +478,11 @@ fn watch_engine(fast_until: Arc<std::sync::atomic::AtomicU64>) -> watch::Receive
                 if *cur == next {
                     false
                 } else {
+                    diag::log(
+                        if next.is_running() { "info" } else { "warn" },
+                        "docker",
+                        serde_json::to_value(&next).unwrap_or_default(),
+                    );
                     *cur = next;
                     true
                 }

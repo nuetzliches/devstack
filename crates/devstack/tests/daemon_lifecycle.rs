@@ -234,8 +234,16 @@ members = [\"api\", \"command.ping\"]
         )
     }
 
+    /// The daemon's diagnostic log and its raw output (a panic lands there).
     fn daemon_log(&self) -> String {
-        std::fs::read_to_string(self.dir.path().join(".devstack/daemon.log")).unwrap_or_default()
+        let read = |f: &str| {
+            std::fs::read_to_string(self.dir.path().join(".devstack").join(f)).unwrap_or_default()
+        };
+        format!(
+            "{}\n--- daemon.out:\n{}",
+            read("daemon.log"),
+            read("daemon.out")
+        )
     }
 
     fn api(&self, path: &str) -> Option<String> {
@@ -305,14 +313,7 @@ impl Drop for Stack {
     fn drop(&mut self) {
         if std::thread::panicking() {
             // The daemon's own account is the only evidence once the temp dir is gone.
-            let log = self.dir.path().join(".devstack/daemon.log");
-            eprintln!(
-                "--- {} ---
-{}
---- end ---",
-                log.display(),
-                std::fs::read_to_string(&log).unwrap_or_else(|e| e.to_string())
-            );
+            eprintln!("--- daemon.log ---\n{}\n--- end ---", self.daemon_log());
         }
         let _ = self.cli(&["down", "--infra"], None);
     }
@@ -915,6 +916,25 @@ fn edits_become_candidates() {
     let crlf = original.replace("\r\n", "\n").replace('\n', "\r\n");
     std::fs::write(&file, crlf).unwrap();
     wait("line endings alone are no change", &|| !changed());
+
+    // 7. Every decision above is in the diagnostic log, as JSON lines.
+    let log = s.cli(&["logs", "--daemon", "--json", "-n", "5000"], None);
+    let log = String::from_utf8_lossy(&log.stdout);
+    for needle in [
+        "\"event\":\"daemon_start\"",
+        "\"event\":\"candidate\"",
+        "\"event\":\"request\"",
+        "\"path\":\"/v1/services/api/promote\"",
+        "\"event\":\"config\"",
+    ] {
+        assert!(log.contains(needle), "{needle} missing in:\n{log}");
+    }
+    let readable = s.cli(&["logs", "--daemon", "--grep", "promote"], None);
+    let readable = String::from_utf8_lossy(&readable.stdout);
+    assert!(
+        readable.contains("request") && readable.contains("status=200"),
+        "{readable}"
+    );
 
     s.ok(&["down"]);
 }

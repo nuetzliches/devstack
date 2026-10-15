@@ -86,6 +86,37 @@ pub struct Supervisor {
 }
 
 /// Hash of the stack file, line endings ignored (a checkout may flip them).
+/// Every state change also goes to the diagnostic log (plan §11): the event as
+/// the clients see it, as a warning when something failed. Snapshots and load
+/// samples stay out (no decision in them, and they would drown the rest).
+fn record(body: &EventBody) {
+    if matches!(body, EventBody::Snapshot { .. } | EventBody::Usage(_)) {
+        return;
+    }
+    let Ok(serde_json::Value::Object(mut v)) = serde_json::to_value(body) else {
+        return;
+    };
+    let event = v
+        .remove("type")
+        .and_then(|t| t.as_str().map(str::to_string))
+        .unwrap_or_else(|| "event".into());
+    let state_of = |key: &str| {
+        v.get(key)
+            .and_then(|s| s.get("state").or(Some(s)))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let bad = ["failed", "unhealthy", "exited"];
+    let warn =
+        bad.contains(&state_of("status").as_str()) || bad.contains(&state_of("candidate").as_str());
+    crate::diag::log(
+        if warn { "warn" } else { "info" },
+        &event,
+        serde_json::Value::Object(v),
+    );
+}
+
 fn stack_file_hash(path: &Path) -> Option<blake3::Hash> {
     let bytes = std::fs::read(path).ok()?;
     let normalized: Vec<u8> = bytes.into_iter().filter(|b| *b != b'\r').collect();
@@ -204,6 +235,7 @@ impl Supervisor {
     }
 
     pub(crate) fn emit(&self, body: EventBody) {
+        record(&body);
         let _ = self.events.send(Event {
             seq: self.seq.fetch_add(1, Ordering::SeqCst),
             at: now_ms(),
@@ -782,6 +814,10 @@ impl Supervisor {
         ));
         std::fs::create_dir_all(log.parent().unwrap()).map_err(|e| e.to_string())?;
         let file = std::fs::File::create(&log).map_err(|e| e.to_string())?;
+        // Every start and every build writes a log; keep the newest (plan §11).
+        let dir = log.parent().unwrap();
+        crate::diag::prune(dir, "run-", KEEP_RUN_LOGS);
+        crate::diag::prune(dir, "build-", KEEP_BUILD_LOGS);
         let spec = Spec {
             name: record.clone(),
             command,
@@ -1583,6 +1619,10 @@ The running instance was left as it was."
 pub(crate) const SUPERSEDED: &str = "superseded by a newer change";
 
 /// Quiet period after the last change before a candidate is built (plan §3.2).
+/// Logs kept per service: the newest starts and builds (plan §11).
+pub const KEEP_RUN_LOGS: usize = 20;
+pub const KEEP_BUILD_LOGS: usize = 10;
+
 const DEBOUNCE: Duration = Duration::from_secs(2);
 
 /// Why a built candidate waits for `promote` (ADR-0013): auto-promotion is

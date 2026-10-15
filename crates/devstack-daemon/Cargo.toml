@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 axum.workspace = true
 blake3.workspace = true
+jiff.workspace = true
 bytes.workspace = true
 devstack-build.workspace = true
 devstack-compose.workspace = true

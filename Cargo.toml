@@ -22,6 +22,7 @@ http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 include_dir = "0.7"
+jiff = "0.2"
 libc = "0.2"
 notify = "8"
 rand = "0.9"

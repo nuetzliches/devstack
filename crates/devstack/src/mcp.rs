@@ -210,6 +210,17 @@ pub fn tools() -> Vec<Value> {
             true,
         ),
         tool(
+            "diagnostics",
+            "devstack's own log: every decision of the daemon (service and candidate states with reasons, requests that changed something, start and stop) or of the dashboard hub (Docker, pairing, stack start/stop). The place to look when something happened and the service log does not say why. Local file, works with the daemon stopped.",
+            json!({
+                "source": { "type": "string", "enum": ["daemon", "hub"], "default": "daemon" },
+                "tail": { "type": "integer", "minimum": 1, "default": 100, "description": "Number of last lines" },
+                "grep": { "type": "string", "description": "Only lines containing this (case-insensitive), e.g. a service name or `warn`" },
+            }),
+            &[],
+            true,
+        ),
+        tool(
             "run_command",
             "Run a command the stack file declares (see `status`), wait for it and return its output. A command with a confirmation text only runs with `confirm: true`; set it only after the user agreed to that text. POST /v1/commands/{command}.",
             json!({
@@ -327,6 +338,24 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 text
             })
         }
+        "diagnostics" => {
+            let path = if args["source"].as_str() == Some("hub") {
+                devstack_hub::log_path()
+            } else {
+                client::state_dir(file)?.join("daemon.log")
+            };
+            let tail = args["tail"].as_u64().unwrap_or(100) as usize;
+            let lines = devstack_daemon::diag::tail(&path, tail, args["grep"].as_str());
+            Ok(if lines.is_empty() {
+                format!("nothing in {}", path.display())
+            } else {
+                lines
+                    .iter()
+                    .map(|l| devstack_daemon::diag::pretty(l))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+        }
         "run_command" => run_command(file, name_arg(args, "command")?, args),
         "hub_status" => Ok(crate::hubcmd::status_text()),
         "hub_start" => {
@@ -400,7 +429,8 @@ mod tests {
         for t in &tools {
             assert_eq!(t["inputSchema"]["type"], "object", "{t}");
             // Daemon tools name their endpoint; the hub tools are local checks.
-            let local = t["name"].as_str().unwrap().starts_with("hub_");
+            let local = t["name"].as_str().unwrap().starts_with("hub_")
+                || t["description"].as_str().unwrap().contains("Local file");
             assert!(
                 local || t["description"].as_str().unwrap().contains("/v1/"),
                 "names its endpoint: {t}"

@@ -58,6 +58,7 @@ devstack restart api      # rebuild now; the running instance is replaced once t
 devstack promote api      # take over a candidate held back by a schema change (ADR-0013)
 devstack rollback api     # back to the build that ran before the last replacement
 devstack logs api --follow
+devstack logs --daemon    # devstack's own decisions with their reasons (--hub: the dashboard hub)
 devstack run reset        # a command from the stack file
 devstack top --watch      # CPU, memory and disk per service, container, group and lane
 devstack env api --export dotenv   # run the service without devstack (ADR-0015)
@@ -82,7 +83,7 @@ migration) waits for `devstack promote`.
 `devstack mcp` is an MCP server on stdio. It is a client of the daemon's API
 like the CLI: every tool maps to one endpoint (`status`, `up`, `down`,
 `start_service`, `stop_service`, `restart_service`, `promote_service`,
-`rollback_service`, `logs`, `run_command`, `usage`, `hub_status`, `hub_start`). Register it in the repository, e.g. `.mcp.json`:
+`rollback_service`, `logs`, `diagnostics`, `run_command`, `usage`, `hub_status`, `hub_start`). Register it in the repository, e.g. `.mcp.json`:
 
 ```json
 { "mcpServers": { "devstack": { "command": "devstack", "args": ["mcp"] } } }
