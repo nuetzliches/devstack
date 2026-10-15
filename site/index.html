@@ -29,6 +29,9 @@
   .status { display: flex; gap: 12px; align-items: flex-start; }
   .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 8px; flex: none; background: var(--muted); }
   .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); }
+  .dot.wait { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) { .dot.wait { animation: none; } }
   .muted { color: var(--muted); }
   .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
   .btn { display: inline-flex; align-items: center; gap: 6px; border-radius: 8px; padding: 8px 14px;
@@ -75,9 +78,10 @@
       <button class="tab" role="tab" data-os="linux">Linux</button>
     </div>
     <div class="cmd"><code id="cmd"></code><button class="btn copy" id="copy" type="button">Copy</button></div>
-    <p class="muted" style="margin-top:10px">No admin rights needed. The script checks the download
-      against the release's checksums, puts devstack on your PATH and lets the dashboard start at
-      logon. Run it again to update. <span id="ver"></span></p>
+    <p class="muted" style="margin-top:10px">No admin rights needed. The script shows the download's
+      progress<span id="size"></span>, checks it against the release's checksums, puts devstack on
+      your PATH and lets the dashboard start at logon. A first install opens the dashboard when it is
+      done, and this page notices it by itself. Run it again to update. <span id="ver"></span></p>
   </section>
 
   <section class="panel">
@@ -125,7 +129,7 @@
     $('cmd').textContent = CMDS[os];
     for (const t of document.querySelectorAll('.tab')) t.setAttribute('aria-selected', String(t.dataset.os === os));
   }
-  for (const t of document.querySelectorAll('.tab')) t.addEventListener('click', () => showOs(t.dataset.os));
+  for (const t of document.querySelectorAll('.tab')) t.addEventListener('click', () => { showOs(t.dataset.os); showSize(); });
   showOs(os);
   $('copy').addEventListener('click', async () => {
     try {
@@ -134,6 +138,9 @@
     } catch {
       $('copy').textContent = 'Select and copy';
     }
+    // The next thing that happens is the installer: wait for it visibly.
+    if (!shown || !shown.local) waiting = true;
+    if (shown) render(shown.local, shown.rel);
     setTimeout(() => ($('copy').textContent = 'Copy'), 1800);
   });
 
@@ -144,11 +151,21 @@
     for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
     return false;
   };
-  const latest = fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
+  const ASSETS = { windows: 'devstack-x86_64-pc-windows-msvc.zip', linux: 'devstack-x86_64-unknown-linux-musl.tar.gz' };
+  let sizes = {};
+  const release = fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
     .then((r) => (r.ok ? r.json() : null))
-    .then((j) => (j && j.tag_name ? j.tag_name.replace(/^v/, '') : null))
     .catch(() => null);
+  const latest = release.then((j) => (j && j.tag_name ? j.tag_name.replace(/^v/, '') : null));
   latest.then((v) => { if (v) $('ver').textContent = `Current release: ${v}.`; });
+  release.then((j) => {
+    for (const a of (j && j.assets) || []) sizes[a.name] = a.size;
+    showSize();
+  });
+  function showSize() {
+    const b = sizes[ASSETS[os]];
+    $('size').textContent = b ? ` (${(b / 1048576).toFixed(1)} MB)` : '';
+  }
 
   // ---------------------------------------------------------------- local hub
   // GET /hub/ping is the one public endpoint of the local hub: it answers with
@@ -167,7 +184,13 @@
     }
   }
 
+  // What is on screen; `waiting`: the install command was copied, the
+  // installer has not answered yet.
+  let shown = null;
+  let waiting = false;
+
   function render(local, rel) {
+    shown = { local, rel };
     const actions = $('actions');
     actions.replaceChildren();
     const link = (text, href, primary) => {
@@ -179,36 +202,52 @@
       return a;
     };
     if (local) {
+      const fresh = waiting;
+      waiting = false;
       $('dot').className = 'dot ok';
-      $('state').textContent = `devstack ${local.version} is running.`;
+      $('state').textContent = fresh ? `devstack ${local.version} is installed and running.` : `devstack ${local.version} is running.`;
       if (rel && newer(rel, local.version)) {
         $('dot').className = 'dot warn';
         $('detail').textContent = `Version ${rel} is out. Run the install command below again to update; \`devstack down\` and \`devstack up\` then switch your stacks over.`;
       } else {
-        $('detail').textContent = rel ? 'Up to date.' : '';
+        $('detail').textContent = fresh
+          ? 'The installer opened the dashboard in a new tab; this button opens it again.'
+          : rel ? 'Up to date.' : '';
       }
       link('Open the dashboard', HUB + '/', true);
+    } else if (waiting) {
+      $('dot').className = 'dot wait';
+      $('state').textContent = 'Waiting for the installer…';
+      $('detail').textContent = os === 'windows'
+        ? 'Paste the command into PowerShell. It shows the download\'s progress; when it is done, the dashboard opens and this page switches over by itself.'
+        : 'Paste the command into a terminal. When it is done, `devstack ui` opens the dashboard; this page switches over by itself.';
     } else {
       $('dot').className = 'dot';
       $('state').textContent = 'No devstack answers on this machine.';
       $('detail').textContent = 'Installed already? Start its dashboard hub (your browser asks once). Otherwise install it below.';
       const start = link('Start devstack', 'devstack://hub/start', true);
-      start.addEventListener('click', () => watch(20));
+
       link('Install', '#install', false);
     }
   }
 
-  let watching = 0;
-  async function watch(seconds) {
-    const id = ++watching;
-    for (let i = 0; i < seconds && id === watching; i++) {
-      await new Promise((r) => setTimeout(r, 1000));
+  // Look again every few seconds while the page is visible: an install, an
+  // update or a hub started from the link shows up without a reload. The
+  // ping goes to this machine only.
+  async function watch() {
+    if (document.visibilityState === 'visible') {
       const local = await ping();
-      if (local) return render(local, await latest);
+      const before = shown && shown.local ? shown.local.version : null;
+      const now = local ? local.version : null;
+      if (!shown || before !== now) render(local, await latest);
     }
+    setTimeout(watch, 3000);
   }
 
-  Promise.all([ping(), latest]).then(([local, rel]) => render(local, rel));
+  Promise.all([ping(), latest]).then(([local, rel]) => {
+    render(local, rel);
+    setTimeout(watch, 3000);
+  });
 })();
 </script>
 </body>

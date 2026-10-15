@@ -203,8 +203,9 @@ non-main lane runs its candidates **without workers** and therefore never talks
 to coordinators that dispatch work (schedulers, pull queues).
 
 **Built (0.5.0, [ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md)):**
-a lane is a supervisor in the main working tree's daemon; `devstack up` in a
-linked worktree makes it one, its ports move by `[lanes] port_step` times its
+a lane is a supervisor in the main working tree's daemon; every linked
+worktree is one (`git worktree list` decides), `devstack up` in it starts it,
+`devstack lane add <name>` creates the worktree; its ports move by `[lanes] port_step` times its
 number, `{lane}` / `{lane_suffix}` name per-lane resources, `promote --lane`
 forwards the fixed ports of the proxied services and moves the workers. Not
 yet: lanes on other machines ([ADR-0025](adr/0025-a-lane-can-run-on-another-node.md) to [ADR-0029](adr/0029-source-sync-and-port-forwarding-for-remote-lanes.md) (proposed)).
@@ -414,7 +415,7 @@ downstream stack.
 | **0: Spikes** | (a) process ownership, see §7.1; (b) build cancellation, see §7.2; (c) snapshot sync cost for the reference tree; (d) platform benchmark for [ADR-0011](adr/0011-platform-windows-native-first.md) | Each spike answers its question with numbers, recorded in the relevant ADR | Done (2026-10-14) |
 | **1: Run plane + CLI** | Stack file, compose driver, `devstack check`, `devstack env --export`, port preflight, artifact builds on demand (`devstack build api`), main slot, jobs, health, logs, job-object ownership, build-id env, CLI, MCP | Reference stack runs end to end without the previous orchestrator; no file-lock failure possible by construction | Done, released as 0.1.0 (§7.3) |
 | **2: Candidate pipeline** | Watch, debounce, supersede/cancel, candidates without workers, promotion gate, rollback, SSE events, first dashboard | A broken edit never replaces main; three concurrent writers produce at most one running build per service | Done, released as 0.2.0 (§7.4) |
-| **3: Lanes** | Worktree lanes, per-lane resources, `promote --lane`, static frontend artifacts for e2e | Two worktrees run side by side without touching each other's database or the main slot | Not started; needs [ADR-0012](adr/0012-shared-infrastructure-between-lanes.md) far enough for one rule per resource |
+| **3: Lanes** | Worktree lanes, per-lane resources, `promote --lane`, static frontend artifacts for e2e | Two worktrees run side by side without touching each other's database or the main slot | Built for one machine (0.5.0, ADR-0024): shared infrastructure under ADR-0012's interim rule, per-lane resources by `{lane}` / `{lane_suffix}`, `kind = "static"` (0.6.0); remote lanes open ([ADR-0025](adr/0025-a-lane-can-run-on-another-node.md) to [ADR-0029](adr/0029-source-sync-and-port-forwarding-for-remote-lanes.md) (proposed)) |
 | **4: Adoption** | Migrate the downstream stack, delete its old orchestrator, publish | Downstream runbook shrinks to the stack file and a page of notes | Under way: the reference stack runs on devstack and its runbook is a generated skill plus one page; its old orchestrator stays as a fallback for now; public since 2026-10-15 with a landing page on GitHub Pages |
 
 ### 7.1 Spike (a): process ownership
@@ -604,6 +605,17 @@ store (a worktree on the same sources starts without building), and artifacts
 are pruned for the first time: the newest five per service plus everything
 some tree runs or may roll back to (ADR-0002 retention). `kind = "static"`
 serves a frontend's production bundle from an artifact (§3.4).
+
+**Since 0.6.0 (not released):** the lanes are the repository's worktrees
+(`git worktree list`): a new worktree is a lane at once, not started, a removed
+one is gone with its state; `devstack lane add <name>` creates the worktree,
+`lane remove` removes it (ADR-0024, amended). `promote --lane` moves the ports
+first and the main slot only when all of them moved; `--lane main` restarts
+only what the main tree ran before; a dev server listening on `::1` only is
+reached through the forward. Pruning keeps every build a started lane runs or
+may go back to, and an artifact is renamed away before it is deleted. A lane
+never restarts the main tree's containers, and a removed lane releases its
+ports and threads. `[lanes] port_step = 0` is an error.
 
 **Not covered by an automated test:** a machine reboot, a Docker Desktop
 restart, the `devstack://` link opened from a browser, an IDE terminal closing.

@@ -33,6 +33,8 @@ export class MockStack {
   previous: Record<string, string>;
   /** Mock lane `agent-login-fix` serves the main ports. */
   laneOwnsMain = false;
+  /** Mock lane `review-cart` was started from the dashboard. */
+  reviewLaneStarted = false;
   private seq = 1;
   private nextRun = 1;
   private eventSubs = new Set<Listener<StackEvent>>();

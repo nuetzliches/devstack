@@ -155,6 +155,18 @@ fn build_publish_failure_cancel_and_prune() {
     );
     assert_eq!(builder.artifact("s", &id).unwrap().lane, "main");
 
+    // A directory without metadata under the id (a prune that stopped
+    // halfway) is no artifact: the next build publishes it afresh.
+    fs::remove_file(dir.join(devstack_build::META_FILE)).unwrap();
+    fs::remove_file(dir.join("version.txt")).unwrap();
+    let mut run = builder.start("main", &snap, "s", &ok).unwrap();
+    assert!(matches!(
+        builder.wait(&mut run).unwrap(),
+        Outcome::Published { .. }
+    ));
+    assert!(dir.join("version.txt").is_file(), "republished complete");
+    assert!(builder.artifact("s", &id).is_some());
+
     // Failure: nothing published, no temporary directory left.
     let failing = service("build = \"exit 4\"\noutput = \"out\"\nrun = \"x\"\n");
     let mut run = builder.start("main", &snap, "f", &failing).unwrap();
@@ -206,6 +218,11 @@ fn build_publish_failure_cancel_and_prune() {
     let removed = builder.prune("p", 1, &[&oldest]);
     assert_eq!(removed.len(), 1, "3 artifacts, keep 1 newest + 1 pinned");
     assert!(layout.artifact("p", &oldest).exists());
+    // Leftovers of an unfinished prune go with the next one.
+    let trash = layout.artifacts("p").join(".trash-old");
+    fs::create_dir_all(trash.join("x")).unwrap();
+    builder.prune("p", 1, &[&oldest]);
+    assert!(!trash.exists());
 }
 
 #[test]

@@ -196,14 +196,15 @@ fn container_key(group: &str, service: &str) -> String {
 }
 
 impl Sampler {
-    /// Start the sampling threads. They end with the daemon process.
+    /// Start the sampling threads. They end with the daemon process, or when
+    /// the supervisor is closed (a removed lane).
     pub fn start(sup: Arc<Supervisor>) -> Arc<Self> {
         let me = Arc::new(Self {
             inner: Mutex::new(Inner::default()),
         });
         let (s, m) = (sup.clone(), me.clone());
         spawn("usage-native", move || {
-            loop {
+            while !s.closed() {
                 m.sample_native(&s);
                 s.emit(EventBody::Usage(Box::new(m.report(&s, false))));
                 std::thread::sleep(NATIVE_EVERY);
@@ -212,7 +213,7 @@ impl Sampler {
         let (s, m) = (sup.clone(), me.clone());
         spawn("usage-containers", move || {
             let mut volumes_due = Instant::now();
-            loop {
+            while !s.closed() {
                 let t0 = Instant::now();
                 m.sample_containers(&s);
                 if Instant::now() >= volumes_due {
@@ -224,7 +225,7 @@ impl Sampler {
         });
         let (s, m) = (sup, me.clone());
         spawn("usage-disk", move || {
-            loop {
+            while !s.closed() {
                 m.sample_disk(&s);
                 std::thread::sleep(DISK_EVERY);
             }

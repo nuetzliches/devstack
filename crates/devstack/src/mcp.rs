@@ -226,7 +226,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "lanes",
-            "The lanes of this repository (plan §3.5): other git worktrees running the stack beside the main one, each with its ports moved by an offset, against the same infrastructure, without background workers. When this MCP server runs in a worktree, every other tool acts on its lane, and `up` makes the worktree a lane. Shows which lane serves the main ports. GET /v1/lanes.",
+            "The lanes of this repository (plan §3.5): its other git worktrees, each a lane that runs the stack beside the main one once started, with its ports moved by an offset, against the same infrastructure, without background workers. Shows branch, whether it is started and which lane serves the main ports. When this MCP server runs in a worktree, every other tool acts on its lane, and `up` starts it. GET /v1/lanes.",
             json!({}),
             &[],
             true,
@@ -412,19 +412,23 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             let lanes: Vec<Value> = serde_json::from_str(&c.get("/v1/lanes")?)?;
             let mut out = match c.lane() {
                 Some(l) if l != "-" => format!("this worktree is lane `{l}`\n"),
-                Some(_) => "this worktree is no lane yet; `up` makes it one\n".to_string(),
+                Some(_) => "this worktree's lane is not started; `up` starts it\n".to_string(),
                 None => "this is the main working tree\n".to_string(),
             };
             if lanes.is_empty() {
-                out.push_str("no lanes");
+                out.push_str("no lanes: the repository has no other worktree");
             }
             for l in lanes {
+                let running = if l["active"] == false {
+                    "not started".to_string()
+                } else {
+                    format!("{}/{} running", l["running"], l["services"])
+                };
                 out.push_str(&format!(
-                    "{}: ports +{}, {}/{} running, {}{}\n",
+                    "{} (branch {}): ports +{}, {running}, {}{}\n",
                     l["name"].as_str().unwrap_or(""),
+                    l["branch"].as_str().unwrap_or("detached"),
                     l["port_offset"],
-                    l["running"],
-                    l["services"],
                     l["path"].as_str().unwrap_or(""),
                     if l["owns_main"] == true {
                         ", serves the main ports"

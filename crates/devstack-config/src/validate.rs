@@ -116,6 +116,13 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         );
     }
 
+    if stack.lanes.port_step == 0 {
+        c.err(
+            "lanes.port_step",
+            "must be at least 1: every lane moves its ports by it",
+        );
+    }
+
     // ---------------------------------------------------------- compose groups
     let mut projects = BTreeMap::new();
     for (g, group) in &stack.compose {

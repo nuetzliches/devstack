@@ -54,7 +54,8 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack logs <container>` | a Compose container's output by its service name (`docker compose logs`, timestamped; `--grep`, `--since 30m`) |
 | `devstack builds <service>` | the service's builds, newest first: live, failed (with the reason), superseded by a newer change, held; answers "did my change ever go live" and "since when is it broken" |
 | `devstack hot-reload <service> on\|off` | for a debugging session: the toolchain's watcher (e.g. `dotnet watch`) from the source tree instead of builds and candidates; needs `hot_reload` in the stack file. Switch it off again afterwards |
-| `devstack up` in a `git worktree` | runs that worktree as a **lane** of the main tree's daemon: its own builds, ports moved by +100 (+200, ...), the same infrastructure, no background workers. Every command in the worktree then acts on the lane (`devstack lane list` shows all) |
+| `devstack up` in a `git worktree` | starts that worktree's **lane** (every worktree is one) in the main tree's daemon: its own builds, ports moved by +100 (+200, ...), the same infrastructure, no background workers. Every command in the worktree then acts on the lane (`devstack lane list` shows all) |
+| `devstack lane add <name> [--up]` | creates a worktree for a new lane beside the repository, on branch `<name>` (`--branch`, `--from`, `--path` to choose); `--up` starts it. `devstack lane remove <name>` removes the worktree again (refused with changes not committed) |
 | `devstack promote --lane <name>` | the lane's services, dev servers included, answer on the main ports; ask the user first, `--lane main` gives them back |
 | `devstack logs --daemon` | devstack's own log: every decision with its reason (`--grep <service>`, `--hub` for the dashboard hub) |
 | `devstack restart <service>` | rebuild now; the running instance stays until the new one is healthy |

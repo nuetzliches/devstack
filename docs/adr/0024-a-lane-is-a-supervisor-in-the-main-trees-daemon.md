@@ -1,6 +1,6 @@
 # ADR-0024: A lane is a supervisor in the main working tree's daemon
 
-- **Status:** Accepted
+- **Status:** Accepted, amended 2026-10-15 (the lanes are the worktrees)
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** plan §3.5, [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0010](0010-promotion-mechanism.md), [ADR-0012](0012-shared-infrastructure-between-lanes.md), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md) to [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) (remote lanes, proposed)
@@ -19,11 +19,13 @@ names (the containers of one tree served the other), workers twice.
 
 ## Decision
 
-1. **One daemon per repository.** A linked worktree (its `.git` is a file
-   pointing into `<main>/.git/worktrees/`) whose main working tree has a stack
-   file runs as a **lane of the main tree's daemon**. The CLI and the MCP server
-   detect this and talk to that daemon; `devstack up` in the worktree makes it
-   a lane. Nothing has to be configured.
+1. **One daemon per repository, one lane per worktree.** Every linked
+   worktree of a repository with a stack file is a **lane of the main tree's
+   daemon**: `git worktree list` is the source of truth, so a worktree added
+   (with git or `devstack lane add`) is a lane at once, not started, and one
+   removed is no lane any more. The CLI and the MCP server in a worktree detect
+   this and talk to that daemon; `devstack up` there starts the lane. Nothing
+   has to be configured.
 2. **A lane is a supervisor of its own** inside that daemon: source root the
    worktree, the worktree's own `devstack.toml` when its branch has one (else
    the main tree's), state in `.devstack/lane-<name>/` (snapshot, logs). The
@@ -53,11 +55,22 @@ names (the containers of one tree served the other), workers twice.
    bytes pass unchanged, WebSockets included); one that does not run in the
    lane keeps running in the main tree. While a lane holds the main slot, the
    main tree builds no candidates for the moved services.
-6. **Who owns the main slot is runtime state.** A daemon restart starts clean
-   (ADR-0016) with the main tree owning it; the registered lanes are remembered
-   (`.devstack/lanes.json`) but start only with `devstack up` in their worktree.
-7. **Removing a lane** stops it and deletes its state directory; the worktree is
-   never touched.
+6. **Who owns the main slot is runtime state**, one value shared by every
+   supervisor of the daemon. A daemon restart starts clean (ADR-0016) with the
+   main tree owning it; the lanes start only with `devstack up` in their
+   worktree. `.devstack/lanes.json` remembers each lane's number, so its ports
+   stay the same.
+7. **Removing a lane removes its worktree** (`devstack lane remove`:
+   `git worktree remove`, which refuses a worktree with changes that are not
+   committed; the branch stays), its state with it. `--keep-worktree` deletes
+   only the state. A worktree removed with git takes its lane's state along.
+
+*Amended 2026-10-15, before any other user.* The first version made a worktree
+a lane only on `devstack up` in it or `devstack lane add <path>`, and kept
+lanes in `lanes.json` after their worktree was gone. A worktree that exists is
+what a developer or an agent has open; the dashboard and `lane list` show
+exactly those, and `lane add` accepted any folder, not only a worktree of this
+repository. Now git decides, and `lane add <name>` creates the worktree.
 
 ## Alternatives considered
 
@@ -87,8 +100,8 @@ names (the containers of one tree served the other), workers twice.
 
 ## Enforced by
 
-`crates/devstack-daemon/src/lanes.rs` (lane registry, port ranges, main slot),
-`Supervisor::new_lane` and its `lane`/`owns_main` handling in
-`crates/devstack-daemon/src/supervisor.rs`, `/v1/lanes` in `api.rs`, worktree
-detection in `crates/devstack/src/client.rs`, the integration test
-`a_worktree_runs_as_a_lane`.
+`crates/devstack-daemon/src/lanes.rs` (lanes from `git worktree list`, port
+ranges, the main-slot hand-over), `Supervisor::new_lane` and the shared
+`main_owner` in `crates/devstack-daemon/src/supervisor.rs`, `/v1/lanes` in
+`api.rs`, worktree detection in `crates/devstack/src/client.rs`, the
+integration test `a_worktree_runs_as_a_lane`.

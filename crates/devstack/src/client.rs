@@ -32,6 +32,16 @@ pub fn worktree() -> Option<&'static Worktree> {
     WORKTREE.get().and_then(Option::as_ref)
 }
 
+/// Two spellings of one directory (`D:/x` from git, `D:\X` from a shell).
+fn same_dir(a: &Path, b: &Path) -> bool {
+    let norm = |p: &Path| {
+        let s = p.to_string_lossy().replace('\\', "/");
+        let s = s.trim_end_matches('/').to_string();
+        if cfg!(windows) { s.to_lowercase() } else { s }
+    };
+    norm(a) == norm(b)
+}
+
 /// `<repo>/.git` is a file `gitdir: <main>/.git/worktrees/<name>` in a linked
 /// worktree; the main working tree is then `<main>`.
 pub fn main_tree_of(repo: &Path) -> Option<PathBuf> {
@@ -71,14 +81,15 @@ impl Client {
         };
         c.get("/v1/stack").ok()?;
         if let Some(wt) = worktree() {
-            // The lane of this worktree, if it is one already (`up` makes it one).
+            // The lane of this worktree, if it is started (`up` starts it).
             let lanes: Vec<Value> = serde_json::from_str(&c.get("/v1/lanes").ok()?).ok()?;
             let me = devstack_proc::long_path(&wt.path);
             if let Some(l) = lanes.iter().find(|l| {
-                l["path"]
-                    .as_str()
-                    .map(|p| devstack_proc::long_path(Path::new(p)))
-                    == Some(me.clone())
+                l["active"] != false
+                    && l["path"]
+                        .as_str()
+                        .map(|p| same_dir(&devstack_proc::long_path(Path::new(p)), &me))
+                        == Some(true)
             }) {
                 c.prefix = format!("/v1/lanes/{}", l["name"].as_str().unwrap_or(""));
             } else {
@@ -117,7 +128,7 @@ impl Client {
             && path.starts_with("/v1/")
             && !path.starts_with("/v1/lanes")
         {
-            bail!("this worktree is no lane yet: run `devstack up` here");
+            bail!("this worktree's lane is not started: run `devstack up` here");
         }
         let path = if path.starts_with("/v1/") && !path.starts_with("/v1/lanes") {
             format!("{}{path}", self.prefix)
@@ -755,20 +766,27 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
     let c = main_client(stack_file)?;
     let lanes: Vec<Value> = serde_json::from_str(&c.get("/v1/lanes")?)?;
     if lanes.is_empty() {
-        println!("no lanes; `devstack up` in a `git worktree` of this repository makes one");
+        println!(
+            "no lanes: this repository has no other worktree (`devstack lane add <name>` creates one)"
+        );
         return Ok(());
     }
     println!(
-        "{:<24} {:>8} {:>9}  {:<5}  PATH",
-        "LANE", "PORTS +", "RUNNING", "MAIN"
+        "{:<24} {:<24} {:>8} {:>9}  {:<5}  PATH",
+        "LANE", "BRANCH", "PORTS +", "RUNNING", "MAIN"
     );
     for l in lanes {
+        let running = if l["active"] == false {
+            "stopped".to_string()
+        } else {
+            format!("{}/{}", l["running"], l["services"])
+        };
         println!(
-            "{:<24} {:>8} {:>4}/{:<4}  {:<5}  {}",
+            "{:<24} {:<24} {:>8} {:>9}  {:<5}  {}",
             l["name"].as_str().unwrap_or(""),
+            l["branch"].as_str().unwrap_or("(detached)"),
             l["port_offset"],
-            l["running"],
-            l["services"],
+            running,
             if l["owns_main"] == true { "yes" } else { "" },
             l["path"].as_str().unwrap_or("")
         );
@@ -776,33 +794,67 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn lane_add(stack_file: &Path, path: &Path, name: Option<&str>) -> Result<()> {
+pub fn lane_add(
+    stack_file: &Path,
+    name: &str,
+    branch: Option<&str>,
+    from: Option<&str>,
+    path: Option<&Path>,
+    up: bool,
+) -> Result<()> {
     let c = main_client(stack_file)?;
+    let dir = path.map(std::path::absolute).transpose()?;
     let (status, body) = c.call_raw(
         "POST",
         "/v1/lanes",
-        Some(serde_json::json!({ "path": std::path::absolute(path)?, "name": name })),
+        Some(serde_json::json!({ "name": name, "branch": branch, "from": from, "dir": dir })),
     )?;
     if status >= 400 {
         bail!("{}", error_text(&body));
     }
     let v: Value = serde_json::from_str(&body)?;
+    let wt = PathBuf::from(v["path"].as_str().unwrap_or(""));
     println!(
-        "lane `{}`: ports +{}; `devstack up` in {} starts it",
+        "lane `{}`: worktree {} on branch {}, ports +{}",
         v["name"].as_str().unwrap_or(""),
+        wt.display(),
+        v["branch"].as_str().unwrap_or("(detached)"),
         v["port_offset"],
-        path.display()
     );
+    if !up {
+        println!("`devstack up` in {} starts it", wt.display());
+        return Ok(());
+    }
+    // `up` as if run in the worktree, so it prints its progress as usual.
+    let file = wt.join(stack_file.file_name().unwrap_or("devstack.toml".as_ref()));
+    let status = std::process::Command::new(std::env::current_exe()?)
+        .arg("up")
+        .arg("-f")
+        .arg(&file)
+        .current_dir(&wt)
+        .status()?;
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
     Ok(())
 }
 
-pub fn lane_remove(stack_file: &Path, name: &str) -> Result<()> {
+pub fn lane_remove(stack_file: &Path, name: &str, keep_worktree: bool) -> Result<()> {
     let c = main_client(stack_file)?;
-    let (status, body) = c.call_raw("DELETE", &format!("/v1/lanes/{name}"), None)?;
+    let q = if keep_worktree {
+        "?keep_worktree=true"
+    } else {
+        ""
+    };
+    let (status, body) = c.call_raw("DELETE", &format!("/v1/lanes/{name}{q}"), None)?;
     if status >= 400 {
         bail!("{}", error_text(&body));
     }
-    println!("lane `{name}` stopped and forgotten (its working tree is untouched)");
+    if keep_worktree {
+        println!("lane `{name}` stopped, its builds and logs deleted; the worktree stays");
+    } else {
+        println!("lane `{name}` stopped, its worktree removed (the branch stays)");
+    }
     Ok(())
 }
 
