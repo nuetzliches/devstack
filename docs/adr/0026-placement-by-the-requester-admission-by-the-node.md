@@ -52,8 +52,8 @@ warm incremental build at a fifth of a cold one).
    recreated by seed jobs; ADR-0025). A dedicated node does not reclaim; taking
    it out of service means its owner first clears the dedicated flag, which
    tells the requesters of main lanes to move them.
-7. **Manual placement first:** `--on <node>` (on `devstack up` and
-   `devstack lane add`) skips scoring but not admission.
+7. **Manual placement first:** `--on <node>` (on `devstack up` in the
+   worktree) skips scoring but not admission.
    It is the first version to be built; scoring follows.
 
 ## Alternatives considered

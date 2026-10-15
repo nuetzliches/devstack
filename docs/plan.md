@@ -204,8 +204,9 @@ to coordinators that dispatch work (schedulers, pull queues).
 
 **Built (0.5.0, [ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md)):**
 a lane is a supervisor in the main working tree's daemon; every linked
-worktree is one (`git worktree list` decides), `devstack up` in it starts it,
-`devstack lane add <name>` creates the worktree; its ports move by `[lanes] port_step` times its
+worktree is one (`git worktree list` decides; git creates and removes them,
+devstack follows), `devstack up` in it starts it, and it runs from a copy of
+the worktree, never in it; its ports move by `[lanes] port_step` times its
 number, `{lane}` / `{lane_suffix}` name per-lane resources, `promote --lane`
 forwards the fixed ports of the proxied services and moves the workers. Not
 yet: lanes on other machines ([ADR-0025](adr/0025-a-lane-can-run-on-another-node.md) to [ADR-0029](adr/0029-source-sync-and-port-forwarding-for-remote-lanes.md) (proposed)).
@@ -608,8 +609,14 @@ serves a frontend's production bundle from an artifact (§3.4).
 
 **Since 0.6.0 (not released):** the lanes are the repository's worktrees
 (`git worktree list`): a new worktree is a lane at once, not started, a removed
-one is gone with its state; `devstack lane add <name>` creates the worktree,
-`lane remove` removes it (ADR-0024, amended). `promote --lane` moves the ports
+one is gone with its state (ADR-0024, amended). Worktrees are git's: no
+`lane add` / `lane remove`; the daemon follows `<git common dir>/worktrees` and
+sends a `lanes` event, and the dashboard shows each lane under its stack,
+named by its branch, the ones not started folded away. A lane's dev servers,
+tools and hot-reload mode run from its snapshot, which follows the worktree
+within 150 ms; `prepare` installs what the snapshot lacks (`npm ci`), so
+`git worktree remove` works while the lane runs. `devstack lane stop` stops a
+lane. `promote --lane` moves the ports
 first and the main slot only when all of them moved; `--lane main` restarts
 only what the main tree ran before; a dev server listening on `::1` only is
 reached through the forward. Pruning keeps every build a started lane runs or

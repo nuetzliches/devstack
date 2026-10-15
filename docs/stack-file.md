@@ -211,6 +211,28 @@ and starts it as usual again. For a debugging session, not as the default
 | `autostart = false` | started only on demand (`devstack start <service>`) |
 | `platforms = ["windows"]` | only on these platforms (`windows`, `linux`, `macos`) |
 | `ensure_dirs = ["{repo}/data/files"]` | created before start |
+| `prepare = { run = "npm ci", inputs = ["web/package-lock.json"] }` | installs what a copy of the source lacks (see below) |
+
+### `prepare`: what a copy of the source lacks
+
+devstack builds in a snapshot, and a lane runs its dev servers from one
+(below); a snapshot holds tracked and untracked non-ignored files only, so
+`node_modules` and the like are not in it. `prepare` runs in the snapshot
+before the service is built there, and in a lane's copy before the service
+starts from it; again only when a file of `inputs` changed (none: once per
+copy). `cwd` defaults to the service's. Its output goes to
+`.devstack/logs/<service>/prepare-*.log`; a failure stops the build or start
+with its tail. The main working tree runs dev servers in place, with the
+developer's own `node_modules`.
+
+```toml
+[services.web]
+kind    = "devserver"
+cwd     = "web"
+run     = "npx ng serve --port {port}"
+port    = 4200
+prepare = { run = "npm ci", inputs = ["web/package-lock.json"] }
+```
 
 ## `[lanes]`: other worktrees ([ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md))
 
@@ -220,11 +242,19 @@ port_step = 100   # the default: lane 1 runs api 5000 on 5100, lane 2 on 5200
 ```
 
 Every `git worktree` of the repository is a **lane** of the main tree's
-daemon; `devstack up` in it starts it: its own build, its own ports (moved by
-`port_step` times the lane's number), the same infrastructure, no background
-workers. Every devstack command and the MCP server in the worktree act on its
-lane. `devstack lane add <name>` creates a worktree (beside the repository, on a
-branch of that name) and with it the lane.
+daemon, the moment git creates it; the dashboard shows it under the stack,
+named by its branch. `devstack up` in it starts it: its own build, its own
+ports (moved by `port_step` times the lane's number), the same infrastructure,
+no background workers. Every devstack command and the MCP server in the
+worktree act on its lane.
+
+Worktrees are git's (or your tool's): devstack never creates or removes one,
+and nothing of a lane runs inside its worktree. Builds run in the lane's
+snapshot, and so do its dev servers, tools and hot-reload mode; the snapshot
+follows the worktree within moments of a change (hot module replacement keeps
+working), and `{repo}` is the snapshot for them. So `git worktree remove`
+works while the lane runs, and the lane stops with it. Ignored files are not
+in the snapshot: `prepare` installs what is missing.
 
 - Per-lane resources on the shared infrastructure: `{lane}` and
   `{lane_suffix}` (empty in the main tree), e.g.
@@ -234,9 +264,8 @@ branch of that name) and with it the lane.
   fixed port is the main tree's).
 - `devstack promote --lane <name>` lets a lane's services answer on the main
   ports (dev servers through a TCP forward); `--lane main` gives them back.
-- `devstack lane list`; `devstack lane remove <name>` stops a lane and removes
-  its worktree (git refuses one with changes not committed),
-  `--keep-worktree` only its builds and logs.
+- `devstack lane list`; `devstack lane stop <name>` stops a lane (its
+  builds stay, the worktree too).
 
 ## `[commands.<name>]`: operations
 

@@ -234,6 +234,16 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                 "hot-reload mode replaces a build: only for services with `build` (a dev server reloads itself)",
             );
         }
+        if svc
+            .prepare
+            .as_ref()
+            .is_some_and(|x| x.run.trim().is_empty())
+        {
+            c.err(
+                format!("{p}.prepare.run"),
+                "missing `run`: the command to run",
+            );
+        }
         if svc.kind == Kind::Job && (svc.port.is_some() || svc.health.is_some()) {
             c.err(
                 &p,

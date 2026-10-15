@@ -1,49 +1,32 @@
 <script setup lang="ts">
-// Lanes (plan §3.5): the repository's other git worktrees, running the stack
-// beside the main one. Pick which one the views show (picking one not started
-// starts it), hand the main ports to a lane and back, remove a lane with its
-// worktree. Shown only when the repository has other worktrees.
+// Lanes (plan §3.5, ADR-0024): the repository's other git worktrees, running
+// the stack beside the main one. The stack switcher picks the lane shown; this
+// bar says which one it is and acts on it: hand the main ports to it and back,
+// stop it. Worktrees themselves are git's: devstack never creates or removes
+// one. Shown only when the repository has other worktrees.
 import { computed } from 'vue';
 import { useStack } from '@/stores/stack';
+import { laneLabel } from '@/lib/lanes';
 import Icon from './icons/Icon.vue';
 
 const stack = useStack();
 const current = computed(() => stack.lanes.find((l) => l.name === stack.lane) ?? null);
-const servedBy = computed(() => stack.lanes.find((l) => l.owns_main)?.name ?? null);
+const servedBy = computed(() => stack.lanes.find((l) => l.owns_main) ?? null);
 const busy = computed(() => !!stack.busy['lane-main']);
-
 const starting = computed(() => stack.busy['lane-start'] ?? null);
-
-function pick(e: Event) {
-  const select = e.target as HTMLSelectElement;
-  const v = select.value;
-  const lane = stack.lanes.find((l) => l.name === v);
-  if (lane && lane.active === false) {
-    select.value = stack.lane ?? '';
-    void stack.startLane(v);
-    return;
-  }
-  stack.selectLane(v === '' ? null : v);
-}
-
-function label(l: (typeof stack.lanes)[number]): string {
-  const branch = l.branch && l.branch !== l.name ? ` · ${l.branch}` : '';
-  const state = l.active === false ? ' · not started' : ` (+${l.port_offset})`;
-  return `${l.name}${branch}${state}${l.owns_main ? ' · main ports' : ''}`;
-}
+const startingLabel = computed(() => {
+  const l = stack.lanes.find((x) => x.name === starting.value);
+  return l ? laneLabel(l) : starting.value;
+});
 </script>
 
 <template>
   <div v-if="stack.lanes.length" class="lanebar" data-testid="lane-bar">
-    <label class="pick">
-      <Icon name="gitBranch" :size="14" />
-      <span class="sr-only">Lane</span>
-      <select :value="stack.lane ?? ''" class="select" :disabled="!!starting" data-testid="lane-select" @change="pick">
-        <option value="">main working tree</option>
-        <option v-for="l in stack.lanes" :key="l.name" :value="l.name" :title="l.path">{{ label(l) }}</option>
-      </select>
-    </label>
-    <span v-if="starting" class="muted" style="font-size: 12px" data-testid="lane-starting"><span class="spinner" /> starting {{ starting }}…</span>
+    <span v-if="current" class="chip" :title="current.path" data-testid="lane-current">
+      <Icon name="gitBranch" :size="14" /> {{ laneLabel(current) }} <span class="muted">+{{ current.port_offset }}</span>
+    </span>
+    <span v-else class="chip muted" data-testid="lane-current"><Icon name="gitBranch" :size="14" /> main working tree</span>
+    <span v-if="starting" class="muted" style="font-size: 12px" data-testid="lane-starting"><span class="spinner" /> starting {{ startingLabel }}…</span>
     <button
       v-if="current && !current.owns_main"
       type="button"
@@ -61,13 +44,12 @@ function label(l: (typeof stack.lanes)[number]): string {
     <button
       v-if="current && !current.owns_main"
       type="button"
-      class="btn btn-ghost btn-sm btn-icon"
-      :title="`Stop lane ${current.name} and remove its worktree`"
-      :aria-label="`Remove lane ${current.name}`"
-      data-testid="lane-remove"
-      @click="stack.removeLane(current.name)"
+      class="btn btn-ghost btn-sm"
+      :title="`Stop lane ${laneLabel(current)}: its services stop; the worktree stays`"
+      data-testid="lane-stop"
+      @click="stack.stopLane(current.name)"
     >
-      <Icon name="trash" :size="14" />
+      <Icon name="stop" :size="14" /> Stop lane
     </button>
   </div>
 </template>
@@ -80,20 +62,14 @@ function label(l: (typeof stack.lanes)[number]): string {
   margin-left: auto;
   flex-wrap: wrap;
 }
-.pick {
+.chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 13px;
-}
-.select {
-  font: inherit;
-  font-size: 13px;
-  padding: 3px 6px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: inherit;
-  max-width: 260px;
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

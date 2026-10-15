@@ -252,6 +252,25 @@ pub struct Service {
     /// <service> on` runs it from the source tree instead of the build, until
     /// switched off. Built services only.
     pub hot_reload: Option<HotReload>,
+    /// Installs what a copy of the source lacks (plan §3.5): a snapshot holds
+    /// tracked and untracked non-ignored files only, so `node_modules` and the
+    /// like are not in it. Runs in the snapshot before the service is built
+    /// there, and in a lane's copy before the service starts from it.
+    pub prepare: Option<Prepare>,
+}
+
+/// `prepare` of a service: a command run in a copy of the source.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Prepare {
+    /// Command, e.g. `npm ci`.
+    pub run: String,
+    /// Working directory relative to the repository; the service's `cwd` by default.
+    pub cwd: Option<String>,
+    /// Files whose change runs it again, e.g. `["web/package-lock.json"]`;
+    /// empty: once per copy.
+    #[serde(default)]
+    pub inputs: Vec<String>,
 }
 
 /// Hot-reload mode of a built service: the toolchain's own watcher, from

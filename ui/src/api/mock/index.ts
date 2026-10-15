@@ -262,6 +262,10 @@ export class MockTransport implements Transport {
           ? [
               { name: 'agent-login-fix', path: 'C:\\work\\shop-agent-login-fix', branch: 'agent/login-fix', number: 1, port_offset: 100, active: true, owns_main: s.laneOwnsMain, running: 3, services: 5 },
               { name: 'review-cart', path: 'C:\\work\\shop-review-cart', branch: 'review-cart', number: 2, port_offset: 200, active: s.reviewLaneStarted, owns_main: false, running: s.reviewLaneStarted ? 5 : 0, services: 5 },
+              // Worktrees agents opened and left: lanes, not started.
+              { name: '1242', path: 'C:\\work\\_wt\\1242', branch: 'agent/checkout-totals', number: 3, port_offset: 300, active: false, owns_main: false, running: 0, services: 5 },
+              { name: '1333', path: 'C:\\work\\_wt\\1333', branch: 'agent/i18n-de', number: 4, port_offset: 400, active: false, owns_main: false, running: 0, services: 5 },
+              { name: 'bisect', path: 'C:\\work\\shop-bisect', branch: null, number: 5, port_offset: 500, active: false, owns_main: false, running: 0, services: 5 },
             ]
           : [],
       );
@@ -276,7 +280,11 @@ export class MockTransport implements Transport {
       s.laneOwnsMain = lm[1] !== 'main';
       return json(200, []);
     }
-    if (/^\/v1\/lanes\/[^/]+$/.test(p) && method === 'DELETE') return empty(204);
+    const stop = /^\/v1\/lanes\/([^/]+)\/stop$/.exec(p);
+    if (stop && method === 'POST') {
+      if (stop[1] === 'review-cart') s.reviewLaneStarted = false;
+      return json(200, []);
+    }
     const fw = /^\/v1\/lanes\/[^/]+(\/v1\/.*)$/.exec(p);
     if (fw) p = fw[1];
     const view = () => json(200, s.view);

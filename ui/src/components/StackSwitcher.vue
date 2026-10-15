@@ -5,6 +5,8 @@ import { ago, useNow } from '@/lib/format';
 import { usePopover } from '@/lib/popover';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
+import { laneLabel, orderLanes } from '@/lib/lanes';
+import type { LaneView } from '@/api/types';
 import Icon from './icons/Icon.vue';
 import AddStackDialog from './AddStackDialog.vue';
 
@@ -28,6 +30,24 @@ function addStack() {
 const stacks = computed(() => [...hub.stacks].sort((a, b) => Number(b.running) - Number(a.running) || a.name.localeCompare(b.name)));
 const current = computed(() => hub.entry(stack.id));
 const currentName = computed(() => current.value?.name ?? stack.view?.name ?? 'Select a stack');
+
+// The lanes of the stack shown (ADR-0024): each worktree looks like a stack of
+// its own, named by its branch. Started ones first; the worktrees nobody
+// started (agents leave many) fold away.
+const lanes = computed(() => orderLanes(stack.lanes));
+const shownLane = computed(() => stack.lanes.find((l) => l.name === stack.lane) ?? null);
+const showIdle = ref(false);
+
+function chooseLane(l: LaneView | null) {
+  close();
+  trigger.value?.focus();
+  if (l && l.active === false) {
+    void stack.startLane(l.name);
+    return;
+  }
+  stack.selectLane(l?.name ?? null);
+  if (stack.id) void router.push({ name: 'overview', params: { stack: stack.id } });
+}
 
 async function toggle() {
   open.value = !open.value;
@@ -92,7 +112,7 @@ function onKey(e: KeyboardEvent) {
       @keydown.down.prevent="!open && toggle()"
     >
       <span class="sdot" :class="!hub.reachable ? 'unknown' : current?.running ? 'on' : 'off'" aria-hidden="true" />
-      <span class="sname truncate">{{ currentName }}</span>
+      <span class="sname truncate">{{ currentName }}<template v-if="shownLane"><span class="lane-sep"> › </span>{{ laneLabel(shownLane) }}</template></span>
       <Icon name="chevronDown" :size="14" class="chev" />
     </button>
     <Transition name="drop">
@@ -125,6 +145,48 @@ function onKey(e: KeyboardEvent) {
           </li>
           <li v-if="!stacks.length" class="empty-opt">No stacks registered yet. Add one, or run <code>devstack up</code> in a project.</li>
         </ul>
+        <template v-if="stack.lanes.length">
+          <div class="menu-head">Worktrees of {{ currentName }}</div>
+          <ul class="lanes" aria-label="Worktrees" data-testid="lane-list">
+            <li>
+              <button type="button" class="lane-opt" :class="{ current: !stack.lane }" data-testid="lane-option" data-lane="" @click="chooseLane(null)">
+                <span class="sdot on" aria-hidden="true" />
+                <span class="grow truncate">main working tree</span>
+                <span v-if="!lanes.running.some((l) => l.owns_main)" class="pill sm">main ports</span>
+              </button>
+            </li>
+            <li v-for="l in lanes.running" :key="l.name">
+              <button type="button" class="lane-opt" :class="{ current: l.name === stack.lane }" :title="l.path" data-testid="lane-option" :data-lane="l.name" @click="chooseLane(l)">
+                <span class="sdot" :class="l.running ? 'on' : 'off'" aria-hidden="true" />
+                <span class="grow truncate">{{ laneLabel(l) }}</span>
+                <span v-if="l.owns_main" class="pill sm ok">main ports</span>
+                <span class="opt-sub">{{ l.running }}/{{ l.services }} · +{{ l.port_offset }}</span>
+              </button>
+            </li>
+            <li v-if="lanes.idle.length">
+              <button type="button" class="lane-fold" :aria-expanded="showIdle" data-testid="lane-idle-toggle" @click="showIdle = !showIdle">
+                <Icon :name="showIdle ? 'chevronDown' : 'chevronRight'" :size="13" />
+                {{ lanes.idle.length }} not started
+              </button>
+            </li>
+            <template v-if="showIdle">
+              <li v-for="l in lanes.idle" :key="l.name">
+                <button
+                  type="button"
+                  class="lane-opt idle"
+                  :title="`${l.path} — click to start it (what devstack up in the worktree does)`"
+                  data-testid="lane-option"
+                  :data-lane="l.name"
+                  @click="chooseLane(l)"
+                >
+                  <span class="sdot off" aria-hidden="true" />
+                  <span class="grow truncate">{{ laneLabel(l) }}</span>
+                  <span class="opt-sub">start</span>
+                </button>
+              </li>
+            </template>
+          </ul>
+        </template>
         <button type="button" class="add-opt" data-testid="add-stack-open" @click="addStack"><Icon name="plus" :size="14" /> Add a stack…</button>
       </div>
     </Transition>
@@ -271,5 +333,49 @@ ul {
 }
 .add-opt:hover {
   background: var(--surface-hover);
+}
+.lane-sep {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.lanes {
+  border-top: 1px solid var(--border);
+  padding-top: 2px;
+  margin-bottom: 4px;
+  max-height: 40vh;
+}
+.lane-opt,
+.lane-fold {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px 6px 18px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.lane-opt:hover,
+.lane-fold:hover {
+  background: var(--surface-hover);
+}
+.lane-opt.current {
+  background: var(--accent-soft);
+}
+.lane-opt.idle {
+  color: var(--text-muted);
+}
+.lane-fold {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.grow {
+  flex: 1;
+  min-width: 0;
 }
 </style>

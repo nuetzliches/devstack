@@ -160,6 +160,8 @@ export type StackEventBody =
   | { type: 'infra'; group: string; message: string }
   | { type: 'command'; command: string; run: number; status: RunStatus }
   | { type: 'config'; changed: boolean }
+  /** A worktree added or removed, a branch checked out, a lane started or stopped, the main ports moved. */
+  | { type: 'lanes'; lanes: LaneView[] }
   | ({ type: 'usage' } & UsageReport);
 
 export type StackEvent = { seq: number; at: number } & StackEventBody;

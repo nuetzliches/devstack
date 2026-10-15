@@ -211,6 +211,11 @@ pub enum EventBody {
     },
     /// Current load, every native sample (plan §12); history via `/v1/usage`.
     Usage(Box<crate::usage::UsageReport>),
+    /// The lanes changed: a worktree added or removed, a branch checked out, a
+    /// lane started or stopped, the main slot moved (ADR-0024).
+    Lanes {
+        lanes: Vec<crate::lanes::LaneView>,
+    },
 }
 
 /// Persisted in `<state>/state.json`.

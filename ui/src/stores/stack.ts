@@ -11,7 +11,7 @@ const MAX_EVENTS = 500;
 const HISTORY_WINDOW_MS = 10 * 60_000;
 
 /** An entry of the events timeline (usage ticks are left out). */
-export type TimelineEvent = Exclude<StackEvent, { type: 'usage' }>;
+export type TimelineEvent = Exclude<StackEvent, { type: 'usage' } | { type: 'lanes' }>;
 
 /** Keys of usage series: svc:<name>, ctr:<group>/<service>, builds, grp:<name>, lane:<name>. */
 export type SeriesKey = string;
@@ -58,11 +58,16 @@ export const useStack = defineStore('stack', () => {
     if (!id.value || !running.value) return;
     try {
       const res = await api().request<LaneView[]>('GET', paths.api(id.value, v1.lanes));
-      lanes.value = res.ok && Array.isArray(res.body) ? res.body : [];
-      if (lane.value && !lanes.value.some((l) => l.name === lane.value)) selectLane(null);
+      if (res.ok && Array.isArray(res.body)) setLanes(res.body);
     } catch {
       // keep the list; the next connect loads it again
     }
+  }
+
+  /** The lanes now; the one shown is gone (its worktree was removed): back to the main tree. */
+  function setLanes(next: LaneView[]) {
+    lanes.value = next;
+    if (lane.value && !next.some((l) => l.name === lane.value)) selectLane(null);
   }
 
   function selectLane(next: string | null) {
@@ -132,17 +137,13 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
-  async function removeLane(name: string) {
+  /** Stop a lane: its services stop, it is no longer started; the worktree stays (git's). */
+  async function stopLane(name: string) {
     if (!id.value) return;
-    const path = lanes.value.find((l) => l.name === name)?.path ?? '';
     const res = await act({
-      label: `Remove lane ${name}`,
-      path: paths.api(id.value, v1.lane(name)),
-      method: 'DELETE',
-      danger: true,
-      confirmLabel: `Remove ${name}`,
-      confirmText: `Stop lane ${name}, delete its builds and logs and remove its worktree ${path} (git refuses a worktree with changes that are not committed; the branch stays)?`,
-      success: `Lane ${name} removed`,
+      label: `Stop lane ${name}`,
+      path: paths.api(id.value, v1.laneStop(name)),
+      success: `Lane ${name} stopped`,
     });
     if (res.ok) {
       if (lane.value === name) selectLane(null);
@@ -244,6 +245,9 @@ export const useStack = defineStore('stack', () => {
       case 'usage':
         addUsage(ev);
         return; // not part of the timeline
+      case 'lanes':
+        setLanes(ev.lanes);
+        return; // the lane bar and the stack switcher show it
     }
     viewAt.value = Date.now();
     const list = events.value;
@@ -534,7 +538,7 @@ export const useStack = defineStore('stack', () => {
     selectLane,
     laneMain,
     startLane,
-    removeLane,
+    stopLane,
     serviceAction,
     groupAction,
     restartContainer,
