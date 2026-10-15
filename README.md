@@ -63,6 +63,7 @@ devstack ui               # the dashboard in the browser (every stack, live)
 devstack hub install      # hub at logon + `devstack://` start link (up does it once)
 devstack skills install   # agent skills for this repository, from the stack file
 devstack restart api      # rebuild now; the running instance is replaced once the new one is healthy
+devstack restart backend  # every service of a group (and its containers); start/stop work the same
 devstack promote api      # take over a candidate held back by a schema change (ADR-0013)
 devstack rollback api     # back to the build that ran before the last replacement
 devstack logs api --follow

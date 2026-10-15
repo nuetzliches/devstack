@@ -76,6 +76,7 @@ const inFlight = computed(() => stack.pending.length - attention.value.length);
 const infraErrors = computed(() => view.value?.infra.filter((g) => g.error) ?? []);
 const daemon = computed(() => stack.entry?.daemon ?? null);
 const hubAway = computed(() => !hub.reachable);
+const groupActions: { action: 'start' | 'stop' | 'restart'; title: string; icon: 'play' | 'stop' | 'restart' }[] = [  { action: 'start', title: 'Start every service of', icon: 'play' },  { action: 'restart', title: 'Rebuild and restart every service and container of', icon: 'restart' },  { action: 'stop', title: 'Stop every service of', icon: 'stop' },];
 const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 </script>
 
@@ -141,6 +142,22 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
           <header class="card-header">
             <h2>{{ card.label }}</h2>
             <span class="count">{{ card.members.length }}</span>
+            <span class="grow" />
+            <div v-if="card.key !== '__other' && card.members.some((m) => m.kind === 'service')" class="group-actions" role="group" :aria-label="`Actions for ${card.label}`">
+              <button
+                v-for="a in groupActions"
+                :key="a.action"
+                type="button"
+                class="btn btn-ghost btn-sm btn-icon"
+                :title="`${a.title} ${card.label}`"
+                :aria-label="`${a.title} ${card.label}`"
+                :disabled="!!stack.busy[`grp:${card.key}`] || stack.stale || hubAway"
+                :data-testid="`group-${a.action}`"
+                @click="stack.groupAction(card.key, card.label, a.action)"
+              >
+                <span v-if="stack.busy[`grp:${card.key}`] === a.action" class="spinner" /><Icon v-else :name="a.icon" />
+              </button>
+            </div>
           </header>
           <ul class="members">
             <template v-for="m in card.members" :key="m.key">
@@ -171,6 +188,11 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 </template>
 
 <style scoped>
+.group-actions {
+  display: flex;
+  gap: 2px;
+  margin: -4px -8px -4px 0;
+}
 .summary {
   padding: 18px 20px;
   display: flex;

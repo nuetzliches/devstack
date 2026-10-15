@@ -1554,6 +1554,82 @@ The running instance was left as it was."
     }
 
     /// `restart_on` of a Compose service: restart the container.
+    /// `start`, `stop` or `restart` for every member of a group (plan §6).
+    /// Services start one after the other in member order (their `after`
+    /// pulls dependencies first) and stop in reverse; restarts build at the
+    /// same time. `restart` also restarts container members; commands are
+    /// left out. Errors name the members that failed, the others still ran.
+    pub fn group_action(self: &Arc<Self>, group: &str, action: &str) -> Result<(), String> {
+        let g = self
+            .stack
+            .groups
+            .get(group)
+            .ok_or_else(|| format!("no group `{group}`"))?;
+        let services: Vec<String> = g
+            .members
+            .iter()
+            .filter(|m| self.stack.services.contains_key(m.as_str()))
+            .cloned()
+            .collect();
+        let containers: Vec<(String, String)> = g
+            .members
+            .iter()
+            .filter_map(|m| {
+                let rest = m.strip_prefix("compose.")?;
+                let (grp, svc) = rest.split_once('.')?;
+                Some((grp.to_string(), svc.to_string()))
+            })
+            .collect();
+        let mut failed: Vec<String> = Vec::new();
+        match action {
+            "start" => {
+                for s in &services {
+                    if let Err(e) = self.start(s) {
+                        failed.push(format!("{s}: {e}"));
+                    }
+                }
+            }
+            "stop" => {
+                for s in services.iter().rev() {
+                    if let Err(e) = self.stop(s) {
+                        failed.push(format!("{s}: {e}"));
+                    }
+                }
+            }
+            "restart" => {
+                let results: Vec<(String, Result<(), String>)> = std::thread::scope(|scope| {
+                    let handles: Vec<_> = services
+                        .iter()
+                        .map(|s| (s.clone(), scope.spawn(|| self.restart(s))))
+                        .collect();
+                    handles
+                        .into_iter()
+                        .map(|(s, h)| (s, h.join().unwrap_or_else(|_| Err("panicked".into()))))
+                        .collect()
+                });
+                failed.extend(
+                    results
+                        .into_iter()
+                        .filter_map(|(s, r)| r.err().map(|e| format!("{s}: {e}"))),
+                );
+                for (grp, svc) in &containers {
+                    if let Err(e) = self.docker.restart(&self.compose_group(grp), svc) {
+                        failed.push(format!("{svc}: {e}"));
+                    }
+                }
+                if !containers.is_empty() {
+                    self.refresh_containers();
+                }
+            }
+            _ => return Err(format!("unknown group action `{action}`")),
+        }
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(failed.join("\n"))
+        }
+    }
+
     /// A container's output (`docker compose logs`, timestamped).
     pub fn container_logs(
         &self,

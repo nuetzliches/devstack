@@ -52,23 +52,25 @@ enum Cmd {
     },
     /// State of services and infrastructure.
     Status,
+    /// Start a service, or every service of a group.
     Start {
+        /// A service or a group of the stack file.
         service: String,
     },
+    /// Stop a service, or every service of a group.
     Stop {
+        /// A service or a group of the stack file.
         service: String,
     },
+    /// Rebuild and restart a service; for a group every service (built at the same time) and its containers.
     Restart {
+        /// A service or a group of the stack file.
         service: String,
     },
     /// Take over a candidate that waits for promotion (a schema change, ADR-0013).
-    Promote {
-        service: String,
-    },
+    Promote { service: String },
     /// Go back to the build that ran before the last replacement (no build, no jobs).
-    Rollback {
-        service: String,
-    },
+    Rollback { service: String },
     /// Console output of a service.
     Logs {
         /// The service, or a Compose container by its service name; not with
@@ -187,9 +189,7 @@ enum Cmd {
     },
     /// Internal: what the system runs for a `devstack://` link (only `devstack://hub/start`).
     #[command(hide = true)]
-    OpenUrl {
-        url: String,
-    },
+    OpenUrl { url: String },
     /// Internal (Linux): the shim between daemon and service (ADR-0009).
     #[command(hide = true)]
     Shim {

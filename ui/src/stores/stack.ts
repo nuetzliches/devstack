@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { computed, ref, shallowRef, triggerRef, watch } from 'vue';
-import { api, paths, v1, type ServiceAction, type StreamState, type Subscription } from '@/api';
+import { api, paths, v1, type GroupAction, type ServiceAction, type StreamState, type Subscription } from '@/api';
 import type { Point, Run, ServiceView, StackEvent, StackView, UsageReport } from '@/api/types';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
@@ -322,6 +322,25 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
+  /** start / stop / restart every member of a group (plan §6). */
+  async function groupAction(group: string, label: string, action: GroupAction) {
+    if (!id.value) return;
+    const key = `grp:${group}`;
+    if (busy.value[key]) return;
+    busy.value[key] = action;
+    try {
+      const res = await act<StackView>({
+        label: `${actionLabels[action]} ${label}`,
+        path: paths.api(id.value, v1.groupAction(group, action)),
+        success: `${actionLabels[action]} ${label}: done`,
+        conflictHint: action === 'restart' ? 'Members that failed keep their running instance.' : undefined,
+      });
+      if (res.ok && res.body && 'services' in res.body) applyView(res.body);
+    } finally {
+      delete busy.value[key];
+    }
+  }
+
   async function restartContainer(group: string, service: string) {
     if (!id.value) return;
     const key = `ctr:${group}/${service}`;
@@ -427,6 +446,7 @@ export const useStack = defineStore('stack', () => {
     loadRuns,
     runCommand,
     serviceAction,
+    groupAction,
     restartContainer,
     startStack,
     stopStack,

@@ -34,6 +34,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/down", post(down))
         .route("/v1/shutdown", post(shutdown))
         .route("/v1/services/{name}/{action}", post(service_action))
+        .route("/v1/groups/{name}/{action}", post(group_action))
         .route("/v1/logs", get(logs_all))
         .route("/v1/services/{name}/logs", get(logs))
         .route("/v1/services/{name}/logs/stream", get(log_stream))
@@ -159,6 +160,10 @@ async fn service_action(
     Path((name, action)): Path<(String, String)>,
 ) -> Response {
     if !s.sup.stack.services.contains_key(&name) {
+        // A group by its name, so `devstack restart backend` works.
+        if s.sup.stack.groups.contains_key(&name) {
+            return group_action(State(s), Path((name, action))).await;
+        }
         return err(StatusCode::NOT_FOUND, format!("no service `{name}`"));
     }
     let sup = s.sup.clone();
@@ -171,6 +176,29 @@ async fn service_action(
         _ => return err(StatusCode::NOT_FOUND, format!("unknown action `{action}`")),
     };
     match result {
+        Ok(Ok(())) => Json(s.sup.view()).into_response(),
+        Ok(Err(e)) => err(StatusCode::CONFLICT, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `POST /v1/groups/{name}/{start|stop|restart}`: every member; `409` names
+/// the members that failed (the others ran).
+async fn group_action(
+    State(s): State<AppState>,
+    Path((name, action)): Path<(String, String)>,
+) -> Response {
+    if !s.sup.stack.groups.contains_key(&name) {
+        return err(StatusCode::NOT_FOUND, format!("no group `{name}`"));
+    }
+    if !matches!(action.as_str(), "start" | "stop" | "restart") {
+        return err(
+            StatusCode::NOT_FOUND,
+            format!("unknown group action `{action}`"),
+        );
+    }
+    let sup = s.sup.clone();
+    match tokio::task::spawn_blocking(move || sup.group_action(&name, &action)).await {
         Ok(Ok(())) => Json(s.sup.view()).into_response(),
         Ok(Err(e)) => err(StatusCode::CONFLICT, e),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),

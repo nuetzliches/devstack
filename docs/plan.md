@@ -388,8 +388,9 @@ by group, a stack switcher, the "not yet active" panel per service, the console
 of the current instance (live, filter, pause), service and stack actions,
 commands with confirmation and their run history, resources, the events
 timeline, Docker and stack-file banners, container logs, earlier logs of a
-service, sortable tables. Open (§13): tray, a build timeline per service, a candidate's console, actions per group, a command
-palette, jumping to the first error line, the lane switcher (phase 3).
+service, sortable tables, actions per group. Open (§13): tray, a build
+timeline per service, a candidate's console, a command palette, jumping to
+the first error line, the lane switcher (phase 3).
 
 ## 7. Phases
 
@@ -557,7 +558,8 @@ than itself instead of an empty error; earlier logs of a service by build
 and by time (`devstack logs api --build/--since/--list`, MCP `logs`,
 "Earlier logs" in the dashboard), every instance's log names its build; container logs (`devstack logs <container>`,
 a log button per container in the dashboard); every table in the dashboard
-sorts by its column headers.
+sorts by its column headers; start, stop and restart per group (dashboard,
+`devstack restart <group>`, MCP).
 
 **Not covered by an automated test:** a machine reboot, a Docker Desktop
 restart, the `devstack://` link opened from a browser, an IDE terminal closing.
@@ -696,7 +698,7 @@ What is open, roughly in the order it pays off, and where it comes from.
 | Hot-reload switch per service at runtime (`devstack hot-reload api on/off`) | §3.4a | medium |
 | `devstack init` beyond .NET and Node (Go, Python, Java), and from a second real repository | §13 | medium |
 | `devstack migrate`, once devstack has outside users | [ADR-0023](adr/0023-stack-file-compatibility.md) | medium |
-| Dashboard: build timeline, candidate console, group actions, command palette, first error line | §6 | medium |
+| Dashboard: build timeline, candidate console, command palette, first error line | §6 | medium |
 | Tray icon with status and notifications | §6, ADR-0018 | medium |
 | Network egress sandbox, stage 1 (cooperative proxy) | [ADR-0022](adr/0022-network-egress-sandbox.md) (proposed) | medium |
 | Optional OTLP export of devstack's own events, next to the diagnostic log | follow-up to §11 | small |

@@ -145,7 +145,8 @@ type UsageReport = {
 | Method and path | Answer |
 |---|---|
 | `POST /v1/up` | `202` |
-| `POST /v1/services/{name}/start` \| `stop` \| `restart` \| `promote` \| `rollback` | `200 StackView`, or `409 {"error": "..."}` (e.g. compiler errors; the running instance stays) |
+| `POST /v1/services/{name}/start` \| `stop` \| `restart` \| `promote` \| `rollback` | `200 StackView`, or `409 {"error": "..."}` (e.g. compiler errors; the running instance stays). For a name that is no service but a group, `start`/`stop`/`restart` act on the group |
+| `POST /v1/groups/{name}/start` \| `stop` \| `restart` | every member service of the group: start in member order, stop in reverse, restart (build) at the same time; `restart` also restarts container members, commands are left out. `200 StackView`, or `409` naming each member that failed (the others ran) |
 | `POST /v1/infra/{group}/{service}/restart` | `204` |
 | `POST /v1/commands/{name}` with `{"confirm": false}` | `202 {"run": 7}`, or `428 {"confirm": "text"}` (ask the user, then send `confirm: true`), `409 {"error"}` (a required service is not ready) |
 | `GET /v1/commands/{name}/runs` | `[Run]` |

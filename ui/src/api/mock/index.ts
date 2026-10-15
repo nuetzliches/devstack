@@ -259,6 +259,19 @@ export class MockTransport implements Transport {
       return text(200, `info: started\nwarn: something went wrong in ${q.get('file')}\nfail: Unhandled exception`);
     }
 
+    const ga = /^\/v1\/groups\/([^/]+)\/(start|stop|restart)$/.exec(p);
+    if (ga) {
+      const g = s.view.groups.find((x) => x.name === decodeURIComponent(ga[1]));
+      if (!g) return json(404, { error: `no group ${ga[1]}` });
+      await sleep(ga[2] === 'restart' ? 2500 : 900);
+      for (const m of g.members) {
+        const svc = s.view.services.find((x) => x.name === m);
+        if (!svc) continue;
+        if (ga[2] === 'stop') s.setStatus(m, { state: 'stopped' });
+        else s.startInstance(svc, svc.build_id ?? '0000000000000000');
+      }
+      return view();
+    }
     let m = /^\/v1\/services\/([^/]+)\/(start|stop|restart|promote|rollback|build-log|logs)$/.exec(p);
     if (m) {
       const name = decodeURIComponent(m[1]);

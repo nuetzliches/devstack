@@ -54,6 +54,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack logs <container>` | a Compose container's output by its service name (`docker compose logs`, timestamped; `--grep`, `--since 30m`) |
 | `devstack logs --daemon` | devstack's own log: every decision with its reason (`--grep <service>`, `--hub` for the dashboard hub) |
 | `devstack restart <service>` | rebuild now; the running instance stays until the new one is healthy |
+| `devstack restart <group>` | every service of a group from the stack file, built at the same time, and its containers (`start`/`stop` take a group too) |
 | `devstack promote <service>` | take over a candidate that is held (schema change, see below) |
 | `devstack rollback <service>` | back to the build before the last replacement, without building |
 | `devstack start` / `stop <service>` | one service |

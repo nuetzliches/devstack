@@ -68,6 +68,7 @@ export const v1 = {
   logFiles: (service: string) => `/v1/services/${enc(service)}/logs/files`,
   keptLog: (service: string, file: string, tail = 2000) => `/v1/services/${enc(service)}/logs?file=${enc(file)}&tail=${tail}`,
   serviceAction: (service: string, action: ServiceAction) => `/v1/services/${enc(service)}/${action}`,
+  groupAction: (group: string, action: GroupAction) => `/v1/groups/${enc(group)}/${action}`,
   infraRestart: (group: string, service: string) => `/v1/infra/${enc(group)}/${enc(service)}/restart`,
   infraLogs: (group: string, service: string, tail = 1000) => `/v1/infra/${enc(group)}/${enc(service)}/logs?tail=${tail}`,
   command: (name: string) => `/v1/commands/${enc(name)}`,
@@ -77,6 +78,7 @@ export const v1 = {
 };
 
 export type ServiceAction = 'start' | 'stop' | 'restart' | 'promote' | 'rollback';
+export type GroupAction = 'start' | 'stop' | 'restart';
 
 function enc(s: string): string {
   return encodeURIComponent(s);

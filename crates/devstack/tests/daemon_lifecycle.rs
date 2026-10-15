@@ -717,6 +717,17 @@ fn lifecycle(with_compose: bool) {
         "the proxy names the build"
     );
 
+    // A group by its name: stop and start every member service.
+    s.ok(&["stop", "app"]);
+    assert!(s.api("/health").is_none(), "group stopped");
+    s.ok(&["start", "app"]);
+    assert!(
+        wait_for(|| s.api("/health").is_some(), Duration::from_secs(60)),
+        "group started again"
+    );
+    assert_eq!(s.info()["build"], second_build.as_str(), "no new build");
+    let second = s.info();
+
     // The daemon dies hard: its services die with it (ADR-0009).
     let api_pid = second["pid"].as_u64().unwrap();
     kill_hard(s.daemon_pid());
