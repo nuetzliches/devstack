@@ -11,6 +11,7 @@ mod envcmd;
 mod hubcmd;
 mod integration;
 mod mcp;
+mod skills;
 mod topcmd;
 
 #[derive(Parser)]
@@ -114,6 +115,11 @@ enum Cmd {
     },
     /// Print the JSON Schema of the stack file (for editors).
     Schema,
+    /// Agent skills for this repository, generated from the stack file.
+    Skills {
+        #[command(subcommand)]
+        action: SkillsAction,
+    },
     /// Internal: what the system runs for a `devstack://` link (only `devstack://hub/start`).
     #[command(hide = true)]
     OpenUrl {
@@ -144,6 +150,22 @@ enum HubAction {
     },
     /// Remove both again; `devstack up` then leaves them alone.
     Uninstall,
+}
+
+#[derive(Subcommand)]
+enum SkillsAction {
+    /// Write the skills `devstack` (run the stack) and `devstack-config` (edit the
+    /// stack file), filled in from this stack file. Again to refresh them.
+    Install {
+        /// Target directory; default `.claude/skills` next to the stack file.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Also replace a file of the same name the project wrote itself.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Do the installed skills match this devstack and this stack file?
+    Check,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -240,7 +262,7 @@ fn main() -> Result<()> {
         Cmd::Down { infra } => client::down(&cli.file, infra),
         Cmd::Status => {
             let c = client::need(&client::state_dir(&cli.file)?)?;
-            client::print_status(&c.stack()?);
+            client::print_status_for(&c.stack()?, &cli.file);
             Ok(())
         }
         Cmd::Start { service } => client::service_action(&cli.file, &service, "start"),
@@ -287,6 +309,31 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::OpenUrl { url } => integration::open_url(&url),
+        Cmd::Skills {
+            action: SkillsAction::Install { dir, force },
+        } => {
+            let stack = load(&cli.file);
+            for o in skills::install(&stack, &cli.file, dir.as_deref(), force)? {
+                match o {
+                    skills::Outcome::Written(p) => println!("written    {}", p.display()),
+                    skills::Outcome::Unchanged(p) => println!("up to date {}", p.display()),
+                    skills::Outcome::Kept(p) => println!(
+                        "kept       {} (written by the project, not by devstack; --force replaces it)",
+                        p.display()
+                    ),
+                }
+            }
+            Ok(())
+        }
+        Cmd::Skills {
+            action: SkillsAction::Check,
+        } => {
+            match skills::outdated_note(&cli.file) {
+                Some(n) => println!("{n}"),
+                None => println!("skills: up to date (or not installed in the default directory)"),
+            }
+            Ok(())
+        }
         Cmd::Top { watch } => topcmd::run(&cli.file, watch),
         Cmd::Run { command, yes } => client::run_command(&cli.file, &command, yes),
         Cmd::Daemon => devstack_daemon::serve(&cli.file).map_err(|e| anyhow::anyhow!(e)),

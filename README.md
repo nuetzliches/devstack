@@ -53,6 +53,7 @@ devstack up               # daemon, infrastructure, autostart services
 devstack status
 devstack ui               # the dashboard in the browser (every stack, live)
 devstack hub install      # hub at logon + `devstack://` start link (up does it once)
+devstack skills install   # agent skills for this repository, from the stack file
 devstack restart api      # rebuild now; the running instance is replaced once the new one is healthy
 devstack promote api      # take over a candidate held back by a schema change (ADR-0013)
 devstack rollback api     # back to the build that ran before the last replacement
@@ -90,6 +91,23 @@ like the CLI: every tool maps to one endpoint (`status`, `up`, `down`,
 A command with a confirmation text in the stack file (a database reset, say)
 only runs when the agent passes `confirm: true`, which it is told to do only
 after the user agreed.
+
+### Agent skills
+
+`devstack skills install` writes two skills into the repository
+(`.claude/skills/`, `--dir` for another place), filled in from the stack file:
+
+- **`devstack`**: install check, operating the stack, "is my change live",
+  this stack's services, commands and start checks, troubleshooting, and the
+  rule to ask the user before reporting a devstack problem upstream.
+- **`devstack-config`**: editing the stack file, with the rules that are easy to
+  get wrong and a link to the reference, [docs/stack-file.md](docs/stack-file.md).
+
+Each file carries a marker line; installing again refreshes it, and
+`devstack status` (and the MCP status) notes when an installed skill no longer
+matches this devstack or the stack file. Project specifics go into a skill of
+the project's own, which devstack never touches. Commit the generated skills
+with the repository.
 
 ## Why
 

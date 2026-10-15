@@ -148,6 +148,15 @@ pub fn print_status(stack: &Value) {
     print!("{}", status_text(stack));
 }
 
+/// `devstack status`: the table, plus a note when the generated agent skills
+/// no longer match.
+pub fn print_status_for(stack: &Value, stack_file: &Path) {
+    print_status(stack);
+    if let Some(n) = crate::skills::outdated_note(stack_file) {
+        println!("\n{n}");
+    }
+}
+
 /// The service table and the infrastructure, as `devstack status` shows them.
 pub fn status_text(stack: &Value) -> String {
     use std::fmt::Write;
@@ -247,7 +256,7 @@ pub fn up(stack_file: &Path) -> Result<()> {
     match outcome {
         UpOutcome::Ready(stack) => {
             println!();
-            print_status(&stack);
+            print_status_for(&stack, stack_file);
             Ok(())
         }
         UpOutcome::Failed { service, reason } => {

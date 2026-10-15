@@ -276,7 +276,13 @@ fn checked(status: u16, body: String) -> Result<String> {
 
 fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
     match name {
-        "status" => Ok(client::status_text(&connect(file)?.stack()?)),
+        "status" => {
+            let mut text = client::status_text(&connect(file)?.stack()?);
+            if let Some(n) = crate::skills::outdated_note(file) {
+                text.push_str(&format!("\n{n}\n"));
+            }
+            Ok(text)
+        }
         "up" => {
             let timeout = Duration::from_secs(args["timeout_s"].as_u64().unwrap_or(600));
             let c = client::ensure_daemon(file, &client::state_dir(file)?)?;
