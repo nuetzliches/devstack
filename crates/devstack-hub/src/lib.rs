@@ -210,7 +210,19 @@ pub fn serve() -> Result<(), String> {
     let port = port();
     let dir = state_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let _lock = devstack_proc::StateLock::acquire(&dir).map_err(|e| e.to_string())?;
+    // A hub that was just told to stop (`devstack update`, a restart) can hold
+    // the lock a few seconds longer while it lets go of open streams; wait for
+    // it instead of exiting at once (the daemon does the same).
+    let t0 = std::time::Instant::now();
+    let _lock = loop {
+        match devstack_proc::StateLock::acquire(&dir) {
+            Ok(l) => break l,
+            Err(devstack_proc::LockError::Held(_)) if t0.elapsed() < Duration::from_secs(15) => {
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    };
     diag::init(log_path());
     let token = devstack_daemon::token::load_or_create().map_err(|e| format!("token: {e}"))?;
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
@@ -1161,14 +1173,20 @@ pub fn ensure_running() -> Result<u16, String> {
         return Ok(port);
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    // What the hub prints before its own log exists (a failed start) goes to
+    // hub.out, like the daemon's daemon.out.
+    let _ = std::fs::create_dir_all(state_dir());
+    let out = state_dir().join("hub.out");
+    let log = std::fs::File::create(&out).map_err(|e| format!("{}: {e}", out.display()))?;
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("hub")
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stdout(log.try_clone().map_err(|e| e.to_string())?)
+        .stderr(log);
     devstack_proc::spawn_detached(&mut cmd).map_err(|e| format!("start the hub: {e}"))?;
-    // The first start of a freshly installed binary can take a while (a virus
-    // scanner reads it first): 15 s were measured on Windows after an update.
+    // A hub that was just stopped can hold the state lock a few seconds more
+    // (the new one waits up to 15 s for it), and a fresh binary may be read
+    // by a virus scanner first.
     const WAIT: Duration = Duration::from_secs(30);
     let t0 = Instant::now();
     while t0.elapsed() < WAIT {
@@ -1177,9 +1195,15 @@ pub fn ensure_running() -> Result<u16, String> {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+    let said = std::fs::read_to_string(&out).unwrap_or_default();
     Err(format!(
-        "the hub did not answer on port {port} within {} s",
-        WAIT.as_secs()
+        "the hub did not answer on port {port} within {} s{}",
+        WAIT.as_secs(),
+        if said.trim().is_empty() {
+            String::new()
+        } else {
+            format!(":\n{}", said.trim())
+        }
     ))
 }
 

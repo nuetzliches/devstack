@@ -589,6 +589,11 @@ in the dashboard's console and stripped where they would show as noise (other
 text views, `grep` matching, the MCP tools, `devstack logs` into a file or a
 pipe); the hub's first start after `devstack update` gets 30 s instead of 10.
 
+**In `main`, for 0.5.2:** a hub started while the previous one still lets go
+of its state lock (right after `devstack update` stopped it) waits for the
+lock instead of exiting silently; what a hub prints before its log exists goes
+to `hub.out`, and a start that fails says so.
+
 **Not covered by an automated test:** a machine reboot, a Docker Desktop
 restart, the `devstack://` link opened from a browser, an IDE terminal closing.
 
