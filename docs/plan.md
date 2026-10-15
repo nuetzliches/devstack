@@ -207,7 +207,7 @@ a lane is a supervisor in the main working tree's daemon; `devstack up` in a
 linked worktree makes it one, its ports move by `[lanes] port_step` times its
 number, `{lane}` / `{lane_suffix}` name per-lane resources, `promote --lane`
 forwards the fixed ports of the proxied services and moves the workers. Not
-yet: lanes on other machines (drafts RL1 to RL5).
+yet: lanes on other machines ([ADR-0025](adr/0025-a-lane-can-run-on-another-node.md) to [ADR-0029](adr/0029-source-sync-and-port-forwarding-for-remote-lanes.md) (proposed)).
 
 ### 3.6 Daemon crash, restart and update
 
@@ -735,7 +735,7 @@ What is open, roughly in the order it pays off, and where it comes from.
 
 | Item | From | Size |
 |---|---|---|
-| Lanes on other machines | drafts RL1 to RL5 | large |
+| Lanes on other machines | [ADR-0025](adr/0025-a-lane-can-run-on-another-node.md) to [ADR-0029](adr/0029-source-sync-and-port-forwarding-for-remote-lanes.md) (proposed) | large |
 | Own domain for the landing page (now on GitHub Pages) | phase 4 | small |
 | Code signing of the Windows binary (deferred) | [#3](https://github.com/nuetzliches/devstack/issues/3) | small |
 | Remove the downstream stack's old orchestrator once its team works without it | phase 4 | downstream |

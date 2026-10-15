@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-10-15
 - **Deciders:** project owner
-- **Related:** plan §3.5, [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0010](0010-promotion-mechanism.md), [ADR-0012](0012-shared-infrastructure-between-lanes.md), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md), drafts RL1 to RL5 (remote lanes)
+- **Related:** plan §3.5, [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0010](0010-promotion-mechanism.md), [ADR-0012](0012-shared-infrastructure-between-lanes.md), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md) to [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) (remote lanes, proposed)
 
 ## Context
 
@@ -66,7 +66,7 @@ names (the containers of one tree served the other), workers twice.
   distributed protocol on one machine, for state one process can hold.
 - **One Compose project per lane** (ADR-0012 option A). Correct but heavy: a
   second SQL Server or search engine per agent exceeds a laptop's memory. Kept
-  for remote lanes (draft RL1), where the memory is a node's.
+  for remote lanes ([ADR-0025](0025-a-lane-can-run-on-another-node.md)), where the memory is a node's.
 - **An artifact store per lane.** Simpler, but every new worktree would
   build everything cold (minutes for a .NET service) although the main tree
   has the same build already. Publishing is atomic per id (a temporary

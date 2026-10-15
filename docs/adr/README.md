@@ -62,3 +62,8 @@ before code exists it names where it *will* live.
 | [0022](0022-network-egress-sandbox.md) | Outbound network calls of supervised services are visible and need an allow rule | Proposed |
 | [0023](0023-stack-file-compatibility.md) | Stack files stay readable; migrations once devstack has outside users | Accepted |
 | [0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) | A lane is a supervisor in the main working tree's daemon | Accepted |
+| [0025](0025-a-lane-can-run-on-another-node.md) | A lane can run on another node, as a Linux container with its own infrastructure | Proposed |
+| [0026](0026-placement-by-the-requester-admission-by-the-node.md) | The requester places a lane; the node admits it, under a lease | Proposed |
+| [0027](0027-trust-between-nodes.md) | Nodes and requesters trust each other by pinned keys, never by network location | Proposed |
+| [0028](0028-lane-images.md) | A remote lane runs in a stack-provided toolchain image; the node supplies devstack | Proposed |
+| [0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) | A remote lane works on a mirror of the requester's tree; ports and API come back over one connection | Proposed |

@@ -1,0 +1,134 @@
+# ADR-0025: A lane can run on another node, as a Linux container with its own infrastructure
+
+- **Status:** Proposed (local lanes are built, ADR-0024; this extends them)
+- **Date:** 2026-10-15
+- **Deciders:** project owner
+- **Related:** plan §3.5, §9, [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (local lanes, built in 0.5.0), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0004](0004-infrastructure-is-delegated-to-compose.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0011](0011-platform-windows-native-first.md), [ADR-0012](0012-shared-infrastructure-between-lanes.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md), [ADR-0027](0027-trust-between-nodes.md), [ADR-0028](0028-lane-images.md), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md)
+
+## Context
+
+A second lane is a second copy of the stack: its own infrastructure, its own
+services, its own builds and dev servers. On a typical developer machine one
+stack already takes several gigabytes of memory (database containers, a .NET
+API with workers, an Angular dev server); a second or third worktree, often
+opened by an AI agent rather than a person, exceeds what the machine has.
+
+Teams usually have spare capacity elsewhere: a server, or colleagues' machines
+that are idle. The aim is to run a lane there while the developer keeps editing
+locally, with the same feedback loop: a save in the IDE starts a build, the
+service is reachable on `localhost`, logs and build results appear in the same
+CLI, MCP tools and dashboard.
+
+Plan §9 sets a guard against becoming a general orchestrator: "devstack never
+schedules, places or networks containers itself." Running a lane elsewhere is a
+placement decision, so this ADR has to move that guard on purpose.
+
+## Decision
+
+1. **The unit is the lane.** A lane (a worktree, run by a supervisor in the
+   main tree's daemon, ADR-0024) has a **placement**: `local` (ADR-0024) or a
+   **node**, chosen when it starts (`devstack up --on <node>`, `devstack lane
+   add <name> --on <node>`). The worktree, and with it the source, stays on the
+   developer's machine. All of a lane runs on its node: infrastructure,
+   builds, services, dev servers. devstack never places a single service or a
+   single build elsewhere.
+2. **A node runs `devstack-node`**, an agent binary from this repository, on any
+   host with a Docker engine (a Linux server, or a developer machine with Docker
+   Desktop). Per remote lane it starts:
+   - the lane's **infrastructure** as a Compose project of its own on the node's
+     Docker engine, from the Compose files in the lane's source (ADR-0004
+     holds: Compose owns every container);
+   - one **lane container** from the stack's lane image (ADR-0028), in which an
+     unmodified Linux `devstackd` runs the lane's application plane exactly as it
+     would locally: snapshot, build, artifacts, candidates, promotion
+     (ADR-0002, ADR-0003, ADR-0009). The lane container has no access to the
+     Docker engine.
+3. **Remote lanes share no infrastructure**, with each other or with local
+   lanes. Local lanes share the main tree's (ADR-0024 point 4); for remote
+   lanes, ADR-0012 is answered with option A (one infra plane per lane), and
+   the memory it costs is the node's. A node keeps an artifact store of its
+   own; the shared store of ADR-0024 is per machine.
+4. **The main slot may be remote, on a dedicated node only.** A node is
+   *dedicated* when its owner has declared that it never reclaims capacity (a
+   server, ADR-0026); developer machines take non-main lanes only. A remote lane
+   owning the main slot runs its workers there (ADR-0008); this is safe because
+   its infrastructure is its own (point 3). Conditions: the stack has no
+   Windows-only services in the remote lane (point 8), and `devstack promote
+   --lane <local lane>` is always the way back, a cold start with data
+   recreated by seed jobs. The move itself is ADR-0024 point 5: the fixed ports
+   forward to the lane's forwarded ports, and the workers move. A remote
+   non-main lane runs without workers, like a local one (ADR-0012
+   interim rule).
+5. **A remote lane is disposable.** Its source lives with the requester; its
+   data (databases, volumes) is lost when the lane is evicted or moved and is
+   recreated by the stack's seed jobs. Moving data between nodes is not
+   supported.
+6. **The developer's machine sees a local lane**: source changes are synced to
+   the node and service ports are forwarded to `localhost` (ADR-0029); the
+   requester's daemon proxies the remote daemon's API and event stream under
+   the same `/v1/lanes/<name>/v1/...` as a local lane (ADR-0024), so CLI, MCP
+   and dashboard need no notion of "remote" (ADR-0007).
+7. **Lifecycle follows ADR-0024.** A daemon restart on the developer's machine
+   is clean (ADR-0016): the main slot returns to the main tree, remote lanes are
+   stopped and their leases released; `devstack up` starts them again, on the
+   node that still has their mirror if it can. Removing the lane releases the
+   lease and deletes the mirror on the node.
+8. **Remote lanes run Linux containers.** Windows-only services do not run in
+   a remote lane. When a remote lane owns the main slot they keep running in
+   the main tree, as any service the lane does not run (ADR-0024 point 5);
+   that is correct only for a service that reaches the lane through its fixed
+   ports and does not use the infrastructure itself, which `devstack check`
+   warns about. Locally, ADR-0011 is unchanged.
+9. **Not supported:** attaching a debugger to a process in a remote lane. Logs,
+   the candidate pipeline and hot-reload mode (plan §3.4a) are the feedback
+   loop.
+
+The guard of plan §9 becomes: *devstack places whole lanes on nodes; inside a
+lane, Compose owns containers and devstack never schedules, places or networks
+individual containers or services.*
+
+## Alternatives considered
+
+- **Remote builds only, run locally.** Moves CPU, not memory; the memory of a
+  lane is mostly in its running services and infrastructure. Also needs
+  cross-built artifacts for Windows.
+- **Remote infrastructure only (Docker context over SSH).** Cheap, and still a
+  reasonable manual setup, but leaves the native services and dev server of
+  every lane on the developer's machine.
+- **Main always local.** Simplest, and the stack keeps working without the
+  farm, but leaves the heaviest lane, the one used all day, on the machine
+  that lacks the memory.
+- **Placing individual services across nodes.** A service talks to its lane's
+  database and siblings on every request; spreading a lane over the network
+  adds latency and failure modes, and needs cross-node service networking,
+  which is an orchestrator's job (Kubernetes), not devstack's.
+- **Kubernetes or a cluster scheduler as the substrate.** Designed for
+  long-lived workloads on dedicated nodes, not for developer machines that
+  join and leave; a dependency the team has to run. Nomad is under a
+  non-MIT-compatible licence (BUSL).
+- **Docker-in-Docker inside the lane container.** Needs a privileged container
+  or the Docker socket, which is root on the host; not acceptable on a
+  colleague's machine.
+
+## Consequences
+
+- A second binary (`devstack-node`) and a Linux build of `devstackd` become
+  release artefacts.
+- How a native service in the lane container reaches the lane's Compose
+  services (ADR-0014 rewrites hosts to published ports on `localhost`) has to be
+  settled in a spike: joining the Compose network and keeping service names, or
+  publishing ports into the container.
+- Forwarded ports follow ADR-0024's allocation (`[lanes] port_step`), so a
+  lane has the same ports whether it runs locally or on a node.
+- The requester's daemon gains a second kind of lane, and the dashboard shows
+  where each lane runs.
+- With a remote main, the developer's daily stack depends on the node and the
+  network; when either is gone, work continues only after promoting a local
+  lane. Goal 2 of the plan (main never regresses) holds only because main is
+  restricted to nodes that do not reclaim.
+
+## Enforced by
+
+Will live in: `crates/devstack-node` (agent: lane container, Compose project per
+lane), the lane model of phase 3 in `crates/devstack-daemon` (placement), plan
+§3.5 and §9, `devstack check` (Windows-only components).
