@@ -389,8 +389,8 @@ of the current instance (live, filter, pause), service and stack actions,
 commands with confirmation and their run history, resources, the events
 timeline, Docker and stack-file banners, container logs, earlier logs of a
 service, sortable tables, actions per group, the jump to the last failure, a
-candidate's console, a build timeline per service. Open (§13): tray, a
-command palette, the lane switcher (phase 3).
+candidate's console, a build timeline per service, a command palette. Open
+(§13): tray, the lane switcher (phase 3).
 
 ## 7. Phases
 
@@ -563,7 +563,8 @@ sorts by its column headers; start, stop and restart per group (dashboard,
 every console ("Last error", again for the ones before); a candidate's own
 console while it starts (`logs/stream?build=`); a build timeline per service
 (`devstack builds`, MCP `builds`, "Builds" in the service view), read back
-from the diagnostic log.
+from the diagnostic log; a command palette (Ctrl+K / Cmd+K) for views, stacks,
+services, groups, containers and commands.
 
 **Not covered by an automated test:** a machine reboot, a Docker Desktop
 restart, the `devstack://` link opened from a browser, an IDE terminal closing.
@@ -702,7 +703,6 @@ What is open, roughly in the order it pays off, and where it comes from.
 | Hot-reload switch per service at runtime (`devstack hot-reload api on/off`) | §3.4a | medium |
 | `devstack init` beyond .NET and Node (Go, Python, Java), and from a second real repository | §13 | medium |
 | `devstack migrate`, once devstack has outside users | [ADR-0023](adr/0023-stack-file-compatibility.md) | medium |
-| Dashboard: command palette | §6 | medium |
 | Tray icon with status and notifications | §6, ADR-0018 | medium |
 | Network egress sandbox, stage 1 (cooperative proxy) | [ADR-0022](adr/0022-network-egress-sandbox.md) (proposed) | medium |
 | Optional OTLP export of devstack's own events, next to the diagnostic log | follow-up to §11 | small |

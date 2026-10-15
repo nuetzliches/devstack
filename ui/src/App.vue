@@ -5,6 +5,7 @@ import { ago, useNow } from '@/lib/format';
 import TopBar from '@/components/TopBar.vue';
 import Toasts from '@/components/Toasts.vue';
 import GlobalDialogs from '@/components/GlobalDialogs.vue';
+import CommandPalette from '@/components/CommandPalette.vue';
 import Icon from '@/components/icons/Icon.vue';
 import UnpairedView from '@/views/UnpairedView.vue';
 
@@ -70,6 +71,7 @@ async function startHub() {
     </main>
     <Toasts />
     <GlobalDialogs />
+    <CommandPalette />
   </template>
 </template>
 

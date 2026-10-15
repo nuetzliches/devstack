@@ -101,6 +101,9 @@ and dark (stored in `localStorage`).
   a third returns to the table's own order; the choice is remembered per
   table in the browser. A column of sparklines sorts by its peak.
 
+- **Anything a button does belongs in the command palette** (`CommandPalette.vue`,
+  Ctrl+K / Cmd+K) too, through the same store action.
+
 ## Test hooks
 
 Key elements carry `data-testid` for Playwright: `stack-switcher`,

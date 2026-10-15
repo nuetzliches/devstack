@@ -25,6 +25,7 @@ const conn = computed(() => {
 const themeIcon = computed(() => (ui.theme === 'system' ? 'monitor' : ui.theme === 'light' ? 'sun' : 'moon'));
 const themeLabel = computed(() => `Theme: ${ui.theme} (click to change)`);
 const version = computed(() => hub.version ?? __APP_VERSION__);
+const openPalette = () => window.dispatchEvent(new Event('devstack:palette'));
 
 async function copyUpdate() {
   try {
@@ -61,6 +62,17 @@ const mismatch = computed(() => {
       <span class="sep hide-xs" aria-hidden="true">/</span>
       <StackSwitcher />
       <span class="grow" />
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm palette-btn"
+        title="Go to or run anything (Ctrl+K)"
+        aria-label="Open the command palette"
+        aria-keyshortcuts="Control+K Meta+K"
+        data-testid="palette-open"
+        @click="openPalette"
+      >
+        <Icon name="search" :size="14" /><kbd class="hide-sm">Ctrl K</kbd>
+      </button>
       <PendingIndicator />
       <span class="conn" :class="`tone-${conn.tone}`" :title="conn.title" data-testid="connection-indicator" role="status">
         <span class="cdot" aria-hidden="true" />
@@ -90,6 +102,14 @@ const mismatch = computed(() => {
 </template>
 
 <style scoped>
+.palette-btn kbd {
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-left: 4px;
+  font-family: inherit;
+}
 .topbar {
   position: sticky;
   top: 0;
