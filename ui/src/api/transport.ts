@@ -69,6 +69,7 @@ export const v1 = {
   keptLog: (service: string, file: string, tail = 2000) => `/v1/services/${enc(service)}/logs?file=${enc(file)}&tail=${tail}`,
   serviceAction: (service: string, action: ServiceAction) => `/v1/services/${enc(service)}/${action}`,
   infraRestart: (group: string, service: string) => `/v1/infra/${enc(group)}/${enc(service)}/restart`,
+  infraLogs: (group: string, service: string, tail = 1000) => `/v1/infra/${enc(group)}/${enc(service)}/logs?tail=${tail}`,
   command: (name: string) => `/v1/commands/${enc(name)}`,
   commandRuns: (name: string) => `/v1/commands/${enc(name)}/runs`,
   run: (id: number) => `/v1/runs/${id}`,

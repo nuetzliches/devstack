@@ -295,12 +295,71 @@ impl Docker {
         self.run(&g.dir, &a).map(|_| ())
     }
 
+    /// The last `tail` lines of a container's output, each starting with its
+    /// RFC 3339 timestamp; `since` as Docker takes it (`30m`, a timestamp).
+    /// Docker hands stdout and stderr back separately; the timestamps put
+    /// them into one order again.
+    pub fn logs(
+        &self,
+        g: &Group,
+        service: &str,
+        tail: usize,
+        since: Option<&str>,
+    ) -> Result<String> {
+        let mut a = g.base_args();
+        a.extend([
+            "logs".into(),
+            "--no-color".into(),
+            "--no-log-prefix".into(),
+            "--timestamps".into(),
+            "--tail".into(),
+            tail.to_string().into(),
+        ]);
+        if let Some(s) = since {
+            a.extend(["--since".into(), s.into()]);
+        }
+        a.push(service.into());
+        let out = self.run(&g.dir, &a)?;
+        Ok(merge_by_time(
+            &String::from_utf8_lossy(&out.stdout),
+            &String::from_utf8_lossy(&out.stderr),
+            tail,
+        ))
+    }
+
     /// Stop and remove the group's containers (volumes are kept).
     pub fn down(&self, g: &Group) -> Result<()> {
         let mut a = g.base_args();
         a.extend(["down".into(), "--timeout".into(), "10".into()]);
         self.run(&g.dir, &a).map(|_| ())
     }
+}
+
+/// Two timestamped streams as one, in time order, the last `tail` lines.
+/// RFC 3339 timestamps of one container sort as text; a line without one
+/// (a continuation) stays after the line before it.
+pub fn merge_by_time(stdout: &str, stderr: &str, tail: usize) -> String {
+    let mut lines: Vec<(&str, usize, &str)> = Vec::new();
+    for (i, text) in [stdout, stderr].into_iter().enumerate() {
+        let mut key = "";
+        for l in text.lines() {
+            if let Some((ts, _)) = l
+                .split_once(' ')
+                .filter(|(t, _)| t.len() >= 20 && t.as_bytes()[4] == b'-')
+            {
+                key = ts;
+            }
+            lines.push((key, i, l));
+        }
+    }
+    lines.sort_by(|a, b| a.0.cmp(b.0).then(a.1.cmp(&b.1)));
+    let skip = lines.len().saturating_sub(tail);
+    lines
+        .into_iter()
+        .skip(skip)
+        .map(|(_, _, l)| l)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Live load of one container (`docker stats`, plan §12).
@@ -454,6 +513,20 @@ fn describe(program: &str, args: &[OsString]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logs_merge_stdout_and_stderr_by_time() {
+        let out = "2026-10-15T10:00:01.000000000Z ready\n2026-10-15T10:00:03.000000000Z query ok";
+        let err = "2026-10-15T10:00:02.000000000Z ERROR: relation missing\n\tat line 4";
+        assert_eq!(
+            merge_by_time(out, err, 10),
+            "2026-10-15T10:00:01.000000000Z ready\n2026-10-15T10:00:02.000000000Z ERROR: relation missing\n\tat line 4\n2026-10-15T10:00:03.000000000Z query ok"
+        );
+        assert_eq!(
+            merge_by_time(out, err, 1),
+            "2026-10-15T10:00:03.000000000Z query ok"
+        );
+    }
 
     const CONFIG: &str = r#"{"name":"probe","services":{
       "api":{"profiles":["container-app"],"environment":{"DB_URL":"http://db:5432/x","EMPTY":null},

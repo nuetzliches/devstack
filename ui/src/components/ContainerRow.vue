@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import type { ContainerView } from '@/api/types';
 import { containerLook } from '@/lib/status';
 import { useStack } from '@/stores/stack';
 import StatusPill from './StatusPill.vue';
+import ContainerLogModal from './ContainerLogModal.vue';
 import Icon from './icons/Icon.vue';
 
 const props = withDefaults(defineProps<{ group: string; container: ContainerView | null; service: string; showGroup?: boolean }>(), { showGroup: false });
 const stack = useStack();
 const look = computed(() => (props.container ? containerLook(props.container) : null));
 const busy = computed(() => !!stack.busy[`ctr:${props.group}/${props.service}`]);
+const showLog = ref(false);
 
 /** "5432->127.0.0.1:15432" -> host side first, which is what people type. */
 function hostPort(p: string): string {
@@ -51,6 +53,17 @@ const extraUrls = computed(() => (props.container?.urls ?? []).filter((u) => !pr
     <button
       type="button"
       class="btn btn-ghost btn-sm btn-icon"
+      :aria-label="`Log of container ${service}`"
+      title="Container log"
+      :disabled="stack.stale || !container || !stack.id"
+      data-testid="action-container-log"
+      @click="showLog = true"
+    >
+      <Icon name="file" />
+    </button>
+    <button
+      type="button"
+      class="btn btn-ghost btn-sm btn-icon"
       :aria-label="`Restart container ${service}`"
       title="Restart container"
       :disabled="busy || stack.stale || !container"
@@ -59,6 +72,7 @@ const extraUrls = computed(() => (props.container?.urls ?? []).filter((u) => !pr
     >
       <span v-if="busy" class="spinner" /><Icon v-else name="restart" />
     </button>
+    <ContainerLogModal v-if="showLog && stack.id" :open="showLog" :stack-id="stack.id" :group="group" :service="service" @close="showLog = false" />
   </li>
 </template>
 

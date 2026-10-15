@@ -1554,6 +1554,32 @@ The running instance was left as it was."
     }
 
     /// `restart_on` of a Compose service: restart the container.
+    /// A container's output (`docker compose logs`, timestamped).
+    pub fn container_logs(
+        &self,
+        group: &str,
+        service: &str,
+        tail: usize,
+        since: Option<&str>,
+    ) -> Result<String, String> {
+        self.docker
+            .logs(&self.compose_group(group), service, tail, since)
+            .map_err(|e| e.to_string())
+    }
+
+    /// The group of the Compose service called `name`, if exactly one group
+    /// starts one by that name.
+    pub fn container_group(&self, name: &str) -> Option<String> {
+        let mut groups = self
+            .stack
+            .compose
+            .iter()
+            .filter(|(_, g)| g.services.iter().any(|s| s == name))
+            .map(|(k, _)| k.clone());
+        let first = groups.next()?;
+        groups.next().is_none().then_some(first)
+    }
+
     pub(crate) fn restart_container(&self, group: &str, service: &str) {
         let message = match self.docker.restart(&self.compose_group(group), service) {
             Ok(()) => format!("{service}: restarted after a change"),

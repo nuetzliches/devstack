@@ -71,7 +71,8 @@ enum Cmd {
     },
     /// Console output of a service.
     Logs {
-        /// The service; not with --daemon / --hub.
+        /// The service, or a Compose container by its service name; not with
+        /// --daemon / --hub.
         service: Option<String>,
         #[arg(long, short = 'n', default_value_t = 200)]
         tail: usize,

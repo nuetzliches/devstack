@@ -201,7 +201,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "logs",
-            "Console output of the service's current instance, or of earlier ones (`build`, `since`, `file`, `list`: an instance that crashed or was replaced). With `grep` only matching lines; without `service` but with `grep`, every service is searched (\"where did this error come from\"). GET /v1/services/{service}/logs, GET /v1/logs.",
+            "Console output of the service's current instance, or of earlier ones (`build`, `since`, `file`, `list`: an instance that crashed or was replaced). A Compose service name gives that container's output (timestamped). With `grep` only matching lines; without `service` but with `grep`, every service is searched (\"where did this error come from\"). GET /v1/services/{service}/logs, GET /v1/logs.",
             json!({
                 "service": service["service"],
                 "tail": { "type": "integer", "minimum": 1, "default": 200, "description": "Number of last (matching) lines, per service when searching all" },

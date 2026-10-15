@@ -12,7 +12,7 @@ services:
     depends_on: [db, cache]
   db:
     image: busybox:1.37
-    command: ["sh", "-c", "trap 'exit 0' TERM; while true; do sleep 1; done"]
+    command: ["sh", "-c", "echo db ready; echo db warming up >&2; trap 'exit 0' TERM; while true; do sleep 1; done"]
     healthcheck: { test: ["CMD", "true"], interval: 1s }
   cache:
     image: busybox:1.37

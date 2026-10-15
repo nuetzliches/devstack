@@ -444,6 +444,17 @@ fn lifecycle(with_compose: bool) {
             "development",
             "value from the dev env file"
         );
+        // A container's output, stdout and stderr in one, by its service name.
+        let logs = s.ok(&["logs", "db"]);
+        assert!(
+            logs.contains("db ready") && logs.contains("db warming up"),
+            "container log: {logs}"
+        );
+        let only = s.ok(&["logs", "db", "--grep", "WARMING"]);
+        assert!(
+            only.contains("db warming up") && !only.contains("db ready"),
+            "{only}"
+        );
     }
     let status = s.ok(&["status"]);
     assert!(status.contains("healthy"), "{status}");

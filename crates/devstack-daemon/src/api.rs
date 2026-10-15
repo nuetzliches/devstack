@@ -43,6 +43,7 @@ pub fn router(state: AppState) -> axum::Router {
             "/v1/infra/{group}/{service}/restart",
             post(restart_container),
         )
+        .route("/v1/infra/{group}/{service}/logs", get(infra_logs))
         .route("/v1/events", get(events))
         .route("/v1/usage", get(usage))
         .route("/v1/commands/{name}", post(run_command))
@@ -207,7 +208,11 @@ async fn logs(
     Query(q): Query<LogQuery>,
 ) -> Response {
     if !s.sup.stack.services.contains_key(&name) {
-        return err(StatusCode::NOT_FOUND, format!("no service `{name}`"));
+        // A container by its Compose service name, so `devstack logs postgres` works.
+        return match s.sup.container_group(&name) {
+            Some(group) => container_logs(&s, group, name, &q).await,
+            None => err(StatusCode::NOT_FOUND, format!("no service `{name}`")),
+        };
     }
     let tail = q.tail.unwrap_or(200);
     let grep = q.grep.as_deref().filter(|g| !g.is_empty());
@@ -609,6 +614,56 @@ async fn build_log(State(s): State<AppState>, Path(name): Path<String>) -> Respo
             StatusCode::NOT_FOUND,
             format!("`{name}` has no build log yet"),
         ),
+    }
+}
+
+/// `GET /v1/infra/{group}/{service}/logs?tail=&grep=&since=`: a container's
+/// output, timestamped (`docker compose logs`).
+async fn infra_logs(
+    State(s): State<AppState>,
+    Path((group, service)): Path<(String, String)>,
+    Query(q): Query<LogQuery>,
+) -> Response {
+    let known = s
+        .sup
+        .stack
+        .compose
+        .get(&group)
+        .is_some_and(|g| g.services.contains(&service));
+    if !known {
+        return err(
+            StatusCode::NOT_FOUND,
+            format!("no compose service `{group}.{service}`"),
+        );
+    }
+    container_logs(&s, group, service, &q).await
+}
+
+async fn container_logs(s: &AppState, group: String, service: String, q: &LogQuery) -> Response {
+    let tail = q.tail.unwrap_or(200).min(20_000);
+    let grep = q.grep.clone().filter(|g| !g.is_empty());
+    let since = q.since.clone().filter(|v| !v.is_empty());
+    // With a filter, Docker hands over more and the filter keeps the last `tail`.
+    let fetch = if grep.is_some() { 20_000 } else { tail };
+    let sup = s.sup.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        sup.container_logs(&group, &service, fetch, since.as_deref())
+    })
+    .await;
+    match res {
+        Ok(Ok(out)) => {
+            let needle = grep.map(|g| g.to_lowercase());
+            let mut lines: Vec<&str> = out
+                .lines()
+                .rev()
+                .filter(|l| needle.as_ref().is_none_or(|g| l.to_lowercase().contains(g)))
+                .take(tail)
+                .collect();
+            lines.reverse();
+            text(lines.join("\n"))
+        }
+        Ok(Err(e)) => err(StatusCode::BAD_GATEWAY, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 

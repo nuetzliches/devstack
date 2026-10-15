@@ -243,6 +243,10 @@ export class MockTransport implements Transport {
     if (p === '/v1/usage' && method === 'GET') return json(200, s.usageWithHistory());
     if (p === '/v1/up' && method === 'POST') return empty(202);
 
+    if (/^\/v1\/infra\/[^/]+\/[^/]+\/logs$/.test(p)) {
+      const t = new Date().toISOString();
+      return text(200, `${t} database system is ready to accept connections\n${t} LOG:  checkpoint starting: time\n${t} ERROR:  relation "orders" does not exist`);
+    }
     if (/^\/v1\/services\/[^/]+\/logs\/files$/.test(p)) {
       const t = Date.now();
       return json(200, [
