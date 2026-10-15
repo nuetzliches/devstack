@@ -58,6 +58,11 @@ chmod 755 "$dir/.devstack.new"
 mv -f "$dir/.devstack.new" "$dir/devstack"
 
 echo "Installed: $("$dir/devstack" --version) -> $dir/devstack"
+# The dashboard hub starts at logon (XDG autostart) and the dashboard can start
+# it (devstack:// link). DEVSTACK_NO_HUB_INTEGRATION=1 skips both.
+if [ -z "${DEVSTACK_NO_HUB_INTEGRATION:-}" ]; then
+  "$dir/devstack" hub install || echo "Note: could not register the hub with your session (devstack hub install)." >&2
+fi
 case ":$PATH:" in
   *":$dir:"*) ;;
   *) echo "Note: $dir is not on your PATH." ;;

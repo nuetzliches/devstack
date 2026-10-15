@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useHub } from '@/stores/hub';
 import { ago, useNow } from '@/lib/format';
 import TopBar from '@/components/TopBar.vue';
@@ -15,6 +15,26 @@ onMounted(() => void hub.init());
 
 const hubDown = computed(() => hub.status === 'unreachable' || (hub.status === 'ok' && hub.stream === 'error'));
 const booting = computed(() => hub.status === 'loading' && !hub.stacks.length);
+
+// Nothing listens while the hub is down, so the page cannot ask it to start.
+// The `devstack://hub/start` link asks the system instead (registered by
+// `devstack up` / `devstack hub install`); the browser confirms it once.
+// Afterwards look for the hub for a short while instead of waiting for the
+// stream's backoff.
+const startingHub = ref(false);
+async function startHub() {
+  startingHub.value = true;
+  const until = Date.now() + 20_000;
+  while (Date.now() < until) {
+    await new Promise((r) => setTimeout(r, 1000));
+    await hub.checkSession();
+    if (hub.status === 'ok') {
+      await hub.init();
+      break;
+    }
+  }
+  startingHub.value = false;
+}
 </script>
 
 <template>
@@ -26,9 +46,19 @@ const booting = computed(() => hub.status === 'loading' && !hub.stacks.length);
       <div class="hub-banner-inner">
         <Icon name="wifiOff" :size="18" />
         <div class="grow">
-          <strong>devstack hub is not reachable</strong> — run <code>devstack ui</code> in a project to start it.
+          <strong>devstack hub is not reachable.</strong> Start it here, or run <code>devstack ui</code> in a project.
           <span class="last">Showing the last known state<template v-if="hub.lastContact"> from {{ ago(hub.lastContact, now) }}</template>.</span>
         </div>
+        <a
+          class="btn btn-primary btn-sm"
+          href="devstack://hub/start"
+          title="Needs the devstack:// link (`devstack hub install`, done by `devstack up`)"
+          data-testid="action-start-hub"
+          @click="startHub()"
+        >
+          <span v-if="startingHub" class="spinner" /><Icon v-else name="play" :size="14" />
+          {{ startingHub ? 'Starting…' : 'Start hub' }}
+        </a>
         <span class="retry"><span class="spinner" aria-hidden="true" /> retrying</span>
       </div>
     </div>

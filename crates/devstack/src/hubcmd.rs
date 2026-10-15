@@ -18,6 +18,15 @@ fn token() -> Result<String> {
 
 /// Hub state as text (also the MCP tool `hub_status`).
 pub fn status_text() -> String {
+    format!(
+        "{}
+{}",
+        running_text(),
+        crate::integration::status_text()
+    )
+}
+
+fn running_text() -> String {
     let port = devstack_hub::port();
     match devstack_hub::read_info().filter(|_| devstack_hub::answers(port)) {
         Some(i) => format!(
@@ -102,6 +111,7 @@ pub fn ensure_quietly() {
     if std::env::var_os("DEVSTACK_NO_HUB").is_some() {
         return;
     }
+    crate::integration::ensure_once();
     if let Err(e) = devstack_hub::ensure_running() {
         eprintln!("note: the dashboard hub did not start: {e}");
     }

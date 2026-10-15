@@ -27,7 +27,9 @@ param(
     # Release to install, e.g. 0.1.0; default: the latest.
     [string]$Version,
     [string]$Dir = (Join-Path $env:LOCALAPPDATA 'Programs\devstack'),
-    [string]$Repo = 'nuetzliches/devstack'
+    [string]$Repo = 'nuetzliches/devstack',
+    # Do not start the hub at logon and do not register the devstack:// link.
+    [switch]$NoHubIntegration
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -81,6 +83,12 @@ try {
         Write-Host "Added $Dir to your PATH (new terminals see it)."
     }
     Write-Host "Installed: $(& $target --version) -> $target"
+    if (-not $NoHubIntegration) {
+        # The dashboard hub starts at logon, and the dashboard can start it
+        # (devstack:// link). Both in the user's registry hive, no admin rights.
+        & $target hub install
+        if ($LASTEXITCODE -ne 0) { Write-Warning "could not register the hub with your session (devstack hub install)" }
+    }
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

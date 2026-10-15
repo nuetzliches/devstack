@@ -52,6 +52,7 @@ devstack check            # validate the stack file (with --compose: the Compose
 devstack up               # daemon, infrastructure, autostart services
 devstack status
 devstack ui               # the dashboard in the browser (every stack, live)
+devstack hub install      # hub at logon + `devstack://` start link (up does it once)
 devstack restart api      # rebuild now; the running instance is replaced once the new one is healthy
 devstack promote api      # take over a candidate held back by a schema change (ADR-0013)
 devstack rollback api     # back to the build that ran before the last replacement

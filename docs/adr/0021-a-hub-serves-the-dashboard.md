@@ -23,7 +23,14 @@ dashboard do not fit that:
    `127.0.0.1:4250`, `DEVSTACK_HUB_PORT` overrides) serves the dashboard as a
    progressive web app. It is started on demand by `devstack up` and
    `devstack ui`, runs without a window, and lives until the user logs out or
-   runs `devstack hub stop`.
+   runs `devstack hub stop`. It also starts at logon, and a `devstack://hub/start`
+   link starts it from the dashboard: while the hub is down nothing listens on
+   its port, so the page has to ask the system. Both are registered in the
+   user's profile (Windows: `HKCU` Run key and URL class, through
+   `conhost.exe --headless` so no window opens; Linux: XDG autostart and a
+   `x-scheme-handler/devstack` desktop file). `devstack up` registers them once,
+   the installers always, `devstack hub uninstall` removes them and keeps `up`
+   from adding them again. A link can do nothing but start the hub.
 2. **A registry of stacks** in the user's state directory (next to the token):
    every daemon registers its stack (id, name, stack file, repository) when it
    starts. The id is derived from the stack file's absolute path.

@@ -9,6 +9,7 @@ mod buildcmd;
 mod client;
 mod envcmd;
 mod hubcmd;
+mod integration;
 mod mcp;
 mod topcmd;
 
@@ -113,6 +114,11 @@ enum Cmd {
     },
     /// Print the JSON Schema of the stack file (for editors).
     Schema,
+    /// Internal: what the system runs for a `devstack://` link (only `devstack://hub/start`).
+    #[command(hide = true)]
+    OpenUrl {
+        url: String,
+    },
     /// Internal (Linux): the shim between daemon and service (ADR-0009).
     #[command(hide = true)]
     Shim {
@@ -127,6 +133,17 @@ enum HubAction {
     Status,
     /// Stop the hub (stacks keep running).
     Stop,
+    /// Start the hub in the background unless it runs.
+    Start,
+    /// Start the hub at logon and let the dashboard start it (`devstack://` link).
+    /// `devstack up` does this once by itself.
+    Install {
+        /// Register the link only, no start at logon.
+        #[arg(long)]
+        no_autostart: bool,
+    },
+    /// Remove both again; `devstack up` then leaves them alone.
+    Uninstall,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -248,6 +265,28 @@ fn main() -> Result<()> {
         Cmd::Hub {
             action: Some(HubAction::Stop),
         } => hubcmd::stop(),
+        Cmd::Hub {
+            action: Some(HubAction::Start),
+        } => {
+            let port = devstack_hub::ensure_running().map_err(|e| anyhow::anyhow!(e))?;
+            println!("hub running: http://127.0.0.1:{port}");
+            Ok(())
+        }
+        Cmd::Hub {
+            action: Some(HubAction::Install { no_autostart }),
+        } => {
+            integration::install(!no_autostart)?;
+            println!("{}", integration::status_text());
+            Ok(())
+        }
+        Cmd::Hub {
+            action: Some(HubAction::Uninstall),
+        } => {
+            integration::uninstall()?;
+            println!("{}", integration::status_text());
+            Ok(())
+        }
+        Cmd::OpenUrl { url } => integration::open_url(&url),
         Cmd::Top { watch } => topcmd::run(&cli.file, watch),
         Cmd::Run { command, yes } => client::run_command(&cli.file, &command, yes),
         Cmd::Daemon => devstack_daemon::serve(&cli.file).map_err(|e| anyhow::anyhow!(e)),

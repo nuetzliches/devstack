@@ -1,0 +1,326 @@
+//! The hub in the user's session (ADR-0021): it starts at logon, and a
+//! `devstack://hub/start` link starts it from the dashboard, which cannot reach
+//! a hub that does not run (nothing listens on its port).
+//!
+//! Both live in the user's profile, no admin rights:
+//!
+//! | | Windows | Linux |
+//! | --- | --- | --- |
+//! | autostart | `HKCU\...\CurrentVersion\Run`, value `devstack-hub` | `~/.config/autostart/devstack-hub.desktop` |
+//! | link | `HKCU\Software\Classes\devstack` | `~/.local/share/applications/devstack-url.desktop` + `xdg-mime` |
+//!
+//! On Windows both run through `conhost.exe --headless`: devstack is a console
+//! program, and started from the logon or from a browser it would otherwise
+//! open a terminal window.
+//!
+//! `devstack up` installs both once, unless the user removed them
+//! (`devstack hub uninstall` leaves a marker that says so).
+
+use anyhow::{Result, anyhow};
+use std::path::{Path, PathBuf};
+
+/// What is registered right now.
+pub struct Status {
+    pub link: bool,
+    pub autostart: bool,
+}
+
+/// The only action a `devstack://` link may trigger. A web page can open such a
+/// link too; starting the hub is harmless, and the browser asks first.
+const LINK_START: &str = "hub/start";
+
+fn marker() -> PathBuf {
+    devstack_daemon::token::token_path()
+        .parent()
+        .expect("token path has a parent")
+        .join("hub")
+        .join("integration.json")
+}
+
+fn write_marker(installed: bool) {
+    let path = marker();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(
+        path,
+        serde_json::json!({ "installed": installed }).to_string(),
+    );
+}
+
+/// A cargo build (`.../target/...`) is not where the user keeps devstack; a
+/// registration pointing there breaks with the next `cargo clean`.
+fn is_dev_build(exe: &Path) -> bool {
+    exe.components().any(|c| c.as_os_str() == "target")
+}
+
+fn exe() -> Result<PathBuf> {
+    std::env::current_exe().map_err(|e| anyhow!("own path: {e}"))
+}
+
+/// Register link and (if asked) autostart for the running devstack binary.
+pub fn install(autostart: bool) -> Result<Status> {
+    let exe = exe()?;
+    imp::install_link(&exe)?;
+    if autostart {
+        imp::install_autostart(&exe)?;
+    } else {
+        imp::remove_autostart()?;
+    }
+    write_marker(true);
+    Ok(status())
+}
+
+pub fn uninstall() -> Result<()> {
+    imp::remove_link()?;
+    imp::remove_autostart()?;
+    write_marker(false);
+    Ok(())
+}
+
+pub fn status() -> Status {
+    Status {
+        link: imp::has_link(),
+        autostart: imp::has_autostart(),
+    }
+}
+
+/// From `devstack up`: install once, quietly. Not for a cargo build, and not
+/// again after the user uninstalled it.
+pub fn ensure_once() {
+    if marker().exists() {
+        return;
+    }
+    let Ok(exe) = exe() else { return };
+    if is_dev_build(&exe) {
+        return;
+    }
+    match install(true) {
+        Ok(_) => eprintln!(
+            "note: the dashboard hub now starts at logon, and the dashboard can start it (`devstack hub uninstall` undoes both)"
+        ),
+        Err(e) => eprintln!("note: could not register the hub with your session: {e}"),
+    }
+}
+
+/// `devstack open-url <url>`, what the system runs for a `devstack://` link.
+pub fn open_url(url: &str) -> Result<()> {
+    let rest = url
+        .strip_prefix("devstack://")
+        .or_else(|| url.strip_prefix("devstack:"))
+        .ok_or_else(|| anyhow!("not a devstack link: {url}"))?;
+    match rest.trim_matches('/') {
+        LINK_START => {
+            devstack_hub::ensure_running().map_err(|e| anyhow!(e))?;
+            Ok(())
+        }
+        other => Err(anyhow!("unknown devstack link `{other}`")),
+    }
+}
+
+pub fn status_text() -> String {
+    let s = status();
+    let yn = |b: bool| if b { "on" } else { "off" };
+    format!(
+        "starts at logon: {}; dashboard can start it (devstack:// link): {}",
+        yn(s.autostart),
+        yn(s.link)
+    )
+}
+
+#[cfg(windows)]
+mod imp {
+    use super::*;
+    use std::process::{Command, Stdio};
+
+    const CLASSES: &str = r"HKCU\Software\Classes\devstack";
+    const RUN: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+    const RUN_VALUE: &str = "devstack-hub";
+
+    fn reg(args: &[&str]) -> Result<bool> {
+        use std::os::windows::process::CommandExt;
+        let s = Command::new("reg")
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .status()
+            .map_err(|e| anyhow!("reg.exe: {e}"))?;
+        Ok(s.success())
+    }
+
+    fn must(args: &[&str]) -> Result<()> {
+        if reg(args)? {
+            Ok(())
+        } else {
+            Err(anyhow!("`reg {}` failed", args.join(" ")))
+        }
+    }
+
+    /// `"C:\Windows\System32\conhost.exe" --headless "<exe>" <args>`
+    fn headless(exe: &Path, args: &str) -> String {
+        let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        format!(
+            r#""{root}\System32\conhost.exe" --headless "{}" {args}"#,
+            exe.display()
+        )
+    }
+
+    pub fn install_link(exe: &Path) -> Result<()> {
+        must(&["add", CLASSES, "/ve", "/d", "URL:devstack", "/f"])?;
+        must(&["add", CLASSES, "/v", "URL Protocol", "/d", "", "/f"])?;
+        let cmd = headless(exe, r#"open-url "%1""#);
+        must(&[
+            "add",
+            &format!(r"{CLASSES}\shell\open\command"),
+            "/ve",
+            "/d",
+            &cmd,
+            "/f",
+        ])
+    }
+
+    pub fn remove_link() -> Result<()> {
+        if has_link() {
+            must(&["delete", CLASSES, "/f"])?;
+        }
+        Ok(())
+    }
+
+    pub fn has_link() -> bool {
+        reg(&["query", &format!(r"{CLASSES}\shell\open\command")]).unwrap_or(false)
+    }
+
+    pub fn install_autostart(exe: &Path) -> Result<()> {
+        must(&[
+            "add",
+            RUN,
+            "/v",
+            RUN_VALUE,
+            "/d",
+            &headless(exe, "hub start"),
+            "/f",
+        ])
+    }
+
+    pub fn remove_autostart() -> Result<()> {
+        if has_autostart() {
+            must(&["delete", RUN, "/v", RUN_VALUE, "/f"])?;
+        }
+        Ok(())
+    }
+
+    pub fn has_autostart() -> bool {
+        reg(&["query", RUN, "/v", RUN_VALUE]).unwrap_or(false)
+    }
+}
+
+#[cfg(not(windows))]
+mod imp {
+    use super::*;
+    use std::process::{Command, Stdio};
+
+    fn home() -> PathBuf {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+    }
+
+    fn data_dir() -> PathBuf {
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home().join(".local/share"))
+    }
+
+    fn config_dir() -> PathBuf {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home().join(".config"))
+    }
+
+    fn link_file() -> PathBuf {
+        data_dir().join("applications/devstack-url.desktop")
+    }
+
+    fn autostart_file() -> PathBuf {
+        config_dir().join("autostart/devstack-hub.desktop")
+    }
+
+    fn write(path: &Path, text: &str) -> Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(path, text).map_err(|e| anyhow!("{}: {e}", path.display()))
+    }
+
+    pub fn install_link(exe: &Path) -> Result<()> {
+        write(
+            &link_file(),
+            &format!(
+                "[Desktop Entry]\nType=Application\nName=devstack\nExec=\"{}\" open-url %u\nNoDisplay=true\nTerminal=false\nMimeType=x-scheme-handler/devstack;\n",
+                exe.display()
+            ),
+        )?;
+        // Without xdg-utils (a server, a container) the file is there but no
+        // browser asks for it; that is all we can do.
+        let _ = Command::new("xdg-mime")
+            .args([
+                "default",
+                "devstack-url.desktop",
+                "x-scheme-handler/devstack",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        Ok(())
+    }
+
+    pub fn remove_link() -> Result<()> {
+        let _ = std::fs::remove_file(link_file());
+        Ok(())
+    }
+
+    pub fn has_link() -> bool {
+        link_file().is_file()
+    }
+
+    pub fn install_autostart(exe: &Path) -> Result<()> {
+        write(
+            &autostart_file(),
+            &format!(
+                "[Desktop Entry]\nType=Application\nName=devstack hub\nComment=Serves the devstack dashboard\nExec=\"{}\" hub start\nTerminal=false\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n",
+                exe.display()
+            ),
+        )
+    }
+
+    pub fn remove_autostart() -> Result<()> {
+        let _ = std::fs::remove_file(autostart_file());
+        Ok(())
+    }
+
+    pub fn has_autostart() -> bool {
+        autostart_file().is_file()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cargo_build_is_recognised() {
+        assert!(is_dev_build(Path::new(
+            "/src/devstack/target/release/devstack"
+        )));
+        assert!(!is_dev_build(Path::new("/home/u/.local/bin/devstack")));
+    }
+
+    #[test]
+    fn links_other_than_hub_start_are_refused() {
+        assert!(open_url("https://example.com").is_err());
+        assert!(open_url("devstack://run/reset-db").is_err());
+        assert!(open_url("devstack://../../x").is_err());
+    }
+}
