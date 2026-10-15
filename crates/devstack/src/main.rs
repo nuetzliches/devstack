@@ -108,6 +108,13 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// The builds of a service, newest first: which went live, failed, were
+    /// replaced by a newer change or wait for promote.
+    Builds {
+        service: String,
+        #[arg(long, short = 'n', default_value_t = 20)]
+        limit: usize,
+    },
     /// CPU, memory and disk per service, container, group and lane (plan §12).
     Top {
         /// Refresh every two seconds.
@@ -475,6 +482,7 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Builds { service, limit } => client::builds(&cli.file, &service, limit),
         Cmd::Top { watch } => topcmd::run(&cli.file, watch),
         Cmd::Run { command, yes } => client::run_command(&cli.file, &command, yes),
         Cmd::Daemon => devstack_daemon::serve(&cli.file).map_err(|e| anyhow::anyhow!(e)),

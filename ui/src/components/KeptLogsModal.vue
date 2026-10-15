@@ -8,7 +8,7 @@ import Modal from './Modal.vue';
 import Diagnostics from './Diagnostics.vue';
 import Icon from './icons/Icon.vue';
 
-const props = defineProps<{ open: boolean; stackId: string; service: string }>();
+const props = defineProps<{ open: boolean; stackId: string; service: string; initialFile?: string }>();
 const emit = defineEmits<{ close: [] }>();
 
 type KeptLog = { file: string; kind: 'run' | 'build'; started_ms: number; modified_ms: number; build: string | null; port: number | null; bytes: number; current: boolean };
@@ -32,7 +32,7 @@ async function load() {
     const res = await api().request<KeptLog[]>('GET', paths.api(props.stackId, v1.logFiles(props.service)));
     if (res.ok && Array.isArray(res.body)) {
       files.value = res.body;
-      const first = res.body.find((f) => !f.current && f.kind === 'run') ?? res.body[0];
+      const first = res.body.find((f) => f.file === props.initialFile) ?? res.body.find((f) => !f.current && f.kind === 'run') ?? res.body[0];
       if (first && !chosen.value) await show(first.file);
     } else failed(null, res.status);
   } catch (e) {

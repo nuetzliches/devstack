@@ -39,6 +39,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/services/{name}/logs", get(logs))
         .route("/v1/services/{name}/logs/stream", get(log_stream))
         .route("/v1/services/{name}/logs/files", get(log_files))
+        .route("/v1/services/{name}/builds", get(builds))
         .route("/v1/services/{name}/build-log", get(build_log))
         .route(
             "/v1/infra/{group}/{service}/restart",
@@ -282,6 +283,38 @@ async fn logs(
         };
     }
     text(s.sup.repo_paths(&combined(&dir, &sel, tail, grep, None)))
+}
+
+#[derive(Deserialize)]
+struct LimitQuery {
+    limit: Option<usize>,
+}
+
+/// `GET /v1/services/{name}/builds?limit=50`: the builds of a service, newest
+/// first, from the diagnostic log (plan §6).
+async fn builds(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Query(q): Query<LimitQuery>,
+) -> Response {
+    if !s.sup.stack.services.contains_key(&name) {
+        return err(StatusCode::NOT_FOUND, format!("no service `{name}`"));
+    }
+    let current = s
+        .sup
+        .view()
+        .services
+        .into_iter()
+        .find(|v| v.name == name)
+        .and_then(|v| v.build_id);
+    let path = s.sup.state_dir.join("daemon.log");
+    let limit = q.limit.unwrap_or(50).min(500);
+    let list = tokio::task::spawn_blocking(move || {
+        crate::timeline::from_log(&path, &name, current.as_deref(), limit)
+    })
+    .await
+    .unwrap_or_default();
+    Json(list).into_response()
 }
 
 /// `GET /v1/services/{name}/logs/files`: the kept logs, newest first.

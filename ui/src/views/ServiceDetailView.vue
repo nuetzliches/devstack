@@ -10,6 +10,7 @@ import CandidatePanel from '@/components/CandidatePanel.vue';
 import LogView from '@/components/LogView.vue';
 import BuildLogModal from '@/components/BuildLogModal.vue';
 import KeptLogsModal from '@/components/KeptLogsModal.vue';
+import BuildTimeline from '@/components/BuildTimeline.vue';
 import Sparkline from '@/components/Sparkline.vue';
 import Icon from '@/components/icons/Icon.vue';
 import type { IconName } from '@/components/icons/icons';
@@ -183,6 +184,8 @@ const kv = computed(() => {
           </section>
         </div>
       </div>
+
+      <BuildTimeline v-if="svc.build_id || svc.candidate" class="stale-dim" :service="svc.name" :build="svc.build_id" :candidate-state="svc.candidate?.state ?? null" />
 
       <section class="card log-card">
         <header class="card-header">

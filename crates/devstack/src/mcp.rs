@@ -215,6 +215,16 @@ pub fn tools() -> Vec<Value> {
             true,
         ),
         tool(
+            "builds",
+            "The builds of a service, newest first, from devstack's diagnostic log: which went live, which failed (with the first line of the reason), which a newer change replaced, which wait for promote, and which runs now. For \"did my change ever go live\" and \"since when is it broken\". GET /v1/services/{service}/builds.",
+            json!({
+                "service": service["service"],
+                "limit": { "type": "integer", "minimum": 1, "default": 20 },
+            }),
+            &["service"],
+            true,
+        ),
+        tool(
             "doctor",
             "Is this machine ready for the stack: Docker engine and Compose version, the tools the stack file runs, ports, the hub, PATH. Read-only. Local file and process checks, no daemon needed. Run it before guessing why something does not start.",
             json!({}),
@@ -373,6 +383,14 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             } else {
                 text
             })
+        }
+        "builds" => {
+            let svc = name_arg(args, "service")?;
+            let limit = args["limit"].as_u64().unwrap_or(20);
+            let list: Vec<Value> = serde_json::from_str(
+                &connect(file)?.get(&format!("/v1/services/{svc}/builds?limit={limit}"))?,
+            )?;
+            Ok(client::builds_text(&list))
         }
         "doctor" => Ok(crate::doctor::text(&crate::doctor::run(file))),
         "diagnostics" => {

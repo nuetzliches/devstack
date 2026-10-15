@@ -247,6 +247,16 @@ export class MockTransport implements Transport {
       const t = new Date().toISOString();
       return text(200, `${t} database system is ready to accept connections\n${t} LOG:  checkpoint starting: time\n${t} ERROR:  relation "orders" does not exist`);
     }
+    if (/^\/v1\/services\/[^/]+\/builds$/.test(p)) {
+      const t = Date.now();
+      const svc = s.view.services.find((x) => p.includes(`/${x.name}/`));
+      return json(200, [
+        { build: 'f00dbabe12345678', started_ms: t - 40_000, updated_ms: t - 31_000, outcome: 'failed', reason: 'Program.cs(12,5): error CS1002: ; expected', current: false },
+        { build: svc?.build_id ?? 'a1b2c3d4e5f6a7b8', started_ms: t - 600_000, updated_ms: t - 588_000, outcome: 'live', reason: null, current: true },
+        { build: 'cafe0000cafe0000', started_ms: t - 640_000, updated_ms: t - 637_000, outcome: 'superseded', reason: null, current: false },
+        { build: '99aa88bb77cc66dd', started_ms: t - 3_600_000, updated_ms: t - 3_590_000, outcome: 'live', reason: null, current: false },
+      ]);
+    }
     if (/^\/v1\/services\/[^/]+\/logs\/files$/.test(p)) {
       const t = Date.now();
       return json(200, [

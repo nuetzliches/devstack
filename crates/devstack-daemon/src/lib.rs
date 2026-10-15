@@ -11,6 +11,7 @@ pub mod proxy;
 pub mod registry;
 pub mod state;
 pub mod supervisor;
+pub mod timeline;
 pub mod token;
 pub mod usage;
 pub mod watch;

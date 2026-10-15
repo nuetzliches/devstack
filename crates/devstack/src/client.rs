@@ -506,6 +506,53 @@ pub fn logs_kept(stack_file: &Path, service: Option<&str>, f: LogFilter) -> Resu
     Ok(())
 }
 
+/// The builds of a service as text, newest first (also the MCP tool `builds`).
+pub fn builds_text(list: &[Value]) -> String {
+    if list.is_empty() {
+        return "no build in the diagnostic log yet".into();
+    }
+    list.iter()
+        .map(|b| {
+            let at = jiff::Timestamp::from_millisecond(b["started_ms"].as_i64().unwrap_or(0))
+                .map(|t| {
+                    t.to_zoned(jiff::tz::TimeZone::system())
+                        .strftime("%Y-%m-%d %H:%M:%S")
+                        .to_string()
+                })
+                .unwrap_or_default();
+            let secs = (b["updated_ms"]
+                .as_u64()
+                .unwrap_or(0)
+                .saturating_sub(b["started_ms"].as_u64().unwrap_or(0)))
+                / 1000;
+            let id = b["build"].as_str().unwrap_or("");
+            let mut line = format!(
+                "{at}  {:<12}  {:<10}  {secs:>4} s{}",
+                &id[..id.len().min(12)],
+                b["outcome"].as_str().unwrap_or(""),
+                if b["current"].as_bool() == Some(true) {
+                    "  (running now)"
+                } else {
+                    ""
+                }
+            );
+            if let Some(r) = b["reason"].as_str() {
+                line.push_str(&format!("\n    {}", r.lines().next().unwrap_or("")));
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub fn builds(stack_file: &Path, service: &str, limit: usize) -> Result<()> {
+    let c = need(&state_dir(stack_file)?)?;
+    let list: Vec<Value> =
+        serde_json::from_str(&c.get(&format!("/v1/services/{service}/builds?limit={limit}"))?)?;
+    println!("{}", builds_text(&list));
+    Ok(())
+}
+
 /// The kept logs of a service, newest first.
 pub fn log_files(stack_file: &Path, service: &str) -> Result<()> {
     let c = need(&state_dir(stack_file)?)?;

@@ -1006,6 +1006,15 @@ fn edits_become_candidates() {
         since.matches("── started").count() >= 4,
         "every instance of the last hour:\n{since}"
     );
+    // The build timeline: every edit above, with what became of it.
+    let builds = out(&["builds", "api", "-n", "50"]);
+    assert!(
+        builds.contains("(running now)")
+            && builds.contains("live")
+            && builds.contains("superseded"),
+        "{builds}"
+    );
+
     // The console of one build (what a candidate's panel shows).
     let ev = s.sse_first(&format!(
         "/v1/services/api/logs/stream?tail=5&build={}",
