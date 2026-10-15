@@ -200,6 +200,14 @@ shared between lanes at all is open and not built in the first phases
 non-main lane runs its candidates **without workers** and therefore never talks
 to coordinators that dispatch work (schedulers, pull queues).
 
+**Built (0.5.0, [ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md)):**
+a lane is a supervisor in the main working tree's daemon; `devstack up` in a
+linked worktree makes it one, its ports move by `[lanes] port_step` times its
+number, `{lane}` / `{lane_suffix}` name per-lane resources, `promote --lane`
+forwards the fixed ports of the proxied services and moves the workers. Not
+yet: sharing artifacts between lanes, forwarding dev servers, lanes on other
+machines (drafts RL1 to RL5).
+
 ### 3.6 Daemon crash, restart and update
 
 The daemon takes the whole application plane down with it and never re-attaches
@@ -393,8 +401,7 @@ of the current instance (live, filter, pause), service and stack actions,
 commands with confirmation and their run history, resources, the events
 timeline, Docker and stack-file banners, container logs, earlier logs of a
 service, sortable tables, actions per group, the jump to the last failure, a
-candidate's console, a build timeline per service, a command palette. Open
-(§13): tray, the lane switcher (phase 3).
+candidate's console, a build timeline per service, a command palette, the lane switcher. Open (§13): tray.
 
 ## 7. Phases
 
@@ -571,7 +578,11 @@ from the diagnostic log; a command palette (Ctrl+K / Cmd+K) for views, stacks,
 services, groups, containers and commands; the hot-reload switch (§3.4a);
 `devstack init` for Go, Python (Django, FastAPI, Flask) and Spring Boot, with
 unique ports and a hot-reload section for .NET; the diagnostic log also as OTLP
-log records (`DEVSTACK_OTLP_ENDPOINT`).
+log records (`DEVSTACK_OTLP_ENDPOINT`); **lanes** (§3.5, ADR-0024): a `git
+worktree` runs as a lane of the main tree's daemon with `devstack up`, ports
+moved per lane, `promote --lane`, a lane switcher in the dashboard; "Add a
+stack" scans a folder of repositories, and a fresh dashboard opens with that
+scan.
 
 **Not covered by an automated test:** a machine reboot, a Docker Desktop
 restart, the `devstack://` link opened from a browser, an IDE terminal closing.
@@ -703,7 +714,7 @@ What is open, roughly in the order it pays off, and where it comes from.
 
 | Item | From | Size |
 |---|---|---|
-| Lanes: one stack per worktree, per-lane resources, `promote --lane` | phase 3, §3.5, O-4, O-7 | large |
+| Lanes, next steps: shared artifacts between lanes, dev servers on the main ports, lanes on other machines (drafts RL1 to RL5) | ADR-0024 | large |
 | Static frontend artifacts (`kind = "static"`) for e2e runs on a pinned build | phase 3, §3.4 | medium |
 | Own domain for the landing page (now on GitHub Pages); code signing of the Windows binary | phase 4 | small |
 | Remove the downstream stack's old orchestrator once its team works without it | phase 4 | downstream |

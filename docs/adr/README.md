@@ -49,7 +49,7 @@ before code exists it names where it *will* live.
 | [0009](0009-the-daemon-owns-every-process-tree.md) | The daemon owns every process tree it starts | Accepted |
 | [0010](0010-promotion-mechanism.md) | Promotion mechanism: restart on the fixed port or switch a reverse proxy | Accepted: B (measured) |
 | [0011](0011-platform-windows-native-first.md) | Windows-native first; WSL is decided by measurement | Accepted |
-| [0012](0012-shared-infrastructure-between-lanes.md) | Which infrastructure may be shared between lanes | Open (deferred) |
+| [0012](0012-shared-infrastructure-between-lanes.md) | Which infrastructure may be shared between lanes | Open; interim rule built (ADR-0024) |
 | [0013](0013-schema-changes-hold-promotion.md) | A build that changes schema inputs is not promoted automatically | Accepted |
 | [0014](0014-native-services-take-their-configuration-from-compose.md) | Native services take their configuration from the Compose service they replace | Accepted |
 | [0015](0015-devstack-is-optional.md) | devstack accelerates a stack, it is never required to run one | Accepted |
@@ -61,3 +61,4 @@ before code exists it names where it *will* live.
 | [0021](0021-a-hub-serves-the-dashboard.md) | A hub on a fixed port serves the dashboard for every stack | Accepted |
 | [0022](0022-network-egress-sandbox.md) | Outbound network calls of supervised services are visible and need an allow rule | Proposed |
 | [0023](0023-stack-file-compatibility.md) | Stack files stay readable; migrations once devstack has outside users | Accepted |
+| [0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) | A lane is a supervisor in the main working tree's daemon | Accepted |

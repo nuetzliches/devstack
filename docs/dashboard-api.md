@@ -23,6 +23,7 @@ Origin `http://127.0.0.1:4250` (or `localhost:4250`).
 | `GET /hub/session` | cookie | `200 {"version": "0.2.0"}`, or `401` (not paired: show "run `devstack ui`") |
 | `GET /hub/stacks` | cookie | `[StackEntry]` |
 | `GET /hub/events` | cookie | SSE: `{"type":"stacks","stacks":[StackEntry]}` and `{"type":"docker","docker":DockerEngine}` and `{"type":"release","current","newer":string|null}` (a newer devstack; checked at start and every 12 h unless `DEVSTACK_NO_UPDATE_CHECK`), each first and on every change |
+| `POST /hub/stacks/scan` | cookie + Origin | `{"path", "add"?, "depth"?}`: every repository with a `devstack.toml` below a folder (default three levels; a repository only at its root, linked worktrees skipped), `[{repo, id, name, error, registered, added}]`; with `add` the valid new ones are registered |
 | `POST /hub/pick-folder` | cookie + Origin | the operating system's folder dialog, shown by the hub (Windows: Explorer picker, Linux: XDG portal): `{"path": "..."}`, `{"path": null}` when cancelled, `501` without a desktop, `409` while one is open |
 | `GET /hub/inspect?path=` | cookie | `{repo, is_dir, has_stack_file, valid, registered, id}` for an absolute folder path (the "Add a stack" dialog) |
 | `POST /hub/stacks/add {"path"}` | cookie + Origin | registers a folder that has a `devstack.toml`; `{id, name}` |
@@ -134,6 +135,11 @@ type UsageReport = {
 | `GET /v1/services/{name}/logs?since=30m` | text, the logs of every instance written to within that time, oldest first, with headers (lines carry no time of their own) |
 | `GET /v1/services/{name}/logs?file=<name>` | text, one kept log (a name from `logs/files`; no other path) |
 | `GET /v1/infra/{group}/{service}/logs?tail=200&grep=&since=` | text, a container's output (`docker compose logs`), stdout and stderr merged by Docker's timestamps, each line starting with one; `since` as Docker takes it (`30m`); `502` when Docker fails. `/v1/services/{name}/logs` answers the same for a name that is no service but exactly one Compose service |
+| `GET /v1/lanes` | JSON, the lanes ([ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md)): `[{name, path, number, port_offset, owns_main, running, services}]` |
+| `POST /v1/lanes` | `{"path", "name"?, "infra"?}`: register a worktree as a lane (an existing one is returned), `201` with its entry; `infra` starts the shared infrastructure if needed |
+| `DELETE /v1/lanes/{lane}` | stop the lane, delete its state; `409` while it serves the main ports |
+| `POST /v1/lanes/{lane}/main` | that lane serves the main ports (`main`: the main tree again), workers move with them |
+| `/v1/lanes/{lane}/v1/...` | the lane's own API, every route of this table; `StackView` then carries `lane`, the main one `main_served_by` while a lane serves its ports |
 | `GET /v1/services/{name}/builds?limit=50` | JSON, the builds of the service newest first, read from the diagnostic log (so across daemon restarts): `[{build, started_ms, updated_ms, outcome, reason, current}]`; `outcome` is `live`, `failed`, `superseded` (a newer change replaced it before it went live), `held`, or the state it is in now |
 | `GET /v1/services/{name}/logs/files` | JSON, the kept logs newest first: `[{file, kind: "run"\|"build", started_ms, modified_ms, build, port, bytes, current}]` |
 | `GET /v1/logs?grep=…&tail=50` | text, matching lines of every service's current log as `service \| line`; with `since=` every instance written to within that time |

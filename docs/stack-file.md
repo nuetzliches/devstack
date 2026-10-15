@@ -190,6 +190,28 @@ and starts it as usual again. For a debugging session, not as the default
 | `platforms = ["windows"]` | only on these platforms (`windows`, `linux`, `macos`) |
 | `ensure_dirs = ["{repo}/data/files"]` | created before start |
 
+## `[lanes]`: other worktrees ([ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md))
+
+```toml
+[lanes]
+port_step = 100   # the default: lane 1 runs api 5000 on 5100, lane 2 on 5200
+```
+
+`devstack up` in a `git worktree` of the repository runs that tree as a **lane**
+of the main tree's daemon: its own build, its own ports (moved by `port_step`
+times the lane's number), the same infrastructure, no background workers. Every
+devstack command and the MCP server in the worktree act on its lane.
+
+- Per-lane resources on the shared infrastructure: `{lane}` and
+  `{lane_suffix}` (empty in the main tree), e.g.
+  `ConnectionStrings__Db = "Server=127.0.0.1,1433;Database=app{lane_suffix}"`;
+  a migrator job then creates the lane's database.
+- A dev server runs in a lane only if its `run` takes `{port}` (otherwise its
+  fixed port is the main tree's).
+- `devstack promote --lane <name>` lets a lane's services answer on the main
+  ports (dev servers stay); `--lane main` gives them back. `devstack lane list`,
+  `devstack lane remove <name>`.
+
 ## `[commands.<name>]`: operations
 
 ```toml
@@ -231,7 +253,9 @@ be in several groups, and members of no group appear under "Other".
 | `{repo}` | absolute path of the lane's source root |
 | `{artifact}` | artifact directory of the build being started |
 | `{port}` | port of the instance being started (an internal one behind the proxy) |
-| `{is_main}` | `true` in the main slot, `false` in a candidate |
+| `{is_main}` | `true` in the main slot, `false` in a candidate and in a lane without the main slot |
+| `{lane}` | the lane's name, `main` in the main working tree |
+| `{lane_suffix}` | empty in the main working tree, `_<lane>` in a lane: `app{lane_suffix}` keeps the main tree's name |
 | `{service.<name>.url}` | URL of that service's main slot (`http(s)://127.0.0.1:<port>`) |
 | `{compose.<group>.<service>.<port>}` | published host address of a container port |
 | `${VAR}`, `${VAR:-default}` | from the env files and the process environment; placeholders inside a default are resolved too |

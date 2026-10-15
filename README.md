@@ -72,6 +72,8 @@ devstack logs api --since 2h  # earlier instances too (--build <id>, --list, --l
 devstack logs postgres       # a container's output, by its Compose service name
 devstack builds api          # its builds: which went live, failed, were replaced
 devstack hot-reload api on   # the toolchain's watcher from the source tree (`hot_reload` in the stack file)
+devstack up                  # in a `git worktree`: runs it as a lane, ports +100, same infrastructure
+devstack promote --lane x    # lane x answers on the main ports; `--lane main` gives them back
 devstack update           # the latest release; the dashboard says when there is one
 devstack logs --daemon    # devstack's own decisions with their reasons (--hub: the dashboard hub)
 devstack run reset        # a command from the stack file

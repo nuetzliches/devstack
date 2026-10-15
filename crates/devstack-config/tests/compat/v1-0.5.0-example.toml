@@ -1,0 +1,152 @@
+# Example stack file (schema version 1, draft; ADR-0017).
+#
+# A fictional stack: an API with a database migrator, a SPA dev server, a
+# payment-provider mock, a scheduler and a webhook ingress. Infrastructure comes
+# from the project's own deployment Compose files plus a dev overlay (ADR-0004);
+# native services take their environment from the Compose service they replace
+# (ADR-0014). Everything here can also be run without devstack (ADR-0015).
+
+version = 1
+
+[stack]
+name = "shop"
+
+# --------------------------------------------------------------------- infra
+# One table per Compose project, started in the order listed in `after`.
+
+[compose.search]
+project  = "shop-search"
+files    = ["deploy/app-host/compose.search.yml", "dev/search.dev.yml"]
+env_files = ["dev/.env.defaults", "dev/.env"]     # later files win; .env is git-ignored
+networks = ["shop-edge"]                           # external, created before `up`
+services = ["search"]
+
+[compose.app]
+project  = "shop-dev"
+files    = ["deploy/app-host/compose.yml", "dev/app-host.dev.yml", "deploy/hooks-host/compose.yml"]
+env_files = ["dev/.env.defaults", "dev/.env"]
+after    = ["search"]
+services = ["db", "scheduler", "webhooks", "renderer", "otel-collector", "dashboard"]
+
+[compose.app.restart_on]                          # bind mounts do not notify (Windows)
+scheduler = ["config/scheduler/**"]
+webhooks  = ["config/webhooks/**"]
+
+# ------------------------------------------------------------------ services
+
+[services.migrate]
+kind    = "job"                                   # runs to completion before dependants
+compose = { group = "app", service = "migrate" }  # environment source (ADR-0014)
+rewrite_hosts = ["db"]
+watch   = ["src/**/*.cs", "src/**/*.csproj"]
+build   = "dotnet build src/Migrate/Migrate.csproj -c Debug"
+output  = "src/Migrate/bin/Debug/net10.0"   # published to the artifact (ADR-0002)
+run     = "{artifact}/Migrate"                    # platform executable suffix added on Windows
+after   = ["compose.app.db"]
+env     = { Database__Name = "shop{lane_suffix}" }  # a database per lane (ADR-0024)
+
+[services.api]
+compose = { group = "app", service = "api" }
+rewrite_hosts = ["db", "scheduler", "webhooks", "renderer", "otel-collector"]
+watch   = ["src/**/*.cs", "src/**/*.csproj", "src/**/appsettings*.json"]
+build   = "dotnet build src/Api/Api.csproj -c Debug"
+output  = "src/Api/bin/Debug/net10.0"   # published to the artifact (ADR-0002)
+run     = "{artifact}/Api"
+port    = 5000
+after   = ["migrate", "compose.app.scheduler"]
+health  = { http = "/health", timeout = "60s" }
+ensure_dirs = ["{repo}/dev/storage/files", "{repo}/dev/storage/invoices"]
+promote = { hold_if_changed = ["src/Data/Migrations/**"] }
+
+[services.api.hot_reload]                         # `devstack hot-reload api on`, plan §3.4a
+run = "dotnet watch run --non-interactive"
+cwd = "src/Api"
+
+[services.api.workers]                            # ADR-0008
+env = { Jobs__Runner__Enabled = "{is_main}", Webhooks__Consumer__Enabled = "{is_main}" }
+
+[services.api.env]                                # wins over the Compose environment
+Database__Name           = "shop{lane_suffix}"   # main tree: shop, lane x: shop_x
+Storage__Root            = "{repo}/dev/storage/files"
+Payments__BaseUrl        = "{service.payment-mock.url}/v1"
+Payments__ApiKey         = "dev-local-mock"
+Mail__Graph__ClientSecret = "${MAIL_GRAPH_CLIENT_SECRET:-}"   # optional, from the env files
+
+[services.payment-mock]                           # mock with code in the repo: native
+watch  = ["tools/payment-mock/**"]
+build   = "dotnet build tools/payment-mock/PaymentMock.csproj -c Debug"
+output  = "tools/payment-mock/bin/Debug/net10.0"   # published to the artifact (ADR-0002)
+run    = "{artifact}/PaymentMock"
+port   = 5310
+health = { http = "/health", timeout = "30s" }
+
+[services.payment-mock.env]
+Webhook__Target = "{compose.app.webhooks.8080}/webhooks/payments"
+
+[services.web]
+kind    = "devserver"                             # builds and serves in one process (plan §3.4)
+cwd     = "web"
+run     = "npx ng serve shop --port {port} --ssl"
+port    = 4200
+health  = { http = "/", timeout = "180s", insecure_tls = true }
+restart_on = ["web/tsconfig*.json", "web/angular.json"]
+
+[services.tray-helper]
+platforms = ["windows"]                           # skipped elsewhere
+autostart = false                                 # started on demand
+build   = "dotnet build src/TrayHelper/TrayHelper.csproj -c Debug"
+output  = "src/TrayHelper/bin/Debug/net10.0"   # published to the artifact (ADR-0002)
+run   = "{artifact}/TrayHelper"
+
+[services.e2e-ui]
+kind      = "tool"                                # long-running, interactive, no health
+autostart = false
+cwd       = "web"
+run       = "npx playwright test --ui"
+env       = { BASE_URL = "{service.web.url}" }
+
+# ------------------------------------------------------------------ commands
+
+[commands.install]
+description = "Install frontend dependencies and browsers"
+steps = [
+  { exec = "npm install", cwd = "web" },
+  { exec = "npx playwright install chromium", cwd = "web" },
+]
+
+[commands.seed]
+description = "Run the development seed"
+requires    = ["api"]                             # enabled only while api is healthy
+steps = [{ http = "POST {service.api.url}/api/dev-seed/run", timeout = "30s" }]
+
+[commands.reset-db]
+description = "Drop and rebuild the local database"
+confirm     = "The local database is deleted and rebuilt. Continue?"
+steps = [
+  { stop = "api" },
+  { exec = "dev/reset-db.sh" },
+  { run = "migrate" },
+  { start = "api" },
+]
+
+# -------------------------------------------------------------------- groups
+# Views for the dashboard and for acting on several members at once (plan
+# §4.4a). Labels, not parents: a member may be in several groups.
+
+[groups.backend]
+label   = "Backend"
+order   = 1
+members = ["api", "migrate", "compose.app.db", "compose.app.scheduler", "command.reset-db", "command.seed"]
+
+[groups.frontend]
+label   = "Frontend"
+order   = 2
+members = ["web", "e2e-ui", "command.install"]
+
+[groups.integrations]
+label   = "Third parties"
+members = ["payment-mock", "compose.app.webhooks", "api"]
+
+# Frozen for 0.5.0: lanes and their placeholders.
+[lanes]
+port_step = 1000

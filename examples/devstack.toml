@@ -43,6 +43,7 @@ build   = "dotnet build src/Migrate/Migrate.csproj -c Debug"
 output  = "src/Migrate/bin/Debug/net10.0"   # published to the artifact (ADR-0002)
 run     = "{artifact}/Migrate"                    # platform executable suffix added on Windows
 after   = ["compose.app.db"]
+env     = { Database__Name = "shop{lane_suffix}" }  # a database per lane (ADR-0024)
 
 [services.api]
 compose = { group = "app", service = "api" }
@@ -65,6 +66,7 @@ cwd = "src/Api"
 env = { Jobs__Runner__Enabled = "{is_main}", Webhooks__Consumer__Enabled = "{is_main}" }
 
 [services.api.env]                                # wins over the Compose environment
+Database__Name           = "shop{lane_suffix}"   # main tree: shop, lane x: shop_x
 Storage__Root            = "{repo}/dev/storage/files"
 Payments__BaseUrl        = "{service.payment-mock.url}/v1"
 Payments__ApiKey         = "dev-local-mock"

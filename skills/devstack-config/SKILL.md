@@ -46,6 +46,10 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   instance, only one of them may run schedulers and queue consumers: put their
   switches into `[services.<name>.workers] env = { X = "{is_main}" }`, not into
   `env`.
+- **Lanes share the infrastructure.** A worktree runs as a lane with its ports
+  moved (`[lanes] port_step`); resources it must not share with the main tree
+  (a database) take `{lane_suffix}` in their name (`Database=app{lane_suffix}`).
+  A dev server's `run` needs `{port}` to run in a lane.
 - **Hot reload is opt-in per session.** `[services.<name>.hot_reload]` with
   the watcher's `run` (`dotnet watch run --non-interactive`) only makes
   `devstack hot-reload <name> on` possible; the service still builds by

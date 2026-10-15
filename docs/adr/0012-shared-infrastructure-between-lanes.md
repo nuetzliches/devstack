@@ -1,6 +1,8 @@
 # ADR-0012: Which infrastructure may be shared between lanes
 
-- **Status:** Open (deferred; not planned or built before phase 3 is complete)
+- **Status:** Open. The interim rule below is what lanes do since 0.5.0
+  ([ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md)); the
+  question stays open for per-lane coordinators.
 - **Date:** 2026-10-14
 - **Related:** plan §3.5, [ADR-0004](0004-infrastructure-is-delegated-to-compose.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md)
 
