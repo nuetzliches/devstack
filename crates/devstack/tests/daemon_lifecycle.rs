@@ -300,6 +300,17 @@ members = [\"api\", \"command.ping\"]
 
 impl Drop for Stack {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            // The daemon's own account is the only evidence once the temp dir is gone.
+            let log = self.dir.path().join(".devstack/daemon.log");
+            eprintln!(
+                "--- {} ---
+{}
+--- end ---",
+                log.display(),
+                std::fs::read_to_string(&log).unwrap_or_else(|e| e.to_string())
+            );
+        }
         let _ = self.cli(&["down", "--infra"], None);
     }
 }
