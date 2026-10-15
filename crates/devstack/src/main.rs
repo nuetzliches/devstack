@@ -169,7 +169,7 @@ enum Cmd {
     /// file runs, ports, the hub, PATH. Read-only; exits 1 when something fails.
     Doctor,
     /// Write a first devstack.toml from what the repository shows (Compose files,
-    /// .NET web projects, Node dev servers); every guess is a TODO.
+    /// .NET, Node, Go, Python and Spring Boot apps); every guess is a TODO.
     Init {
         /// The repository; default the current directory.
         #[arg(long)]

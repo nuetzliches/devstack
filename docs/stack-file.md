@@ -15,7 +15,8 @@ commands people and agents can trigger. Schema version 1 ([ADR-0017](adr/0017-st
 - **A running daemon does not reload the file.** `devstack status` says when it
   changed since the start; it applies with `devstack down` + `devstack up`.
 - **No file yet?** `devstack init` writes a first draft from what the repository
-  shows (Compose files, .NET web projects, Node dev servers), every guess marked
+  shows (Compose files, .NET web projects, Node dev servers, Go main packages,
+  Django, FastAPI and Flask apps, Spring Boot through Maven or Gradle), every guess marked
   `TODO`. The dashboard does the same under "Add a stack".
 
 A complete example: [`examples/devstack.toml`](../examples/devstack.toml).

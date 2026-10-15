@@ -2,7 +2,8 @@
 //!
 //! A draft, not a finished file: what can be read off the repository (Compose
 //! files and their services, .NET web projects with their launch ports, Node
-//! dev servers) is filled in, every guess is marked `# TODO:`. A person or an
+//! dev servers, Go main packages, Python web apps (Django, FastAPI, Flask),
+//! Spring Boot apps) is filled in, every guess is marked `# TODO:`. A person or an
 //! agent works through the TODOs with the stack file reference and
 //! `devstack check`. Writes nothing when a stack file exists.
 
@@ -205,6 +206,16 @@ fn dotnet(repo: &Path, csproj: &Path, port: u16) -> Option<Svc> {
         let _ = writeln!(b, "\n[services.{}.env]", kebab(&stem));
         let _ = writeln!(b, "ASPNETCORE_URLS = \"http://127.0.0.1:{{port}}\"");
         let _ = writeln!(b, "ASPNETCORE_ENVIRONMENT = \"Development\"");
+        let _ = writeln!(
+            b,
+            "\n# `devstack hot-reload {} on` for a debugging session (plan §3.4a)",
+            kebab(&stem)
+        );
+        let _ = writeln!(b, "[services.{}.hot_reload]", kebab(&stem));
+        let _ = writeln!(
+            b,
+            "run = \"dotnet watch run --project {p} --non-interactive\""
+        );
     } else {
         let _ = writeln!(
             b,
@@ -281,6 +292,200 @@ fn node(repo: &Path, pkg: &Path) -> Option<Svc> {
     Some(Svc { name, body: b })
 }
 
+/// A Go `main` package: built with `go build`, the port through `PORT`.
+fn golang(repo: &Path, main_go: &Path, module_dir: &Path, port: u16) -> Option<Svc> {
+    let text = std::fs::read_to_string(main_go).ok()?;
+    if !text.lines().any(|l| l.trim() == "package main") || !text.contains("func main()") {
+        return None;
+    }
+    let dir = main_go.parent()?;
+    let lower = rel(repo, dir).to_lowercase();
+    if lower.contains("test") || lower.contains("example") || lower.contains("tools") {
+        return None;
+    }
+    let name = kebab(&dir.file_name()?.to_string_lossy());
+    let module = rel(repo, module_dir);
+    let pkg = dir
+        .strip_prefix(module_dir)
+        .ok()?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let pkg = if pkg.is_empty() {
+        ".".to_string()
+    } else {
+        format!("./{pkg}")
+    };
+    let out = if module.is_empty() {
+        format!("bin/{name}")
+    } else {
+        format!("{module}/bin/{name}")
+    };
+    let watch = if module.is_empty() {
+        String::new()
+    } else {
+        format!("{module}/")
+    };
+    let mut b = String::new();
+    if module.is_empty() {
+        let _ = writeln!(b, "build  = \"go build -o bin/{name}/ {pkg}\"");
+    } else {
+        let _ = writeln!(
+            b,
+            "build  = \"cd {module} && go build -o bin/{name}/ {pkg}\""
+        );
+    }
+    let _ = writeln!(b, "output = \"{out}\"");
+    let _ = writeln!(b, "run    = \"{{artifact}}/{name}\"");
+    let _ = writeln!(
+        b,
+        "watch  = [\"{watch}**/*.go\", \"{watch}go.mod\", \"{watch}go.sum\"]"
+    );
+    let _ = writeln!(b, "port   = {port}   # TODO: the port others reach it on");
+    let _ = writeln!(
+        b,
+        "health = {{ http = \"/health\", timeout = \"60s\" }}   # TODO: a readiness endpoint, or remove (a worker without HTTP)"
+    );
+    let _ = writeln!(b, "\n[services.{name}.env]");
+    let _ = writeln!(
+        b,
+        "PORT = \"{{port}}\"   # TODO: the variable or flag your program reads its listen port from"
+    );
+    Some(Svc { name, body: b })
+}
+
+/// A Python web app: its framework's dev server reloads by itself.
+fn python(repo: &Path, dir: &Path, all: &[PathBuf]) -> Option<Svc> {
+    let read = |f: &str| {
+        std::fs::read_to_string(dir.join(f))
+            .unwrap_or_default()
+            .to_lowercase()
+    };
+    let deps = format!(
+        "{}{}{}",
+        read("pyproject.toml"),
+        read("requirements.txt"),
+        read("Pipfile")
+    );
+    let d = rel(repo, dir);
+    let name = if d.is_empty() {
+        kebab(&repo.file_name()?.to_string_lossy())
+    } else {
+        kebab(&d)
+    };
+    let mut b = String::new();
+    let _ = writeln!(b, "kind   = \"devserver\"   # reloads itself on a change");
+    if !d.is_empty() {
+        let _ = writeln!(b, "cwd    = \"{d}\"");
+    }
+    if dir.join("manage.py").is_file() {
+        let _ = writeln!(
+            b,
+            "run    = \"python manage.py runserver 127.0.0.1:8000\"   # TODO: the virtualenv's python"
+        );
+        let _ = writeln!(b, "port   = 8000");
+        let _ = writeln!(
+            b,
+            "health = {{ http = \"/\", timeout = \"60s\" }}   # TODO: a readiness endpoint"
+        );
+        let _ = writeln!(
+            b,
+            "restart_on = [\"{}requirements.txt\"]",
+            if d.is_empty() {
+                String::new()
+            } else {
+                format!("{d}/")
+            }
+        );
+    } else if deps.contains("fastapi") {
+        let app = all
+            .iter()
+            .filter(|p| p.starts_with(dir) && p.extension().is_some_and(|e| e == "py"))
+            .find(|p| std::fs::read_to_string(p).is_ok_and(|t| t.contains("FastAPI(")))
+            .and_then(|p| {
+                p.strip_prefix(dir).ok().map(|r| {
+                    r.with_extension("")
+                        .to_string_lossy()
+                        .replace(['/', '\\'], ".")
+                })
+            })
+            .unwrap_or_else(|| "main".into());
+        let _ = writeln!(
+            b,
+            "run    = \"uvicorn {app}:app --reload --host 127.0.0.1 --port 8000\"   # TODO: check the module and the app object"
+        );
+        let _ = writeln!(b, "port   = 8000");
+        let _ = writeln!(
+            b,
+            "health = {{ http = \"/docs\", timeout = \"60s\" }}   # TODO: a readiness endpoint"
+        );
+    } else if deps.contains("flask") {
+        let _ = writeln!(
+            b,
+            "run    = \"flask --app app run --debug --host 127.0.0.1 --port 5000\"   # TODO: the --app module"
+        );
+        let _ = writeln!(b, "port   = 5000");
+        let _ = writeln!(
+            b,
+            "health = {{ http = \"/\", timeout = \"60s\" }}   # TODO: a readiness endpoint"
+        );
+    } else {
+        return None;
+    }
+    Some(Svc { name, body: b })
+}
+
+/// A Spring Boot app through Maven or Gradle: `spring-boot:run` / `bootRun`
+/// build and run it, devtools restarts it.
+fn java(repo: &Path, build_file: &Path) -> Option<Svc> {
+    let text = std::fs::read_to_string(build_file).ok()?;
+    if !text.contains("spring-boot") {
+        return None;
+    }
+    let dir = build_file.parent()?;
+    let maven = build_file.file_name()? == "pom.xml";
+    let wrapper = if maven {
+        dir.join("mvnw").is_file()
+    } else {
+        dir.join("gradlew").is_file()
+    };
+    let cmd = match (maven, wrapper) {
+        (true, true) => "./mvnw spring-boot:run",
+        (true, false) => "mvn spring-boot:run",
+        (false, true) => "./gradlew bootRun",
+        (false, false) => "gradle bootRun",
+    };
+    let d = rel(repo, dir);
+    let name = between(&text, "<artifactId>", "</artifactId>")
+        .filter(|_| maven)
+        .map(kebab)
+        .or_else(|| dir.file_name().map(|n| kebab(&n.to_string_lossy())))
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "app".into());
+    let actuator = text.contains("spring-boot-starter-actuator");
+    let mut b = String::new();
+    let _ = writeln!(
+        b,
+        "kind   = \"devserver\"   # {cmd} builds and runs it; devtools restarts it on a change"
+    );
+    if !d.is_empty() {
+        let _ = writeln!(b, "cwd    = \"{d}\"");
+    }
+    let _ = writeln!(b, "run    = \"{cmd}\"");
+    let _ = writeln!(b, "port   = 8080   # TODO: server.port");
+    if actuator {
+        let _ = writeln!(
+            b,
+            "health = {{ http = \"/actuator/health/readiness\", timeout = \"300s\" }}"
+        );
+    } else {
+        let _ = writeln!(
+            b,
+            "health = {{ http = \"/\", timeout = \"300s\" }}   # TODO: add spring-boot-starter-actuator for /actuator/health/readiness"
+        );
+    }
+    Some(Svc { name, body: b })
+}
+
 pub fn draft(repo: &Path) -> Result<Draft> {
     let file = repo.join("devstack.toml");
     let all = files(repo);
@@ -304,6 +509,95 @@ pub fn draft(repo: &Path) -> Result<Draft> {
             svcs.push(s);
         }
     }
+    let in_skip = |p: &Path| {
+        p.components()
+            .any(|c| SKIP_DIRS.contains(&c.as_os_str().to_string_lossy().as_ref()))
+    };
+    // Go: every main package below a go.mod.
+    let modules: Vec<PathBuf> = all
+        .iter()
+        .filter(|p| p.file_name().is_some_and(|n| n == "go.mod"))
+        .filter_map(|p| p.parent().map(Path::to_path_buf))
+        .collect();
+    for p in all.iter().filter(|p| {
+        p.extension().is_some_and(|e| e == "go") && !p.to_string_lossy().ends_with("_test.go")
+    }) {
+        let Some(module) = modules
+            .iter()
+            .filter(|m| p.starts_with(m))
+            .max_by_key(|m| m.components().count())
+        else {
+            continue;
+        };
+        if svcs.iter().any(|s| {
+            s.body.contains(&format!(
+                "{{artifact}}/{}\"",
+                p.parent()
+                    .and_then(|d| d.file_name())
+                    .map(|n| kebab(&n.to_string_lossy()))
+                    .unwrap_or_default()
+            ))
+        }) {
+            continue; // one service per package
+        }
+        if let Some(s) = golang(repo, p, module, next_port) {
+            next_port += 1;
+            svcs.push(s);
+        }
+    }
+    // Python: a directory with a project file.
+    let mut py_dirs: Vec<PathBuf> = all
+        .iter()
+        .filter(|p| {
+            p.file_name().is_some_and(|n| {
+                n == "pyproject.toml" || n == "requirements.txt" || n == "manage.py"
+            })
+        })
+        .filter_map(|p| p.parent().map(Path::to_path_buf))
+        .filter(|d| !in_skip(d))
+        .collect();
+    py_dirs.sort();
+    py_dirs.dedup();
+    for d in &py_dirs {
+        if let Some(s) = python(repo, d, &all) {
+            svcs.push(s);
+        }
+    }
+    // Java: Spring Boot through Maven or Gradle.
+    for p in all.iter().filter(|p| {
+        p.file_name()
+            .is_some_and(|n| n == "pom.xml" || n == "build.gradle" || n == "build.gradle.kts")
+    }) {
+        if let Some(s) = java(repo, p) {
+            svcs.push(s);
+        }
+    }
+    // Ports must be unique: a second app on a framework's default port moves
+    // up, in its command too.
+    let mut used = std::collections::BTreeSet::new();
+    for s in &mut svcs {
+        let Some(port) = s
+            .body
+            .lines()
+            .find_map(|l| l.strip_prefix("port   = "))
+            .and_then(|r| r.split_whitespace().next())
+            .and_then(|n| n.parse::<u16>().ok())
+        else {
+            continue;
+        };
+        let mut free = port;
+        while !used.insert(free) {
+            free += 1;
+        }
+        if free != port {
+            s.body = s.body.replace(&port.to_string(), &free.to_string());
+            s.body = s.body.replacen(
+                &format!("port   = {free}"),
+                &format!("port   = {free}   # TODO: moved from {port}, which another service uses"),
+                1,
+            );
+        }
+    }
     // Names must be unique.
     let mut seen = std::collections::BTreeSet::new();
     for s in &mut svcs {
@@ -314,10 +608,12 @@ pub fn draft(repo: &Path) -> Result<Draft> {
             i += 1;
         }
         if n != s.name {
-            s.body = s.body.replace(
-                &format!("[services.{}.env]", s.name),
-                &format!("[services.{n}.env]"),
-            );
+            for sub in ["env", "hot_reload"] {
+                s.body = s.body.replace(
+                    &format!("[services.{}.{sub}]", s.name),
+                    &format!("[services.{n}.{sub}]"),
+                );
+            }
             s.name = n;
         }
     }
@@ -393,7 +689,7 @@ pub fn draft(repo: &Path) -> Result<Draft> {
     if svcs.is_empty() {
         let _ = writeln!(
             t,
-            "# TODO: no .NET or Node project found. A service looks like this:\n# [services.api]\n# build  = \"...\"\n# output = \"...\"\n# run    = \"... {{artifact}} ...\"\n# port   = 5080\n# health = {{ http = \"/health\", timeout = \"60s\" }}\n# watch  = [\"src/**\"]\n"
+            "# TODO: no .NET, Node, Go, Python or Spring Boot project found. A service looks like this:\n# [services.api]\n# build  = \"...\"\n# output = \"...\"\n# run    = \"... {{artifact}} ...\"\n# port   = 5080\n# health = {{ http = \"/health\", timeout = \"60s\" }}\n# watch  = [\"src/**\"]\n"
         );
     }
     let _ = writeln!(
@@ -500,6 +796,64 @@ mod tests {
         );
         assert!(d.text.contains("port   = 5173"), "vite");
         assert!(d.todos > 0);
+        devstack_config::from_str(&d.text, &r.join("devstack.toml")).expect("the draft loads");
+    }
+
+    #[test]
+    fn go_python_and_spring_boot_become_services() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        let w = |p: &str, t: &str| {
+            let f = r.join(p);
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, t).unwrap();
+        };
+        w("svc/go.mod", "module example.com/svc\n");
+        w("svc/cmd/orders/main.go", "package main\n\nfunc main() {}\n");
+        w("svc/cmd/orders/server.go", "package main\n");
+        w("svc/internal/db/db.go", "package db\n");
+        w(
+            "api/pyproject.toml",
+            "[project]\ndependencies = [\"fastapi\", \"uvicorn\"]\n",
+        );
+        w(
+            "api/app/main.py",
+            "from fastapi import FastAPI\napp = FastAPI()\n",
+        );
+        w("admin/manage.py", "import django\n");
+        w(
+            "billing/pom.xml",
+            "<project><artifactId>billing-service</artifactId><dependency><artifactId>spring-boot-starter-web</artifactId></dependency><dependency><artifactId>spring-boot-starter-actuator</artifactId></dependency></project>",
+        );
+        w("billing/mvnw", "");
+
+        let d = draft(r).unwrap();
+        for n in ["orders", "api", "admin", "billing-service"] {
+            assert!(
+                d.services.iter().any(|s| s == n),
+                "{n} in {:?}\n{}",
+                d.services,
+                d.text
+            );
+        }
+        assert!(
+            d.text
+                .contains("cd svc && go build -o bin/orders/ ./cmd/orders"),
+            "{}",
+            d.text
+        );
+        assert!(
+            d.text.contains("uvicorn app.main:app --reload"),
+            "{}",
+            d.text
+        );
+        assert!(d.text.contains("python manage.py runserver"), "{}", d.text);
+        assert!(
+            d.text.contains("./mvnw spring-boot:run")
+                && d.text.contains("/actuator/health/readiness"),
+            "{}",
+            d.text
+        );
         devstack_config::from_str(&d.text, &r.join("devstack.toml")).expect("the draft loads");
     }
 

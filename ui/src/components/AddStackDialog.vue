@@ -126,7 +126,7 @@ const prompt = computed(
 devstack (https://github.com/nuetzliches/devstack) runs a local development stack from a devstack.toml in the repository root: containers from the Compose files, native services built in the background, a change goes live once it is healthy.
 
 1. Read the stack file reference: ${docs.value}
-2. ${drafted.value ? 'A draft devstack.toml exists (from `devstack init`).' : 'Run `devstack init` in the repository for a draft (it detects Compose files, .NET web projects and Node dev servers).'} Work through every TODO in it: which containers run in development (infrastructure only; what runs natively stays out), build/output/run/watch of each service, ports (the process listens on {port}), a readiness health endpoint, the environment (from a Compose service with \`compose = {...}\`), background workers (\`workers\`), and commands such as seed or reset (with \`confirm\` when they delete data).
+2. ${drafted.value ? 'A draft devstack.toml exists (from `devstack init`).' : 'Run `devstack init` in the repository for a draft (it detects Compose files, .NET, Node, Go, Python and Spring Boot apps).'} Work through every TODO in it: which containers run in development (infrastructure only; what runs natively stays out), build/output/run/watch of each service, ports (the process listens on {port}), a readiness health endpoint, the environment (from a Compose service with \`compose = {...}\`), background workers (\`workers\`), and commands such as seed or reset (with \`confirm\` when they delete data).
 3. Validate with \`devstack check\` (and \`devstack check --compose\`), then \`devstack doctor\`.
 4. Run \`devstack skills install\`, so later sessions have the devstack skills.
 5. Start with \`devstack up\` and fix what fails. Ask me before running anything that deletes data, and before committing.`,
@@ -175,7 +175,7 @@ async function copyPrompt() {
       <div v-if="!drafted" class="choices">
         <div class="choice">
           <h3><Icon name="file" :size="15" /> Create a draft</h3>
-          <p class="muted">devstack writes a first <code>devstack.toml</code> from what it finds (Compose files, .NET web projects, Node dev servers). Every guess is marked <code>TODO</code>; nothing else in the repository changes.</p>
+          <p class="muted">devstack writes a first <code>devstack.toml</code> from what it finds (Compose files, .NET, Node, Go, Python and Spring Boot apps). Every guess is marked <code>TODO</code>; nothing else in the repository changes.</p>
           <button type="button" class="btn btn-primary" :disabled="busy" data-testid="add-stack-init" @click="draft">
             <span v-if="busy" class="spinner" /><Icon v-else name="play" :size="14" /> Create draft
           </button>

@@ -568,7 +568,9 @@ every console ("Last error", again for the ones before); a candidate's own
 console while it starts (`logs/stream?build=`); a build timeline per service
 (`devstack builds`, MCP `builds`, "Builds" in the service view), read back
 from the diagnostic log; a command palette (Ctrl+K / Cmd+K) for views, stacks,
-services, groups, containers and commands; the hot-reload switch (§3.4a).
+services, groups, containers and commands; the hot-reload switch (§3.4a);
+`devstack init` for Go, Python (Django, FastAPI, Flask) and Spring Boot, with
+unique ports and a hot-reload section for .NET.
 
 **Not covered by an automated test:** a machine reboot, a Docker Desktop
 restart, the `devstack://` link opened from a browser, an IDE terminal closing.
@@ -704,7 +706,7 @@ What is open, roughly in the order it pays off, and where it comes from.
 | Static frontend artifacts (`kind = "static"`) for e2e runs on a pinned build | phase 3, §3.4 | medium |
 | Own domain for the landing page (now on GitHub Pages); code signing of the Windows binary | phase 4 | small |
 | Remove the downstream stack's old orchestrator once its team works without it | phase 4 | downstream |
-| `devstack init` beyond .NET and Node (Go, Python, Java), and from a second real repository | §13 | medium |
+| `devstack init` checked against a second real repository per language (Go, Python, Spring Boot are detected; .NET and Node came from the reference stack) | §13 | small |
 | `devstack migrate`, once devstack has outside users | [ADR-0023](adr/0023-stack-file-compatibility.md) | medium |
 | Tray icon with status and notifications | §6, ADR-0018 | medium |
 | Network egress sandbox, stage 1 (cooperative proxy) | [ADR-0022](adr/0022-network-egress-sandbox.md) (proposed) | medium |
