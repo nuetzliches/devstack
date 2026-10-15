@@ -219,10 +219,12 @@ and starts it as usual again. For a debugging session, not as the default
 port_step = 100   # the default: lane 1 runs api 5000 on 5100, lane 2 on 5200
 ```
 
-`devstack up` in a `git worktree` of the repository runs that tree as a **lane**
-of the main tree's daemon: its own build, its own ports (moved by `port_step`
-times the lane's number), the same infrastructure, no background workers. Every
-devstack command and the MCP server in the worktree act on its lane.
+Every `git worktree` of the repository is a **lane** of the main tree's
+daemon; `devstack up` in it starts it: its own build, its own ports (moved by
+`port_step` times the lane's number), the same infrastructure, no background
+workers. Every devstack command and the MCP server in the worktree act on its
+lane. `devstack lane add <name>` creates a worktree (beside the repository, on a
+branch of that name) and with it the lane.
 
 - Per-lane resources on the shared infrastructure: `{lane}` and
   `{lane_suffix}` (empty in the main tree), e.g.
@@ -231,8 +233,10 @@ devstack command and the MCP server in the worktree act on its lane.
 - A dev server runs in a lane only if its `run` takes `{port}` (otherwise its
   fixed port is the main tree's).
 - `devstack promote --lane <name>` lets a lane's services answer on the main
-  ports (dev servers through a TCP forward); `--lane main` gives them back. `devstack lane list`,
-  `devstack lane remove <name>`.
+  ports (dev servers through a TCP forward); `--lane main` gives them back.
+- `devstack lane list`; `devstack lane remove <name>` stops a lane and removes
+  its worktree (git refuses one with changes not committed),
+  `--keep-worktree` only its builds and logs.
 
 ## `[commands.<name>]`: operations
 

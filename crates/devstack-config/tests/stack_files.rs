@@ -272,3 +272,12 @@ fn a_static_site_needs_a_build_output_and_port_but_no_run() {
             .any(|i| i.contains("missing `run`"))
     );
 }
+
+#[test]
+fn a_lane_port_step_of_zero_is_an_error() {
+    let issues = invalid(&format!("{MINIMAL}\n[lanes]\nport_step = 0\n"));
+    assert!(
+        issues.iter().any(|i| i.contains("lanes.port_step")),
+        "{issues:?}"
+    );
+}

@@ -111,15 +111,37 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
+  /** Start a lane not started yet (what `devstack up` in its worktree does), then show it. */
+  async function startLane(name: string) {
+    const l = lanes.value.find((x) => x.name === name);
+    if (!id.value || !l) return;
+    busy.value[`lane-start`] = name;
+    try {
+      const res = await act({
+        label: `Start lane ${name}`,
+        path: paths.api(id.value, v1.lanes),
+        body: { path: l.path, infra: true },
+        success: false,
+      });
+      if (!res.ok) return;
+      const up = await act({ label: `Start lane ${name}`, path: paths.api(id.value, `${v1.lane(name)}/v1/up`), success: `Lane ${name} is starting` });
+      if (up.ok) selectLane(name);
+      await loadLanes();
+    } finally {
+      delete busy.value['lane-start'];
+    }
+  }
+
   async function removeLane(name: string) {
     if (!id.value) return;
+    const path = lanes.value.find((l) => l.name === name)?.path ?? '';
     const res = await act({
       label: `Remove lane ${name}`,
       path: paths.api(id.value, v1.lane(name)),
       method: 'DELETE',
       danger: true,
       confirmLabel: `Remove ${name}`,
-      confirmText: `Stop lane ${name} and delete its state (builds, logs)? The worktree itself stays.`,
+      confirmText: `Stop lane ${name}, delete its builds and logs and remove its worktree ${path} (git refuses a worktree with changes that are not committed; the branch stays)?`,
       success: `Lane ${name} removed`,
     });
     if (res.ok) {
@@ -511,6 +533,7 @@ export const useStack = defineStore('stack', () => {
     loadLanes,
     selectLane,
     laneMain,
+    startLane,
     removeLane,
     serviceAction,
     groupAction,

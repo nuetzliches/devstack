@@ -1,7 +1,8 @@
 <script setup lang="ts">
-// Lanes (plan §3.5): other git worktrees running the stack beside the main
-// one. Pick which one the views show, hand the main ports to a lane and back,
-// remove a lane. Shown only when the stack has lanes.
+// Lanes (plan §3.5): the repository's other git worktrees, running the stack
+// beside the main one. Pick which one the views show (picking one not started
+// starts it), hand the main ports to a lane and back, remove a lane with its
+// worktree. Shown only when the repository has other worktrees.
 import { computed } from 'vue';
 import { useStack } from '@/stores/stack';
 import Icon from './icons/Icon.vue';
@@ -11,9 +12,24 @@ const current = computed(() => stack.lanes.find((l) => l.name === stack.lane) ??
 const servedBy = computed(() => stack.lanes.find((l) => l.owns_main)?.name ?? null);
 const busy = computed(() => !!stack.busy['lane-main']);
 
+const starting = computed(() => stack.busy['lane-start'] ?? null);
+
 function pick(e: Event) {
-  const v = (e.target as HTMLSelectElement).value;
+  const select = e.target as HTMLSelectElement;
+  const v = select.value;
+  const lane = stack.lanes.find((l) => l.name === v);
+  if (lane && lane.active === false) {
+    select.value = stack.lane ?? '';
+    void stack.startLane(v);
+    return;
+  }
   stack.selectLane(v === '' ? null : v);
+}
+
+function label(l: (typeof stack.lanes)[number]): string {
+  const branch = l.branch && l.branch !== l.name ? ` · ${l.branch}` : '';
+  const state = l.active === false ? ' · not started' : ` (+${l.port_offset})`;
+  return `${l.name}${branch}${state}${l.owns_main ? ' · main ports' : ''}`;
 }
 </script>
 
@@ -22,11 +38,12 @@ function pick(e: Event) {
     <label class="pick">
       <Icon name="gitBranch" :size="14" />
       <span class="sr-only">Lane</span>
-      <select :value="stack.lane ?? ''" class="select" data-testid="lane-select" @change="pick">
+      <select :value="stack.lane ?? ''" class="select" :disabled="!!starting" data-testid="lane-select" @change="pick">
         <option value="">main working tree</option>
-        <option v-for="l in stack.lanes" :key="l.name" :value="l.name">{{ l.name }} (+{{ l.port_offset }}){{ l.owns_main ? ' · main ports' : '' }}</option>
+        <option v-for="l in stack.lanes" :key="l.name" :value="l.name" :title="l.path">{{ label(l) }}</option>
       </select>
     </label>
+    <span v-if="starting" class="muted" style="font-size: 12px" data-testid="lane-starting"><span class="spinner" /> starting {{ starting }}…</span>
     <button
       v-if="current && !current.owns_main"
       type="button"
@@ -45,7 +62,7 @@ function pick(e: Event) {
       v-if="current && !current.owns_main"
       type="button"
       class="btn btn-ghost btn-sm btn-icon"
-      :title="`Stop lane ${current.name} and forget it (the worktree stays)`"
+      :title="`Stop lane ${current.name} and remove its worktree`"
       :aria-label="`Remove lane ${current.name}`"
       data-testid="lane-remove"
       @click="stack.removeLane(current.name)"

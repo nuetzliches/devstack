@@ -253,9 +253,23 @@ export class MockTransport implements Transport {
   }
 
   private async daemon(s: MockStack, method: string, p: string, q: URLSearchParams, body?: Record<string, unknown>): Promise<Response> {
-    // Lanes (plan §3.5): the shop stack has one; a lane's API is the stack's, here.
+    // Lanes (plan §3.5): the shop repository has two other worktrees, one
+    // started; a lane's API is the stack's, here.
     if (p === '/v1/lanes' && method === 'GET')
-      return json(200, s.view.name === 'shop' ? [{ name: 'agent-login-fix', path: 'C:\\work\\shop-wt\\agent-login-fix', number: 1, port_offset: 100, owns_main: s.laneOwnsMain, running: 3, services: 5 }] : []);
+      return json(
+        200,
+        s.view.name === 'shop'
+          ? [
+              { name: 'agent-login-fix', path: 'C:\\work\\shop-agent-login-fix', branch: 'agent/login-fix', number: 1, port_offset: 100, active: true, owns_main: s.laneOwnsMain, running: 3, services: 5 },
+              { name: 'review-cart', path: 'C:\\work\\shop-review-cart', branch: 'review-cart', number: 2, port_offset: 200, active: s.reviewLaneStarted, owns_main: false, running: s.reviewLaneStarted ? 5 : 0, services: 5 },
+            ]
+          : [],
+      );
+    if (p === '/v1/lanes' && method === 'POST') {
+      await sleep(600);
+      s.reviewLaneStarted = true;
+      return json(201, {});
+    }
     const lm = /^\/v1\/lanes\/([^/]+)\/main$/.exec(p);
     if (lm && method === 'POST') {
       await sleep(1200);

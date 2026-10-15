@@ -70,6 +70,8 @@ struct Shared {
     tracks: Mutex<HashMap<u16, Arc<Track>>>,
     served: AtomicU64,
     last_error: Mutex<Option<String>>,
+    /// `true` ends the listeners (a removed lane's proxies, `Proxy::close`).
+    closed: watch::Sender<bool>,
 }
 
 impl Shared {
@@ -97,8 +99,8 @@ impl Drop for Active {
     }
 }
 
-/// A running proxy. Dropping it does not stop the listener; the daemon's
-/// runtime ends with the daemon.
+/// A running proxy. Dropping it does not stop the listener (it lives as long
+/// as the daemon); `close` does.
 #[derive(Clone)]
 pub struct Proxy {
     shared: Arc<Shared>,
@@ -119,16 +121,25 @@ impl Proxy {
             tracks: Mutex::new(HashMap::new()),
             served: AtomicU64::new(0),
             last_error: Mutex::new(None),
+            closed: watch::channel(false).0,
         });
         for l in std::iter::once(v4).chain(v6) {
             l.set_nonblocking(true)?;
             let sh = shared.clone();
+            let mut closed = shared.closed.subscribe();
             rt.spawn(async move {
                 let Ok(listener) = tokio::net::TcpListener::from_std(l) else {
                     return;
                 };
                 loop {
-                    let Ok((stream, _)) = listener.accept().await else {
+                    let accepted = tokio::select! {
+                        a = listener.accept() => a,
+                        _ = closed.wait_for(|c| *c) => return,
+                    };
+                    let Ok((stream, _)) = accepted else {
+                        // A connection reset before it was accepted, or no
+                        // file handles left: keep listening, without spinning.
+                        tokio::time::sleep(Duration::from_millis(50)).await;
                         continue;
                     };
                     let sh = sh.clone();
@@ -143,6 +154,12 @@ impl Proxy {
             });
         }
         Ok(Self { shared })
+    }
+
+    /// Stop listening (the port is free once the listener tasks have ended,
+    /// a moment later); open connections end on their own.
+    pub fn close(&self) {
+        self.shared.closed.send_replace(true);
     }
 
     pub fn set_upstream(&self, upstream: Option<Upstream>) {

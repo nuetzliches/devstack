@@ -207,24 +207,39 @@ fn lanes_of(s: &AppState) -> Result<&Arc<crate::lanes::Lanes>, Response> {
 
 /// `GET /v1/lanes`: the other working trees this daemon runs (plan §3.5).
 async fn lanes_list(State(s): State<AppState>) -> Response {
-    match lanes_of(&s) {
-        Ok(l) => Json(l.list()).into_response(),
-        Err(r) => r,
+    let lanes = match lanes_of(&s) {
+        Ok(l) => l.clone(),
+        Err(r) => return r,
+    };
+    // `git worktree list` runs: off the async workers.
+    match tokio::task::spawn_blocking(move || lanes.list()).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 
 #[derive(Deserialize)]
 struct LaneAdd {
-    path: std::path::PathBuf,
+    /// An existing worktree of the repository: start its lane.
+    path: Option<std::path::PathBuf>,
+    /// Without `path`: create a worktree for a new lane of this name.
     name: Option<String>,
+    /// For a new worktree: its branch (default: the lane's name; created when
+    /// it does not exist), what a new branch starts from (default: the main
+    /// tree's HEAD), and where it goes (default: `<repo>-<name>` beside it).
+    branch: Option<String>,
+    from: Option<String>,
+    dir: Option<std::path::PathBuf>,
     /// Make sure the shared infrastructure runs (the main lane's).
     #[serde(default)]
     infra: bool,
 }
 
-/// `POST /v1/lanes {"path", "name"?, "infra"?}`: register a working tree as
-/// a lane (an existing one is returned); with `infra` the shared
-/// infrastructure is started if it is not up. `/v1/lanes/<name>/v1/up` starts it.
+/// `POST /v1/lanes`: with `{"path", "infra"?}` start the lane of that
+/// worktree (`devstack up` in it does this; with `infra` the shared
+/// infrastructure is started if it is not up), `/v1/lanes/<name>/v1/up`
+/// then starts its services. With `{"name", "branch"?, "from"?, "dir"?}`
+/// create a worktree for a new lane (`devstack lane add`), not started.
 async fn lanes_add(State(s): State<AppState>, Json(body): Json<LaneAdd>) -> Response {
     let lanes = match lanes_of(&s) {
         Ok(l) => l.clone(),
@@ -232,37 +247,60 @@ async fn lanes_add(State(s): State<AppState>, Json(body): Json<LaneAdd>) -> Resp
     };
     let main = s.sup.clone();
     let res = tokio::task::spawn_blocking(move || {
-        let lane = lanes.add(&body.path, body.name.as_deref())?;
-        if body.infra {
-            main.infra_up()?;
-            lane.sup.refresh_infra();
-        }
-        Ok::<_, String>(lane)
+        let name = match (&body.path, &body.name) {
+            (Some(path), _) => {
+                let lane = lanes.activate(path)?;
+                if body.infra {
+                    main.infra_up()?;
+                    lane.sup.refresh_infra();
+                }
+                lane.entry.name.clone()
+            }
+            (None, Some(name)) => {
+                lanes
+                    .create(
+                        name,
+                        body.branch.as_deref(),
+                        body.dir.as_deref(),
+                        body.from.as_deref(),
+                    )?
+                    .name
+            }
+            (None, None) => return Err("`path` or `name` is needed".to_string()),
+        };
+        lanes
+            .list()
+            .into_iter()
+            .find(|v| v.name == name)
+            .ok_or_else(|| format!("lane `{name}` is gone"))
     })
     .await;
     match res {
-        Ok(Ok(lane)) => {
-            let view = s
-                .lanes
-                .as_ref()
-                .map(|l| l.list())
-                .unwrap_or_default()
-                .into_iter()
-                .find(|v| v.name == lane.entry.name);
-            (StatusCode::CREATED, Json(view)).into_response()
-        }
+        Ok(Ok(view)) => (StatusCode::CREATED, Json(view)).into_response(),
         Ok(Err(e)) => err(StatusCode::CONFLICT, e),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 
-/// `DELETE /v1/lanes/{lane}`: stop it and forget it with its state.
-async fn lanes_remove(State(s): State<AppState>, Path(lane): Path<String>) -> Response {
+#[derive(Deserialize)]
+struct LaneRemove {
+    #[serde(default)]
+    keep_worktree: bool,
+}
+
+/// `DELETE /v1/lanes/{lane}[?keep_worktree=true]`: stop it and remove its
+/// worktree (`git worktree remove`: refused with changes not committed) and
+/// its state; with `keep_worktree` only its state (builds, logs) goes.
+async fn lanes_remove(
+    State(s): State<AppState>,
+    Path(lane): Path<String>,
+    Query(q): Query<LaneRemove>,
+) -> Response {
     let lanes = match lanes_of(&s) {
         Ok(l) => l.clone(),
         Err(r) => return r,
     };
-    match tokio::task::spawn_blocking(move || lanes.remove(&lane)).await {
+    match tokio::task::spawn_blocking(move || lanes.remove(&lane, q.keep_worktree)).await {
         Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
         Ok(Err(e)) => err(StatusCode::CONFLICT, e),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
@@ -276,9 +314,8 @@ async fn lanes_take_main(State(s): State<AppState>, Path(lane): Path<String>) ->
         Ok(l) => l.clone(),
         Err(r) => return r,
     };
-    let main = s.sup.clone();
-    match tokio::task::spawn_blocking(move || lanes.take_main(&main, &lane)).await {
-        Ok(Ok(())) => Json(s.lanes.as_ref().map(|l| l.list()).unwrap_or_default()).into_response(),
+    match tokio::task::spawn_blocking(move || lanes.take_main(&lane).map(|()| lanes.list())).await {
+        Ok(Ok(list)) => Json(list).into_response(),
         Ok(Err(e)) => err(StatusCode::CONFLICT, e),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
@@ -295,11 +332,13 @@ async fn lane_forward(
         Ok(l) => l,
         Err(r) => return r,
     };
-    let Some(l) = lanes.get(&lane) else {
-        return err(
-            StatusCode::NOT_FOUND,
-            format!("no lane `{lane}` (see `devstack lane list`)"),
-        );
+    let l = {
+        let lanes = lanes.clone();
+        match tokio::task::spawn_blocking(move || lanes.get(&lane)).await {
+            Ok(Ok(l)) => l,
+            Ok(Err(e)) => return err(StatusCode::NOT_FOUND, e),
+            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        }
     };
     let query = req
         .uri()

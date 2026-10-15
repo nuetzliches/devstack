@@ -88,14 +88,21 @@ pub struct Supervisor {
     /// The lane this supervisor runs (plan §3.5): empty for the main working
     /// tree, which also owns the infrastructure.
     pub lane: String,
-    /// Its instances are the main slot: workers on (ADR-0008, ADR-0012).
-    owns_main: std::sync::atomic::AtomicBool,
-    /// Main lane only: the lane its fixed ports forward to (`promote --lane`).
-    served_by: Mutex<Option<String>>,
+    /// Which tree's instances are the main slot (ADR-0024): `None` the main
+    /// working tree, else a lane's name. One value, shared by the main
+    /// supervisor and every lane, set only by `Lanes::take_main`.
+    main_owner: Arc<Mutex<Option<String>>>,
     /// Main lane only: TCP forwards on the ports of services without the HTTP
     /// proxy (dev servers) while a lane serves the main ports.
     forwards: Mutex<BTreeMap<String, crate::tcpfwd::Forward>>,
+    /// Main lane only: the builds the lanes need kept (`Lanes::pins`).
+    lane_pins: Mutex<Option<LanePins>>,
+    /// Set when a lane is removed: its sampler threads end.
+    closed: std::sync::atomic::AtomicBool,
 }
+
+/// The artifact ids of a service the lanes run or may go back to.
+pub(crate) type LanePins = Box<dyn Fn(&str) -> Vec<String> + Send + Sync>;
 
 /// Hash of the stack file, line endings ignored (a checkout may flip them).
 /// Every state change also goes to the diagnostic log (plan §11): the event as
@@ -168,12 +175,14 @@ impl Supervisor {
             proc_opts,
             rt,
             String::new(),
+            Arc::new(Mutex::new(None)),
         )
     }
 
     /// A supervisor for a lane (plan §3.5): `lane` empty for the main working
     /// tree. Another lane gets a stack whose ports are already moved
     /// ([`crate::lanes`]) and never starts or stops infrastructure.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_lane(
         stack: Stack,
         stack_file: PathBuf,
@@ -182,6 +191,7 @@ impl Supervisor {
         proc_opts: devstack_proc::Options,
         rt: tokio::runtime::Handle,
         lane: String,
+        main_owner: Arc<Mutex<Option<String>>>,
     ) -> Result<Arc<Self>, String> {
         let stack = with_static_servers(stack);
         // A lane (`.devstack/lane-<name>/`) shares the main tree's artifact store.
@@ -264,9 +274,10 @@ impl Supervisor {
             stack_file,
             config_changed: std::sync::atomic::AtomicBool::new(false),
             hot: Mutex::new(BTreeSet::new()),
-            owns_main: std::sync::atomic::AtomicBool::new(lane.is_empty()),
-            served_by: Mutex::new(None),
+            main_owner,
             forwards: Mutex::new(BTreeMap::new()),
+            lane_pins: Mutex::new(None),
+            closed: std::sync::atomic::AtomicBool::new(false),
             lane,
         }))
     }
@@ -372,7 +383,7 @@ impl Supervisor {
             commands,
             config_changed: self.config_changed.load(Ordering::SeqCst),
             lane: (!self.lane.is_empty()).then(|| self.lane.clone()),
-            main_served_by: self.served_by.lock().unwrap().clone(),
+            main_served_by: self.served_by(),
         }
     }
 
@@ -684,11 +695,40 @@ impl Supervisor {
     /// the first service that does not become ready.
     /// This lane's instances hold the main slot: workers on (ADR-0008).
     pub fn owns_main(&self) -> bool {
-        self.owns_main.load(Ordering::SeqCst)
+        let owner = self.main_owner.lock().unwrap();
+        match owner.as_deref() {
+            None => self.lane.is_empty(),
+            Some(l) => l == self.lane,
+        }
     }
 
-    pub(crate) fn set_owns_main(&self, on: bool) {
-        self.owns_main.store(on, Ordering::SeqCst);
+    /// The shared main-slot owner, for the lanes' supervisors.
+    pub(crate) fn main_owner(&self) -> Arc<Mutex<Option<String>>> {
+        self.main_owner.clone()
+    }
+
+    pub(crate) fn set_main_owner(&self, lane: Option<String>) {
+        *self.main_owner.lock().unwrap() = lane;
+    }
+
+    pub(crate) fn set_lane_pins(&self, pins: LanePins) {
+        *self.lane_pins.lock().unwrap() = Some(pins);
+    }
+
+    /// A removed lane: stop its services, release its ports, end its threads.
+    pub(crate) fn close(&self) {
+        self.down(false);
+        self.closed.store(true, Ordering::SeqCst);
+        for (_, p) in std::mem::take(&mut *self.proxies.lock().unwrap()) {
+            p.close();
+        }
+        for (_, f) in std::mem::take(&mut *self.forwards.lock().unwrap()) {
+            f.close();
+        }
+    }
+
+    pub(crate) fn closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
     }
 
     pub fn up(self: &Arc<Self>) -> Result<(), String> {
@@ -828,22 +868,13 @@ impl Supervisor {
         if !self.layout.owns_artifacts() {
             return;
         }
-        let mut pinned: BTreeSet<String> = BTreeSet::new();
-        if let Some(slot) = self.slots.lock().unwrap().get(name) {
-            pinned.extend(slot.view.build_id.clone());
-            pinned.extend(slot.previous.clone());
-            pinned.extend(
-                slot.view
-                    .candidate
-                    .as_ref()
-                    .and_then(|c| c.build_id.clone()),
-            );
+        let mut pinned = self.pins(name);
+        // What the started lanes run or may go back to.
+        if let Some(lane_pins) = self.lane_pins.lock().unwrap().as_ref() {
+            pinned.extend(lane_pins(name));
         }
-        if let Some((id, _)) = self.held.lock().unwrap().get(name) {
-            pinned.insert(id.clone());
-        }
-        pinned.extend(self.persisted.lock().unwrap().main.get(name).cloned());
-        // What the lanes run (their state.json, written at every start).
+        // What the lanes not started now restore at their next start (their
+        // state.json).
         if let Ok(rd) = std::fs::read_dir(&self.state_dir) {
             for e in rd.flatten() {
                 if e.file_name().to_string_lossy().starts_with("lane-") {
@@ -861,9 +892,35 @@ impl Supervisor {
         }
     }
 
-    /// Main lane: the lane serving its fixed ports, if one does.
+    /// The builds of a service this tree runs or may go back to: main,
+    /// previous, candidate, held and the one restored at the next start.
+    pub(crate) fn pins(&self, name: &str) -> BTreeSet<String> {
+        let mut pinned: BTreeSet<String> = BTreeSet::new();
+        if let Some(slot) = self.slots.lock().unwrap().get(name) {
+            pinned.extend(slot.view.build_id.clone());
+            pinned.extend(slot.previous.clone());
+            pinned.extend(
+                slot.view
+                    .candidate
+                    .as_ref()
+                    .and_then(|c| c.build_id.clone()),
+            );
+        }
+        if let Some((id, _)) = self.held.lock().unwrap().get(name) {
+            pinned.insert(id.clone());
+        }
+        pinned.extend(self.persisted.lock().unwrap().main.get(name).cloned());
+        pinned
+    }
+
+    /// Main lane: the lane serving its fixed ports, if one does (`None` in a
+    /// lane: its own ports are its own).
     pub fn served_by(&self) -> Option<String> {
-        self.served_by.lock().unwrap().clone()
+        if self.lane.is_empty() {
+            self.main_owner.lock().unwrap().clone()
+        } else {
+            None
+        }
     }
 
     /// Services whose fixed port is a devstack proxy: what `promote --lane`
@@ -892,17 +949,25 @@ impl Supervisor {
     }
 
     /// Main lane: forward the fixed port of `name` to `target` (`None` ends
-    /// the forward and frees the port).
+    /// the forward). The previous forward's listener is closed before this
+    /// returns, so the port can be bound again at once.
     pub fn tcp_forward(&self, name: &str, target: Option<u16>) -> Result<(), String> {
         let svc = self.service(name)?.clone();
         let mut fw = self.forwards.lock().unwrap();
-        fw.remove(name); // dropping it closes the listener
+        if let Some(old) = fw.remove(name) {
+            old.close();
+        }
         if let (Some(port), Some(t)) = (svc.port, target) {
             let f = crate::tcpfwd::start(port, t, &self.rt)
                 .map_err(|e| format!("forward port {port} to {t}: {e}"))?;
             fw.insert(name.to_string(), f);
         }
         Ok(())
+    }
+
+    /// Main lane: the services whose fixed port forwards to a lane now.
+    pub fn forwarded_services(&self) -> Vec<String> {
+        self.forwards.lock().unwrap().keys().cloned().collect()
     }
 
     /// Running services that have worker switches (ADR-0008).
@@ -940,11 +1005,6 @@ impl Supervisor {
             None => proxy.set_upstream(None),
         }
         Ok(())
-    }
-
-    /// Main lane: which lane serves the fixed ports (`None`: this one).
-    pub(crate) fn set_served_by(&self, lane: Option<String>) {
-        *self.served_by.lock().unwrap() = lane;
     }
 
     pub fn start(self: &Arc<Self>, name: &str) -> Result<(), String> {
@@ -1960,6 +2020,9 @@ The running instance was left as it was."
     }
 
     pub(crate) fn restart_container(&self, group: &str, service: &str) {
+        if !self.lane.is_empty() {
+            return; // the main lane owns the infrastructure (ADR-0024)
+        }
         let message = match self.docker.restart(&self.compose_group(group), service) {
             Ok(()) => format!("{service}: restarted after a change"),
             Err(e) => format!("{service}: restart after a change failed: {e}"),

@@ -85,9 +85,10 @@ enum Cmd {
         #[arg(long)]
         lane: Option<String>,
     },
-    /// Lanes: other working trees (`git worktree`) running beside the main one
-    /// on their own ports, against the same infrastructure (plan §3.5).
-    /// `devstack up` in a worktree makes it a lane by itself.
+    /// Lanes: the repository's other working trees (`git worktree`), running
+    /// beside the main one on their own ports, against the same
+    /// infrastructure (plan §3.5). Every worktree is a lane; `devstack up` in
+    /// it starts it.
     Lane {
         #[command(subcommand)]
         action: LaneAction,
@@ -241,17 +242,33 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum LaneAction {
-    /// The lanes and their ports.
+    /// The lanes (the repository's worktrees), their branches and ports.
     List,
-    /// Run a working tree as a lane (usually done by `devstack up` in it).
+    /// Create a worktree for a new lane: `git worktree add` beside the main
+    /// tree, on a branch of the lane's name (created when it does not exist).
     Add {
-        path: PathBuf,
-        /// Default: the directory's name.
+        name: String,
+        /// The branch to check out (default: the lane's name).
         #[arg(long)]
-        name: Option<String>,
+        branch: Option<String>,
+        /// What a new branch starts from (default: the main tree's HEAD).
+        #[arg(long)]
+        from: Option<String>,
+        /// Where the worktree goes (default: `<repo>-<name>` beside the repository).
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Start the lane right away (`devstack up` in the new worktree).
+        #[arg(long)]
+        up: bool,
     },
-    /// Stop a lane and forget it with its state; the working tree stays.
-    Remove { name: String },
+    /// Stop a lane and remove its worktree (`git worktree remove`: refused
+    /// when it has changes that are not committed) with its state.
+    Remove {
+        name: String,
+        /// Keep the worktree: only stop the lane and delete its builds and logs.
+        #[arg(long)]
+        keep_worktree: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -415,8 +432,24 @@ fn main() -> Result<()> {
         },
         Cmd::Lane { action } => match action {
             LaneAction::List => client::lane_list(&cli.file),
-            LaneAction::Add { path, name } => client::lane_add(&cli.file, &path, name.as_deref()),
-            LaneAction::Remove { name } => client::lane_remove(&cli.file, &name),
+            LaneAction::Add {
+                name,
+                branch,
+                from,
+                path,
+                up,
+            } => client::lane_add(
+                &cli.file,
+                &name,
+                branch.as_deref(),
+                from.as_deref(),
+                path.as_deref(),
+                up,
+            ),
+            LaneAction::Remove {
+                name,
+                keep_worktree,
+            } => client::lane_remove(&cli.file, &name, keep_worktree),
         },
         Cmd::Rollback { service } => client::service_action(&cli.file, &service, "rollback"),
         Cmd::Logs {

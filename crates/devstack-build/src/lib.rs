@@ -322,8 +322,14 @@ impl Builder {
             )));
         }
         let fin = self.layout.artifact(&r.service, &r.id);
-        if fin.exists() {
+        if self.artifact(&r.service, &r.id).is_some() {
             return Ok(fin); // same inputs, already published
+        }
+        // A directory without metadata is no artifact (a prune that stopped
+        // halfway): it goes, and the build is published afresh.
+        if fin.exists() {
+            fs::remove_dir_all(&fin)
+                .map_err(|e| BuildError::io(format!("remove incomplete {}", fin.display()), e))?;
         }
         let tmp = self
             .layout
@@ -365,13 +371,28 @@ impl Builder {
             .filter_map(|e| self.artifact(service, &e.file_name().to_string_lossy()))
             .collect();
         all.sort_by_key(|a| std::cmp::Reverse(a.created));
+        let dir = self.layout.artifacts(service);
         let mut removed = Vec::new();
         for (i, a) in all.iter().enumerate() {
-            if i >= keep
-                && !pinned.contains(&a.id.as_str())
-                && fs::remove_dir_all(self.layout.artifact(service, &a.id)).is_ok()
-            {
+            if i < keep || pinned.contains(&a.id.as_str()) {
+                continue;
+            }
+            // Renamed away first, so the id is gone at once or not at all: a
+            // delete that stops halfway (a file still open on Windows) leaves
+            // a `.trash-` directory, never a half artifact under its id. A
+            // directory with a file in use cannot be renamed on Windows; it
+            // stays for the next prune.
+            let trash = dir.join(format!(".trash-{}", a.id));
+            let _ = fs::remove_dir_all(&trash);
+            if fs::rename(self.layout.artifact(service, &a.id), &trash).is_ok() {
+                let _ = fs::remove_dir_all(&trash);
                 removed.push(a.id.clone());
+            }
+        }
+        // What an earlier prune could not finish.
+        for e in fs::read_dir(&dir).into_iter().flatten().flatten() {
+            if e.file_name().to_string_lossy().starts_with(".trash-") {
+                let _ = fs::remove_dir_all(e.path());
             }
         }
         removed

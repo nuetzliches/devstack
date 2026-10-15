@@ -60,11 +60,15 @@ export type ProxyView = {
   last_error: string | null;
 };
 
-/** A lane: another git worktree running the stack beside the main one (plan §3.5). */
+/** A lane: another git worktree of the repository, running the stack beside the main one (plan §3.5). */
 export type LaneView = {
   name: string;
   path: string;
+  /** The branch checked out in it; null: a detached HEAD. Older daemons omit it. */
+  branch?: string | null;
   number: number;
+  /** Started (`devstack up` in it); a lane not started runs nothing. Older daemons omit it (all started). */
+  active?: boolean;
   port_offset: number;
   owns_main: boolean;
   running: number;
