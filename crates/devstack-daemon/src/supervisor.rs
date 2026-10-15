@@ -183,7 +183,11 @@ impl Supervisor {
         rt: tokio::runtime::Handle,
         lane: String,
     ) -> Result<Arc<Self>, String> {
-        let layout = Layout::new(&state_dir);
+        // A lane (`.devstack/lane-<name>/`) shares the main tree's artifact store.
+        let layout = match state_dir.parent() {
+            Some(root) if !lane.is_empty() => Layout::shared(&state_dir, root.join("artifacts")),
+            _ => Layout::new(&state_dir),
+        };
         let builder = Builder::new(layout.clone(), &proc_opts).map_err(|e| e.to_string())?;
         let snapshot = Snapshot::open(&repo, &layout.lane("main")).map_err(|e| e.to_string())?;
         let groups_of = |name: &str| -> Vec<String> {
@@ -815,6 +819,47 @@ impl Supervisor {
         self.start(name)
     }
 
+    /// Keep the newest artifacts of a service and everything something runs or
+    /// may go back to (ADR-0002 retention): this tree's main, previous,
+    /// candidate and held builds, and what every lane runs. Only the main tree
+    /// prunes: the store is shared with the lanes.
+    fn prune_artifacts(&self, name: &str) {
+        if !self.layout.owns_artifacts() {
+            return;
+        }
+        let mut pinned: BTreeSet<String> = BTreeSet::new();
+        if let Some(slot) = self.slots.lock().unwrap().get(name) {
+            pinned.extend(slot.view.build_id.clone());
+            pinned.extend(slot.previous.clone());
+            pinned.extend(
+                slot.view
+                    .candidate
+                    .as_ref()
+                    .and_then(|c| c.build_id.clone()),
+            );
+        }
+        if let Some((id, _)) = self.held.lock().unwrap().get(name) {
+            pinned.insert(id.clone());
+        }
+        pinned.extend(self.persisted.lock().unwrap().main.get(name).cloned());
+        // What the lanes run (their state.json, written at every start).
+        if let Ok(rd) = std::fs::read_dir(&self.state_dir) {
+            for e in rd.flatten() {
+                if e.file_name().to_string_lossy().starts_with("lane-") {
+                    pinned.extend(Persisted::load(&e.path()).main.get(name).cloned());
+                }
+            }
+        }
+        let refs: Vec<&str> = pinned.iter().map(String::as_str).collect();
+        let removed = self.builder.prune(name, KEEP_ARTIFACTS, &refs);
+        if !removed.is_empty() {
+            crate::diag::info(
+                "artifacts_pruned",
+                serde_json::json!({ "service": name, "removed": removed }),
+            );
+        }
+    }
+
     /// Main lane: the lane serving its fixed ports, if one does.
     pub fn served_by(&self) -> Option<String> {
         self.served_by.lock().unwrap().clone()
@@ -1162,7 +1207,7 @@ impl Supervisor {
                 std::thread::sleep(Duration::from_millis(100));
             };
             match outcome {
-                Outcome::Published { .. } => {}
+                Outcome::Published { .. } => self.prune_artifacts(name),
                 Outcome::Failed { exit_code, log, .. } => {
                     // Point compiler messages at the repository, not at the
                     // snapshot, so they stay clickable in the IDE.
@@ -2150,6 +2195,8 @@ pub(crate) const SUPERSEDED: &str = "superseded by a newer change";
 /// Quiet period after the last change before a candidate is built (plan §3.2).
 /// Logs kept per service: the newest starts and builds (plan §11).
 pub const KEEP_RUN_LOGS: usize = 20;
+/// Artifacts kept per service beyond the pinned ones (ADR-0002 retention).
+pub const KEEP_ARTIFACTS: usize = 5;
 pub const KEEP_BUILD_LOGS: usize = 10;
 
 const DEBOUNCE: Duration = Duration::from_secs(2);

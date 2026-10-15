@@ -55,19 +55,39 @@ pub type Result<T> = std::result::Result<T, BuildError>;
 #[derive(Debug, Clone)]
 pub struct Layout {
     pub state: PathBuf,
+    /// Where artifacts are stored: `<state>/artifacts`, or a store shared
+    /// with other lanes (ADR-0024), owned by the main working tree.
+    pub artifacts_root: PathBuf,
 }
 
 impl Layout {
     pub fn new(state: impl Into<PathBuf>) -> Self {
+        let state = state.into();
+        Self {
+            artifacts_root: state.join("artifacts"),
+            state,
+        }
+    }
+
+    /// A lane's layout: its own state, the main tree's artifact store. A build
+    /// id is a hash of the inputs, so a lane on the same sources starts from
+    /// the main tree's artifacts instead of building.
+    pub fn shared(state: impl Into<PathBuf>, artifacts_root: impl Into<PathBuf>) -> Self {
         Self {
             state: state.into(),
+            artifacts_root: artifacts_root.into(),
         }
+    }
+
+    /// The artifact store belongs to this layout (not shared from elsewhere).
+    pub fn owns_artifacts(&self) -> bool {
+        self.artifacts_root == self.state.join("artifacts")
     }
     pub fn lane(&self, lane: &str) -> PathBuf {
         self.state.join("lanes").join(lane)
     }
     pub fn artifacts(&self, service: &str) -> PathBuf {
-        self.state.join("artifacts").join(service)
+        self.artifacts_root.join(service)
     }
     pub fn artifact(&self, service: &str, id: &str) -> PathBuf {
         self.artifacts(service).join(id)
@@ -177,8 +197,15 @@ pub struct Running {
 impl Builder {
     /// Removes publishes a previous instance left half done (ADR-0016).
     pub fn new(layout: Layout, opts: &devstack_proc::Options) -> Result<Self> {
-        let root = layout.state.join("artifacts");
-        if let Ok(services) = fs::read_dir(&root) {
+        // Only the owner of the store clears half-done publishes: in a shared
+        // store a `.tmp-` may be another lane's publish in progress.
+        let root = layout.artifacts_root.clone();
+        let services = if layout.owns_artifacts() {
+            fs::read_dir(&root).ok()
+        } else {
+            None
+        };
+        if let Some(services) = services {
             for s in services.flatten() {
                 if let Ok(entries) = fs::read_dir(s.path()) {
                     for e in entries.flatten() {

@@ -1088,6 +1088,8 @@ fn a_worktree_runs_as_a_lane() {
         assert!(ok, "git {args:?}");
     };
     std::fs::write(s.dir.path().join(".gitignore"), ".devstack/\nprep.count\n").unwrap();
+    // Checkouts as the files are (no CRLF on Windows), so main and worktree hash alike.
+    git(s.dir.path(), &["config", "core.autocrlf", "false"]);
     git(s.dir.path(), &["add", "-A"]);
     git(s.dir.path(), &["commit", "-qm", "init"]);
     let wt = s
@@ -1168,6 +1170,10 @@ fn a_worktree_runs_as_a_lane() {
     // 2. An edit in the worktree reaches the lane only.
     let main_build = s.info()["build"].as_str().unwrap().to_string();
     let lane_build = lane_info()["build"].as_str().unwrap().to_string();
+    assert_eq!(
+        lane_build, main_build,
+        "same sources, same build id: the lane started from the main tree's artifact"
+    );
     let program = wt.join("src/Api/Program.cs");
     let source = std::fs::read_to_string(&program).unwrap();
     std::fs::write(&program, format!("{source}\n// lane edit\n")).unwrap();

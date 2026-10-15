@@ -26,8 +26,11 @@ names (the containers of one tree served the other), workers twice.
    a lane. Nothing has to be configured.
 2. **A lane is a supervisor of its own** inside that daemon: source root the
    worktree, the worktree's own `devstack.toml` when its branch has one (else
-   the main tree's), state in `.devstack/lane-<name>/` (snapshot, artifacts,
-   logs). Its API is the main one under `/v1/lanes/<name>/v1/...`, so every
+   the main tree's), state in `.devstack/lane-<name>/` (snapshot, logs). The
+   **artifact store is the main tree's**: a build id is a hash of its inputs,
+   so a worktree on the same sources starts from the main tree's artifacts
+   without building, and two trees never build the same thing twice. Only the
+   main tree prunes the store, keeping what any lane runs. Its API is the main one under `/v1/lanes/<name>/v1/...`, so every
    tool (CLI, MCP, dashboard) works on a lane unchanged (ADR-0007).
 3. **Ports move by a fixed step per lane.** Every service port is moved by
    `[lanes] port_step` (default 100) times the lane's number; the first number
@@ -64,10 +67,11 @@ names (the containers of one tree served the other), workers twice.
 - **One Compose project per lane** (ADR-0012 option A). Correct but heavy: a
   second SQL Server or search engine per agent exceeds a laptop's memory. Kept
   for remote lanes (draft RL1), where the memory is a node's.
-- **Sharing artifacts between lanes** (the build id is a content hash, so
-  identical inputs could reuse a build). Saves cold builds, but prune and
-  concurrent publishing across supervisors need care. Deferred; each lane has
-  its own artifact store for now.
+- **An artifact store per lane.** Simpler, but every new worktree would
+  build everything cold (minutes for a .NET service) although the main tree
+  has the same build already. Publishing is atomic per id (a temporary
+  directory renamed into place), so concurrent publishes are safe; pruning is
+  kept to the main tree.
 - **An HTTP proxy for dev servers as well.** Would break TLS dev servers
   (`ng serve --ssl`); a TCP forward needs no knowledge of the protocol.
 
@@ -77,7 +81,8 @@ names (the containers of one tree served the other), workers twice.
   predictable ports (`+100`, `+200`, ...), and their tools act on their lane.
 - A dev server whose command ignores `{port}` cannot run in a lane (its fixed
   port is taken by the main tree); the start fails with a port-in-use error.
-- Disk: each lane builds into its own artifact store.
+- Disk: lanes add only the builds of their own changes to the shared store;
+  the main tree keeps the newest five per service plus every pinned one.
 - A stack file change on a lane's branch applies to that lane only.
 
 ## Enforced by

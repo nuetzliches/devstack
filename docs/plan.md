@@ -205,8 +205,7 @@ a lane is a supervisor in the main working tree's daemon; `devstack up` in a
 linked worktree makes it one, its ports move by `[lanes] port_step` times its
 number, `{lane}` / `{lane_suffix}` name per-lane resources, `promote --lane`
 forwards the fixed ports of the proxied services and moves the workers. Not
-yet: sharing artifacts between lanes, lanes on other
-machines (drafts RL1 to RL5).
+yet: lanes on other machines (drafts RL1 to RL5).
 
 ### 3.6 Daemon crash, restart and update
 
@@ -598,7 +597,10 @@ Desktop restarted: connections are accepted and closed at once) is found:
 before a service that comes `after` it starts (the container is restarted
 once), after `up`, in `devstack status`, `devstack doctor` and the dashboard.
 `promote --lane` also moves dev servers: a TCP forward on their fixed port to
-the lane's (TLS and WebSockets pass).
+the lane's (TLS and WebSockets pass). Lanes share the main tree's artifact
+store (a worktree on the same sources starts without building), and artifacts
+are pruned for the first time: the newest five per service plus everything
+some tree runs or may roll back to (ADR-0002 retention).
 
 **Not covered by an automated test:** a machine reboot, a Docker Desktop
 restart, the `devstack://` link opened from a browser, an IDE terminal closing.
@@ -730,7 +732,7 @@ What is open, roughly in the order it pays off, and where it comes from.
 
 | Item | From | Size |
 |---|---|---|
-| Lanes, next steps: shared artifacts between lanes, lanes on other machines (drafts RL1 to RL5) | ADR-0024 | large |
+| Lanes on other machines | drafts RL1 to RL5 | large |
 | Static frontend artifacts (`kind = "static"`) for e2e runs on a pinned build | phase 3, §3.4 | medium |
 | Own domain for the landing page (now on GitHub Pages) | phase 4 | small |
 | Code signing of the Windows binary (deferred) | [#3](https://github.com/nuetzliches/devstack/issues/3) | small |
