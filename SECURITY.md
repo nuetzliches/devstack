@@ -18,7 +18,7 @@ interfaces are deliberately narrow ([ADR-0019](docs/adr/0019-control-api-securit
 | Daemon API (one per stack) | `127.0.0.1`, a random port | Holders of the per-user token (`devstack` CLI, MCP server, hub). `Host` header checked against loopback, no CORS |
 | Hub (dashboard) | `127.0.0.1` / `::1`, port 4250 | A browser paired once through a one-time code (`devstack ui`): `HttpOnly`, `SameSite=Strict` cookie, the hub's own `Origin` required for every change, `Host` checked. The hub stores a hash of the cookie, never the cookie |
 | `GET /hub/ping` | the hub | Anyone on the machine; it answers name and version only. Its CORS header names only the landing page's origin (`https://nuetzliches.github.io`, shared by every GitHub Pages site of the organisation, which therefore can read the version too) plus origins in `DEVSTACK_HUB_PING_ORIGINS` |
-| `/hub/inspect`, `/hub/stacks/add`, `/hub/stacks/init` | the hub | The paired browser (cookie, own `Origin`): inspects a folder the user names, registers it, or writes a first `devstack.toml` there, never over an existing file |
+| `/hub/pick-folder`, `/hub/inspect`, `/hub/stacks/add`, `/hub/stacks/init` | the hub | The paired browser (cookie, own `Origin`): opens the system's folder dialog on this machine, inspects a folder the user chose or named, registers it, or writes a first `devstack.toml` there, never over an existing file |
 | `devstack://hub/start` | the operating system | Any web page can open the link; the browser asks first. It can only start the hub, nothing else |
 | MCP server (`devstack mcp`) | stdio of the agent that started it | That agent. Commands with a confirmation text run only with `confirm: true`, which an agent must not send without the user's consent |
 

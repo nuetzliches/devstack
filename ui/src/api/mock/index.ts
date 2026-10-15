@@ -203,6 +203,7 @@ export class MockTransport implements Transport {
       const has = !/empty|new/i.test(path);
       return json(200, { repo: path, is_dir: !/missing/i.test(path), has_stack_file: has, valid: has ? { Ok: null } : null, registered: null, id: 'b1a2c3d4e5f6' });
     }
+    if (p === '/hub/pick-folder' && method === 'POST') return json(200, { path: 'C:\\src\\new-shop' });
     if (p === '/hub/stacks/add' && method === 'POST') return json(200, { id: hub.stacks[0].entry.id, name: hub.stacks[0].entry.name });
     if (p === '/hub/stacks/init' && method === 'POST')
       return json(200, { file: `${String(body?.path)}\\devstack.toml`, services: ['api', 'web'], compose_files: ['deploy/compose.yml'], todos: 9, id: null });

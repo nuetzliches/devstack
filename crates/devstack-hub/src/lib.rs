@@ -31,6 +31,7 @@ use tokio_stream::StreamExt;
 
 static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 
+mod dialog;
 pub mod release;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -316,6 +317,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/docker/start", post(docker_start))
         .route("/hub/events", get(events))
         .route("/hub/inspect", get(inspect))
+        .route("/hub/pick-folder", post(pick_folder))
         .route("/hub/stacks/add", post(stack_add))
         .route("/hub/stacks/init", post(stack_init))
         .route("/hub/stacks/{id}/up", post(stack_up))
@@ -703,6 +705,27 @@ fn stack_paths(dir: &str) -> Result<(PathBuf, PathBuf), String> {
         devstack_proc::long_path(&repo),
         devstack_proc::long_path(&file),
     ))
+}
+
+/// One folder dialog at a time.
+static PICKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `POST /hub/pick-folder`: the operating system's own folder dialog, shown by
+/// the hub (a local program may, a web page may not learn a folder's path).
+/// `{"path": "..."}`, `{"path": null}` when cancelled, `501` where there is no
+/// dialog (a server without a desktop); the page then keeps its text field.
+async fn pick_folder() -> Response {
+    use std::sync::atomic::Ordering;
+    if PICKING.swap(true, Ordering::SeqCst) {
+        return err(StatusCode::CONFLICT, "a folder dialog is open already");
+    }
+    let picked = tokio::task::spawn_blocking(dialog::pick_folder).await;
+    PICKING.store(false, Ordering::SeqCst);
+    match picked {
+        Ok(Ok(path)) => Json(serde_json::json!({ "path": path })).into_response(),
+        Ok(Err(e)) => err(StatusCode::NOT_IMPLEMENTED, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 /// `GET /hub/inspect?path=`: is it a folder, does it have a stack file, is

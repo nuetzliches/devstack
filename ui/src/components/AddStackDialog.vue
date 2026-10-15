@@ -39,6 +39,34 @@ watch(
   },
 );
 
+// The hub shows the operating system's folder dialog (a page cannot learn a
+// folder's path). Where it cannot (no desktop), the text field stays.
+const canPick = ref(true);
+const picking = ref(false);
+async function pick() {
+  picking.value = true;
+  problem.value = null;
+  try {
+    const res = await api().request<{ path: string | null } | { error: string }>('POST', paths.pickFolder);
+    const b = typeof res.body === 'object' ? res.body : null;
+    if (res.status === 501) {
+      canPick.value = false;
+      ui.toast('info', 'No folder dialog on this machine', 'Paste the folder path instead.');
+    } else if (res.ok && b && 'path' in b) {
+      if (b.path) {
+        path.value = b.path;
+        await check();
+      }
+    } else {
+      problem.value = b && 'error' in b ? b.error : `HTTP ${res.status}`;
+    }
+  } catch {
+    problem.value = 'The hub does not answer.';
+  } finally {
+    picking.value = false;
+  }
+}
+
 async function check() {
   const p = path.value.trim();
   if (!p) return;
@@ -116,8 +144,11 @@ async function copyPrompt() {
 
 <template>
   <Modal :open="open" title="Add a stack" size="lg" testid="add-stack" @close="emit('close')">
-    <p class="muted">The folder of a repository, as an absolute path (copy it from the address bar of your file manager). devstack looks for its <code>devstack.toml</code>.</p>
+    <p class="muted">The folder of a repository. Choose it, or paste its path. devstack looks for its <code>devstack.toml</code>.</p>
     <form class="pathrow" @submit.prevent="check">
+      <button v-if="canPick" type="button" class="btn" :disabled="picking" data-testid="add-stack-pick" @click="pick">
+        <span v-if="picking" class="spinner" /><Icon v-else name="folder" :size="14" /> Choose folder…
+      </button>
       <input v-model="path" class="input grow" type="text" placeholder="C:\src\shop  or  /home/me/src/shop" spellcheck="false" autocomplete="off" data-testid="add-stack-path" />
       <button type="submit" class="btn btn-primary" :disabled="!path.trim() || checking" data-testid="add-stack-check">
         <span v-if="checking" class="spinner" /><Icon v-else name="search" :size="14" /> Check
