@@ -435,6 +435,35 @@ pub fn diag_log(
     }
 }
 
+/// `devstack logs [service] --grep X`: matching lines of one service, or of
+/// every service (`service | line`).
+pub fn logs_grep(stack_file: &Path, service: Option<&str>, grep: &str, tail: usize) -> Result<()> {
+    let c = need(&state_dir(stack_file)?)?;
+    let q = enc(grep);
+    let text = match service {
+        Some(s) => c.get(&format!("/v1/services/{s}/logs?tail={tail}&grep={q}"))?,
+        None => c.get(&format!("/v1/logs?tail={tail}&grep={q}"))?,
+    };
+    if text.is_empty() {
+        println!("no line contains `{grep}`");
+    } else {
+        println!("{text}");
+    }
+    Ok(())
+}
+
+/// Percent-encoding for a query value (no dependency for one parameter).
+pub fn enc(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 pub fn logs(stack_file: &Path, name: &str, tail: usize, follow: bool) -> Result<()> {
     let c = need(&state_dir(stack_file)?)?;
     let mut shown = c.get(&format!("/v1/services/{name}/logs?tail={tail}"))?;

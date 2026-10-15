@@ -10,11 +10,13 @@ mod client;
 mod doctor;
 mod envcmd;
 mod hubcmd;
+mod init;
 mod integration;
 mod mcp;
 mod selfcmd;
 mod skills;
 mod topcmd;
+mod update;
 
 #[derive(Parser)]
 #[command(version, about = "Local development orchestrator")]
@@ -81,7 +83,8 @@ enum Cmd {
         /// The dashboard hub's log.
         #[arg(long, conflicts_with = "service")]
         hub: bool,
-        /// With --daemon / --hub: only lines containing this (case-insensitive).
+        /// Only lines containing this (case-insensitive). Without a service:
+        /// every service's current log, each line prefixed with its service.
         #[arg(long)]
         grep: Option<String>,
         /// With --daemon / --hub: the raw JSON lines instead of readable ones.
@@ -133,6 +136,29 @@ enum Cmd {
     /// Is this machine ready for the stack? Docker, Compose, the tools the stack
     /// file runs, ports, the hub, PATH. Read-only; exits 1 when something fails.
     Doctor,
+    /// Write a first devstack.toml from what the repository shows (Compose files,
+    /// .NET web projects, Node dev servers); every guess is a TODO.
+    Init {
+        /// The repository; default the current directory.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Print the draft instead of writing it.
+        #[arg(long)]
+        print: bool,
+        /// A summary as JSON (for the hub).
+        #[arg(long)]
+        json: bool,
+    },
+    /// Install the latest release (or `--version`) with the official installer
+    /// and move the hub onto it. Running stacks switch at their next restart.
+    Update {
+        /// Only say whether a newer release exists.
+        #[arg(long)]
+        check: bool,
+        /// A specific release, e.g. 0.4.0.
+        #[arg(long)]
+        version: Option<String>,
+    },
     /// devstack itself on this machine.
     #[command(name = "self")]
     Myself {
@@ -327,11 +353,17 @@ fn main() -> Result<()> {
                     client::state_dir(&cli.file)?.join("daemon.log")
                 };
                 client::diag_log(&path, tail, grep.as_deref(), follow, json)
+            } else if let Some(service) = service {
+                match grep.as_deref() {
+                    Some(g) => client::logs_grep(&cli.file, Some(&service), g, tail),
+                    None => client::logs(&cli.file, &service, tail, follow),
+                }
+            } else if let Some(g) = grep.as_deref() {
+                client::logs_grep(&cli.file, None, g, tail)
             } else {
-                let service = service.ok_or_else(|| {
-                    anyhow::anyhow!("name a service, or --daemon / --hub for devstack's own log")
-                })?;
-                client::logs(&cli.file, &service, tail, follow)
+                Err(anyhow::anyhow!(
+                    "name a service, search all of them with --grep, or --daemon / --hub for devstack's own log"
+                ))
             }
         }
         Cmd::Mcp => mcp::serve(&cli.file),
@@ -368,6 +400,14 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::OpenUrl { url } => integration::open_url(&url),
+        Cmd::Init { dir, print, json } => {
+            let repo = match dir {
+                Some(d) => d,
+                None => std::env::current_dir()?,
+            };
+            init::run(&repo, print, json)
+        }
+        Cmd::Update { check, version } => update::run(check, version.as_deref()),
         Cmd::Doctor => {
             if !doctor::print(&doctor::run(&cli.file)) {
                 std::process::exit(1);

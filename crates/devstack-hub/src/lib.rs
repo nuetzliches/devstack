@@ -31,6 +31,8 @@ use tokio_stream::StreamExt;
 
 static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 
+pub mod release;
+
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const DEFAULT_PORT: u16 = 4250;
 const COOKIE: &str = "devstack_hub";
@@ -97,6 +99,8 @@ struct AppState {
     stacks: watch::Receiver<Vec<StackEntry>>,
     /// The Docker engine as last seen, see `watch_engine`.
     engine: watch::Receiver<Engine>,
+    /// A newer release than this hub, if the check found one (`release`).
+    newer: watch::Receiver<Option<String>>,
     /// Until when (ms) to look at the engine every 2 s: after a start request.
     engine_fast_until: Arc<std::sync::atomic::AtomicU64>,
     shutdown: Arc<tokio::sync::Notify>,
@@ -248,6 +252,7 @@ pub fn serve() -> Result<(), String> {
 
         let engine_fast_until = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let engine_rx = watch_engine(engine_fast_until.clone());
+        let newer_rx = watch_release();
 
         let shutdown = Arc::new(tokio::sync::Notify::new());
         let state = AppState {
@@ -257,6 +262,7 @@ pub fn serve() -> Result<(), String> {
             codes: Arc::new(Mutex::new(HashMap::new())),
             stacks: rx,
             engine: engine_rx,
+            newer: newer_rx,
             engine_fast_until,
             shutdown: shutdown.clone(),
         };
@@ -309,6 +315,9 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/docker", get(docker))
         .route("/hub/docker/start", post(docker_start))
         .route("/hub/events", get(events))
+        .route("/hub/inspect", get(inspect))
+        .route("/hub/stacks/add", post(stack_add))
+        .route("/hub/stacks/init", post(stack_init))
         .route("/hub/stacks/{id}/up", post(stack_up))
         .route("/hub/stacks/{id}/down", post(stack_down))
         .route("/hub/stacks/{id}", delete(forget))
@@ -557,6 +566,42 @@ fn watch_engine(fast_until: Arc<std::sync::atomic::AtomicU64>) -> watch::Receive
     rx
 }
 
+/// Look for a newer release at start and every 12 hours (`release::latest`),
+/// unless `DEVSTACK_NO_UPDATE_CHECK` is set. Publishes the newer version, or
+/// `None`; a failed check changes nothing.
+fn watch_release() -> watch::Receiver<Option<String>> {
+    let (tx, rx) = watch::channel(None);
+    if release::check_disabled() {
+        return rx;
+    }
+    std::thread::spawn(move || {
+        loop {
+            match release::latest() {
+                Ok(latest) => {
+                    let next = release::newer(&latest, VERSION).then_some(latest);
+                    tx.send_if_modified(|cur| {
+                        if *cur == next {
+                            false
+                        } else {
+                            if let Some(v) = &next {
+                                diag::info("release", serde_json::json!({ "newer": v }));
+                            }
+                            *cur = next;
+                            true
+                        }
+                    });
+                }
+                Err(e) => diag::warn("release_check", serde_json::json!({ "error": e })),
+            }
+            if tx.is_closed() {
+                return;
+            }
+            std::thread::sleep(Duration::from_secs(12 * 3600));
+        }
+    });
+    rx
+}
+
 async fn docker(State(s): State<AppState>) -> Response {
     Json(s.engine.borrow().clone()).into_response()
 }
@@ -594,7 +639,9 @@ async fn events(State(s): State<AppState>) -> Response {
         .map(|stacks| serde_json::json!({ "type": "stacks", "stacks": stacks }));
     let docker = tokio_stream::wrappers::WatchStream::new(s.engine.clone())
         .map(|engine| serde_json::json!({ "type": "docker", "docker": engine }));
-    let stream = stacks.merge(docker).map(|v| {
+    let release = tokio_stream::wrappers::WatchStream::new(s.newer.clone())
+        .map(|newer| serde_json::json!({ "type": "release", "current": VERSION, "newer": newer }));
+    let stream = stacks.merge(docker).merge(release).map(|v| {
         Ok::<_, std::convert::Infallible>(SseEvent::default().json_data(v).unwrap_or_default())
     });
     Sse::new(stream)
@@ -625,6 +672,166 @@ fn entry(s: &AppState, id: &str) -> Option<StackEntry> {
 }
 
 /// Start the stack the way `devstack up` does, in the background.
+// ---------------------------------------------------------- adding a stack
+//
+// The dashboard cannot pick a folder by path (a browser hands out handles,
+// never absolute paths), so the user pastes one. Inspect it, then register a
+// folder that has a stack file, or write a first draft (`devstack init`) and
+// register that. Both are mutations: cookie and own Origin (guard).
+
+#[derive(Deserialize)]
+struct PathQuery {
+    path: String,
+}
+
+/// The repository root and its stack file, in the form the daemon registers
+/// (same id, so the daemon's own registration later is the same entry).
+fn stack_paths(dir: &str) -> Result<(PathBuf, PathBuf), String> {
+    let raw = PathBuf::from(dir.trim().trim_matches('"'));
+    if !raw.is_absolute() {
+        return Err("an absolute path, e.g. C:\\src\\shop or /home/me/src/shop".into());
+    }
+    let abs = std::path::absolute(&raw).map_err(|e| e.to_string())?;
+    // A pasted path to the stack file itself names its folder.
+    let repo = if abs.file_name().is_some_and(|n| n == "devstack.toml") {
+        abs.parent().map(PathBuf::from).unwrap_or(abs)
+    } else {
+        abs
+    };
+    let file = repo.join("devstack.toml");
+    Ok((
+        devstack_proc::long_path(&repo),
+        devstack_proc::long_path(&file),
+    ))
+}
+
+/// `GET /hub/inspect?path=`: is it a folder, does it have a stack file, is
+/// it registered already.
+async fn inspect(Query(q): Query<PathQuery>) -> Response {
+    let (repo, file) = match stack_paths(&q.path) {
+        Ok(p) => p,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    };
+    let id = registry::id_for(&file);
+    let has_file = file.is_file();
+    Json(serde_json::json!({
+        "repo": repo,
+        "is_dir": repo.is_dir(),
+        "has_stack_file": has_file,
+        "valid": has_file.then(|| devstack_config::load(&file).map(|_| ()).map_err(|e| e.to_string())),
+        "registered": registry::list().iter().any(|e| e.id == id).then_some(&id),
+        "id": id,
+    }))
+    .into_response()
+}
+
+fn register_folder(
+    repo: &std::path::Path,
+    file: &std::path::Path,
+) -> Result<registry::Entry, String> {
+    let stack = devstack_config::load(file).map_err(|e| e.to_string())?;
+    let entry = registry::Entry {
+        id: registry::id_for(file),
+        name: stack.stack.name.clone(),
+        file: file.to_path_buf(),
+        repo: repo.to_path_buf(),
+    };
+    registry::register(&entry).map_err(|e| e.to_string())?;
+    diag::info(
+        "stack_added",
+        serde_json::json!({ "id": entry.id, "name": entry.name }),
+    );
+    Ok(entry)
+}
+
+/// `POST /hub/stacks/add {"path"}`: register a folder that has a stack file.
+async fn stack_add(Json(q): Json<PathQuery>) -> Response {
+    let (repo, file) = match stack_paths(&q.path) {
+        Ok(p) => p,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    };
+    if !file.is_file() {
+        return err(
+            StatusCode::CONFLICT,
+            format!("no devstack.toml in {}", repo.display()),
+        );
+    }
+    match tokio::task::spawn_blocking(move || register_folder(&repo, &file)).await {
+        Ok(Ok(e)) => Json(serde_json::json!({ "id": e.id, "name": e.name })).into_response(),
+        Ok(Err(e)) => err(StatusCode::CONFLICT, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `POST /hub/stacks/init {"path"}`: write a first draft (`devstack init`,
+/// never over an existing file) and register it, so it shows in the list.
+async fn stack_init(Json(q): Json<PathQuery>) -> Response {
+    let (repo, file) = match stack_paths(&q.path) {
+        Ok(p) => p,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    };
+    if !repo.is_dir() {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!("{} is not a folder", repo.display()),
+        );
+    }
+    if file.exists() {
+        return err(
+            StatusCode::CONFLICT,
+            "it has a devstack.toml already; add it instead",
+        );
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "cannot find devstack");
+    };
+    let run = {
+        let repo = repo.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut cmd = std::process::Command::new(exe);
+            cmd.args(["init", "--json", "--dir"])
+                .arg(&repo)
+                .stdin(std::process::Stdio::null());
+            no_window(&mut cmd);
+            cmd.output()
+        })
+        .await
+    };
+    let out = match run {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    if !out.status.success() {
+        return err(
+            StatusCode::CONFLICT,
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        );
+    }
+    let draft: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
+    diag::info(
+        "stack_init",
+        serde_json::json!({ "repo": repo, "todos": draft["todos"] }),
+    );
+    // A draft may not load yet (TODOs); then it is written but not listed.
+    let registered = tokio::task::spawn_blocking({
+        let (repo, file) = (repo.clone(), file.clone());
+        move || register_folder(&repo, &file)
+    })
+    .await
+    .ok()
+    .and_then(Result::ok);
+    Json(serde_json::json!({
+        "file": file,
+        "services": draft["services"],
+        "compose_files": draft["compose_files"],
+        "todos": draft["todos"],
+        "id": registered.as_ref().map(|e| e.id.clone()),
+        "name": registered.as_ref().map(|e| e.name.clone()),
+    }))
+    .into_response()
+}
+
 async fn stack_up(State(s): State<AppState>, Path(id): Path<String>) -> Response {
     let Some(e) = entry(&s, &id) else {
         return err(StatusCode::NOT_FOUND, format!("no stack {id}"));

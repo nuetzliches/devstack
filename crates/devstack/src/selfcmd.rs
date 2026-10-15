@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 /// Where the installers put devstack; a binary elsewhere (a cargo build) is
 /// not deleted.
-fn install_dir() -> Option<PathBuf> {
+pub(crate) fn install_dir() -> Option<PathBuf> {
     if cfg!(windows) {
         std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Programs").join("devstack"))
     } else {

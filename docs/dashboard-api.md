@@ -22,7 +22,10 @@ Origin `http://127.0.0.1:4250` (or `localhost:4250`).
 | `GET /hub/ping` | none | `{"devstack":true,"version":"0.3.0"}`; CORS for the landing page only (ADR-0021) |
 | `GET /hub/session` | cookie | `200 {"version": "0.2.0"}`, or `401` (not paired: show "run `devstack ui`") |
 | `GET /hub/stacks` | cookie | `[StackEntry]` |
-| `GET /hub/events` | cookie | SSE: `{"type":"stacks","stacks":[StackEntry]}` and `{"type":"docker","docker":DockerEngine}`, each first and on every change |
+| `GET /hub/events` | cookie | SSE: `{"type":"stacks","stacks":[StackEntry]}` and `{"type":"docker","docker":DockerEngine}` and `{"type":"release","current","newer":string|null}` (a newer devstack; checked at start and every 12 h unless `DEVSTACK_NO_UPDATE_CHECK`), each first and on every change |
+| `GET /hub/inspect?path=` | cookie | `{repo, is_dir, has_stack_file, valid, registered, id}` for an absolute folder path (the "Add a stack" dialog) |
+| `POST /hub/stacks/add {"path"}` | cookie + Origin | registers a folder that has a `devstack.toml`; `{id, name}` |
+| `POST /hub/stacks/init {"path"}` | cookie + Origin | writes a first draft (`devstack init`, never over an existing file) and registers it when it loads; `{file, services, compose_files, todos, id}` |
 | `GET /hub/docker` | cookie | `DockerEngine`: `{"state":"running","version"}`, `{"state":"stopped","starter":"Docker Desktop"\|null,"hint"}` or `{"state":"missing"}`; the hub looks every 10 s |
 | `POST /hub/docker/start` | cookie + Origin | `202 {"started":"Docker Desktop"}`, `200` when it already runs, `409 {"error"}` where devstack cannot start it (Docker Engine as a system service on Linux needs root) |
 | `POST /hub/stacks/{id}/up` | cookie + Origin | `202`; the stack starts (daemon, infrastructure, autostart services) |
@@ -79,7 +82,8 @@ type Candidate = {
 type ProxyView = { port: number; upstream: number | null; build: string | null; pending: string | null;
                    active: number; served: number; last_error: string | null };
 type InfraView = { group: string; project: string; containers: ContainerView[]; error: string | null };
-type ContainerView = { service: string; name: string; state: string; health: string; ports: string[] };
+type ContainerView = { service: string; name: string; state: string; health: string; ports: string[];
+  urls: string[] };                      // dashboard links: the group's `urls` entry, or http://localhost:<port> per published port
 type GroupView = { name: string; label: string; order: number | null; members: string[] };
   // members: "<service>", "compose.<group>.<service>", "command.<name>"
 type CommandView = { name: string; description: string; confirm: string | null; requires: string[] };
@@ -124,7 +128,8 @@ type UsageReport = {
 
 | Method and path | Answer |
 |---|---|
-| `GET /v1/services/{name}/logs?tail=200` | text, the last lines of the current instance |
+| `GET /v1/services/{name}/logs?tail=200&grep=` | text, the last (matching, case-insensitive) lines of the current instance |
+| `GET /v1/logs?grep=…&tail=50` | text, matching lines of every service's current log as `service \| line` |
 | `GET /v1/services/{name}/logs/stream?tail=200` | SSE: `{"type":"line","text":"..."}` for the last lines, then every new one; `{"type":"instance","build_id":...}` when another instance takes over (the lines that follow are the new one's) |
 | `GET /v1/services/{name}/build-log` | text, the latest build log of the service (full compiler output) |
 | `GET /v1/runs/{id}/log/stream` | SSE: `{"type":"line","text":"..."}`, then `{"type":"end","status":"succeeded"|"failed","error":...}` |

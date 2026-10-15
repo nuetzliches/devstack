@@ -23,6 +23,19 @@ watch(
 const hubDown = computed(() => hub.status === 'unreachable' || hub.stream === 'error');
 const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 const unknown = computed(() => hub.fresh && !stack.entry && !stack.view);
+/** The daemon runs another devstack than the hub: a restart of the stack
+ * starts it with the hub's (the installed) one. */
+const daemonOutdated = computed(() => {
+  const d = stack.entry?.daemon?.version;
+  const h = hub.version;
+  return d && h && d !== h ? { daemon: d, hub: h } : null;
+});
+const restartReason = computed(() => {
+  if (!stack.running) return null;
+  if (daemonOutdated.value) return 'version';
+  if (stack.view?.config_changed) return 'config';
+  return null;
+});
 /** Docker is down and this stack has containers (or we do not know yet). */
 const dockerDown = computed(() => {
   const d = hub.docker;
@@ -92,9 +105,13 @@ function isActive(name: string) {
           {{ hub.dockerStarting ? 'Starting…' : `Start ${dockerDown.starter}` }}
         </button>
       </div>
-      <div v-if="!hubDown && stack.running && stack.view?.config_changed" class="banner warn" data-testid="config-changed">
-        <Icon name="file" :size="18" />
-        <span class="grow"><strong>The stack file changed since {{ stack.entry?.name ?? 'the stack' }} started.</strong> It applies after a restart.</span>
+      <div v-if="!hubDown && restartReason" class="banner warn" :data-testid="restartReason === 'version' ? 'daemon-outdated' : 'config-changed'">
+        <Icon :name="restartReason === 'version' ? 'alert' : 'file'" :size="18" />
+        <span v-if="restartReason === 'version'" class="grow">
+          <strong>{{ stack.entry?.name ?? 'This stack' }} runs devstack {{ daemonOutdated?.daemon }}, devstack {{ daemonOutdated?.hub }} is installed.</strong>
+          A restart of the stack switches it over<template v-if="stack.view?.config_changed"> and applies the changed stack file</template>.
+        </span>
+        <span v-else class="grow"><strong>The stack file changed since {{ stack.entry?.name ?? 'the stack' }} started.</strong> It applies after a restart.</span>
         <button type="button" class="btn btn-primary btn-sm" :disabled="!!stack.busy['stack']" data-testid="action-restart-stack" @click="stack.restartStack()">
           <span v-if="stack.busy['stack'] === 'restart'" class="spinner" /><Icon v-else name="restart" :size="14" />
           {{ stack.busy['stack'] === 'restart' ? 'Restarting…' : 'Restart stack' }}

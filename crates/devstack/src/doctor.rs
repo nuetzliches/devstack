@@ -81,6 +81,7 @@ pub fn run(stack_file: &Path) -> Vec<Finding> {
         }
     }
     out.push(hub());
+    out.extend(release());
     out.extend(path_entry());
     #[cfg(windows)]
     out.extend(dev_drive(stack_file));
@@ -243,6 +244,29 @@ fn ports(stack: &devstack_config::Stack, stack_file: &Path) -> Vec<Finding> {
             ),
         )]
     }
+}
+
+/// A newer release, if GitHub answers within a few seconds (skipped with
+/// `DEVSTACK_NO_UPDATE_CHECK`).
+fn release() -> Option<Finding> {
+    if devstack_hub::release::check_disabled() {
+        return None;
+    }
+    let current = devstack_config::VERSION;
+    Some(match devstack_hub::release::latest() {
+        Ok(latest) if devstack_hub::release::newer(&latest, current) => f(
+            Level::Warn,
+            format!("devstack {latest} is out (this is {current}): `devstack update`"),
+        ),
+        Ok(_) => f(
+            Level::Ok,
+            format!("devstack {current} is the latest release"),
+        ),
+        Err(e) => f(
+            Level::Info,
+            format!("could not check for a newer release: {e}"),
+        ),
+    })
 }
 
 fn hub() -> Finding {

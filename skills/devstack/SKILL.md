@@ -49,6 +49,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack up` | Docker check, infrastructure, jobs, every autostart service; starts the dashboard hub. First run takes minutes (images, builds), later ones well under a minute |
 | `devstack status` | state per service and container; `-> not yet active: …` means the latest change is not running yet |
 | `devstack logs <service> --follow` | console output (`-n 500` for more history) |
+| `devstack logs --grep <text>` | matching lines of every service's log ("where did this error come from"); with a service only its log |
 | `devstack logs --daemon` | devstack's own log: every decision with its reason (`--grep <service>`, `--hub` for the dashboard hub) |
 | `devstack restart <service>` | rebuild now; the running instance stays until the new one is healthy |
 | `devstack promote <service>` | take over a candidate that is held (schema change, see below) |
@@ -57,6 +58,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack run <command>` | a command of the stack file (list below) |
 | `devstack top` | CPU, memory, disk per service and container |
 | `devstack ui` | dashboard in the browser (pairs the browser once) |
+| `devstack update` | install the newest devstack (`--check` only asks); stacks switch at their next restart |
 | `devstack down` | stop the services and the daemon; containers keep running. `down --infra` removes them too |
 
 ### Is my change live?
@@ -122,6 +124,7 @@ Register it once (project `.mcp.json` or user configuration):
 | a service exits right after start | `devstack logs <service> -n 200`; every start has its own log in `.devstack/logs/<service>/run-*.log` |
 | dashboard: "hub not reachable" | `devstack ui` (or the "Start hub" button once `devstack hub install` ran) |
 | this skill says it is outdated | `devstack skills install` refreshes it from the installed devstack and this stack file |
+| dashboard: "runs devstack X, Y is installed" | the stack still runs the old daemon: "Restart stack" there, or `devstack down` + `devstack up` |
 
 ## 7. Problems in devstack itself
 

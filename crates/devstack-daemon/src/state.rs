@@ -107,6 +107,9 @@ pub struct ContainerView {
     pub state: String,
     pub health: String,
     pub ports: Vec<String>,
+    /// Links for the dashboard: the stack file's `urls` entry, or
+    /// `http://localhost:<port>` per published port.
+    pub urls: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

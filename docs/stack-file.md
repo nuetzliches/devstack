@@ -14,6 +14,9 @@ commands people and agents can trigger. Schema version 1 ([ADR-0017](adr/0017-st
   the first line).
 - **A running daemon does not reload the file.** `devstack status` says when it
   changed since the start; it applies with `devstack down` + `devstack up`.
+- **No file yet?** `devstack init` writes a first draft from what the repository
+  shows (Compose files, .NET web projects, Node dev servers), every guess marked
+  `TODO`. The dashboard does the same under "Add a stack".
 
 A complete example: [`examples/devstack.toml`](../examples/devstack.toml).
 
@@ -47,7 +50,13 @@ services  = ["db", "cache"]                              # everything else in th
 networks  = ["shop-shared"]                              # external networks created before `up`
 after     = ["search"]                                   # other groups that must be healthy first
 restart_on = { db = ["deploy/dev/db/init/**"] }          # a change restarts that container
+urls      = { scheduler = "http://localhost:5100/ui", db = "" }   # dashboard links (below)
 ```
+
+The dashboard links every published port of a container to
+`http://localhost:<port>`, as Docker Desktop does. `urls` sets the link of a
+service where that is wrong: HTTPS, a path, or `""` for no link (a database,
+SMB). Keys must be in `services`.
 
 - Keep dev-only changes (published ports on `127.0.0.1`, volumes, profiles) in
   the overlay, not in the deployment files.

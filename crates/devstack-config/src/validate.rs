@@ -156,6 +156,21 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                 );
             }
         }
+        for (svc, url) in &group.urls {
+            if !group.services.contains(svc) {
+                c.err(
+                    format!("{p}.urls.{svc}"),
+                    format!("`{svc}` is not in this group's `services`"),
+                );
+            } else if !url.is_empty()
+                && !(url.starts_with("http://") || url.starts_with("https://"))
+            {
+                c.err(
+                    format!("{p}.urls.{svc}"),
+                    "an http:// or https:// address, or \"\" for no link",
+                );
+            }
+        }
     }
     if let Some(cycle) = find_cycle(
         stack

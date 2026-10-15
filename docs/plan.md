@@ -1,6 +1,6 @@
 # devstack: plan
 
-- **Status:** Active: phases 0 to 2 done, phase 4 under way, phase 3 next (see §7 and the backlog, §13)
+- **Status:** Active: phases 0 to 2 done (0.4.0), phase 4 under way, phase 3 next (see §7 and the backlog, §13)
 - **Date:** 2026-10-14, status updated 2026-10-15
 - **Inputs:** [problem-statement.md](problem-statement.md), [ADR index](adr/README.md)
 
@@ -541,6 +541,15 @@ a newer change cancels the running build, so one service has at most one build.
 - `devstack doctor`, `devstack self uninstall`, `GET /hub/ping` and the landing
   page (`site/`, GitHub Pages); licence MIT OR Apache-2.0, `cargo deny` in CI.
 
+**Released as 0.4.0 (2026-10-15):** "Restart stack" in the dashboard when a
+stack runs an older daemon than the installed devstack; dashboard links for
+every published container port (`urls` in a Compose group overrides them); log
+search across services (`/v1/logs?grep=`, `devstack logs --grep`, MCP `logs`);
+`devstack update` and a release check in hub, dashboard and `doctor`;
+`devstack init` and "Add a stack" in the dashboard (register a folder, write a
+draft, or copy a prompt for a coding agent); stack file compatibility rules
+([ADR-0023](adr/0023-stack-file-compatibility.md)).
+
 **Not covered by an automated test:** a machine reboot, a Docker Desktop
 restart, the `devstack://` link opened from a browser, an IDE terminal closing.
 
@@ -672,7 +681,9 @@ What is open, roughly in the order it pays off, and where it comes from.
 | Own domain for the landing page (now on GitHub Pages); code signing of the Windows binary | phase 4 | small |
 | Remove the downstream stack's old orchestrator once its team works without it | phase 4 | downstream |
 | Hot-reload switch per service at runtime (`devstack hot-reload api on/off`) | §3.4a | medium |
-| Search over all service logs (`/v1/logs?grep=`), log filters by build and time | §11 | small |
+| `devstack init` beyond .NET and Node (Go, Python, Java), and from a second real repository | §13 | medium |
+| `devstack migrate`, once devstack has outside users | [ADR-0023](adr/0023-stack-file-compatibility.md) | medium |
+| Log filters by build and time (the search over all services is done) | §11 | small |
 | Dashboard: container logs, build timeline, candidate console, group actions, command palette, first error line | §6 | medium |
 | Tray icon with status and notifications | §6, ADR-0018 | medium |
 | Network egress sandbox, stage 1 (cooperative proxy) | [ADR-0022](adr/0022-network-egress-sandbox.md) (proposed) | medium |

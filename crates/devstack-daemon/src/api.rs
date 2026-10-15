@@ -33,6 +33,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/down", post(down))
         .route("/v1/shutdown", post(shutdown))
         .route("/v1/services/{name}/{action}", post(service_action))
+        .route("/v1/logs", get(logs_all))
         .route("/v1/services/{name}/logs", get(logs))
         .route("/v1/services/{name}/logs/stream", get(log_stream))
         .route("/v1/services/{name}/build-log", get(build_log))
@@ -176,6 +177,8 @@ async fn service_action(
 #[derive(Deserialize)]
 struct LogQuery {
     tail: Option<usize>,
+    /// Only lines containing this, case-insensitive.
+    grep: Option<String>,
 }
 
 async fn logs(
@@ -185,25 +188,56 @@ async fn logs(
 ) -> Response {
     match s.sup.service_log(&name) {
         None => err(StatusCode::NOT_FOUND, format!("`{name}` has no log yet")),
-        Some(p) => text_tail(&p, q.tail.unwrap_or(200)),
+        Some(p) => text(matching(&p, q.tail.unwrap_or(200), q.grep.as_deref()).join("\n")),
     }
 }
 
-fn text_tail(path: &std::path::Path, n: usize) -> Response {
+/// `GET /v1/logs?grep=…`: "where did this come from" across every service's
+/// current log, each line prefixed with its service; `tail` lines per service.
+async fn logs_all(State(s): State<AppState>, Query(q): Query<LogQuery>) -> Response {
+    let Some(grep) = q.grep.as_deref().filter(|g| !g.is_empty()) else {
+        return err(StatusCode::BAD_REQUEST, "`grep` is required");
+    };
+    let tail = q.tail.unwrap_or(50);
+    let mut out = Vec::new();
+    for svc in s.sup.view().services {
+        if let Some(p) = s.sup.service_log(&svc.name) {
+            for line in matching(&p, tail, Some(grep)) {
+                out.push(format!("{} | {line}", svc.name));
+            }
+        }
+    }
+    text(out.join("\n"))
+}
+
+/// The last `n` lines of a file, optionally only those containing `grep`.
+fn matching(path: &std::path::Path, n: usize, grep: Option<&str>) -> Vec<String> {
     let text = std::fs::read(path)
         .map(|b| String::from_utf8_lossy(&b).into_owned())
         .unwrap_or_default();
-    let lines: Vec<&str> = text.lines().rev().take(n).collect();
+    let needle = grep.map(str::to_lowercase);
+    let mut lines: Vec<String> = text
+        .lines()
+        .rev()
+        .filter(|l| needle.as_ref().is_none_or(|g| l.to_lowercase().contains(g)))
+        .take(n)
+        .map(str::to_string)
+        .collect();
+    lines.reverse();
+    lines
+}
+
+fn text(body: String) -> Response {
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
         "text/plain; charset=utf-8".parse().unwrap(),
     );
-    (
-        headers,
-        lines.into_iter().rev().collect::<Vec<_>>().join("\n"),
-    )
-        .into_response()
+    (headers, body).into_response()
+}
+
+fn text_tail(path: &std::path::Path, n: usize) -> Response {
+    text(matching(path, n, None).join("\n"))
 }
 
 /// The event stream starts with a snapshot of the whole state, so a client

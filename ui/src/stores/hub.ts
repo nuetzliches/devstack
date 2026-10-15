@@ -22,6 +22,8 @@ export const useHub = defineStore('hub', () => {
   /** The Docker engine; null until the hub said (older hubs never do). */
   const docker = ref<DockerEngine | null>(null);
   const dockerStarting = ref(false);
+  /** A newer devstack release, if the hub found one. */
+  const newer = ref<string | null>(null);
   let sub: Subscription | null = null;
   let hadBreak = false;
   let checking: Promise<void> | null = null;
@@ -57,6 +59,10 @@ export const useHub = defineStore('hub', () => {
     sub?.close();
     sub = api().subscribe<HubEvent>(paths.hubEvents, {
       onMessage(ev) {
+        if (ev.type === 'release') {
+          newer.value = ev.newer;
+          return;
+        }
         if (ev.type === 'docker') {
           docker.value = ev.docker;
           if (ev.docker.state === 'running') dockerStarting.value = false;
@@ -99,5 +105,5 @@ export const useHub = defineStore('hub', () => {
     return id ? stacks.value.find((s) => s.id === id) : undefined;
   }
 
-  return { status, version, stacks, lastContact, stream, fresh, starting, docker, dockerStarting, reachable, init, checkSession, startDocker, entry, save };
+  return { status, version, stacks, lastContact, stream, fresh, starting, docker, dockerStarting, newer, reachable, init, checkSession, startDocker, entry, save };
 });

@@ -16,6 +16,15 @@ function hostPort(p: string): string {
   const m = /^(\d+)(?:\/\w+)?->(.+)$/.exec(p);
   return m ? `${m[2].replace(/^0\.0\.0\.0:|^127\.0\.0\.1:/, ':')} → ${m[1]}` : p;
 }
+
+/** The link of a published port: a URL naming its host port. */
+function urlFor(p: string): string | undefined {
+  const port = p.split(':').pop();
+  return props.container?.urls?.find((u) => new RegExp(`:${port}(?:/|$)`).test(u));
+}
+
+/** A link the stack file set that names none of the ports (another path or host). */
+const extraUrls = computed(() => (props.container?.urls ?? []).filter((u) => !props.container!.ports.some((p) => urlFor(p) === u)));
 </script>
 
 <template>
@@ -27,7 +36,11 @@ function hostPort(p: string): string {
       </div>
       <div class="meta">
         <template v-if="container">
-          <span v-for="p in container.ports" :key="p" class="tag" :title="p">{{ hostPort(p) }}</span>
+          <template v-for="p in container.ports" :key="p">
+            <a v-if="urlFor(p)" class="tag port-link" :href="urlFor(p)" target="_blank" rel="noopener" :title="`open ${urlFor(p)}`" data-testid="container-url">{{ hostPort(p) }}</a>
+            <span v-else class="tag" :title="p">{{ hostPort(p) }}</span>
+          </template>
+          <a v-for="u in extraUrls" :key="u" class="tag port-link" :href="u" target="_blank" rel="noopener" data-testid="container-url">{{ u.replace(/^https?:\/\//, '') }}</a>
           <span v-if="!container.ports.length" class="faint">no published ports</span>
         </template>
         <span v-else class="faint">not created</span>
@@ -88,5 +101,13 @@ function hostPort(p: string): string {
   flex-wrap: wrap;
   font-size: 12px;
   margin-top: 2px;
+}
+.port-link {
+  color: inherit;
+  text-decoration: none;
+}
+.port-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 </style>

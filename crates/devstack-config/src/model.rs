@@ -120,6 +120,11 @@ pub struct ComposeGroup {
     /// Per started service: paths whose change restarts that container.
     #[serde(default)]
     pub restart_on: BTreeMap<String, Vec<String>>,
+    /// Per started service: the address the dashboard links to, e.g.
+    /// `https://localhost:9443/ui`; `""` for no link (a database). Without an
+    /// entry every published port links to `http://localhost:<port>`.
+    #[serde(default)]
+    pub urls: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]

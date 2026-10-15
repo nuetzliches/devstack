@@ -348,7 +348,7 @@ export const useStack = defineStore('stack', () => {
     const name = entry.value?.name ?? 'stack';
     const ok = await ui.confirm({
       title: `Restart ${name}`,
-      text: 'All services stop and start again with the changed stack file. Containers keep running unless the file changes them.',
+      text: 'All services stop and start again, with the installed devstack and the current stack file. Containers keep running unless the file changes them.',
       confirmLabel: 'Restart stack',
       danger: false,
     });
@@ -380,7 +380,7 @@ export const useStack = defineStore('stack', () => {
         return;
       }
       hub.starting[stackId] = true;
-      const up = await act({ label: `Start ${name}`, path: paths.up(stackId), success: 'Starting the stack with the new stack file…' });
+      const up = await act({ label: `Start ${name}`, path: paths.up(stackId), success: 'Starting the stack again…' });
       if (!up.ok) delete hub.starting[stackId];
     } finally {
       delete busy.value['stack'];

@@ -201,12 +201,13 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "logs",
-            "Console output of the service's current instance. GET /v1/services/{service}/logs.",
+            "Console output of the service's current instance. With `grep` only matching lines; without `service` but with `grep`, every service is searched (\"where did this error come from\"). GET /v1/services/{service}/logs, GET /v1/logs.",
             json!({
                 "service": service["service"],
-                "tail": { "type": "integer", "minimum": 1, "default": 200, "description": "Number of last lines" },
+                "tail": { "type": "integer", "minimum": 1, "default": 200, "description": "Number of last (matching) lines, per service when searching all" },
+                "grep": { "type": "string", "description": "Only lines containing this (case-insensitive)" },
             }),
-            &["service"],
+            &[],
             true,
         ),
         tool(
@@ -336,11 +337,26 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             Ok(client::status_text(&serde_json::from_str(&body)?))
         }
         "logs" => {
-            let svc = name_arg(args, "service")?;
             let tail = args["tail"].as_u64().unwrap_or(200);
-            let text = connect(file)?.get(&format!("/v1/services/{svc}/logs?tail={tail}"))?;
+            let grep = args["grep"].as_str().filter(|g| !g.is_empty());
+            let q = grep
+                .map(|g| format!("&grep={}", client::enc(g)))
+                .unwrap_or_default();
+            if args["service"].is_null() {
+                let Some(g) = grep else {
+                    anyhow::bail!("name a `service`, or search every service with `grep`");
+                };
+                let text = connect(file)?.get(&format!("/v1/logs?tail={tail}{q}"))?;
+                return Ok(if text.is_empty() {
+                    format!("no service log contains `{g}`")
+                } else {
+                    text
+                });
+            }
+            let svc = name_arg(args, "service")?;
+            let text = connect(file)?.get(&format!("/v1/services/{svc}/logs?tail={tail}{q}"))?;
             Ok(if text.is_empty() {
-                format!("`{svc}` has written nothing yet")
+                format!("`{svc}` has written nothing yet (or nothing matching)")
             } else {
                 text
             })

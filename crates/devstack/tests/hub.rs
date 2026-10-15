@@ -40,6 +40,7 @@ fn start_in(home: tempfile::TempDir, port: u16) -> Hub {
         .env("DEVSTACK_HUB_PORT", port.to_string())
         .env("LOCALAPPDATA", home.path())
         .env("XDG_STATE_HOME", home.path())
+        .env("DEVSTACK_NO_UPDATE_CHECK", "1")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -321,4 +322,94 @@ fn ping_is_public_but_tells_only_the_landing_page() {
         "Origin: https://nuetzliches.github.io\r\n",
     );
     assert_eq!(s, 401);
+}
+
+#[test]
+fn a_stack_is_added_or_drafted_from_the_dashboard() {
+    let h = start();
+    let p = h.port;
+    let with = format!("Cookie: {}\r\n", paired_cookie(&h));
+    let post = |path: &str, body: &str, origin: bool| {
+        let o = if origin {
+            format!("Origin: http://127.0.0.1:{p}\r\n")
+        } else {
+            String::new()
+        };
+        http(
+            p,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\n{with}{o}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+    };
+    let js = |s: &str| serde_json::to_string(s).unwrap();
+
+    // A folder with a stack file: inspect, add, listed.
+    let shop = h.home.path().join("shop");
+    std::fs::create_dir_all(&shop).unwrap();
+    std::fs::write(
+        shop.join("devstack.toml"),
+        "version = 1\n[stack]\nname = \"shop\"\n",
+    )
+    .unwrap();
+    let dir = shop.to_string_lossy().to_string();
+    let (s, _, body) = get(p, &format!("/hub/inspect?path={}", enc(&dir)), &with);
+    assert_eq!(s, 200, "{body}");
+    assert!(
+        body.contains("\"has_stack_file\":true") && body.contains("\"registered\":null"),
+        "{body}"
+    );
+    let (s, _, _) = post(
+        "/hub/stacks/add",
+        &format!("{{\"path\":{}}}", js(&dir)),
+        false,
+    );
+    assert_eq!(s, 403, "no Origin, no change");
+    let (s, _, body) = post(
+        "/hub/stacks/add",
+        &format!("{{\"path\":{}}}", js(&dir)),
+        true,
+    );
+    assert_eq!(s, 200, "{body}");
+    // The hub rescans its registry once a second.
+    let t0 = Instant::now();
+    loop {
+        let (_, _, list) = get(p, "/hub/stacks", &with);
+        if list.contains("\"name\":\"shop\"") {
+            break;
+        }
+        assert!(t0.elapsed() < Duration::from_secs(5), "not listed: {list}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // An empty folder: a draft is written (never over an existing file).
+    let crm = h.home.path().join("crm");
+    std::fs::create_dir_all(&crm).unwrap();
+    let (s, _, body) = post(
+        "/hub/stacks/init",
+        &format!("{{\"path\":{}}}", js(&crm.to_string_lossy())),
+        true,
+    );
+    assert_eq!(s, 200, "{body}");
+    assert!(crm.join("devstack.toml").is_file());
+    let (s, _, _) = post(
+        "/hub/stacks/init",
+        &format!("{{\"path\":{}}}", js(&crm.to_string_lossy())),
+        true,
+    );
+    assert_eq!(s, 409, "an existing stack file stays");
+
+    // Relative paths are refused.
+    let (s, _, _) = get(p, "/hub/inspect?path=shop", &with);
+    assert_eq!(s, 400);
+}
+
+fn enc(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }

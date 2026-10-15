@@ -417,6 +417,26 @@ impl Supervisor {
         Ok(())
     }
 
+    /// Where the dashboard links a container to: the group's `urls` entry for
+    /// it (`""` for none), otherwise `http://localhost:<port>` per published
+    /// port, as Docker Desktop does.
+    fn container_urls(&self, group: &str, service: &str, ports: &[String]) -> Vec<String> {
+        match self
+            .stack
+            .compose
+            .get(group)
+            .and_then(|g| g.urls.get(service))
+        {
+            Some(u) if u.is_empty() => Vec::new(),
+            Some(u) => vec![u.clone()],
+            None => ports
+                .iter()
+                .filter_map(|p| p.rsplit(':').next())
+                .map(|port| format!("http://localhost:{port}"))
+                .collect(),
+        }
+    }
+
     /// Re-read only the containers' states (`compose ps`, no `config`): cheap
     /// enough to run every few seconds, so a container that stopped or turned
     /// unhealthy shows as such. Every change is an event.
@@ -465,10 +485,11 @@ impl Supervisor {
                         changes.push(format!("{}: {now}", c.service));
                     }
                     next.push(ContainerView {
-                        service: c.service,
+                        service: c.service.clone(),
                         name: c.name,
                         state: c.state,
                         health: c.health,
+                        urls: self.container_urls(&g, &c.service, &ports),
                         ports,
                     });
                 }
@@ -538,10 +559,11 @@ impl Supervisor {
                             }
                         }
                         view.containers.push(ContainerView {
-                            service: c.service,
+                            service: c.service.clone(),
                             name: c.name,
                             state: c.state,
                             health: c.health,
+                            urls: self.container_urls(&g, &c.service, &ports),
                             ports,
                         });
                     }

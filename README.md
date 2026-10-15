@@ -54,6 +54,7 @@ the infrastructure and the services devstack builds and runs
 JSON Schema).
 
 ```
+devstack init             # a first devstack.toml from the repository (TODOs to work through)
 devstack doctor           # is this machine ready: Docker, Compose, tools, ports, hub, PATH
 devstack check            # validate the stack file (with --compose: the Compose groups too)
 devstack up               # daemon, infrastructure, autostart services
@@ -65,6 +66,8 @@ devstack restart api      # rebuild now; the running instance is replaced once t
 devstack promote api      # take over a candidate held back by a schema change (ADR-0013)
 devstack rollback api     # back to the build that ran before the last replacement
 devstack logs api --follow
+devstack logs --grep timeout  # every service's log, matching lines
+devstack update           # the latest release; the dashboard says when there is one
 devstack logs --daemon    # devstack's own decisions with their reasons (--hub: the dashboard hub)
 devstack run reset        # a command from the stack file
 devstack top --watch      # CPU, memory and disk per service, container, group and lane

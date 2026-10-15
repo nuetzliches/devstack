@@ -3,6 +3,7 @@
 // URL switches for testing the edge screens:
 //   ?mock=unpaired   GET /hub/session answers 401
 //   ?mock=configchanged  the shop stack's file changed since it started
+//   ?mock=newer      a newer release (0.5.0) is out
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
 import type { DockerEngine, HubEvent, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
@@ -20,6 +21,7 @@ class MockHub {
   hubDown = false;
   unpaired = false;
   docker: DockerEngine = { state: 'running', version: '28.4.0' };
+  newer: string | null = null;
   private streams = new Set<{ reconnect(): void }>();
 
   constructor() {
@@ -43,6 +45,7 @@ class MockHub {
     const q = new URLSearchParams(location.search).get('mock') ?? '';
     this.hubDown = q.includes('hubdown');
     this.unpaired = q.includes('unpaired');
+    if (q.includes('newer')) this.newer = '0.5.0';
     if (q.includes('configchanged')) shop.view.config_changed = true;
     if (q.includes('nodocker')) this.docker = { state: 'stopped', starter: 'Docker Desktop', hint: 'start Docker Desktop' };
   }
@@ -194,6 +197,15 @@ export class MockTransport implements Transport {
     if (hub.unpaired) return json(401, { error: 'not paired' });
     if (p === '/hub/stacks' && method === 'GET') return json(200, hub.entries());
     if (p === '/hub/docker' && method === 'GET') return json(200, hub.docker);
+    if (p === '/hub/inspect' && method === 'GET') {
+      const path = url.searchParams.get('path') ?? '';
+      if (!/^([a-z]:\\|\/)/i.test(path)) return json(400, { error: 'an absolute path, e.g. C:\\src\\shop or /home/me/src/shop' });
+      const has = !/empty|new/i.test(path);
+      return json(200, { repo: path, is_dir: !/missing/i.test(path), has_stack_file: has, valid: has ? { Ok: null } : null, registered: null, id: 'b1a2c3d4e5f6' });
+    }
+    if (p === '/hub/stacks/add' && method === 'POST') return json(200, { id: hub.stacks[0].entry.id, name: hub.stacks[0].entry.name });
+    if (p === '/hub/stacks/init' && method === 'POST')
+      return json(200, { file: `${String(body?.path)}\\devstack.toml`, services: ['api', 'web'], compose_files: ['deploy/compose.yml'], todos: 9, id: null });
     if (p === '/hub/docker/start' && method === 'POST') {
       if (hub.docker.state === 'running') return json(200, { started: null });
       hub.startDocker();
@@ -393,6 +405,7 @@ export class MockTransport implements Transport {
       const l = listener<HubEvent>();
       l.send({ type: 'stacks', stacks: hub.entries() });
       l.send({ type: 'docker', docker: hub.docker });
+      l.send({ type: 'release', current: '0.4.0', newer: hub.newer });
       hub.hubSubs.add(l);
       return { stop: () => hub.hubSubs.delete(l) };
     }

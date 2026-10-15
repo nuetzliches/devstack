@@ -23,7 +23,11 @@ export type DockerEngine =
   | { state: 'stopped'; starter: string | null; hint: string }
   | { state: 'missing' };
 
-export type HubEvent = { type: 'stacks'; stacks: StackEntry[] } | { type: 'docker'; docker: DockerEngine };
+export type HubEvent =
+  | { type: 'stacks'; stacks: StackEntry[] }
+  | { type: 'docker'; docker: DockerEngine }
+  /** A newer release than the hub (`newer`), or none. */
+  | { type: 'release'; current: string; newer: string | null };
 
 // ---------------------------------------------------------------- daemon state
 
@@ -74,7 +78,15 @@ export type ServiceView = {
   candidate: Candidate | null;
 };
 
-export type ContainerView = { service: string; name: string; state: string; health: string; ports: string[] };
+export type ContainerView = {
+  service: string;
+  name: string;
+  state: string;
+  health: string;
+  ports: string[];
+  /** Links for the dashboard (stack file `urls`, or http://localhost:<port> per published port). Older daemons omit it. */
+  urls?: string[];
+};
 
 export type InfraView = { group: string; project: string; containers: ContainerView[]; error: string | null };
 

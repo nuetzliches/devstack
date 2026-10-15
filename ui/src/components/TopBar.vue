@@ -25,6 +25,15 @@ const conn = computed(() => {
 const themeIcon = computed(() => (ui.theme === 'system' ? 'monitor' : ui.theme === 'light' ? 'sun' : 'moon'));
 const themeLabel = computed(() => `Theme: ${ui.theme} (click to change)`);
 const version = computed(() => hub.version ?? __APP_VERSION__);
+
+async function copyUpdate() {
+  try {
+    await navigator.clipboard.writeText('devstack update');
+    ui.toast('info', 'Copied: devstack update', `Run it in a terminal to install ${hub.newer}; running stacks switch at their next restart.`);
+  } catch {
+    ui.toast('info', 'Run: devstack update', `It installs ${hub.newer}; running stacks switch at their next restart.`);
+  }
+}
 const mismatch = computed(() => {
   const d = stack.entry?.daemon?.version;
   const h = hub.version;
@@ -60,6 +69,16 @@ const mismatch = computed(() => {
       </span>
       <button type="button" class="btn btn-ghost btn-sm btn-icon" :aria-label="themeLabel" :title="themeLabel" data-testid="theme-toggle" @click="ui.cycleTheme()">
         <Icon :name="themeIcon" />
+      </button>
+      <button
+        v-if="hub.newer"
+        type="button"
+        class="btn btn-sm update"
+        :title="`devstack ${hub.newer} is out. Click to copy the command: devstack update`"
+        data-testid="update-available"
+        @click="copyUpdate()"
+      >
+        <Icon name="download" :size="13" /> {{ hub.newer }}
       </button>
       <span class="ver hide-sm" :title="mismatch ? `daemon ${mismatch} differs from the hub's minor version` : 'hub version'">
         <span v-if="isMock" class="pill sm info">mock</span>
@@ -143,6 +162,11 @@ const mismatch = computed(() => {
 }
 .tone-neutral .cdot {
   animation: pulse 1.4s ease-in-out infinite;
+}
+.update {
+  color: var(--accent);
+  font-size: 12px;
+  gap: 4px;
 }
 .ver {
   display: inline-flex;

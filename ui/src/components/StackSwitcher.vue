@@ -6,6 +6,7 @@ import { usePopover } from '@/lib/popover';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import Icon from './icons/Icon.vue';
+import AddStackDialog from './AddStackDialog.vue';
 
 const hub = useHub();
 const stack = useStack();
@@ -17,6 +18,12 @@ const trigger = ref<HTMLButtonElement | null>(null);
 const list = ref<HTMLElement | null>(null);
 const { open, close } = usePopover(root, trigger);
 const active = ref(0);
+const adding = ref(false);
+
+function addStack() {
+  close();
+  adding.value = true;
+}
 
 const stacks = computed(() => [...hub.stacks].sort((a, b) => Number(b.running) - Number(a.running) || a.name.localeCompare(b.name)));
 const current = computed(() => hub.entry(stack.id));
@@ -116,10 +123,12 @@ function onKey(e: KeyboardEvent) {
             </div>
             <Icon v-if="s.id === stack.id" name="check" :size="15" class="tick" />
           </li>
-          <li v-if="!stacks.length" class="empty-opt">No stacks registered yet. Run <code>devstack up</code> in a project.</li>
+          <li v-if="!stacks.length" class="empty-opt">No stacks registered yet. Add one, or run <code>devstack up</code> in a project.</li>
         </ul>
+        <button type="button" class="add-opt" data-testid="add-stack-open" @click="addStack"><Icon name="plus" :size="14" /> Add a stack…</button>
       </div>
     </Transition>
+    <AddStackDialog :open="adding" @close="adding = false" />
   </div>
 </template>
 
@@ -244,5 +253,23 @@ ul {
   .trigger {
     max-width: 150px;
   }
+}
+.add-opt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.add-opt:hover {
+  background: var(--surface-hover);
 }
 </style>

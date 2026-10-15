@@ -27,7 +27,8 @@ details). A complete example: [examples/devstack.toml]({{devstack:repo_url}}/blo
 6. After the restart, verify the change itself (`devstack status`, the service's
    log, the health URL), not only that the stack came up.
 
-`devstack schema` prints the JSON Schema of the file for editors.
+`devstack schema` prints the JSON Schema of the file for editors. A repository
+without a stack file starts from `devstack init` (a draft with TODOs).
 
 ## Rules that are easy to get wrong
 
@@ -57,6 +58,9 @@ details). A complete example: [examples/devstack.toml]({{devstack:repo_url}}/blo
 - **Ports.** `port` is the fixed port users and other services see. Behind the
   proxy the process listens on `{port}` (an internal one), so its listen address
   must come from `{port}`, never from the fixed number.
+- **Container links** in the dashboard default to `http://localhost:<port>` per
+  published port; set `urls = { <service> = "https://localhost:9443/ui" }` (or
+  `""` for none) in the Compose group where that is wrong.
 - **Paths** are relative to the repository root; use `{repo}` where a process
   needs an absolute one. Generated directories (`bin`, `obj`, `node_modules`,
   `target`, `.git`, `.devstack`) never count as changes.

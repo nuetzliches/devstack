@@ -34,7 +34,8 @@ function service(p: Partial<ServiceView> & Pick<ServiceView, 'name' | 'kind'>, r
 }
 
 function container(project: string, svc: string, state: string, health: string, ports: string[]): ContainerView {
-  return { service: svc, name: `${project}-${svc}-1`, state, health, ports };
+  const urls = ports.map((p) => `http://localhost:${p.split(':').pop()}`);
+  return { service: svc, name: `${project}-${svc}-1`, state, health, ports, urls };
 }
 
 export type MockStackSeed = {
