@@ -60,6 +60,17 @@ export type ProxyView = {
   last_error: string | null;
 };
 
+/** A lane: another git worktree running the stack beside the main one (plan §3.5). */
+export type LaneView = {
+  name: string;
+  path: string;
+  number: number;
+  port_offset: number;
+  owns_main: boolean;
+  running: number;
+  services: number;
+};
+
 export type ServiceView = {
   name: string;
   kind: ServiceKind;

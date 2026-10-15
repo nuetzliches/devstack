@@ -31,6 +31,8 @@ export class MockStack {
   entry: StackEntry;
   view: StackView;
   previous: Record<string, string>;
+  /** Mock lane `agent-login-fix` serves the main ports. */
+  laneOwnsMain = false;
   private seq = 1;
   private nextRun = 1;
   private eventSubs = new Set<Listener<StackEvent>>();

@@ -238,6 +238,18 @@ export class MockTransport implements Transport {
   }
 
   private async daemon(s: MockStack, method: string, p: string, q: URLSearchParams, body?: Record<string, unknown>): Promise<Response> {
+    // Lanes (plan §3.5): the shop stack has one; a lane's API is the stack's, here.
+    if (p === '/v1/lanes' && method === 'GET')
+      return json(200, s.view.name === 'shop' ? [{ name: 'agent-login-fix', path: 'C:\\work\\shop-wt\\agent-login-fix', number: 1, port_offset: 100, owns_main: s.laneOwnsMain, running: 3, services: 5 }] : []);
+    const lm = /^\/v1\/lanes\/([^/]+)\/main$/.exec(p);
+    if (lm && method === 'POST') {
+      await sleep(1200);
+      s.laneOwnsMain = lm[1] !== 'main';
+      return json(200, []);
+    }
+    if (/^\/v1\/lanes\/[^/]+$/.test(p) && method === 'DELETE') return empty(204);
+    const fw = /^\/v1\/lanes\/[^/]+(\/v1\/.*)$/.exec(p);
+    if (fw) p = fw[1];
     const view = () => json(200, s.view);
     if (p === '/v1/stack' && method === 'GET') return view();
     if (p === '/v1/usage' && method === 'GET') return json(200, s.usageWithHistory());
@@ -464,13 +476,19 @@ export class MockTransport implements Transport {
       const off = s.subscribeEvents(listener<StackEvent>());
       return { stop: off };
     }
-    let mm = /^\/v1\/services\/([^/]+)\/logs\/stream$/.exec(rest);
+    const lanePath = /^\/v1\/lanes\/[^/]+(\/v1\/.*)$/.exec(rest);
+    const restInLane = lanePath ? lanePath[1] : rest;
+    if (restInLane === '/v1/events') {
+      const off = s.subscribeEvents(listener<StackEvent>());
+      return { stop: off };
+    }
+    let mm = /^\/v1\/services\/([^/]+)\/logs\/stream$/.exec(restInLane);
     if (mm) {
       const tail = Number(url.searchParams.get('tail') ?? '200');
       const off = s.subscribeLogs(decodeURIComponent(mm[1]), tail, listener<LogStreamEvent>());
       return { stop: off };
     }
-    mm = /^\/v1\/runs\/(\d+)\/log\/stream$/.exec(rest);
+    mm = /^\/v1\/runs\/(\d+)\/log\/stream$/.exec(restInLane);
     if (mm) {
       const off = s.subscribeRunLog(Number(mm[1]), listener<RunLogEvent>());
       return off ? { stop: off } : null;

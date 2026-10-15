@@ -55,11 +55,23 @@ export const paths = {
   up: (stack: string) => `/hub/stacks/${enc(stack)}/up`,
   down: (stack: string, infra = false) => `/hub/stacks/${enc(stack)}/down?infra=${infra}`,
   forget: (stack: string) => `/hub/stacks/${enc(stack)}`,
-  api: (stack: string, path: string) => `/hub/stacks/${enc(stack)}/api${path}`,
+  /** A daemon path; in a lane (plan §3.5) it goes to that lane's API. */
+  api: (stack: string, path: string) =>
+    `/hub/stacks/${enc(stack)}/api${lanePrefix && path.startsWith('/v1/') && !path.startsWith('/v1/lanes') ? lanePrefix : ''}${path}`,
 };
+
+let lanePrefix = '';
+
+/** The lane every daemon path goes to (`null`: the main working tree). */
+export function setLane(name: string | null) {
+  lanePrefix = name ? `/v1/lanes/${enc(name)}` : '';
+}
 
 export const v1 = {
   stack: '/v1/stack',
+  lanes: '/v1/lanes',
+  laneMain: (lane: string) => `/v1/lanes/${enc(lane)}/main`,
+  lane: (lane: string) => `/v1/lanes/${enc(lane)}`,
   events: '/v1/events',
   usage: '/v1/usage?history=true',
   up: '/v1/up',

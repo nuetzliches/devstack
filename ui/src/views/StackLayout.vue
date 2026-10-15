@@ -5,6 +5,7 @@ import { ago, useNow } from '@/lib/format';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import Icon from '@/components/icons/Icon.vue';
+import LaneBar from '@/components/LaneBar.vue';
 import type { IconName } from '@/components/icons/icons';
 
 const route = useRoute();
@@ -82,10 +83,23 @@ function isActive(name: string) {
           {{ t.label }}
           <span v-if="t.name === 'overview' && stack.pending.length" class="badge">{{ stack.pending.length }}</span>
         </RouterLink>
+        <LaneBar />
       </div>
     </nav>
 
     <div class="banners">
+      <div v-if="stack.lane" class="banner info" data-testid="lane-banner">
+        <Icon name="gitBranch" :size="18" />
+        <span class="grow">
+          <strong>Lane {{ stack.lane }}</strong>
+          <template v-for="l in stack.lanes.filter((x) => x.name === stack.lane)" :key="l.name">
+            · ports +{{ l.port_offset }} · <code>{{ l.path }}</code>
+            <template v-if="l.owns_main"> · serves the main ports</template>
+            <template v-else> · no background workers</template>
+          </template>
+        </span>
+        <button type="button" class="btn btn-sm" @click="stack.selectLane(null)">Show the main tree</button>
+      </div>
       <div v-if="dockerDown" class="banner danger" data-testid="docker-down">
         <Icon name="box" :size="18" />
         <span class="grow">

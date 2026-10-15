@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref, shallowRef, triggerRef, watch } from 'vue';
-import { api, paths, v1, type GroupAction, type ServiceAction, type StreamState, type Subscription } from '@/api';
-import type { Point, Run, ServiceView, StackEvent, StackView, UsageReport } from '@/api/types';
+import { api, paths, setLane, v1, type GroupAction, type ServiceAction, type StreamState, type Subscription } from '@/api';
+import type { LaneView, Point, Run, ServiceView, StackEvent, StackView, UsageReport } from '@/api/types';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
 import { useHub } from './hub';
@@ -50,12 +50,40 @@ export const useStack = defineStore('stack', () => {
 
   // ------------------------------------------------------------ selection
 
+  /** The lane shown (plan §3.5); `null`: the main working tree. */
+  const lane = ref<string | null>(null);
+  const lanes = ref<LaneView[]>([]);
+
+  async function loadLanes() {
+    if (!id.value || !running.value) return;
+    try {
+      const res = await api().request<LaneView[]>('GET', paths.api(id.value, v1.lanes));
+      lanes.value = res.ok && Array.isArray(res.body) ? res.body : [];
+      if (lane.value && !lanes.value.some((l) => l.name === lane.value)) selectLane(null);
+    } catch {
+      // keep the list; the next connect loads it again
+    }
+  }
+
+  function selectLane(next: string | null) {
+    if (next === lane.value) return;
+    lane.value = next;
+    if (id.value) persist.set(`lane.${id.value}`, next);
+    reset(id.value!);
+  }
+
   function select(next: string) {
     if (next === id.value) return;
-    disconnect();
     id.value = next;
     persist.saveLastStack(next);
-    const cached = persist.stack(next);
+    lane.value = persist.get<string | null>(`lane.${next}`) ?? null;
+    reset(next);
+  }
+
+  function reset(next: string) {
+    disconnect();
+    setLane(lane.value);
+    const cached = lane.value ? null : persist.stack(next);
     view.value = cached?.view ?? null;
     viewAt.value = cached?.at ?? null;
     events.value = [];
@@ -65,6 +93,39 @@ export const useStack = defineStore('stack', () => {
     busy.value = {};
     usageFetched = false;
     if (running.value) connect();
+    void loadLanes();
+  }
+
+  async function laneMain(name: string) {
+    if (!id.value) return;
+    busy.value['lane-main'] = 'promote';
+    try {
+      await act({
+        label: name === 'main' ? 'Main ports back to the main tree' : `Lane ${name} serves the main ports`,
+        path: paths.api(id.value, v1.laneMain(name)),
+        success: name === 'main' ? 'The main working tree serves the main ports again' : `Lane ${name} serves the main ports`,
+      });
+      await loadLanes();
+    } finally {
+      delete busy.value['lane-main'];
+    }
+  }
+
+  async function removeLane(name: string) {
+    if (!id.value) return;
+    const res = await act({
+      label: `Remove lane ${name}`,
+      path: paths.api(id.value, v1.lane(name)),
+      method: 'DELETE',
+      danger: true,
+      confirmLabel: `Remove ${name}`,
+      confirmText: `Stop lane ${name} and delete its state (builds, logs)? The worktree itself stays.`,
+      success: `Lane ${name} removed`,
+    });
+    if (res.ok) {
+      if (lane.value === name) selectLane(null);
+      await loadLanes();
+    }
   }
 
   // Follow the hub: connect when the stack starts, drop the stream when it stops.
@@ -198,7 +259,7 @@ export const useStack = defineStore('stack', () => {
     if (saveTimer) return;
     saveTimer = setTimeout(() => {
       saveTimer = null;
-      if (id.value && view.value) persist.saveStack(id.value, { view: view.value, at: Date.now() });
+      if (id.value && view.value && !lane.value) persist.saveStack(id.value, { view: view.value, at: Date.now() });
     }, 500);
   }
 
@@ -445,6 +506,12 @@ export const useStack = defineStore('stack', () => {
     svc,
     loadRuns,
     runCommand,
+    lane,
+    lanes,
+    loadLanes,
+    selectLane,
+    laneMain,
+    removeLane,
     serviceAction,
     groupAction,
     restartContainer,
