@@ -2,6 +2,7 @@
 //
 // URL switches for testing the edge screens:
 //   ?mock=unpaired   GET /hub/session answers 401
+//   ?mock=empty      no stack registered (a fresh install)
 //   ?mock=configchanged  the shop stack's file changed since it started
 //   ?mock=newer      a newer release (0.5.0) is out
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
@@ -20,6 +21,7 @@ class MockHub {
   hubSubs = new Set<Listener<HubEvent>>();
   hubDown = false;
   unpaired = false;
+  empty = false;
   docker: DockerEngine = { state: 'running', version: '28.4.0' };
   newer: string | null = null;
   private streams = new Set<{ reconnect(): void }>();
@@ -47,10 +49,13 @@ class MockHub {
     this.unpaired = q.includes('unpaired');
     if (q.includes('newer')) this.newer = '0.5.0';
     if (q.includes('configchanged')) shop.view.config_changed = true;
+    // A fresh install: no stack registered yet (the welcome page with the scan).
+    this.empty = q.includes('empty');
     if (q.includes('nodocker')) this.docker = { state: 'stopped', starter: 'Docker Desktop', hint: 'start Docker Desktop' };
   }
 
   entries(): StackEntry[] {
+    if (this.empty) return [];
     return this.stacks.map((s) => ({ ...s.entry, last_seen: s.running ? Date.now() : s.entry.last_seen }));
   }
 
@@ -202,6 +207,16 @@ export class MockTransport implements Transport {
       if (!/^([a-z]:\\|\/)/i.test(path)) return json(400, { error: 'an absolute path, e.g. C:\\src\\shop or /home/me/src/shop' });
       const has = !/empty|new/i.test(path);
       return json(200, { repo: path, is_dir: !/missing/i.test(path), has_stack_file: has, valid: has ? { Ok: null } : null, registered: null, id: 'b1a2c3d4e5f6' });
+    }
+    if (p === '/hub/stacks/scan' && method === 'POST') {
+      await sleep(600);
+      const root = String((body as { path?: string } | undefined)?.path ?? 'C:\\src');
+      const add = !!(body as { add?: boolean } | undefined)?.add;
+      return json(200, [
+        { repo: `${root}\\shop`, id: 'shop-3f9a1c', name: 'shop', error: null, registered: true, added: false },
+        { repo: `${root}\\billing`, id: 'b111', name: 'billing', error: null, registered: add, added: add },
+        { repo: `${root}\\legacy`, id: 'l222', name: null, error: 'devstack.toml: unknown field `biuld`', registered: false, added: false },
+      ]);
     }
     if (p === '/hub/pick-folder' && method === 'POST') return json(200, { path: 'C:\\src\\new-shop' });
     if (p === '/hub/stacks/add' && method === 'POST') return json(200, { id: hub.stacks[0].entry.id, name: hub.stacks[0].entry.name });

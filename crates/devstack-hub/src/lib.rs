@@ -320,6 +320,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/pick-folder", post(pick_folder))
         .route("/hub/stacks/add", post(stack_add))
         .route("/hub/stacks/init", post(stack_init))
+        .route("/hub/stacks/scan", post(stack_scan))
         .route("/hub/stacks/{id}/up", post(stack_up))
         .route("/hub/stacks/{id}/down", post(stack_down))
         .route("/hub/stacks/{id}", delete(forget))
@@ -786,6 +787,123 @@ async fn stack_add(Json(q): Json<PathQuery>) -> Response {
     }
 }
 
+/// Directories a scan never enters.
+const SCAN_SKIP: &[&str] = &[
+    "node_modules",
+    "target",
+    "bin",
+    "obj",
+    "dist",
+    "build",
+    "vendor",
+    "packages",
+    "AppData",
+    "Program Files",
+    "Program Files (x86)",
+    "Windows",
+    "$RECYCLE.BIN",
+];
+
+/// Repositories with a stack file below `root`, at most `depth` levels down.
+/// A repository (a `.git` directory) is looked at only at its root and not
+/// entered: its sub-folders (examples, fixtures) are no stacks of their own.
+/// A linked worktree (a `.git` file) is skipped: it runs as a lane of its
+/// main working tree (plan §3.5).
+pub fn scan_for_stacks(root: &std::path::Path, depth: usize) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    while let Some((dir, d)) = stack.pop() {
+        let git = dir.join(".git");
+        if git.is_file() {
+            continue;
+        }
+        if git.is_dir() || dir.join("devstack.toml").is_file() {
+            if dir.join("devstack.toml").is_file() {
+                out.push(dir.clone());
+            }
+            if git.is_dir() {
+                continue;
+            }
+        }
+        if d >= depth {
+            continue;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || SCAN_SKIP.contains(&name.as_str()) {
+                continue;
+            }
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
+                stack.push((e.path(), d + 1));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+#[derive(serde::Deserialize)]
+struct ScanQuery {
+    path: String,
+    /// Register every valid stack found that is not registered yet.
+    #[serde(default)]
+    add: bool,
+    #[serde(default = "scan_depth")]
+    depth: usize,
+}
+
+fn scan_depth() -> usize {
+    3
+}
+
+/// `POST /hub/stacks/scan {"path", "add"?, "depth"?}`: every repository with
+/// a devstack.toml below a folder (e.g. the one all projects live in), with
+/// whether it loads and is registered; with `add` the new ones are registered.
+async fn stack_scan(Json(q): Json<ScanQuery>) -> Response {
+    let root = match stack_paths(&q.path) {
+        Ok((r, _)) => r,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    };
+    if !root.is_dir() {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!("{} is not a folder", root.display()),
+        );
+    }
+    let depth = q.depth.clamp(1, 6);
+    let found = tokio::task::spawn_blocking(move || {
+        let known: Vec<String> = registry::list().into_iter().map(|e| e.id).collect();
+        scan_for_stacks(&root, depth)
+            .into_iter()
+            .map(|repo| {
+                let (repo, file) = stack_paths(&repo.to_string_lossy())
+                    .unwrap_or((repo.clone(), repo.join("devstack.toml")));
+                let id = registry::id_for(&file);
+                let loaded = devstack_config::load(&file);
+                let name = loaded.as_ref().map(|s| s.stack.name.clone()).ok();
+                let error = loaded.as_ref().err().map(|e| e.to_string());
+                let registered = known.contains(&id);
+                let added = q.add
+                    && !registered
+                    && error.is_none()
+                    && register_folder(&repo, &file).is_ok();
+                serde_json::json!({
+                    "repo": repo, "id": id, "name": name, "error": error,
+                    "registered": registered || added, "added": added,
+                })
+            })
+            .collect::<Vec<_>>()
+    })
+    .await;
+    match found {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 /// `POST /hub/stacks/init {"path"}`: write a first draft (`devstack init`,
 /// never over an existing file) and register it, so it shows in the list.
 async fn stack_init(Json(q): Json<PathQuery>) -> Response {
@@ -1066,4 +1184,39 @@ pub fn answers(port: u16) -> bool {
         Duration::from_millis(300),
     )
     .is_ok()
+}
+
+#[cfg(test)]
+mod scan_tests {
+    use super::scan_for_stacks;
+
+    #[test]
+    fn finds_repositories_with_a_stack_file_not_their_subfolders_or_worktrees() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        let mk = |p: &str| std::fs::create_dir_all(r.join(p)).unwrap();
+        let touch = |p: &str, t: &str| std::fs::write(r.join(p), t).unwrap();
+        mk("shop/.git");
+        touch("shop/devstack.toml", "");
+        mk("shop/examples");
+        touch("shop/examples/devstack.toml", ""); // inside a repo: not a stack
+        mk("group/crm/.git");
+        touch("group/crm/devstack.toml", "");
+        mk("plain/.git"); // a repo without a stack file
+        mk("shop-wt");
+        touch("shop-wt/.git", "gitdir: x/.git/worktrees/shop-wt");
+        touch("shop-wt/devstack.toml", ""); // a worktree: a lane
+        mk("node_modules/pkg/.git");
+        touch("node_modules/pkg/devstack.toml", "");
+        let found: Vec<String> = scan_for_stacks(r, 3)
+            .into_iter()
+            .map(|p| {
+                p.strip_prefix(r)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        assert_eq!(found, ["group/crm", "shop"]);
+    }
 }

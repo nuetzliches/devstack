@@ -11,6 +11,7 @@ import { useHub } from '@/stores/hub';
 import { useUi } from '@/stores/ui';
 import Modal from './Modal.vue';
 import Icon from './icons/Icon.vue';
+import ScanStacks from './ScanStacks.vue';
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ close: [] }>();
@@ -21,6 +22,8 @@ const router = useRouter();
 type Inspect = { repo: string; is_dir: boolean; has_stack_file: boolean; valid: { Ok?: null; Err?: string } | null; registered: string | null; id: string };
 type InitResult = { file: string; services: string[]; compose_files: string[]; todos: number; id: string | null };
 
+/** One folder, or every project below a folder. */
+const mode = ref<'one' | 'scan'>('one');
 const path = ref('');
 const checking = ref(false);
 const info = ref<Inspect | null>(null);
@@ -144,6 +147,19 @@ async function copyPrompt() {
 
 <template>
   <Modal :open="open" title="Add a stack" size="lg" testid="add-stack" @close="emit('close')">
+    <div class="modes" role="tablist" aria-label="How to add">
+      <button type="button" role="tab" class="btn btn-sm" :aria-selected="mode === 'one'" :class="{ active: mode === 'one' }" data-testid="add-mode-one" @click="mode = 'one'">
+        <Icon name="folder" :size="14" /> One repository
+      </button>
+      <button type="button" role="tab" class="btn btn-sm" :aria-selected="mode === 'scan'" :class="{ active: mode === 'scan' }" data-testid="add-mode-scan" @click="mode = 'scan'">
+        <Icon name="search" :size="14" /> Scan a folder of repositories
+      </button>
+    </div>
+    <template v-if="mode === 'scan'">
+      <p class="muted">The folder your repositories live in, e.g. <code>D:\Sources</code>. Every repository with a <code>devstack.toml</code> at its root is found (three levels deep); worktrees run as lanes of their main tree.</p>
+      <ScanStacks @added="emit('close')" />
+    </template>
+    <template v-else>
     <p class="muted">The folder of a repository. Choose it, or paste its path. devstack looks for its <code>devstack.toml</code>.</p>
     <form class="pathrow" @submit.prevent="check">
       <button v-if="canPick" type="button" class="btn" :disabled="picking" data-testid="add-stack-pick" @click="pick">
@@ -202,10 +218,20 @@ async function copyPrompt() {
         <pre>{{ prompt }}</pre>
       </details>
     </template>
+    </template>
   </Modal>
 </template>
 
 <style scoped>
+.modes {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.modes .active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
 .pathrow {
   display: flex;
   gap: 8px;
