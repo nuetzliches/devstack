@@ -1,0 +1,27 @@
+# Frozen for 0.6.0: kind = "static", hot_reload, lanes and their placeholders.
+version = 1
+
+[stack]
+name = "shop"
+requires = "0.6.0"
+
+[lanes]
+port_step = 100
+
+[services.api]
+build = "dotnet build src/Api/Api.csproj -c Debug"
+output = "src/Api/bin/Debug/net10.0"
+run = "dotnet {artifact}/Api.dll"
+port = 5000
+env = { Database__Name = "shop{lane_suffix}", Lane = "{lane}" }
+
+[services.api.hot_reload]
+run = "dotnet watch run --non-interactive"
+cwd = "src/Api"
+
+[services.web-e2e]
+kind = "static"
+build = "npm run build"
+output = "web/dist/web/browser"
+port = 4300
+spa = true
