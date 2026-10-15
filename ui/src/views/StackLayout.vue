@@ -92,6 +92,14 @@ function isActive(name: string) {
           {{ hub.dockerStarting ? 'Starting…' : `Start ${dockerDown.starter}` }}
         </button>
       </div>
+      <div v-if="!hubDown && stack.running && stack.view?.config_changed" class="banner warn" data-testid="config-changed">
+        <Icon name="file" :size="18" />
+        <span class="grow"><strong>The stack file changed since {{ stack.entry?.name ?? 'the stack' }} started.</strong> It applies after a restart.</span>
+        <button type="button" class="btn btn-primary btn-sm" :disabled="!!stack.busy['stack']" data-testid="action-restart-stack" @click="stack.restartStack()">
+          <span v-if="stack.busy['stack'] === 'restart'" class="spinner" /><Icon v-else name="restart" :size="14" />
+          {{ stack.busy['stack'] === 'restart' ? 'Restarting…' : 'Restart stack' }}
+        </button>
+      </div>
       <div v-if="unknown" class="banner neutral">
         <Icon name="info" :size="18" />
         <span class="grow">This stack is not registered with the hub. It appears once its daemon starts.</span>

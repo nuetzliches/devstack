@@ -266,6 +266,16 @@ members = [\"api\", \"command.ping\"]
 
     /// The daemon's view of one service (`GET /v1/stack`).
     fn service_view(&self, name: &str) -> Value {
+        self.stack_view()["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["name"] == name)
+            .cloned()
+            .unwrap_or(Value::Null)
+    }
+
+    fn stack_view(&self) -> Value {
         let daemon: Value = serde_json::from_slice(
             &std::fs::read(self.dir.path().join(".devstack/daemon.json")).unwrap(),
         )
@@ -275,14 +285,7 @@ members = [\"api\", \"command.ping\"]
             .header("Authorization", &format!("Bearer {token}"))
             .call()
             .unwrap();
-        let stack: Value = serde_json::from_str(&r.body_mut().read_to_string().unwrap()).unwrap();
-        stack["services"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|v| v["name"] == name)
-            .cloned()
-            .unwrap_or(Value::Null)
+        serde_json::from_str(&r.body_mut().read_to_string().unwrap()).unwrap()
     }
 
     fn prep_runs(&self) -> usize {
@@ -895,6 +898,23 @@ fn edits_become_candidates() {
     s.ok(&["rollback", "api"]);
     assert_eq!(build(), b3, "back to the previous build");
     assert_eq!(s.artifacts(), artifacts, "no build for a rollback");
+
+    // 6. The daemon does not reload its stack file, but says when it changed.
+    let file = s.dir.path().join("devstack.toml");
+    let original = std::fs::read_to_string(&file).unwrap();
+    let changed = || s.stack_view()["config_changed"] == true;
+    assert!(!changed(), "unchanged at start");
+    std::fs::write(&file, format!("{original}\n# edited\n")).unwrap();
+    wait("a changed stack file is reported", &changed);
+    let status = s.cli(&["status"], None);
+    assert!(
+        String::from_utf8_lossy(&status.stdout).contains("stack file changed"),
+        "status says so"
+    );
+    // Same content with CRLF (as a Windows checkout writes it): no change.
+    let crlf = original.replace("\r\n", "\n").replace('\n', "\r\n");
+    std::fs::write(&file, crlf).unwrap();
+    wait("line endings alone are no change", &|| !changed());
 
     s.ok(&["down"]);
 }

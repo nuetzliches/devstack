@@ -2,6 +2,7 @@
 //
 // URL switches for testing the edge screens:
 //   ?mock=unpaired   GET /hub/session answers 401
+//   ?mock=configchanged  the shop stack's file changed since it started
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
 import type { DockerEngine, HubEvent, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
@@ -42,6 +43,7 @@ class MockHub {
     const q = new URLSearchParams(location.search).get('mock') ?? '';
     this.hubDown = q.includes('hubdown');
     this.unpaired = q.includes('unpaired');
+    if (q.includes('configchanged')) shop.view.config_changed = true;
     if (q.includes('nodocker')) this.docker = { state: 'stopped', starter: 'Docker Desktop', hint: 'start Docker Desktop' };
   }
 

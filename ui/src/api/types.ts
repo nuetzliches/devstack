@@ -90,6 +90,8 @@ export type StackView = {
   infra: InfraView[];
   groups: GroupView[];
   commands: CommandView[];
+  /** The stack file changed since the daemon started; applies with the next start. Older daemons omit it. */
+  config_changed?: boolean;
 };
 
 // ---------------------------------------------------------------- usage
@@ -124,6 +126,7 @@ export type StackEventBody =
   | { type: 'candidate'; service: string; candidate: Candidate | null }
   | { type: 'infra'; group: string; message: string }
   | { type: 'command'; command: string; run: number; status: RunStatus }
+  | { type: 'config'; changed: boolean }
   | ({ type: 'usage' } & UsageReport);
 
 export type StackEvent = { seq: number; at: number } & StackEventBody;

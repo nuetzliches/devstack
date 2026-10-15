@@ -77,6 +77,19 @@ pub struct Supervisor {
     held: Mutex<BTreeMap<String, (String, PathBuf)>>,
     /// Debounced restarts (dev servers, containers): last change, worker running.
     quiet: Mutex<BTreeMap<String, (Instant, bool)>>,
+    /// The stack file this daemon runs from, and a hash of what it read at start.
+    /// The daemon does not reload it: a change waits for the next start, and the
+    /// status says so instead of keeping quiet.
+    stack_file: PathBuf,
+    stack_file_hash: Option<blake3::Hash>,
+    config_changed: std::sync::atomic::AtomicBool,
+}
+
+/// Hash of the stack file, line endings ignored (a checkout may flip them).
+fn stack_file_hash(path: &Path) -> Option<blake3::Hash> {
+    let bytes = std::fs::read(path).ok()?;
+    let normalized: Vec<u8> = bytes.into_iter().filter(|b| *b != b'\r').collect();
+    Some(blake3::hash(&normalized))
 }
 
 /// What the watcher saw for one service since its last candidate.
@@ -95,6 +108,7 @@ struct Changes {
 impl Supervisor {
     pub fn new(
         stack: Stack,
+        stack_file: PathBuf,
         repo: PathBuf,
         state_dir: PathBuf,
         proc_opts: devstack_proc::Options,
@@ -170,7 +184,23 @@ impl Supervisor {
             changes: Mutex::new(BTreeMap::new()),
             held: Mutex::new(BTreeMap::new()),
             quiet: Mutex::new(BTreeMap::new()),
+            stack_file_hash: stack_file_hash(&stack_file),
+            stack_file,
+            config_changed: std::sync::atomic::AtomicBool::new(false),
         }))
+    }
+
+    pub fn stack_file(&self) -> &Path {
+        &self.stack_file
+    }
+
+    /// The watcher saw the stack file change: compare with what this daemon
+    /// read at start and tell the clients when the answer flips.
+    pub fn stack_file_touched(&self) {
+        let changed = stack_file_hash(&self.stack_file) != self.stack_file_hash;
+        if self.config_changed.swap(changed, Ordering::SeqCst) != changed {
+            self.emit(EventBody::Config { changed });
+        }
     }
 
     pub(crate) fn emit(&self, body: EventBody) {
@@ -258,6 +288,7 @@ impl Supervisor {
             infra,
             groups,
             commands,
+            config_changed: self.config_changed.load(Ordering::SeqCst),
         }
     }
 

@@ -102,6 +102,8 @@ export class MockStack {
 
   async goUp(): Promise<void> {
     const gen = this.generation;
+    // A new daemon reads the stack file afresh.
+    this.view.config_changed = false;
     await sleep(1400);
     if (gen !== this.generation) return;
     this.entry = {

@@ -145,6 +145,9 @@ pub struct StackView {
     pub infra: Vec<InfraView>,
     pub groups: Vec<GroupView>,
     pub commands: Vec<CommandView>,
+    /// The stack file differs from what this daemon read at start; it takes
+    /// effect with the next start (`down`, `up`).
+    pub config_changed: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -181,6 +184,10 @@ pub enum EventBody {
     Candidate {
         service: String,
         candidate: Option<Candidate>,
+    },
+    /// The stack file changed since the daemon started (`true`), or was changed back.
+    Config {
+        changed: bool,
     },
     /// Current load, every native sample (plan §12); history via `/v1/usage`.
     Usage(Box<crate::usage::UsageReport>),

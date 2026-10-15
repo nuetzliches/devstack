@@ -154,6 +154,10 @@ export const useStack = defineStore('stack', () => {
       case 'command':
         onCommandEvent(ev);
         break;
+      case 'config':
+        if (view.value) view.value.config_changed = ev.changed;
+        save();
+        break;
       case 'usage':
         addUsage(ev);
         return; // not part of the timeline
@@ -337,6 +341,52 @@ export const useStack = defineStore('stack', () => {
     if (!res.ok) delete hub.starting[stackId];
   }
 
+  /** Down, wait until the daemon is gone, up: picks up a changed stack file. */
+  async function restartStack() {
+    if (!id.value) return;
+    const stackId = id.value;
+    const name = entry.value?.name ?? 'stack';
+    const ok = await ui.confirm({
+      title: `Restart ${name}`,
+      text: 'All services stop and start again with the changed stack file. Containers keep running unless the file changes them.',
+      confirmLabel: 'Restart stack',
+      danger: false,
+    });
+    if (!ok) return;
+    busy.value['stack'] = 'restart';
+    try {
+      const down = await act({ label: `Stop ${name}`, path: paths.down(stackId, false), success: false });
+      if (!down.ok) return;
+      // The hub's stack stream says when the daemon is gone; 60 s at most.
+      const gone = await new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => {
+          stop();
+          resolve(false);
+        }, 60_000);
+        const stop = watch(
+          () => hub.entry(stackId)?.running,
+          (r) => {
+            if (r === false) {
+              clearTimeout(timer);
+              stop();
+              resolve(true);
+            }
+          },
+          { immediate: true },
+        );
+      });
+      if (!gone) {
+        ui.toast('error', `${name} did not stop within 60 s`, 'Start it again once it is down.');
+        return;
+      }
+      hub.starting[stackId] = true;
+      const up = await act({ label: `Start ${name}`, path: paths.up(stackId), success: 'Starting the stack with the new stack file…' });
+      if (!up.ok) delete hub.starting[stackId];
+    } finally {
+      delete busy.value['stack'];
+    }
+  }
+
   async function stopStack() {
     if (!id.value) return;
     const name = entry.value?.name ?? 'stack';
@@ -380,5 +430,6 @@ export const useStack = defineStore('stack', () => {
     restartContainer,
     startStack,
     stopStack,
+    restartStack,
   };
 });

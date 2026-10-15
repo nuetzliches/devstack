@@ -152,6 +152,12 @@ pub fn print_status(stack: &Value) {
 pub fn status_text(stack: &Value) -> String {
     use std::fmt::Write;
     let mut out = String::new();
+    if stack["config_changed"].as_bool() == Some(true) {
+        let _ = writeln!(
+            out,
+            "! the stack file changed since the daemon started; it applies with `devstack down` + `devstack up`\n"
+        );
+    }
     let _ = writeln!(
         out,
         "{:<22} {:<38} {:<17} {:>6} {:>7}",

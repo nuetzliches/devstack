@@ -3,7 +3,9 @@
 //!
 //! - built services with `watch`: a candidate (ADR-0003, `Supervisor::changed`);
 //! - dev servers with `restart_on`: a restart in place;
-//! - Compose services with `restart_on`: a container restart.
+//! - Compose services with `restart_on`: a container restart;
+//! - the stack file itself: the status says it changed since the daemon started
+//!   (the daemon does not reload it).
 //!
 //! Generated directories never count (`bin`, `obj`, `node_modules`, `target`,
 //! `.git`, `.devstack`): a build in the repository would otherwise see its own
@@ -33,8 +35,9 @@ pub fn ignored(rel: &str) -> bool {
     })
 }
 
-/// Start watching the repository; `None` when nothing in the stack file asks
-/// for it (or the OS watch could not be set up).
+/// Start watching the repository (only its top directory, for the stack file,
+/// when nothing in the stack file asks for more); `None` when the OS watch
+/// could not be set up.
 pub fn start(sup: Arc<Supervisor>) -> Option<Watcher> {
     let platform = devstack_config::model::Platform::current();
     let runs = |s: &devstack_config::model::Service| {
@@ -64,9 +67,12 @@ pub fn start(sup: Arc<Supervisor>) -> Option<Watcher> {
                 .filter_map(move |(s, p)| set(p).map(|set| (g.clone(), s.clone(), set)))
         })
         .collect();
-    if built.is_empty() && devservers.is_empty() && containers.is_empty() {
-        return None;
-    }
+    let only_stack_file = built.is_empty() && devservers.is_empty() && containers.is_empty();
+    let stack_rel = sup
+        .stack_file()
+        .strip_prefix(&sup.repo)
+        .ok()
+        .map(|p| p.to_string_lossy().replace('\\', "/"));
     let repo = sup.repo.clone();
     let me = sup.clone();
     let mut inner = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
@@ -101,6 +107,10 @@ pub fn start(sup: Arc<Supervisor>) -> Option<Watcher> {
             if rel.is_empty() || ignored(&rel) {
                 continue;
             }
+            if stack_rel.as_deref() == Some(rel.as_str()) {
+                me.stack_file_touched();
+                continue;
+            }
             for (n, g) in &built {
                 if g.is_match(&rel) {
                     me.changed(n, &rel);
@@ -127,7 +137,12 @@ pub fn start(sup: Arc<Supervisor>) -> Option<Watcher> {
         }
     })
     .ok()?;
-    inner.watch(&sup.repo, RecursiveMode::Recursive).ok()?;
+    let mode = if only_stack_file {
+        RecursiveMode::NonRecursive
+    } else {
+        RecursiveMode::Recursive
+    };
+    inner.watch(&sup.repo, mode).ok()?;
     Some(Watcher { _inner: inner })
 }
 

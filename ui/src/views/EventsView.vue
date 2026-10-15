@@ -13,9 +13,10 @@ const types: { v: Type; label: string }[] = [
   { v: 'candidate', label: 'Candidate' },
   { v: 'infra', label: 'Infra' },
   { v: 'command', label: 'Command' },
+  { v: 'config', label: 'Stack file' },
   { v: 'snapshot', label: 'Connect' },
 ];
-const enabled = ref<Record<Type, boolean>>({ service: true, candidate: true, infra: true, command: true, snapshot: true });
+const enabled = ref<Record<Type, boolean>>({ service: true, candidate: true, infra: true, command: true, config: true, snapshot: true });
 const subject = ref('');
 
 function subjectOf(e: TimelineEvent): string {
@@ -27,6 +28,7 @@ function subjectOf(e: TimelineEvent): string {
       return e.group;
     case 'command':
       return e.command;
+    case 'config':
     case 'snapshot':
       return '';
   }
@@ -67,6 +69,10 @@ function describe(e: TimelineEvent): Desc {
       return { icon: 'box', tone: 'info', title: e.group, text: e.message };
     case 'command':
       return { icon: 'terminal', tone: e.status === 'failed' ? 'danger' : e.status === 'succeeded' ? 'ok' : 'accent', title: e.command, text: `run #${e.run} ${e.status}` };
+    case 'config':
+      return e.changed
+        ? { icon: 'file', tone: 'warn', title: 'Stack file', text: 'Changed since the daemon started; applies with the next start' }
+        : { icon: 'file', tone: 'ok', title: 'Stack file', text: 'Back to what the daemon runs with' };
     case 'snapshot':
       return { icon: 'activity', tone: 'neutral', title: 'Connected', text: `snapshot of ${e.stack.services.length} services` };
   }

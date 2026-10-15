@@ -98,6 +98,7 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let sup = supervisor::Supervisor::new(
         stack,
+        abs_file.clone(),
         repo,
         state_dir.clone(),
         proc_opts,

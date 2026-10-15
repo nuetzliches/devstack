@@ -54,6 +54,7 @@ Paths below are relative to `/hub/stacks/{id}/api`.
 type StackView = {
   name: string; repo: string; version: string;
   services: ServiceView[]; infra: InfraView[]; groups: GroupView[]; commands: CommandView[];
+  config_changed: boolean;              // the stack file differs from what the daemon read at start; applies with the next start
 };
 type ServiceView = {
   name: string; kind: "service" | "job" | "devserver" | "tool";
@@ -93,6 +94,7 @@ type Event = { seq: number; at: number } & (
   | { type: "candidate"; service: string; candidate: Candidate | null }
   | { type: "infra"; group: string; message: string }        // a container changed: fetch /v1/stack once
   | { type: "command"; command: string; run: number; status: "running" | "succeeded" | "failed" }
+  | { type: "config"; changed: boolean }   // the stack file changed since start (true) or back (false)
   | { type: "usage" } & UsageReport                           // every 2 s, without history
 );
 ```
