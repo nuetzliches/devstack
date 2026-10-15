@@ -44,6 +44,14 @@ const extraUrls = computed(() => (props.container?.urls ?? []).filter((u) => !pr
           </template>
           <a v-for="u in extraUrls" :key="u" class="tag port-link" :href="u" target="_blank" rel="noopener" data-testid="container-url">{{ u.replace(/^https?:\/\//, '') }}</a>
           <span v-if="!container.ports.length" class="faint">no published ports</span>
+          <span
+            v-if="container.unreachable?.length"
+            class="tag lost"
+            :title="`${container.unreachable.join(', ')} closes connections from this machine at once: Docker lost the port forward (restart the container), or nothing listens on it inside.`"
+            data-testid="container-unreachable"
+          >
+            not reachable from here
+          </span>
         </template>
         <span v-else class="faint">not created</span>
       </div>
@@ -77,6 +85,10 @@ const extraUrls = computed(() => (props.container?.urls ?? []).filter((u) => !pr
 </template>
 
 <style scoped>
+.lost {
+  color: var(--danger);
+  border-color: var(--danger);
+}
 .ctr-row {
   display: flex;
   align-items: center;

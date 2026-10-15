@@ -115,6 +115,11 @@ pub struct ContainerView {
     /// Links for the dashboard: the stack file's `urls` entry, or
     /// `http://localhost:<port>` per published port.
     pub urls: Vec<String>,
+    /// Published ports that accept a connection from this machine and close
+    /// it at once (`5432->127.0.0.1:5432`): a lost port forward, the
+    /// container may look healthy. A restart of the container fixes it.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub unreachable: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -48,6 +48,7 @@ pub fn router(state: AppState) -> axum::Router {
             post(restart_container),
         )
         .route("/v1/infra/{group}/{service}/logs", get(infra_logs))
+        .route("/v1/infra/check", post(infra_check))
         .route("/v1/events", get(events))
         .route("/v1/usage", get(usage))
         .route("/v1/commands/{name}", post(run_command))
@@ -841,6 +842,22 @@ async fn build_log(State(s): State<AppState>, Path(name): Path<String>) -> Respo
             StatusCode::NOT_FOUND,
             format!("`{name}` has no build log yet"),
         ),
+    }
+}
+
+/// `POST /v1/infra/check`: probe every running container's published ports
+/// from this machine; `[{group, service, ports}]` whose forward is lost
+/// (accepted and closed at once). Recorded in the view as `unreachable`.
+async fn infra_check(State(s): State<AppState>) -> Response {
+    let sup = s.sup.clone();
+    match tokio::task::spawn_blocking(move || sup.check_forwards()).await {
+        Ok(lost) => Json(
+            lost.into_iter()
+                .map(|(group, service, ports)| serde_json::json!({ "group": group, "service": service, "ports": ports }))
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 

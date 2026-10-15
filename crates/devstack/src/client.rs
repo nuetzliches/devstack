@@ -380,6 +380,19 @@ pub fn status_text(stack: &Value) -> String {
                 c["state"].as_str().unwrap_or(""),
                 ports.join(", ")
             );
+            let lost: Vec<&str> = c["unreachable"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|p| p.as_str())
+                .collect();
+            if !lost.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "    ! {} closes connections from this machine at once: Docker lost the port forward (restart the container), or nothing listens inside",
+                    lost.join(", ")
+                );
+            }
         }
     }
     out

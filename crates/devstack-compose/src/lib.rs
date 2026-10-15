@@ -131,6 +131,39 @@ pub struct Publisher {
     pub published_port: u16,
 }
 
+/// What a published port does when this machine connects to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    /// It answered, or it waits for the client to speak first (a database).
+    Open,
+    /// Nothing accepts the connection.
+    Refused,
+    /// The connection is accepted and closed at once, before a byte: Docker
+    /// Desktop's port forwarding lost the container (seen after Docker Desktop
+    /// restarted). The container itself can be healthy.
+    ClosedAtOnce,
+}
+
+/// Connect to `addr` (`127.0.0.1:5432`) and listen for a moment: a server
+/// either says something, or waits for the client; a dead port forward
+/// closes the connection without a word.
+pub fn probe(addr: &str) -> Reach {
+    use std::io::Read;
+    let Ok(sa) = addr.parse::<std::net::SocketAddr>() else {
+        return Reach::Open; // not an address we can judge
+    };
+    let Ok(mut s) = std::net::TcpStream::connect_timeout(&sa, Duration::from_secs(1)) else {
+        return Reach::Refused;
+    };
+    let _ = s.set_read_timeout(Some(Duration::from_millis(400)));
+    let mut b = [0u8; 1];
+    match s.read(&mut b) {
+        Ok(0) => Reach::ClosedAtOnce,
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => Reach::ClosedAtOnce,
+        _ => Reach::Open,
+    }
+}
+
 impl Container {
     /// Ready = running and, if it has a health check, healthy.
     pub fn is_ready(&self) -> bool {
@@ -513,6 +546,35 @@ fn describe(program: &str, args: &[OsString]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn probe_tells_a_lost_forward_from_a_silent_server() {
+        use std::net::TcpListener;
+        // Accepts and closes at once, like Docker Desktop with a lost forward.
+        let closing = TcpListener::bind("127.0.0.1:0").unwrap();
+        let a = closing.local_addr().unwrap().to_string();
+        let t = std::thread::spawn(move || {
+            let (s, _) = closing.accept().unwrap();
+            drop(s);
+        });
+        assert_eq!(probe(&a), Reach::ClosedAtOnce);
+        t.join().unwrap();
+        // Accepts and waits for the client, like a database.
+        let silent = TcpListener::bind("127.0.0.1:0").unwrap();
+        let b = silent.local_addr().unwrap().to_string();
+        let t = std::thread::spawn(move || {
+            let (s, _) = silent.accept().unwrap();
+            std::thread::sleep(Duration::from_millis(800));
+            drop(s);
+        });
+        assert_eq!(probe(&b), Reach::Open);
+        t.join().unwrap();
+        // Nobody listens.
+        let free = TcpListener::bind("127.0.0.1:0").unwrap();
+        let c = free.local_addr().unwrap().to_string();
+        drop(free);
+        assert_eq!(probe(&c), Reach::Refused);
+    }
 
     #[test]
     fn logs_merge_stdout_and_stderr_by_time() {

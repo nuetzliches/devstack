@@ -223,7 +223,26 @@ fn ports(stack: &devstack_config::Stack, stack_file: &Path) -> Vec<Finding> {
         .and_then(|d| devstack_daemon::read_info(&d))
         .is_some();
     if running {
-        return vec![f(Level::Ok, "ports: the stack runs, its daemon holds them")];
+        let mut out = vec![f(Level::Ok, "ports: the stack runs, its daemon holds them")];
+        // Containers healthy inside Docker, but not reachable from here.
+        if let Ok(c) =
+            crate::client::need(&crate::client::state_dir(stack_file).unwrap_or_default())
+            && let Ok((200, body)) = c.call_raw("POST", "/v1/infra/check", None)
+            && let Ok(lost) = serde_json::from_str::<Vec<serde_json::Value>>(&body)
+        {
+            for l in lost {
+                out.push(f(
+                    Level::Fail,
+                    format!(
+                        "container {}: {} accepts connections from this machine and closes them at once: Docker lost the port forward (restart the container: `docker compose restart {}` or the dashboard, else Docker Desktop), or nothing listens on it inside",
+                        l["service"].as_str().unwrap_or(""),
+                        l["ports"].as_array().into_iter().flatten().filter_map(|p| p.as_str()).collect::<Vec<_>>().join(", "),
+                        l["service"].as_str().unwrap_or("")
+                    ),
+                ));
+            }
+        }
+        return out;
     }
     let taken: Vec<String> = stack
         .services

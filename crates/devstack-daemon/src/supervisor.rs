@@ -537,6 +537,18 @@ impl Supervisor {
                     if before.as_deref() != Some(now.as_str()) {
                         changes.push(format!("{}: {now}", c.service));
                     }
+                    // The last verdict of `check_forwards` stays until the
+                    // container stops (a restart repairs a lost forward).
+                    let up = c.state == "running";
+                    let unreachable = if up {
+                        view.containers
+                            .iter()
+                            .find(|o| o.service == c.service)
+                            .map(|o| o.unreachable.clone())
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
                     next.push(ContainerView {
                         service: c.service.clone(),
                         name: c.name,
@@ -544,6 +556,7 @@ impl Supervisor {
                         health: c.health,
                         urls: self.container_urls(&g, &c.service, &ports),
                         ports,
+                        unreachable,
                     });
                 }
                 for gone in view
@@ -618,6 +631,7 @@ impl Supervisor {
                             health: c.health,
                             urls: self.container_urls(&g, &c.service, &ports),
                             ports,
+                            unreachable: Vec::new(),
                         });
                     }
                 }
@@ -671,6 +685,17 @@ impl Supervisor {
     pub fn up(self: &Arc<Self>) -> Result<(), String> {
         if self.lane.is_empty() {
             self.infra_up()?;
+            // Healthy inside Docker is not reachable from here: say so
+            // (a service that needs the container repairs it, ensure_after).
+            for (g, svc, lost) in self.check_forwards() {
+                self.emit(EventBody::Infra {
+                    group: g,
+                    message: format!(
+                        "{svc}: {} closes connections from this machine at once (Docker lost the port forward, or nothing listens inside)",
+                        lost.join(", ")
+                    ),
+                });
+            }
         } else {
             // The main lane owns the infrastructure; a lane only reads it.
             self.refresh_infra();
@@ -1934,8 +1959,123 @@ The running instance was left as it was."
 
     /// Start what `svc` comes after and is not ready yet (services, jobs that
     /// have not completed). Compose services are the infra plane's job (`up`).
+    /// The published ports of a Compose service, as this machine reaches them.
+    fn container_ports(&self, group: &str, service: &str) -> Vec<String> {
+        self.infra
+            .lock()
+            .unwrap()
+            .published
+            .iter()
+            .filter(|((g, s, _), _)| g == group && s == service)
+            .map(|((_, _, t), addr)| format!("{t}->{addr}"))
+            .collect()
+    }
+
+    /// Probe the published ports of every running container from this machine
+    /// and record lost port forwards in the view (on demand: a probe is a
+    /// connection the server sees, so it does not run with every refresh).
+    pub fn check_forwards(&self) -> Vec<(String, String, Vec<String>)> {
+        let targets: Vec<(String, String, Vec<String>)> = self
+            .infra
+            .lock()
+            .unwrap()
+            .views
+            .iter()
+            .flat_map(|v| {
+                v.containers
+                    .iter()
+                    .filter(|c| {
+                        c.state == "running" && (c.health.is_empty() || c.health == "healthy")
+                    })
+                    .map(|c| (v.group.clone(), c.service.clone(), c.ports.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let mut out = Vec::new();
+        for (g, svc, ports) in targets {
+            let lost = lost_forwards(&ports);
+            self.set_unreachable(&g, &svc, lost.clone());
+            if !lost.is_empty() {
+                out.push((g, svc, lost));
+            }
+        }
+        out
+    }
+
+    fn set_unreachable(&self, group: &str, service: &str, lost: Vec<String>) {
+        let mut cache = self.infra.lock().unwrap();
+        if let Some(c) = cache
+            .views
+            .iter_mut()
+            .filter(|v| v.group == group)
+            .flat_map(|v| v.containers.iter_mut())
+            .find(|c| c.service == service)
+        {
+            c.unreachable = lost;
+        }
+    }
+
+    /// A Compose service a native one needs must be reachable from here, not
+    /// only healthy inside Docker: a lost port forward (Docker Desktop after a
+    /// restart) is repaired by restarting the container once. Never fails the
+    /// start: a port with nothing listening inside looks the same.
+    fn ensure_reachable(&self, group: &str, service: &str) -> Result<(), String> {
+        let lost = lost_forwards(&self.container_ports(group, service));
+        self.set_unreachable(group, service, lost.clone());
+        if lost.is_empty() {
+            return Ok(());
+        }
+        self.emit(EventBody::Infra {
+            group: group.into(),
+            message: format!(
+                "{service}: {} accepted but closed at once from this machine (lost port forward); restarting the container",
+                lost.join(", ")
+            ),
+        });
+        self.docker
+            .restart(&self.compose_group(group), service)
+            .map_err(|e| format!("restart `{service}`: {e}"))?;
+        let t0 = Instant::now();
+        loop {
+            self.refresh_containers();
+            let still = lost_forwards(&self.container_ports(group, service));
+            let up = self.infra.lock().unwrap().views.iter().any(|v| {
+                v.group == group
+                    && v.containers.iter().any(|c| {
+                        c.service == service
+                            && c.state == "running"
+                            && (c.health.is_empty() || c.health == "healthy")
+                    })
+            });
+            if up && still.is_empty() {
+                self.set_unreachable(group, service, Vec::new());
+                return Ok(());
+            }
+            if t0.elapsed() > Duration::from_secs(60) {
+                // Not a lost forward after all (nothing listens on that port
+                // inside), or Docker Desktop itself is stuck: say so, but do not
+                // keep the service from starting.
+                self.emit(EventBody::Infra {
+                    group: group.into(),
+                    message: format!(
+                        "{service}: {} still closes connections from this machine after a restart of the container; if a service cannot reach it, restart Docker Desktop",
+                        still.join(", ")
+                    ),
+                });
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+
     fn ensure_after(self: &Arc<Self>, svc: &Service) -> Result<(), String> {
         for dep in &svc.after {
+            if let Some(rest) = dep.strip_prefix("compose.")
+                && let Some((group, service)) = rest.split_once('.')
+            {
+                self.ensure_reachable(group, service)?;
+                continue;
+            }
             let Some(d) = self.stack.services.get(dep) else {
                 continue;
             };
@@ -1954,6 +2094,19 @@ The running instance was left as it was."
         }
         Ok(())
     }
+}
+
+/// The published ports (`5432->127.0.0.1:5432`) whose forward is lost.
+fn lost_forwards(ports: &[String]) -> Vec<String> {
+    ports
+        .iter()
+        .filter(|p| {
+            p.split_once("->").is_some_and(|(_, addr)| {
+                devstack_compose::probe(addr) == devstack_compose::Reach::ClosedAtOnce
+            })
+        })
+        .cloned()
+        .collect()
 }
 
 /// The error text of a build killed for a newer change.

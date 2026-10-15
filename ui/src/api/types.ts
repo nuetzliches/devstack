@@ -94,6 +94,8 @@ export type ServiceView = {
 };
 
 export type ContainerView = {
+  /** Published ports Docker no longer forwards (accepted, closed at once); older daemons omit it. */
+  unreachable?: string[];
   service: string;
   name: string;
   state: string;
