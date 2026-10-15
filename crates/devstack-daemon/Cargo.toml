@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 axum.workspace = true
+tower.workspace = true
 blake3.workspace = true
 jiff.workspace = true
 bytes.workspace = true

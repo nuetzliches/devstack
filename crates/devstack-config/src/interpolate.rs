@@ -15,6 +15,11 @@ pub enum Placeholder {
     Port,
     /// `{is_main}`: `true` in the main slot, `false` otherwise.
     IsMain,
+    /// `{lane}`: name of the lane (plan §3.5), `main` for the main working tree.
+    Lane,
+    /// `{lane_suffix}`: empty in the main lane, `_<lane>` in another one: for
+    /// per-lane resources that keep their name in the main lane (`app{lane_suffix}`).
+    LaneSuffix,
     /// `{service.<name>.url}`: URL of that service's main slot.
     ServiceUrl(String),
     /// `{compose.<group>.<service>.<port>}`: published host address of a container port.
@@ -32,6 +37,8 @@ impl fmt::Display for Placeholder {
             Placeholder::Artifact => write!(f, "{{artifact}}"),
             Placeholder::Port => write!(f, "{{port}}"),
             Placeholder::IsMain => write!(f, "{{is_main}}"),
+            Placeholder::Lane => write!(f, "{{lane}}"),
+            Placeholder::LaneSuffix => write!(f, "{{lane_suffix}}"),
             Placeholder::ServiceUrl(s) => write!(f, "{{service.{s}.url}}"),
             Placeholder::ComposePort {
                 group,
@@ -55,7 +62,7 @@ pub enum Segment {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum InterpError {
     #[error(
-        "unknown placeholder `{{{0}}}` (allowed: repo, artifact, port, is_main, service.<name>.url, compose.<group>.<service>.<port>)"
+        "unknown placeholder `{{{0}}}` (allowed: repo, artifact, port, is_main, lane, lane_suffix, service.<name>.url, compose.<group>.<service>.<port>)"
     )]
     UnknownPlaceholder(String),
     #[error("unclosed `{0}`")]
@@ -161,6 +168,8 @@ fn placeholder(body: &str) -> Result<Placeholder, InterpError> {
         ["artifact"] => Ok(Placeholder::Artifact),
         ["port"] => Ok(Placeholder::Port),
         ["is_main"] => Ok(Placeholder::IsMain),
+        ["lane"] => Ok(Placeholder::Lane),
+        ["lane_suffix"] => Ok(Placeholder::LaneSuffix),
         ["service", name, "url"] if !name.is_empty() => {
             Ok(Placeholder::ServiceUrl(name.to_string()))
         }
@@ -240,6 +249,8 @@ mod tests {
                 Placeholder::Artifact => "/art".into(),
                 Placeholder::Port => "5000".into(),
                 Placeholder::IsMain => "true".into(),
+                Placeholder::Lane => "feat-x".into(),
+                Placeholder::LaneSuffix => "_feat-x".into(),
                 Placeholder::ServiceUrl(s) => format!("http://127.0.0.1:1/{s}"),
                 Placeholder::ComposePort { service, port, .. } => {
                     format!("http://127.0.0.1:9{port}/{service}")
@@ -266,6 +277,10 @@ mod tests {
             "http://127.0.0.1:98080/hooks/x"
         );
         assert_eq!(x("plain").unwrap(), "plain");
+        assert_eq!(
+            x("app{lane_suffix} in {lane}").unwrap(),
+            "app_feat-x in feat-x"
+        );
     }
 
     #[test]

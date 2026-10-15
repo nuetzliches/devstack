@@ -30,6 +30,33 @@ pub struct Stack {
     /// not parents: no member depends on another, a member may be in several.
     #[serde(default)]
     pub groups: BTreeMap<String, Group>,
+    /// Other working trees run as lanes (plan §3.5).
+    #[serde(default)]
+    pub lanes: Lanes,
+}
+
+/// Lanes: another working tree (a `git worktree`, an agent's checkout) runs the
+/// stack's services beside the main one, on its own ports, against the same
+/// infrastructure (plan §3.5, ADR-0012 interim rule).
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Lanes {
+    /// Each lane's services listen on their port plus this times the lane's
+    /// number (1, 2, ...): with 100, `api` on 5000 is 5100 in the first lane.
+    #[serde(default = "default_port_step")]
+    pub port_step: u16,
+}
+
+impl Default for Lanes {
+    fn default() -> Self {
+        Self {
+            port_step: default_port_step(),
+        }
+    }
+}
+
+fn default_port_step() -> u16 {
+    100
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

@@ -65,12 +65,15 @@ impl Runs {
 struct CommandContext {
     repo: PathBuf,
     urls: BTreeMap<String, String>,
+    lane: String,
 }
 
 impl Resolve for CommandContext {
     fn resolve(&self, p: &Placeholder) -> Result<String, String> {
         match p {
             Placeholder::Repo => Ok(self.repo.to_string_lossy().into_owned()),
+            Placeholder::Lane => Ok(devstack_env::lane_name(&self.lane).to_string()),
+            Placeholder::LaneSuffix => Ok(devstack_env::lane_suffix(&self.lane)),
             Placeholder::ServiceUrl(s) => self
                 .urls
                 .get(s)
@@ -175,6 +178,7 @@ fn execute(
     let ctx = CommandContext {
         repo: sup.repo.clone(),
         urls,
+        lane: sup.lane.clone(),
     };
     let vars = devstack_env::variables(&sup.stack, None, &sup.repo);
     let env = |k: &str| vars.get(k).cloned();

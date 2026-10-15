@@ -6,6 +6,7 @@ pub mod api;
 pub mod commands;
 pub mod diag;
 pub mod health;
+pub mod lanes;
 pub mod logfiles;
 pub mod proxy;
 pub mod registry;
@@ -106,7 +107,7 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
         abs_file.clone(),
         repo,
         state_dir.clone(),
-        proc_opts,
+        proc_opts.clone(),
         rt.handle().clone(),
     )?;
     sup.refresh_infra();
@@ -140,13 +141,23 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
             }),
         );
         let shutdown = Arc::new(tokio::sync::Notify::new());
+        let token = Arc::new(token);
+        let lanes = lanes::Lanes::load(
+            state_dir.clone(),
+            sup.clone(),
+            proc_opts.clone(),
+            tokio::runtime::Handle::current(),
+            token.clone(),
+            port,
+        );
         let app = api::router(api::AppState {
             sup: sup.clone(),
             runs: Arc::new(commands::Runs::default()),
             usage,
-            token: Arc::new(token),
+            token,
             port,
             shutdown: shutdown.clone(),
+            lanes: Some(lanes.clone()),
         });
         let (stopping_tx, stopping_rx) = tokio::sync::oneshot::channel::<()>();
         let stop = async move {
@@ -172,7 +183,11 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
             }
         };
         let s = sup.clone();
-        let _ = tokio::task::spawn_blocking(move || s.down(false)).await;
+        let _ = tokio::task::spawn_blocking(move || {
+            lanes.down_all();
+            s.down(false)
+        })
+        .await;
         let _ = std::fs::remove_file(info_path(&state_dir));
         diag::info("daemon_stop", serde_json::json!({}));
         served

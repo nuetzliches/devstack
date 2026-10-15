@@ -156,6 +156,13 @@ pub struct StackView {
     /// The stack file differs from what this daemon read at start; it takes
     /// effect with the next start (`down`, `up`).
     pub config_changed: bool,
+    /// The lane: absent for the main working tree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
+    /// The lane whose services answer on the main ports (`promote --lane`);
+    /// absent while the main working tree serves them itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub main_served_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

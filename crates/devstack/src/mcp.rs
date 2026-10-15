@@ -225,6 +225,13 @@ pub fn tools() -> Vec<Value> {
             true,
         ),
         tool(
+            "lanes",
+            "The lanes of this repository (plan §3.5): other git worktrees running the stack beside the main one, each with its ports moved by an offset, against the same infrastructure, without background workers. When this MCP server runs in a worktree, every other tool acts on its lane, and `up` makes the worktree a lane. Shows which lane serves the main ports. GET /v1/lanes.",
+            json!({}),
+            &[],
+            true,
+        ),
+        tool(
             "builds",
             "The builds of a service, newest first, from devstack's diagnostic log: which went live, which failed (with the first line of the reason), which a newer change replaced, which wait for promote, and which runs now. For \"did my change ever go live\" and \"since when is it broken\". GET /v1/services/{service}/builds.",
             json!({
@@ -328,7 +335,13 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
         }
         "up" => {
             let timeout = Duration::from_secs(args["timeout_s"].as_u64().unwrap_or(600));
-            let c = client::ensure_daemon(file, &client::state_dir(file)?)?;
+            let sd = client::state_dir(file)?;
+            let mut c = client::ensure_daemon(&client::daemon_file(file), &sd)?;
+            if let Some(wt) = client::worktree()
+                && c.lane().is_none_or(|l| l == "-")
+            {
+                c.join_lane(wt)?;
+            }
             match client::start_and_wait(&c, file, Some(timeout), |_, _| {})? {
                 UpOutcome::Ready(stack) => Ok(format!("ready\n\n{}", client::status_text(&stack))),
                 UpOutcome::Failed { service, reason } => {
@@ -393,6 +406,34 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             } else {
                 text
             })
+        }
+        "lanes" => {
+            let c = client::need(&client::state_dir(file)?)?;
+            let lanes: Vec<Value> = serde_json::from_str(&c.get("/v1/lanes")?)?;
+            let mut out = match c.lane() {
+                Some(l) if l != "-" => format!("this worktree is lane `{l}`\n"),
+                Some(_) => "this worktree is no lane yet; `up` makes it one\n".to_string(),
+                None => "this is the main working tree\n".to_string(),
+            };
+            if lanes.is_empty() {
+                out.push_str("no lanes");
+            }
+            for l in lanes {
+                out.push_str(&format!(
+                    "{}: ports +{}, {}/{} running, {}{}\n",
+                    l["name"].as_str().unwrap_or(""),
+                    l["port_offset"],
+                    l["running"],
+                    l["services"],
+                    l["path"].as_str().unwrap_or(""),
+                    if l["owns_main"] == true {
+                        ", serves the main ports"
+                    } else {
+                        ""
+                    }
+                ));
+            }
+            Ok(out)
         }
         "builds" => {
             let svc = name_arg(args, "service")?;

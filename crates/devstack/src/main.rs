@@ -76,7 +76,22 @@ enum Cmd {
         state: String,
     },
     /// Take over a candidate that waits for promotion (a schema change, ADR-0013).
-    Promote { service: String },
+    Promote {
+        /// The service whose held candidate takes over.
+        #[arg(required_unless_present = "lane", conflicts_with = "lane")]
+        service: Option<String>,
+        /// Instead: this lane's services answer on the main ports (`main`
+        /// gives them back to the main working tree), plan §3.5.
+        #[arg(long)]
+        lane: Option<String>,
+    },
+    /// Lanes: other working trees (`git worktree`) running beside the main one
+    /// on their own ports, against the same infrastructure (plan §3.5).
+    /// `devstack up` in a worktree makes it a lane by itself.
+    Lane {
+        #[command(subcommand)]
+        action: LaneAction,
+    },
     /// Go back to the build that ran before the last replacement (no build, no jobs).
     Rollback { service: String },
     /// Console output of a service.
@@ -211,6 +226,21 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum LaneAction {
+    /// The lanes and their ports.
+    List,
+    /// Run a working tree as a lane (usually done by `devstack up` in it).
+    Add {
+        path: PathBuf,
+        /// Default: the directory's name.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Stop a lane and forget it with its state; the working tree stays.
+    Remove { name: String },
 }
 
 #[derive(Subcommand)]
@@ -368,7 +398,15 @@ fn main() -> Result<()> {
         Cmd::HotReload { service, state } => {
             client::service_action(&cli.file, &service, &format!("hot-reload-{state}"))
         }
-        Cmd::Promote { service } => client::service_action(&cli.file, &service, "promote"),
+        Cmd::Promote { service, lane } => match lane {
+            Some(l) => client::promote_lane(&cli.file, &l),
+            None => client::service_action(&cli.file, &service.unwrap_or_default(), "promote"),
+        },
+        Cmd::Lane { action } => match action {
+            LaneAction::List => client::lane_list(&cli.file),
+            LaneAction::Add { path, name } => client::lane_add(&cli.file, &path, name.as_deref()),
+            LaneAction::Remove { name } => client::lane_remove(&cli.file, &name),
+        },
         Cmd::Rollback { service } => client::service_action(&cli.file, &service, "rollback"),
         Cmd::Logs {
             service,

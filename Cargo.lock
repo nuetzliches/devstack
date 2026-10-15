@@ -399,6 +399,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-stream",
+ "tower",
  "ureq",
 ]
 

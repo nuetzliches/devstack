@@ -1054,3 +1054,175 @@ fn edits_become_candidates() {
 
     s.ok(&["down"]);
 }
+
+/// GET on a port of this machine, the body.
+fn get_on(port: u16, path: &str) -> Option<String> {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(3)))
+        .build()
+        .new_agent()
+        .get(&format!("http://127.0.0.1:{port}{path}"))
+        .call()
+        .ok()?
+        .body_mut()
+        .read_to_string()
+        .ok()
+}
+
+#[test]
+fn a_worktree_runs_as_a_lane() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1 (needs the .NET 10 SDK)");
+        return;
+    }
+    let s = Stack::new(false);
+    s.cli(&["up"], None); // `broken` fails, the API runs
+    let git = |dir: &Path, args: &[&str]| {
+        let ok = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    std::fs::write(s.dir.path().join(".gitignore"), ".devstack/\nprep.count\n").unwrap();
+    git(s.dir.path(), &["add", "-A"]);
+    git(s.dir.path(), &["commit", "-qm", "init"]);
+    let wt = s
+        .dir
+        .path()
+        .parent()
+        .unwrap()
+        .join(format!("wt-{}", s.port));
+    git(
+        s.dir.path(),
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "lane-test",
+            wt.to_str().unwrap(),
+        ],
+    );
+    let wt_cli = |args: &[&str]| {
+        let out = Command::new(BIN)
+            .args(args)
+            .arg("-f")
+            .arg(wt.join("devstack.toml"))
+            .env("LOCALAPPDATA", s.token_home.path())
+            .env("XDG_STATE_HOME", s.token_home.path())
+            .env("DEVSTACK_NO_HUB", "1")
+            .output()
+            .unwrap();
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+    let lane = format!("wt-{}", s.port);
+
+    // 1. `up` in the worktree: a lane of the main tree's daemon, on its own port, no workers.
+    let up = wt_cli(&["up"]);
+    assert!(up.contains(&format!("lane `{lane}`")), "{up}");
+    // Its ports are moved by 100 per lane number; a taken range is skipped.
+    let list = s.ok(&["lane", "list"]);
+    let offset: u16 = list
+        .lines()
+        .find(|l| l.starts_with(&lane))
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("offset in {list}"));
+    assert_eq!(offset % 100, 0, "{list}");
+    let lane_port = s.port + offset;
+    assert!(
+        wait_for(
+            || get_on(lane_port, "/health").is_some(),
+            Duration::from_secs(120)
+        ),
+        "the lane's api answers on {lane_port}: {:?}\n{up}\n{}\nlane status:\n{}",
+        ureq::get(&format!("http://127.0.0.1:{lane_port}/health"))
+            .call()
+            .map(|r| r.status()),
+        s.diag(),
+        wt_cli(&["status"])
+    );
+    let lane_info =
+        || -> Value { serde_json::from_str(&get_on(lane_port, "/info").unwrap()).unwrap() };
+    assert_eq!(
+        lane_info()["workers"],
+        false,
+        "a lane without the main slot runs no workers"
+    );
+    assert_eq!(s.info()["workers"], true, "main keeps its workers");
+    assert!(s.ok(&["lane", "list"]).contains(&lane));
+    let status = wt_cli(&["status"]);
+    assert!(
+        status.contains("api") && status.contains(&lane_port.to_string()),
+        "status of the lane: {status}"
+    );
+
+    // 2. An edit in the worktree reaches the lane only.
+    let main_build = s.info()["build"].as_str().unwrap().to_string();
+    let lane_build = lane_info()["build"].as_str().unwrap().to_string();
+    let program = wt.join("src/Api/Program.cs");
+    let source = std::fs::read_to_string(&program).unwrap();
+    std::fs::write(&program, format!("{source}\n// lane edit\n")).unwrap();
+    assert!(
+        wait_for(
+            || lane_info()["build"].as_str() != Some(lane_build.as_str()),
+            Duration::from_secs(120)
+        ),
+        "the lane built the edit\n{}",
+        s.diag()
+    );
+    assert_eq!(s.info()["build"], main_build.as_str(), "main is untouched");
+
+    // 3. promote --lane: the main port answers from the lane, workers move with it.
+    let lane_build = lane_info()["build"].as_str().unwrap().to_string();
+    s.ok(&["promote", "--lane", &lane]);
+    assert!(
+        wait_for(
+            || s.api("/info").is_some_and(|i| i.contains(&lane_build)),
+            Duration::from_secs(60)
+        ),
+        "the main port serves the lane's build"
+    );
+    assert!(
+        wait_for(|| lane_info()["workers"] == true, Duration::from_secs(60)),
+        "the lane runs the workers now"
+    );
+    s.ok(&["promote", "--lane", "main"]);
+    assert!(
+        wait_for(
+            || s.api("/info").is_some_and(|i| i.contains(&main_build)),
+            Duration::from_secs(120)
+        ),
+        "the main tree serves again\n{}",
+        s.diag()
+    );
+    assert!(wait_for(
+        || s.info()["workers"] == true,
+        Duration::from_secs(60)
+    ));
+    assert_eq!(lane_info()["workers"], false);
+
+    // 4. down in the worktree stops the lane only; remove forgets it.
+    let down = wt_cli(&["down"]);
+    assert!(down.contains("stopped"), "{down}");
+    assert!(get_on(lane_port, "/health").is_none(), "lane stopped");
+    assert!(s.api("/health").is_some(), "main still runs");
+    s.ok(&["lane", "remove", &lane]);
+    assert!(!s.ok(&["lane", "list"]).contains(&lane));
+
+    s.ok(&["down"]);
+    let _ = Command::new("git")
+        .args(["worktree", "remove", "--force"])
+        .arg(&wt)
+        .current_dir(s.dir.path())
+        .status();
+    let _ = std::fs::remove_dir_all(&wt);
+}

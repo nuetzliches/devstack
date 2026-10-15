@@ -85,13 +85,20 @@ pub struct Supervisor {
     config_changed: std::sync::atomic::AtomicBool,
     /// Services switched to hot-reload mode (plan §3.4a), for this daemon's life.
     hot: Mutex<BTreeSet<String>>,
+    /// The lane this supervisor runs (plan §3.5): empty for the main working
+    /// tree, which also owns the infrastructure.
+    pub lane: String,
+    /// Its instances are the main slot: workers on (ADR-0008, ADR-0012).
+    owns_main: std::sync::atomic::AtomicBool,
+    /// Main lane only: the lane its fixed ports forward to (`promote --lane`).
+    served_by: Mutex<Option<String>>,
 }
 
 /// Hash of the stack file, line endings ignored (a checkout may flip them).
 /// Every state change also goes to the diagnostic log (plan §11): the event as
 /// the clients see it, as a warning when something failed. Snapshots and load
 /// samples stay out (no decision in them, and they would drown the rest).
-fn record(body: &EventBody) {
+fn record(body: &EventBody, lane: &str) {
     if matches!(body, EventBody::Snapshot { .. } | EventBody::Usage(_)) {
         return;
     }
@@ -112,6 +119,9 @@ fn record(body: &EventBody) {
     let bad = ["failed", "unhealthy", "exited"];
     let warn =
         bad.contains(&state_of("status").as_str()) || bad.contains(&state_of("candidate").as_str());
+    if !lane.is_empty() {
+        v.insert("lane".into(), serde_json::Value::String(lane.into()));
+    }
     crate::diag::log(
         if warn { "warn" } else { "info" },
         &event,
@@ -146,6 +156,29 @@ impl Supervisor {
         state_dir: PathBuf,
         proc_opts: devstack_proc::Options,
         rt: tokio::runtime::Handle,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_lane(
+            stack,
+            stack_file,
+            repo,
+            state_dir,
+            proc_opts,
+            rt,
+            String::new(),
+        )
+    }
+
+    /// A supervisor for a lane (plan §3.5): `lane` empty for the main working
+    /// tree. Another lane gets a stack whose ports are already moved
+    /// ([`crate::lanes`]) and never starts or stops infrastructure.
+    pub fn new_lane(
+        stack: Stack,
+        stack_file: PathBuf,
+        repo: PathBuf,
+        state_dir: PathBuf,
+        proc_opts: devstack_proc::Options,
+        rt: tokio::runtime::Handle,
+        lane: String,
     ) -> Result<Arc<Self>, String> {
         let layout = Layout::new(&state_dir);
         let builder = Builder::new(layout.clone(), &proc_opts).map_err(|e| e.to_string())?;
@@ -223,6 +256,9 @@ impl Supervisor {
             stack_file,
             config_changed: std::sync::atomic::AtomicBool::new(false),
             hot: Mutex::new(BTreeSet::new()),
+            owns_main: std::sync::atomic::AtomicBool::new(lane.is_empty()),
+            served_by: Mutex::new(None),
+            lane,
         }))
     }
 
@@ -240,7 +276,7 @@ impl Supervisor {
     }
 
     pub(crate) fn emit(&self, body: EventBody) {
-        record(&body);
+        record(&body, &self.lane);
         let _ = self.events.send(Event {
             seq: self.seq.fetch_add(1, Ordering::SeqCst),
             at: now_ms(),
@@ -326,6 +362,8 @@ impl Supervisor {
             groups,
             commands,
             config_changed: self.config_changed.load(Ordering::SeqCst),
+            lane: (!self.lane.is_empty()).then(|| self.lane.clone()),
+            main_served_by: self.served_by.lock().unwrap().clone(),
         }
     }
 
@@ -621,8 +659,22 @@ impl Supervisor {
 
     /// Infra, then every autostart service for this platform, in order. Stops at
     /// the first service that does not become ready.
+    /// This lane's instances hold the main slot: workers on (ADR-0008).
+    pub fn owns_main(&self) -> bool {
+        self.owns_main.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn set_owns_main(&self, on: bool) {
+        self.owns_main.store(on, Ordering::SeqCst);
+    }
+
     pub fn up(self: &Arc<Self>) -> Result<(), String> {
-        self.infra_up()?;
+        if self.lane.is_empty() {
+            self.infra_up()?;
+        } else {
+            // The main lane owns the infrastructure; a lane only reads it.
+            self.refresh_infra();
+        }
         // A failed service holds back only what comes `after` it; everything
         // independent of it still starts (one broken build must not keep the
         // rest of the stack down).
@@ -662,7 +714,8 @@ impl Supervisor {
         for name in self.service_order().into_iter().rev() {
             let _ = self.stop(&name);
         }
-        if infra {
+        // A lane never stops the infrastructure the main lane owns.
+        if infra && self.lane.is_empty() {
             for g in self.group_order().into_iter().rev() {
                 let _ = self.docker.down(&self.compose_group(&g));
             }
@@ -733,8 +786,71 @@ impl Supervisor {
         self.start(name)
     }
 
+    /// Main lane: the lane serving its fixed ports, if one does.
+    pub fn served_by(&self) -> Option<String> {
+        self.served_by.lock().unwrap().clone()
+    }
+
+    /// Services whose fixed port is a devstack proxy: what `promote --lane`
+    /// moves (a dev server keeps its port).
+    pub fn proxied_services(&self) -> Vec<String> {
+        self.stack
+            .services
+            .iter()
+            .filter(|(_, s)| s.proxied() && runs_here(s))
+            .map(|(n, _)| n.clone())
+            .collect()
+    }
+
+    /// Running services that have worker switches (ADR-0008).
+    pub fn running_worker_services(&self) -> Vec<String> {
+        let slots = self.slots.lock().unwrap();
+        self.stack
+            .services
+            .iter()
+            .filter(|(n, s)| s.workers.is_some() && slots[n.as_str()].view.status.is_active())
+            .map(|(n, _)| n.clone())
+            .collect()
+    }
+
+    /// Start a running service again from its current build, so a changed
+    /// worker switch takes effect; nothing is built that is not cached.
+    pub fn relaunch(self: &Arc<Self>, name: &str) -> Result<(), String> {
+        self.stop(name)?;
+        self.start(name)
+    }
+
+    /// Main lane: the fixed port of `name` forwards to another lane's port
+    /// (`Some`), or is released for this lane's own instances (`None`).
+    pub fn forward(
+        &self,
+        name: &str,
+        to: Option<(&str, u16, Option<String>)>,
+    ) -> Result<(), String> {
+        let svc = self.service(name)?.clone();
+        let proxy = self.ensure_proxy(name, &svc)?;
+        match to {
+            Some((lane, port, build)) => {
+                proxy.set_waiting(Waiting::Refuse(format!("lane `{lane}` is not answering")));
+                proxy.set_upstream(Some(Upstream { port, build }));
+            }
+            None => proxy.set_upstream(None),
+        }
+        Ok(())
+    }
+
+    /// Main lane: which lane serves the fixed ports (`None`: this one).
+    pub(crate) fn set_served_by(&self, lane: Option<String>) {
+        *self.served_by.lock().unwrap() = lane;
+    }
+
     pub fn start(self: &Arc<Self>, name: &str) -> Result<(), String> {
         let svc = self.effective(name, self.service(name)?);
+        if let Some(lane) = self.served_by().filter(|_| svc.proxied()) {
+            return Err(format!(
+                "lane `{lane}` serves the main ports: `devstack promote --lane main` first"
+            ));
+        }
         if !runs_here(&svc) {
             return Err(format!("`{name}` does not run on this platform"));
         }
@@ -1015,7 +1131,9 @@ impl Supervisor {
             repo: self.repo.clone(),
             artifact: artifact.map(Path::to_path_buf),
             port,
-            is_main,
+            // A lane without the main slot never runs workers (ADR-0012 interim rule).
+            is_main: is_main && self.owns_main(),
+            lane: self.lane.clone(),
             published: infra.published.clone(),
             pending: infra.pending.clone(),
             ..Default::default()
@@ -1391,6 +1509,10 @@ The running instance was left as it was."
     pub fn changed(self: &Arc<Self>, name: &str, path: &str) {
         if self.is_hot(name) {
             return; // its own watcher reloads it
+        }
+        if self.served_by().is_some() && self.stack.services.get(name).is_some_and(|s| s.proxied())
+        {
+            return; // another lane serves its port; no candidate may take it back
         }
         let spawn = {
             let mut changes = self.changes.lock().unwrap();

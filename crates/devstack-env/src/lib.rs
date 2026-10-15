@@ -94,6 +94,8 @@ pub struct Context {
     /// Port of the instance being started.
     pub port: Option<u16>,
     pub is_main: bool,
+    /// The lane (plan §3.5); empty means `main`.
+    pub lane: String,
     /// Main-slot URL of every service with a port.
     pub service_urls: BTreeMap<String, String>,
     /// `(group, service, container port)` -> `127.0.0.1:<published>`.
@@ -118,6 +120,8 @@ impl Resolve for Context {
                 .map(|p| p.to_string())
                 .ok_or_else(|| "`{port}`: the service has no port".into()),
             Placeholder::IsMain => Ok(self.is_main.to_string()),
+            Placeholder::Lane => Ok(lane_name(&self.lane).to_string()),
+            Placeholder::LaneSuffix => Ok(lane_suffix(&self.lane)),
             Placeholder::ServiceUrl(s) => self
                 .service_urls
                 .get(s)
@@ -135,6 +139,19 @@ impl Resolve for Context {
                     format!("`{p}`: port {port} of `{group}/{service}` is not published")
                 }),
         }
+    }
+}
+
+/// `main` for the main working tree.
+pub fn lane_name(lane: &str) -> &str {
+    if lane.is_empty() { "main" } else { lane }
+}
+
+/// Empty in the main lane, `_<lane>` in another one.
+pub fn lane_suffix(lane: &str) -> String {
+    match lane_name(lane) {
+        "main" => String::new(),
+        l => format!("_{l}"),
     }
 }
 

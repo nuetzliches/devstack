@@ -25,6 +25,8 @@ pub struct AppState {
     pub token: Arc<String>,
     pub port: u16,
     pub shutdown: Arc<tokio::sync::Notify>,
+    /// The other working trees (plan §3.5); `None` inside a lane's own API.
+    pub lanes: Option<Arc<crate::lanes::Lanes>>,
 }
 
 pub fn router(state: AppState) -> axum::Router {
@@ -53,6 +55,13 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/runs/{id}", get(run_info))
         .route("/v1/runs/{id}/log", get(run_log))
         .route("/v1/runs/{id}/log/stream", get(run_log_stream))
+        .route("/v1/lanes", get(lanes_list).post(lanes_add))
+        .route("/v1/lanes/{lane}", axum::routing::delete(lanes_remove))
+        .route("/v1/lanes/{lane}/main", post(lanes_take_main))
+        .route(
+            "/v1/lanes/{lane}/v1/{*rest}",
+            axum::routing::any(lane_forward),
+        )
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .layer(middleware::from_fn(audit))
         .with_state(state)
@@ -185,6 +194,127 @@ async fn service_action(
     }
 }
 
+#[allow(clippy::result_large_err)] // the error is the answer itself
+fn lanes_of(s: &AppState) -> Result<&Arc<crate::lanes::Lanes>, Response> {
+    s.lanes.as_ref().ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "lanes are managed by the main working tree's daemon",
+        )
+    })
+}
+
+/// `GET /v1/lanes`: the other working trees this daemon runs (plan §3.5).
+async fn lanes_list(State(s): State<AppState>) -> Response {
+    match lanes_of(&s) {
+        Ok(l) => Json(l.list()).into_response(),
+        Err(r) => r,
+    }
+}
+
+#[derive(Deserialize)]
+struct LaneAdd {
+    path: std::path::PathBuf,
+    name: Option<String>,
+    /// Make sure the shared infrastructure runs (the main lane's).
+    #[serde(default)]
+    infra: bool,
+}
+
+/// `POST /v1/lanes {"path", "name"?, "infra"?}`: register a working tree as
+/// a lane (an existing one is returned); with `infra` the shared
+/// infrastructure is started if it is not up. `/v1/lanes/<name>/v1/up` starts it.
+async fn lanes_add(State(s): State<AppState>, Json(body): Json<LaneAdd>) -> Response {
+    let lanes = match lanes_of(&s) {
+        Ok(l) => l.clone(),
+        Err(r) => return r,
+    };
+    let main = s.sup.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        let lane = lanes.add(&body.path, body.name.as_deref())?;
+        if body.infra {
+            main.infra_up()?;
+            lane.sup.refresh_infra();
+        }
+        Ok::<_, String>(lane)
+    })
+    .await;
+    match res {
+        Ok(Ok(lane)) => {
+            let view = s
+                .lanes
+                .as_ref()
+                .map(|l| l.list())
+                .unwrap_or_default()
+                .into_iter()
+                .find(|v| v.name == lane.entry.name);
+            (StatusCode::CREATED, Json(view)).into_response()
+        }
+        Ok(Err(e)) => err(StatusCode::CONFLICT, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `DELETE /v1/lanes/{lane}`: stop it and forget it with its state.
+async fn lanes_remove(State(s): State<AppState>, Path(lane): Path<String>) -> Response {
+    let lanes = match lanes_of(&s) {
+        Ok(l) => l.clone(),
+        Err(r) => return r,
+    };
+    match tokio::task::spawn_blocking(move || lanes.remove(&lane)).await {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(e)) => err(StatusCode::CONFLICT, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `POST /v1/lanes/{lane}/main`: that lane's instances serve the main slot
+/// (`devstack promote --lane`); `main` gives it back to the main working tree.
+async fn lanes_take_main(State(s): State<AppState>, Path(lane): Path<String>) -> Response {
+    let lanes = match lanes_of(&s) {
+        Ok(l) => l.clone(),
+        Err(r) => return r,
+    };
+    let main = s.sup.clone();
+    match tokio::task::spawn_blocking(move || lanes.take_main(&main, &lane)).await {
+        Ok(Ok(())) => Json(s.lanes.as_ref().map(|l| l.list()).unwrap_or_default()).into_response(),
+        Ok(Err(e)) => err(StatusCode::CONFLICT, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `/v1/lanes/{lane}/v1/...`: the lane's own API, the same as the main one.
+async fn lane_forward(
+    State(s): State<AppState>,
+    Path((lane, rest)): Path<(String, String)>,
+    mut req: Request,
+) -> Response {
+    use tower::ServiceExt;
+    let lanes = match lanes_of(&s) {
+        Ok(l) => l,
+        Err(r) => return r,
+    };
+    let Some(l) = lanes.get(&lane) else {
+        return err(
+            StatusCode::NOT_FOUND,
+            format!("no lane `{lane}` (see `devstack lane list`)"),
+        );
+    };
+    let query = req
+        .uri()
+        .query()
+        .map(|q| format!("?{q}"))
+        .unwrap_or_default();
+    let Ok(uri) = format!("/v1/{rest}{query}").parse::<axum::http::Uri>() else {
+        return err(StatusCode::BAD_REQUEST, "bad path");
+    };
+    *req.uri_mut() = uri;
+    match l.router.clone().oneshot(req).await {
+        Ok(r) => r,
+        Err(e) => match e {},
+    }
+}
+
 /// `POST /v1/groups/{name}/{start|stop|restart}`: every member; `409` names
 /// the members that failed (the others ran).
 async fn group_action(
@@ -309,10 +439,20 @@ async fn builds(
         .into_iter()
         .find(|v| v.name == name)
         .and_then(|v| v.build_id);
-    let path = s.sup.state_dir.join("daemon.log");
+    // One diagnostic log per daemon, the main tree's; a lane's lines carry its name.
+    let path = if s.sup.lane.is_empty() {
+        s.sup.state_dir.join("daemon.log")
+    } else {
+        s.sup
+            .state_dir
+            .parent()
+            .unwrap_or(&s.sup.state_dir)
+            .join("daemon.log")
+    };
+    let lane = s.sup.lane.clone();
     let limit = q.limit.unwrap_or(50).min(500);
     let list = tokio::task::spawn_blocking(move || {
-        crate::timeline::from_log(&path, &name, current.as_deref(), limit)
+        crate::timeline::from_log(&path, &name, &lane, current.as_deref(), limit)
     })
     .await
     .unwrap_or_default();

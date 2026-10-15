@@ -31,6 +31,7 @@ fn at_ms(v: &Value) -> Option<u64> {
 pub fn builds(
     lines: &[String],
     service: &str,
+    lane: &str,
     current: Option<&str>,
     limit: usize,
 ) -> Vec<BuildEntry> {
@@ -41,7 +42,7 @@ pub fn builds(
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if v["service"].as_str() != Some(service) {
+        if v["service"].as_str() != Some(service) || v["lane"].as_str().unwrap_or("") != lane {
             continue;
         }
         let Some(at) = at_ms(&v) else { continue };
@@ -142,12 +143,13 @@ pub fn builds(
 pub fn from_log(
     path: &Path,
     service: &str,
+    lane: &str,
     current: Option<&str>,
     limit: usize,
 ) -> Vec<BuildEntry> {
     let needle = format!("\"service\":\"{service}\"");
     let lines = crate::diag::tail(path, 50_000, Some(&needle));
-    builds(&lines, service, current, limit)
+    builds(&lines, service, lane, current, limit)
 }
 
 #[cfg(test)]
@@ -201,7 +203,11 @@ mod tests {
                 r#""event":"service","service":"web","build_id":"zzz","status":{"state":"healthy"}"#,
             ),
         ];
-        let b = builds(&lines, "api", Some("bbb"), 10);
+        let b = builds(&lines, "api", "", Some("bbb"), 10);
+        assert!(
+            builds(&lines, "api", "feat", None, 10).is_empty(),
+            "another lane stays out"
+        );
         let got: Vec<(&str, &str, bool)> = b
             .iter()
             .map(|e| (e.build.as_str(), e.outcome.as_str(), e.current))
@@ -222,6 +228,6 @@ mod tests {
             "from the build start to the switch"
         );
         assert_eq!(b[0].reason.as_deref(), Some("exited with code 3"));
-        assert_eq!(builds(&lines, "api", None, 2).len(), 2);
+        assert_eq!(builds(&lines, "api", "", None, 2).len(), 2);
     }
 }

@@ -10,6 +10,47 @@ pub struct Client {
     base: String,
     token: String,
     agent: ureq::Agent,
+    /// `/v1/lanes/<name>` when the CLI runs in a lane's working tree: every
+    /// call goes to that lane's API (plan §3.5).
+    prefix: String,
+}
+
+/// A linked `git worktree` of a repository whose main working tree has a
+/// stack file: it runs as a lane of the main tree's daemon (plan §3.5).
+#[derive(Debug, Clone)]
+pub struct Worktree {
+    /// The worktree's root.
+    pub path: PathBuf,
+    /// The main working tree's stack file.
+    pub main_file: PathBuf,
+}
+
+static WORKTREE: std::sync::OnceLock<Option<Worktree>> = std::sync::OnceLock::new();
+
+/// The worktree the CLI runs in, if it is a lane (decided once per process).
+pub fn worktree() -> Option<&'static Worktree> {
+    WORKTREE.get().and_then(Option::as_ref)
+}
+
+/// `<repo>/.git` is a file `gitdir: <main>/.git/worktrees/<name>` in a linked
+/// worktree; the main working tree is then `<main>`.
+pub fn main_tree_of(repo: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(repo.join(".git")).ok()?;
+    let dir = PathBuf::from(text.trim().strip_prefix("gitdir:")?.trim());
+    let dir = if dir.is_relative() {
+        repo.join(dir)
+    } else {
+        dir
+    };
+    let worktrees = dir.parent()?;
+    if worktrees.file_name()? != "worktrees" {
+        return None;
+    }
+    let git = worktrees.parent()?;
+    if git.file_name()? != ".git" {
+        return None;
+    }
+    Some(git.parent()?.to_path_buf())
 }
 
 impl Client {
@@ -22,15 +63,72 @@ impl Client {
             .http_status_as_error(false)
             .build()
             .new_agent();
-        let c = Self {
+        let mut c = Self {
             base: format!("http://127.0.0.1:{}", info.port),
             token,
             agent,
+            prefix: String::new(),
         };
-        c.get("/v1/stack").ok().map(|_| c)
+        c.get("/v1/stack").ok()?;
+        if let Some(wt) = worktree() {
+            // The lane of this worktree, if it is one already (`up` makes it one).
+            let lanes: Vec<Value> = serde_json::from_str(&c.get("/v1/lanes").ok()?).ok()?;
+            let me = devstack_proc::long_path(&wt.path);
+            if let Some(l) = lanes.iter().find(|l| {
+                l["path"]
+                    .as_str()
+                    .map(|p| devstack_proc::long_path(Path::new(p)))
+                    == Some(me.clone())
+            }) {
+                c.prefix = format!("/v1/lanes/{}", l["name"].as_str().unwrap_or(""));
+            } else {
+                c.prefix = "/v1/lanes/-".into(); // not a lane yet: every call says so
+            }
+        }
+        Some(c)
+    }
+
+    /// The lane this client talks to, if any.
+    pub fn lane(&self) -> Option<&str> {
+        self.prefix.strip_prefix("/v1/lanes/")
+    }
+
+    /// Register this worktree as a lane (and make sure the shared
+    /// infrastructure runs); from then on calls go to it.
+    pub fn join_lane(&mut self, wt: &Worktree) -> Result<String> {
+        let (status, body) = self.call_raw(
+            "POST",
+            "/v1/lanes",
+            Some(serde_json::json!({ "path": wt.path, "infra": true })),
+        )?;
+        if status >= 400 {
+            bail!("{}", error_text(&body));
+        }
+        let name = serde_json::from_str::<Value>(&body)?["name"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        self.prefix = format!("/v1/lanes/{name}");
+        Ok(name)
     }
 
     fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<(u16, String)> {
+        if self.prefix == "/v1/lanes/-"
+            && path.starts_with("/v1/")
+            && !path.starts_with("/v1/lanes")
+        {
+            bail!("this worktree is no lane yet: run `devstack up` here");
+        }
+        let path = if path.starts_with("/v1/") && !path.starts_with("/v1/lanes") {
+            format!("{}{path}", self.prefix)
+        } else {
+            path.to_string()
+        };
+        self.call_raw(method, &path, body)
+    }
+
+    /// Without the lane prefix: the main daemon's own routes.
+    pub fn call_raw(&self, method: &str, path: &str, body: Option<Value>) -> Result<(u16, String)> {
         let req = ureq::http::Request::builder()
             .method(method)
             .uri(format!("{}{path}", self.base))
@@ -132,13 +230,36 @@ fn daemon_report(state_dir: &Path) -> String {
     )
 }
 
+/// Where the daemon of this stack keeps its state. In a lane's worktree:
+/// the main working tree's (its daemon runs the lane).
 pub fn state_dir(stack_file: &Path) -> Result<PathBuf> {
     let abs = std::path::absolute(stack_file)?;
-    Ok(abs
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or(abs)
-        .join(".devstack"))
+    let repo = abs.parent().map(Path::to_path_buf).unwrap_or(abs.clone());
+    let wt = WORKTREE.get_or_init(|| {
+        let main = main_tree_of(&repo)?;
+        let main_file = main.join(abs.file_name()?);
+        main_file.is_file().then(|| Worktree {
+            path: repo.clone(),
+            main_file,
+        })
+    });
+    Ok(match wt {
+        Some(w) => w
+            .main_file
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(".devstack"),
+        None => repo.join(".devstack"),
+    })
+}
+
+/// The stack file the daemon runs from: the main working tree's in a lane.
+pub fn daemon_file(stack_file: &Path) -> PathBuf {
+    let _ = state_dir(stack_file);
+    match worktree() {
+        Some(w) => w.main_file.clone(),
+        None => stack_file.to_path_buf(),
+    }
 }
 
 pub fn need(state_dir: &Path) -> Result<Client> {
@@ -277,7 +398,16 @@ fn truncate(s: &str, n: usize) -> String {
 pub fn up(stack_file: &Path) -> Result<()> {
     ensure_engine(stack_file)?;
     let sd = state_dir(stack_file)?;
-    let c = ensure_daemon(stack_file, &sd)?;
+    let mut c = ensure_daemon(&daemon_file(stack_file), &sd)?;
+    if let Some(wt) = worktree()
+        && c.lane().is_none_or(|l| l == "-")
+    {
+        let name = c.join_lane(wt)?;
+        println!(
+            "this worktree runs as lane `{name}` of {}",
+            wt.main_file.display()
+        );
+    }
     crate::hubcmd::ensure_quietly();
     let t0 = Instant::now();
     let outcome = start_and_wait(&c, stack_file, None, |name, st| {
@@ -604,6 +734,81 @@ fn human_bytes(b: u64) -> String {
     }
 }
 
+fn main_client(stack_file: &Path) -> Result<Client> {
+    need(&state_dir(stack_file)?)
+}
+
+pub fn lane_list(stack_file: &Path) -> Result<()> {
+    let c = main_client(stack_file)?;
+    let lanes: Vec<Value> = serde_json::from_str(&c.get("/v1/lanes")?)?;
+    if lanes.is_empty() {
+        println!("no lanes; `devstack up` in a `git worktree` of this repository makes one");
+        return Ok(());
+    }
+    println!(
+        "{:<24} {:>8} {:>9}  {:<5}  PATH",
+        "LANE", "PORTS +", "RUNNING", "MAIN"
+    );
+    for l in lanes {
+        println!(
+            "{:<24} {:>8} {:>4}/{:<4}  {:<5}  {}",
+            l["name"].as_str().unwrap_or(""),
+            l["port_offset"],
+            l["running"],
+            l["services"],
+            if l["owns_main"] == true { "yes" } else { "" },
+            l["path"].as_str().unwrap_or("")
+        );
+    }
+    Ok(())
+}
+
+pub fn lane_add(stack_file: &Path, path: &Path, name: Option<&str>) -> Result<()> {
+    let c = main_client(stack_file)?;
+    let (status, body) = c.call_raw(
+        "POST",
+        "/v1/lanes",
+        Some(serde_json::json!({ "path": std::path::absolute(path)?, "name": name })),
+    )?;
+    if status >= 400 {
+        bail!("{}", error_text(&body));
+    }
+    let v: Value = serde_json::from_str(&body)?;
+    println!(
+        "lane `{}`: ports +{}; `devstack up` in {} starts it",
+        v["name"].as_str().unwrap_or(""),
+        v["port_offset"],
+        path.display()
+    );
+    Ok(())
+}
+
+pub fn lane_remove(stack_file: &Path, name: &str) -> Result<()> {
+    let c = main_client(stack_file)?;
+    let (status, body) = c.call_raw("DELETE", &format!("/v1/lanes/{name}"), None)?;
+    if status >= 400 {
+        bail!("{}", error_text(&body));
+    }
+    println!("lane `{name}` stopped and forgotten (its working tree is untouched)");
+    Ok(())
+}
+
+pub fn promote_lane(stack_file: &Path, lane: &str) -> Result<()> {
+    let c = main_client(stack_file)?;
+    let (status, body) = c.call_raw("POST", &format!("/v1/lanes/{lane}/main"), None)?;
+    if status >= 400 {
+        bail!("{}", error_text(&body));
+    }
+    if lane == "main" {
+        println!("the main working tree serves the main ports again");
+    } else {
+        println!(
+            "lane `{lane}` serves the main ports now (dev servers stay with the main tree); `devstack promote --lane main` gives them back"
+        );
+    }
+    Ok(())
+}
+
 /// Percent-encoding for a query value (no dependency for one parameter).
 pub fn enc(s: &str) -> String {
     s.bytes()
@@ -688,6 +893,18 @@ pub fn down(stack_file: &Path, infra: bool) -> Result<()> {
         println!("no daemon is running for this stack");
         return Ok(());
     };
+    if let Some(lane) = c.lane() {
+        // A lane stops its own services; the daemon and the infrastructure
+        // belong to the main working tree.
+        let (status, body) = c.post("/v1/down", None)?;
+        if status >= 400 {
+            bail!("{}", error_text(&body));
+        }
+        println!(
+            "lane `{lane}` stopped; `devstack lane remove {lane}` in the main tree forgets it"
+        );
+        return Ok(());
+    }
     let (status, body) = c.post(&format!("/v1/down?infra={infra}"), None)?;
     if status >= 400 {
         bail!("{}", error_text(&body));
