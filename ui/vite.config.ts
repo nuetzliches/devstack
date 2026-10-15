@@ -26,7 +26,7 @@ export default defineConfig(({ mode }) => {
       proxy: mock
         ? undefined
         : {
-            '/hub': { target: 'http://127.0.0.1:4250', changeOrigin: false },
+            '/hub': { target: 'http://127.0.0.1:4250', changeOrigin: false, ws: true },
             '/auth': { target: 'http://127.0.0.1:4250', changeOrigin: false },
           },
     },
