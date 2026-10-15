@@ -1,0 +1,30 @@
+{
+  "name": "devstack-dashboard",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "description": "Web dashboard for devstack, served by the hub",
+  "scripts": {
+    "dev": "vite",
+    "dev:mock": "vite --mode mock",
+    "build": "vue-tsc --noEmit -p tsconfig.app.json && vite build",
+    "build:mock": "vue-tsc --noEmit -p tsconfig.app.json && vite build --mode mock",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.app.json && vue-tsc --noEmit -p tsconfig.node.json"
+  },
+  "dependencies": {
+    "pinia": "4.1.0",
+    "vue": "3.5.44",
+    "vue-router": "5.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "@vitejs/plugin-vue": "6.0.10",
+    "@vue/tsconfig": "0.9.1",
+    "typescript": "6.0.3",
+    "vite": "8.3.4",
+    "vite-plugin-pwa": "2.0.0",
+    "vue-tsc": "3.3.13",
+    "workbox-window": "7.4.1"
+  }
+}

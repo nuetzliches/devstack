@@ -1,0 +1,110 @@
+<script setup lang="ts">
+import { computed, onMounted } from 'vue';
+import { useHub } from '@/stores/hub';
+import { ago, useNow } from '@/lib/format';
+import TopBar from '@/components/TopBar.vue';
+import Toasts from '@/components/Toasts.vue';
+import GlobalDialogs from '@/components/GlobalDialogs.vue';
+import Icon from '@/components/icons/Icon.vue';
+import UnpairedView from '@/views/UnpairedView.vue';
+
+const hub = useHub();
+const now = useNow();
+
+onMounted(() => void hub.init());
+
+const hubDown = computed(() => hub.status === 'unreachable' || (hub.status === 'ok' && hub.stream === 'error'));
+const booting = computed(() => hub.status === 'loading' && !hub.stacks.length);
+</script>
+
+<template>
+  <UnpairedView v-if="hub.status === 'unpaired'" />
+  <template v-else>
+    <a class="skip" href="#main">Skip to content</a>
+    <TopBar />
+    <div v-if="hubDown" class="hub-banner" role="alert" data-testid="hub-unreachable">
+      <div class="hub-banner-inner">
+        <Icon name="wifiOff" :size="18" />
+        <div class="grow">
+          <strong>devstack hub is not reachable</strong> — run <code>devstack ui</code> in a project to start it.
+          <span class="last">Showing the last known state<template v-if="hub.lastContact"> from {{ ago(hub.lastContact, now) }}</template>.</span>
+        </div>
+        <span class="retry"><span class="spinner" aria-hidden="true" /> retrying</span>
+      </div>
+    </div>
+    <main id="main" tabindex="-1">
+      <div v-if="booting" class="boot" aria-busy="true">
+        <span class="spinner" /> Connecting to the devstack hub…
+      </div>
+      <RouterView v-else />
+    </main>
+    <Toasts />
+    <GlobalDialogs />
+  </template>
+</template>
+
+<style scoped>
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 8px;
+  z-index: 100;
+  background: var(--accent);
+  color: var(--on-accent);
+  padding: 6px 12px;
+  border-radius: 6px;
+}
+.skip:focus {
+  left: 8px;
+}
+main {
+  outline: none;
+}
+.hub-banner {
+  background: var(--danger-soft);
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  color: var(--danger-text);
+}
+.hub-banner-inner {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 10px var(--space-5);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+@media (max-width: 640px) {
+  .hub-banner-inner {
+    padding: 10px var(--space-3);
+    align-items: flex-start;
+  }
+}
+.hub-banner code {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: inherit;
+}
+.last {
+  color: var(--text-2);
+  margin-left: 4px;
+}
+.retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.retry .spinner {
+  width: 12px;
+  height: 12px;
+}
+.boot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 50vh;
+  color: var(--text-muted);
+}
+</style>

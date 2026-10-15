@@ -1,0 +1,11 @@
+[
+ {
+  "id": 1,
+  "command": "ping",
+  "started": 1792020316000,
+  "finished": 1792020316007,
+  "status": "succeeded",
+  "error": null,
+  "log": "C:\\work\\shop\\.devstack\\logs\\commands\\ping\\1792020316000-1.log"
+ }
+]

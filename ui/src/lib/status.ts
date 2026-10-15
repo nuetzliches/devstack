@@ -1,0 +1,125 @@
+import type { Candidate, CandidateState, ContainerView, ServiceView, Status } from '@/api/types';
+import type { IconName } from '@/components/icons/icons';
+
+export type Tone = 'ok' | 'warn' | 'danger' | 'info' | 'accent' | 'neutral';
+
+export type StatusLook = { label: string; tone: Tone; busy: boolean; detail: string | null };
+
+export function statusLook(s: Status): StatusLook {
+  switch (s.state) {
+    case 'healthy':
+      return { label: 'Healthy', tone: 'ok', busy: false, detail: null };
+    case 'running':
+      return { label: 'Running', tone: 'ok', busy: false, detail: null };
+    case 'starting':
+      return { label: 'Starting', tone: 'accent', busy: true, detail: null };
+    case 'building':
+      return { label: 'Building', tone: 'accent', busy: true, detail: null };
+    case 'stopped':
+      return { label: 'Stopped', tone: 'neutral', busy: false, detail: null };
+    case 'unhealthy':
+      return { label: 'Unhealthy', tone: 'warn', busy: false, detail: s.reason };
+    case 'failed':
+      return { label: 'Failed', tone: 'danger', busy: false, detail: s.reason };
+    case 'completed':
+      return { label: s.exit_code === 0 ? 'Completed' : `Completed (${s.exit_code})`, tone: s.exit_code === 0 ? 'neutral' : 'danger', busy: false, detail: null };
+    case 'exited':
+      return { label: `Exited (${s.exit_code})`, tone: s.exit_code === 0 ? 'neutral' : 'danger', busy: false, detail: null };
+  }
+}
+
+/** Healthy/starting/failed buckets for the summary. */
+export function statusBucket(s: Status): 'healthy' | 'starting' | 'failed' | 'idle' {
+  switch (s.state) {
+    case 'healthy':
+    case 'running':
+      return 'healthy';
+    case 'starting':
+    case 'building':
+      return 'starting';
+    case 'failed':
+    case 'unhealthy':
+      return 'failed';
+    case 'exited':
+      return s.exit_code === 0 ? 'idle' : 'failed';
+    default:
+      return 'idle';
+  }
+}
+
+export type CandidateLook = { label: string; tone: Tone; busy: boolean; icon: IconName; explain: string };
+
+const candidateLooks: Record<CandidateState, CandidateLook> = {
+  changed: { label: 'Changed', tone: 'info', busy: true, icon: 'zap', explain: 'A change was detected; the build starts after the debounce.' },
+  building: { label: 'Building', tone: 'accent', busy: true, icon: 'wrench', explain: 'The new build is compiling. The running instance keeps serving.' },
+  superseded: { label: 'Superseded', tone: 'neutral', busy: true, icon: 'history', explain: 'A newer change arrived; this build was cancelled and a new one follows.' },
+  starting: { label: 'Starting', tone: 'accent', busy: true, icon: 'play', explain: 'The build succeeded; the candidate starts on a free port and is health-checked.' },
+  switching: { label: 'Switching', tone: 'accent', busy: true, icon: 'restart', explain: 'The candidate is healthy; traffic is moving over to it.' },
+  held: { label: 'Held', tone: 'warn', busy: false, icon: 'hourglass', explain: 'Built and health-checked, but it waits for an explicit promote.' },
+  failed: { label: 'Failed', tone: 'danger', busy: false, icon: 'xCircle', explain: 'The build or health check failed. The running instance stays.' },
+};
+
+export function candidateLook(c: Candidate): CandidateLook {
+  return candidateLooks[c.state];
+}
+
+/** One line: "Not yet active: building" etc. */
+export function candidateSummary(c: Candidate): string {
+  switch (c.state) {
+    case 'changed':
+      return 'change detected';
+    case 'building':
+      return 'building';
+    case 'superseded':
+      return 'superseded by a newer change';
+    case 'starting':
+      return 'starting candidate';
+    case 'switching':
+      return 'switching over';
+    case 'held':
+      return 'held, waiting for promote';
+    case 'failed':
+      return 'build failed';
+  }
+}
+
+export function containerLook(c: ContainerView): StatusLook {
+  const state = c.state.toLowerCase();
+  const health = c.health.toLowerCase();
+  if (state === 'running') {
+    if (health === 'unhealthy') return { label: 'Unhealthy', tone: 'warn', busy: false, detail: null };
+    if (health === 'starting') return { label: 'Starting', tone: 'accent', busy: true, detail: null };
+    if (health === 'healthy') return { label: 'Healthy', tone: 'ok', busy: false, detail: null };
+    return { label: 'Running', tone: 'ok', busy: false, detail: null };
+  }
+  if (state === 'restarting' || state === 'created') return { label: cap(state), tone: 'accent', busy: true, detail: null };
+  if (state === 'exited' || state === 'dead') return { label: cap(state), tone: 'danger', busy: false, detail: null };
+  if (state === 'paused') return { label: 'Paused', tone: 'warn', busy: false, detail: null };
+  return { label: cap(state || 'unknown'), tone: 'neutral', busy: false, detail: null };
+}
+
+export function containerBucket(c: ContainerView): 'healthy' | 'starting' | 'failed' | 'idle' {
+  const t = containerLook(c).tone;
+  return t === 'ok' ? 'healthy' : t === 'accent' ? 'starting' : t === 'danger' || t === 'warn' ? 'failed' : 'idle';
+}
+
+function cap(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+export function kindLabel(s: ServiceView): string {
+  return { service: 'service', job: 'job', devserver: 'dev server', tool: 'tool' }[s.kind];
+}
+
+export function kindIcon(s: ServiceView): IconName {
+  return ({ service: 'server', job: 'play', devserver: 'globe', tool: 'wrench' } as const)[s.kind];
+}
+
+/** "compose.<group>.<service>" -> [group, service]. Group names do not contain dots. */
+export function parseComposeMember(m: string): [string, string] | null {
+  if (!m.startsWith('compose.')) return null;
+  const rest = m.slice('compose.'.length);
+  const dot = rest.indexOf('.');
+  if (dot < 0) return null;
+  return [rest.slice(0, dot), rest.slice(dot + 1)];
+}

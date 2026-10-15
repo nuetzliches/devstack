@@ -1,0 +1,157 @@
+/* Design tokens. Light is the default; dark follows the system unless the
+   user picked a theme (html[data-theme]). */
+:root {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --topbar-h: 56px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  color-scheme: light;
+  --bg: #f4f5f8;
+  --bg-elev: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f6f7fa;
+  --surface-3: #eceef3;
+  --surface-hover: #f0f2f7;
+  --border: #e1e4ea;
+  --border-strong: #cfd4dd;
+  --text: #171a21;
+  --text-2: #4a5161;
+  --text-muted: #6d7586;
+  --text-faint: #9aa1af;
+  --accent: #3a6df0;
+  --accent-hover: #2f5ed6;
+  --accent-soft: #e8eefe;
+  --accent-text: #2350c7;
+  --on-accent: #ffffff;
+  --ok: #17915a;
+  --ok-soft: #e3f5ec;
+  --ok-text: #10764a;
+  --warn: #c27c0e;
+  --warn-soft: #fdf3dd;
+  --warn-text: #94600a;
+  --danger: #d1394b;
+  --danger-hover: #b72e3f;
+  --danger-soft: #fce8eb;
+  --danger-text: #b02a3b;
+  --info: #6a54d8;
+  --info-soft: #efebfd;
+  --info-text: #5541bf;
+  --neutral-soft: #eceef2;
+  --neutral-text: #5b6373;
+  --focus: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+  --shadow-sm: 0 1px 2px rgb(16 24 40 / 0.06);
+  --shadow: 0 1px 3px rgb(16 24 40 / 0.08), 0 4px 12px rgb(16 24 40 / 0.05);
+  --shadow-lg: 0 12px 40px rgb(16 24 40 / 0.18);
+  --log-bg: #fbfbfd;
+  --log-error: #c42b3c;
+  --log-warn: #9a6400;
+  --log-debug: #8a91a0;
+  --mark: #ffe58a;
+  --mark-text: #1a1a1a;
+  --backdrop: rgb(15 18 25 / 0.45);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #0f1115;
+    --bg-elev: #151820;
+    --surface: #161a22;
+    --surface-2: #1b2029;
+    --surface-3: #232a35;
+    --surface-hover: #1f2530;
+    --border: #272e3a;
+    --border-strong: #354050;
+    --text: #e7eaf0;
+    --text-2: #b8bfcc;
+    --text-muted: #8b94a5;
+    --text-faint: #636c7d;
+    --accent: #5b8cff;
+    --accent-hover: #7aa2ff;
+    --accent-soft: #1b2a4d;
+    --accent-text: #8fb0ff;
+    --on-accent: #0b1020;
+    --ok: #3ecf8e;
+    --ok-soft: #12332a;
+    --ok-text: #5fdca4;
+    --warn: #f0b043;
+    --warn-soft: #3a2c10;
+    --warn-text: #f5c26a;
+    --danger: #f2667a;
+    --danger-hover: #ff8395;
+    --danger-soft: #3d1820;
+    --danger-text: #ff8b9c;
+    --info: #a08bff;
+    --info-soft: #261f47;
+    --info-text: #b8a8ff;
+    --neutral-soft: #222833;
+    --neutral-text: #a3abba;
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3);
+    --shadow: 0 1px 3px rgb(0 0 0 / 0.35), 0 4px 14px rgb(0 0 0 / 0.25);
+    --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.55);
+    --log-bg: #0c0e13;
+    --log-error: #ff7d8e;
+    --log-warn: #f3c065;
+    --log-debug: #6c7586;
+    --mark: #6b5a12;
+    --mark-text: #fff6cc;
+    --backdrop: rgb(0 0 0 / 0.6);
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0f1115;
+  --bg-elev: #151820;
+  --surface: #161a22;
+  --surface-2: #1b2029;
+  --surface-3: #232a35;
+  --surface-hover: #1f2530;
+  --border: #272e3a;
+  --border-strong: #354050;
+  --text: #e7eaf0;
+  --text-2: #b8bfcc;
+  --text-muted: #8b94a5;
+  --text-faint: #636c7d;
+  --accent: #5b8cff;
+  --accent-hover: #7aa2ff;
+  --accent-soft: #1b2a4d;
+  --accent-text: #8fb0ff;
+  --on-accent: #0b1020;
+  --ok: #3ecf8e;
+  --ok-soft: #12332a;
+  --ok-text: #5fdca4;
+  --warn: #f0b043;
+  --warn-soft: #3a2c10;
+  --warn-text: #f5c26a;
+  --danger: #f2667a;
+  --danger-hover: #ff8395;
+  --danger-soft: #3d1820;
+  --danger-text: #ff8b9c;
+  --info: #a08bff;
+  --info-soft: #261f47;
+  --info-text: #b8a8ff;
+  --neutral-soft: #222833;
+  --neutral-text: #a3abba;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow: 0 1px 3px rgb(0 0 0 / 0.35), 0 4px 14px rgb(0 0 0 / 0.25);
+  --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.55);
+  --log-bg: #0c0e13;
+  --log-error: #ff7d8e;
+  --log-warn: #f3c065;
+  --log-debug: #6c7586;
+  --mark: #6b5a12;
+  --mark-text: #fff6cc;
+  --backdrop: rgb(0 0 0 / 0.6);
+}

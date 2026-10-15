@@ -1,0 +1,90 @@
+{
+ "name": "fixture",
+ "repo": "C:\\work\\shop",
+ "services": [
+  {
+   "name": "api",
+   "kind": "service",
+   "groups": [
+    "app"
+   ],
+   "port": 5080,
+   "autostart": true,
+   "status": {
+    "state": "healthy"
+   },
+   "build_id": "61e7ee9e6937f21f",
+   "pid": 25968,
+   "since": 1792020314669,
+   "log": "C:\\work\\shop\\.devstack\\logs\\api\\run-1792020314043-49512.log",
+   "instance_port": 49512,
+   "proxy": {
+    "port": 5080,
+    "upstream": 49512,
+    "build": "61e7ee9e6937f21f",
+    "pending": null,
+    "active": 0,
+    "served": 0,
+    "last_error": null
+   },
+   "candidate": null
+  }
+ ],
+ "infra": [
+  {
+   "group": "app",
+   "project": "devstack-fixture",
+   "containers": [
+    {
+     "service": "cache",
+     "name": "devstack-fixture-cache-1",
+     "state": "running",
+     "health": "",
+     "ports": [
+      "6379->127.0.0.1:49509"
+     ]
+    },
+    {
+     "service": "db",
+     "name": "devstack-fixture-db-1",
+     "state": "running",
+     "health": "healthy",
+     "ports": [
+      "5432->127.0.0.1:15432"
+     ]
+    }
+   ],
+   "error": null
+  }
+ ],
+ "groups": [
+  {
+   "name": "app",
+   "label": "Application",
+   "order": null,
+   "members": [
+    "api",
+    "compose.app.db",
+    "compose.app.cache",
+    "command.ping",
+    "command.reset"
+   ]
+  }
+ ],
+ "commands": [
+  {
+   "name": "ping",
+   "description": "Call the API's health endpoint",
+   "confirm": null,
+   "requires": [
+    "api"
+   ]
+  },
+  {
+   "name": "reset",
+   "description": "Stop the API, run a step, start it again (shape of a database reset)",
+   "confirm": "This restarts the API. Continue?",
+   "requires": []
+  }
+ ]
+}

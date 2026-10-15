@@ -1,0 +1,50 @@
+{
+ "at": 1792020314906,
+ "services": [
+  {
+   "name": "api",
+   "cpu": 0.0,
+   "memory": 0
+  }
+ ],
+ "builds": {
+  "name": "builds",
+  "cpu": 0.0,
+  "memory": 0,
+  "cpu_time_ms": 0,
+  "processes": 0,
+  "history": [
+   {
+    "at": 1792020312187,
+    "cpu": 0.0,
+    "memory": 0
+   },
+   {
+    "at": 1792020314187,
+    "cpu": 0.0,
+    "memory": 0
+   }
+  ]
+ },
+ "containers": [],
+ "groups": [
+  {
+   "name": "app",
+   "cpu": 0.0,
+   "memory": 0
+  }
+ ],
+ "lanes": [
+  {
+   "name": "main",
+   "cpu": 0.0,
+   "memory": 0,
+   "disk": {
+    "snapshot": 490507,
+    "artifacts": 783000,
+    "logs": 481954,
+    "volumes": 0
+   }
+  }
+ ]
+}
