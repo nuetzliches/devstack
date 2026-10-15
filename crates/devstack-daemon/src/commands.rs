@@ -165,7 +165,7 @@ fn execute(
     let mut urls = BTreeMap::new();
     for (n, s) in &sup.stack.services {
         if let Some(p) = s.port {
-            urls.insert(n.clone(), format!("http://127.0.0.1:{p}"));
+            urls.insert(n.clone(), format!("{}://127.0.0.1:{p}", s.scheme()));
         }
     }
     let ctx = CommandContext {

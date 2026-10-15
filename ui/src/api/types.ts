@@ -17,7 +17,13 @@ export type StackEntry = {
 
 export type HubSession = { version: string };
 
-export type HubEvent = { type: 'stacks'; stacks: StackEntry[] };
+/** The Docker engine as the hub sees it (`GET /hub/docker`, `docker` events). */
+export type DockerEngine =
+  | { state: 'running'; version: string }
+  | { state: 'stopped'; starter: string | null; hint: string }
+  | { state: 'missing' };
+
+export type HubEvent = { type: 'stacks'; stacks: StackEntry[] } | { type: 'docker'; docker: DockerEngine };
 
 // ---------------------------------------------------------------- daemon state
 
@@ -55,6 +61,8 @@ export type ServiceView = {
   kind: ServiceKind;
   groups: string[];
   port: number | null;
+  /** Where a browser opens it (`https://localhost:4200`); null without a port. Older daemons omit it. */
+  url?: string | null;
   autostart: boolean;
   status: Status;
   build_id: string | null;

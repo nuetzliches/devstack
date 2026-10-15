@@ -62,3 +62,8 @@ export function useNow() {
   }
   return nowRef;
 }
+
+/** Where a browser opens a service: the daemon's `url`, or plain http for daemons before 0.2.1. */
+export function serviceUrl(s: { url?: string | null; port: number | null }): string {
+  return s.url ?? `http://localhost:${s.port}`;
+}

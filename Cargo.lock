@@ -363,6 +363,7 @@ dependencies = [
  "axum",
  "blake3",
  "bytes",
+ "devstack-compose",
  "devstack-daemon",
  "devstack-proc",
  "http-body-util",

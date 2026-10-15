@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { ServiceView } from '@/api/types';
-import { ago, shortBuild, useNow } from '@/lib/format';
+import { ago, serviceUrl, shortBuild, useNow } from '@/lib/format';
 import { candidateLook, candidateSummary, kindIcon, kindLabel, statusLook } from '@/lib/status';
 import { useStack } from '@/stores/stack';
 import StatusPill from './StatusPill.vue';
@@ -27,7 +27,7 @@ const to = computed(() => ({ name: 'service', params: { stack: stack.id ?? '', n
         <RouterLink :to="to" class="name" data-testid="service-link">{{ service.name }}</RouterLink>
         <div class="meta">
           <span v-if="service.build_id" class="tag" :title="`running build ${service.build_id}`" data-testid="service-build">{{ shortBuild(service.build_id) }}</span>
-          <span v-if="service.port" class="m" title="fixed port"><Icon name="link" :size="12" />:{{ service.port }}</span>
+          <a v-if="service.port" class="m port-link" :href="serviceUrl(service)" target="_blank" rel="noopener" :title="`open ${serviceUrl(service)}`" data-testid="service-url"><Icon name="link" :size="12" />:{{ service.port }}</a>
           <span v-if="service.pid" class="m hide-sm">pid {{ service.pid }}</span>
           <span v-if="service.kind !== 'service'" class="m">{{ kindLabel(service) }}</span>
         </div>
@@ -126,6 +126,14 @@ const to = computed(() => ({ name: 'service', params: { stack: stack.id ?? '', n
   display: inline-flex;
   align-items: center;
   gap: 2px;
+}
+.port-link {
+  color: inherit;
+  text-decoration: none;
+}
+.port-link:hover {
+  color: var(--accent, inherit);
+  text-decoration: underline;
 }
 .actions {
   display: flex;

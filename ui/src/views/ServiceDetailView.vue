@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { paths, v1, type ServiceAction } from '@/api';
-import { ago, bytes, dateTime, percent, shortBuild, useNow } from '@/lib/format';
+import { ago, bytes, dateTime, percent, serviceUrl, shortBuild, useNow } from '@/lib/format';
 import { kindIcon, kindLabel, statusLook } from '@/lib/status';
 import { useStack } from '@/stores/stack';
 import StatusPill from '@/components/StatusPill.vue';
@@ -80,7 +80,7 @@ const kv = computed(() => {
             <div class="subtitle">
               {{ kindLabel(svc) }}
               <template v-if="svc.build_id"> · running build <span class="mono">{{ shortBuild(svc.build_id) }}</span></template>
-              <template v-if="svc.port"> · <a :href="`http://localhost:${svc.port}`" target="_blank" rel="noopener">localhost:{{ svc.port }} <Icon name="external" :size="12" /></a></template>
+              <template v-if="svc.port"> · <a :href="serviceUrl(svc)" target="_blank" rel="noopener" data-testid="service-url">{{ serviceUrl(svc).replace(/^https?:\/\//, '') }} <Icon name="external" :size="12" /></a></template>
             </div>
           </div>
         </div>

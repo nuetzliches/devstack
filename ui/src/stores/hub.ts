@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, paths, Unreachable, type StreamState, type Subscription } from '@/api';
-import type { HubEvent, HubSession, StackEntry } from '@/api/types';
+import type { DockerEngine, HubEvent, HubSession, StackEntry } from '@/api/types';
+import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
 
 export type SessionStatus = 'loading' | 'ok' | 'unpaired' | 'unreachable';
@@ -17,6 +18,9 @@ export const useHub = defineStore('hub', () => {
   /** True once the hub stream delivered a list in this page session. */
   const fresh = ref(false);
   const starting = ref<Record<string, boolean>>({});
+  /** The Docker engine; null until the hub said (older hubs never do). */
+  const docker = ref<DockerEngine | null>(null);
+  const dockerStarting = ref(false);
   let sub: Subscription | null = null;
   let checking: Promise<void> | null = null;
 
@@ -51,6 +55,11 @@ export const useHub = defineStore('hub', () => {
     sub?.close();
     sub = api().subscribe<HubEvent>(paths.hubEvents, {
       onMessage(ev) {
+        if (ev.type === 'docker') {
+          docker.value = ev.docker;
+          if (ev.docker.state === 'running') dockerStarting.value = false;
+          return;
+        }
         if (ev.type !== 'stacks') return;
         stacks.value = ev.stacks;
         lastContact.value = Date.now();
@@ -67,9 +76,19 @@ export const useHub = defineStore('hub', () => {
     });
   }
 
+  async function startDocker() {
+    dockerStarting.value = true;
+    const res = await act<{ started: string | null }>({
+      label: 'Start Docker',
+      path: paths.dockerStart,
+      success: (b) => (b?.started ? `Starting ${b.started}…` : 'Docker is running'),
+    });
+    if (!res.ok) dockerStarting.value = false;
+  }
+
   function entry(id: string | null | undefined): StackEntry | undefined {
     return id ? stacks.value.find((s) => s.id === id) : undefined;
   }
 
-  return { status, version, stacks, lastContact, stream, fresh, starting, reachable, init, checkSession, entry, save };
+  return { status, version, stacks, lastContact, stream, fresh, starting, docker, dockerStarting, reachable, init, checkSession, startDocker, entry, save };
 });

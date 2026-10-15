@@ -21,7 +21,9 @@ Origin `http://127.0.0.1:4250` (or `localhost:4250`).
 | `GET /auth?code=<code>` | none | sets the session cookie (one year, survives a hub restart), redirects to `/` |
 | `GET /hub/session` | cookie | `200 {"version": "0.2.0"}`, or `401` (not paired: show "run `devstack ui`") |
 | `GET /hub/stacks` | cookie | `[StackEntry]` |
-| `GET /hub/events` | cookie | SSE: `{"type":"stacks","stacks":[StackEntry]}` first and on every change |
+| `GET /hub/events` | cookie | SSE: `{"type":"stacks","stacks":[StackEntry]}` and `{"type":"docker","docker":DockerEngine}`, each first and on every change |
+| `GET /hub/docker` | cookie | `DockerEngine`: `{"state":"running","version"}`, `{"state":"stopped","starter":"Docker Desktop"\|null,"hint"}` or `{"state":"missing"}`; the hub looks every 10 s |
+| `POST /hub/docker/start` | cookie + Origin | `202 {"started":"Docker Desktop"}`, `200` when it already runs, `409 {"error"}` where devstack cannot start it (Docker Engine as a system service on Linux needs root) |
 | `POST /hub/stacks/{id}/up` | cookie + Origin | `202`; the stack starts (daemon, infrastructure, autostart services) |
 | `POST /hub/stacks/{id}/down?infra=false` | cookie + Origin | `202`; services stop, the daemon exits |
 | `DELETE /hub/stacks/{id}` | cookie + Origin | `204`; forget a stack (it registers again when it starts) |
@@ -56,6 +58,7 @@ type StackView = {
 type ServiceView = {
   name: string; kind: "service" | "job" | "devserver" | "tool";
   groups: string[]; port: number | null; autostart: boolean;
+  url: string | null;                   // https://localhost:4200 (https when the health check speaks TLS)
   status: Status; build_id: string | null; pid: number | null;
   since: number; log: string | null;
   instance_port: number | null;          // internal port behind the proxy

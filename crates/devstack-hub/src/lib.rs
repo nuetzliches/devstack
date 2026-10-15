@@ -17,6 +17,7 @@ use axum::middleware::{self, Next};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, delete, get, post};
+use devstack_compose::engine::{self, Engine};
 use devstack_daemon::registry;
 use hyper_util::rt::TokioIo;
 use include_dir::{Dir, include_dir};
@@ -89,6 +90,10 @@ struct AppState {
     sessions: Arc<Mutex<Sessions>>,
     codes: Arc<Mutex<HashMap<String, Instant>>>,
     stacks: watch::Receiver<Vec<StackEntry>>,
+    /// The Docker engine as last seen, see `watch_engine`.
+    engine: watch::Receiver<Engine>,
+    /// Until when (ms) to look at the engine every 2 s: after a start request.
+    engine_fast_until: Arc<std::sync::atomic::AtomicU64>,
     shutdown: Arc<tokio::sync::Notify>,
 }
 
@@ -235,6 +240,9 @@ pub fn serve() -> Result<(), String> {
             }
         });
 
+        let engine_fast_until = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let engine_rx = watch_engine(engine_fast_until.clone());
+
         let shutdown = Arc::new(tokio::sync::Notify::new());
         let state = AppState {
             port,
@@ -242,6 +250,8 @@ pub fn serve() -> Result<(), String> {
             sessions: Arc::new(Mutex::new(Sessions::load(dir.join(SESSIONS_FILE)))),
             codes: Arc::new(Mutex::new(HashMap::new())),
             stacks: rx,
+            engine: engine_rx,
+            engine_fast_until,
             shutdown: shutdown.clone(),
         };
         let app = router(state);
@@ -284,6 +294,8 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/shutdown", post(shutdown))
         .route("/hub/session", get(session))
         .route("/hub/stacks", get(stacks))
+        .route("/hub/docker", get(docker))
+        .route("/hub/docker/start", post(docker_start))
         .route("/hub/events", get(events))
         .route("/hub/stacks/{id}/up", post(stack_up))
         .route("/hub/stacks/{id}/down", post(stack_down))
@@ -414,19 +426,71 @@ async fn session() -> Response {
     Json(serde_json::json!({ "version": VERSION })).into_response()
 }
 
+/// Look at the Docker engine every 10 s (every 2 s after a start request) and
+/// publish changes. One `docker version` per look; nothing when it did not change.
+fn watch_engine(fast_until: Arc<std::sync::atomic::AtomicU64>) -> watch::Receiver<Engine> {
+    let (tx, rx) = watch::channel(engine::status("docker"));
+    std::thread::spawn(move || {
+        loop {
+            let fast = now_ms() < u128::from(fast_until.load(std::sync::atomic::Ordering::Relaxed));
+            let step = if fast { 2 } else { 10 };
+            std::thread::sleep(Duration::from_secs(step));
+            if tx.is_closed() {
+                return;
+            }
+            let next = engine::status("docker");
+            tx.send_if_modified(|cur| {
+                if *cur == next {
+                    false
+                } else {
+                    *cur = next;
+                    true
+                }
+            });
+        }
+    });
+    rx
+}
+
+async fn docker(State(s): State<AppState>) -> Response {
+    Json(s.engine.borrow().clone()).into_response()
+}
+
+/// Start Docker Desktop. `202` once started; the engine stream says when it answers.
+async fn docker_start(State(s): State<AppState>) -> Response {
+    if s.engine.borrow().is_running() {
+        return (StatusCode::OK, Json(serde_json::json!({ "started": null }))).into_response();
+    }
+    match tokio::task::spawn_blocking(engine::start).await {
+        Ok(Ok(name)) => {
+            let until = now_ms() + 180_000;
+            s.engine_fast_until.store(
+                u64::try_from(until).unwrap_or(u64::MAX),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            (
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({ "started": name })),
+            )
+                .into_response()
+        }
+        Ok(Err(e)) => err(StatusCode::CONFLICT, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 async fn stacks(State(s): State<AppState>) -> Response {
     Json(s.stacks.borrow().clone()).into_response()
 }
 
-/// The stack list first, then on every change.
+/// The stack list and the Docker engine first, then each on every change.
 async fn events(State(s): State<AppState>) -> Response {
-    let rx = s.stacks.clone();
-    let stream = tokio_stream::wrappers::WatchStream::new(rx).map(|stacks| {
-        Ok::<_, std::convert::Infallible>(
-            SseEvent::default()
-                .json_data(serde_json::json!({ "type": "stacks", "stacks": stacks }))
-                .unwrap_or_default(),
-        )
+    let stacks = tokio_stream::wrappers::WatchStream::new(s.stacks.clone())
+        .map(|stacks| serde_json::json!({ "type": "stacks", "stacks": stacks }));
+    let docker = tokio_stream::wrappers::WatchStream::new(s.engine.clone())
+        .map(|engine| serde_json::json!({ "type": "docker", "docker": engine }));
+    let stream = stacks.merge(docker).map(|v| {
+        Ok::<_, std::convert::Infallible>(SseEvent::default().json_data(v).unwrap_or_default())
     });
     Sse::new(stream)
         .keep_alive(KeepAlive::default())
@@ -649,19 +713,7 @@ pub fn ensure_running() -> Result<u16, String> {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    no_window(&mut cmd);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        // SAFETY: setsid is async-signal-safe; detaches from the terminal's session.
-        unsafe {
-            cmd.pre_exec(|| {
-                libc_setsid();
-                Ok(())
-            });
-        }
-    }
-    cmd.spawn().map_err(|e| format!("start the hub: {e}"))?;
+    devstack_proc::spawn_detached(&mut cmd).map_err(|e| format!("start the hub: {e}"))?;
     let t0 = Instant::now();
     while t0.elapsed() < Duration::from_secs(10) {
         if answers(port) {
@@ -670,17 +722,6 @@ pub fn ensure_running() -> Result<u16, String> {
         std::thread::sleep(Duration::from_millis(100));
     }
     Err(format!("the hub did not answer on port {port} within 10 s"))
-}
-
-#[cfg(unix)]
-fn libc_setsid() {
-    unsafe extern "C" {
-        fn setsid() -> i32;
-    }
-    // SAFETY: plain syscall without arguments.
-    unsafe {
-        setsid();
-    }
 }
 
 /// Is a hub (or anything) answering on `port`?

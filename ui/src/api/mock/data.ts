@@ -23,6 +23,7 @@ function service(p: Partial<ServiceView> & Pick<ServiceView, 'name' | 'kind'>, r
     log: `${repo}\\.devstack\\logs\\${p.name}\\run-${now - 25 * MIN}.log`,
     candidate: null,
     port,
+    url: port ? `${p.kind === 'devserver' ? 'https' : 'http'}://localhost:${port}` : null,
     ...p,
     build_id: build,
     instance_port: proxied ? instance : null,

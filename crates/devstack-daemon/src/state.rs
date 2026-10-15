@@ -60,6 +60,8 @@ pub struct ServiceView {
     pub kind: String,
     pub groups: Vec<String>,
     pub port: Option<u16>,
+    /// Where a browser opens the service (`https://localhost:4200`), if it has a port.
+    pub url: Option<String>,
     pub autostart: bool,
     pub status: Status,
     pub build_id: Option<String>,

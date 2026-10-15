@@ -23,6 +23,13 @@ watch(
 const hubDown = computed(() => hub.status === 'unreachable' || hub.stream === 'error');
 const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 const unknown = computed(() => hub.fresh && !stack.entry && !stack.view);
+/** Docker is down and this stack has containers (or we do not know yet). */
+const dockerDown = computed(() => {
+  const d = hub.docker;
+  if (!d || d.state === 'running' || hubDown.value) return null;
+  if (stack.view && stack.view.infra.length === 0) return null;
+  return d;
+});
 
 watch(
   () => [stack.view?.name, route.meta.title] as const,
@@ -66,6 +73,25 @@ function isActive(name: string) {
     </nav>
 
     <div class="banners">
+      <div v-if="dockerDown" class="banner danger" data-testid="docker-down">
+        <Icon name="box" :size="18" />
+        <span class="grow">
+          <template v-if="dockerDown.state === 'missing'"><strong>Docker is not installed</strong> (no <code>docker</code> on PATH). This stack's containers need it.</template>
+          <template v-else-if="hub.dockerStarting"><strong>Docker is starting…</strong> The containers come up once it answers.</template>
+          <template v-else><strong>Docker is not running.</strong> This stack's containers need it<template v-if="!dockerDown.starter">: {{ dockerDown.hint }}</template>.</template>
+        </span>
+        <button
+          v-if="dockerDown.state === 'stopped' && dockerDown.starter"
+          type="button"
+          class="btn btn-primary btn-sm"
+          :disabled="hub.dockerStarting"
+          data-testid="action-start-docker"
+          @click="hub.startDocker()"
+        >
+          <span v-if="hub.dockerStarting" class="spinner" /><Icon v-else name="play" :size="14" />
+          {{ hub.dockerStarting ? 'Starting…' : `Start ${dockerDown.starter}` }}
+        </button>
+      </div>
       <div v-if="unknown" class="banner neutral">
         <Icon name="info" :size="18" />
         <span class="grow">This stack is not registered with the hub. It appears once its daemon starts.</span>

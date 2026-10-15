@@ -7,6 +7,7 @@
 //! `published` as a string and omits it for dynamically assigned ports;
 //! `ps --format json` prints one JSON object per line, with `Publishers`.
 
+pub mod engine;
 use devstack_config::model::ComposeGroup;
 use serde::Deserialize;
 use std::collections::BTreeMap;

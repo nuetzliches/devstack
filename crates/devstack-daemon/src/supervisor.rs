@@ -122,6 +122,9 @@ impl Supervisor {
                         kind: format!("{:?}", svc.kind).to_lowercase(),
                         groups: groups_of(name),
                         port: svc.port,
+                        url: svc
+                            .port
+                            .map(|p| format!("{}://localhost:{p}", svc.scheme())),
                         autostart: svc.autostart,
                         status: Status::Stopped,
                         build_id: None,

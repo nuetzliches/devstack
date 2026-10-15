@@ -47,6 +47,7 @@ export interface Transport {
 export const paths = {
   session: '/hub/session',
   hubEvents: '/hub/events',
+  dockerStart: '/hub/docker/start',
   up: (stack: string) => `/hub/stacks/${enc(stack)}/up`,
   down: (stack: string, infra = false) => `/hub/stacks/${enc(stack)}/down?infra=${infra}`,
   forget: (stack: string) => `/hub/stacks/${enc(stack)}`,

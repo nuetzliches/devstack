@@ -2,8 +2,9 @@
 //
 // URL switches for testing the edge screens:
 //   ?mock=unpaired   GET /hub/session answers 401
+//   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { HubEvent, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
+import type { DockerEngine, HubEvent, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -17,6 +18,7 @@ class MockHub {
   hubSubs = new Set<Listener<HubEvent>>();
   hubDown = false;
   unpaired = false;
+  docker: DockerEngine = { state: 'running', version: '28.4.0' };
   private streams = new Set<{ reconnect(): void }>();
 
   constructor() {
@@ -40,10 +42,18 @@ class MockHub {
     const q = new URLSearchParams(location.search).get('mock') ?? '';
     this.hubDown = q.includes('hubdown');
     this.unpaired = q.includes('unpaired');
+    if (q.includes('nodocker')) this.docker = { state: 'stopped', starter: 'Docker Desktop', hint: 'start Docker Desktop' };
   }
 
   entries(): StackEntry[] {
     return this.stacks.map((s) => ({ ...s.entry, last_seen: s.running ? Date.now() : s.entry.last_seen }));
+  }
+
+  startDocker(): void {
+    setTimeout(() => {
+      this.docker = { state: 'running', version: '28.4.0' };
+      for (const l of this.hubSubs) l.send({ type: 'docker', docker: this.docker });
+    }, 4000);
   }
 
   publish(): void {
@@ -181,6 +191,12 @@ export class MockTransport implements Transport {
     if (p === '/hub/session') return hub.unpaired ? json(401, { error: 'not paired' }) : json(200, { version: '0.2.0' });
     if (hub.unpaired) return json(401, { error: 'not paired' });
     if (p === '/hub/stacks' && method === 'GET') return json(200, hub.entries());
+    if (p === '/hub/docker' && method === 'GET') return json(200, hub.docker);
+    if (p === '/hub/docker/start' && method === 'POST') {
+      if (hub.docker.state === 'running') return json(200, { started: null });
+      hub.startDocker();
+      return json(202, { started: 'Docker Desktop' });
+    }
 
     const m = /^\/hub\/stacks\/([^/]+)(\/.*)?$/.exec(p);
     if (!m) return json(404, { error: `no route ${method} ${p}` });
@@ -374,6 +390,7 @@ export class MockTransport implements Transport {
     if (p === '/hub/events') {
       const l = listener<HubEvent>();
       l.send({ type: 'stacks', stacks: hub.entries() });
+      l.send({ type: 'docker', docker: hub.docker });
       hub.hubSubs.add(l);
       return { stop: () => hub.hubSubs.delete(l) };
     }

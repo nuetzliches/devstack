@@ -86,46 +86,9 @@ pub fn ensure_daemon(stack_file: &Path, state_dir: &Path) -> Result<Client> {
         .stdin(std::process::Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
-        use windows_sys::Win32::System::Console::{
-            GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
-        };
-        // Our own stdio may be a pipe (`devstack up | grep …`). Inheritable, the
-        // daemon would hold it open for its whole life and the reader would
-        // never see the end. The daemon gets its own log file instead.
-        for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
-            // SAFETY: plain Win32 calls on this process's standard handles.
-            unsafe {
-                let h = GetStdHandle(which);
-                if !h.is_null() {
-                    SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
-                }
-            }
-        }
-        // Not the caller's console, but a console of its own without a window:
-        // the daemon needs one to send CTRL_BREAK to its services (ADR-0009).
-        // Letting the daemon AllocConsole and hide the window does not work where
-        // Windows Terminal is the default terminal: the console then opens a
-        // terminal window that the console's window handle does not refer to.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        // SAFETY: setsid is async-signal-safe; detaches from the terminal's session.
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::setsid();
-                Ok(())
-            });
-        }
-    }
-    let mut child = cmd.spawn().context("start the daemon")?;
+    // Own console without a window, out of the terminal's job, no inherited
+    // pipes (devstack_proc::spawn_detached).
+    let mut child = devstack_proc::spawn_detached(&mut cmd).context("start the daemon")?;
     let t0 = Instant::now();
     while t0.elapsed() < Duration::from_secs(20) {
         if let Some(c) = Client::connect(state_dir) {
@@ -267,6 +230,7 @@ fn truncate(s: &str, n: usize) -> String {
 /// `devstack up`: infra, then autostart services; follow until all are ready
 /// or one fails. Exit code 1 on failure.
 pub fn up(stack_file: &Path) -> Result<()> {
+    ensure_engine(stack_file)?;
     let sd = state_dir(stack_file)?;
     let c = ensure_daemon(stack_file, &sd)?;
     crate::hubcmd::ensure_quietly();
@@ -475,4 +439,38 @@ pub fn down(stack_file: &Path, infra: bool) -> Result<()> {
         }
     );
     Ok(())
+}
+
+/// A stack with Compose groups needs the Docker engine. Start Docker Desktop
+/// when it is installed and not running, instead of letting every compose call
+/// fail with a message about a pipe.
+fn ensure_engine(stack_file: &Path) -> Result<()> {
+    use devstack_compose::engine::{self, Engine};
+    let has_compose = devstack_config::load(stack_file)
+        .map(|s| !s.compose.is_empty())
+        .unwrap_or(false);
+    if !has_compose {
+        return Ok(());
+    }
+    match engine::status("docker") {
+        Engine::Running { .. } => Ok(()),
+        Engine::Missing => Err(anyhow::anyhow!(
+            "this stack has Compose groups, but `docker` is not on PATH (install Docker Desktop or the Docker Engine)"
+        )),
+        Engine::Stopped {
+            starter: None,
+            hint,
+        } => Err(anyhow::anyhow!("the Docker engine is not running: {hint}")),
+        Engine::Stopped {
+            starter: Some(_), ..
+        } => {
+            let name = engine::start().map_err(|e| anyhow::anyhow!(e))?;
+            println!("Docker is not running; started {name}, waiting for it (up to 3 min) ...");
+            let version = engine::wait("docker", Duration::from_secs(180)).map_err(|e| {
+                anyhow::anyhow!("{e}; start {name} yourself and run `devstack up` again")
+            })?;
+            println!("Docker {version} is ready.");
+            Ok(())
+        }
+    }
 }

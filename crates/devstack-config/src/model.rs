@@ -394,6 +394,17 @@ fn opt_duration<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Duratio
 }
 
 impl Service {
+    /// `https` when the health check speaks TLS (a dev server with a
+    /// certificate), otherwise `http`: how a browser or a command reaches the
+    /// service on its fixed port.
+    pub fn scheme(&self) -> &'static str {
+        if self.health.as_ref().is_some_and(|h| h.insecure_tls) {
+            "https"
+        } else {
+            "http"
+        }
+    }
+
     /// Behind devstack's proxy (ADR-0010).
     pub fn proxied(&self) -> bool {
         self.kind == Kind::Service && self.port.is_some() && self.proxy.unwrap_or(true)
