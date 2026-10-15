@@ -716,9 +716,11 @@ What is open, roughly in the order it pays off, and where it comes from.
 |---|---|---|
 | Lanes, next steps: shared artifacts between lanes, dev servers on the main ports, lanes on other machines (drafts RL1 to RL5) | ADR-0024 | large |
 | Static frontend artifacts (`kind = "static"`) for e2e runs on a pinned build | phase 3, §3.4 | medium |
-| Own domain for the landing page (now on GitHub Pages); code signing of the Windows binary | phase 4 | small |
+| Own domain for the landing page (now on GitHub Pages) | phase 4 | small |
+| Code signing of the Windows binary (deferred) | [#3](https://github.com/nuetzliches/devstack/issues/3) | small |
 | Remove the downstream stack's old orchestrator once its team works without it | phase 4 | downstream |
 | `devstack init` checked against a second real repository per language (Go, Python, Spring Boot are detected; .NET and Node came from the reference stack) | §13 | small |
 | `devstack migrate`, once devstack has outside users | [ADR-0023](adr/0023-stack-file-compatibility.md) | medium |
-| Tray icon with status and notifications | §6, ADR-0018 | medium |
+| Tray icon with status and notifications (deferred) | §6, ADR-0018, [#1](https://github.com/nuetzliches/devstack/issues/1) | medium |
 | Network egress sandbox, stage 1 (cooperative proxy) | [ADR-0022](adr/0022-network-egress-sandbox.md) (proposed) | medium |
+| Confine file writes of services to the repository (deferred) | [#2](https://github.com/nuetzliches/devstack/issues/2) | medium |
