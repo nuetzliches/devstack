@@ -54,9 +54,10 @@ before code exists it names where it *will* live.
 | [0014](0014-native-services-take-their-configuration-from-compose.md) | Native services take their configuration from the Compose service they replace | Accepted |
 | [0015](0015-devstack-is-optional.md) | devstack accelerates a stack, it is never required to run one | Accepted |
 | [0016](0016-a-daemon-restart-is-a-clean-restart.md) | A daemon restart is a clean restart from the last promoted artifacts | Accepted |
-| [0017](0017-stack-file-is-toml.md) | The stack file is TOML, without profiles in version 1 | Accepted, provisional |
+| [0017](0017-stack-file-is-toml.md) | The stack file is TOML, without profiles in version 1 | Accepted |
 | [0018](0018-dashboard-is-a-browser-page.md) | The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper | Accepted |
 | [0019](0019-control-api-security.md) | The control API trusts the user's own processes, never a web page | Accepted |
 | [0020](0020-builds-share-one-long-lived-build-job.md) | Builds share one long-lived build job; a cancel ends only the cancelled build's tree | Accepted |
 | [0021](0021-a-hub-serves-the-dashboard.md) | A hub on a fixed port serves the dashboard for every stack | Accepted |
 | [0022](0022-network-egress-sandbox.md) | Outbound network calls of supervised services are visible and need an allow rule | Proposed |
+| [0023](0023-stack-file-compatibility.md) | Stack files stay readable; migrations once devstack has outside users | Accepted |

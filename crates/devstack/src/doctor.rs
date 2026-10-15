@@ -38,6 +38,12 @@ pub fn run(stack_file: &Path) -> Vec<Finding> {
     let stack = if stack_file.exists() {
         match devstack_config::load(stack_file) {
             Ok(s) => {
+                for w in std::fs::read_to_string(stack_file)
+                    .map(|t| devstack_config::compat::warnings(&t))
+                    .unwrap_or_default()
+                {
+                    out.push(f(Level::Warn, w.to_string()));
+                }
                 out.push(f(
                     Level::Ok,
                     format!(

@@ -18,6 +18,17 @@
    (process control, paths, file watching, signals) before it is called done.
    See [ADR-0011](docs/adr/0011-platform-windows-native-first.md).
 
+## Stack file changes
+
+A change to the stack file format (`crates/devstack-config`) that makes an
+existing file fail to load, or behave differently, is a **breaking change**.
+Before making one, **ask the project owner whether devstack has users outside
+its maintainers by now**: until it does, no migration is needed (raise
+`[stack] requires` and say so); once it does, the rules of
+[ADR-0023](docs/adr/0023-stack-file-compatibility.md) apply (deprecated aliases,
+`version = 2`, `devstack migrate`). The frozen files in
+`crates/devstack-config/tests/compat/` catch a break you did not intend.
+
 ## Public-repository hygiene
 
 This repository may become public. It must not contain anything that identifies

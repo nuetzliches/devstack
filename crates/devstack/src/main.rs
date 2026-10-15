@@ -237,6 +237,11 @@ fn main() -> Result<()> {
                 stack.services.len(),
                 stack.commands.len()
             );
+            if let Ok(text) = std::fs::read_to_string(&cli.file) {
+                for w in devstack_config::compat::warnings(&text) {
+                    println!("warning: {w}");
+                }
+            }
             if compose {
                 let repo = repo_of(&cli.file)?;
                 let docker = devstack_compose::Docker::default();

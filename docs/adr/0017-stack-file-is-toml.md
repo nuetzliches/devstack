@@ -1,6 +1,6 @@
 # ADR-0017: The stack file is TOML, without profiles in version 1
 
-- **Status:** Accepted, provisional (see *Revisit*)
+- **Status:** Accepted (confirmed 2026-10-15 after the reference stack ran end to end; compatibility: [ADR-0023](0023-stack-file-compatibility.md))
 - **Date:** 2026-10-14
 - **Deciders:** project owner
 - **Related:** plan §4, [ADR-0004](0004-infrastructure-is-delegated-to-compose.md), [ADR-0014](0014-native-services-take-their-configuration-from-compose.md), [ADR-0015](0015-devstack-is-optional.md)
@@ -76,6 +76,11 @@ This decision is provisional. It is reviewed, and either confirmed or
 superseded, when the first downstream stack file is complete and devstack has
 run it end to end (end of phase 1). Until then the format may change without a
 migration path. After that, a change of format ships with a converter.
+
+**Revisited 2026-10-15:** confirmed. The reference stack (two Compose groups,
+eleven services, eight commands) is written in it and runs end to end; nothing
+asked for another format. When a change needs a converter is decided by
+[ADR-0023](0023-stack-file-compatibility.md).
 
 ## Enforced by
 

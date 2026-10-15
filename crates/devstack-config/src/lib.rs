@@ -1,6 +1,7 @@
 //! The stack file (`devstack.toml`): model, strict loading, validation and
 //! interpolation. See ADR-0017 and plan §4.
 
+pub mod compat;
 pub mod interpolate;
 pub mod model;
 pub mod validate;
