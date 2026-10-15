@@ -1,7 +1,7 @@
 # devstack: plan
 
-- **Status:** Draft
-- **Date:** 2026-10-14
+- **Status:** Active: phases 0 to 2 done, phase 4 under way, phase 3 next (see §7 and the backlog, §13)
+- **Date:** 2026-10-14, status updated 2026-10-15
 - **Inputs:** [problem-statement.md](problem-statement.md), [ADR index](adr/README.md)
 
 This document is the planning artefact. Decisions it relies on are recorded as
@@ -382,18 +382,27 @@ icon and notifications through a tray in the daemon binary ([ADR-0018](adr/0018-
 - Explicitly not: a telemetry viewer. Traces and metrics go to an OTLP sink
   defined in the downstream Compose file.
 
+**Status 2026-10-15:** served by the hub, not the daemon ([ADR-0021](adr/0021-a-hub-serves-the-dashboard.md)),
+as an installable page that keeps the last known state offline. Built: overview
+by group, a stack switcher, the "not yet active" panel per service, the console
+of the current instance (live, filter, pause), service and stack actions,
+commands with confirmation and their run history, resources, the events
+timeline, Docker and stack-file banners. Open (§13): tray, container logs, a
+build timeline per service, a candidate's console, actions per group, a command
+palette, jumping to the first error line, the lane switcher (phase 3).
+
 ## 7. Phases
 
 Each phase ends with a usable state. Exit criteria are measured on the first
 downstream stack.
 
-| Phase | Content | Exit criterion |
-|---|---|---|
-| **0: Spikes** | (a) process ownership, see §7.1; (b) build cancellation, see §7.2; (c) snapshot sync cost for the reference tree; (d) platform benchmark for [ADR-0011](adr/0011-platform-windows-native-first.md) | Each spike answers its question with numbers, recorded in the relevant ADR |
-| **1: Run plane + CLI** | Stack file, compose driver, `devstack check`, `devstack env --export`, port preflight, artifact builds on demand (`devstack build api`), main slot, jobs, health, logs, job-object ownership, build-id env, CLI, MCP | Reference stack runs end to end without the previous orchestrator; no file-lock failure possible by construction |
-| **2: Candidate pipeline** | Watch, debounce, supersede/cancel, candidates without workers, promotion gate, rollback, SSE events, first dashboard | A broken edit never replaces main; three concurrent writers produce at most one running build per service |
-| **3: Lanes** | Worktree lanes, per-lane resources, `promote --lane`, static frontend artifacts for e2e | Two worktrees run side by side without touching each other's database or the main slot |
-| **4: Adoption** | Migrate the downstream stack, delete its old orchestrator, publish | Downstream runbook shrinks to the stack file and a page of notes |
+| Phase | Content | Exit criterion | Status |
+|---|---|---|---|
+| **0: Spikes** | (a) process ownership, see §7.1; (b) build cancellation, see §7.2; (c) snapshot sync cost for the reference tree; (d) platform benchmark for [ADR-0011](adr/0011-platform-windows-native-first.md) | Each spike answers its question with numbers, recorded in the relevant ADR | Done (2026-10-14) |
+| **1: Run plane + CLI** | Stack file, compose driver, `devstack check`, `devstack env --export`, port preflight, artifact builds on demand (`devstack build api`), main slot, jobs, health, logs, job-object ownership, build-id env, CLI, MCP | Reference stack runs end to end without the previous orchestrator; no file-lock failure possible by construction | Done, released as 0.1.0 (§7.3) |
+| **2: Candidate pipeline** | Watch, debounce, supersede/cancel, candidates without workers, promotion gate, rollback, SSE events, first dashboard | A broken edit never replaces main; three concurrent writers produce at most one running build per service | Done, released as 0.2.0 (§7.4) |
+| **3: Lanes** | Worktree lanes, per-lane resources, `promote --lane`, static frontend artifacts for e2e | Two worktrees run side by side without touching each other's database or the main slot | Not started; needs [ADR-0012](adr/0012-shared-infrastructure-between-lanes.md) far enough for one rule per resource |
+| **4: Adoption** | Migrate the downstream stack, delete its old orchestrator, publish | Downstream runbook shrinks to the stack file and a page of notes | Under way: the reference stack runs on devstack and its runbook is a generated skill plus one page; its old orchestrator stays as a fallback for now; not public yet (licence, O-5) |
 
 ### 7.1 Spike (a): process ownership
 
@@ -504,20 +513,49 @@ Phase 1 delivers builds on demand and the main slot; candidates, auto-promotion
 and the dashboard are phase 2. Exit criterion unchanged: the reference stack
 runs end to end without its previous orchestrator.
 
+### 7.4 Phase 2 status
+
+**Done (0.2.0, 2026-10-15):** watcher with debounce and supersede, candidates on
+internal ports behind a daemon-owned proxy ([ADR-0010](adr/0010-promotion-mechanism.md),
+option B, measured: no failed request across a switch, against 3.9 s of errors
+for a restart in place), workers only in the main slot, the promotion gate,
+`promote`, `rollback`, SSE events with a snapshot first, and the dashboard served
+by a hub ([ADR-0021](adr/0021-a-hub-serves-the-dashboard.md)). Exit criterion: a
+broken edit leaves main running (integration test `edits_become_candidates`);
+a newer change cancels the running build, so one service has at most one build.
+
+**Added after 0.2.0, from running the reference stack (not released yet):**
+
+- Docker engine check: `up` starts Docker Desktop, the hub reports the engine
+  and starts it from the dashboard.
+- Daemon and hub detach from the terminal (job objects of IDE terminals,
+  inherited pipes); both stop within 2 s despite open event streams.
+- The hub starts at logon and from a `devstack://hub/start` link; pairings
+  survive a hub restart.
+- Services carry their URL with the right scheme.
+- `config_changed`: the status says when the stack file changed since the start.
+- Agent skills generated from the stack file (`devstack skills install`) and a
+  reference for the stack file (`docs/stack-file.md`).
+- The diagnostic log of §11.
+- The dashboard loads the current version on reload and follows a hub update.
+
+**Not covered by an automated test:** a machine reboot, a Docker Desktop
+restart, the `devstack://` link opened from a browser, an IDE terminal closing.
+
 ## 8. Open questions
 
 | # | Question | Where it is tracked |
 |---|---|---|
 | O-1 | Stack file format: TOML, provisional | [ADR-0017](adr/0017-stack-file-is-toml.md), reviewed at the end of phase 1 |
-| O-2 | Promotion mechanism: restart on fixed port vs. reverse proxy | [ADR-0010](adr/0010-promotion-mechanism.md) (leaning: proxy) |
+| O-2 | Promotion mechanism: restart on fixed port vs. reverse proxy | [ADR-0010](adr/0010-promotion-mechanism.md): resolved, proxy (B), measured |
 | O-3 | Windows-native vs. WSL | [ADR-0011](adr/0011-platform-windows-native-first.md) |
 | O-4 | Which infrastructure may be shared between lanes | [ADR-0012](adr/0012-shared-infrastructure-between-lanes.md), deliberately deferred |
 | O-5 | Licence (Croniq uses MIT OR Apache-2.0) | Before going public |
-| O-6 | Default daemon port | Phase 1 |
+| O-6 | Default daemon port | Resolved: the daemon takes a free port and writes it to `.devstack/daemon.json`; the hub has a fixed one (4250, `DEVSTACK_HUB_PORT`) |
 | O-7 | Lanes per worktree only, or also per agent session in one tree | Phase 3 |
 | O-8 | Development values that are not secret (local passwords, dev API keys): a tracked `dev/.env.defaults` next to the untracked `dev/.env`, or everything through the downstream secret chain | Downstream decision; devstack supports several env files per group either way |
 | O-10 | How build servers outlive a single build but die with the daemon (spike (b)) | [ADR-0020](adr/0020-builds-share-one-long-lived-build-job.md), accepted |
-| O-9 | Minimum Docker Compose version (overlays rely on `!reset`, `!override`, `required: false`) | Phase 1, checked by `devstack check` |
+| O-9 | Minimum Docker Compose version (overlays rely on `!reset`, `!override`, `required: false`) | Open: not checked yet (§13) |
 
 ## 9. Risks
 
@@ -568,6 +606,20 @@ provided, with the build id as the organising key.
   sink in the downstream Compose file; devstack only passes the build id along
   (§3.3) so traces can be filtered by it.
 
+**Status 2026-10-15:** built differently in places.
+
+- One file per started instance, `.devstack/logs/<service>/run-<ms>-<port>.log`,
+  and one per build, `build-<id>.log`; the newest 20 runs and 10 builds per
+  service and 20 runs per command are kept. No ring buffer: the API reads the
+  file's tail.
+- `devstack logs <service>` and the MCP tool take `tail`, not the other filters;
+  the search over all services (`/v1/logs?grep=`) is open (§13).
+- The daemon log is built as planned: `.devstack/daemon.log`, JSON lines, every
+  state change and every request that changed something, with its answer; the
+  hub writes `hub.log` next to the token. Both rotate at 5 MB. Read with
+  `devstack logs --daemon | --hub` and the MCP tool `diagnostics`; raw process
+  output of the daemon goes to `daemon.out`.
+
 ## 12. Resource usage
 
 What a stack costs the machine is visible per service, per group and per lane,
@@ -606,3 +658,22 @@ Known limits of the numbers:
   native numbers by up to five seconds plus that.
 - Disk is the logical size of the files (no deduplication, no compression);
   links and junctions are not followed.
+
+## 13. Backlog
+
+What is open, roughly in the order it pays off, and where it comes from.
+
+| Item | From | Size |
+|---|---|---|
+| Release 0.3.0 with what came after 0.2.0 (§7.4) | | small |
+| Lanes: one stack per worktree, per-lane resources, `promote --lane` | phase 3, §3.5, O-4, O-7 | large |
+| Static frontend artifacts (`kind = "static"`) for e2e runs on a pinned build | phase 3, §3.4 | medium |
+| Publish: licence, a hygiene pass over docs and examples, public repository | phase 4, O-5 | small |
+| Remove the downstream stack's old orchestrator once its team works without it | phase 4 | downstream |
+| Hot-reload switch per service at runtime (`devstack hot-reload api on/off`) | §3.4a | medium |
+| Search over all service logs (`/v1/logs?grep=`), log filters by build and time | §11 | small |
+| Minimum Docker Compose version in `devstack check` | O-9 | small |
+| Dashboard: container logs, build timeline, candidate console, group actions, command palette, first error line | §6 | medium |
+| Tray icon with status and notifications | §6, ADR-0018 | medium |
+| Network egress sandbox, stage 1 (cooperative proxy) | [ADR-0022](adr/0022-network-egress-sandbox.md) (proposed) | medium |
+| Optional OTLP export of devstack's own events, next to the diagnostic log | follow-up to §11 | small |
