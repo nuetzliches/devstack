@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // A live log on an SSE stream: auto-scroll with "jump to latest", pause,
 // search with highlighting (or only matching lines), wrap toggle, level
-// colouring, a marker when another instance takes over. Keeps `maxLines`.
+// colouring, a marker when another instance takes over, a jump to where the
+// last failure started (and the ones before). Keeps `maxLines`.
 import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { api, type StreamState, type Subscription } from '@/api';
 import type { LogStreamEvent, RunLogEvent } from '@/api/types';
@@ -173,6 +174,45 @@ const stateLabel = computed(() => {
   return 'Connecting…';
 });
 
+// Where each failure starts: an error line after a non-error one. Indented
+// lines after it (a stack trace) belong to the same failure.
+const errorStarts = computed(() => {
+  const out: number[] = [];
+  let inBlock = false;
+  for (const l of visible.value) {
+    if (l.marker) {
+      inBlock = false;
+    } else if (l.level === 'error') {
+      if (!inBlock) out.push(l.id);
+      inBlock = true;
+    } else if (!(inBlock && /^\s/.test(l.text))) {
+      inBlock = false;
+    }
+  }
+  return out;
+});
+// Which failure the last jump went to, counted from the newest.
+const errorCursor = ref(-1);
+const flashId = ref<number | null>(null);
+watch(errorStarts, (now, before) => {
+  if (now.length !== before?.length) errorCursor.value = -1;
+});
+
+function jumpToError() {
+  const starts = errorStarts.value;
+  if (!starts.length) return;
+  errorCursor.value = (errorCursor.value + 1) % starts.length;
+  const id = starts[starts.length - 1 - errorCursor.value];
+  follow.value = false;
+  const el = scroller.value?.querySelector<HTMLElement>(`[data-line="${id}"]`);
+  const sc = scroller.value;
+  if (el && sc) sc.scrollTop += el.getBoundingClientRect().top - sc.getBoundingClientRect().top - sc.clientHeight / 3;
+  flashId.value = id;
+  setTimeout(() => {
+    if (flashId.value === id) flashId.value = null;
+  }, 1600);
+}
+
 watch(onlyMatches, () => {
   if (follow.value) void nextTick(scrollToEnd);
 });
@@ -195,6 +235,17 @@ defineExpose({ clear });
         <Icon name="filter" :size="14" /><span class="hide-xs">Only matches</span>
       </button>
       <span class="grow" />
+      <button
+        v-if="errorStarts.length"
+        type="button"
+        class="btn btn-sm err-jump"
+        :title="errorCursor < 0 ? 'Jump to where the last failure started' : `Failure ${errorStarts.length - errorCursor} of ${errorStarts.length}; again for the one before`"
+        data-testid="log-error-jump"
+        @click="jumpToError"
+      >
+        <Icon name="alert" :size="14" /><span class="hide-xs">{{ errorCursor < 0 ? 'Last error' : `Error ${errorStarts.length - errorCursor}/${errorStarts.length}` }}</span>
+        <span class="tabular count">{{ errorStarts.length }}</span>
+      </button>
       <button v-if="kind === 'service'" type="button" class="btn btn-sm" :aria-pressed="paused" data-testid="log-pause" @click="togglePause">
         <Icon :name="paused ? 'play' : 'pause'" :size="14" /><span class="hide-xs">{{ paused ? 'Resume' : 'Pause' }}</span>
       </button>
@@ -214,7 +265,7 @@ defineExpose({ clear });
           <div v-if="l.marker" class="marker" :class="l.marker" data-testid="log-marker">
             <span>{{ l.text }}</span>
           </div>
-          <div v-else class="line" :class="l.level"><template v-for="(p, i) in parts(l.text)" :key="i"><mark v-if="p.m">{{ p.t }}</mark><template v-else>{{ p.t }}</template></template></div>
+          <div v-else class="line" :class="[l.level, { flash: flashId === l.id }]" :data-line="l.id"><template v-for="(p, i) in parts(l.text)" :key="i"><mark v-if="p.m">{{ p.t }}</mark><template v-else>{{ p.t }}</template></template></div>
         </template>
       </div>
       <Transition name="fade">
@@ -314,6 +365,17 @@ defineExpose({ clear });
 }
 .line:hover {
   background: var(--surface-hover);
+}
+.line.flash {
+  outline: 2px solid var(--danger, #d14);
+  outline-offset: -2px;
+  border-radius: 3px;
+}
+.err-jump .count {
+  font-size: 11px;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: var(--danger-soft, rgba(220, 40, 60, 0.15));
 }
 .line.error {
   color: var(--log-error);
