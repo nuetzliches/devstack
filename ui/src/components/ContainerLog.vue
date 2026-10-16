@@ -1,14 +1,12 @@
 <script setup lang="ts">
 // A container's output (`docker compose logs`, stdout and stderr in one,
-// timestamped). Refreshed every few seconds while open, if wanted.
+// timestamped), inline on its page. Refreshed every few seconds unless paused.
 import { onBeforeUnmount, ref, watch } from 'vue';
 import { api, paths, v1, Unreachable } from '@/api';
-import Modal from './Modal.vue';
 import Diagnostics from './Diagnostics.vue';
 import Icon from './icons/Icon.vue';
 
-const props = defineProps<{ open: boolean; stackId: string; group: string; service: string }>();
-const emit = defineEmits<{ close: [] }>();
+const props = defineProps<{ stackId: string; group: string; service: string }>();
 
 const text = ref<string | null>(null);
 const error = ref<string | null>(null);
@@ -40,44 +38,45 @@ function stop() {
 }
 
 watch(
-  () => [props.open, follow.value] as const,
-  ([open, f]) => {
-    stop();
-    if (!open) return;
-    if (text.value === null) void load();
-    if (f) timer = setInterval(() => void load(), 3000);
+  () => [props.stackId, props.group, props.service] as const,
+  () => {
+    text.value = null;
+    void load();
   },
   { immediate: true },
 );
 watch(
-  () => props.open,
-  (o) => {
-    if (o) {
-      text.value = null;
-      void load();
-    }
+  follow,
+  (f) => {
+    stop();
+    if (f) timer = setInterval(() => void load(), 3000);
   },
+  { immediate: true },
 );
 onBeforeUnmount(stop);
 </script>
 
 <template>
-  <Modal :open="open" :title="`Container log · ${service}`" size="xl" testid="container-log-modal" @close="emit('close')">
-    <template #icon><Icon name="box" :size="18" /></template>
-    <div v-if="text === null && loading" class="row muted"><span class="spinner" /> Loading…</div>
-    <div v-else-if="error && text === null" class="banner neutral"><Icon name="info" /> {{ error }}</div>
-    <Diagnostics v-else-if="text !== null" :text="text || '(no output)'" max-height="66vh" />
-    <p class="muted hint">The last 1000 lines of <code>docker compose logs</code>, stdout and stderr together, with Docker's timestamps.</p>
-    <template #footer>
-      <label class="check"><input v-model="follow" type="checkbox" /> Refresh every 3 s</label>
+  <section class="card" data-testid="container-log">
+    <header class="card-header">
+      <h2>Log</h2>
       <span class="grow" />
-      <button type="button" class="btn" :disabled="loading" @click="load"><Icon name="restart" /> Reload</button>
-      <button type="button" class="btn btn-primary" @click="emit('close')">Close</button>
-    </template>
-  </Modal>
+      <label class="check"><input v-model="follow" type="checkbox" data-testid="container-log-follow" /> Refresh every 3 s</label>
+      <button type="button" class="btn btn-sm" :disabled="loading" @click="load"><Icon name="restart" :size="14" /> Reload</button>
+    </header>
+    <div class="body">
+      <div v-if="text === null && loading" class="row muted"><span class="spinner" /> Loading…</div>
+      <div v-else-if="error && text === null" class="banner neutral"><Icon name="info" /> {{ error }}</div>
+      <Diagnostics v-else-if="text !== null" :text="text || '(no output)'" max-height="70vh" />
+      <p class="muted hint">The last 1000 lines of <code>docker compose logs</code>, stdout and stderr together, with Docker's timestamps.</p>
+    </div>
+  </section>
 </template>
 
 <style scoped>
+.body {
+  padding: 12px 16px 16px;
+}
 .hint {
   font-size: 12px;
   margin: 6px 0 0;

@@ -59,8 +59,8 @@ const mismatch = computed(() => {
         </svg>
         <span class="brand-name hide-xs">devstack</span>
       </RouterLink>
-      <span class="sep hide-xs" aria-hidden="true">/</span>
-      <StackSwitcher />
+      <span class="sep hide-xs switcher-narrow" aria-hidden="true">/</span>
+      <StackSwitcher class="switcher-narrow" />
       <span class="grow" />
       <button
         type="button"
@@ -111,6 +111,12 @@ const mismatch = computed(() => {
   padding: 0 4px;
   margin-left: 4px;
   font-family: inherit;
+}
+/* The sidebar lists the stacks on a wide screen (App.vue). */
+@media (min-width: 1000px) {
+  .switcher-narrow {
+    display: none;
+  }
 }
 .topbar {
   position: sticky;

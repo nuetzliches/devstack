@@ -1,17 +1,17 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 import type { ContainerView } from '@/api/types';
 import { containerLook } from '@/lib/status';
 import { useStack } from '@/stores/stack';
 import StatusPill from './StatusPill.vue';
-import ContainerLogModal from './ContainerLogModal.vue';
 import Icon from './icons/Icon.vue';
 
 const props = withDefaults(defineProps<{ group: string; container: ContainerView | null; service: string; showGroup?: boolean }>(), { showGroup: false });
 const stack = useStack();
 const look = computed(() => (props.container ? containerLook(props.container) : null));
 const busy = computed(() => !!stack.busy[`ctr:${props.group}/${props.service}`]);
-const showLog = ref(false);
+const running = computed(() => props.container?.state === 'running' || props.container?.state === 'restarting');
+const to = computed(() => ({ name: 'container', params: { stack: stack.id ?? '', group: props.group, service: props.service } }));
 
 /** "5432->127.0.0.1:15432" -> host side first, which is what people type. */
 function hostPort(p: string): string {
@@ -34,7 +34,7 @@ const extraUrls = computed(() => (props.container?.urls ?? []).filter((u) => !pr
     <span class="kind" title="compose container"><Icon name="box" :size="15" /></span>
     <div class="grow name-col">
       <div class="name">
-        {{ service }}<span v-if="showGroup" class="muted"> · {{ group }}</span>
+        <RouterLink :to="to" class="name-link" data-testid="container-link">{{ service }}</RouterLink><span v-if="showGroup" class="muted"> · {{ group }}</span>
       </div>
       <div class="meta">
         <template v-if="container">
@@ -58,29 +58,45 @@ const extraUrls = computed(() => (props.container?.urls ?? []).filter((u) => !pr
     </div>
     <StatusPill v-if="look" :tone="look.tone" :label="look.label" :busy="look.busy" :title="container ? `${container.name}: ${container.state}${container.health ? ` (${container.health})` : ''}` : undefined" />
     <StatusPill v-else tone="neutral" label="Missing" />
-    <button
-      type="button"
-      class="btn btn-ghost btn-sm btn-icon"
-      :aria-label="`Log of container ${service}`"
-      title="Container log"
-      :disabled="stack.stale || !container || !stack.id"
-      data-testid="action-container-log"
-      @click="showLog = true"
-    >
+    <RouterLink :to="to" class="btn btn-ghost btn-sm btn-icon" :aria-label="`Log of container ${service}`" title="Container log and details" data-testid="action-container-log">
       <Icon name="file" />
-    </button>
+    </RouterLink>
     <button
+      v-if="!running"
       type="button"
       class="btn btn-ghost btn-sm btn-icon"
-      :aria-label="`Restart container ${service}`"
-      title="Restart container"
-      :disabled="busy || stack.stale || !container"
-      data-testid="action-container-restart"
-      @click="stack.restartContainer(group, service)"
+      :aria-label="`Start container ${service}`"
+      title="Start container"
+      :disabled="busy || stack.stale"
+      data-testid="action-container-start"
+      @click="stack.containerAction(group, service, 'start')"
     >
-      <span v-if="busy" class="spinner" /><Icon v-else name="restart" />
+      <span v-if="busy" class="spinner" /><Icon v-else name="play" />
     </button>
-    <ContainerLogModal v-if="showLog && stack.id" :open="showLog" :stack-id="stack.id" :group="group" :service="service" @close="showLog = false" />
+    <template v-else>
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm btn-icon"
+        :aria-label="`Restart container ${service}`"
+        title="Restart container"
+        :disabled="busy || stack.stale"
+        data-testid="action-container-restart"
+        @click="stack.containerAction(group, service, 'restart')"
+      >
+        <span v-if="busy" class="spinner" /><Icon v-else name="restart" />
+      </button>
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm btn-icon"
+        :aria-label="`Stop container ${service}`"
+        title="Stop container"
+        :disabled="busy || stack.stale"
+        data-testid="action-container-stop"
+        @click="stack.containerAction(group, service, 'stop')"
+      >
+        <Icon name="stop" />
+      </button>
+    </template>
   </li>
 </template>
 
@@ -127,6 +143,14 @@ const extraUrls = computed(() => (props.container?.urls ?? []).filter((u) => !pr
   flex-wrap: wrap;
   font-size: 12px;
   margin-top: 2px;
+}
+.name-link {
+  color: inherit;
+  text-decoration: none;
+}
+.name-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 .port-link {
   color: inherit;

@@ -44,8 +44,8 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/services/{name}/builds", get(builds))
         .route("/v1/services/{name}/build-log", get(build_log))
         .route(
-            "/v1/infra/{group}/{service}/restart",
-            post(restart_container),
+            "/v1/infra/{group}/{service}/{action}",
+            post(container_action),
         )
         .route("/v1/infra/{group}/{service}/logs", get(infra_logs))
         .route("/v1/infra/check", post(infra_check))
@@ -966,9 +966,10 @@ async fn container_logs(s: &AppState, group: String, service: String, q: &LogQue
     }
 }
 
-async fn restart_container(
+/// `POST /v1/infra/{group}/{service}/{start|stop|restart}`: one container.
+async fn container_action(
     State(s): State<AppState>,
-    Path((group, service)): Path<(String, String)>,
+    Path((group, service, action)): Path<(String, String, String)>,
 ) -> Response {
     let known = s
         .sup
@@ -983,8 +984,10 @@ async fn restart_container(
         );
     }
     let sup = s.sup.clone();
-    match tokio::task::spawn_blocking(move || sup.restart_container(&group, &service)).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+    match tokio::task::spawn_blocking(move || sup.container_action(&group, &service, &action)).await
+    {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(e)) => err(StatusCode::CONFLICT, e),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }

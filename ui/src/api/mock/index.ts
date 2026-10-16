@@ -415,11 +415,15 @@ export class MockTransport implements Transport {
       }
     }
 
-    m = /^\/v1\/infra\/([^/]+)\/([^/]+)\/restart$/.exec(p);
+    m = /^\/v1\/infra\/([^/]+)\/([^/]+)\/(start|stop|restart)$/.exec(p);
     if (m && method === 'POST') {
       const group = decodeURIComponent(m[1]);
       const service = decodeURIComponent(m[2]);
-      s.infra(group, service, 'restarting', 'starting', `${service} restarting`);
+      if (m[3] === 'stop') {
+        s.infra(group, service, 'exited', '', `${service} stopped`);
+        return empty(204);
+      }
+      s.infra(group, service, 'restarting', 'starting', `${service} ${m[3] === 'start' ? 'starting' : 'restarting'}`);
       setTimeout(() => s.infra(group, service, 'running', /cache|collector/.test(service) ? '' : 'healthy', `${service} running`), 2600);
       return empty(204);
     }

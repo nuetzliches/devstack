@@ -343,6 +343,18 @@ impl Docker {
         self.run(&g.dir, &a).map(|_| ())
     }
 
+    /// Stop one container; it stays (and starts again with `up`).
+    pub fn stop(&self, g: &Group, service: &str) -> Result<()> {
+        let mut a = g.base_args();
+        a.extend([
+            "stop".into(),
+            "--timeout".into(),
+            "10".into(),
+            service.into(),
+        ]);
+        self.run(&g.dir, &a).map(|_| ())
+    }
+
     /// The last `tail` lines of a container's output, each starting with its
     /// RFC 3339 timestamp; `since` as Docker takes it (`30m`, a timestamp).
     /// Docker hands stdout and stderr back separately; the timestamps put
