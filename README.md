@@ -60,6 +60,7 @@ devstack check            # validate the stack file (with --compose: the Compose
 devstack up               # daemon, infrastructure, autostart services
 devstack status
 devstack ui               # the dashboard in the browser (every stack, live)
+devstack ui --browser edge  # pair that browser instead of the default one (or DEVSTACK_BROWSER)
 devstack hub install      # hub at logon + `devstack://` start link (up does it once)
 devstack skills install   # agent skills for this repository, from the stack file
 devstack restart api      # rebuild now; the running instance is replaced once the new one is healthy

@@ -57,14 +57,77 @@ pub fn pairing_url() -> Result<String> {
         .ok_or_else(|| anyhow!("no url in the hub's answer"))
 }
 
-pub fn ui(print_only: bool) -> Result<()> {
+pub fn ui(print_only: bool, browser: Option<&str>) -> Result<()> {
     let url = pairing_url()?;
     if print_only {
         println!("{url}");
         return Ok(());
     }
-    open_browser(&url)?;
-    println!("dashboard opened (the link works once, for 60 s): {url}");
+    // The pairing belongs to the browser that opens the link, so it must be
+    // the one you develop in, not just the system default (#9).
+    let chosen = browser
+        .map(str::to_string)
+        .or_else(|| std::env::var("DEVSTACK_BROWSER").ok())
+        .or_else(|| std::env::var("BROWSER").ok())
+        .filter(|b| !b.trim().is_empty());
+    match &chosen {
+        Some(b) => open_in(b, &url)?,
+        None => open_browser(&url)?,
+    }
+    println!(
+        "dashboard opened{} (the link works once, for 60 s): {url}",
+        chosen.map(|b| format!(" in {b}")).unwrap_or_default()
+    );
+    Ok(())
+}
+
+/// What `--browser` names, as a program to start: a path as it is, a known
+/// name as that browser's executable on this platform, anything else as a
+/// program on PATH.
+fn browser_program(name: &str) -> String {
+    let n = name.trim();
+    if n.contains(['/', '\\']) {
+        return n.to_string();
+    }
+    let known = |win: &'static str, unix: &'static str| if cfg!(windows) { win } else { unix };
+    match n.to_ascii_lowercase().as_str() {
+        "chrome" | "google-chrome" => known("chrome", "google-chrome"),
+        "edge" | "msedge" | "microsoft-edge" => known("msedge", "microsoft-edge"),
+        "firefox" => known("firefox", "firefox"),
+        "brave" => known("brave", "brave-browser"),
+        "chromium" => known("chromium", "chromium"),
+        _ => n,
+    }
+    .to_string()
+}
+
+/// Open `url` in the browser `name` (`--browser`, `DEVSTACK_BROWSER`, `BROWSER`).
+fn open_in(name: &str, url: &str) -> Result<()> {
+    let program = browser_program(name);
+    #[cfg(windows)]
+    let mut cmd = {
+        use std::os::windows::process::CommandExt;
+        // `start` finds browsers by their registered name (App Paths), which
+        // are rarely on PATH; the empty title keeps a quoted path a program.
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/d", "/c", "start", "", &program, url]);
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        c
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut c = std::process::Command::new(&program);
+        c.arg(url);
+        c
+    };
+    let status = cmd
+        .status()
+        .map_err(|e| anyhow!("cannot start {program} ({e}); open {url} yourself"))?;
+    if cfg!(windows) && !status.success() {
+        bail!(
+            "cannot start {program}; open {url} yourself, or pass the browser's path to --browser"
+        );
+    }
     Ok(())
 }
 
@@ -114,5 +177,33 @@ pub fn ensure_quietly() {
     crate::integration::ensure_once();
     if let Err(e) = devstack_hub::ensure_running() {
         eprintln!("note: the dashboard hub did not start: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn browsers_by_name_or_path() {
+        let b = super::browser_program;
+        assert_eq!(
+            b("Edge"),
+            if cfg!(windows) {
+                "msedge"
+            } else {
+                "microsoft-edge"
+            }
+        );
+        assert_eq!(
+            b("chrome"),
+            if cfg!(windows) {
+                "chrome"
+            } else {
+                "google-chrome"
+            }
+        );
+        assert_eq!(b("firefox"), "firefox");
+        assert_eq!(b(r"C:\Tools\vivaldi.exe"), r"C:\Tools\vivaldi.exe");
+        assert_eq!(b("/opt/x/browser"), "/opt/x/browser");
+        assert_eq!(b("vivaldi"), "vivaldi");
     }
 }
