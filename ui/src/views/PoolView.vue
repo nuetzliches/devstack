@@ -76,6 +76,58 @@ const kindTitle: Record<string, string> = {
   unknown: 'Has not reported to the coordinator yet',
 };
 const leaseWhat = (l: PoolLease) => `lane ${l.repo}/${l.lane} on ${nameOf(l.node)}`;
+
+// Tags of a member and the policy of a node (ADR-0033), edited inline.
+const memberOf = (id: string) => (o.value?.members ?? []).find((m) => m.id === id);
+const editTags = ref<string | null>(null);
+const tagsText = ref('');
+function startTags(m: PoolMember) {
+  editTags.value = m.id;
+  tagsText.value = (m.tags ?? []).join(', ');
+}
+async function saveTags(m: PoolMember) {
+  const tags = tagsText.value.split(',').map((t) => t.trim()).filter(Boolean);
+  await pool.setTags(m.id, m.name, tags);
+  editTags.value = null;
+}
+const editPolicy = ref<string | null>(null);
+const pol = ref({ allow: '', repos: '', headroom: '', network: 'lan' as 'lan' | 'none' });
+function startPolicy(id: string) {
+  const p = memberOf(id)?.policy;
+  pol.value = {
+    allow: (p?.allow ?? []).join(', '),
+    repos: (p?.repos ?? []).join(', '),
+    headroom: p?.memory_headroom !== undefined ? String(p.memory_headroom) : '',
+    network: p?.network ?? 'lan',
+  };
+  editPolicy.value = id;
+}
+const list = (t: string) => t.split(',').map((x) => x.trim()).filter(Boolean);
+async function savePolicy(id: string, name: string, clear = false) {
+  const h = Number(pol.value.headroom.replace(',', '.'));
+  await pool.setPolicy(
+    id,
+    name,
+    clear
+      ? null
+      : {
+          allow: list(pol.value.allow),
+          repos: list(pol.value.repos),
+          memory_headroom: pol.value.headroom.trim() && Number.isFinite(h) && h > 0 ? h : undefined,
+          network: pol.value.network,
+        },
+  );
+  editPolicy.value = null;
+}
+function policyText(id: string) {
+  const p = memberOf(id)?.policy;
+  if (!p) return 'everyone, any repository';
+  const who = p.allow?.length ? p.allow.join(', ') : 'everyone';
+  const what = p.repos?.length ? p.repos.join(', ') : 'any repository';
+  const net = p.network === 'none' ? ' · no network outside the lane' : '';
+  const mem = p.memory_headroom ? ` · memory need ×${p.memory_headroom}` : '';
+  return `${who} · ${what}${mem}${net}`;
+}
 </script>
 
 <template>
@@ -191,7 +243,8 @@ const leaseWhat = (l: PoolLease) => `lane ${l.repo}/${l.lane} on ${nameOf(l.node
             <tr><th>Machine</th><th>State</th><th>Shares</th><th>Lanes</th><th>Last report</th><th v-if="pool.isAdmin" /></tr>
           </thead>
           <tbody>
-            <tr v-for="n in nodes" :key="n.id" :data-node="n.id">
+            <template v-for="n in nodes" :key="n.id">
+              <tr :data-node="n.id">
               <td>
                 <strong>{{ n.name }}</strong> <span v-if="isMe(n.id)" class="pill sm outline">this machine</span>
                 <span class="pill sm" :class="n.kind === 'server' ? 'accent' : 'outline'" :title="kindTitle[n.kind ?? 'unknown']" data-testid="pool-kind">{{ kindText[n.kind ?? 'unknown'] }}</span>
@@ -211,6 +264,16 @@ const leaseWhat = (l: PoolLease) => `lane ${l.repo}/${l.lane} on ${nameOf(l.node
                   v-if="n.report?.api"
                   type="button"
                   class="btn btn-xs"
+                  title="Who may run lanes here, which repositories, limits, network (ADR-0033)"
+                  data-testid="pool-policy"
+                  @click="editPolicy === n.id ? (editPolicy = null) : startPolicy(n.id)"
+                >
+                  <Icon name="shield" :size="13" /> Policy
+                </button>
+                <button
+                  v-if="n.report?.api"
+                  type="button"
+                  class="btn btn-xs"
                   :title="n.paused ? 'Let it take lanes again' : 'No new lanes on it; running ones stay'"
                   data-testid="pool-pause"
                   @click="pool.setPaused(n.id, n.name, !n.paused)"
@@ -219,6 +282,28 @@ const leaseWhat = (l: PoolLease) => `lane ${l.repo}/${l.lane} on ${nameOf(l.node
                 </button>
               </td>
             </tr>
+              <tr v-if="n.report?.api && (pool.isAdmin || memberOf(n.id)?.policy)" class="policy-row">
+                <td :colspan="pool.isAdmin ? 6 : 5" class="faint small">
+                  <template v-if="editPolicy !== n.id">Runs lanes of: {{ policyText(n.id) }}</template>
+                  <form v-else class="policy-form" data-testid="pool-policy-form" @submit.prevent="savePolicy(n.id, n.name)">
+                    <label><span>Who (member ids or tags)</span><input v-model="pol.allow" class="input" placeholder="everyone" /></label>
+                    <label><span>Repositories</span><input v-model="pol.repos" class="input" placeholder="any" /></label>
+                    <label><span>Memory limit (× need)</span><input v-model="pol.headroom" class="input" placeholder="none" /></label>
+                    <label>
+                      <span>Network</span>
+                      <select v-model="pol.network" class="input">
+                        <option value="lan">internet and local network</option>
+                        <option value="none">only the lane's own containers</option>
+                      </select>
+                    </label>
+                    <button type="submit" class="btn btn-sm btn-primary">Save</button>
+                    <button type="button" class="btn btn-sm" @click="savePolicy(n.id, n.name, true)">Lift</button>
+                    <button type="button" class="btn btn-sm btn-ghost" @click="editPolicy = null">Cancel</button>
+                    <span class="faint">A repository is named by the requester: a guard against mistakes, not against someone who lies.</span>
+                  </form>
+                </td>
+              </tr>
+            </template>
           </tbody>
         </table>
       </div>
@@ -268,11 +353,20 @@ const leaseWhat = (l: PoolLease) => `lane ${l.repo}/${l.lane} on ${nameOf(l.node
               <td>
                 <strong>{{ m.name }}</strong> <span v-if="isMe(m.id)" class="pill sm outline">this machine</span>
                 <span class="pill sm" :class="kindOf(m.id) === 'server' ? 'accent' : 'outline'" :title="kindTitle[kindOf(m.id)]">{{ kindText[kindOf(m.id)] }}</span>
+                <span v-for="t in m.tags ?? []" :key="t" class="pill sm info" data-testid="pool-tag">{{ t }}</span>
+                <form v-if="editTags === m.id" class="tags-form" @submit.prevent="saveTags(m)">
+                  <input v-model="tagsText" class="input" placeholder="team:backend, customer:acme" data-testid="pool-tags-input" />
+                  <button type="submit" class="btn btn-xs btn-primary">Save</button>
+                  <button type="button" class="btn btn-xs btn-ghost" @click="editTags = null">Cancel</button>
+                </form>
               </td>
               <td class="mono faint">{{ m.id }}</td>
               <td><span class="pill sm" :class="m.role === 'admin' ? 'accent' : 'outline'">{{ m.role }}</span></td>
               <td v-if="pool.isAdmin" class="mono">{{ m.address ?? '–' }}</td>
               <td v-if="pool.isAdmin" class="actions">
+                <button type="button" class="btn btn-sm" title="Tags for nodes' policies (ADR-0033)" data-testid="pool-tags" @click="startTags(m)">
+                  Tags
+                </button>
                 <button
                   v-if="m.role === 'member'"
                   type="button"
@@ -385,6 +479,29 @@ const leaseWhat = (l: PoolLease) => `lane ${l.repo}/${l.lane} on ${nameOf(l.node
 }
 .small {
   font-size: 12px;
+}
+.policy-row td {
+  padding-top: 0;
+}
+.policy-form,
+.tags-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  margin: 4px 0 6px;
+}
+.policy-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+.policy-form .input {
+  width: 190px;
+}
+.tags-form .input {
+  width: 220px;
 }
 .join {
   display: flex;

@@ -46,6 +46,10 @@ pub struct LaneRun {
     /// The lane's port offset on the requester's machine
     /// (`DEVSTACK_PORT_OFFSET`): it runs on those ports here too.
     pub port_offset: u16,
+    /// The lane container's memory limit (ADR-0033), bytes.
+    pub memory_limit: Option<u64>,
+    /// Its networks reach nothing outside the lane (ADR-0033: `none`).
+    pub isolated: bool,
 }
 
 /// Where the lane's daemon is reached, and its token.
@@ -201,7 +205,7 @@ impl LaneRun {
             let _ = std::fs::remove_file(&overlay);
             let g = self.group(&stack, &name);
             let model = dc.config(&g)?;
-            let text = devstack_compose::node_overlay(&model, &g.project, &self.id)
+            let text = devstack_compose::node_overlay(&model, &g.project, &self.id, self.isolated)
                 .map_err(|e| RunError::Config(format!("compose group `{name}`: {e}")))?;
             std::fs::create_dir_all(overlay.parent().expect("has a parent"))
                 .map_err(|e| RunError::Io(overlay.clone(), e))?;
@@ -291,6 +295,7 @@ impl LaneRun {
         std::fs::create_dir_all(&home).map_err(|e| RunError::Io(home.clone(), e))?;
         let mount_home = format!("{}:/home/lane", home.display());
         let user = own_user();
+        let memory = self.memory_limit.map(|m| format!("{m}b"));
         let mut args: Vec<&str> = vec![
             "run",
             "-d",
@@ -332,6 +337,9 @@ impl LaneRun {
         }
         if let Some(u) = &user {
             args.extend(["--user", u.as_str()]);
+        }
+        if let Some(m) = &memory {
+            args.extend(["--memory", m.as_str()]);
         }
         args.extend([
             image.as_str(),

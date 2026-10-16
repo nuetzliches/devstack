@@ -225,6 +225,21 @@ export type PoolMember = {
   requested_at: number;
   /** Where the request came from; only an admin sees it. */
   address?: string;
+  /** Set by admins (ADR-0033): `team:backend`, `customer:acme`. */
+  tags?: string[];
+  /** As a node: what it lets run on it (ADR-0033). */
+  policy?: NodePolicy;
+};
+
+export type NodePolicy = {
+  /** Member ids or tags that may start lanes there; empty: everyone. */
+  allow?: string[];
+  /** Repositories (`[stack] name`) it runs; empty: any. */
+  repos?: string[];
+  /** A lane's memory limit: its expected need times this (at least 2 GiB). */
+  memory_headroom?: number;
+  /** `lan`: the internet and the local network; `none`: only the lane's own containers. */
+  network?: 'lan' | 'none';
 };
 
 export type PoolNode = {

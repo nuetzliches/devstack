@@ -41,6 +41,8 @@ Origin `http://127.0.0.1:4250` (or `localhost:4250`).
 | `POST /hub/pool/members/{id}/remove` | cookie + Origin | admins only: remove a member or reject its request; `409 {"error"}` for the last admin |
 | `POST /hub/pool/nodes/{id}/pause`, `.../resume` | cookie + Origin | admins only: a paused node takes no new lanes (the coordinator refuses leases on it); running ones stay |
 | `POST /hub/pool/leases/{id}/end` | cookie + Origin | admins only: `202`; the node stops that lane at its next report (within about 15 s); its requester sees the lease over |
+| `POST /hub/pool/members/{id}/tags {"tags"}` | cookie + Origin | admins only: replace a member's tags (ADR-0033); the member's `PoolMember` |
+| `POST /hub/pool/nodes/{id}/policy` (a `NodePolicy` or `null`) | cookie + Origin | admins only: what the node lets run on it, `{allow, repos, memory_headroom?, network: "lan"\|"none"}`; `null` lifts it |
 | `POST /hub/pool/join {"coordinator", "fingerprint", "name"?}` | cookie + Origin | ask a pool to admit this machine (`devstack join` without waiting); `GET /hub/pool` shows it pending until an admin approves |
 | `POST /hub/pool/members/{id}/role {"role"}` | cookie + Origin | admins only: `member` or `admin`; `409 {"error"}` for the last admin. A member who is no admin gets `403` from all three |
 | `POST /hub/pair` | `Authorization: Bearer <user token>` | `{"code": "...", "url": "http://127.0.0.1:4250/auth?code=..."}` (CLI only) |

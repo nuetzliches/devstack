@@ -221,6 +221,16 @@ export class MockTransport implements Transport {
       const r = hub.pool.end(decodeURIComponent(pe[1]));
       return json(r.status, r.body);
     }
+    const pt = /^\/hub\/pool\/members\/([^/]+)\/tags$/.exec(p);
+    if (pt && method === 'POST') {
+      const r = hub.pool.tags(decodeURIComponent(pt[1]), (body as { tags?: string[] } | undefined)?.tags ?? []);
+      return json(r.status, r.body);
+    }
+    const pp = /^\/hub\/pool\/nodes\/([^/]+)\/policy$/.exec(p);
+    if (pp && method === 'POST') {
+      const r = hub.pool.policy(decodeURIComponent(pp[1]), body as never);
+      return json(r.status, r.body);
+    }
     if (p === '/hub/pool/join' && method === 'POST') {
       const r = hub.pool.join();
       return json(r.status, r.body);

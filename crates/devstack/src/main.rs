@@ -399,6 +399,29 @@ enum MembersAction {
     /// Change an approved member's role: `member` or `admin` (the last admin
     /// stays one).
     Role { member: String, role: String },
+    /// Set a member's tags (ADR-0033), replacing its tags: `team:backend`,
+    /// `customer:acme`; none clears them.
+    Tags { member: String, tags: Vec<String> },
+    /// What a node lets run on it (ADR-0033); without options it shows it.
+    Policy {
+        node: String,
+        /// Who may start lanes there: a member id or a tag; repeat. None: all.
+        #[arg(long)]
+        allow: Vec<String>,
+        /// A repository (`[stack] name`) it runs; repeat. None: any.
+        #[arg(long)]
+        repo: Vec<String>,
+        /// A lane's memory limit as its expected need times this.
+        #[arg(long)]
+        memory_headroom: Option<f64>,
+        /// `lan` (the internet and the local network) or `none` (only the
+        /// lane's own containers).
+        #[arg(long)]
+        network: Option<String>,
+        /// Lift the node's policy.
+        #[arg(long)]
+        clear: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -670,6 +693,23 @@ fn main() -> Result<()> {
                     poolcmd::members_approve(dir, &member, admin)
                 }
                 MembersAction::Role { member, role } => poolcmd::members_role(dir, &member, &role),
+                MembersAction::Tags { member, tags } => poolcmd::members_tags(dir, &member, &tags),
+                MembersAction::Policy {
+                    node,
+                    allow,
+                    repo,
+                    memory_headroom,
+                    network,
+                    clear,
+                } => poolcmd::members_policy(
+                    dir,
+                    &node,
+                    allow,
+                    repo,
+                    memory_headroom,
+                    network,
+                    clear,
+                ),
                 MembersAction::Remove { member } => poolcmd::members_remove(dir, &member),
             },
         },

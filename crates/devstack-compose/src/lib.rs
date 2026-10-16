@@ -470,12 +470,45 @@ pub fn lane_overlay(
 /// nothing is published on the node's host at all. The lane container
 /// reaches every service by its name on the lane's network, and two lanes
 /// on one node would otherwise want the same host ports.
+///
+/// `isolated`: every network of the lane is `internal`, so its containers
+/// reach each other and nothing else (ADR-0033: a node's `none`).
 pub fn node_overlay(
     model: &Model,
     project: &str,
     lane: &str,
+    isolated: bool,
 ) -> std::result::Result<String, String> {
-    overlay(model, project, lane, None, &[])
+    let mut text = overlay(model, project, lane, None, &[])?;
+    if isolated {
+        // The `default` network always exists for services without networks.
+        let mut keys: Vec<&str> = model.networks.keys().map(String::as_str).collect();
+        if !keys.contains(&"default") {
+            keys.push("default");
+        }
+        if text.contains("\nnetworks:\n") {
+            // Renamed networks are listed already: add `internal` to the
+            // ones there and append the rest.
+            for k in &keys {
+                let head = format!("\n  \"{k}\":\n");
+                if let Some(i) = text.find(&head) {
+                    text.insert_str(i + head.len(), "    internal: true\n");
+                } else {
+                    text = text.replacen(
+                        "\nnetworks:\n",
+                        &format!("\nnetworks:\n  \"{k}\":\n    internal: true\n"),
+                        1,
+                    );
+                }
+            }
+        } else {
+            text.push_str("networks:\n");
+            for k in &keys {
+                text.push_str(&format!("  \"{k}\":\n    internal: true\n"));
+            }
+        }
+    }
+    Ok(text)
 }
 
 /// `offset`: move published ports by it; `None`: publish none.
@@ -924,9 +957,11 @@ mod tests {
                 "cache":{}},"networks":{"default":{"name":"shop_default"}}}"#,
         )
         .unwrap();
-        let y = node_overlay(&model, "shop-ab12", "ab12").unwrap();
+        let y = node_overlay(&model, "shop-ab12", "ab12", false).unwrap();
         assert!(y.contains("ports: !reset []"), "{y}");
         assert!(y.contains("container_name: !reset null"), "{y}");
         assert!(!y.contains("5432"), "{y}");
+        let y = node_overlay(&model, "shop-ab12", "ab12", true).unwrap();
+        assert!(y.contains("internal: true"), "{y}");
     }
 }

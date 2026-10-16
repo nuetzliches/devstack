@@ -39,8 +39,8 @@ export class MockPool {
     this.joined = !q.includes('nopool');
     this.myRole = q.includes('poolmember') ? 'member' : 'admin';
     this.members = [
-      { id: this.me, name: 'dev-pc', state: 'approved', role: this.myRole, requested_at: s - 86_400 * 3, address: '10.0.0.21' },
-      { id: '9f8e7d6c5b4a3921', name: 'build-server', state: 'approved', role: this.myRole === 'admin' ? 'member' : 'admin', requested_at: s - 86_400 * 5, address: '10.0.0.14' },
+      { id: this.me, name: 'dev-pc', state: 'approved', role: this.myRole, requested_at: s - 86_400 * 3, address: '10.0.0.21', tags: ['team:backend'] },
+      { id: '9f8e7d6c5b4a3921', name: 'build-server', state: 'approved', role: this.myRole === 'admin' ? 'member' : 'admin', requested_at: s - 86_400 * 5, address: '10.0.0.14', policy: { allow: ['team:backend'], repos: [], memory_headroom: 2, network: 'none' } },
       { id: '1122334455667788', name: 'laptop-anna', state: 'approved', role: 'member', requested_at: s - 86_400, address: '100.64.0.9' },
       { id: '5566778899aabbcc', name: 'laptop-ben', state: 'pending', role: 'member', requested_at: s - 240, address: '100.64.0.12' },
     ];
@@ -109,6 +109,22 @@ export class MockPool {
     this.leases = this.leases.filter((x) => x !== l);
     this.log('end', m, `${l.repo}/${l.lane} (${l.id})`);
     return { status: 202, body: null };
+  }
+
+  /** `POST /hub/pool/members/{id}/tags` and `.../nodes/{id}/policy`. */
+  tags(id: string, tags: string[]): R {
+    const m = this.members.find((x) => x.id === id);
+    if (!m) return { status: 404, body: { error: 'no member' } };
+    m.tags = tags;
+    this.log('tags' as PoolAuditEntry['action'], m, tags.join(', '));
+    return { status: 200, body: m };
+  }
+
+  policy(id: string, p: PoolMember['policy'] | null): R {
+    const m = this.members.find((x) => x.id === id);
+    if (!m) return { status: 404, body: { error: 'no member' } };
+    m.policy = p ?? undefined;
+    return { status: 200, body: m };
   }
 
   /** `POST /hub/pool/join`: the machine asks; it waits for an admin. */

@@ -246,6 +246,11 @@ pub struct MemberView {
     pub requested_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// As a node: what it lets run on it (ADR-0033).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<crate::policy::NodePolicy>,
 }
 
 impl From<&Member> for MemberView {
@@ -257,8 +262,16 @@ impl From<&Member> for MemberView {
             role: m.role,
             requested_at: m.requested_at,
             address: None,
+            tags: m.tags.clone(),
+            policy: m.policy.clone(),
         }
     }
+}
+
+/// `POST /v1/admin/members/{id}/tags`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TagsRequest {
+    pub tags: Vec<String>,
 }
 
 impl MemberView {
@@ -382,6 +395,8 @@ fn router(shared: Shared) -> Router {
         .route("/v1/admin/nodes/{id}/pause", post(admin_pause))
         .route("/v1/admin/nodes/{id}/resume", post(admin_resume))
         .route("/v1/admin/leases/{id}/end", post(admin_end))
+        .route("/v1/admin/members/{id}/tags", post(admin_tags))
+        .route("/v1/admin/nodes/{id}/policy", post(admin_policy))
         .with_state(shared)
 }
 
@@ -526,6 +541,11 @@ async fn lease_create(
         let best = ms
             .iter()
             .filter(|m| m.state == State::Approved && !m.paused && m.id != me.id)
+            .filter(|m| {
+                m.policy
+                    .as_ref()
+                    .is_none_or(|p| p.admits(&me.id, &me.tags, &r.repo).is_ok())
+            })
             .filter_map(|m| {
                 let (at, rep) = reports.get(&m.id)?;
                 (at.elapsed() < ONLINE_FOR
@@ -582,6 +602,11 @@ async fn lease_create(
                 StatusCode::CONFLICT,
                 format!("{} is paused by an admin: it takes no new lanes", node.name),
             ));
+        }
+        if let Some(p) = &node.policy
+            && let Err(why) = p.admits(&me.id, &me.tags, &r.repo)
+        {
+            return Err((StatusCode::FORBIDDEN, format!("{}: {why}", node.name)));
         }
         let _ = at;
         let Some(api) = rep.api.clone() else {
@@ -692,6 +717,29 @@ fn random_hex(bytes: usize) -> String {
     let mut b = vec![0u8; bytes];
     rand::rng().fill_bytes(&mut b);
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+async fn admin_tags(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+    Json(t): Json<TagsRequest>,
+) -> ApiResult<Json<MemberView>> {
+    let (_, by) = admin(&s, &peer)?;
+    let m = s.store.set_tags(&id, &t.tags, &by).map_err(store_err)?;
+    Ok(Json(MemberView::for_admin(&m)))
+}
+
+/// Set what a node lets run on it; `null` lifts its policy.
+async fn admin_policy(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+    Json(p): Json<Option<crate::policy::NodePolicy>>,
+) -> ApiResult<Json<MemberView>> {
+    let (_, by) = admin(&s, &peer)?;
+    let m = s.store.set_policy(&id, p, &by).map_err(store_err)?;
+    Ok(Json(MemberView::for_admin(&m)))
 }
 
 async fn admin_pause(

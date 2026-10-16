@@ -171,6 +171,90 @@ pub fn members_role(dir: Option<PathBuf>, member: &str, role: &str) -> Result<()
     Ok(())
 }
 
+pub fn members_tags(dir: Option<PathBuf>, member: &str, tags: &[String]) -> Result<()> {
+    let dir = coordinator_dir(dir);
+    need_coordinator(&dir)?;
+    let m = Store::new(&dir).set_tags(member, tags, SHELL)?;
+    if m.tags.is_empty() {
+        println!("{} ({}) has no tags", m.id, m.name);
+    } else {
+        println!("{} ({}): {}", m.id, m.name, m.tags.join(", "));
+    }
+    Ok(())
+}
+
+pub fn members_policy(
+    dir: Option<PathBuf>,
+    node: &str,
+    allow: Vec<String>,
+    repos: Vec<String>,
+    memory_headroom: Option<f64>,
+    network: Option<String>,
+    clear: bool,
+) -> Result<()> {
+    use devstack_node::policy::{Network, NodePolicy};
+    let dir = coordinator_dir(dir);
+    need_coordinator(&dir)?;
+    let store = Store::new(&dir);
+    let changes = clear
+        || !allow.is_empty()
+        || !repos.is_empty()
+        || memory_headroom.is_some()
+        || network.is_some();
+    let m = if !changes {
+        let ms = store.list()?;
+        ms.into_iter()
+            .find(|m| m.id.starts_with(node) || m.name == node)
+            .ok_or_else(|| anyhow!("no member `{node}`"))?
+    } else if clear {
+        store.set_policy(node, None, SHELL)?
+    } else {
+        let network = match network.as_deref() {
+            None | Some("lan") => Network::Lan,
+            Some("none") => Network::None,
+            Some(o) => bail!("--network {o}: `lan` or `none`"),
+        };
+        store.set_policy(
+            node,
+            Some(NodePolicy {
+                allow,
+                repos,
+                memory_headroom,
+                network,
+            }),
+            SHELL,
+        )?
+    };
+    match &m.policy {
+        None => println!(
+            "{} ({}): no policy, every member may run any lane there",
+            m.id, m.name
+        ),
+        Some(p) => println!(
+            "{} ({}): allow {}; repositories {}; memory {}; network {}",
+            m.id,
+            m.name,
+            if p.allow.is_empty() {
+                "everyone".into()
+            } else {
+                p.allow.join(", ")
+            },
+            if p.repos.is_empty() {
+                "any".into()
+            } else {
+                p.repos.join(", ")
+            },
+            p.memory_headroom
+                .map_or("unlimited".into(), |h| format!("need x {h}")),
+            match p.network {
+                Network::Lan => "the internet and the local network",
+                Network::None => "only the lane's own containers",
+            }
+        ),
+    }
+    Ok(())
+}
+
 pub fn members_remove(dir: Option<PathBuf>, member: &str) -> Result<()> {
     let dir = coordinator_dir(dir);
     need_coordinator(&dir)?;
