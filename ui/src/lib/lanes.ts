@@ -8,6 +8,11 @@ export function laneLabel(l: LaneView): string {
   return l.branch ?? `${l.name} (detached)`;
 }
 
+/** Where a lane on a node runs: the node, with its pool unless the default one (ADR-0034). */
+export function nodeLabel(l: LaneView): string {
+  return l.pool && l.pool !== 'default' ? `${l.pool}:${l.node}` : (l.node ?? '');
+}
+
 /** Not started: a worktree that runs nothing yet. Older daemons omit `active` (all started). */
 export function started(l: LaneView): boolean {
   return l.active !== false;

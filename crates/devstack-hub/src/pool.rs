@@ -11,9 +11,12 @@
 //!   admin's changes, passed on as they are
 //! - `POST /hub/pool/join` `{coordinator, fingerprint, name?}`: ask to join a
 //!   pool (`devstack join` without waiting)
+//! - `GET /hub/pools`: the pools this machine belongs to (ADR-0034)
+//!
+//! Each takes `?pool=<name>`; without it, the default pool.
 
 use axum::Json;
-use axum::extract::Path;
+use axum::extract::{Path, Query};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use devstack_node::member::{Local, MemberError};
@@ -21,12 +24,60 @@ use devstack_node::store::{Role, State};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-fn local() -> Local {
-    let state = devstack_daemon::token::token_path()
+fn state() -> std::path::PathBuf {
+    devstack_daemon::token::token_path()
         .parent()
         .expect("token path has a parent")
-        .to_path_buf();
-    Local::new(&devstack_node::member::default_dir(&state))
+        .to_path_buf()
+}
+
+/// `?pool=<name>` (ADR-0034); none: the default pool.
+#[derive(Deserialize, Default)]
+pub struct PoolQuery {
+    #[serde(default)]
+    pool: Option<String>,
+}
+
+impl PoolQuery {
+    fn name(&self) -> Result<String, MemberError> {
+        let p = self
+            .pool
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .unwrap_or(devstack_node::member::DEFAULT_POOL);
+        if devstack_node::member::valid_pool_name(p) {
+            Ok(p.to_string())
+        } else {
+            Err(MemberError::Status(
+                400,
+                json!({ "error": format!("pool `{p}`: a-z, 0-9, `-` and `_`, at most 32") })
+                    .to_string(),
+            ))
+        }
+    }
+}
+
+/// `GET /hub/pools`: the pools this machine belongs to, the default one
+/// first (joined or not).
+pub async fn pools() -> Response {
+    let list = tokio::task::spawn_blocking(|| {
+        devstack_node::member::pools(&state())
+            .into_iter()
+            .map(|(name, dir)| {
+                let m = Local::new(&dir).membership().ok().flatten();
+                json!({
+                    "name": name,
+                    "joined": m.is_some(),
+                    "state": m.as_ref().map(|m| m.state),
+                    "coordinator": m.as_ref().map(|m| m.coordinator.clone()),
+                })
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default();
+    Json(list).into_response()
 }
 
 fn error(e: &MemberError) -> Response {
@@ -51,17 +102,25 @@ fn error(e: &MemberError) -> Response {
 
 /// Run a blocking call to the coordinator off the async runtime.
 async fn blocking<T: Send + 'static>(
+    q: &PoolQuery,
     f: impl FnOnce(&Local) -> Result<T, MemberError> + Send + 'static,
 ) -> Result<T, MemberError> {
-    tokio::task::spawn_blocking(move || f(&local()))
-        .await
-        .unwrap_or_else(|e| Err(MemberError::Other(format!("pool call failed: {e}"))))
+    let pool = q.name()?;
+    tokio::task::spawn_blocking(move || {
+        f(&Local::new(&devstack_node::member::pool_dir(
+            &state(),
+            &pool,
+        )))
+    })
+    .await
+    .unwrap_or_else(|e| Err(MemberError::Other(format!("pool call failed: {e}"))))
 }
 
 /// Everything the pool area shows, in one answer. A machine in no pool, or
 /// not approved yet, gets what it can see: how to join, or that it waits.
-pub async fn overview() -> Response {
-    let r = blocking(|l| {
+pub async fn overview(Query(q): Query<PoolQuery>) -> Response {
+    let pool = q.name().unwrap_or_default();
+    let r = blocking(&q, move |l| {
         let Some(mut m) = l.membership()? else {
             return Ok(json!({ "joined": false }));
         };
@@ -79,10 +138,15 @@ pub async fn overview() -> Response {
         v["me"]["role"] = json!(mine.role);
         // What another machine runs to join this pool; the fingerprint is
         // public, the approval is what admits it.
+        let as_pool = if pool == devstack_node::member::DEFAULT_POOL {
+            String::new()
+        } else {
+            format!(" --pool {pool}")
+        };
         v["join"] = json!({
             "coordinator": m.coordinator,
             "fingerprint": m.ca_fingerprint,
-            "command": format!("devstack join {} --fingerprint {}", m.coordinator, m.ca_fingerprint),
+            "command": format!("devstack join {} --fingerprint {}{as_pool}", m.coordinator, m.ca_fingerprint),
         });
         if mine.role == Role::Admin {
             v["members"] = json!(l.admin_members()?);
@@ -105,30 +169,34 @@ pub struct RoleBody {
     role: Option<Role>,
 }
 
-pub async fn approve(Path(id): Path<String>, body: Option<Json<RoleBody>>) -> Response {
+pub async fn approve(
+    Path(id): Path<String>,
+    Query(q): Query<PoolQuery>,
+    body: Option<Json<RoleBody>>,
+) -> Response {
     let role = body.and_then(|Json(b)| b.role);
-    match blocking(move |l| l.admin_approve(&id, role)).await {
+    match blocking(&q, move |l| l.admin_approve(&id, role)).await {
         Ok(m) => Json(m).into_response(),
         Err(e) => error(&e),
     }
 }
 
-pub async fn remove(Path(id): Path<String>) -> Response {
-    match blocking(move |l| l.admin_remove(&id)).await {
+pub async fn remove(Path(id): Path<String>, Query(q): Query<PoolQuery>) -> Response {
+    match blocking(&q, move |l| l.admin_remove(&id)).await {
         Ok(m) => Json(m).into_response(),
         Err(e) => error(&e),
     }
 }
 
-pub async fn pause(Path(id): Path<String>) -> Response {
-    match blocking(move |l| l.admin_pause(&id, true)).await {
+pub async fn pause(Path(id): Path<String>, Query(q): Query<PoolQuery>) -> Response {
+    match blocking(&q, move |l| l.admin_pause(&id, true)).await {
         Ok(m) => Json(m).into_response(),
         Err(e) => error(&e),
     }
 }
 
-pub async fn resume(Path(id): Path<String>) -> Response {
-    match blocking(move |l| l.admin_pause(&id, false)).await {
+pub async fn resume(Path(id): Path<String>, Query(q): Query<PoolQuery>) -> Response {
+    match blocking(&q, move |l| l.admin_pause(&id, false)).await {
         Ok(m) => Json(m).into_response(),
         Err(e) => error(&e),
     }
@@ -136,9 +204,10 @@ pub async fn resume(Path(id): Path<String>) -> Response {
 
 pub async fn tags(
     Path(id): Path<String>,
+    Query(q): Query<PoolQuery>,
     Json(t): Json<devstack_node::coordinator::TagsRequest>,
 ) -> Response {
-    match blocking(move |l| l.admin_tags(&id, &t.tags)).await {
+    match blocking(&q, move |l| l.admin_tags(&id, &t.tags)).await {
         Ok(m) => Json(m).into_response(),
         Err(e) => error(&e),
     }
@@ -146,16 +215,17 @@ pub async fn tags(
 
 pub async fn policy(
     Path(id): Path<String>,
+    Query(q): Query<PoolQuery>,
     Json(p): Json<Option<devstack_node::policy::NodePolicy>>,
 ) -> Response {
-    match blocking(move |l| l.admin_policy(&id, p)).await {
+    match blocking(&q, move |l| l.admin_policy(&id, p)).await {
         Ok(m) => Json(m).into_response(),
         Err(e) => error(&e),
     }
 }
 
-pub async fn end(Path(id): Path<String>) -> Response {
-    match blocking(move |l| l.admin_end(&id)).await {
+pub async fn end(Path(id): Path<String>, Query(q): Query<PoolQuery>) -> Response {
+    match blocking(&q, move |l| l.admin_end(&id)).await {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(e) => error(&e),
     }
@@ -171,20 +241,28 @@ pub struct JoinBody {
 
 /// Ask a pool's coordinator to admit this machine; the answer comes with
 /// the approval, which `GET /hub/pool` picks up.
-pub async fn join(Json(b): Json<JoinBody>) -> Response {
+pub async fn join(Query(q): Query<PoolQuery>, Json(b): Json<JoinBody>) -> Response {
     let name = b
         .name
         .filter(|n| !n.trim().is_empty())
         .or_else(|| std::env::var("COMPUTERNAME").ok())
         .or_else(|| std::env::var("HOSTNAME").ok())
         .unwrap_or_else(|| "member".into());
-    match blocking(move |l| l.join(b.coordinator.trim(), &b.fingerprint, name.trim())).await {
+    match blocking(&q, move |l| {
+        l.join(b.coordinator.trim(), &b.fingerprint, name.trim())
+    })
+    .await
+    {
         Ok(m) => Json(json!({ "id": m.id, "name": m.name, "state": m.state })).into_response(),
         Err(e) => error(&e),
     }
 }
 
-pub async fn role(Path(id): Path<String>, Json(b): Json<RoleBody>) -> Response {
+pub async fn role(
+    Path(id): Path<String>,
+    Query(q): Query<PoolQuery>,
+    Json(b): Json<RoleBody>,
+) -> Response {
     let Some(role) = b.role else {
         return (
             StatusCode::BAD_REQUEST,
@@ -192,7 +270,7 @@ pub async fn role(Path(id): Path<String>, Json(b): Json<RoleBody>) -> Response {
         )
             .into_response();
     };
-    match blocking(move |l| l.admin_role(&id, role)).await {
+    match blocking(&q, move |l| l.admin_role(&id, role)).await {
         Ok(m) => Json(m).into_response(),
         Err(e) => error(&e),
     }

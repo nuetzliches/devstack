@@ -208,6 +208,26 @@ export class MockTransport implements Transport {
     if (hub.unpaired) return json(401, { error: 'not paired' });
     if (p === '/hub/stacks' && method === 'GET') return json(200, hub.entries());
     if (p === '/hub/docker' && method === 'GET') return json(200, hub.docker);
+    if (p === '/hub/pools' && method === 'GET')
+      return json(200, [
+        { name: 'default', joined: true, state: 'approved', coordinator: 'https://10.0.0.14:4260' },
+        { name: 'customer', joined: true, state: 'approved', coordinator: 'https://172.20.1.5:4260' },
+      ]);
+    if (p === '/hub/pool' && method === 'GET' && url.searchParams.get('pool') === 'customer')
+      return json(200, {
+        joined: true,
+        me: { id: 'c0ffee0123456789', name: 'dev-pc', state: 'approved', role: 'member', coordinator: 'https://172.20.1.5:4260' },
+        nodes: [
+          { id: 'c0ffee0123456789', name: 'dev-pc', online: true, seen: 3, kind: 'machine', report: { sharing: false, cpus: 0, memory: 0 } },
+          { id: 'feedbeef00112233', name: 'gpu-box', online: true, seen: 5, kind: 'server', report: { sharing: true, cpus: 24, memory: 96 * 2 ** 30, api: 'https://172.20.1.9:4261' } },
+        ],
+        leases: [],
+        members: [
+          { id: 'c0ffee0123456789', name: 'dev-pc', state: 'approved', role: 'member', requested_at: 1760000000 },
+          { id: 'feedbeef00112233', name: 'gpu-box', state: 'approved', role: 'admin', requested_at: 1760000000 },
+        ],
+        join: { coordinator: 'https://172.20.1.5:4260', fingerprint: 'ab'.repeat(32), command: `devstack join https://172.20.1.5:4260 --fingerprint ${'ab'.repeat(32)} --pool customer` },
+      });
     if (p === '/hub/pool' && method === 'GET') return json(200, hub.pool.overview());
     if (p === '/hub/pool/share' && method === 'GET') return json(200, hub.pool.share());
     if (p === '/hub/pool/share' && method === 'PUT') return json(200, hub.pool.setShare(body as unknown as ShareSettings));

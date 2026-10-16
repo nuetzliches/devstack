@@ -45,16 +45,22 @@ const actionText: Record<string, string> = {
   end: 'ended a lane on',
 };
 
-// Joining a pool from here, as `devstack join` does.
+// Joining a pool from here, as `devstack join` does; another one beside
+// the default pool under a name of its own (ADR-0034).
 const joinUrl = ref('');
 const joinFp = ref('');
 const joinName = ref('');
+const joinPool = ref('');
 const joining = ref(false);
+const addingPool = ref(false);
+const poolNameOk = computed(() => /^[a-z0-9_-]{1,32}$/.test(joinPool.value.trim()) && !pool.pools.some((p) => p.name === joinPool.value.trim() && p.joined));
 async function join() {
   joining.value = true;
-  await pool.join(joinUrl.value.trim(), joinFp.value.trim(), joinName.value.trim());
+  const as = addingPool.value ? joinPool.value.trim() : pool.current;
+  if (await pool.join(joinUrl.value.trim(), joinFp.value.trim(), joinName.value.trim(), as)) addingPool.value = false;
   joining.value = false;
 }
+const joinedPools = computed(() => pool.pools.filter((p) => p.joined));
 
 const ui = useUi();
 async function copyJoin() {
@@ -137,10 +143,66 @@ function policyText(id: string) {
 
 <template>
   <div class="page pool" data-testid="pool">
-    <section class="card">
+    <nav v-if="joinedPools.length > 1 || addingPool || pool.overview?.joined" class="pool-tabs" data-testid="pool-tabs">
+      <button
+        v-for="p in joinedPools"
+        :key="p.name"
+        type="button"
+        class="tab"
+        :class="{ on: p.name === pool.current && !addingPool }"
+        :title="p.coordinator ?? ''"
+        data-testid="pool-tab"
+        @click="
+          addingPool = false;
+          pool.select(p.name);
+        "
+      >
+        {{ p.name }}<span v-if="p.state === 'pending'" class="faint"> · waiting</span>
+      </button>
+      <button type="button" class="tab" :class="{ on: addingPool }" title="Join another pool, e.g. a customer's (ADR-0034)" data-testid="pool-add" @click="addingPool = true">
+        <Icon name="plus" :size="13" /> Another pool
+      </button>
+    </nav>
+
+    <section v-if="addingPool" class="card" data-testid="pool-join-another">
+      <header class="card-header">
+        <Icon name="key" :size="18" />
+        <h2>Join another pool</h2>
+      </header>
+      <div class="card-body">
+        <p class="muted small">
+          A pool of another organisation (a customer's servers, say), beside this machine's other pools. Each pool decides alone whom it
+          admits; they do not trust each other. The name is yours: it is how lanes name it (<code>--on name:node</code>).
+        </p>
+        <form class="join" @submit.prevent="join">
+          <label>
+            <span>Name here</span>
+            <input v-model="joinPool" class="input" placeholder="customer" required data-testid="pool-join-name" />
+          </label>
+          <label>
+            <span>Coordinator</span>
+            <input v-model="joinUrl" class="input" placeholder="https://10.0.0.5:4260" required />
+          </label>
+          <label class="wide">
+            <span>Fingerprint</span>
+            <input v-model="joinFp" class="input mono" placeholder="64 hex digits" required />
+          </label>
+          <label>
+            <span>This machine's name (optional)</span>
+            <input v-model="joinName" class="input" placeholder="this machine's name" />
+          </label>
+          <button type="submit" class="btn btn-primary btn-sm" :disabled="joining || !joinUrl || !joinFp || !poolNameOk">
+            <span v-if="joining" class="spinner" /><Icon v-else name="key" :size="14" /> Ask to join
+          </button>
+          <button type="button" class="btn btn-sm btn-ghost" @click="addingPool = false">Cancel</button>
+        </form>
+      </div>
+    </section>
+
+    <section v-if="!addingPool" class="card">
       <header class="card-header">
         <Icon name="server" :size="18" />
-        <h2>Pool</h2>
+        <h2>Pool<template v-if="pool.current !== 'default'"> {{ pool.current }}</template></h2>
         <span v-if="me?.role" class="pill sm" :class="me.role === 'admin' ? 'accent' : 'outline'" data-testid="pool-role">{{ me.role }}</span>
       </header>
       <div class="card-body">
@@ -193,7 +255,7 @@ function policyText(id: string) {
       </div>
     </section>
 
-    <section v-if="me?.state === 'approved'" class="card" data-testid="pool-share">
+    <section v-if="me?.state === 'approved' && !addingPool" class="card" data-testid="pool-share">
       <header class="card-header">
         <Icon name="power" :size="18" />
         <h2>This machine shares</h2>
@@ -508,6 +570,29 @@ function policyText(id: string) {
 }
 .tags-form .input {
   width: 220px;
+}
+.pool-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.pool-tabs .tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+.pool-tabs .tab.on {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--surface-hover);
 }
 .join {
   display: flex;

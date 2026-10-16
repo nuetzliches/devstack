@@ -56,6 +56,10 @@ that one.
 
 ## Enforced by
 
-Will live in: `crates/devstack-node/src/member.rs` (a membership per pool),
-`crates/devstack/src/poolcmd.rs` (`--pool`), the placement in
-`crates/devstack-daemon/src/lanes.rs`, the pool area in `ui/`.
+`crates/devstack-node/src/member.rs` (`pool_dir`, `pools`, `resolve_on`: a
+membership per pool, the default one where it always was, the others in
+`pools/<name>` beside it), `crates/devstack/src/poolcmd.rs` (`join --pool`,
+`pool [--pool]`, `node agent --pool`), `crates/devstack-daemon/src/remote.rs`
+(a lane leases in the pool `--on` names and shows it), the hub's `?pool=` and
+`GET /hub/pools`, the share switch per pool, the pool area in `ui/` (a tab
+per pool, joining another one; lanes start and move to the nodes of all).

@@ -109,6 +109,88 @@ pub fn default_dir(state: &Path) -> PathBuf {
         .unwrap_or_else(|| state.join("pool"))
 }
 
+/// The pool a machine joins first, and the one meant where none is named
+/// (ADR-0034).
+pub const DEFAULT_POOL: &str = "default";
+
+/// Is `name` usable as a pool's name: `a-z`, `0-9`, `-`, `_`, at most 32?
+pub fn valid_pool_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 32
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
+/// Where this machine's membership of the pool `name` lives: the default
+/// pool's in [`default_dir`], every other one's in `pools/<name>` beside it
+/// (ADR-0034: a membership per pool).
+pub fn pool_dir(state: &Path, name: &str) -> PathBuf {
+    let default = default_dir(state);
+    if name == DEFAULT_POOL {
+        return default;
+    }
+    default
+        .parent()
+        .map_or_else(|| state.to_path_buf(), Path::to_path_buf)
+        .join("pools")
+        .join(name)
+}
+
+/// The pools this machine belongs to or asked to join: the default pool
+/// first (always, joined or not), then the others by name.
+pub fn pools(state: &Path) -> Vec<(String, PathBuf)> {
+    let mut out = vec![(DEFAULT_POOL.to_string(), default_dir(state))];
+    let others = pool_dir(state, "x")
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    let mut names: Vec<String> = std::fs::read_dir(&others)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().join("member.json").is_file())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n != DEFAULT_POOL && valid_pool_name(n))
+        .collect();
+    names.sort();
+    out.extend(names.into_iter().map(|n| {
+        let d = others.join(&n);
+        (n, d)
+    }));
+    out
+}
+
+/// Where a lane is to run, as `--on` names it (ADR-0034 point 3), split
+/// into the pool and what its coordinator is asked for (a node, or `pool`
+/// for its choice):
+///
+/// - `<pool>:<node>`, `<pool>:` or `<pool>:pool`: in that pool;
+/// - `<pool>` alone, a pool this machine belongs to other than the default
+///   one: that pool's coordinator chooses;
+/// - anything else (`pool`, a node's name or id): the default pool.
+pub fn resolve_on(state: &Path, on: &str) -> std::result::Result<(String, String), String> {
+    let on = on.trim();
+    let known = pools(state);
+    let have = |p: &str| known.iter().any(|(n, _)| n == p);
+    if let Some((pool, node)) = on.split_once(':') {
+        if !have(pool) {
+            return Err(format!(
+                "this machine is in no pool `{pool}` (`devstack join <coordinator> --pool {pool}`)"
+            ));
+        }
+        let node = if node.is_empty() { "pool" } else { node };
+        return Ok((pool.to_string(), node.to_string()));
+    }
+    if on != DEFAULT_POOL && !on.eq_ignore_ascii_case("pool") && have(on) {
+        return Ok((on.to_string(), "pool".into()));
+    }
+    if on == DEFAULT_POOL {
+        return Ok((DEFAULT_POOL.into(), "pool".into()));
+    }
+    Ok((DEFAULT_POOL.into(), on.to_string()))
+}
+
 /// This machine's membership, in `dir`.
 pub struct Local {
     dir: PathBuf,
@@ -387,5 +469,40 @@ impl Local {
 
     pub fn admin_audit(&self) -> Result<Vec<AuditEntry>> {
         self.get("/v1/admin/audit")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn on_names_a_pool_and_a_node() {
+        if std::env::var_os("DEVSTACK_POOL_DIR").is_some() {
+            return;
+        }
+        let state = tempfile::tempdir().unwrap();
+        let acme = pool_dir(state.path(), "acme");
+        assert_eq!(acme, state.path().join("pools").join("acme"));
+        assert_eq!(
+            pool_dir(state.path(), DEFAULT_POOL),
+            state.path().join("pool")
+        );
+        std::fs::create_dir_all(&acme).unwrap();
+        std::fs::write(acme.join("member.json"), "{}").unwrap();
+        let names: Vec<String> = pools(state.path()).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, ["default", "acme"]);
+        let r = |on: &str| resolve_on(state.path(), on);
+        let pair = |p: &str, n: &str| Ok((p.to_string(), n.to_string()));
+        assert_eq!(r("build-server"), pair("default", "build-server"));
+        assert_eq!(r("pool"), pair("default", "pool"));
+        assert_eq!(r("default"), pair("default", "pool"));
+        assert_eq!(r("acme"), pair("acme", "pool"));
+        assert_eq!(r("acme:gpu-1"), pair("acme", "gpu-1"));
+        assert_eq!(r("acme:"), pair("acme", "pool"));
+        assert_eq!(r("default:build-server"), pair("default", "build-server"));
+        assert!(r("other:x").is_err());
+        assert!(!valid_pool_name("Acme"));
+        assert!(!valid_pool_name("../x"));
     }
 }

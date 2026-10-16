@@ -16,15 +16,13 @@ const stack = useStack();
 const pool = usePool();
 onBeforeUnmount(pool.watch(30_000));
 
-/** The nodes that can take a lane now. */
-const nodes = computed(() =>
-  (pool.overview?.nodes ?? []).filter((n) => n.online && n.report?.api && n.report.sharing && !n.paused && n.id !== pool.overview?.me?.id),
-);
+/** The nodes that can take a lane now, of every pool (ADR-0034). */
+const nodes = computed(() => pool.targets);
 const busy = computed(() => stack.busy['lane-start'] === props.lane.name);
 const m = computed(() => props.lane.moving ?? null);
 const running = computed(() => !!m.value && !m.value.error && m.value.kind === 'start');
 const failed = computed(() => (m.value?.error && m.value.kind === 'start' ? m.value : null));
-const placeName = (to: string) => (to === 'pool' ? 'the pool' : to);
+const placeName = (to: string) => (to === 'pool' ? 'the pool' : pool.pools.some((p) => p.name === to) ? `the pool ${to}` : to);
 
 function start(on?: string) {
   void stack.startLane(props.lane.name, on);
@@ -60,29 +58,41 @@ function start(on?: string) {
           <span v-if="busy && !running" class="spinner" /><Icon v-else name="play" :size="14" /> Start here
         </button>
         <button
+          v-if="!pool.placeable.length"
           type="button"
           class="btn"
-          :disabled="busy || running || !nodes.length"
-          :title="nodes.length ? 'The coordinator picks the node with the most free memory' : 'No node of the pool can take a lane now'"
+          disabled
+          title="No node of the pool can take a lane now"
           data-testid="lane-start-pool"
-          @click="start('pool')"
         >
           <Icon name="server" :size="14" /> Start in the pool
         </button>
         <button
-          v-for="n in nodes"
-          :key="n.id"
+          v-for="p in pool.placeable"
+          :key="p.pool"
           type="button"
           class="btn"
           :disabled="busy || running"
-          :title="`${n.report!.cpus.toFixed(1)} CPU free`"
-          data-testid="lane-start-node"
-          @click="start(n.name)"
+          title="The coordinator picks the node with the most free memory"
+          data-testid="lane-start-pool"
+          @click="start(p.on)"
         >
-          on {{ n.name }}
+          <Icon name="server" :size="14" /> Start in the pool{{ p.pool === 'default' ? '' : ` ${p.pool}` }}
+        </button>
+        <button
+          v-for="n in nodes"
+          :key="n.on"
+          type="button"
+          class="btn"
+          :disabled="busy || running"
+          :title="`${n.node.report!.cpus.toFixed(1)} CPU free`"
+          data-testid="lane-start-node"
+          @click="start(n.on)"
+        >
+          on {{ n.label }}
         </button>
       </div>
-      <p v-if="!pool.overview?.joined" class="muted small">
+      <p v-if="!pool.joinedAny" class="muted small">
         Lanes on other machines need a pool: <RouterLink :to="{ name: 'pool' }">join one</RouterLink>.
       </p>
     </div>
