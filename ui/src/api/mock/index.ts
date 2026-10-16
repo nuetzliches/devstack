@@ -266,24 +266,28 @@ export class MockTransport implements Transport {
   private async daemon(s: MockStack, method: string, p: string, q: URLSearchParams, body?: Record<string, unknown>): Promise<Response> {
     // Lanes (plan §3.5): the shop repository has two other worktrees, one
     // started; a lane's API is the stack's, here.
-    if (p === '/v1/lanes' && method === 'GET')
-      return json(
-        200,
-        s.view.name === 'shop'
-          ? [
-              { name: 'agent-login-fix', path: 'C:\\work\\shop-agent-login-fix', branch: 'agent/login-fix', number: 1, port_offset: 100, active: true, owns_main: s.laneOwnsMain, running: 3, services: 5 },
-              { name: 'review-cart', path: 'C:\\work\\shop-review-cart', branch: 'review-cart', number: 2, port_offset: 200, active: s.reviewLaneStarted, owns_main: false, running: s.reviewLaneStarted ? 5 : 0, services: 5 },
-              // Worktrees agents opened and left: lanes, not started.
-              { name: '1242', path: 'C:\\work\\_wt\\1242', branch: 'agent/checkout-totals', number: 3, port_offset: 300, active: false, owns_main: false, running: 0, services: 5 },
-              { name: '1333', path: 'C:\\work\\_wt\\1333', branch: 'agent/i18n-de', number: 4, port_offset: 400, active: false, owns_main: false, running: 0, services: 5 },
-              { name: 'bisect', path: 'C:\\work\\shop-bisect', branch: null, number: 5, port_offset: 500, active: false, owns_main: false, running: 0, services: 5 },
-            ]
-          : [],
-      );
+    const lanes = () =>
+      s.view.name === 'shop'
+        ? [
+            { name: 'agent-login-fix', path: 'C:\\work\\shop-agent-login-fix', branch: 'agent/login-fix', number: 1, port_offset: 100 },
+            { name: 'review-cart', path: 'C:\\work\\shop-review-cart', branch: 'review-cart', number: 2, port_offset: 200 },
+            // Worktrees agents opened and left: lanes, not started.
+            { name: '1242', path: 'C:\\work\\_wt\\1242', branch: 'agent/checkout-totals', number: 3, port_offset: 300 },
+            { name: '1333', path: 'C:\\work\\_wt\\1333', branch: 'agent/i18n-de', number: 4, port_offset: 400 },
+            { name: 'bisect', path: 'C:\\work\\shop-bisect', branch: null, number: 5, port_offset: 500 },
+          ].map((l) => {
+            const active = l.name === 'agent-login-fix' || s.startedLanes.has(l.name);
+            const owns = l.name === 'agent-login-fix' && s.laneOwnsMain;
+            return { ...l, active, owns_main: owns, running: active ? (l.name === 'agent-login-fix' ? 3 : 5) : 0, services: 5 };
+          })
+        : [];
+    if (p === '/v1/lanes' && method === 'GET') return json(200, lanes());
     if (p === '/v1/lanes' && method === 'POST') {
       await sleep(600);
-      s.reviewLaneStarted = true;
-      return json(201, {});
+      const l = lanes().find((x) => x.path === body?.path);
+      if (!l) return json(409, { error: 'no worktree there' });
+      s.startedLanes.add(l.name);
+      return json(201, { ...l, active: true, running: 5 });
     }
     const lm = /^\/v1\/lanes\/([^/]+)\/main$/.exec(p);
     if (lm && method === 'POST') {
@@ -293,7 +297,7 @@ export class MockTransport implements Transport {
     }
     const stop = /^\/v1\/lanes\/([^/]+)\/stop$/.exec(p);
     if (stop && method === 'POST') {
-      if (stop[1] === 'review-cart') s.reviewLaneStarted = false;
+      s.startedLanes.delete(decodeURIComponent(stop[1]));
       return json(200, []);
     }
     const fw = /^\/v1\/lanes\/[^/]+(\/v1\/.*)$/.exec(p);
