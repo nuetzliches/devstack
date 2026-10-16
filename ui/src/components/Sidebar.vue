@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // Stacks and their worktrees (lanes, ADR-0024) as a sidebar: every stack the
 // hub knows, and under each running one its lanes, named by their branch.
-// Started lanes first; the worktrees nobody started fold away. The current
+// Started lanes first; the worktrees nobody started fold away. A stack's
+// worktrees fold only with its toggle, never by navigating. The shown
 // stack's lanes come live from its stream; the others' are read when the
 // hub's list of stacks changes (no polling, ADR-0021).
 import { computed, nextTick, ref, watch } from 'vue';
@@ -20,17 +21,34 @@ const stack = useStack();
 const router = useRouter();
 const adding = ref(false);
 const unfolded = ref<Record<string, boolean>>({});
+/** Stacks whose worktrees are folded away; only the toggle changes it. */
+const collapsed = ref<Record<string, boolean>>(persist.get<Record<string, boolean>>('sidebar.collapsed') ?? {});
+function toggle(id: string) {
+  collapsed.value[id] = !collapsed.value[id];
+  persist.set('sidebar.collapsed', collapsed.value);
+}
 
 const stacks = computed(() => [...hub.stacks].sort((a, b) => Number(b.running) - Number(a.running) || a.name.localeCompare(b.name)));
 
-/** Lanes of the stacks not shown, by stack id. */
-const others = ref<Record<string, LaneView[]>>({});
-async function loadOthers(list: StackEntry[]) {
+/**
+ * The worktrees of every stack, kept across navigation: replaced when news
+ * arrives (the shown stack's stream, a read when the hub's list changes),
+ * never emptied by a switch, so nothing folds or flickers.
+ */
+const known = ref<Record<string, LaneView[]>>({});
+watch(
+  () => [stack.lanesOf, stack.lanes] as const,
+  ([sid, list]) => {
+    if (sid) known.value[sid] = list;
+  },
+  { immediate: true },
+);
+async function loadAll(list: StackEntry[]) {
   for (const s of list) {
-    if (!s.running || s.id === stack.id) continue;
+    if (!s.running) continue;
     try {
       const res = await api().request<LaneView[]>('GET', paths.api(s.id, v1.lanes));
-      others.value[s.id] = res.ok && Array.isArray(res.body) ? res.body : [];
+      if (res.ok && Array.isArray(res.body)) known.value[s.id] = res.body;
     } catch {
       /* keep what is known */
     }
@@ -38,14 +56,15 @@ async function loadOthers(list: StackEntry[]) {
 }
 watch(
   () => hub.stacks.map((s) => `${s.id}:${s.running}`).join(','),
-  () => void loadOthers(hub.stacks),
+  () => void loadAll(hub.stacks),
   { immediate: true },
 );
 
 function lanesOf(s: StackEntry) {
   if (!s.running) return { running: [], idle: [] };
-  return orderLanes(s.id === stack.id ? stack.lanes : (others.value[s.id] ?? []));
+  return orderLanes(known.value[s.id] ?? []);
 }
+const hasLanes = (s: StackEntry) => s.running && (known.value[s.id]?.length ?? 0) > 0;
 
 function openStack(s: StackEntry) {
   if (s.id === stack.id && stack.lane) stack.selectLane(null);
@@ -77,12 +96,27 @@ const isCurrent = (s: StackEntry) => s.id === stack.id;
     <div class="head">Stacks</div>
     <ul class="stacks">
       <li v-for="s in stacks" :key="s.id" class="stack" :class="{ current: isCurrent(s) }" :data-stack="s.id">
+        <div class="stack-row">
+        <button
+          v-if="hasLanes(s)"
+          type="button"
+          class="fold-btn"
+          :aria-expanded="!collapsed[s.id]"
+          :aria-label="`${collapsed[s.id] ? 'Show' : 'Hide'} the worktrees of ${s.name}`"
+          :title="collapsed[s.id] ? 'Show worktrees' : 'Hide worktrees'"
+          data-testid="sidebar-fold"
+          @click="toggle(s.id)"
+        >
+          <Icon :name="collapsed[s.id] ? 'chevronRight' : 'chevronDown'" :size="13" />
+        </button>
+        <span v-else class="fold-space" />
         <button type="button" class="item" :class="{ active: isCurrent(s) && !stack.lane }" :title="s.repo" data-testid="sidebar-stack" @click="openStack(s)">
           <span class="dot" :class="!hub.reachable ? 'unknown' : s.running ? 'on' : 'off'" aria-hidden="true" />
           <span class="label truncate">{{ s.name }}</span>
           <span v-if="!s.running" class="faint small">offline</span>
         </button>
-        <ul v-if="lanesOf(s).running.length || lanesOf(s).idle.length" class="lanes">
+        </div>
+        <ul v-if="hasLanes(s) && !collapsed[s.id]" class="lanes">
           <li v-for="l in lanesOf(s).running" :key="l.name">
             <button
               type="button"
@@ -155,7 +189,7 @@ ul {
 .lanes {
   margin: 2px 0 6px;
   border-left: 1px solid var(--border);
-  margin-left: 14px;
+  margin-left: 30px;
   padding-left: 4px;
 }
 .item {
@@ -240,5 +274,29 @@ ul {
 }
 .add:hover {
   background: var(--surface-hover);
+}
+.stack-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.fold-btn,
+.fold-space {
+  width: 20px;
+  height: 24px;
+  flex: none;
+}
+.fold-btn {
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.fold-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
 }
 </style>

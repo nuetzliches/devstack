@@ -54,11 +54,17 @@ export const useStack = defineStore('stack', () => {
   const lane = ref<string | null>(null);
   const lanes = ref<LaneView[]>([]);
 
+  /** Which stack `lanes` belongs to (it lags behind `id` while a switch loads). */
+  const lanesOf = ref<string | null>(null);
+  /** The last view of each lane seen in this page session, so switching back shows it at once. */
+  const laneViews = new Map<string, { view: StackView; at: number }>();
+
   async function loadLanes() {
-    if (!id.value || !running.value) return;
+    const sid = id.value;
+    if (!sid || !running.value) return;
     try {
-      const res = await api().request<LaneView[]>('GET', paths.api(id.value, v1.lanes));
-      if (res.ok && Array.isArray(res.body)) setLanes(res.body);
+      const res = await api().request<LaneView[]>('GET', paths.api(sid, v1.lanes));
+      if (sid === id.value && res.ok && Array.isArray(res.body)) setLanes(res.body);
     } catch {
       // keep the list; the next connect loads it again
     }
@@ -67,6 +73,7 @@ export const useStack = defineStore('stack', () => {
   /** The lanes now; the one shown is gone (its worktree was removed): back to the main tree. */
   function setLanes(next: LaneView[]) {
     lanes.value = next;
+    lanesOf.value = id.value;
     if (lane.value && !next.some((l) => l.name === lane.value)) selectLane(null);
   }
 
@@ -88,7 +95,7 @@ export const useStack = defineStore('stack', () => {
   function reset(next: string) {
     disconnect();
     setLane(lane.value);
-    const cached = lane.value ? null : persist.stack(next);
+    const cached = lane.value ? (laneViews.get(`${next}#${lane.value}`) ?? null) : persist.stack(next);
     view.value = cached?.view ?? null;
     viewAt.value = cached?.at ?? null;
     events.value = [];
@@ -286,6 +293,7 @@ export const useStack = defineStore('stack', () => {
     saveTimer = setTimeout(() => {
       saveTimer = null;
       if (id.value && view.value && !lane.value) persist.saveStack(id.value, { view: view.value, at: Date.now() });
+      if (id.value && view.value && lane.value) laneViews.set(`${id.value}#${lane.value}`, { view: view.value, at: Date.now() });
     }, 500);
   }
 
@@ -551,6 +559,7 @@ export const useStack = defineStore('stack', () => {
     runCommand,
     lane,
     lanes,
+    lanesOf,
     loadLanes,
     selectLane,
     laneMain,
