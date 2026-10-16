@@ -72,3 +72,4 @@ before code exists it names where it *will* live.
 | [0032](0032-the-pool-is-administered-in-the-dashboard.md) | The pool is administered in the dashboard, by members with the admin role | Accepted |
 | [0033](0033-a-node-decides-what-runs-on-it.md) | A node decides who runs lanes on it, and what a lane there may do | Accepted |
 | [0034](0034-a-machine-can-belong-to-several-pools.md) | A machine can belong to several pools; pools do not trust each other | Accepted |
+| [0035](0035-lanes-can-be-shared-with-the-pool.md) | The pool sees the lanes its members share, and can use them | Accepted |
