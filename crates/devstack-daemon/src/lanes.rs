@@ -942,7 +942,7 @@ impl Lanes {
             .unwrap()
             .get(&t)
             .map_or(0, |k| k.entry.number * main.stack.lanes.port_step);
-        let remote_active = remote.as_ref().map(|r| r.state().active);
+        let remote_active = remote.as_ref().map(|r| r.active_now(&self.rt));
         let active = |s: &str| match &remote_active {
             Some(names) => names.iter().any(|n| n == s).then(|| {
                 main.stack
