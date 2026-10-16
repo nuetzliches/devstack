@@ -1,0 +1,28 @@
+# Frozen for 0.7.0: `prepare` of a dev server, which a lane runs from its copy.
+version = 1
+
+[stack]
+name = "shop"
+requires = "0.7.0"
+
+[lanes]
+port_step = 100
+
+[services.web]
+kind = "devserver"
+cwd = "web"
+run = "npx ng serve --port {port}"
+port = 4200
+restart_on = ["web/angular.json"]
+prepare = { run = "npm ci", inputs = ["web/package-lock.json"] }
+
+[services.web-e2e]
+kind = "static"
+cwd = "web"
+build = "npm run build"
+output = "web/dist/web/browser"
+port = 4300
+
+[services.web-e2e.prepare]
+run = "npm ci"
+inputs = ["web/package-lock.json"]
