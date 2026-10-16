@@ -83,6 +83,10 @@ pub struct RemoteSpec<'a> {
     pub need: Amount,
     /// A directory of this daemon's for the lane.
     pub scratch: &'a Path,
+    /// Each service port of the lane, as `(on the node, here)`: the lane
+    /// listens on the stack's ports there, here on them moved by its offset,
+    /// as a local lane does (ADR-0029 point 4).
+    pub ports: Vec<(u16, u16)>,
 }
 
 impl RemoteLane {
@@ -96,6 +100,7 @@ impl RemoteLane {
             on,
             need,
             scratch,
+            ports,
         } = spec;
         let local = local_member();
         let offer = local
@@ -139,6 +144,10 @@ impl RemoteLane {
         });
         let l = lane.clone();
         let scratch = scratch.to_path_buf();
+        for (there, here) in ports {
+            let l = lane.clone();
+            rt.spawn(async move { l.forward_port(there, here).await });
+        }
         // The first look syncs once more: the fingerprint of what the first
         // sync sent is not known, and the listing is all it costs.
         rt.spawn(async move { l.follow(scratch, None).await });
@@ -221,6 +230,77 @@ impl RemoteLane {
                 }
             }
         }
+    }
+
+    /// Listen on `here` (loopback, IPv4 and, where there is one, IPv6) and
+    /// carry every connection to port `there` of the lane on its node: bytes
+    /// unchanged, so WebSockets, hot module replacement and TLS dev servers
+    /// work as they do locally.
+    async fn forward_port(self: Arc<Self>, there: u16, here: u16) {
+        let mut listeners = Vec::new();
+        match tokio::net::TcpListener::bind(("127.0.0.1", here)).await {
+            Ok(l) => listeners.push(l),
+            Err(e) => {
+                self.trouble(Some(format!("port {here} here: {e}")));
+                return;
+            }
+        }
+        if let Ok(l) = tokio::net::TcpListener::bind(("::1", here)).await {
+            listeners.push(l);
+        }
+        for listener in listeners {
+            let me = self.clone();
+            tokio::spawn(async move {
+                let mut stopped = me.stopped.subscribe();
+                loop {
+                    let accepted = tokio::select! {
+                        a = listener.accept() => a,
+                        _ = stopped.wait_for(|s| *s) => return,
+                    };
+                    let Ok((tcp, _)) = accepted else {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        continue;
+                    };
+                    let me = me.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = me.tunnel(tcp, there).await {
+                            crate::diag::warn(
+                                "remote_lane_tunnel",
+                                serde_json::json!({ "lane": me.name, "port": there, "error": e }),
+                            );
+                        }
+                    });
+                }
+            });
+        }
+    }
+
+    /// One connection, through the node agent to the lane daemon's tunnel.
+    async fn tunnel(&self, mut tcp: tokio::net::TcpStream, port: u16) -> Result<(), String> {
+        let _ = tcp.set_nodelay(true);
+        let req = axum::http::Request::builder()
+            .method("GET")
+            .uri(format!("/v1/tunnel/{port}"))
+            .header(axum::http::header::CONNECTION, "upgrade")
+            .header(axum::http::header::UPGRADE, crate::api::TUNNEL_PROTOCOL)
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .map_err(|e| e.to_string())?;
+        let mut res = self
+            .client
+            .forward(&self.lease, req)
+            .await
+            .map_err(|e| e.to_string())?;
+        if res.status() != axum::http::StatusCode::SWITCHING_PROTOCOLS {
+            return Err(format!("the node answered {}", res.status()));
+        }
+        let up = hyper::upgrade::on(&mut res)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut up = hyper_util::rt::TokioIo::new(up);
+        tokio::io::copy_bidirectional(&mut up, &mut tcp)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     /// The lane's API, passed through (`req`'s URI is the daemon's path).

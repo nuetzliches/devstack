@@ -61,6 +61,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/runs/{id}", get(run_info))
         .route("/v1/runs/{id}/log", get(run_log))
         .route("/v1/runs/{id}/log/stream", get(run_log_stream))
+        .route("/v1/tunnel/{port}", get(tunnel))
         .route("/v1/lanes", get(lanes_list).post(lanes_start))
         .route("/v1/lanes/{lane}/stop", post(lanes_stop))
         .route("/v1/lanes/{lane}/main", post(lanes_take_main))
@@ -325,6 +326,68 @@ fn memory_fits(
         gb(free)
     ))
 }
+
+/// `GET /v1/tunnel/{port}` with `Upgrade: devstack-tcp`: the connection
+/// becomes a TCP connection to a service's port on this machine's loopback
+/// (ADR-0029 point 4). A lane on a node is reached this way: services there
+/// listen on its container's loopback, and the requester forwards its
+/// local ports through the node agent to here. Only the ports of the stack's
+/// services, behind the API's token like every route.
+async fn tunnel(State(s): State<AppState>, Path(port): Path<u16>, mut req: Request) -> Response {
+    if !s
+        .sup
+        .stack
+        .services
+        .values()
+        .any(|svc| svc.port == Some(port))
+    {
+        return err(
+            StatusCode::FORBIDDEN,
+            format!("port {port} is no service's port in this stack"),
+        );
+    }
+    let wants = req
+        .headers()
+        .get(header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case(TUNNEL_PROTOCOL));
+    if !wants {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!("a tunnel needs `Upgrade: {TUNNEL_PROTOCOL}`"),
+        );
+    }
+    // Dev servers bound to `localhost` may hold only `::1`.
+    let tcp = match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+        Ok(t) => t,
+        Err(_) => match tokio::net::TcpStream::connect(("::1", port)).await {
+            Ok(t) => t,
+            Err(e) => {
+                return err(
+                    StatusCode::BAD_GATEWAY,
+                    format!("nothing answers on port {port}: {e}"),
+                );
+            }
+        },
+    };
+    let _ = tcp.set_nodelay(true);
+    let upgrade = hyper::upgrade::on(&mut req);
+    tokio::spawn(async move {
+        let Ok(up) = upgrade.await else { return };
+        let mut io = hyper_util::rt::TokioIo::new(up);
+        let mut tcp = tcp;
+        let _ = tokio::io::copy_bidirectional(&mut io, &mut tcp).await;
+    });
+    Response::builder()
+        .status(StatusCode::SWITCHING_PROTOCOLS)
+        .header(header::CONNECTION, "upgrade")
+        .header(header::UPGRADE, TUNNEL_PROTOCOL)
+        .body(axum::body::Body::empty())
+        .expect("a valid response")
+}
+
+/// The `Upgrade` protocol of a TCP tunnel.
+pub const TUNNEL_PROTOCOL: &str = "devstack-tcp";
 
 /// `POST /v1/lanes/{lane}/stop`: its services stop and it is no longer
 /// started (`devstack lane stop`); the worktree stays as it is.

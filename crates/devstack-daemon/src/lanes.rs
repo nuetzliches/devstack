@@ -1043,6 +1043,13 @@ impl Lanes {
                 on,
                 need,
                 scratch: &scratch,
+                ports: ports(&self.main.stack)
+                    .into_iter()
+                    .filter_map(|p| {
+                        p.checked_add(entry.number * self.main.stack.lanes.port_step)
+                            .map(|here| (p, here))
+                    })
+                    .collect(),
             },
         );
         self.pending.lock().unwrap().remove(&name);

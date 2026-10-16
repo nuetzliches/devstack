@@ -209,6 +209,12 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
             diag::info("daemon_stopping", serde_json::json!({ "reason": why }));
             let _ = stopping_tx.send(());
         };
+        // Small writes go out at once: a tunnel to a lane's port is this API
+        // too (ADR-0029 point 4), and its turns would wait for delayed ACKs.
+        use axum::serve::ListenerExt;
+        let listener = listener.tap_io(|tcp| {
+            let _ = tcp.set_nodelay(true);
+        });
         let serve = axum::serve(listener, app).with_graceful_shutdown(stop);
         // A graceful shutdown waits for every open request, and event and log
         // streams (dashboard, `logs --follow`) never end on their own: give them
