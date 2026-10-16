@@ -289,7 +289,9 @@ export class MockTransport implements Transport {
           ].map((l) => {
             const active = l.name === 'agent-login-fix' || s.startedLanes.has(l.name);
             const owns = l.name === 'agent-login-fix' && s.laneOwnsMain;
-            return { ...l, active, owns_main: owns, running: active ? (l.name === 'agent-login-fix' ? 3 : 5) : 0, services: 5 };
+            // review-cart runs on a node of the pool once started (ADR-0025).
+            const node = active && l.name === 'review-cart' ? { node: 'build-server' } : {};
+            return { ...l, active, owns_main: owns, running: active ? (l.name === 'agent-login-fix' ? 3 : 5) : 0, services: 5, ...node };
           })
         : [];
     if (p === '/v1/lanes' && method === 'GET') return json(200, lanes());

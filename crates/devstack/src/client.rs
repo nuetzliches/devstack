@@ -106,12 +106,18 @@ impl Client {
 
     /// Register this worktree as a lane (and make sure the shared
     /// infrastructure runs); from then on calls go to it.
-    pub fn join_lane(&mut self, wt: &Worktree, workers: bool, force: bool) -> Result<String> {
+    pub fn join_lane(
+        &mut self,
+        wt: &Worktree,
+        workers: bool,
+        force: bool,
+        on: Option<&str>,
+    ) -> Result<String> {
         let (status, body) = self.call_raw(
             "POST",
             "/v1/lanes",
             Some(serde_json::json!({
-                "path": wt.path, "infra": true, "workers": workers, "force": force
+                "path": wt.path, "infra": on.is_none(), "workers": workers, "force": force, "on": on
             })),
         )?;
         if status >= 400 {
@@ -421,18 +427,36 @@ fn truncate(s: &str, n: usize) -> String {
 
 /// `devstack up`: infra, then autostart services; follow until all are ready
 /// or one fails. Exit code 1 on failure.
-pub fn up(stack_file: &Path, workers: bool, force: bool) -> Result<()> {
-    ensure_engine(stack_file)?;
+pub fn up(stack_file: &Path, workers: bool, force: bool, on: Option<&str>) -> Result<()> {
+    // Resolves whether this is a lane's worktree.
     let sd = state_dir(stack_file)?;
+    if on.is_some() && worktree().is_none() {
+        bail!(
+            "--on runs a worktree's lane on another machine: run it in a `git worktree` of the repository"
+        );
+    }
+    // A lane on a node needs no Docker here: everything of it runs there.
+    if on.is_none() {
+        ensure_engine(stack_file)?;
+    }
     let mut c = ensure_daemon(&daemon_file(stack_file), &sd)?;
     if let Some(wt) = worktree()
-        && c.lane().is_none_or(|l| l == "-")
+        && (on.is_some() || c.lane().is_none_or(|l| l == "-"))
     {
-        let name = c.join_lane(wt, workers, force)?;
-        println!(
-            "this worktree runs as lane `{name}` of {}",
-            wt.main_file.display()
-        );
+        if let Some(node) = on {
+            println!("leasing, syncing and starting the lane on {node}...");
+        }
+        let name = c.join_lane(wt, workers, force, on)?;
+        match on {
+            Some(node) => println!(
+                "this worktree runs as lane `{name}` of {} on {node}",
+                wt.main_file.display()
+            ),
+            None => println!(
+                "this worktree runs as lane `{name}` of {}",
+                wt.main_file.display()
+            ),
+        }
     }
     crate::hubcmd::ensure_quietly();
     let t0 = Instant::now();
@@ -773,24 +797,33 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<24} {:<24} {:>8} {:>9}  {:<5}  PATH",
-        "LANE", "BRANCH", "PORTS +", "RUNNING", "MAIN"
+        "{:<24} {:<24} {:<16} {:>8} {:>9}  {:<5}  PATH",
+        "LANE", "BRANCH", "RUNS ON", "PORTS +", "RUNNING", "MAIN"
     );
+    let mut troubles = Vec::new();
     for l in lanes {
         let running = if l["active"] == false {
             "stopped".to_string()
         } else {
             format!("{}/{}", l["running"], l["services"])
         };
+        let name = l["name"].as_str().unwrap_or("");
+        if let Some(e) = l["node_error"].as_str() {
+            troubles.push(format!("{name}: {e}"));
+        }
         println!(
-            "{:<24} {:<24} {:>8} {:>9}  {:<5}  {}",
-            l["name"].as_str().unwrap_or(""),
+            "{:<24} {:<24} {:<16} {:>8} {:>9}  {:<5}  {}",
+            name,
             l["branch"].as_str().unwrap_or("(detached)"),
+            l["node"].as_str().unwrap_or("this machine"),
             l["port_offset"],
             running,
             if l["owns_main"] == true { "yes" } else { "" },
             l["path"].as_str().unwrap_or("")
         );
+    }
+    for t in troubles {
+        println!("  ! {t}");
     }
     Ok(())
 }

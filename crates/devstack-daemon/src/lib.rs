@@ -12,6 +12,7 @@ pub mod lanes;
 pub mod logfiles;
 pub mod proxy;
 pub mod registry;
+pub mod remote;
 pub mod state;
 pub mod staticsrv;
 pub mod supervisor;

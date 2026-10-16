@@ -340,7 +340,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             if let Some(wt) = client::worktree()
                 && c.lane().is_none_or(|l| l == "-")
             {
-                c.join_lane(wt, false, false)?;
+                c.join_lane(wt, false, false, None)?;
             }
             match client::start_and_wait(&c, file, Some(timeout), |_, _| {})? {
                 UpOutcome::Ready(stack) => Ok(format!("ready\n\n{}", client::status_text(&stack))),

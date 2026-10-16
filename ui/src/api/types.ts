@@ -77,6 +77,10 @@ export type LaneView = {
   owns_main: boolean;
   running: number;
   services: number;
+  /** The node of the pool it runs on (ADR-0025); absent: this machine. */
+  node?: string;
+  /** What went wrong with it on its node lately (a sync, a renewal). */
+  node_error?: string;
 };
 
 export type ServiceView = {

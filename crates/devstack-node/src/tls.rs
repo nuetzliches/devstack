@@ -209,3 +209,48 @@ pub async fn request(
 pub fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |x, (p, q)| x | (p ^ q)) == 0
 }
+
+/// Send `req` (path and query in its URI) to the member `member` at `api` and
+/// hand back the answer as it arrives: streams stay streams.
+pub async fn send<B>(
+    config: Arc<rustls::ClientConfig>,
+    api: &str,
+    member: &str,
+    mut req: hyper::Request<B>,
+) -> Result<hyper::Response<hyper::body::Incoming>>
+where
+    B: hyper::body::Body + Send + 'static,
+    B::Data: Send,
+    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    let authority = api
+        .strip_prefix("https://")
+        .ok_or_else(|| TlsError::Other(format!("`{api}` is no https:// address")))?
+        .trim_end_matches('/')
+        .to_string();
+    let tcp = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::net::TcpStream::connect(&authority),
+    )
+    .await
+    .map_err(|_| TlsError::Other(format!("{authority}: no answer within 10 s")))?
+    .map_err(|e| TlsError::Other(format!("{authority}: {e}")))?;
+    let name = ServerName::try_from(pki::member_dns(member))
+        .map_err(|e| TlsError::Other(format!("server name: {e}")))?;
+    let tls = tokio_rustls::TlsConnector::from(config)
+        .connect(name, tcp)
+        .await
+        .map_err(|e| TlsError::Other(format!("{authority}: TLS: {e}")))?;
+    let (mut s, conn) = hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(tls))
+        .await
+        .map_err(|e| TlsError::Other(format!("{authority}: {e}")))?;
+    tokio::spawn(conn);
+    req.headers_mut().insert(
+        hyper::header::HOST,
+        hyper::header::HeaderValue::from_str(&authority)
+            .map_err(|e| TlsError::Other(e.to_string()))?,
+    );
+    s.send_request(req)
+        .await
+        .map_err(|e| TlsError::Other(format!("{authority}: {e}")))
+}

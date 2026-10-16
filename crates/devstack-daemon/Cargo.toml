@@ -17,6 +17,7 @@ devstack-build.workspace = true
 devstack-compose.workspace = true
 devstack-config.workspace = true
 devstack-env.workspace = true
+devstack-node.workspace = true
 devstack-proc.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true

@@ -538,6 +538,7 @@ dependencies = [
  "devstack-compose",
  "devstack-config",
  "devstack-env",
+ "devstack-node",
  "devstack-proc",
  "globset",
  "http-body-util",

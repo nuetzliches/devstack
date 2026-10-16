@@ -119,6 +119,12 @@ with a home of its own, and the lane publishes no host port on the node
 (`devstack_compose::node_overlay`). An expired lease took container, Compose
 project, network and mirror with it.
 
+*Measured with M2c, 2026-10-16:* `devstack up --on <node>` in a worktree of a
+copy of the fixture: leased, 7 files synced in 0.2 s, started on the node in
+3 s, the API healthy 2.4 s after `up`; an edit in the worktree was a new
+healthy build on the node about 8 s later; `devstack lane stop` and `devstack
+down` (the daemon ends) each left nothing on the node.
+
 ## Alternatives considered
 
 - **Remote builds only, run locally.** Moves CPU, not memory; the memory of a

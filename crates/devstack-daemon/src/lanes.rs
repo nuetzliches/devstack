@@ -25,8 +25,13 @@
 //!
 //! The control API of a lane is the same as the main one, under
 //! `/v1/lanes/<name>/v1/...`.
+//!
+//! A lane may run on another machine of the pool instead (`devstack up --on
+//! <node>`, ADR-0025): then it is a [`RemoteLane`], and its API is the
+//! node's lane daemon, passed through under the same path.
 
 use crate::api::{self, AppState};
+use crate::remote::RemoteLane;
 use crate::supervisor::Supervisor;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -60,6 +65,12 @@ pub struct LaneView {
     /// Services that run (healthy or starting), of all.
     pub running: usize,
     pub services: usize,
+    /// The node it runs on; `None`: this machine (ADR-0025 point 10).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
+    /// What went wrong with a lane on a node lately (a sync, a renewal).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_error: Option<String>,
 }
 
 /// A started lane.
@@ -102,6 +113,8 @@ pub struct Lanes {
     known: Mutex<BTreeMap<String, Known>>,
     /// The started lanes.
     map: Mutex<BTreeMap<String, Arc<Lane>>>,
+    /// The started lanes that run on a node of the pool.
+    remote: Mutex<BTreeMap<String, Arc<RemoteLane>>>,
     /// Lanes being started right now, so one is not started twice.
     pending: Mutex<BTreeSet<String>>,
     /// One main-slot hand-over at a time, and what it took from the main tree.
@@ -270,6 +283,7 @@ impl Lanes {
             port,
             known: Mutex::new(BTreeMap::new()),
             map: Mutex::new(BTreeMap::new()),
+            remote: Mutex::new(BTreeMap::new()),
             pending: Mutex::new(BTreeSet::new()),
             handover: Mutex::new(Handover::default()),
             syncing: Mutex::new(()),
@@ -488,6 +502,9 @@ impl Lanes {
         if let Some(l) = self.map.lock().unwrap().remove(name) {
             l.sup.close();
         }
+        if let Some(r) = self.remote.lock().unwrap().remove(name) {
+            self.stop_remote(r);
+        }
         self.remove_infra(name);
         {
             let mut known = self.known.lock().unwrap();
@@ -615,6 +632,7 @@ impl Lanes {
     /// The lanes as they are known now, without asking git.
     fn views(&self) -> Vec<LaneView> {
         let map = self.map.lock().unwrap();
+        let remote = self.remote.lock().unwrap();
         let services = self.main.stack.services.len();
         self.known
             .lock()
@@ -622,13 +640,16 @@ impl Lanes {
             .values()
             .map(|k| {
                 let lane = map.get(&k.entry.name);
-                let (running, services) = match lane {
-                    Some(l) => {
+                let on_node = remote.get(&k.entry.name);
+                let node_state = on_node.map(|r| r.state());
+                let (running, services) = match (lane, &node_state) {
+                    (Some(l), _) => {
                         let v = l.sup.view();
                         let n = v.services.iter().filter(|s| s.status.is_active()).count();
                         (n, v.services.len())
                     }
-                    None => (0, services),
+                    (None, Some(st)) if st.services > 0 => (st.running, st.services),
+                    (None, _) => (0, services),
                 };
                 LaneView {
                     name: k.entry.name.clone(),
@@ -636,10 +657,12 @@ impl Lanes {
                     branch: k.branch.clone(),
                     number: k.entry.number,
                     port_offset: k.entry.number * self.main.stack.lanes.port_step,
-                    active: lane.is_some(),
+                    active: lane.is_some() || on_node.is_some(),
                     owns_main: lane.is_some_and(|l| l.sup.owns_main()),
                     running,
                     services,
+                    node: on_node.map(|r| r.node.name.clone()),
+                    node_error: node_state.and_then(|st| st.error),
                 }
             })
             .collect()
@@ -670,6 +693,12 @@ impl Lanes {
         let name = entry.name.clone();
         if let Some(l) = self.map.lock().unwrap().get(&name) {
             return Ok(l.clone());
+        }
+        if let Some(r) = self.remote.lock().unwrap().get(&name) {
+            return Err(format!(
+                "lane `{name}` runs on {}: `devstack lane stop {name}` first",
+                r.node.name
+            ));
         }
         if !self.pending.lock().unwrap().insert(name.clone()) {
             return Err(format!("lane `{name}` is being started"));
@@ -716,6 +745,13 @@ impl Lanes {
     /// started; its snapshot and builds stay for the next start. The worktree
     /// is git's business and stays as it is.
     pub fn stop(&self, name: &str) -> Result<(), String> {
+        let remote = self.remote.lock().unwrap().remove(name);
+        if let Some(r) = remote {
+            self.stop_remote(r);
+            crate::diag::info("lane_stopped", serde_json::json!({ "lane": name }));
+            self.announce();
+            return Ok(());
+        }
         let lane = self.started(name)?;
         if lane.sup.owns_main() {
             return Err(format!(
@@ -750,6 +786,12 @@ impl Lanes {
     /// The ports move first; the owner changes only when all of them did. A
     /// port that cannot move gives everything back to the main tree.
     pub fn take_main(&self, name: &str) -> Result<(), String> {
+        if let Some(r) = self.remote.lock().unwrap().get(name) {
+            return Err(format!(
+                "lane `{name}` runs on {}: the main slot stays on this machine for now (ADR-0025 point 4)",
+                r.node.name
+            ));
+        }
         let main = &self.main;
         let mut ho = self.handover.lock().unwrap();
         let current = main.served_by();
@@ -915,6 +957,99 @@ impl Lanes {
         for l in lanes {
             l.sup.down(false);
         }
+        // A daemon that stops releases its lanes on nodes (ADR-0025 point 7).
+        let remote: Vec<Arc<RemoteLane>> = std::mem::take(&mut *self.remote.lock().unwrap())
+            .into_values()
+            .collect();
+        for r in remote {
+            self.stop_remote(r);
+        }
+    }
+
+    /// Release a lane on a node, on a thread of its own: the call blocks on
+    /// the node, and this may run on the runtime's.
+    fn stop_remote(&self, r: Arc<RemoteLane>) {
+        let rt = self.rt.clone();
+        let _ = std::thread::spawn(move || r.stop(&rt)).join();
+    }
+
+    /// A started lane that runs on a node.
+    pub fn remote(&self, name: &str) -> Option<Arc<RemoteLane>> {
+        self.remote.lock().unwrap().get(name).cloned()
+    }
+
+    /// Start the lane of the worktree at `path` on the node `on` (`devstack
+    /// up --on`, ADR-0025): leased, synced and started there, followed from
+    /// here. `need` is what it is expected to take.
+    pub fn activate_remote(
+        &self,
+        path: &Path,
+        on: &str,
+        need: devstack_node::share::Amount,
+    ) -> Result<String, String> {
+        let path = std::path::absolute(path).map_err(|e| e.to_string())?;
+        if same_tree(&path, &self.main.repo) {
+            return Err("that is the main working tree: it runs on this machine".into());
+        }
+        self.sync();
+        let entry = self
+            .known
+            .lock()
+            .unwrap()
+            .values()
+            .find(|k| same_tree(&k.entry.path, &path))
+            .map(|k| k.entry.clone())
+            .ok_or_else(|| {
+                format!(
+                    "{} is no worktree of {} (`git worktree add` makes one)",
+                    path.display(),
+                    self.main.repo.display()
+                )
+            })?;
+        let name = entry.name.clone();
+        if self.map.lock().unwrap().contains_key(&name) {
+            return Err(format!(
+                "lane `{name}` runs on this machine: `devstack lane stop {name}` first"
+            ));
+        }
+        if let Some(r) = self.remote.lock().unwrap().get(&name) {
+            return if r.node.name.eq_ignore_ascii_case(on) || r.node.id.starts_with(on) {
+                Ok(name)
+            } else {
+                Err(format!(
+                    "lane `{name}` runs on {} already (moving it: ADR-0025 point 10, planned)",
+                    r.node.name
+                ))
+            };
+        }
+        if !self.pending.lock().unwrap().insert(name.clone()) {
+            return Err(format!("lane `{name}` is being started"));
+        }
+        let stack_file = self
+            .main
+            .stack_file()
+            .strip_prefix(&self.main.repo)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| "devstack.toml".into());
+        let scratch = self.state_dir(&name).join("remote");
+        let worktree = devstack_proc::long_path(&entry.path);
+        let result = RemoteLane::start(
+            &self.rt,
+            crate::remote::RemoteSpec {
+                name: &name,
+                repo: &self.main.stack.stack.name,
+                worktree: &worktree,
+                stack_file: &stack_file,
+                on,
+                need,
+                scratch: &scratch,
+            },
+        );
+        self.pending.lock().unwrap().remove(&name);
+        let lane = result?;
+        self.remote.lock().unwrap().insert(name.clone(), lane);
+        self.announce();
+        Ok(name)
     }
 }
 
