@@ -48,7 +48,9 @@ async function loadAll(list: StackEntry[]) {
     if (!s.running) continue;
     try {
       const res = await api().request<LaneView[]>('GET', paths.api(s.id, v1.lanes));
-      if (res.ok && Array.isArray(res.body)) known.value[s.id] = res.body;
+      // The shown stack's list comes from its stream: a read that started
+      // before a change and answers after it must not overwrite it.
+      if (res.ok && Array.isArray(res.body) && stack.lanesOf !== s.id) known.value[s.id] = res.body;
     } catch {
       /* keep what is known */
     }
