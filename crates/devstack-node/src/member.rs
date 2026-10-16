@@ -319,8 +319,26 @@ impl Local {
         self.get("/v1/nodes")
     }
 
-    pub fn report(&self, r: &Report) -> Result<()> {
-        self.post::<serde_json::Value>("/v1/nodes/report", r)?;
+    /// Report to the coordinator; its answer says what the node is to do.
+    pub fn report(&self, r: &Report) -> Result<crate::coordinator::ReportAnswer> {
+        let v: Option<crate::coordinator::ReportAnswer> = self.post("/v1/nodes/report", r)?;
+        Ok(v.unwrap_or_default())
+    }
+
+    /// The leases of the pool: which lane runs where.
+    pub fn leases(&self) -> Result<Vec<crate::coordinator::Lease>> {
+        self.get("/v1/leases")
+    }
+
+    /// Pause a node, or let it take lanes again (admins only).
+    pub fn admin_pause(&self, id: &str, paused: bool) -> Result<MemberView> {
+        let what = if paused { "pause" } else { "resume" };
+        self.post(&format!("/v1/admin/nodes/{id}/{what}"), &())
+    }
+
+    /// End a lease (admins only): its node stops the lane.
+    pub fn admin_end(&self, lease: &str) -> Result<()> {
+        self.post::<serde_json::Value>(&format!("/v1/admin/leases/{lease}/end"), &())?;
         Ok(())
     }
 

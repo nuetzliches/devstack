@@ -219,9 +219,30 @@ export type PoolNode = {
   /** Seconds since its last report. */
   seen?: number;
   report?: { sharing: boolean; cpus: number; memory: number; api?: string };
+  /** Paused by an admin: no new lanes. */
+  paused?: boolean;
 };
 
-export type PoolAuditEntry = { at: number; by: string; action: 'approve' | 'reject' | 'remove' | 'role'; member: string; name: string; detail?: string };
+/** A lane on a node, as the coordinator knows it. */
+export type PoolLease = {
+  id: string;
+  node: string;
+  member: string;
+  repo: string;
+  lane: string;
+  state: 'offered' | 'running';
+  created: number;
+  expires_in?: number;
+};
+
+export type PoolAuditEntry = {
+  at: number;
+  by: string;
+  action: 'approve' | 'reject' | 'remove' | 'role' | 'pause' | 'resume' | 'end';
+  member: string;
+  name: string;
+  detail?: string;
+};
 
 /** `GET /hub/pool`: what this machine sees of its pool. */
 export type PoolOverview = {
@@ -229,6 +250,9 @@ export type PoolOverview = {
   me?: { id: string; name: string; state: PoolMemberState; role?: PoolRole; coordinator: string };
   members?: PoolMember[];
   nodes?: PoolNode[];
+  leases?: PoolLease[];
+  /** What another machine runs to join this pool. */
+  join?: { coordinator: string; fingerprint: string; command: string };
   /** Admins only. */
   audit?: PoolAuditEntry[];
 };

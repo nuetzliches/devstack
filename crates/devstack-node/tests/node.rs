@@ -220,3 +220,116 @@ fn a_lane_is_leased_admitted_and_synced() {
         "a released lease takes its mirror with it"
     );
 }
+
+/// An admin pauses a node (no new lanes) and ends a lease; the node drops
+/// the lane at its next report (ADR-0032 point 4).
+#[test]
+fn an_admin_pauses_a_node_and_ends_a_lease() {
+    let c = tempfile::tempdir().unwrap();
+    let (url, fp) = coordinator(c.path());
+    let (nd, rd) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let node_member = member(c.path(), &url, &fp, nd.path(), "node-pc");
+    let admin = member(c.path(), &url, &fp, rd.path(), "admin-pc");
+    let admin_id = admin.membership().unwrap().unwrap().id;
+    Store::new(c.path())
+        .set_role(&admin_id, devstack_node::store::Role::Admin, SHELL)
+        .unwrap();
+
+    let rt_node = rt();
+    let listener = rt_node
+        .block_on(tokio::net::TcpListener::bind(("127.0.0.1", 0)))
+        .unwrap();
+    let api = format!(
+        "https://127.0.0.1:{}",
+        listener.local_addr().unwrap().port()
+    );
+    let config = NodeConfig {
+        dir: nd.path().to_path_buf(),
+        api,
+        share: Settings {
+            enabled: true,
+            max_cpus: Some(4.0),
+            max_memory: Some(4 << 30),
+        },
+    };
+    std::thread::spawn(move || {
+        rt_node
+            .block_on(node::serve(config, listener, std::future::pending()))
+            .unwrap();
+    });
+    let node_id = node_member.membership().unwrap().unwrap().id;
+    let until = std::time::Instant::now() + Duration::from_secs(10);
+    while !admin
+        .nodes()
+        .unwrap()
+        .iter()
+        .any(|n| n.id == node_id && n.online)
+    {
+        assert!(std::time::Instant::now() < until, "the node reports");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let ask = || {
+        admin.lease(&LeaseRequest {
+            node: "node-pc".into(),
+            repo: "shop".into(),
+            lane: "fix".into(),
+            need: Amount {
+                cpus: 0.1,
+                memory: 64 << 20,
+            },
+        })
+    };
+
+    admin.admin_pause(&node_id, true).unwrap();
+    assert!(
+        admin
+            .nodes()
+            .unwrap()
+            .iter()
+            .any(|n| n.id == node_id && n.paused)
+    );
+    let e = ask().unwrap_err().to_string();
+    assert!(e.contains("paused"), "{e}");
+    admin.admin_pause(&node_id, false).unwrap();
+
+    let offer = ask().unwrap();
+    let rt = rt();
+    let client = NodeClient::new(&admin, offer.node.clone()).unwrap();
+    let lease = rt.block_on(client.admit(&offer)).unwrap();
+    // The coordinator knows it once the node reported it.
+    let until = std::time::Instant::now() + Duration::from_secs(30);
+    while !admin
+        .leases()
+        .unwrap()
+        .iter()
+        .any(|l| l.id == lease.id && l.state == "running")
+    {
+        assert!(
+            std::time::Instant::now() < until,
+            "the node reports its lease"
+        );
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    admin.admin_end(&lease.id).unwrap();
+    let until = std::time::Instant::now() + Duration::from_secs(40);
+    loop {
+        match rt.block_on(client.renew(&lease.id)) {
+            Err(ClientError::Status(404, _)) => break,
+            _ => {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "the node drops an ended lease"
+                );
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        }
+    }
+    let log: Vec<String> = admin
+        .admin_audit()
+        .unwrap()
+        .into_iter()
+        .map(|e| e.action)
+        .collect();
+    assert_eq!(&log[..3], ["end", "resume", "pause"]);
+}

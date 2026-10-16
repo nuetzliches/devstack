@@ -5,7 +5,11 @@
 //! - `GET /hub/pool`: this machine's membership, the members and nodes, and
 //!   for an admin the members with their addresses and the audit log
 //! - `POST /hub/pool/members/{id}/approve` `{role?}`, `.../remove`,
-//!   `.../role` `{role}`: an admin's changes, passed on as they are
+//!   `.../role` `{role}`, `POST /hub/pool/nodes/{id}/pause|resume`,
+//!   `POST /hub/pool/leases/{id}/end`: an admin's changes, passed on as they
+//!   are
+//! - `POST /hub/pool/join` `{coordinator, fingerprint, name?}`: ask to join a
+//!   pool (`devstack join` without waiting)
 
 use axum::Json;
 use axum::extract::Path;
@@ -70,8 +74,15 @@ pub async fn overview() -> Response {
             return Ok(json!({ "joined": true, "me": me }));
         }
         let mine = l.me()?;
-        let mut v = json!({ "joined": true, "me": me, "nodes": l.nodes()? });
+        let mut v = json!({ "joined": true, "me": me, "nodes": l.nodes()?, "leases": l.leases()? });
         v["me"]["role"] = json!(mine.role);
+        // What another machine runs to join this pool; the fingerprint is
+        // public, the approval is what admits it.
+        v["join"] = json!({
+            "coordinator": m.coordinator,
+            "fingerprint": m.ca_fingerprint,
+            "command": format!("devstack join {} --fingerprint {}", m.coordinator, m.ca_fingerprint),
+        });
         if mine.role == Role::Admin {
             v["members"] = json!(l.admin_members()?);
             v["audit"] = json!(l.admin_audit()?);
@@ -104,6 +115,50 @@ pub async fn approve(Path(id): Path<String>, body: Option<Json<RoleBody>>) -> Re
 pub async fn remove(Path(id): Path<String>) -> Response {
     match blocking(move |l| l.admin_remove(&id)).await {
         Ok(m) => Json(m).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+pub async fn pause(Path(id): Path<String>) -> Response {
+    match blocking(move |l| l.admin_pause(&id, true)).await {
+        Ok(m) => Json(m).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+pub async fn resume(Path(id): Path<String>) -> Response {
+    match blocking(move |l| l.admin_pause(&id, false)).await {
+        Ok(m) => Json(m).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+pub async fn end(Path(id): Path<String>) -> Response {
+    match blocking(move |l| l.admin_end(&id)).await {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct JoinBody {
+    coordinator: String,
+    fingerprint: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// Ask a pool's coordinator to admit this machine; the answer comes with
+/// the approval, which `GET /hub/pool` picks up.
+pub async fn join(Json(b): Json<JoinBody>) -> Response {
+    let name = b
+        .name
+        .filter(|n| !n.trim().is_empty())
+        .or_else(|| std::env::var("COMPUTERNAME").ok())
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .unwrap_or_else(|| "member".into());
+    match blocking(move |l| l.join(b.coordinator.trim(), &b.fingerprint, name.trim())).await {
+        Ok(m) => Json(json!({ "id": m.id, "name": m.name, "state": m.state })).into_response(),
         Err(e) => error(&e),
     }
 }

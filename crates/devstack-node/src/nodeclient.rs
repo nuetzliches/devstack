@@ -130,12 +130,18 @@ impl NodeClient {
 
     /// Start the lane from its mirror (infrastructure, lane container,
     /// daemon); `stack_file` relative to the lane's root.
-    pub async fn start(&self, lease: &str, stack_file: &str) -> Result<LaneState> {
+    pub async fn start(
+        &self,
+        lease: &str,
+        stack_file: &str,
+        display_root: Option<&str>,
+    ) -> Result<LaneState> {
         self.json(
             "POST",
             &format!("/v1/leases/{lease}/start"),
             Some(&Start {
                 stack_file: stack_file.into(),
+                display_root: display_root.map(str::to_string),
             }),
         )
         .await

@@ -62,6 +62,9 @@ export const paths = {
   poolApprove: (id: string) => `/hub/pool/members/${enc(id)}/approve`,
   poolRemove: (id: string) => `/hub/pool/members/${enc(id)}/remove`,
   poolRole: (id: string) => `/hub/pool/members/${enc(id)}/role`,
+  poolPause: (id: string, paused: boolean) => `/hub/pool/nodes/${enc(id)}/${paused ? 'pause' : 'resume'}`,
+  poolEnd: (lease: string) => `/hub/pool/leases/${enc(lease)}/end`,
+  poolJoin: '/hub/pool/join',
   /** A daemon path; in a lane (plan §3.5) it goes to that lane's API. */
   api: (stack: string, path: string) =>
     `/hub/stacks/${enc(stack)}/api${lanePrefix && path.startsWith('/v1/') && !path.startsWith('/v1/lanes') ? lanePrefix : ''}${path}`,

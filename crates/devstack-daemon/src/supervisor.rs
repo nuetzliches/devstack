@@ -510,10 +510,14 @@ impl Supervisor {
     /// repository, where the user's files are.
     pub fn repo_paths(&self, text: &str) -> String {
         let snap_dir = self.layout.lane("main").join("src");
-        text.replace(
-            &snap_dir.to_string_lossy().into_owned(),
-            &self.repo.to_string_lossy(),
-        )
+        // A lane on a node (ADR-0029 point 5): its repository is the node's
+        // mirror; the developer's files are in the worktree it mirrors. The
+        // snapshot maps straight there (the mirror's path, `/src`, may well
+        // occur again inside a path).
+        let to = crate::display_root()
+            .map(str::to_string)
+            .unwrap_or_else(|| self.repo.to_string_lossy().into_owned());
+        text.replace(&snap_dir.to_string_lossy().into_owned(), &to)
     }
 
     /// Where the kept logs of `name` are (plan §11).

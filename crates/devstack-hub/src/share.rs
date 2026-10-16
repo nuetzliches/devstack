@@ -141,7 +141,7 @@ fn report(settings: &Settings, offer: Amount) -> Result<bool, String> {
             api: None,
             leases: Vec::new(),
         })
-        .map(|()| true)
+        .map(|_| true)
         .map_err(|e| e.to_string())
 }
 

@@ -1,14 +1,16 @@
 <script setup lang="ts">
-// The pool (ADR-0031, ADR-0032): this machine's membership, the requests to
-// join, the members and what each node shares. An admin approves, rejects
-// and removes members and changes roles here; the coordinator checks the
-// role, this page only hides what the role does not allow.
+// The pool (ADR-0031, ADR-0032): this machine's membership (and joining one),
+// the requests to join, the nodes with their lanes, the members. An admin
+// approves, rejects and removes members, changes roles, pauses nodes and ends
+// leases here; the coordinator checks the role, this page only hides what the
+// role does not allow.
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { ago, bytes } from '@/lib/format';
 import { usePool } from '@/stores/pool';
 import Icon from '@/components/icons/Icon.vue';
 import ShareSwitch from '@/components/ShareSwitch.vue';
-import type { PoolMember } from '@/api/types';
+import type { PoolLease, PoolMember } from '@/api/types';
+import { useUi } from '@/stores/ui';
 
 const pool = usePool();
 const stop = pool.watch(10_000);
@@ -38,7 +40,34 @@ const actionText: Record<string, string> = {
   reject: 'rejected the request of',
   remove: 'removed',
   role: 'changed the role of',
+  pause: 'paused',
+  resume: 'resumed',
+  end: 'ended a lane on',
 };
+
+// Joining a pool from here, as `devstack join` does.
+const joinUrl = ref('');
+const joinFp = ref('');
+const joinName = ref('');
+const joining = ref(false);
+async function join() {
+  joining.value = true;
+  await pool.join(joinUrl.value.trim(), joinFp.value.trim(), joinName.value.trim());
+  joining.value = false;
+}
+
+const ui = useUi();
+async function copyJoin() {
+  const c = o.value?.join?.command;
+  if (!c) return;
+  await navigator.clipboard.writeText(c);
+  ui.toast('info', 'Copied: run it on the machine that is to join');
+}
+
+const leases = computed(() => o.value?.leases ?? []);
+const nameOf = (id: string) => (o.value?.members ?? []).find((m) => m.id === id)?.name ?? nodes.value.find((n) => n.id === id)?.name ?? id;
+const lanesOn = (node: string) => leases.value.filter((l) => l.node === node).length;
+const leaseWhat = (l: PoolLease) => `lane ${l.repo}/${l.lane} on ${nameOf(l.node)}`;
 </script>
 
 <template>
@@ -53,10 +82,27 @@ const actionText: Record<string, string> = {
         <p v-if="pool.error && !o" class="err" data-testid="pool-error"><Icon name="alert" :size="14" /> {{ pool.error }}</p>
         <template v-else-if="o && !o.joined">
           <p>This machine is in no pool. A pool lets machines run lanes for each other (remote lanes).</p>
-          <p class="muted">
-            Ask the pool's admin for the coordinator's address and fingerprint, then run
-            <code>devstack join https://&lt;coordinator&gt;:4260 --fingerprint &lt;fingerprint&gt;</code>.
+          <p class="muted small">
+            A member of the pool copies its join command from this page (or ask its admin for the coordinator's address and
+            fingerprint). The fingerprint proves the coordinator is the one it claims; an admin then approves this machine.
           </p>
+          <form class="join" data-testid="pool-join" @submit.prevent="join">
+            <label>
+              <span>Coordinator</span>
+              <input v-model="joinUrl" class="input" placeholder="https://10.0.0.5:4260" required data-testid="pool-join-url" />
+            </label>
+            <label class="wide">
+              <span>Fingerprint</span>
+              <input v-model="joinFp" class="input mono" placeholder="64 hex digits" required data-testid="pool-join-fp" />
+            </label>
+            <label>
+              <span>Name (optional)</span>
+              <input v-model="joinName" class="input" placeholder="this machine's name" />
+            </label>
+            <button type="submit" class="btn btn-primary btn-sm" :disabled="joining || !joinUrl || !joinFp" data-testid="pool-join-submit">
+              <span v-if="joining" class="spinner" /><Icon v-else name="key" :size="14" /> Ask to join
+            </button>
+          </form>
         </template>
         <template v-else-if="me">
           <dl class="facts">
@@ -69,6 +115,13 @@ const actionText: Record<string, string> = {
             <Icon name="hourglass" :size="14" /> Waiting for an admin to approve this machine.
           </p>
           <p v-else-if="me.state === 'removed'" class="err"><Icon name="xCircle" :size="14" /> This machine was removed from the pool.</p>
+          <div v-if="me.state === 'approved' && o?.join" class="join-cmd" data-testid="pool-join-command">
+            <span class="muted small">Another machine joins with</span>
+            <code class="mono">{{ o.join.command }}</code>
+            <button type="button" class="btn btn-xs" title="Copy the command" data-testid="pool-join-copy" @click="copyJoin">
+              <Icon name="copy" :size="13" /> Copy
+            </button>
+          </div>
           <p v-if="pool.error" class="err small"><Icon name="alert" :size="14" /> {{ pool.error }} (showing the last answer)</p>
         </template>
         <p v-else class="muted">Reading the pool…</p>
@@ -127,17 +180,61 @@ const actionText: Record<string, string> = {
       <div class="card-body flush table-wrap">
         <table class="table">
           <thead>
-            <tr><th>Machine</th><th>State</th><th>Shares</th><th>Last report</th></tr>
+            <tr><th>Machine</th><th>State</th><th>Shares</th><th>Lanes</th><th>Last report</th><th v-if="pool.isAdmin" /></tr>
           </thead>
           <tbody>
             <tr v-for="n in nodes" :key="n.id" :data-node="n.id">
               <td><strong>{{ n.name }}</strong> <span v-if="isMe(n.id)" class="pill sm outline">this machine</span></td>
-              <td><span class="pill sm" :class="n.online ? 'ok' : 'outline'">{{ n.online ? 'online' : 'offline' }}</span></td>
+              <td>
+                <span class="pill sm" :class="n.online ? 'ok' : 'outline'">{{ n.online ? 'online' : 'offline' }}</span>
+                <span v-if="n.paused" class="pill sm warn" title="Paused by an admin: no new lanes, running ones stay">paused</span>
+              </td>
               <td class="tabular">
                 <template v-if="n.report?.sharing">{{ n.report.cpus.toFixed(1) }} CPU · {{ bytes(n.report.memory) }}</template>
                 <span v-else class="faint">not shared</span>
               </td>
+              <td class="tabular">{{ lanesOn(n.id) || '–' }}</td>
               <td class="faint">{{ n.seen === undefined ? 'never' : ago(now - n.seen * 1000, now) }}</td>
+              <td v-if="pool.isAdmin" class="actions">
+                <button
+                  v-if="n.report?.api"
+                  type="button"
+                  class="btn btn-xs"
+                  :title="n.paused ? 'Let it take lanes again' : 'No new lanes on it; running ones stay'"
+                  data-testid="pool-pause"
+                  @click="pool.setPaused(n.id, n.name, !n.paused)"
+                >
+                  <Icon :name="n.paused ? 'play' : 'pause'" :size="13" /> {{ n.paused ? 'Resume' : 'Pause' }}
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section v-if="me?.state === 'approved' && leases.length" class="card" data-testid="pool-lanes">
+      <header class="card-header">
+        <Icon name="gitBranch" :size="18" />
+        <h2>Lanes</h2>
+        <span class="count">{{ leases.length }}</span>
+      </header>
+      <div class="card-body flush table-wrap">
+        <table class="table">
+          <thead>
+            <tr><th>Lane</th><th>On</th><th>For</th><th>State</th><th v-if="pool.isAdmin" /></tr>
+          </thead>
+          <tbody>
+            <tr v-for="l in leases" :key="l.id" :data-lease="l.id">
+              <td><strong>{{ l.lane }}</strong> <span class="faint">{{ l.repo }}</span></td>
+              <td>{{ nameOf(l.node) }}</td>
+              <td>{{ nameOf(l.member) }} <span v-if="isMe(l.member)" class="pill sm outline">this machine</span></td>
+              <td><span class="pill sm" :class="l.state === 'running' ? 'ok' : 'outline'">{{ l.state }}</span></td>
+              <td v-if="pool.isAdmin" class="actions">
+                <button type="button" class="btn btn-xs btn-danger" title="Stop this lane on its node" data-testid="pool-end" @click="pool.endLease(l.id, leaseWhat(l))">
+                  <Icon name="stop" :size="13" /> End
+                </button>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -248,10 +345,11 @@ const actionText: Record<string, string> = {
   font-size: 12px;
 }
 .actions {
-  display: flex;
-  gap: 6px;
-  justify-content: flex-end;
-  flex-wrap: wrap;
+  text-align: right;
+  white-space: nowrap;
+}
+.actions > .btn + .btn {
+  margin-left: 6px;
 }
 .hint {
   margin: 0;
@@ -273,6 +371,35 @@ const actionText: Record<string, string> = {
 }
 .small {
   font-size: 12px;
+}
+.join {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 10px;
+}
+.join label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.join .wide input {
+  width: 420px;
+  max-width: 100%;
+}
+.join-cmd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.join-cmd code {
+  font-size: 12px;
+  word-break: break-all;
 }
 .audit,
 .removed {

@@ -211,6 +211,20 @@ export class MockTransport implements Transport {
     if (p === '/hub/pool' && method === 'GET') return json(200, hub.pool.overview());
     if (p === '/hub/pool/share' && method === 'GET') return json(200, hub.pool.share());
     if (p === '/hub/pool/share' && method === 'PUT') return json(200, hub.pool.setShare(body as unknown as ShareSettings));
+    const pn = /^\/hub\/pool\/nodes\/([^/]+)\/(pause|resume)$/.exec(p);
+    if (pn && method === 'POST') {
+      const r = hub.pool.pause(decodeURIComponent(pn[1]), pn[2] === 'pause');
+      return json(r.status, r.body);
+    }
+    const pe = /^\/hub\/pool\/leases\/([^/]+)\/end$/.exec(p);
+    if (pe && method === 'POST') {
+      const r = hub.pool.end(decodeURIComponent(pe[1]));
+      return json(r.status, r.body);
+    }
+    if (p === '/hub/pool/join' && method === 'POST') {
+      const r = hub.pool.join();
+      return json(r.status, r.body);
+    }
     const pm = /^\/hub\/pool\/members\/([^/]+)\/(approve|remove|role)$/.exec(p);
     if (pm && method === 'POST') {
       const r = hub.pool.act(decodeURIComponent(pm[1]), pm[2], body as { role?: 'member' | 'admin' } | undefined);

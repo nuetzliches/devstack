@@ -29,6 +29,9 @@ pub struct RemoteState {
     /// The last thing that went wrong (a failed sync or renewal), until it
     /// works again.
     pub error: Option<String>,
+    /// The lease is over (an admin ended it, or it expired): the lane no
+    /// longer runs there.
+    pub ended: bool,
 }
 
 pub struct RemoteLane {
@@ -131,7 +134,10 @@ impl RemoteLane {
                 serde_json::json!({ "lane": name, "node": offer.node.name, "files": s.files,
                     "uploaded": s.uploaded, "bytes": s.bytes, "ms": t0.elapsed().as_millis() as u64 }),
             );
-            client.start(&offer.id, stack_file).await
+            // Paths in its logs point into the worktree, `/` as compilers
+            // on the node write them.
+            let display = worktree.to_string_lossy().replace('\\', "/");
+            client.start(&offer.id, stack_file, Some(&display)).await
         });
         if let Err(e) = started {
             let _ = rt.block_on(client.release(&offer.id));
@@ -215,6 +221,23 @@ impl RemoteLane {
             if renewed.elapsed() >= RENEW_EVERY {
                 match self.client.renew(&self.lease).await {
                     Ok(_) => renewed = Instant::now(),
+                    Err(devstack_node::nodeclient::ClientError::Status(404, _)) => {
+                        {
+                            let mut st = self.state.lock().unwrap();
+                            st.ended = true;
+                            st.error = Some(format!(
+                                "the lease on {} is over (an admin ended it, or it expired): \
+                                 `devstack up --on {}` starts the lane again",
+                                self.node.name, self.node.name
+                            ));
+                        }
+                        self.listening.send_replace(false);
+                        crate::diag::warn(
+                            "remote_lane_ended",
+                            serde_json::json!({ "lane": self.name, "node": self.node.name, "lease": self.lease }),
+                        );
+                        return;
+                    }
                     Err(e) => self.trouble(Some(format!("renewing the lease: {e}"))),
                 }
             }

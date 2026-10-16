@@ -657,7 +657,7 @@ impl Lanes {
                     branch: k.branch.clone(),
                     number: k.entry.number,
                     port_offset: k.entry.number * self.main.stack.lanes.port_step,
-                    active: lane.is_some() || on_node.is_some(),
+                    active: lane.is_some() || node_state.as_ref().is_some_and(|st| !st.ended),
                     owns_main: lane.is_some_and(|l| l.sup.owns_main()),
                     running,
                     services,
@@ -1012,6 +1012,11 @@ impl Lanes {
                 "lane `{name}` runs on this machine: `devstack lane stop {name}` first"
             ));
         }
+        // A lane whose lease is over starts afresh.
+        self.remote
+            .lock()
+            .unwrap()
+            .retain(|n, r| n != &name || !r.state().ended);
         if let Some(r) = self.remote.lock().unwrap().get(&name) {
             return if r.node.name.eq_ignore_ascii_case(on) || r.node.id.starts_with(on) {
                 Ok(name)

@@ -9,7 +9,8 @@
 //! - leases (ADR-0031 point 4): `POST /v1/leases` `{node, repo, lane, need}`
 //!   (a requester), `GET /v1/leases/{id}?token=` (the node, to admit it),
 //!   `GET /v1/leases`
-//! - admins only (ADR-0032): `GET /v1/admin/members`,
+//! - admins only (ADR-0032): `POST /v1/admin/nodes/{id}/pause|resume`,
+//!   `POST /v1/admin/leases/{id}/end`, `GET /v1/admin/members`,
 //!   `POST /v1/admin/members/{id}/approve` `{role?}`,
 //!   `POST /v1/admin/members/{id}/remove` (also rejects a request),
 //!   `POST /v1/admin/members/{id}/role` `{role}`, `GET /v1/admin/audit`
@@ -201,6 +202,17 @@ pub struct NodeView {
     pub seen: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<Report>,
+    /// Paused by an admin: no new lanes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paused: bool,
+}
+
+/// The coordinator's answer to a node's report: what it is to do.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReportAnswer {
+    /// Leases an admin ended: the node stops their lanes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub end: Vec<String>,
 }
 
 /// A member as `/v1/members` lists it (no request or certificate); the
@@ -271,6 +283,8 @@ const OFFER_FOR: Duration = Duration::from_secs(300);
 
 struct Inner {
     dir: PathBuf,
+    /// Leases an admin ended, until their node no longer holds them.
+    ending: Mutex<std::collections::HashSet<String>>,
     /// Leases by id, with their token and when they were offered.
     leases: Mutex<HashMap<String, (Lease, String, std::time::Instant)>>,
     store: Store,
@@ -346,6 +360,9 @@ fn router(shared: Shared) -> Router {
         .route("/v1/admin/members/{id}/remove", post(admin_remove))
         .route("/v1/admin/members/{id}/role", post(admin_role))
         .route("/v1/admin/audit", get(admin_audit))
+        .route("/v1/admin/nodes/{id}/pause", post(admin_pause))
+        .route("/v1/admin/nodes/{id}/resume", post(admin_resume))
+        .route("/v1/admin/leases/{id}/end", post(admin_end))
         .with_state(shared)
 }
 
@@ -406,8 +423,18 @@ async fn report(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
     Json(r): Json<Report>,
-) -> ApiResult<StatusCode> {
+) -> ApiResult<Json<ReportAnswer>> {
     let m = member(&s, &peer)?;
+    // What an admin ended and the node still holds: it is to stop them.
+    let end: Vec<String> = {
+        let mut ending = s.ending.lock().unwrap();
+        ending.retain(|id| r.leases.iter().any(|l| &l.id == id));
+        r.leases
+            .iter()
+            .filter(|l| ending.contains(&l.id))
+            .map(|l| l.id.clone())
+            .collect()
+    };
     {
         let mut leases = s.leases.lock().unwrap();
         // What the node holds is running; what it no longer holds is over.
@@ -429,7 +456,7 @@ async fn report(
         .lock()
         .unwrap()
         .insert(m.id, (std::time::Instant::now(), r));
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(ReportAnswer { end }))
 }
 
 async fn nodes(
@@ -451,6 +478,7 @@ async fn nodes(
                     online: age.is_some_and(|a| a < ONLINE_FOR),
                     seen: age.map(|a| a.as_secs()),
                     report: r.map(|(_, r)| r.clone()),
+                    paused: m.paused,
                 }
             })
             .collect(),
@@ -496,6 +524,12 @@ async fn lease_create(
         else {
             return Err((StatusCode::CONFLICT, format!("{} is offline", node.name)));
         };
+        if node.paused {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("{} is paused by an admin: it takes no new lanes", node.name),
+            ));
+        }
         let _ = at;
         let Some(api) = rep.api.clone() else {
             return Err((
@@ -607,6 +641,53 @@ fn random_hex(bytes: usize) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+async fn admin_pause(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<Json<MemberView>> {
+    let (_, by) = admin(&s, &peer)?;
+    let m = s.store.set_paused(&id, true, &by).map_err(store_err)?;
+    Ok(Json(MemberView::for_admin(&m)))
+}
+
+async fn admin_resume(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<Json<MemberView>> {
+    let (_, by) = admin(&s, &peer)?;
+    let m = s.store.set_paused(&id, false, &by).map_err(store_err)?;
+    Ok(Json(MemberView::for_admin(&m)))
+}
+
+/// End a lease (a lane someone forgot): its node stops the lane at its next
+/// report, and its requester sees the lease gone.
+async fn admin_end(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<StatusCode> {
+    let (_, by) = admin(&s, &peer)?;
+    let lease = s
+        .leases
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|(l, _, _)| l.clone())
+        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("no lease `{id}`")))?;
+    s.ending.lock().unwrap().insert(id.clone());
+    s.store
+        .record(
+            &by,
+            "end",
+            &lease.node,
+            Some(format!("{}/{} ({id})", lease.repo, lease.lane)),
+        )
+        .map_err(store_err)?;
+    Ok(StatusCode::ACCEPTED)
+}
+
 async fn admin_members(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
@@ -676,6 +757,7 @@ pub async fn serve(
     let shared = Arc::new(Inner {
         dir: dir.to_path_buf(),
         leases: Mutex::new(HashMap::new()),
+        ending: Mutex::new(std::collections::HashSet::new()),
         store: Store::new(dir),
         ca_pem,
         reports: Mutex::new(HashMap::new()),
