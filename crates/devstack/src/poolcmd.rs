@@ -270,8 +270,11 @@ pub fn pool() -> Result<()> {
                 .find(|n| n.id == id)
                 .map_or(id.to_string(), |n| n.name.clone())
         };
-        println!("
-{:<18}{:<24}{:<24}{:<10}LANE", "LEASE", "NODE", "FOR", "STATE");
+        println!(
+            "
+{:<18}{:<24}{:<24}{:<10}LANE",
+            "LEASE", "NODE", "FOR", "STATE"
+        );
         for l in &leases {
             println!(
                 "{:<18}{:<24}{:<24}{:<10}{}/{}",
