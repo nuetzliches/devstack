@@ -91,9 +91,10 @@
       <li><code class="inline">devstack up</code> starts it; <code class="inline">devstack ui</code> opens the dashboard.</li>
       <li><code class="inline">devstack skills install</code> gives your coding agent the skills to run and configure it.</li>
     </ol>
-    <p class="muted" style="margin-top:10px">No <code class="inline">devstack.toml</code> yet? The
+    <p class="muted" style="margin-top:10px">No <code class="inline">devstack.toml</code> yet?
+      <code class="inline">devstack init</code> drafts one from the repository; the
       <a href="https://github.com/nuetzliches/devstack/blob/main/docs/stack-file.md">stack file reference</a>
-      and the <a href="https://github.com/nuetzliches/devstack/blob/main/examples/devstack.toml">example</a> show how.</p>
+      and the <a href="https://github.com/nuetzliches/devstack/blob/main/examples/devstack.toml">example</a> explain every key.</p>
   </section>
 
   <section class="features">
@@ -101,6 +102,8 @@
     <div><strong>No broken restarts</strong>A new build takes over only when it is healthy; a compiler error leaves the old one running.</div>
     <div><strong>Your Compose files</strong>Infrastructure comes from the Compose files you deploy with, plus a small dev overlay.</div>
     <div><strong>Agents included</strong>An MCP server and generated skills let coding agents run, check and fix the stack.</div>
+    <div><strong>Every worktree a lane</strong>Each git worktree runs the whole stack on its own ports with its own containers: many branches, many agents, no collisions.</div>
+    <div><strong>Lanes on the team's server</strong><code class="inline">devstack up --on build-server</code> runs a worktree's lane on a machine of your pool, its ports forwarded to yours. Move it, share it, give it the main ports.</div>
   </section>
 
   <footer>

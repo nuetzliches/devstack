@@ -19,8 +19,8 @@ Origin `http://127.0.0.1:4250` (or `localhost:4250`).
 |---|---|---|
 | `GET /`, `/assets/*`, `/manifest.webmanifest`, `/sw.js` | none | the app shell (works offline once cached) |
 | `GET /auth?code=<code>` | none | sets the session cookie (one year, survives a hub restart), redirects to `/` |
-| `GET /hub/ping` | none | `{"devstack":true,"version":"0.3.0"}`; CORS for the landing page only (ADR-0021) |
-| `GET /hub/session` | cookie | `200 {"version": "0.2.0"}`, or `401` (not paired: show "run `devstack ui`") |
+| `GET /hub/ping` | none | `{"devstack":true,"version":"0.9.7"}`; CORS for the landing page only (ADR-0021) |
+| `GET /hub/session` | cookie | `200 {"version": "0.9.7"}`, or `401` (not paired: show "run `devstack ui`") |
 | `GET /hub/stacks` | cookie | `[StackEntry]` |
 | `GET /hub/ws?path=<stream>` | cookie + Origin | WebSocket that carries the server-sent event stream at `<stream>` (`/hub/events` or `/hub/stacks/{id}/api/v1/...`), one text message per event's `data`; how the dashboard reads every stream (a browser allows six HTTP/1.1 connections per host across all its tabs, WebSockets do not count; ADR-0021). The upstream is opened before the upgrade: `503` for a stack not running, `400` for another path. When the stream ends the socket closes |
 | `GET /hub/events` | cookie | SSE: `{"type":"stacks","stacks":[StackEntry]}` and `{"type":"docker","docker":DockerEngine}` and `{"type":"release","current","newer":string|null}` (a newer devstack; checked at start, every 12 h by the clock and when a dashboard connects and the last answer is over an hour old, unless `DEVSTACK_NO_UPDATE_CHECK`) and `{"type":"update","update":{"running":bool,"error":string|null}}` (the dashboard's update), each first and on every change |
@@ -51,6 +51,8 @@ Origin `http://127.0.0.1:4250` (or `localhost:4250`).
 | `POST /hub/pool/nodes/{id}/policy` (a `NodePolicy` or `null`) | cookie + Origin | admins only: what the node lets run on it, `{allow, repos, memory_headroom?, network: "lan"\|"internet"\|"none"}`; `null` lifts it |
 | `POST /hub/pool/join {"coordinator", "fingerprint", "name"?}` | cookie + Origin | ask a pool to admit this machine (`devstack join` without waiting); `GET /hub/pool` shows it pending until an admin approves |
 | `POST /hub/pool/members/{id}/role {"role"}` | cookie + Origin | admins only: `member` or `admin`; `409 {"error"}` for the last admin. A member who is no admin gets `403` from all three |
+| `GET /hub/pool/share`, `PUT /hub/pool/share {enabled, max_cpus?, max_memory?}` | cookie (+ Origin for `PUT`) | this machine's share of the pool (ADR-0031 point 3), per pool: the switch, the caps, what is free and offered now, the last report (`ShareStatus`); `PUT` changes them and reports at once |
+| `POST /hub/shutdown` | `Authorization: Bearer <user token>` | `202`; the hub exits (`devstack hub stop`) |
 | `POST /hub/pair` | `Authorization: Bearer <user token>` | `{"code": "...", "url": "http://127.0.0.1:4250/auth?code=..."}` (CLI only) |
 
 ```ts
@@ -74,10 +76,27 @@ type PoolOverview = {
   members?: PoolMember[];   // approved ones for a member; every one, with `address`, for an admin
   leases?: { id: string; node: string; member: string; repo: string; lane: string; state: 'offered' | 'running'; created: number; expires_in?: number }[];
   join?: { coordinator: string; fingerprint: string; command: string }; // what another machine runs to join
-  nodes?: { id: string; name: string; online: boolean; paused?: boolean; seen?: number; report?: { sharing: boolean; cpus: number; memory: number; api?: string } }[];
-  audit?: { at: number; by: string; action: 'approve' | 'reject' | 'remove' | 'role'; member: string; name: string; detail?: string }[]; // admins only, newest first
+  nodes?: {
+    id: string; name: string; online: boolean; paused?: boolean; seen?: number;
+    kind?: 'server' | 'node' | 'machine' | 'unknown';   // dedicated node, node, a machine that asks for lanes, never reported
+    report?: {
+      sharing: boolean; cpus: number; memory: number;  // what it offers now
+      api?: string; dedicated?: boolean;
+      leases?: { id: string; member: string; repo: string; lane: string; expires_in: number }[];
+      total?: { cpus: number; memory: number };        // what the machine has (ADR-0036)
+      used?: { cpus: number; memory: number };         // what its lanes use
+      gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean }[];
+    };
+  }[];
+  audit?: { at: number; by: string; action: 'approve' | 'reject' | 'remove' | 'role' | 'pause' | 'resume' | 'end' | 'tags' | 'policy'; member: string; name: string; detail?: string }[]; // admins only, newest first
 };
-type PoolMember = { id: string; name: string; state: 'pending' | 'approved' | 'removed'; role: 'member' | 'admin'; requested_at: number; address?: string };
+type PoolMember = {
+  id: string; name: string; state: 'pending' | 'approved' | 'removed'; role: 'member' | 'admin'; requested_at: number;
+  address?: string;           // admins only
+  tags?: string[];            // ADR-0033
+  policy?: NodePolicy;        // as a node
+};
+type NodePolicy = { allow?: string[]; repos?: string[]; memory_headroom?: number; max_cpus?: number; network?: 'lan' | 'internet' | 'none' };
 ```
 
 ## Daemon (through the hub)
@@ -93,9 +112,12 @@ type StackView = {
   name: string; repo: string; version: string;
   services: ServiceView[]; infra: InfraView[]; groups: GroupView[]; commands: CommandView[];
   config_changed: boolean;              // the stack file differs from what the daemon read at start; applies with the next start
+  lane?: string;                        // in a lane's view: its name
+  branch?: string;                      // the checked-out branch of this tree
+  main_served_by?: string;              // the lane that serves the main ports, if not the main tree
 };
 type ServiceView = {
-  name: string; kind: "service" | "job" | "devserver" | "tool";
+  name: string; kind: "service" | "job" | "devserver" | "tool" | "static";
   groups: string[]; port: number | null; autostart: boolean;
   url: string | null;                   // https://localhost:4200 (https when the health check speaks TLS)
   status: Status; build_id: string | null; pid: number | null;
@@ -103,6 +125,8 @@ type ServiceView = {
   instance_port: number | null;          // internal port behind the proxy
   proxy: ProxyView | null;
   candidate: Candidate | null;           // a newer build on its way, or why it did not arrive
+  hot_reload: boolean;                   // the toolchain's watcher runs it now
+  hot_reload_available: boolean;         // the stack file has `hot_reload` for it
 };
 type Status =
   | { state: "stopped" | "starting" | "running" | "healthy" }
@@ -116,11 +140,26 @@ type Candidate = {
 type ProxyView = { port: number; upstream: number | null; build: string | null; pending: string | null;
                    active: number; served: number; last_error: string | null };
 type InfraView = { group: string; project: string; containers: ContainerView[]; error: string | null };
-type ContainerView = { service: string; name: string; state: string; health: string; ports: string[];
-  urls: string[] };                      // dashboard links: the group's `urls` entry, or http://localhost:<port> per published port
+type ContainerView = { service: string; name: string; state: string; health: string; exit_code: number; ports: string[];
+  urls: string[];                        // see below
+  unreachable: string[] };               // published ports Docker no longer forwards                      // dashboard links: the group's `urls` entry, or http://localhost:<port> per published port
 type GroupView = { name: string; label: string; order: number | null; members: string[] };
   // members: "<service>", "compose.<group>.<service>", "command.<name>"
 type CommandView = { name: string; description: string; confirm: string | null; requires: string[] };
+```
+
+```ts
+type LaneView = {
+  name: string; path: string; branch: string | null; number: number; port_offset: number;
+  active: boolean;                       // started (`devstack up` in it)
+  owns_main: boolean;                    // it serves the main ports
+  running: number; services: number;
+  node?: string; pool?: string;          // on a node of the pool (ADR-0025, ADR-0034); absent: this machine
+  shared_with?: string[];                // ADR-0035: member ids, tags, `*`
+  node_error?: string;                   // a sync or renewal that failed lately
+  moving?: { kind: "start" | "move"; to: string; step: number; steps: number; what: string; since: number;
+             error?: string; failed_at?: number };  // a start on a node or a move under way, or failed lately
+};
 ```
 
 `GET /v1/events` -> SSE, first event `{"type":"snapshot","stack":StackView}`, then
@@ -190,6 +229,11 @@ type UsageReport = {
 | Method and path | Answer |
 |---|---|
 | `POST /v1/up` | `202` |
+| `POST /v1/down?infra=false` | `204` when every service stopped; with `infra=true` the containers too |
+| `POST /v1/shutdown` | `202`; the daemon stops (`devstack down`) |
+| `GET /v1/services/{name}/env?export=false` | JSON, its environment with each variable's origin (`devstack env`); `export=true`: only what Compose and the stack file give, for running it without devstack |
+| `GET /v1/runs/{id}/log` | text, a command run's output so far |
+| `GET /v1/tunnel/{port}` with `Upgrade: devstack-tcp` | a raw TCP connection to that port of the lane (ADR-0029 point 4): how a lane on a node reaches its requester's forwards; the node agent passes it through |
 | `POST /v1/services/{name}/start` \| `stop` \| `restart` \| `promote` \| `rollback` | `200 StackView`, or `409 {"error": "..."}` (e.g. compiler errors; the running instance stays). For a name that is no service but a group, `start`/`stop`/`restart` act on the group. `hot-reload-on` / `hot-reload-off` switch a service with `hot_reload` in the stack file into and out of hot-reload mode (`ServiceView.hot_reload`, `hot_reload_available`) |
 | `POST /v1/groups/{name}/start` \| `stop` \| `restart` | every member service of the group: start in member order, stop in reverse, restart (build) at the same time; `restart` also restarts container members, commands are left out. `200 StackView`, or `409` naming each member that failed (the others ran) |
 | `POST /v1/infra/{group}/{service}/{start\|stop\|restart}` | `204`; one container (in a lane its own; a `shared` one: `409`). The dashboard shows each container on a page of its own (`/s/<stack>/infra/<group>/<service>`) with its log |

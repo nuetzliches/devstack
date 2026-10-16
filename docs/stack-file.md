@@ -52,6 +52,7 @@ networks  = ["shop-shared"]                              # external networks cre
 after     = ["search"]                                   # other groups that must be healthy first
 restart_on = { db = ["deploy/dev/db/init/**"] }          # a change restarts that container
 urls      = { scheduler = "http://localhost:5100/ui", db = "" }   # dashboard links (below)
+shared    = ["mailbox"]                                  # lanes use the main tree's (see [lanes])
 ```
 
 The dashboard links every published port of a container to
@@ -68,7 +69,7 @@ SMB). Keys must be in `services`.
 
 ```toml
 [services.api]
-kind   = "service"          # service (default) | job | devserver | tool
+kind   = "service"          # service (default) | job | devserver | tool | static
 build  = "dotnet build src/Api/Api.csproj -c Debug -nologo -v q"
 output = "src/Api/bin/Debug/net10.0"     # copied into an immutable artifact after the build
 run    = "dotnet {artifact}/Api.dll"
@@ -205,6 +206,10 @@ Telemetry__Endpoint = "http://127.0.0.1:4317"
 - `devstack env <service>` shows the resulting environment with the origin of
   every variable; `--export dotenv --out <file>` exports it for running the
   service without devstack ([ADR-0015](adr/0015-devstack-is-optional.md)).
+- Every process also gets `DEVSTACK_SERVICE` (its name), `DEVSTACK_BUILD_ID`
+  (the build it runs, a built service only) and `DEVSTACK_SLOT` (`main`, or
+  `candidate` while it starts beside the running one), so it can tell its
+  instances apart in its own logs or telemetry.
 
 ### Hot-reload mode
 
@@ -253,7 +258,7 @@ port    = 4200
 prepare = { run = "npm ci", inputs = ["web/package-lock.json"] }
 ```
 
-## `[lanes]`: other worktrees ([ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md))
+## `[lanes]`: other worktrees ([ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0030](adr/0030-each-lane-has-its-own-infrastructure.md); on other machines [ADR-0025](adr/0025-a-lane-can-run-on-another-node.md), [ADR-0028](adr/0028-lane-images.md), [ADR-0029](adr/0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0035](adr/0035-lanes-can-be-shared-with-the-pool.md), and [pool.md](pool.md))
 
 ```toml
 [lanes]

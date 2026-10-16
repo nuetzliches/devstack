@@ -46,10 +46,17 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   instance, only one of them may run schedulers and queue consumers: put their
   switches into `[services.<name>.workers] env = { X = "{is_main}" }`, not into
   `env`.
-- **Lanes share the infrastructure.** A worktree runs as a lane with its ports
-  moved (`[lanes] port_step`); resources it must not share with the main tree
-  (a database) take `{lane_suffix}` in their name (`Database=app{lane_suffix}`).
-  A dev server's `run` needs `{port}` to run in a lane.
+- **Lanes have their own containers.** A worktree runs as a lane with its
+  ports moved (`[lanes] port_step`) and its own Compose project, so its
+  database is its own and needs no `{lane_suffix}`; services that hold nothing
+  per lane (a telemetry dashboard, a fake SMTP server) can stay shared:
+  `[compose.<group>] shared = ["mailbox"]`. A dev server's `run` needs
+  `{port}` to run in a lane.
+- **Lanes on other machines** (`devstack up --on <node>`) run in a Linux
+  container: `[lanes] image` (a toolchain image) or `[lanes] dockerfile`. Files
+  git ignores do not go there unless `[lanes] sync` names them (a dev
+  certificate); `prepare` installs what the copy lacks (`npm ci`).
+  `[lanes] share` says whom such a lane is shared with by default.
 - **Hot reload is opt-in per session.** `[services.<name>.hot_reload]` with
   the watcher's `run` (`dotnet watch run --non-interactive`) only makes
   `devstack hot-reload <name> on` possible; the service still builds by

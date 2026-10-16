@@ -4,8 +4,9 @@
 
 1. **Target stack:** Rust (latest stable, edition 2024) for daemon and CLI
    ([ADR-0005](docs/adr/0005-rust-for-daemon-and-cli.md)). The dashboard is
-   Vue 3 + TypeScript under `ui/`, served same-origin by the daemon
-   ([ADR-0006](docs/adr/0006-dashboard-vue-same-origin.md)).
+   Vue 3 + TypeScript under `ui/`, served by the hub for every stack
+   ([ADR-0006](docs/adr/0006-dashboard-vue-same-origin.md),
+   [ADR-0021](docs/adr/0021-a-hub-serves-the-dashboard.md)).
 2. **Language:** documentation, commits and code comments in English.
 3. **ADR-driven:** read [`docs/adr/README.md`](docs/adr/README.md) before
    proposing a change to anything listed in its index. A new architectural
@@ -42,5 +43,9 @@ invented service names (`api`, `web`, `worker`, `db`).
 | Path | What |
 |---|---|
 | `docs/plan.md` | Architecture, phases, open questions |
+| `docs/stack-file.md` | The stack file reference (keep in step with `crates/devstack-config`) |
+| `docs/pool.md` | The pool: coordinator, nodes, lanes on other machines |
+| `docs/dashboard-api.md` | The hub's and the daemon's HTTP API |
+| `skills/` | The agent skills `devstack skills install` writes (keep in step with the CLI) |
 | `docs/problem-statement.md` | The failure modes this project removes, and the requirements derived from them |
 | `docs/adr/` | Decision log |
