@@ -54,6 +54,11 @@ enum Cmd {
         /// does not fit.
         #[arg(long)]
         force: bool,
+        /// In a worktree: run its lane on this node of the pool (its name or
+        /// member id, see `devstack pool`) instead of on this machine
+        /// (ADR-0025). Everything of the lane runs there; the worktree stays.
+        #[arg(long, value_name = "NODE")]
+        on: Option<String>,
     },
     /// Stop the services and the daemon; `--infra` also removes the containers.
     Down {
@@ -524,7 +529,7 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Up { workers, force } => client::up(&cli.file, workers, force),
+        Cmd::Up { workers, force, on } => client::up(&cli.file, workers, force, on.as_deref()),
         Cmd::Down { infra } => client::down(&cli.file, infra),
         Cmd::Status => {
             let c = client::need(&client::state_dir(&cli.file)?)?;

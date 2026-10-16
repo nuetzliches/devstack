@@ -178,6 +178,29 @@ impl NodeClient {
         Ok((a.status, String::from_utf8_lossy(&a.body).into_owned()))
     }
 
+    /// A request to the lane daemon's API, answered as it arrives (event
+    /// streams included); `req`'s URI is the daemon's path, `/v1/events`.
+    pub async fn forward<B>(
+        &self,
+        lease: &str,
+        mut req: hyper::Request<B>,
+    ) -> Result<hyper::Response<hyper::body::Incoming>>
+    where
+        B: hyper::body::Body + Send + 'static,
+        B::Data: Send,
+        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        let path = req
+            .uri()
+            .path_and_query()
+            .map_or("/", |p| p.as_str())
+            .to_string();
+        *req.uri_mut() = format!("/v1/leases/{lease}/api{path}")
+            .parse()
+            .map_err(|e| ClientError::Other(format!("{path}: {e}")))?;
+        Ok(tls::send(self.config.clone(), &self.node.api, &self.node.id, req).await?)
+    }
+
     /// Make the node's mirror of `lease` hold exactly `files` (paths relative
     /// to `root`, `/`-separated), uploading only the content it lacks.
     pub async fn sync(&self, lease: &str, root: &Path, files: &[String]) -> Result<SyncStats> {

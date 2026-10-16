@@ -124,6 +124,7 @@ function pick(l: LaneView | null) {
           >
             <span class="dot" :class="l.active === false ? 'off' : l.running ? 'on' : 'off'" />
             <span class="grow truncate">{{ laneLabel(l) }}</span>
+            <span v-if="l.node" class="pill sm info" :title="`Runs on ${l.node}`">{{ l.node }}</span>
             <span v-if="l.owns_main" class="pill sm ok">main ports</span>
             <span v-else-if="l.active === false" class="faint">start</span>
             <span v-else class="faint tabular">{{ l.running }}/{{ l.services }}</span>
@@ -131,7 +132,12 @@ function pick(l: LaneView | null) {
         </div>
       </div>
       <span v-if="daemon && !current" class="muted small">daemon pid {{ daemon.pid }} · port {{ daemon.port }} · up {{ duration(now - daemon.started) }}</span>
-      <span v-else-if="current && current.active !== false" class="muted small">{{ current.owns_main ? 'serves the main ports' : 'no background workers' }}</span>
+      <span v-else-if="current && current.active !== false" class="muted small" data-testid="lane-placement">
+        <template v-if="current.node">runs on <strong>{{ current.node }}</strong> · </template>
+        <template v-else>runs on this machine · </template>
+        {{ current.owns_main ? 'serves the main ports' : 'no background workers' }}
+        <span v-if="current.node_error" class="err" :title="current.node_error"> · {{ current.node_error }}</span>
+      </span>
     </div>
   </header>
 </template>
@@ -162,6 +168,9 @@ h1 {
   font-size: 12.5px;
   color: var(--text-2);
   max-width: 48ch;
+}
+.err {
+  color: var(--danger);
 }
 .small {
   font-size: 12px;

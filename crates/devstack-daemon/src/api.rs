@@ -239,6 +239,10 @@ struct LaneStart {
     /// Start it although the memory check says it does not fit.
     #[serde(default)]
     force: bool,
+    /// Run it on this node of the pool instead of here (ADR-0025): its name
+    /// or member id.
+    #[serde(default)]
+    on: Option<String>,
 }
 
 /// `POST /v1/lanes` with `{"path", "infra"?}`: start the lane of that
@@ -253,6 +257,19 @@ async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> 
     let main = s.sup.clone();
     let usage = s.usage.clone();
     let res = tokio::task::spawn_blocking(move || {
+        if let Some(on) = body.on.as_deref().filter(|o| !o.trim().is_empty()) {
+            // What a local lane would need here is what it needs there.
+            let need = devstack_node::share::Amount {
+                cpus: 0.5,
+                memory: lane_need(&main, &usage).max(1 << 30),
+            };
+            let name = lanes.activate_remote(&body.path, on.trim(), need)?;
+            return lanes
+                .list()
+                .into_iter()
+                .find(|v| v.name == name)
+                .ok_or_else(|| format!("lane `{name}` is gone"));
+        }
         if !body.force {
             memory_fits(&main, &usage)?;
         }
@@ -276,6 +293,14 @@ async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> 
     }
 }
 
+/// What a lane takes: about what the main tree takes now, containers
+/// included (ADR-0030).
+fn lane_need(main: &crate::supervisor::Supervisor, usage: &crate::usage::Sampler) -> u64 {
+    let r = usage.report(main, false);
+    r.services.iter().map(|e| e.load.memory).sum::<u64>()
+        + r.containers.iter().map(|e| e.load.memory).sum::<u64>()
+}
+
 /// A lane is a second copy of the stack, containers included (ADR-0030): it
 /// needs about what the main tree takes now. Refuse when the machine does
 /// not have that, with a margin, instead of pushing it into swap.
@@ -284,9 +309,7 @@ fn memory_fits(
     usage: &crate::usage::Sampler,
 ) -> Result<(), String> {
     const MARGIN: u64 = 1 << 30;
-    let r = usage.report(main, false);
-    let need: u64 = r.services.iter().map(|e| e.load.memory).sum::<u64>()
-        + r.containers.iter().map(|e| e.load.memory).sum::<u64>();
+    let need = lane_need(main, usage);
     let Some(free) = devstack_proc::memory_available() else {
         return Ok(()); // not measurable here: no reason to refuse
     };
@@ -296,8 +319,8 @@ fn memory_fits(
     let gb = |b: u64| b as f64 / (1u64 << 30) as f64;
     Err(format!(
         "a lane needs about {:.1} GB (what the main tree takes now, containers included), {:.1} GB are free: \
-         stop another lane or close something, or start it anyway with `devstack up --force`. \
-         Lanes on another machine are planned (ADR-0025)",
+         stop another lane or close something, start it on another machine of the pool \
+         (`devstack up --on <node>`, see `devstack pool`), or start it anyway with `devstack up --force`",
         gb(need),
         gb(free)
     ))
@@ -342,6 +365,27 @@ async fn lane_forward(
         Ok(l) => l,
         Err(r) => return r,
     };
+    if let Some(r) = lanes.remote(&lane) {
+        // On a node: its daemon's API, passed through as it is.
+        let query = req
+            .uri()
+            .query()
+            .map(|q| format!("?{q}"))
+            .unwrap_or_default();
+        let (parts, body) = req.into_parts();
+        let mut out = axum::http::Request::new(body);
+        *out.method_mut() = parts.method;
+        let Ok(uri) = format!("/v1/{rest}{query}").parse::<axum::http::Uri>() else {
+            return err(StatusCode::BAD_REQUEST, "bad path");
+        };
+        *out.uri_mut() = uri;
+        for (k, v) in &parts.headers {
+            if k != header::HOST && k != header::AUTHORIZATION {
+                out.headers_mut().insert(k, v.clone());
+            }
+        }
+        return r.forward(out).await;
+    }
     let l = {
         let lanes = lanes.clone();
         match tokio::task::spawn_blocking(move || lanes.get(&lane)).await {
