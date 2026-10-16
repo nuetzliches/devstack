@@ -1,6 +1,6 @@
 # devstack: plan
 
-- **Status:** Active: phases 0 to 2 done (0.4.0), phase 3 built for one machine (0.7.0), phase 4 under way; lanes on other machines proposed (ADR-0025 to 0029; see §7 and the backlog, §13)
+- **Status:** Active: phases 0 to 2 done (0.4.0), phase 3 built for one machine (0.7.0; each lane with its own infrastructure since 0.8.0, ADR-0030), phase 4 under way; lanes on other machines proposed (ADR-0025 to 0029; see §7 and the backlog, §13)
 - **Date:** 2026-10-14, status updated 2026-10-16
 - **Inputs:** [problem-statement.md](problem-statement.md), [ADR index](adr/README.md)
 

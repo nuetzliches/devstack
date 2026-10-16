@@ -391,7 +391,7 @@ dependencies = [
 
 [[package]]
 name = "devstack"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -417,7 +417,7 @@ dependencies = [
 
 [[package]]
 name = "devstack-build"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "blake3",
  "devstack-config",
@@ -431,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "devstack-compose"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "devstack-config",
  "serde",
@@ -442,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "devstack-config"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "schemars",
  "serde",
@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "devstack-daemon"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "axum",
  "blake3",
@@ -482,7 +482,7 @@ dependencies = [
 
 [[package]]
 name = "devstack-env"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "devstack-config",
  "tempfile",
@@ -491,7 +491,7 @@ dependencies = [
 
 [[package]]
 name = "devstack-hub"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "axum",
  "blake3",
@@ -518,7 +518,7 @@ dependencies = [
 
 [[package]]
 name = "devstack-proc"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "libc",
  "serde",
