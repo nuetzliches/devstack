@@ -317,6 +317,20 @@ enum NodeAction {
         #[arg(long)]
         dir: Option<PathBuf>,
     },
+    /// Try a lane on a node without the daemon: lease, sync this repository,
+    /// start it there, show its services until they are up (M2b; `devstack
+    /// up --on` replaces it).
+    #[command(hide = true)]
+    RunLane {
+        /// The node: its name or member id.
+        #[arg(long)]
+        on: String,
+        #[arg(long, default_value = "try")]
+        lane: String,
+        /// Leave it running (renew the lease yourself); default: release it.
+        #[arg(long)]
+        keep: bool,
+    },
     /// Run other members' lanes on this machine (ADR-0025): admit leases,
     /// keep their source mirrors, report to the coordinator. The machine
     /// must have joined the pool (`devstack join`).
@@ -620,6 +634,9 @@ fn main() -> Result<()> {
             NodeAction::Init { addresses, dir } => poolcmd::init(dir, &addresses),
             NodeAction::Serve { listen, dir } => poolcmd::serve(dir, &listen),
             NodeAction::Fingerprint { dir } => poolcmd::print_fingerprint(dir),
+            NodeAction::RunLane { on, lane, keep } => {
+                poolcmd::run_lane(&cli.file, &on, &lane, keep)
+            }
             NodeAction::Agent {
                 listen,
                 api,

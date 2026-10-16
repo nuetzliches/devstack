@@ -5,7 +5,9 @@
 
 use crate::coordinator::{LeaseOffer, NodeRef};
 use crate::member::Local;
-use crate::node::{Admit, Applied, Apply, FileEntry, Hashes, NodeLease, NodeView};
+use crate::node::{
+    Admit, Applied, Apply, FileEntry, Hashes, LaneState, NodeLease, NodeView, Start,
+};
 use crate::tls::{self, Answer};
 use serde::de::DeserializeOwned;
 use std::path::Path;
@@ -124,6 +126,56 @@ impl NodeClient {
         self.call("DELETE", &format!("/v1/leases/{lease}"), None)
             .await
             .map(|_| ())
+    }
+
+    /// Start the lane from its mirror (infrastructure, lane container,
+    /// daemon); `stack_file` relative to the lane's root.
+    pub async fn start(&self, lease: &str, stack_file: &str) -> Result<LaneState> {
+        self.json(
+            "POST",
+            &format!("/v1/leases/{lease}/start"),
+            Some(&Start {
+                stack_file: stack_file.into(),
+            }),
+        )
+        .await
+    }
+
+    pub async fn stop(&self, lease: &str) -> Result<LaneState> {
+        self.json("POST", &format!("/v1/leases/{lease}/stop"), None::<&()>)
+            .await
+    }
+
+    pub async fn lane(&self, lease: &str) -> Result<LaneState> {
+        self.json("GET", &format!("/v1/leases/{lease}/lane"), None::<&()>)
+            .await
+    }
+
+    /// A call to the lane daemon's API (`path` as the daemon has it,
+    /// `/v1/stack`), answered whole.
+    pub async fn api(
+        &self,
+        lease: &str,
+        method: &str,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<(u16, String)> {
+        let body = body.map(|b| {
+            (
+                "application/json",
+                bytes::Bytes::from(serde_json::to_vec(&b).expect("a request serialises")),
+            )
+        });
+        let a = tls::request(
+            self.config.clone(),
+            &self.node.api,
+            &self.node.id,
+            method,
+            &format!("/v1/leases/{lease}/api{path}"),
+            body,
+        )
+        .await?;
+        Ok((a.status, String::from_utf8_lossy(&a.body).into_owned()))
     }
 
     /// Make the node's mirror of `lease` hold exactly `files` (paths relative

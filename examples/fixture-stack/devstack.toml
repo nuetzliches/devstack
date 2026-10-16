@@ -5,6 +5,10 @@ version = 1
 [stack]
 name = "fixture"
 
+# A lane on another machine of the pool runs in the .NET SDK image (ADR-0028).
+[lanes]
+image = "mcr.microsoft.com/dotnet/sdk:10.0"
+
 [compose.app]
 project   = "devstack-fixture"
 files     = ["deploy/compose.yml", "dev/compose.dev.yml"]

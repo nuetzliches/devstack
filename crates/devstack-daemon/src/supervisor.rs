@@ -1027,6 +1027,11 @@ impl Supervisor {
     /// the first service that does not become ready.
     /// This lane's instances hold the main slot: workers on (ADR-0008).
     pub fn owns_main(&self) -> bool {
+        // A daemon that runs a lane on another machine is never the main
+        // slot (yet): no workers there (ADR-0025 point 4, ADR-0012).
+        if crate::remote_lane() {
+            return false;
+        }
         let owner = self.main_owner.lock().unwrap();
         match owner.as_deref() {
             None => self.lane.is_empty(),

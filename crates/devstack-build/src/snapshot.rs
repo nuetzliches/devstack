@@ -66,7 +66,7 @@ impl Snapshot {
     /// repository (a node's mirror of a worktree, ADR-0029, holds exactly
     /// those already): every file but devstack's own state.
     pub fn list(&self) -> Result<Vec<String>> {
-        if !self.source.join(".git").exists() {
+        if !in_git(&self.source) {
             return Ok(walk(&self.source));
         }
         let out = std::process::Command::new("git")
@@ -164,6 +164,19 @@ impl Snapshot {
             elapsed: t0.elapsed(),
         })
     }
+}
+
+/// Whether `dir` is in a git working tree: its root, or below it (a stack in
+/// a subdirectory of a repository).
+fn in_git(dir: &Path) -> bool {
+    if dir.join(".git").exists() {
+        return true;
+    }
+    std::process::Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(dir)
+        .output()
+        .is_ok_and(|o| o.status.success() && o.stdout.starts_with(b"true"))
 }
 
 /// Every file below `root`, relative with `/`, without `.devstack/` and `.git/`.

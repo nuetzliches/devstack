@@ -463,6 +463,30 @@ pub fn lane_overlay(
     offset: u16,
     keep: &[String],
 ) -> std::result::Result<String, String> {
+    overlay(model, project, lane, Some(offset), keep)
+}
+
+/// The overlay for a lane on a node (ADR-0025): as [`lane_overlay`], but
+/// nothing is published on the node's host at all. The lane container
+/// reaches every service by its name on the lane's network, and two lanes
+/// on one node would otherwise want the same host ports.
+pub fn node_overlay(
+    model: &Model,
+    project: &str,
+    lane: &str,
+) -> std::result::Result<String, String> {
+    overlay(model, project, lane, None, &[])
+}
+
+/// `offset`: move published ports by it; `None`: publish none.
+fn overlay(
+    model: &Model,
+    project: &str,
+    lane: &str,
+    offset: Option<u16>,
+    keep: &[String],
+) -> std::result::Result<String, String> {
+    let by = offset.unwrap_or(0);
     let q = |v: &str| format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""));
     let shift = |p: &str| -> std::result::Result<String, String> {
         let one = |n: &str| -> std::result::Result<String, String> {
@@ -470,9 +494,9 @@ pub fn lane_overlay(
                 .trim()
                 .parse()
                 .map_err(|_| format!("port `{p}` is not a number"))?;
-            n.checked_add(offset)
+            n.checked_add(by)
                 .map(|m| m.to_string())
-                .ok_or_else(|| format!("port {n} + {offset} is beyond 65535"))
+                .ok_or_else(|| format!("port {n} + {by} is beyond 65535"))
         };
         match p.split_once('-') {
             Some((a, b)) => Ok(format!("{}-{}", one(a)?, one(b)?)),
@@ -485,7 +509,9 @@ pub fn lane_overlay(
     let mut services = String::new();
     for (name, svc) in model.services.iter().filter(|(n, _)| !keep.contains(n)) {
         let mut body = String::new();
-        if !svc.ports.is_empty() {
+        if !svc.ports.is_empty() && offset.is_none() {
+            body.push_str("    ports: !reset []\n");
+        } else if !svc.ports.is_empty() {
             body.push_str("    ports: !override\n");
             for port in &svc.ports {
                 let mut spec = String::new();
@@ -889,5 +915,18 @@ mod tests {
         assert!(!y.contains("kept"), "external volumes stay: {y}");
         let over = lane_overlay(&model, "shop-fix", "fix", 65000, &[]);
         assert!(over.is_err());
+    }
+
+    #[test]
+    fn a_node_overlay_publishes_nothing() {
+        let model = parse_config(
+            r#"{"services":{"db":{"ports":[{"target":5432,"published":"5432"}],"container_name":"shop-db"},
+                "cache":{}},"networks":{"default":{"name":"shop_default"}}}"#,
+        )
+        .unwrap();
+        let y = node_overlay(&model, "shop-ab12", "ab12").unwrap();
+        assert!(y.contains("ports: !reset []"), "{y}");
+        assert!(y.contains("container_name: !reset null"), "{y}");
+        assert!(!y.contains("5432"), "{y}");
     }
 }

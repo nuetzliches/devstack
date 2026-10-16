@@ -258,6 +258,9 @@ prepare = { run = "npm ci", inputs = ["web/package-lock.json"] }
 ```toml
 [lanes]
 port_step = 100   # the default: lane 1 runs api 5000 on 5100, lane 2 on 5200
+# For lanes on another machine of the pool (ADR-0025, ADR-0028), one of:
+image      = "registry.example/shop-lane:1"   # a Linux image with the stack's toolchains
+dockerfile = "dev/lane.Dockerfile"            # or one the node builds from the lane's source
 ```
 
 Every `git worktree` of the repository is a **lane** of the main tree's

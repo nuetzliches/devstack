@@ -324,3 +324,104 @@ pub fn agent(
     devstack_node::node::serve_blocking(devstack_node::node::NodeConfig { dir, api, share }, addr)?;
     Ok(())
 }
+
+/// `devstack node run-lane`: a lane on a node, driven from here without the
+/// daemon (a smoke test for M2b).
+pub fn run_lane(file: &Path, on: &str, lane: &str, keep: bool) -> Result<()> {
+    use devstack_node::coordinator::LeaseRequest;
+    use devstack_node::nodeclient::NodeClient;
+    let file = std::path::absolute(file)?;
+    let repo = file
+        .parent()
+        .ok_or_else(|| anyhow!("{} has no directory", file.display()))?
+        .to_path_buf();
+    let stack = devstack_config::load(&file).map_err(|e| anyhow!("{e}"))?;
+    let local = Local::new(&member_dir());
+    let offer = local.lease(&LeaseRequest {
+        node: on.into(),
+        repo: stack.stack.name.clone(),
+        lane: lane.into(),
+        need: devstack_node::share::Amount {
+            cpus: 0.5,
+            memory: 1 << 30,
+        },
+    })?;
+    println!(
+        "lease {} on {} ({})",
+        offer.id, offer.node.name, offer.node.api
+    );
+    let client = NodeClient::new(&local, offer.node.clone())?;
+    let rt = tokio::runtime::Runtime::new()?;
+    let id = offer.id.clone();
+    let result = rt.block_on(async {
+        client.admit(&offer).await?;
+        let tmp = std::env::temp_dir().join(format!("devstack-run-lane-{id}"));
+        let files = devstack_build::snapshot::Snapshot::open(&repo, &tmp)?.list()?;
+        let t0 = std::time::Instant::now();
+        let s = client.sync(&id, &repo, &files).await?;
+        println!(
+            "synced {} files ({} uploaded, {} KiB) in {:.1} s",
+            s.files,
+            s.uploaded,
+            s.bytes / 1024,
+            t0.elapsed().as_secs_f64()
+        );
+        let rel = file
+            .strip_prefix(&repo)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| "devstack.toml".into());
+        let t0 = std::time::Instant::now();
+        client.start(&id, &rel).await?;
+        println!(
+            "lane started in {:.1} s; starting its services",
+            t0.elapsed().as_secs_f64()
+        );
+        let (st, body) = client.api(&id, "POST", "/v1/up", None).await?;
+        if st >= 300 {
+            bail!("POST /v1/up: {st} {body}");
+        }
+        let until = std::time::Instant::now() + Duration::from_secs(600);
+        let mut last = String::new();
+        loop {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            client.renew(&id).await?;
+            let (st, body) = client.api(&id, "GET", "/v1/stack", None).await?;
+            if st != 200 {
+                println!("GET /v1/stack: {st}");
+                continue;
+            }
+            let v: serde_json::Value = serde_json::from_str(&body)?;
+            let states: Vec<String> = v["services"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|s| {
+                    format!(
+                        "{}={}",
+                        s["name"].as_str().unwrap_or("?"),
+                        s["status"]["state"].as_str().unwrap_or("?")
+                    )
+                })
+                .collect();
+            let line = states.join(" ");
+            if line != last {
+                println!("[{:>4} s] {line}", (t0.elapsed().as_secs()));
+                last = line;
+            }
+            let settled = states.iter().all(|s| {
+                s.ends_with("=healthy") || s.ends_with("=failed") || s.ends_with("=stopped")
+            });
+            if settled || std::time::Instant::now() > until {
+                break;
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    });
+    if keep {
+        println!("lease {id} stays; it expires within two minutes unless renewed");
+    } else {
+        let _ = rt.block_on(client.release(&id));
+        println!("released lease {id}");
+    }
+    result
+}
