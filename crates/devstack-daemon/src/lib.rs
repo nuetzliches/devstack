@@ -34,6 +34,19 @@ pub fn remote_lane() -> bool {
     *ON.get_or_init(|| std::env::var_os("DEVSTACK_REMOTE_LANE").is_some_and(|v| !v.is_empty()))
 }
 
+/// Where the files of a lane on a node are for the developer
+/// (`DEVSTACK_DISPLAY_ROOT`, the worktree the node mirrors): compiler paths
+/// in logs point there instead of into the mirror (ADR-0029 point 5).
+pub fn display_root() -> Option<&'static str> {
+    static ROOT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        std::env::var("DEVSTACK_DISPLAY_ROOT")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+    })
+    .as_deref()
+}
+
 /// Where the API listens: `DEVSTACK_LISTEN` (`address:port`) in a node's lane
 /// container, where the node agent proxies to it from the lane's network;
 /// else a free loopback port. The API still requires its token and a

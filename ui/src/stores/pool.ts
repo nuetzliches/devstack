@@ -98,6 +98,37 @@ export const usePool = defineStore('pool', () => {
     if (r.ok) await load();
   }
 
+  async function setPaused(id: string, name: string, paused: boolean) {
+    const r = await act({
+      label: paused ? `Pause ${name}` : `Resume ${name}`,
+      path: paths.poolPause(id, paused),
+      success: paused ? `${name} takes no new lanes; running ones stay` : `${name} takes lanes again`,
+    });
+    if (r.ok) await load();
+  }
+
+  async function endLease(id: string, what: string) {
+    const r = await act({
+      label: `End ${what}`,
+      path: paths.poolEnd(id),
+      confirmText: `End ${what}? Its node stops the lane within about 15 s; its owner sees it ended and can start it again.`,
+      confirmLabel: 'End it',
+      success: `${what} ends`,
+    });
+    if (r.ok) setTimeout(() => void load(), 1500);
+  }
+
+  async function join(coordinator: string, fingerprint: string, name: string) {
+    const r = await act({
+      label: 'Join the pool',
+      path: paths.poolJoin,
+      body: { coordinator, fingerprint, name },
+      success: 'Asked to join: an admin of the pool approves it',
+    });
+    if (r.ok) await load();
+    return r.ok;
+  }
+
   /** Change the switch or the caps; the hub reports at once. */
   async function setShare(next: ShareSettings) {
     const r = await act<ShareStatus>({
@@ -111,5 +142,5 @@ export const usePool = defineStore('pool', () => {
     setTimeout(() => void load(), 1500);
   }
 
-  return { overview, error, loading, share, isAdmin, pending, load, loadShare, watch, approve, remove, setRole, setShare };
+  return { overview, error, loading, share, isAdmin, pending, load, loadShare, watch, approve, remove, setRole, setShare, setPaused, endLease, join };
 });

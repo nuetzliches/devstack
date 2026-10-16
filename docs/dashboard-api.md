@@ -39,6 +39,9 @@ Origin `http://127.0.0.1:4250` (or `localhost:4250`).
 | `GET /hub/pool` | cookie | `PoolOverview`: this machine's pool, read from the coordinator with its member certificate (ADR-0032); `{"joined":false}` in no pool; `502 {"error"}` when the coordinator does not answer |
 | `POST /hub/pool/members/{id}/approve {"role"?}` | cookie + Origin | admins only: approve a request, as `member` (default) or `admin`; the member's `PoolMember` |
 | `POST /hub/pool/members/{id}/remove` | cookie + Origin | admins only: remove a member or reject its request; `409 {"error"}` for the last admin |
+| `POST /hub/pool/nodes/{id}/pause`, `.../resume` | cookie + Origin | admins only: a paused node takes no new lanes (the coordinator refuses leases on it); running ones stay |
+| `POST /hub/pool/leases/{id}/end` | cookie + Origin | admins only: `202`; the node stops that lane at its next report (within about 15 s); its requester sees the lease over |
+| `POST /hub/pool/join {"coordinator", "fingerprint", "name"?}` | cookie + Origin | ask a pool to admit this machine (`devstack join` without waiting); `GET /hub/pool` shows it pending until an admin approves |
 | `POST /hub/pool/members/{id}/role {"role"}` | cookie + Origin | admins only: `member` or `admin`; `409 {"error"}` for the last admin. A member who is no admin gets `403` from all three |
 | `POST /hub/pair` | `Authorization: Bearer <user token>` | `{"code": "...", "url": "http://127.0.0.1:4250/auth?code=..."}` (CLI only) |
 
@@ -61,7 +64,9 @@ type PoolOverview = {
   joined: boolean;
   me?: { id: string; name: string; state: 'pending' | 'approved' | 'removed'; role?: 'member' | 'admin'; coordinator: string };
   members?: PoolMember[];   // approved ones for a member; every one, with `address`, for an admin
-  nodes?: { id: string; name: string; online: boolean; seen?: number; report?: { sharing: boolean; cpus: number; memory: number; api?: string } }[];
+  leases?: { id: string; node: string; member: string; repo: string; lane: string; state: 'offered' | 'running'; created: number; expires_in?: number }[];
+  join?: { coordinator: string; fingerprint: string; command: string }; // what another machine runs to join
+  nodes?: { id: string; name: string; online: boolean; paused?: boolean; seen?: number; report?: { sharing: boolean; cpus: number; memory: number; api?: string } }[];
   audit?: { at: number; by: string; action: 'approve' | 'reject' | 'remove' | 'role'; member: string; name: string; detail?: string }[]; // admins only, newest first
 };
 type PoolMember = { id: string; name: string; state: 'pending' | 'approved' | 'removed'; role: 'member' | 'admin'; requested_at: number; address?: string };

@@ -82,6 +82,9 @@ pub struct Member {
     /// Its SHA-256, what a connection is recognised by.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cert_fp: Option<String>,
+    /// As a node: paused by an admin, no new lanes (running ones stay).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paused: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -108,7 +111,7 @@ pub struct AuditEntry {
     pub at: u64,
     /// Who: a member (`id (name)`) or [`SHELL`].
     pub by: String,
-    /// `approve`, `reject`, `remove`, `role`.
+    /// `approve`, `reject`, `remove`, `role`, `pause`, `resume`, `end`.
     pub action: String,
     pub member: String,
     pub name: String,
@@ -209,6 +212,7 @@ impl Store {
                 csr: csr.into(),
                 cert: None,
                 cert_fp: None,
+                paused: false,
             };
             ms.push(m.clone());
             Ok((m, true))
@@ -369,6 +373,42 @@ impl Store {
             self.log(by, "role", &m, Some(role.as_str().into()))?;
         }
         Ok(m)
+    }
+
+    /// Pause a node, or let it take lanes again (ADR-0032 point 4).
+    pub fn set_paused(&self, key: &str, paused: bool, by: &str) -> Result<Member, StoreError> {
+        let (m, changed) = self.change(|ms| {
+            let i = Self::find(ms, key)?;
+            if ms[i].state != State::Approved {
+                return Err(StoreError::Refused(format!(
+                    "{} ({}) is {}: only an approved member runs lanes",
+                    ms[i].id,
+                    ms[i].name,
+                    ms[i].state.as_str()
+                )));
+            }
+            let changed = ms[i].paused != paused;
+            ms[i].paused = paused;
+            Ok(((ms[i].clone(), changed), changed))
+        })?;
+        if changed {
+            self.log(by, if paused { "pause" } else { "resume" }, &m, None)?;
+        }
+        Ok(m)
+    }
+
+    /// Record an admin's change that is not one of the members' (ending a
+    /// lease), against the member it concerns.
+    pub fn record(
+        &self,
+        by: &str,
+        action: &str,
+        member: &str,
+        detail: Option<String>,
+    ) -> Result<(), StoreError> {
+        let ms = self.list()?;
+        let m = &ms[Self::find(&ms, member)?];
+        self.log(by, action, m, detail)
     }
 
     /// Remove a member, or reject its request: its certificate is refused

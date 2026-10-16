@@ -204,6 +204,7 @@ impl Inner {
                 .stack_file
                 .clone()
                 .unwrap_or_else(|| "devstack.toml".into()),
+            display_root: None,
         }
     }
 
@@ -581,6 +582,10 @@ pub struct Start {
     /// The stack file, relative to the lane's root.
     #[serde(default = "default_stack_file")]
     pub stack_file: String,
+    /// Where the requester has the lane's files (its worktree): paths in the
+    /// lane's logs point there (ADR-0029 point 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_root: Option<String>,
 }
 
 fn default_stack_file() -> String {
@@ -610,7 +615,10 @@ async fn start(
             format!("{} cannot run lanes: its agent is no Linux build", s.name),
         ));
     };
-    let stack_file = body.map_or_else(default_stack_file, |Json(b)| b.stack_file);
+    let (stack_file, display_root) = body.map_or_else(
+        || (default_stack_file(), None),
+        |Json(b)| (b.stack_file, b.display_root),
+    );
     if safe_path(&stack_file).is_none() {
         return Err(err(
             StatusCode::BAD_REQUEST,
@@ -627,7 +635,8 @@ async fn start(
     }
     let s2 = s.clone();
     let addr = tokio::task::spawn_blocking(move || {
-        let run = s2.run(&l);
+        let mut run = s2.run(&l);
+        run.display_root = display_root;
         run.start(&bin, s2.container.as_deref())
     })
     .await
@@ -870,7 +879,23 @@ async fn background(s: Shared) {
                 .collect(),
         };
         let s2 = s.clone();
-        let _ = tokio::task::spawn_blocking(move || s2.local.report(&report)).await;
+        let answer = tokio::task::spawn_blocking(move || s2.local.report(&report)).await;
+        // Leases an admin ended: their lanes stop like expired ones.
+        if let Ok(Ok(a)) = answer
+            && !a.end.is_empty()
+        {
+            let ended: Vec<NodeLease> = {
+                let mut leases = s.leases.lock().unwrap();
+                let out: Vec<NodeLease> = a.end.iter().filter_map(|id| leases.remove(id)).collect();
+                if !out.is_empty() {
+                    s.save(&leases);
+                }
+                out
+            };
+            for l in ended {
+                s.drop_lease(l);
+            }
+        }
     }
 }
 

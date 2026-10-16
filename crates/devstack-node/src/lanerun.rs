@@ -41,6 +41,8 @@ pub struct LaneRun {
     pub dir: PathBuf,
     /// The stack file, relative to the lane's root.
     pub stack_file: String,
+    /// Where the requester has the lane's files (`DEVSTACK_DISPLAY_ROOT`).
+    pub display_root: Option<String>,
 }
 
 /// Where the lane's daemon is reached, and its token.
@@ -246,6 +248,10 @@ impl LaneRun {
         let stack_in = format!("/src/{}", self.stack_file);
         let listen = format!("DEVSTACK_LISTEN=0.0.0.0:{DAEMON_PORT}");
         let lane_env = format!("DEVSTACK_REMOTE_LANE={}", self.lane);
+        let display = format!(
+            "DEVSTACK_DISPLAY_ROOT={}",
+            self.display_root.as_deref().unwrap_or("")
+        );
         let label = format!("devstack.lease={}", self.id);
         // The lane runs as the agent's own user: what it writes into the
         // mirror (its state, its token, build output) stays the agent's to
@@ -285,6 +291,8 @@ impl LaneRun {
             "DEVSTACK_NO_UPDATE_CHECK=1",
             "-e",
             "XDG_STATE_HOME=/src/.devstack/xdg",
+            "-e",
+            &display,
         ];
         if let Some(n) = networks.first() {
             args.extend(["--network", n.as_str()]);

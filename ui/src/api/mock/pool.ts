@@ -1,7 +1,7 @@
 // A fake pool for the mock hub (ADR-0031, ADR-0032): this machine is an admin,
 // two colleagues are members, a request waits. `?mock=nopool` is a machine in
 // no pool, `?mock=poolmember` one without the admin role.
-import type { PoolAuditEntry, PoolMember, PoolNode, PoolOverview, PoolRole, ShareSettings, ShareStatus } from '../types';
+import type { PoolAuditEntry, PoolLease, PoolMember, PoolNode, PoolOverview, PoolRole, ShareSettings, ShareStatus } from '../types';
 
 type R = { status: number; body: unknown };
 
@@ -11,6 +11,7 @@ export class MockPool {
   members: PoolMember[];
   nodes: PoolNode[];
   audit: PoolAuditEntry[] = [];
+  leases: PoolLease[] = [];
   private me = 'a1b2c3d4e5f60718';
   settings: ShareSettings = { enabled: false };
 
@@ -45,8 +46,12 @@ export class MockPool {
     ];
     this.nodes = [
       { id: this.me, name: 'dev-pc', online: true, seen: 4, report: { sharing: false, cpus: 0, memory: 0 } },
-      { id: '9f8e7d6c5b4a3921', name: 'build-server', online: true, seen: 7, report: { sharing: true, cpus: 12, memory: 48 * 2 ** 30 } },
+      { id: '9f8e7d6c5b4a3921', name: 'build-server', online: true, seen: 7, report: { sharing: true, cpus: 12, memory: 48 * 2 ** 30, api: 'https://10.0.0.14:4261' } },
       { id: '1122334455667788', name: 'laptop-anna', online: false, seen: 7200 },
+    ];
+    this.leases = [
+      { id: '7c1e9a0b22d4f610', node: '9f8e7d6c5b4a3921', member: this.me, repo: 'shop', lane: 'review-cart', state: 'running', created: s - 1800, expires_in: 110 },
+      { id: '0d3a5b6c7e8f9012', node: '9f8e7d6c5b4a3921', member: '1122334455667788', repo: 'crm', lane: 'agent-1242', state: 'running', created: s - 600, expires_in: 95 },
     ];
     this.audit = [{ at: s - 86_400, by: `${this.me} (dev-pc)`, action: 'approve', member: '1122334455667788', name: 'laptop-anna', detail: 'member' }];
   }
@@ -65,6 +70,12 @@ export class MockPool {
       me,
       nodes: this.nodes.filter((n) => this.members.some((m) => m.id === n.id && m.state === 'approved')),
       members: this.members.filter((m) => this.myRole === 'admin' || m.state === 'approved').map((m) => this.visible(m)),
+      leases: this.leases,
+      join: {
+        coordinator: me.coordinator,
+        fingerprint: '1a93c4d2e5f60718293a4b5c6d7e8f901a2b3c4d5e6f708192a3b4c5d6e7f809',
+        command: `devstack join ${me.coordinator} --fingerprint 1a93c4d2e5f60718293a4b5c6d7e8f901a2b3c4d5e6f708192a3b4c5d6e7f809`,
+      },
     };
     if (this.myRole === 'admin') v.audit = this.audit;
     return v;
@@ -76,6 +87,37 @@ export class MockPool {
 
   private lastAdmin(m: PoolMember) {
     return m.role === 'admin' && m.state === 'approved' && this.members.filter((x) => x.role === 'admin' && x.state === 'approved').length === 1;
+  }
+
+  /** `POST /hub/pool/nodes/{id}/pause|resume`. */
+  pause(id: string, paused: boolean): R {
+    if (this.myRole !== 'admin') return { status: 403, body: { error: 'only an admin of the pool may do this' } };
+    const n = this.nodes.find((x) => x.id === id);
+    const m = this.members.find((x) => x.id === id);
+    if (!n || !m) return { status: 404, body: { error: `no member \`${id}\`` } };
+    n.paused = paused;
+    this.log(paused ? 'pause' : 'resume', m);
+    return { status: 200, body: this.visible(m) };
+  }
+
+  /** `POST /hub/pool/leases/{id}/end`. */
+  end(id: string): R {
+    if (this.myRole !== 'admin') return { status: 403, body: { error: 'only an admin of the pool may do this' } };
+    const l = this.leases.find((x) => x.id === id);
+    const m = l && this.members.find((x) => x.id === l.node);
+    if (!l || !m) return { status: 404, body: { error: `no lease \`${id}\`` } };
+    this.leases = this.leases.filter((x) => x !== l);
+    this.log('end', m, `${l.repo}/${l.lane} (${l.id})`);
+    return { status: 202, body: null };
+  }
+
+  /** `POST /hub/pool/join`: the machine asks; it waits for an admin. */
+  join(): R {
+    this.joined = true;
+    this.myRole = 'member';
+    const mine = this.members.find((x) => x.id === this.me);
+    if (mine) mine.state = 'pending';
+    return { status: 200, body: { id: this.me, name: 'dev-pc', state: 'pending' } };
   }
 
   /** `POST /hub/pool/members/{id}/{action}`. */
