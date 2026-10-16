@@ -19,6 +19,7 @@ use devstack_config::model::Service;
 use devstack_proc::{Build, BuildJob};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -113,20 +114,81 @@ pub struct ArtifactMeta {
 
 pub const META_FILE: &str = ".devstack-artifact.json";
 
+/// Files of build systems that change what a build produces for every project
+/// below them, wherever the project's own files are (#13): MSBuild's
+/// `Directory.Build.*`, SDK and package settings, workspace manifests and
+/// lockfiles. Compared without case.
+pub const BUILD_FILES: [&str; 24] = [
+    "directory.build.props",
+    "directory.build.targets",
+    "directory.build.rsp",
+    "directory.packages.props",
+    "global.json",
+    "nuget.config",
+    "package.json",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "yarn.lock",
+    "tsconfig.json",
+    "tsconfig.base.json",
+    "cargo.toml",
+    "cargo.lock",
+    "go.mod",
+    "go.sum",
+    "pyproject.toml",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "settings.gradle",
+    "settings.gradle.kts",
+];
+
+/// `path` (repository-relative, `/`) is one of [`BUILD_FILES`].
+pub fn is_build_file(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    BUILD_FILES.contains(&name.as_str())
+}
+
 /// The build id: a hash over the service's inputs (ADR-0002). Inputs are the
 /// files matched by `watch` (all files when it is empty) with their content
-/// hashes, plus the build command and output path, so changing how a service
-/// is built also yields a new id.
+/// hashes; the build-system files ([`BUILD_FILES`]) in the directory of a
+/// watched file or above it; and the build command and output path, so
+/// changing how a service is built also yields a new id. Ignored files are
+/// not in the snapshot and count for nothing.
 pub fn build_id(manifest: &Manifest, svc: &Service) -> Result<String> {
     let set = watch_set(&svc.watch)?;
+    // Directories that hold a watched file: a build file applies to them if it
+    // sits in one of them or above.
+    let dirs: BTreeSet<&str> = match &set {
+        None => BTreeSet::new(),
+        Some(s) => manifest
+            .files
+            .keys()
+            .filter(|p| s.is_match(p.as_str()))
+            .map(|p| p.rsplit_once('/').map_or("", |(d, _)| d))
+            .collect(),
+    };
+    let applies = |path: &str| {
+        let dir = path.rsplit_once('/').map_or("", |(d, _)| d);
+        dir.is_empty()
+            || dirs
+                .iter()
+                .any(|d| *d == dir || d.strip_prefix(dir).is_some_and(|r| r.starts_with('/')))
+    };
     let mut h = blake3::Hasher::new();
-    h.update(b"devstack build id v1\0");
+    h.update(b"devstack build id v2\0");
     h.update(svc.build.as_deref().unwrap_or("").as_bytes());
     h.update(b"\0");
     h.update(svc.output.as_deref().unwrap_or("").as_bytes());
     h.update(b"\0");
     for (path, e) in &manifest.files {
-        if set.as_ref().is_none_or(|s| s.is_match(path)) {
+        let counts = match &set {
+            None => true,
+            Some(s) => s.is_match(path) || (is_build_file(path) && applies(path)),
+        };
+        if counts {
             h.update(path.as_bytes());
             h.update(b"\0");
             h.update(e.hash.as_bytes());
@@ -240,12 +302,25 @@ impl Builder {
         service: &str,
         svc: &Service,
     ) -> Result<Running> {
+        let id = build_id(&snap.manifest, svc)?;
+        self.start_as(lane, snap, service, svc, id)
+    }
+
+    /// [`Self::start`], publishing under `id` (a forced rebuild of the same
+    /// inputs, `<inputs>-<n>`).
+    pub fn start_as(
+        &self,
+        lane: &str,
+        snap: &Snapshot,
+        service: &str,
+        svc: &Service,
+        id: String,
+    ) -> Result<Running> {
         let (Some(command), Some(output)) = (&svc.build, &svc.output) else {
             return Err(BuildError::Other(format!(
                 "service `{service}` has no `build`/`output`"
             )));
         };
-        let id = build_id(&snap.manifest, svc)?;
         let log = self.layout.build_log(service, &id);
         fs::create_dir_all(log.parent().expect("log has a parent"))
             .map_err(|e| BuildError::io("create log dir", e))?;

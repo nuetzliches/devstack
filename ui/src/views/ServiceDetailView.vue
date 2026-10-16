@@ -45,6 +45,13 @@ const actions = computed<Act[]>(() => {
   return [
     { action: 'start', label: 'Start', icon: 'play', show: isDown.value, primary: true, title: 'Start the service from its current build' },
     { action: 'restart', label: 'Restart', icon: 'restart', show: !isDown.value, title: 'Rebuild; the running instance is replaced only if the build succeeds and is healthy' },
+    {
+      action: 'rebuild',
+      label: 'Rebuild',
+      icon: 'wrench',
+      show: !isDown.value && !!s.build_id && !s.hot_reload,
+      title: 'Build again although the inputs did not change (an SDK or a file outside the repository did); the new build gets the id <inputs>-2',
+    },
     // promote lives in the candidate panel, next to the reason it is held
     { action: 'rollback', label: 'Roll back', icon: 'rollback', show: !!s.build_id && !isDown.value && !s.hot_reload, title: 'Switch back to the previous build' },
     {

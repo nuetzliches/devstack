@@ -132,6 +132,44 @@ fn build_id_follows_watched_inputs_and_the_build_definition() {
     );
 }
 
+/// #13: build files above the watched files are inputs (MSBuild's
+/// `Directory.Build.targets` at the root); build files beside other projects
+/// are not.
+#[test]
+fn build_files_above_the_watched_ones_count() {
+    let r = repo();
+    let state = tempfile::tempdir().unwrap();
+    let mut snap = Snapshot::open(r.path(), &state.path().join("lane")).unwrap();
+    fs::create_dir_all(r.path().join("web")).unwrap();
+    fs::write(r.path().join("Directory.Build.targets"), "<Project />").unwrap();
+    fs::write(r.path().join("web/package.json"), "{}").unwrap();
+    snap.sync().unwrap();
+    let watched = service(&format!(
+        "{OK_BUILD}watch = [\"src/feature/**\"]
+"
+    ));
+    let id1 = build_id(&snap.manifest, &watched).unwrap();
+
+    fs::write(
+        r.path().join("Directory.Build.targets"),
+        "<Project><Target Name=\"X\" /></Project>",
+    )
+    .unwrap();
+    snap.sync().unwrap();
+    let id2 = build_id(&snap.manifest, &watched).unwrap();
+    assert_ne!(id2, id1, "a build file at the root is an input");
+
+    fs::write(r.path().join("web/package.json"), "{\"name\":\"web\"}").unwrap();
+    snap.sync().unwrap();
+    assert_eq!(
+        build_id(&snap.manifest, &watched).unwrap(),
+        id2,
+        "a build file beside another project is not"
+    );
+    assert!(devstack_build::is_build_file("x/NuGet.Config"));
+    assert!(!devstack_build::is_build_file("src/Program.cs"));
+}
+
 #[test]
 fn build_publish_failure_cancel_and_prune() {
     let r = repo();

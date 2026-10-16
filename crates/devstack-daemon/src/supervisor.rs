@@ -86,6 +86,9 @@ pub struct Supervisor {
     /// background workers although the lane does not own the main slot; its
     /// coordinators are its own (ADR-0030).
     lane_workers: std::sync::atomic::AtomicBool,
+    /// Services whose next build runs even if an artifact for their inputs
+    /// exists (`devstack restart --rebuild`, #13).
+    force_build: Mutex<BTreeSet<String>>,
     /// The stack file this daemon runs from, and a hash of what it read at start.
     /// The daemon does not reload it: a change waits for the next start, and the
     /// status says so instead of keeping quiet.
@@ -289,6 +292,7 @@ impl Supervisor {
             preparing: Mutex::new(()),
             port_offset,
             lane_workers: std::sync::atomic::AtomicBool::new(false),
+            force_build: Mutex::new(BTreeSet::new()),
             stack_file_hash: stack_file_hash(&stack_file),
             stack_file,
             config_changed: std::sync::atomic::AtomicBool::new(false),
@@ -1501,7 +1505,30 @@ impl Supervisor {
         building(None);
         let mut snap = self.snapshot.lock().unwrap();
         snap.sync().map_err(|e| e.to_string())?;
-        let id = build_id(&snap.manifest, svc).map_err(|e| e.to_string())?;
+        let mut id = build_id(&snap.manifest, svc).map_err(|e| e.to_string())?;
+        // `--rebuild`: the same inputs once more, under `<id>-<n>`; the artifact
+        // that exists may be running and is never overwritten (ADR-0002).
+        if self.force_build.lock().unwrap().remove(name) {
+            let base = id.clone();
+            id = (2..)
+                .map(|n| format!("{base}-{n}"))
+                .find(|i| self.builder.artifact(name, i).is_none())
+                .expect("a free id");
+            crate::diag::info(
+                "build_forced",
+                serde_json::json!({ "lane": self.lane, "service": name, "inputs": base, "build_id": id }),
+            );
+        } else if self.builder.artifact(name, &id).is_some() {
+            crate::diag::info(
+                "build_reused",
+                serde_json::json!({
+                    "lane": self.lane,
+                    "service": name,
+                    "build_id": id,
+                    "why": "an artifact for these inputs exists (watch paths, build files above them, build command); `devstack restart --rebuild` builds anyway",
+                }),
+            );
+        }
         if self.builder.artifact(name, &id).is_none() {
             building(Some(id.clone()));
             if let Some(job) = self.prepare_job(name, svc, &snap)? {
@@ -1511,7 +1538,7 @@ impl Supervisor {
             }
             let mut running = self
                 .builder
-                .start("main", &snap, name, svc)
+                .start_as("main", &snap, name, svc, id.clone())
                 .map_err(|e| e.to_string())?;
             drop(snap); // other services may sync while this one builds
             // A newer change supersedes the build: kill it (ADR-0003, spike b).
@@ -1730,6 +1757,18 @@ impl Supervisor {
     /// Build first; only a successful build replaces the running instance
     /// (ADR-0003). Behind the proxy the replacement is a candidate that takes
     /// over without dropping a request; otherwise a restart in place.
+    /// `restart --rebuild`: build again even if an artifact for the same
+    /// inputs exists (an input devstack does not see changed), then restart.
+    pub fn rebuild(self: &Arc<Self>, name: &str) -> Result<(), String> {
+        if self.service(name)?.build.is_none() {
+            return Err(format!("`{name}` has no `build`"));
+        }
+        self.force_build.lock().unwrap().insert(name.to_string());
+        let result = self.restart(name);
+        self.force_build.lock().unwrap().remove(name);
+        result
+    }
+
     pub fn restart(self: &Arc<Self>, name: &str) -> Result<(), String> {
         if self.is_hot(name) {
             // The watcher builds by itself; a restart starts it afresh.
@@ -2069,6 +2108,16 @@ The running instance was left as it was."
         }
         // The change did not touch the service's inputs after all.
         if self.slots.lock().unwrap()[name].view.build_id.as_deref() == Some(artifact.0.as_str()) {
+            crate::diag::info(
+                "candidate_unchanged",
+                serde_json::json!({
+                    "lane": self.lane,
+                    "service": name,
+                    "build_id": artifact.0,
+                    "paths": paths,
+                    "why": "the changed files are not inputs of its build id (watch paths, build files above them)",
+                }),
+            );
             clear();
             return false;
         }

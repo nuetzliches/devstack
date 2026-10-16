@@ -182,6 +182,7 @@ async fn service_action(
         "start" => tokio::task::spawn_blocking(move || sup.start(&name)).await,
         "stop" => tokio::task::spawn_blocking(move || sup.stop(&name)).await,
         "restart" => tokio::task::spawn_blocking(move || sup.restart(&name)).await,
+        "rebuild" => tokio::task::spawn_blocking(move || sup.rebuild(&name)).await,
         "promote" => tokio::task::spawn_blocking(move || sup.promote(&name)).await,
         "rollback" => tokio::task::spawn_blocking(move || sup.rollback(&name)).await,
         "hot-reload-on" => tokio::task::spawn_blocking(move || sup.hot_reload(&name, true)).await,

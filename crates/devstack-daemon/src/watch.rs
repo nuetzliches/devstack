@@ -122,8 +122,11 @@ pub fn start(sup: Arc<Supervisor>) -> Option<Watcher> {
                 me.stack_file_touched();
                 continue;
             }
+            // A build file (`Directory.Build.targets`, a lockfile) may be an
+            // input of any build; the build id decides (#13).
+            let build_file = devstack_build::is_build_file(&rel);
             for (n, g) in &built {
-                if g.is_match(&rel) {
+                if g.is_match(&rel) || build_file {
                     me.changed(n, &rel);
                 }
             }
