@@ -143,7 +143,15 @@ const isCurrent = (s: StackEntry) => s.id === stack.id;
           </li>
           <template v-if="unfolded[s.id]">
             <li v-for="l in lanesOf(s).idle" :key="l.name">
-              <button type="button" class="item lane idle" :title="`${l.path} — click to start it`" data-testid="sidebar-lane" :data-lane="l.name" @click="openLane(s, l)">
+              <button
+                type="button"
+                class="item lane idle"
+                :class="{ active: isCurrent(s) && stack.lane === l.name }"
+                :title="`${l.path} — click to start it`"
+                data-testid="sidebar-lane"
+                :data-lane="l.name"
+                @click="openLane(s, l)"
+              >
                 <Icon name="gitBranch" :size="13" class="branch" />
                 <span class="label truncate">{{ laneLabel(l) }}</span>
                 <span class="faint small">start</span>

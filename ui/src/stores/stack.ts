@@ -137,8 +137,10 @@ export const useStack = defineStore('stack', () => {
       });
       if (!res.ok) return;
       const up = await act({ label: `Start lane ${name}`, path: paths.api(id.value, `${v1.lane(name)}/v1/up`), success: `Lane ${name} is starting` });
-      if (up.ok) selectLane(name);
       await loadLanes();
+      // Show it only once the daemon lists it as started: never a lane the
+      // list still calls "not started".
+      if (up.ok && lanes.value.some((x) => x.name === name && x.active !== false)) selectLane(name);
     } finally {
       delete busy.value['lane-start'];
     }
