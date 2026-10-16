@@ -1,7 +1,7 @@
 # devstack: plan
 
-- **Status:** Active: phases 0 to 2 done (0.4.0), phase 4 under way, phase 3 next (see §7 and the backlog, §13)
-- **Date:** 2026-10-14, status updated 2026-10-15
+- **Status:** Active: phases 0 to 2 done (0.4.0), phase 3 built for one machine (0.7.0), phase 4 under way; lanes on other machines proposed (ADR-0025 to 0029; see §7 and the backlog, §13)
+- **Date:** 2026-10-14, status updated 2026-10-16
 - **Inputs:** [problem-statement.md](problem-statement.md), [ADR index](adr/README.md)
 
 This document is the planning artefact. Decisions it relies on are recorded as
@@ -607,7 +607,7 @@ are pruned for the first time: the newest five per service plus everything
 some tree runs or may roll back to (ADR-0002 retention). `kind = "static"`
 serves a frontend's production bundle from an artifact (§3.4).
 
-**Since 0.6.0 (not released):** the lanes are the repository's worktrees
+**0.7.0:** the lanes are the repository's worktrees
 (`git worktree list`): a new worktree is a lane at once, not started, a removed
 one is gone with its state (ADR-0024, amended). Worktrees are git's: no
 `lane add` / `lane remove`; the daemon follows `<git common dir>/worktrees` and
