@@ -94,7 +94,7 @@ export const v1 = {
   runLogStream: (id: number) => `/v1/runs/${id}/log/stream`,
 };
 
-export type ServiceAction = 'start' | 'stop' | 'restart' | 'promote' | 'rollback' | 'hot-reload-on' | 'hot-reload-off';
+export type ServiceAction = 'start' | 'stop' | 'restart' | 'rebuild' | 'promote' | 'rollback' | 'hot-reload-on' | 'hot-reload-off';
 export type GroupAction = 'start' | 'stop' | 'restart';
 
 function enc(s: string): string {

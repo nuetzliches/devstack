@@ -75,6 +75,11 @@ enum Cmd {
     Restart {
         /// A service or a group of the stack file.
         service: String,
+        /// Build again even if an artifact for the same inputs exists (an
+        /// input devstack does not see changed: the SDK, a file outside the
+        /// repository). The build gets the id `<inputs>-<n>`.
+        #[arg(long)]
+        rebuild: bool,
     },
     /// Run a built service with its toolchain's watcher from the source tree
     /// (`hot_reload` in the stack file), or back to builds (plan §3.4a).
@@ -415,7 +420,11 @@ fn main() -> Result<()> {
         }
         Cmd::Start { service } => client::service_action(&cli.file, &service, "start"),
         Cmd::Stop { service } => client::service_action(&cli.file, &service, "stop"),
-        Cmd::Restart { service } => client::service_action(&cli.file, &service, "restart"),
+        Cmd::Restart { service, rebuild } => client::service_action(
+            &cli.file,
+            &service,
+            if rebuild { "rebuild" } else { "restart" },
+        ),
         Cmd::HotReload { service, state } => {
             client::service_action(&cli.file, &service, &format!("hot-reload-{state}"))
         }

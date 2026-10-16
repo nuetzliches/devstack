@@ -115,6 +115,24 @@ with the normal output directories. `output` is copied into an artifact named by
 the build id (a hash of the inputs); `run` starts from `{artifact}`. The same
 inputs never build twice, and a rollback needs no build.
 
+What goes into the build id:
+
+- the files `watch` matches (every file of the repository without `watch`),
+  with their content;
+- build-system files in the directory of a watched file or above it:
+  `Directory.Build.props/.targets/.rsp`, `Directory.Packages.props`,
+  `global.json`, `nuget.config`, `package.json` and lockfiles (npm, pnpm,
+  yarn), `tsconfig.json` / `tsconfig.base.json`, `Cargo.toml`/`.lock`,
+  `go.mod`/`.sum`, `pyproject.toml`, `pom.xml`, Gradle build and settings
+  files. A change to one starts candidates like a watched file;
+- the `build` command and `output`.
+
+Not in it: ignored files (they are not in the snapshot either), the SDK and
+anything outside the repository. When one of those changed, `devstack restart
+<service> --rebuild` builds again anyway; the build gets the id
+`<inputs>-<n>`. The daemon log says when a build was reused
+(`build_reused`) or a change was not an input (`candidate_unchanged`).
+
 ### How a change arrives ([ADR-0003](adr/0003-changes-flow-through-candidates.md), [ADR-0010](adr/0010-promotion-mechanism.md))
 
 - `watch`: a saved change starts a candidate build (debounced 2 s; a newer

@@ -824,6 +824,22 @@ fn lifecycle(with_compose: bool) {
     assert_eq!(s.info()["build"], second_build.as_str());
     assert_eq!(s.artifacts(), artifacts, "no new build after a restart");
 
+    // `restart --rebuild` builds the same inputs again under `<id>-2` (#13).
+    s.ok(&["restart", "api", "--rebuild"]);
+    assert!(
+        wait_for(
+            || s.api("/info")
+                .is_some_and(|i| i.contains(&format!("{second_build}-2"))),
+            Duration::from_secs(120)
+        ),
+        "rebuilt as {second_build}-2\n{}",
+        s.diag()
+    );
+    assert!(
+        s.daemon_log().contains("build_forced"),
+        "the daemon log says why it built"
+    );
+
     // down: nothing left.
     s.ok(&["down", "--infra"]);
     assert!(s.api("/health").is_none());
