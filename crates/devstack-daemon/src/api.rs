@@ -335,16 +335,20 @@ fn memory_fits(
 /// local ports through the node agent to here. Only the ports of the stack's
 /// services, behind the API's token like every route.
 async fn tunnel(State(s): State<AppState>, Path(port): Path<u16>, mut req: Request) -> Response {
-    if !s
-        .sup
-        .stack
-        .services
-        .values()
-        .any(|svc| svc.port == Some(port))
+    // A service's port on this machine's loopback, or (a lane on a node) a
+    // container's, at its address on the lane's network.
+    let container = s.sup.infra_tunnel(port);
+    if container.is_none()
+        && !s
+            .sup
+            .stack
+            .services
+            .values()
+            .any(|svc| svc.port == Some(port))
     {
         return err(
             StatusCode::FORBIDDEN,
-            format!("port {port} is no service's port in this stack"),
+            format!("port {port} is no service's or container's port in this stack"),
         );
     }
     let wants = req
@@ -358,18 +362,23 @@ async fn tunnel(State(s): State<AppState>, Path(port): Path<u16>, mut req: Reque
             format!("a tunnel needs `Upgrade: {TUNNEL_PROTOCOL}`"),
         );
     }
-    // Dev servers bound to `localhost` may hold only `::1`.
-    let tcp = match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
-        Ok(t) => t,
-        Err(_) => match tokio::net::TcpStream::connect(("::1", port)).await {
-            Ok(t) => t,
-            Err(e) => {
-                return err(
-                    StatusCode::BAD_GATEWAY,
-                    format!("nothing answers on port {port}: {e}"),
-                );
-            }
+    let connected = match &container {
+        Some(addr) => tokio::net::TcpStream::connect(addr.as_str()).await,
+        // Dev servers bound to `localhost` may hold only `::1`.
+        None => match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+            Ok(t) => Ok(t),
+            Err(_) => tokio::net::TcpStream::connect(("::1", port)).await,
         },
+    };
+    let tcp = match connected {
+        Ok(t) => t,
+        Err(e) => {
+            let at = container.unwrap_or_else(|| format!("port {port}"));
+            return err(
+                StatusCode::BAD_GATEWAY,
+                format!("nothing answers at {at}: {e}"),
+            );
+        }
     };
     let _ = tcp.set_nodelay(true);
     let upgrade = hyper::upgrade::on(&mut req);

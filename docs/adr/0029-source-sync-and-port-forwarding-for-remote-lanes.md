@@ -53,6 +53,13 @@ machine to a Linux node: 0.5 ms per request on a kept-alive connection, 5 to
 hop matters: without it each kept-alive request waited about 40 ms for a
 delayed ACK, the daemon's own service proxy included.
 
+*With M3c:* the containers of a remote lane are forwarded too, each on the
+port a local lane would publish it on (the Compose file's host port moved by
+the lane's offset; a port Docker assigns stays unforwarded, as it has no fixed
+number to keep). The node lists those ports in the infrastructure file, the
+lane daemon shows and links them, and its tunnel connects them to the
+container on the lane's network.
+
 ## Alternatives considered
 
 - **Commit and push, the node builds from the branch.** Needs a commit for every
