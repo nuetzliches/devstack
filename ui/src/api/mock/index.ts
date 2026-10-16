@@ -218,6 +218,17 @@ export class MockTransport implements Transport {
         { repo: `${root}\\legacy`, id: 'l222', name: null, error: 'devstack.toml: unknown field `biuld`', registered: false, added: false },
       ]);
     }
+    if (p === '/hub/update' && method === 'POST') {
+      // As if installed: the hub would restart on the new version.
+      const send = (ev: HubEvent) => hub.hubSubs.forEach((l) => l.send(ev));
+      send({ type: 'update', update: { running: true, error: null } });
+      setTimeout(() => {
+        hub.newer = null;
+        send({ type: 'update', update: { running: false, error: null } });
+        send({ type: 'release', current: '0.5.0', newer: null });
+      }, 2500);
+      return empty(202);
+    }
     if (p === '/hub/pick-folder' && method === 'POST') return json(200, { path: 'C:\\src\\new-shop' });
     if (p === '/hub/stacks/add' && method === 'POST') return json(200, { id: hub.stacks[0].entry.id, name: hub.stacks[0].entry.name });
     if (p === '/hub/stacks/init' && method === 'POST')

@@ -27,7 +27,9 @@ export type HubEvent =
   | { type: 'stacks'; stacks: StackEntry[] }
   | { type: 'docker'; docker: DockerEngine }
   /** A newer release than the hub (`newer`), or none. */
-  | { type: 'release'; current: string; newer: string | null };
+  | { type: 'release'; current: string; newer: string | null }
+  /** The dashboard's update (`POST /hub/update`): running, or why the last one failed. Older hubs never send it. */
+  | { type: 'update'; update: { running: boolean; error: string | null } };
 
 // ---------------------------------------------------------------- daemon state
 

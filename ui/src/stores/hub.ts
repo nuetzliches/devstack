@@ -5,6 +5,7 @@ import type { DockerEngine, HubEvent, HubSession, StackEntry } from '@/api/types
 import { act } from '@/lib/actions';
 import { checkForAppUpdate } from '@/lib/app-update';
 import { persist } from '@/lib/persist';
+import { useUi } from '@/stores/ui';
 
 export type SessionStatus = 'loading' | 'ok' | 'unpaired' | 'unreachable';
 
@@ -24,6 +25,8 @@ export const useHub = defineStore('hub', () => {
   const dockerStarting = ref(false);
   /** A newer devstack release, if the hub found one. */
   const newer = ref<string | null>(null);
+  /** `devstack update` started from the dashboard runs. */
+  const updating = ref(false);
   let sub: Subscription | null = null;
   let hadBreak = false;
   let checking: Promise<void> | null = null;
@@ -61,6 +64,12 @@ export const useHub = defineStore('hub', () => {
       onMessage(ev) {
         if (ev.type === 'release') {
           newer.value = ev.newer;
+          return;
+        }
+        if (ev.type === 'update') {
+          const failed = updating.value && !ev.update.running && ev.update.error;
+          updating.value = ev.update.running;
+          if (failed) useUi().toast('error', 'The update failed', ev.update.error ?? '', 15000);
           return;
         }
         if (ev.type === 'docker') {
@@ -105,5 +114,24 @@ export const useHub = defineStore('hub', () => {
     return id ? stacks.value.find((s) => s.id === id) : undefined;
   }
 
-  return { status, version, stacks, lastContact, stream, fresh, starting, docker, dockerStarting, newer, reachable, init, checkSession, startDocker, entry, save };
+  /**
+   * Install the newer release (`devstack update` on the hub's machine). On
+   * success the hub restarts on the new binary and this page reconnects and
+   * reloads with the new dashboard; running stacks switch at their next
+   * restart (their banner offers it).
+   */
+  async function installUpdate() {
+    if (!newer.value || updating.value) return;
+    const res = await act({
+      label: `Update to devstack ${newer.value}`,
+      path: paths.hubUpdate,
+      danger: false,
+      confirmLabel: 'Update',
+      confirmText: `Installs devstack ${newer.value} and restarts the hub; the dashboard reconnects on its own. Running stacks keep running and switch at their next restart.`,
+      success: `Installing devstack ${newer.value}…`,
+    });
+    if (res.ok) updating.value = true;
+  }
+
+  return { status, version, stacks, lastContact, stream, fresh, starting, docker, dockerStarting, newer, updating, reachable, init, checkSession, startDocker, installUpdate, entry, save };
 });

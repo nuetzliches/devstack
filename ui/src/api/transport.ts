@@ -47,6 +47,7 @@ export interface Transport {
 export const paths = {
   session: '/hub/session',
   hubEvents: '/hub/events',
+  hubUpdate: '/hub/update',
   dockerStart: '/hub/docker/start',
   inspect: (path: string) => `/hub/inspect?path=${encodeURIComponent(path)}`,
   stackAdd: '/hub/stacks/add',

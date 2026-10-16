@@ -86,11 +86,13 @@ const mismatch = computed(() => {
         v-if="hub.newer"
         type="button"
         class="btn btn-sm update"
-        :title="`devstack ${hub.newer} is out. Click to copy the command: devstack update`"
+        :disabled="hub.updating"
+        :title="`devstack ${hub.newer} is out. Click to install it (devstack update); right-click copies the command`"
         data-testid="update-available"
-        @click="copyUpdate()"
+        @click="hub.installUpdate()"
+        @contextmenu.prevent="copyUpdate()"
       >
-        <Icon name="download" :size="13" /> {{ hub.newer }}
+        <span v-if="hub.updating" class="spinner" /><Icon v-else name="download" :size="13" /> {{ hub.updating ? `Installing ${hub.newer}…` : `Update to ${hub.newer}` }}
       </button>
       <span class="ver hide-sm" :title="mismatch ? `daemon ${mismatch} differs from the hub's minor version` : 'hub version'">
         <span v-if="isMock" class="pill sm info">mock</span>

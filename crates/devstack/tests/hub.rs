@@ -475,7 +475,7 @@ fn live_streams_come_over_websocket() {
     assert_eq!(s, 101, "{head}");
     let v: serde_json::Value = serde_json::from_str(&first.unwrap()).unwrap();
     assert!(
-        ["stacks", "docker", "release"].contains(&v["type"].as_str().unwrap()),
+        ["stacks", "docker", "release", "update"].contains(&v["type"].as_str().unwrap()),
         "{v}"
     );
 
@@ -500,4 +500,41 @@ fn live_streams_come_over_websocket() {
     assert_eq!(s, 503);
     let (s, _, _) = ws_open(p, "/elsewhere", &format!("{cookie}{own}"));
     assert_eq!(s, 400);
+}
+
+#[test]
+fn an_update_needs_the_hubs_own_page() {
+    let h = start();
+    let p = h.port;
+    let cookie = format!(
+        "Cookie: {}
+",
+        paired_cookie(&h)
+    );
+    // Installing a release is a mutation: never from another origin, never
+    // without the pairing. (A request that passes would really update.)
+    for extra in [
+        format!(
+            "{cookie}Origin: http://evil.example
+"
+        ),
+        cookie.clone(),
+        format!(
+            "Origin: http://127.0.0.1:{p}
+"
+        ),
+    ] {
+        let (s, _, _) = http(
+            p,
+            &format!(
+                "POST /hub/update HTTP/1.1
+Host: 127.0.0.1:{p}
+{extra}Content-Length: 0
+Connection: close
+
+"
+            ),
+        );
+        assert!(s == 401 || s == 403, "{extra}: {s}");
+    }
 }
