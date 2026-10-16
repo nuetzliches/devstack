@@ -35,6 +35,13 @@ param(
     [switch]$NoOpen
 )
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 started from PowerShell 7 inherits 7's PSModulePath,
+# tries 7's modules and cannot load them: Get-FileHash and friends go missing
+# (#12). Keep 5.1 to its own module directories; below, .NET does what
+# module cmdlets would (hash, unzip, HTTP), so the script runs the same in both.
+if ($PSVersionTable.PSEdition -eq 'Desktop') {
+    $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -and $_ -notmatch '\\PowerShell\\' }) -join ';'
+}
 # Invoke-WebRequest's own progress bar slows Windows PowerShell 5.1 down to a
 # crawl; the download below draws its own.
 $ProgressPreference = 'SilentlyContinue'
@@ -128,7 +135,9 @@ function Get-LatestTag {
 
 function Test-Hub {
     try {
-        $null = Invoke-RestMethod -Uri 'http://127.0.0.1:4250/hub/ping' -TimeoutSec 2
+        $req = [Net.HttpWebRequest]::Create('http://127.0.0.1:4250/hub/ping')
+        $req.Timeout = 2000
+        $req.GetResponse().Dispose()
         return $true
     }
     catch { return $false }
@@ -169,7 +178,10 @@ try {
     $expected = (Get-Content (Join-Path $tmp 'SHA256SUMS') |
         Where-Object { $_ -match "\s\*?$([regex]::Escape($asset))$" } |
         ForEach-Object { ($_ -split '\s+')[0] }) | Select-Object -First 1
-    $actual = (Get-FileHash -Algorithm SHA256 (Join-Path $tmp $asset)).Hash
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $fs = [IO.File]::OpenRead((Join-Path $tmp $asset))
+    try { $actual = -join ($sha.ComputeHash($fs) | ForEach-Object { $_.ToString('X2') }) }
+    finally { $fs.Dispose(); $sha.Dispose() }
     if (-not $expected -or $actual -ne $expected.ToUpperInvariant()) {
         throw "checksum mismatch for $asset (expected $expected, got $actual)"
     }
@@ -177,7 +189,9 @@ try {
 
     # 3. Install
     Step "Installing to $Dir"
-    Expand-Archive -Path (Join-Path $tmp $asset) -DestinationPath $tmp -Force
+    $null = [Reflection.Assembly]::Load('System.IO.Compression.FileSystem, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089')
+    $unpacked = Join-Path $tmp 'unpacked'
+    [IO.Compression.ZipFile]::ExtractToDirectory((Join-Path $tmp $asset), $unpacked)
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     Get-ChildItem $Dir -Filter 'devstack.exe.old*' -ErrorAction SilentlyContinue |
         ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
@@ -185,7 +199,7 @@ try {
         # A running daemon holds the file: renaming works, overwriting does not.
         Move-Item $target "$target.old-$([DateTime]::Now.ToString('yyyyMMddHHmmss'))" -Force
     }
-    Copy-Item (Join-Path $tmp 'devstack.exe') $target
+    Copy-Item (Join-Path $unpacked 'devstack.exe') $target
     $installed = (& $target --version)
     Note $installed
 
