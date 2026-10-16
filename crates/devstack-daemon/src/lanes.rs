@@ -552,6 +552,30 @@ impl Lanes {
 
     /// The containers, volumes and networks of lane `name` (ADR-0030), also
     /// of a lane not started now: Compose finds a project by its name alone.
+    /// Stop and remove the containers of lane `name` here, keeping their
+    /// volumes: what a lane leaves on this machine when it goes to a node
+    /// (left over from a local start), which would hold its ports here.
+    fn stop_local_infra(&self, name: &str) {
+        let docker = devstack_compose::Docker::default();
+        for (g, cfg) in &self.main.stack.compose {
+            let group = devstack_compose::Group {
+                name: g.clone(),
+                project: format!("{}-{name}", cfg.project),
+                files: Vec::new(),
+                env_files: Vec::new(),
+                networks: Vec::new(),
+                services: Vec::new(),
+                dir: self.main.repo.clone(),
+            };
+            if let Err(e) = docker.down(&group) {
+                crate::diag::warn(
+                    "lane_infra_not_stopped",
+                    serde_json::json!({ "lane": name, "group": g, "error": e.to_string() }),
+                );
+            }
+        }
+    }
+
     fn remove_infra(&self, name: &str) {
         let docker = devstack_compose::Docker::default();
         for (g, cfg) in &self.main.stack.compose {
@@ -1131,6 +1155,8 @@ impl Lanes {
             return Err(format!("lane `{name}` is being started"));
         }
         let step = self.stepper(&name, "start", on, 3);
+        // Containers of an earlier local start would hold its ports here.
+        self.stop_local_infra(&name);
         let result = self.start_remote(&entry, on, need, true, &step);
         self.finish(&name, result.as_ref().err());
         self.pending.lock().unwrap().remove(&name);
@@ -1305,6 +1331,9 @@ impl Lanes {
                 l.sup.close();
             }
         }
+        // Whatever of the lane is left here (a local start's containers)
+        // goes, so its ports here are free for the forwards.
+        self.stop_local_infra(name);
         next.start_forwarding(&self.rt);
         self.remote.lock().unwrap().insert(name.clone(), next);
         Ok(())

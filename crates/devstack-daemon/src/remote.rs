@@ -376,11 +376,41 @@ impl RemoteLane {
 
     async fn forward_port(self: Arc<Self>, there: u16, here: u16) {
         let mut listeners = Vec::new();
-        match tokio::net::TcpListener::bind(("127.0.0.1", here)).await {
-            Ok(l) => listeners.push(l),
-            Err(e) => {
-                self.trouble(Some(format!("port {here} here: {e}")));
-                return;
+        // A port something else still holds (a container on its way out) is
+        // tried again: every second for half a minute, then every 15 s, as
+        // long as the lane forwards. The lane says so meanwhile.
+        let t0 = Instant::now();
+        let mut stopped = self.stopped.subscribe();
+        let mut listening = self.listening.subscribe();
+        loop {
+            match tokio::net::TcpListener::bind(("127.0.0.1", here)).await {
+                Ok(l) => {
+                    listeners.push(l);
+                    let mut st = self.state.lock().unwrap();
+                    if st
+                        .error
+                        .as_deref()
+                        .is_some_and(|e| e.starts_with(&format!("port {here} here")))
+                    {
+                        st.error = None;
+                    }
+                    break;
+                }
+                Err(e) => {
+                    self.trouble(Some(format!(
+                        "port {here} here: {e} (something else holds it; tried again until it is free)"
+                    )));
+                    let wait = if t0.elapsed() < Duration::from_secs(30) {
+                        Duration::from_secs(1)
+                    } else {
+                        Duration::from_secs(15)
+                    };
+                    tokio::select! {
+                        _ = tokio::time::sleep(wait) => {}
+                        _ = stopped.wait_for(|s| *s) => return,
+                        _ = listening.wait_for(|l| !*l) => return,
+                    }
+                }
             }
         }
         if let Ok(l) = tokio::net::TcpListener::bind(("::1", here)).await {
