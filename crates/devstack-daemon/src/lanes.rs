@@ -106,6 +106,10 @@ pub struct Lanes {
     pending: Mutex<BTreeSet<String>>,
     /// One main-slot hand-over at a time, and what it took from the main tree.
     handover: Mutex<Handover>,
+    /// One [`Lanes::sync`] at a time: asking git and applying the answer go
+    /// together, or an answer from before a worktree was added could be
+    /// applied after a newer one and drop it as gone.
+    syncing: Mutex<()>,
 }
 
 /// `Feature/Agent 12` -> `feature-agent-12`; `main` is the main working tree's.
@@ -268,6 +272,7 @@ impl Lanes {
             map: Mutex::new(BTreeMap::new()),
             pending: Mutex::new(BTreeSet::new()),
             handover: Mutex::new(Handover::default()),
+            syncing: Mutex::new(()),
         });
         let remembered: Vec<LaneEntry> = match std::fs::read(me.file()) {
             Ok(b) => serde_json::from_slice(&b).unwrap_or_else(|e| {
@@ -305,6 +310,7 @@ impl Lanes {
     /// one is forgotten with its state. Without an answer from git nothing
     /// changes.
     pub fn sync(&self) {
+        let _one = self.syncing.lock().unwrap();
         let Some(trees) = worktrees(&self.main.repo) else {
             return;
         };
