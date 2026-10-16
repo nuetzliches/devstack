@@ -828,6 +828,25 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn lane_move(stack_file: &Path, name: &str, to: &str) -> Result<()> {
+    let c = main_client(stack_file)?;
+    println!("moving lane `{name}` to {to}: starting it there; it takes over once it is ready...");
+    let t0 = Instant::now();
+    let (status, body) = c.call_raw(
+        "POST",
+        &format!("/v1/lanes/{name}/move"),
+        Some(serde_json::json!({ "to": to })),
+    )?;
+    if status >= 400 {
+        bail!("{}", error_text(&body));
+    }
+    println!(
+        "lane `{name}` runs on {to} now ({:.0} s); its ports here are the same",
+        t0.elapsed().as_secs_f64()
+    );
+    Ok(())
+}
+
 pub fn lane_stop(stack_file: &Path, name: &str) -> Result<()> {
     let c = main_client(stack_file)?;
     let (status, body) = c.call_raw("POST", &format!("/v1/lanes/{name}/stop"), None)?;

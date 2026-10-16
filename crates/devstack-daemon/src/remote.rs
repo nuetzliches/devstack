@@ -39,6 +39,11 @@ pub struct RemoteLane {
     client: NodeClient,
     state: Mutex<RemoteState>,
     stopped: tokio::sync::watch::Sender<bool>,
+    /// The lane's ports, `(on the node, here)`.
+    ports: Vec<(u16, u16)>,
+    /// Whether this machine listens on them for the lane now: a lane that
+    /// moves here takes them over before its old placement goes.
+    listening: tokio::sync::watch::Sender<bool>,
 }
 
 /// This machine's membership of the pool, in devstack's per-user state.
@@ -87,6 +92,9 @@ pub struct RemoteSpec<'a> {
     /// listens on the stack's ports there, here on them moved by its offset,
     /// as a local lane does (ADR-0029 point 4).
     pub ports: Vec<(u16, u16)>,
+    /// Listen on them at once; else when [`RemoteLane::start_forwarding`]
+    /// says so (a lane moving here, ADR-0025 point 10).
+    pub forward: bool,
 }
 
 impl RemoteLane {
@@ -101,6 +109,7 @@ impl RemoteLane {
             need,
             scratch,
             ports,
+            forward,
         } = spec;
         let local = local_member();
         let offer = local
@@ -141,12 +150,13 @@ impl RemoteLane {
             client,
             state: Mutex::new(RemoteState::default()),
             stopped: tokio::sync::watch::channel(false).0,
+            ports,
+            listening: tokio::sync::watch::channel(false).0,
         });
         let l = lane.clone();
         let scratch = scratch.to_path_buf();
-        for (there, here) in ports {
-            let l = lane.clone();
-            rt.spawn(async move { l.forward_port(there, here).await });
+        if forward {
+            lane.start_forwarding(rt);
         }
         // The first look syncs once more: the fingerprint of what the first
         // sync sent is not known, and the listing is all it costs.
@@ -236,6 +246,58 @@ impl RemoteLane {
     /// carry every connection to port `there` of the lane on its node: bytes
     /// unchanged, so WebSockets, hot module replacement and TLS dev servers
     /// work as they do locally.
+    /// Listen on the lane's ports here (again).
+    pub fn start_forwarding(self: &Arc<Self>, rt: &tokio::runtime::Handle) {
+        if self.listening.send_replace(true) {
+            return;
+        }
+        for &(there, here) in &self.ports {
+            let l = self.clone();
+            rt.spawn(async move { l.forward_port(there, here).await });
+        }
+    }
+
+    /// Stop listening on the lane's ports here; open connections stay.
+    /// Returns once the ports are free (or after two seconds).
+    pub fn stop_forwarding(&self) {
+        self.listening.send_replace(false);
+        let until = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < until
+            && self
+                .ports
+                .iter()
+                .any(|(_, here)| crate::supervisor::port_in_use(*here))
+        {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Start the lane's services (`POST /v1/up` there) and wait until every
+    /// one of `expected` is ready, or one failed, or `within` ran out.
+    pub async fn up_and_wait(&self, expected: &[String], within: Duration) -> Result<(), String> {
+        let (st, body) = self
+            .client
+            .api(&self.lease, "POST", "/v1/up", None)
+            .await
+            .map_err(|e| e.to_string())?;
+        if st >= 300 {
+            return Err(format!("starting its services: {st} {body}"));
+        }
+        let until = Instant::now() + within;
+        loop {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            if let Ok((200, body)) = self.client.api(&self.lease, "GET", "/v1/stack", None).await
+                && let Ok(v) = serde_json::from_str::<serde_json::Value>(&body)
+                && let Some(done) = readiness(&v, expected)
+            {
+                return done;
+            }
+            if Instant::now() > until {
+                return Err(format!("not ready within {} s", within.as_secs()));
+            }
+        }
+    }
+
     async fn forward_port(self: Arc<Self>, there: u16, here: u16) {
         let mut listeners = Vec::new();
         match tokio::net::TcpListener::bind(("127.0.0.1", here)).await {
@@ -252,10 +314,12 @@ impl RemoteLane {
             let me = self.clone();
             tokio::spawn(async move {
                 let mut stopped = me.stopped.subscribe();
+                let mut listening = me.listening.subscribe();
                 loop {
                     let accepted = tokio::select! {
                         a = listener.accept() => a,
                         _ = stopped.wait_for(|s| *s) => return,
+                        _ = listening.wait_for(|l| !*l) => return,
                     };
                     let Ok((tcp, _)) = accepted else {
                         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -325,6 +389,51 @@ impl RemoteLane {
         crate::diag::info(
             "remote_lane_stopped",
             serde_json::json!({ "lane": self.name, "node": self.node.name, "lease": self.lease }),
+        );
+    }
+}
+
+/// Whether the services in `expected` are all ready in a stack view
+/// (`GET /v1/stack`): `None` while one still starts, else the outcome.
+pub fn readiness(view: &serde_json::Value, expected: &[String]) -> Option<Result<(), String>> {
+    let mut pending = false;
+    for s in view["services"].as_array().into_iter().flatten() {
+        let name = s["name"].as_str().unwrap_or("");
+        if !expected.iter().any(|e| e == name) {
+            continue;
+        }
+        match s["status"]["state"].as_str().unwrap_or("") {
+            "healthy" | "running" => {}
+            "completed" if s["status"]["exit_code"] == 0 => {}
+            "failed" | "exited" | "completed" => {
+                let why = s["status"]["reason"].as_str().unwrap_or("it stopped");
+                return Some(Err(format!("{name}: {why}")));
+            }
+            _ => pending = true,
+        }
+    }
+    (!pending).then_some(Ok(()))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn ready_when_every_expected_service_is() {
+        let v = |a: &str, b: &str| {
+            serde_json::json!({ "services": [
+                { "name": "api", "status": { "state": a } },
+                { "name": "web", "status": { "state": b, "reason": "port taken" } },
+                { "name": "tool", "status": { "state": "stopped" } },
+            ]})
+        };
+        let exp = ["api".to_string(), "web".to_string()];
+        assert_eq!(super::readiness(&v("healthy", "starting"), &exp), None);
+        assert_eq!(
+            super::readiness(&v("healthy", "running"), &exp),
+            Some(Ok(()))
+        );
+        assert!(
+            matches!(super::readiness(&v("healthy", "failed"), &exp), Some(Err(e)) if e.contains("port taken"))
         );
     }
 }

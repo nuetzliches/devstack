@@ -80,6 +80,7 @@ export const v1 = {
   laneMain: (lane: string) => `/v1/lanes/${enc(lane)}/main`,
   lane: (lane: string) => `/v1/lanes/${enc(lane)}`,
   laneStop: (lane: string) => `/v1/lanes/${enc(lane)}/stop`,
+  laneMove: (lane: string) => `/v1/lanes/${enc(lane)}/move`,
   events: '/v1/events',
   usage: '/v1/usage?history=true',
   up: '/v1/up',
