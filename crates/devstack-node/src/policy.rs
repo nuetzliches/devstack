@@ -34,6 +34,9 @@ pub struct NodePolicy {
     /// `None`: no limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_headroom: Option<f64>,
+    /// The most CPU cores one lane's container may use; `None`: no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cpus: Option<f64>,
     #[serde(default)]
     pub network: Network,
 }
@@ -79,6 +82,7 @@ mod tests {
         let p = NodePolicy {
             allow: vec!["team:backend".into(), "b2".into()],
             repos: vec!["shop".into()],
+            max_cpus: None,
             memory_headroom: Some(2.0),
             network: Network::None,
         };

@@ -147,6 +147,38 @@ pub fn apply(lease: &str, subnets: &[String]) -> Result<(), String> {
         .map_err(|e| format!("network rules for the lane (internet only): {e}"))
 }
 
+/// Remove the rules of lanes this node no longer holds (a lane that stopped
+/// while the agent was down left them; a later network with the same subnet
+/// would be held to them). Only where the helper image exists: without it,
+/// no rule was ever set.
+pub fn cleanup(keep: &[String]) {
+    let have = Command::new("docker")
+        .args(["image", "inspect", IMAGE])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !have {
+        return;
+    }
+    let _ = helper(&cleanup_script(keep));
+}
+
+/// The shell script that removes every lane's rules but those of `keep`.
+pub fn cleanup_script(keep: &[String]) -> String {
+    let keep: Vec<String> = keep.iter().map(|l| chain(l, 'f')).collect();
+    // Every forward chain of ours that is not kept, with its input chain.
+    let keep = keep.join(" ");
+    let script = format!(
+        "for c in $(iptables -S | sed -n 's/^-N \\(dsl-[A-Za-z0-9]*\\)-f$/\\1/p'); do\n\
+         case \" {keep} \" in *\" $c-f \"*) continue;; esac\n\
+         for p in DOCKER-USER INPUT; do iptables -S $p | grep -E -- \"-j $c-(f|i)$\" | sed 's/^-A/-D/' | while read -r r; do iptables $r; done; done\n\
+         for k in f i; do iptables -F $c-$k 2>/dev/null; iptables -X $c-$k 2>/dev/null; done\n\
+         done\n"
+    );
+    script
+}
+
 /// Remove the lane's rules; nothing if it has none.
 pub fn remove(lease: &str) {
     if ensure_image().is_ok() {

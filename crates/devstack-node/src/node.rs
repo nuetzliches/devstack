@@ -217,6 +217,7 @@ impl Inner {
             display_root: None,
             port_offset: 0,
             memory_limit: None,
+            cpu_limit: None,
             network: crate::policy::Network::Lan,
         }
     }
@@ -697,6 +698,7 @@ async fn start(
         run.port_offset = port_offset;
         if let Some(p) = s2.policy.lock().unwrap().as_ref() {
             run.memory_limit = p.memory_limit(l.need.memory);
+            run.cpu_limit = p.max_cpus.filter(|c| *c > 0.0);
             run.network = p.network;
         }
         let s3 = s2.clone();
@@ -1244,6 +1246,9 @@ pub async fn serve(
         .map(|l| (l.id.clone(), l))
         .collect();
     let bin = linux_binary(&root);
+    // Rules of lanes that ended while the agent was down (ADR-0033 point 5).
+    let held: Vec<String> = leases.keys().cloned().collect();
+    tokio::task::spawn_blocking(move || crate::egress::cleanup(&held));
     let s = Arc::new(Inner {
         local,
         me: m.id,

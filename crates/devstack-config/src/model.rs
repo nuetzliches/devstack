@@ -37,8 +37,9 @@ pub struct Stack {
 }
 
 /// Lanes: another working tree (a `git worktree`, an agent's checkout) runs the
-/// stack's services beside the main one, on its own ports, against the same
-/// infrastructure (plan §3.5, ADR-0012 interim rule).
+/// stack's services beside the main one, on its own ports, with its own
+/// containers (plan §3.5, ADR-0030), on this machine or a node of the pool
+/// (ADR-0025).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Lanes {

@@ -25,7 +25,10 @@ shows `not yet active: building | starting | failed | held` until the change run
 old build answers meanwhile; do not test the change before that line is gone. A `held` \
 candidate (a schema change) needs the user's go-ahead before `promote_service`. Commands \
 (`run_command`) are scripts the stack file declares, such as a database reset; \
-some ask for confirmation, which must come from the user.";
+some ask for confirmation, which must come from the user. In a git worktree, every tool acts \
+on its lane (`lanes` lists them): `up` starts it here, or with `on` on a node of the pool \
+(everything of it runs there, its ports are forwarded here); `lane_move`, `lane_share` and \
+`promote_lane` move it, share it with the pool, or give it the main ports.";
 
 type Out = Arc<Mutex<std::io::Stdout>>;
 
@@ -152,8 +155,11 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "up",
-            "Start the stack: the daemon if needed, the infrastructure, then every autostart service, building what is not built yet. Waits until all are ready or one fails. POST /v1/up.",
-            json!({ "timeout_s": { "type": "integer", "minimum": 1, "description": "Give up waiting after this many seconds (default 600); the stack keeps starting" } }),
+            "Start the stack: the daemon if needed, the infrastructure, then every autostart service, building what is not built yet. Waits until all are ready or one fails. In a worktree, its lane; with `on`, the lane on a node of the pool (ADR-0025). POST /v1/up.",
+            json!({
+                "timeout_s": { "type": "integer", "minimum": 1, "description": "Give up waiting after this many seconds (default 600); the stack keeps starting" },
+                "on": { "type": "string", "description": "In a worktree only: run its lane on this node of the pool (its name or member id), `pool` for the coordinator to choose, `<pool>:<node>` in another pool" },
+            }),
             &[],
             false,
         ),
@@ -226,10 +232,37 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "lanes",
-            "The lanes of this repository (plan §3.5): its other git worktrees, each a lane that runs the stack beside the main one once started, with its ports moved by an offset, against the same infrastructure, without background workers. Shows branch, whether it is started and which lane serves the main ports. When this MCP server runs in a worktree, every other tool acts on its lane, and `up` starts it. GET /v1/lanes.",
+            "The lanes of this repository (plan §3.5): its other git worktrees, each a lane that runs the stack beside the main one once started, with its ports moved by an offset and its own containers, without background workers, on this machine or a node of the pool (`node`). Shows branch, whether it is started and which lane serves the main ports. When this MCP server runs in a worktree, every other tool acts on its lane, and `up` starts it. GET /v1/lanes.",
             json!({}),
             &[],
             true,
+        ),
+        tool(
+            "lane_move",
+            "Move a started lane to another node of the pool, or back to this machine (`local`): a cold start there that takes over once it is ready; its data comes from the seed jobs again. POST /v1/lanes/{lane}/move.",
+            json!({
+                "lane": { "type": "string", "description": "The lane's name (see `lanes`)" },
+                "to": { "type": "string", "description": "A node (name or member id), `<pool>:<node>`, or `local`" },
+            }),
+            &["lane", "to"],
+            false,
+        ),
+        tool(
+            "lane_share",
+            "Share a lane on a node with others in its pool: they see it and open its services, they do not control it. An empty `with` shares it with nobody. Ask the user first: what the lane holds becomes visible to them. POST /v1/lanes/{lane}/share.",
+            json!({
+                "lane": { "type": "string" },
+                "with": { "type": "array", "items": { "type": "string" }, "description": "Member ids or tags (`team:qa`), `*` for every member; empty: nobody" },
+            }),
+            &["lane", "with"],
+            false,
+        ),
+        tool(
+            "promote_lane",
+            "A lane serves the main ports (`main`: the main working tree again); background workers move with them. A lane on a node only on a dedicated one. POST /v1/lanes/{lane}/main.",
+            json!({ "lane": { "type": "string", "description": "The lane's name, or `main`" } }),
+            &["lane"],
+            false,
         ),
         tool(
             "builds",
@@ -337,10 +370,16 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             let timeout = Duration::from_secs(args["timeout_s"].as_u64().unwrap_or(600));
             let sd = client::state_dir(file)?;
             let mut c = client::ensure_daemon(&client::daemon_file(file), &sd)?;
+            let on = args["on"].as_str().filter(|o| !o.trim().is_empty());
+            if on.is_some() && client::worktree().is_none() {
+                anyhow::bail!(
+                    "`on` runs a worktree's lane on a node: this is the main working tree"
+                );
+            }
             if let Some(wt) = client::worktree()
-                && c.lane().is_none_or(|l| l == "-")
+                && (on.is_some() || c.lane().is_none_or(|l| l == "-"))
             {
-                c.join_lane(wt, false, false, None)?;
+                c.join_lane(wt, false, false, on)?;
             }
             match client::start_and_wait(&c, file, Some(timeout), |_, _| {})? {
                 UpOutcome::Ready(stack) => Ok(format!("ready\n\n{}", client::status_text(&stack))),
@@ -405,6 +444,36 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 format!("`{svc}` has written nothing yet (or nothing matching)")
             } else {
                 devstack_daemon::ansi::strip(&text).into_owned()
+            })
+        }
+        "lane_move" | "lane_share" | "promote_lane" => {
+            let lane = args["lane"].as_str().unwrap_or_default();
+            if lane.is_empty() {
+                anyhow::bail!("name the lane");
+            }
+            let (path, body) = match name {
+                "lane_move" => (
+                    format!("/v1/lanes/{lane}/move"),
+                    json!({ "to": args["to"].as_str().unwrap_or_default() }),
+                ),
+                "lane_share" => (
+                    format!("/v1/lanes/{lane}/share"),
+                    json!({ "with": args["with"].clone() }),
+                ),
+                _ => (format!("/v1/lanes/{lane}/main"), json!({})),
+            };
+            let c = client::main_client(file)?;
+            let (status, text) = c.call_raw("POST", &path, Some(body))?;
+            if status >= 400 {
+                anyhow::bail!("{}", client::error_text(&text));
+            }
+            Ok(match name {
+                "lane_move" => format!(
+                    "lane `{lane}` moved to {}",
+                    args["to"].as_str().unwrap_or("")
+                ),
+                "lane_share" => format!("lane `{lane}` shared with {}", args["with"]),
+                _ => format!("{lane} serves the main ports"),
             })
         }
         "lanes" => {
