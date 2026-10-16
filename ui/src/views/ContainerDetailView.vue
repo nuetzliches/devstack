@@ -7,7 +7,8 @@ import { bytes, percent } from '@/lib/format';
 import { containerLook } from '@/lib/status';
 import { useStack } from '@/stores/stack';
 import StatusPill from '@/components/StatusPill.vue';
-import ContainerLog from '@/components/ContainerLog.vue';
+import LogView from '@/components/LogView.vue';
+import { paths, v1 } from '@/api';
 import Sparkline from '@/components/Sparkline.vue';
 import Icon from '@/components/icons/Icon.vue';
 
@@ -33,6 +34,8 @@ function hostPort(p: string): string {
   return m ? `${m[2].replace(/^0\.0\.0\.0:|^127\.0\.0\.1:/, ':')} → ${m[1]}` : p;
 }
 
+const logPath = computed(() => (stack.id && stack.running && stack.live && container.value ? paths.api(stack.id, v1.infraLogStream(group.value, service.value)) : null));
+
 const kv = computed(() => {
   const c = container.value;
   return [
@@ -46,8 +49,7 @@ const kv = computed(() => {
 </script>
 
 <template>
-  <div class="page">
-    <RouterLink :to="{ name: 'infra', params: { stack: stack.id ?? '' } }" class="back"><Icon name="chevronLeft" :size="14" /> Infrastructure</RouterLink>
+  <div class="pane">
 
     <header class="page-header" data-testid="container-detail" :data-container="`${group}/${service}`">
       <div class="row head-left">
@@ -120,18 +122,27 @@ const kv = computed(() => {
       </section>
     </div>
 
-    <ContainerLog v-if="stack.id" :stack-id="stack.id" :group="group" :service="service" />
+    <section class="card log-card">
+      <header class="card-header">
+        <h2>Log</h2>
+        <span class="count">container, live</span>
+      </header>
+      <LogView v-if="logPath" :key="logPath" :path="logPath" height="min(60vh, 560px)" empty-text="No output from this container yet." />
+      <div v-else class="empty">
+        <Icon name="terminal" :size="28" />
+        <p v-if="!stack.running">The stack is not running; the live log is unavailable.</p>
+        <p v-else>Connecting…</p>
+      </div>
+    </section>
   </div>
 </template>
 
 <style scoped>
-.back {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  color: var(--text-muted);
-  align-self: flex-start;
+.pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
 }
 .head-left {
   gap: 12px;

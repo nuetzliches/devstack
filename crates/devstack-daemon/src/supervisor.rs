@@ -79,6 +79,9 @@ pub struct Supervisor {
     quiet: Mutex<BTreeMap<String, (Instant, bool)>>,
     /// One `prepare` at a time: two in the same directory would collide.
     preparing: Mutex<()>,
+    /// The branch of this working tree, as `git worktree list` says
+    /// (`Lanes::sync` keeps it current).
+    branch: Mutex<Option<String>>,
     /// What a lane's ports are moved by (0 in the main tree): its own
     /// services' and its own containers' (ADR-0030).
     port_offset: u16,
@@ -290,6 +293,7 @@ impl Supervisor {
             held: Mutex::new(BTreeMap::new()),
             quiet: Mutex::new(BTreeMap::new()),
             preparing: Mutex::new(()),
+            branch: Mutex::new(None),
             port_offset,
             lane_workers: std::sync::atomic::AtomicBool::new(false),
             force_build: Mutex::new(BTreeSet::new()),
@@ -406,6 +410,7 @@ impl Supervisor {
             commands,
             config_changed: self.config_changed.load(Ordering::SeqCst),
             lane: (!self.lane.is_empty()).then(|| self.lane.clone()),
+            branch: self.branch.lock().unwrap().clone(),
             main_served_by: self.served_by(),
         }
     }
@@ -815,6 +820,7 @@ impl Supervisor {
                     next.push(ContainerView {
                         service: c.service.clone(),
                         name: c.name,
+                        exit_code: c.exit_code,
                         state: c.state,
                         health: c.health,
                         urls: self.container_urls(&g, &c.service, &ports),
@@ -890,6 +896,7 @@ impl Supervisor {
                         view.containers.push(ContainerView {
                             service: c.service.clone(),
                             name: c.name,
+                            exit_code: c.exit_code,
                             state: c.state,
                             health: c.health,
                             urls: self.container_urls(&g, &c.service, &ports),
@@ -2351,6 +2358,29 @@ The running instance was left as it was."
     }
 
     /// A container's output (`docker compose logs`, timestamped).
+    /// The branch of this working tree changed (or is first known).
+    pub fn set_branch(&self, branch: Option<String>) {
+        *self.branch.lock().unwrap() = branch;
+    }
+
+    /// Follow one container's output (`docker compose logs --follow`); in a
+    /// lane its own container, the main tree's for a `shared` one.
+    pub fn follow_container_logs(
+        &self,
+        group: &str,
+        service: &str,
+        tail: usize,
+    ) -> Result<std::process::Child, String> {
+        let g = if self.is_shared(group, service) {
+            Group::from_config(group, &self.stack.compose[group], &self.repo)
+        } else {
+            self.compose_group(group)
+        };
+        self.docker
+            .follow_logs(&g, service, tail)
+            .map_err(|e| e.to_string())
+    }
+
     pub fn container_logs(
         &self,
         group: &str,

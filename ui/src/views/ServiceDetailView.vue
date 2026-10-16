@@ -85,8 +85,7 @@ const kv = computed(() => {
 </script>
 
 <template>
-  <div class="page">
-    <RouterLink :to="{ name: 'overview', params: { stack: stack.id ?? '' } }" class="back"><Icon name="chevronLeft" :size="14" /> Overview</RouterLink>
+  <div class="pane">
 
     <template v-if="svc && look">
       <header class="page-header" data-testid="service-detail" :data-service="svc.name">
@@ -236,6 +235,12 @@ const kv = computed(() => {
 </template>
 
 <style scoped>
+.pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
 .back {
   display: inline-flex;
   align-items: center;

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import type { ContainerView } from '@/api/types';
 import { containerLook } from '@/lib/status';
 import { useStack } from '@/stores/stack';
@@ -12,6 +13,13 @@ const look = computed(() => (props.container ? containerLook(props.container) : 
 const busy = computed(() => !!stack.busy[`ctr:${props.group}/${props.service}`]);
 const running = computed(() => props.container?.state === 'running' || props.container?.state === 'restarting');
 const to = computed(() => ({ name: 'container', params: { stack: stack.id ?? '', group: props.group, service: props.service } }));
+const route = useRoute();
+const router = useRouter();
+const selected = computed(() => route.name === 'container' && route.params.group === props.group && route.params.service === props.service);
+function open(e: MouseEvent) {
+  if ((e.target as Element).closest('button, a, input, label')) return;
+  void router.push(to.value);
+}
 
 /** "5432->127.0.0.1:15432" -> host side first, which is what people type. */
 function hostPort(p: string): string {
@@ -30,7 +38,7 @@ const extraUrls = computed(() => (props.container?.urls ?? []).filter((u) => !pr
 </script>
 
 <template>
-  <li class="ctr-row" data-testid="container-row" :data-container="`${group}/${service}`">
+  <li class="ctr-row" :class="{ selected }" :aria-current="selected ? 'true' : undefined" data-testid="container-row" @click="open" :data-container="`${group}/${service}`">
     <span class="kind" title="compose container"><Icon name="box" :size="15" /></span>
     <div class="grow name-col">
       <div class="name">
@@ -44,23 +52,23 @@ const extraUrls = computed(() => (props.container?.urls ?? []).filter((u) => !pr
           </template>
           <a v-for="u in extraUrls" :key="u" class="tag port-link" :href="u" target="_blank" rel="noopener" data-testid="container-url">{{ u.replace(/^https?:\/\//, '') }}</a>
           <span v-if="!container.ports.length" class="faint">no published ports</span>
-          <span
+          <button
             v-if="container.unreachable?.length"
+            type="button"
             class="tag lost"
-            :title="`${container.unreachable.join(', ')} closes connections from this machine at once: Docker lost the port forward (restart the container), or nothing listens on it inside.`"
+            :disabled="busy || stack.stale"
+            :title="`${container.unreachable.join(', ')} closes connections from this machine at once: Docker lost the port forward, or nothing listens on it inside. Click to restart the container.`"
             data-testid="container-unreachable"
+            @click="stack.containerAction(group, service, 'restart')"
           >
-            not reachable from here
-          </span>
+            not reachable from here · restart
+          </button>
         </template>
         <span v-else class="faint">not created</span>
       </div>
     </div>
     <StatusPill v-if="look" :tone="look.tone" :label="look.label" :busy="look.busy" :title="container ? `${container.name}: ${container.state}${container.health ? ` (${container.health})` : ''}` : undefined" />
     <StatusPill v-else tone="neutral" label="Missing" />
-    <RouterLink :to="to" class="btn btn-ghost btn-sm btn-icon" :aria-label="`Log of container ${service}`" title="Container log and details" data-testid="action-container-log">
-      <Icon name="file" />
-    </RouterLink>
     <button
       v-if="!running"
       type="button"
@@ -112,6 +120,21 @@ const extraUrls = computed(() => (props.container?.urls ?? []).filter((u) => !pr
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   min-width: 0;
+}
+.ctr-row {
+  cursor: pointer;
+}
+.ctr-row:hover {
+  background: var(--surface-hover);
+}
+.ctr-row.selected {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.lost {
+  cursor: pointer;
+  background: transparent;
+  font: inherit;
 }
 .ctr-row:last-child {
   border-bottom: 0;

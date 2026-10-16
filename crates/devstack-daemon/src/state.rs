@@ -111,6 +111,9 @@ pub struct ContainerView {
     pub name: String,
     pub state: String,
     pub health: String,
+    /// Exit code of a container that is not running: 0, 130, 137 or 143 is
+    /// a stop (by devstack, Docker or a signal), anything else a failure.
+    pub exit_code: i64,
     pub ports: Vec<String>,
     /// Links for the dashboard: the stack file's `urls` entry, or
     /// `http://localhost:<port>` per published port.
@@ -164,6 +167,9 @@ pub struct StackView {
     /// The lane: absent for the main working tree.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lane: Option<String>,
+    /// The branch checked out in this working tree (`None`: detached, or
+    /// not known yet).
+    pub branch: Option<String>,
     /// The lane whose services answer on the main ports (`promote --lane`);
     /// absent while the main working tree serves them itself.
     #[serde(skip_serializing_if = "Option::is_none")]

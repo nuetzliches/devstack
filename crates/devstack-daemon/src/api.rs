@@ -49,6 +49,10 @@ pub fn router(state: AppState) -> axum::Router {
             post(container_action),
         )
         .route("/v1/infra/{group}/{service}/logs", get(infra_logs))
+        .route(
+            "/v1/infra/{group}/{service}/logs/stream",
+            get(infra_log_stream),
+        )
         .route("/v1/infra/check", post(infra_check))
         .route("/v1/events", get(events))
         .route("/v1/usage", get(usage))
@@ -961,6 +965,71 @@ async fn infra_logs(
         );
     }
     container_logs(&s, group, service, &q).await
+}
+
+/// `GET /v1/infra/{group}/{service}/logs/stream?tail=`: a container's output
+/// as a stream, the same events as a service's (`{"type":"line","text"}`),
+/// so the dashboard shows both with one log view. `docker compose logs
+/// --follow` runs while someone reads.
+async fn infra_log_stream(
+    State(s): State<AppState>,
+    Path((group, service)): Path<(String, String)>,
+    Query(q): Query<StreamQuery>,
+) -> Response {
+    let known = s
+        .sup
+        .stack
+        .compose
+        .get(&group)
+        .is_some_and(|g| g.services.contains(&service));
+    if !known {
+        return err(
+            StatusCode::NOT_FOUND,
+            format!("no compose service `{group}.{service}`"),
+        );
+    }
+    let tail = q.tail.unwrap_or(500).min(5000);
+    let mut child = match s.sup.follow_container_logs(&group, &service, tail) {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::BAD_GATEWAY, e),
+    };
+    let (tx, rx) = tokio::sync::mpsc::channel(512);
+    for pipe in [
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for l in std::io::BufReader::new(pipe).lines() {
+                let Ok(l) = l else { return };
+                if tx.blocking_send(line(l)).is_err() {
+                    return;
+                }
+            }
+        });
+    }
+    // The reader is gone, or the container's log ended: stop following.
+    std::thread::spawn(move || {
+        loop {
+            if tx.is_closed() || child.try_wait().ok().flatten().is_some() {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    });
+    sse_json(rx)
 }
 
 async fn container_logs(s: &AppState, group: String, service: String, q: &LogQuery) -> Response {

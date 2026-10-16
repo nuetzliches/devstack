@@ -88,6 +88,7 @@ export const v1 = {
   groupAction: (group: string, action: GroupAction) => `/v1/groups/${enc(group)}/${action}`,
   infraAction: (group: string, service: string, action: 'start' | 'stop' | 'restart') => `/v1/infra/${enc(group)}/${enc(service)}/${action}`,
   infraLogs: (group: string, service: string, tail = 1000) => `/v1/infra/${enc(group)}/${enc(service)}/logs?tail=${tail}`,
+  infraLogStream: (group: string, service: string, tail = 500) => `/v1/infra/${enc(group)}/${enc(service)}/logs/stream?tail=${tail}`,
   command: (name: string) => `/v1/commands/${enc(name)}`,
   commandRuns: (name: string) => `/v1/commands/${enc(name)}/runs`,
   run: (id: number) => `/v1/runs/${id}`,

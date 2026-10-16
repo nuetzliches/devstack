@@ -840,6 +840,13 @@ fn lifecycle(with_compose: bool) {
         "the daemon log says why it built"
     );
 
+    // A container's log as a stream, like a service's (one log view).
+    if s.project.is_some() {
+        let first = s.sse_first("/v1/infra/app/db/logs/stream?tail=20");
+        assert!(first.contains("\"type\":\"line\""), "{first}");
+        assert!(first.contains("db"), "{first}");
+    }
+
     // down: nothing left.
     s.ok(&["down", "--infra"]);
     assert!(s.api("/health").is_none());

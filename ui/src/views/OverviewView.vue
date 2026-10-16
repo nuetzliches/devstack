@@ -1,22 +1,16 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import type { CommandView, ContainerView, ServiceView } from '@/api/types';
-import { ago, duration, useNow } from '@/lib/format';
 import { containerBucket, parseComposeMember, statusBucket } from '@/lib/status';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import ServiceRow from '@/components/ServiceRow.vue';
 import ContainerRow from '@/components/ContainerRow.vue';
 import CommandRow from '@/components/CommandRow.vue';
-import CandidatePanel from '@/components/CandidatePanel.vue';
-import ErrorLine from '@/components/ErrorLine.vue';
-import BuildLogModal from '@/components/BuildLogModal.vue';
 import Icon from '@/components/icons/Icon.vue';
 
 const stack = useStack();
 const hub = useHub();
-const now = useNow();
-const buildLogFor = ref<string | null>(null);
 
 type Member =
   | { kind: 'service'; key: string; service: ServiceView }
@@ -90,39 +84,14 @@ const counts = computed(() => {
   return c;
 });
 
-const attention = computed(() => stack.pending.filter((s) => s.candidate && (s.candidate.state === 'held' || s.candidate.state === 'failed')));
-const inFlight = computed(() => stack.pending.length - attention.value.length);
-const infraErrors = computed(() => view.value?.infra.filter((g) => g.error) ?? []);
-const daemon = computed(() => stack.entry?.daemon ?? null);
 const hubAway = computed(() => !hub.reachable);
 const groupActions: { action: 'start' | 'stop' | 'restart'; title: string; icon: 'play' | 'stop' | 'restart' }[] = [  { action: 'start', title: 'Start every service of', icon: 'play' },  { action: 'restart', title: 'Rebuild and restart every service and container of', icon: 'restart' },  { action: 'stop', title: 'Stop every service of', icon: 'stop' },];
 const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 </script>
 
 <template>
-  <div class="page">
+  <div class="page page-wide">
     <template v-if="view">
-      <section class="summary card" data-testid="stack-summary">
-        <div class="sum-main">
-          <div class="grow">
-            <div class="row wrap title-row">
-              <h1>{{ view.name }}</h1>
-              <span v-if="hubAway" class="pill" :title="'The hub is not reachable'"><span class="dot" />last seen {{ ago(stack.viewAt ?? hub.lastContact, now) }}</span>
-              <span v-else class="pill" :class="stack.running ? 'ok' : ''"><span class="dot" />{{ stack.running ? 'running' : 'offline' }}</span>
-              <span v-if="daemon" class="tag" title="daemon version">devstack {{ daemon.version }}</span>
-            </div>
-            <div class="repo truncate" :title="view.repo">{{ view.repo }}</div>
-            <div v-if="daemon" class="daemon muted">daemon pid {{ daemon.pid }} · port {{ daemon.port }} · up {{ duration(now - daemon.started) }}</div>
-          </div>
-          <div v-if="!hubAway" class="btn-group">
-            <button v-if="!stack.running" type="button" class="btn btn-primary" :disabled="starting || !stack.entry" data-testid="action-stack-start" @click="stack.startStack()">
-              <span v-if="starting" class="spinner" /><Icon v-else name="play" /> Start stack
-            </button>
-            <button v-else type="button" class="btn" :disabled="!!stack.busy.stack" data-testid="action-stack-stop" @click="stack.stopStack()">
-              <span v-if="stack.busy.stack" class="spinner" /><Icon v-else name="power" /> Stop stack
-            </button>
-          </div>
-        </div>
         <div class="stats stale-dim" role="group" aria-label="Filter the overview by state">
           <button
             type="button"
@@ -181,28 +150,13 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
             <span class="v tabular">{{ stack.pending.length }}</span><span class="l">not live yet</span>
           </button>
         </div>
-      </section>
-
-      <div v-for="g in infraErrors" :key="g.group" class="banner danger">
-        <Icon name="alert" :size="18" />
-        <strong>Compose group {{ g.group }}:</strong>
-        <ErrorLine class="grow" :text="g.error ?? ''" tone="danger" />
-      </div>
-
-      <section v-if="attention.length" class="attention stale-dim" aria-label="Needs attention">
-        <h2 class="section-title">Needs attention</h2>
-        <div v-for="s in attention" :key="s.name" class="att-item">
-          <RouterLink :to="{ name: 'service', params: { stack: stack.id ?? '', name: s.name } }" class="att-name">{{ s.name }} <Icon name="chevronRight" :size="14" /></RouterLink>
-          <CandidatePanel :service="s" @build-log="buildLogFor = s.name" />
-        </div>
-      </section>
-      <p v-if="inFlight" class="inflight muted"><span class="spinner" /> {{ inFlight }} change{{ inFlight === 1 ? '' : 's' }} on the way; the running instances keep serving until the new builds are healthy.</p>
 
       <p v-if="filter" class="filter-note muted" data-testid="overview-filter">
         Showing only what is {{ filterLabel[filter] }}<template v-if="!shown.length">: nothing right now</template>.
         <button type="button" class="link-btn" @click="filter = null">Show everything</button>
       </p>
-      <div class="grid-cards stale-dim">
+      <div class="md">
+      <div class="list stale-dim" data-testid="member-list">
         <section v-for="card in shown" :key="card.key" class="card" :data-testid="`group-${card.key}`">
           <header class="card-header">
             <h2>{{ card.label }}</h2>
@@ -234,6 +188,10 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
           </ul>
         </section>
       </div>
+      <div class="detail">
+        <RouterView />
+      </div>
+      </div>
     </template>
 
     <div v-else class="card">
@@ -248,7 +206,6 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
       </div>
     </div>
 
-    <BuildLogModal v-if="buildLogFor && stack.id" :open="!!buildLogFor" :stack-id="stack.id" :service="buildLogFor" @close="buildLogFor = null" />
   </div>
 </template>
 
@@ -411,5 +368,34 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
   font: inherit;
   cursor: pointer;
   text-decoration: underline;
+}
+.md {
+  display: grid;
+  grid-template-columns: minmax(380px, 40%) minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+/* The list stays in view while the detail scrolls. */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  position: sticky;
+  top: calc(var(--topbar-h) + 12px);
+  max-height: calc(100vh - var(--topbar-h) - 24px);
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.detail {
+  min-width: 0;
+}
+@media (max-width: 1100px) {
+  .md {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .list {
+    position: static;
+    max-height: none;
+  }
 }
 </style>
