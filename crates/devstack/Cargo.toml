@@ -21,6 +21,7 @@ serde.workspace = true
 jiff.workspace = true
 serde_json.workspace = true
 ureq.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
@@ -29,9 +30,12 @@ ureq.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+flate2.workspace = true
+tar.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
+zip.workspace = true
 
 [lints]
 workspace = true
