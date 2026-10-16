@@ -356,6 +356,22 @@ impl RemoteLane {
         }
     }
 
+    /// Its services that run now (healthy or running), read from the lane
+    /// at once rather than from the last poll. Blocking.
+    pub fn active_now(&self, rt: &tokio::runtime::Handle) -> Vec<String> {
+        match rt.block_on(self.client.api(&self.lease, "GET", "/v1/stack", None)) {
+            Ok((200, body)) => serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v["services"].as_array().cloned())
+                .unwrap_or_default()
+                .iter()
+                .filter(|s| matches!(s["status"]["state"].as_str(), Some("healthy" | "running")))
+                .filter_map(|s| s["name"].as_str().map(str::to_string))
+                .collect(),
+            _ => self.state().active,
+        }
+    }
+
     /// Whether it holds the main slot here.
     pub fn owns_main(&self) -> bool {
         self.owns_main.load(std::sync::atomic::Ordering::SeqCst)
