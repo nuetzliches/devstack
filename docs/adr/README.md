@@ -49,7 +49,7 @@ before code exists it names where it *will* live.
 | [0009](0009-the-daemon-owns-every-process-tree.md) | The daemon owns every process tree it starts | Accepted |
 | [0010](0010-promotion-mechanism.md) | Promotion mechanism: restart on the fixed port or switch a reverse proxy | Accepted: B (measured) |
 | [0011](0011-platform-windows-native-first.md) | Windows-native first; WSL is decided by measurement | Accepted |
-| [0012](0012-shared-infrastructure-between-lanes.md) | Which infrastructure may be shared between lanes | Open; interim rule built (ADR-0024) |
+| [0012](0012-shared-infrastructure-between-lanes.md) | Which infrastructure may be shared between lanes | Decided by ADR-0030 |
 | [0013](0013-schema-changes-hold-promotion.md) | A build that changes schema inputs is not promoted automatically | Accepted |
 | [0014](0014-native-services-take-their-configuration-from-compose.md) | Native services take their configuration from the Compose service they replace | Accepted |
 | [0015](0015-devstack-is-optional.md) | devstack accelerates a stack, it is never required to run one | Accepted |
@@ -67,3 +67,4 @@ before code exists it names where it *will* live.
 | [0027](0027-trust-between-nodes.md) | Nodes and requesters trust each other by pinned keys, never by network location | Proposed |
 | [0028](0028-lane-images.md) | A remote lane runs in a stack-provided toolchain image; the node supplies devstack | Proposed |
 | [0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) | A remote lane works on a mirror of the requester's tree; ports and API come back over one connection | Proposed |
+| [0030](0030-each-lane-has-its-own-infrastructure.md) | Each lane has its own infrastructure | Accepted |

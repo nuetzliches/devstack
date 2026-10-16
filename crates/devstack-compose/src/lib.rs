@@ -84,6 +84,19 @@ impl Group {
 pub struct Model {
     #[serde(default)]
     pub services: BTreeMap<String, ServiceModel>,
+    #[serde(default)]
+    pub networks: BTreeMap<String, Option<NamedModel>>,
+    #[serde(default)]
+    pub volumes: BTreeMap<String, Option<NamedModel>>,
+}
+
+/// A top-level network or volume: what decides whether two Compose projects
+/// share it.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct NamedModel {
+    pub name: Option<String>,
+    #[serde(default)]
+    pub external: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -95,6 +108,7 @@ pub struct ServiceModel {
     pub ports: Vec<PortModel>,
     #[serde(default)]
     pub profiles: Vec<String>,
+    pub container_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -103,6 +117,7 @@ pub struct PortModel {
     /// Absent when Docker assigns the port at start.
     pub published: Option<String>,
     pub host_ip: Option<String>,
+    pub protocol: Option<String>,
 }
 
 /// One line of `docker compose ps --format json`.
@@ -366,6 +381,126 @@ impl Docker {
         a.extend(["down".into(), "--timeout".into(), "10".into()]);
         self.run(&g.dir, &a).map(|_| ())
     }
+
+    /// Remove the group's containers, its volumes and the networks devstack
+    /// created for it: a lane whose worktree is gone (ADR-0030).
+    pub fn remove(&self, g: &Group) -> Result<()> {
+        let mut a = g.base_args();
+        a.extend([
+            "down".into(),
+            "--volumes".into(),
+            "--remove-orphans".into(),
+            "--timeout".into(),
+            "10".into(),
+        ]);
+        self.run(&g.dir, &a)?;
+        for n in &g.networks {
+            let _ = self.run(&g.dir, &["network".into(), "rm".into(), n.into()]);
+        }
+        Ok(())
+    }
+}
+
+/// The Compose overlay that makes a lane's copy of a group its own (ADR-0030):
+/// every published host port moved by `offset`, no fixed `container_name`,
+/// and every network or volume that has a fixed name (external networks
+/// included) renamed `<name>-<lane>`, so nothing is shared with the main
+/// tree or another lane. External volumes stay as they are: they hold data
+/// someone put there on purpose. `model` is the group's configuration under
+/// the lane's `project`, whose own names (`<project>_<key>`) are its own
+/// already. `keep` are services the lane does not run (`shared`); they are
+/// left alone. YAML, with the merge tags of Compose 2.24 (`!override`,
+/// `!reset`).
+pub fn lane_overlay(
+    model: &Model,
+    project: &str,
+    lane: &str,
+    offset: u16,
+    keep: &[String],
+) -> std::result::Result<String, String> {
+    let q = |v: &str| format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""));
+    let shift = |p: &str| -> std::result::Result<String, String> {
+        let one = |n: &str| -> std::result::Result<String, String> {
+            let n: u16 = n
+                .trim()
+                .parse()
+                .map_err(|_| format!("port `{p}` is not a number"))?;
+            n.checked_add(offset)
+                .map(|m| m.to_string())
+                .ok_or_else(|| format!("port {n} + {offset} is beyond 65535"))
+        };
+        match p.split_once('-') {
+            Some((a, b)) => Ok(format!("{}-{}", one(a)?, one(b)?)),
+            None => one(p),
+        }
+    };
+    let mut out = format!(
+        "# Written by devstack for lane `{lane}` (ADR-0030): its own ports, names,\n# networks and volumes. Do not edit; it is written again at every start.\n"
+    );
+    let mut services = String::new();
+    for (name, svc) in model.services.iter().filter(|(n, _)| !keep.contains(n)) {
+        let mut body = String::new();
+        if !svc.ports.is_empty() {
+            body.push_str("    ports: !override\n");
+            for port in &svc.ports {
+                let mut spec = String::new();
+                if let Some(published) = &port.published {
+                    if let Some(ip) = port.host_ip.as_deref().filter(|ip| !ip.is_empty()) {
+                        spec.push_str(ip);
+                        spec.push(':');
+                    }
+                    spec.push_str(&shift(published)?);
+                    spec.push(':');
+                }
+                spec.push_str(&port.target.to_string());
+                if let Some(proto) = port.protocol.as_deref().filter(|p| *p != "tcp") {
+                    spec.push('/');
+                    spec.push_str(proto);
+                }
+                body.push_str(&format!("      - {}\n", q(&spec)));
+            }
+        }
+        if svc.container_name.is_some() {
+            body.push_str("    container_name: !reset null\n");
+        }
+        if !body.is_empty() {
+            services.push_str(&format!("  {}:\n{body}", q(name)));
+        }
+    }
+    if !services.is_empty() {
+        out.push_str("services:\n");
+        out.push_str(&services);
+    }
+    let renamed = |kind: &str, items: &BTreeMap<String, Option<NamedModel>>, external_too: bool| {
+        let mut text = String::new();
+        for (key, m) in items {
+            let Some(m) = m else { continue };
+            if m.external && !external_too {
+                continue;
+            }
+            let Some(name) = m
+                .name
+                .as_deref()
+                .or(m.external.then_some(key.as_str()))
+                .filter(|n| *n != format!("{project}_{key}"))
+            else {
+                continue; // project-scoped already
+            };
+            text.push_str(&format!(
+                "  {}:\n    name: {}\n",
+                q(key),
+                q(&format!("{name}-{lane}"))
+            ));
+        }
+        if text.is_empty() {
+            String::new()
+        } else {
+            format!("{kind}:\n{text}")
+        }
+    };
+    out.push_str(&renamed("networks", &model.networks, true));
+    out.push_str(&renamed("volumes", &model.volumes, false));
+    Ok(out)
 }
 
 /// Two timestamped streams as one, in time order, the last `tail` lines.
@@ -667,5 +802,47 @@ mod tests {
             1,
             "missing .env must be skipped: {a:?}"
         );
+    }
+
+    #[test]
+    fn a_lane_overlay_moves_ports_and_renames_what_projects_would_share() {
+        let model = parse_config(
+            r#"{
+              "services": {
+                "db": {"container_name": "shop-db",
+                       "ports": [{"target": 5432, "published": "5432", "host_ip": "127.0.0.1", "protocol": "tcp"}]},
+                "dns": {"ports": [{"target": 53, "published": "5353", "protocol": "udp"},
+                                  {"target": 8080}]},
+                "mail": {"ports": [{"target": 8025, "published": "8025"}]},
+                "worker": {}
+              },
+              "networks": {"default": {"name": "shop-fix_default"}, "edge": {"name": "edge", "external": true}},
+              "volumes": {"data": {"name": "shop-fix_data"}, "fixed": {"name": "shared-files"}, "keep": {"name": "kept", "external": true}}
+            }"#,
+        )
+        .unwrap();
+        let y = lane_overlay(&model, "shop-fix", "fix", 100, &["mail".to_string()]).unwrap();
+        assert!(y.contains("\"db\":\n    ports: !override\n      - \"127.0.0.1:5532:5432\"\n    container_name: !reset null"), "{y}");
+        assert!(
+            y.contains("- \"5453:53/udp\"") && y.contains("- \"8080\""),
+            "{y}"
+        );
+        assert!(
+            !y.contains("\"mail\""),
+            "a shared service stays as it is: {y}"
+        );
+        assert!(!y.contains("\"worker\""), "{y}");
+        assert!(y.contains("\"edge\":\n    name: \"edge-fix\""), "{y}");
+        assert!(
+            !y.contains("default") && !y.contains("shop-fix_data"),
+            "names of the lane's project are its own already: {y}"
+        );
+        assert!(
+            y.contains("\"fixed\":\n    name: \"shared-files-fix\""),
+            "{y}"
+        );
+        assert!(!y.contains("kept"), "external volumes stay: {y}");
+        let over = lane_overlay(&model, "shop-fix", "fix", 65000, &[]);
+        assert!(over.is_err());
     }
 }

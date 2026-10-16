@@ -222,9 +222,17 @@ async fn lanes_list(State(s): State<AppState>) -> Response {
 struct LaneStart {
     /// A worktree of the repository (git makes them; devstack never does).
     path: std::path::PathBuf,
-    /// Make sure the shared infrastructure runs (the main lane's).
+    /// Make sure what the lane uses from the main tree runs (`shared`
+    /// Compose services, ADR-0030); its own infrastructure starts with its
+    /// `up`.
     #[serde(default)]
     infra: bool,
+    /// Its main instances run their background workers (ADR-0030).
+    #[serde(default)]
+    workers: bool,
+    /// Start it although the memory check says it does not fit.
+    #[serde(default)]
+    force: bool,
 }
 
 /// `POST /v1/lanes` with `{"path", "infra"?}`: start the lane of that
@@ -237,11 +245,15 @@ async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> 
         Err(r) => return r,
     };
     let main = s.sup.clone();
+    let usage = s.usage.clone();
     let res = tokio::task::spawn_blocking(move || {
+        if !body.force {
+            memory_fits(&main, &usage)?;
+        }
         let lane = lanes.activate(&body.path)?;
-        if body.infra {
+        lane.sup.set_lane_workers(body.workers);
+        if body.infra && main.stack.compose.values().any(|g| !g.shared.is_empty()) {
             main.infra_up()?;
-            lane.sup.refresh_infra();
         }
         let name = lane.entry.name.clone();
         lanes
@@ -256,6 +268,33 @@ async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> 
         Ok(Err(e)) => err(StatusCode::CONFLICT, e),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
+}
+
+/// A lane is a second copy of the stack, containers included (ADR-0030): it
+/// needs about what the main tree takes now. Refuse when the machine does
+/// not have that, with a margin, instead of pushing it into swap.
+fn memory_fits(
+    main: &crate::supervisor::Supervisor,
+    usage: &crate::usage::Sampler,
+) -> Result<(), String> {
+    const MARGIN: u64 = 1 << 30;
+    let r = usage.report(main, false);
+    let need: u64 = r.services.iter().map(|e| e.load.memory).sum::<u64>()
+        + r.containers.iter().map(|e| e.load.memory).sum::<u64>();
+    let Some(free) = devstack_proc::memory_available() else {
+        return Ok(()); // not measurable here: no reason to refuse
+    };
+    if need == 0 || free >= need + MARGIN {
+        return Ok(());
+    }
+    let gb = |b: u64| b as f64 / (1u64 << 30) as f64;
+    Err(format!(
+        "a lane needs about {:.1} GB (what the main tree takes now, containers included), {:.1} GB are free: \
+         stop another lane or close something, or start it anyway with `devstack up --force`. \
+         Lanes on another machine are planned (ADR-0025)",
+        gb(need),
+        gb(free)
+    ))
 }
 
 /// `POST /v1/lanes/{lane}/stop`: its services stop and it is no longer

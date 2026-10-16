@@ -155,6 +155,14 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                 c.err(format!("{p}.after[{i}]"), format!("no compose group `{a}`"));
             }
         }
+        for svc in &group.shared {
+            if !group.services.contains(svc) {
+                c.err(
+                    format!("{p}.shared"),
+                    format!("`{svc}` is not in this group's `services`"),
+                );
+            }
+        }
         for svc in group.restart_on.keys() {
             if !group.services.contains(svc) {
                 c.err(

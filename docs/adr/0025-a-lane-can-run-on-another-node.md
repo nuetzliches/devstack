@@ -46,9 +46,8 @@ placement decision, so this ADR has to move that guard on purpose.
      (ADR-0002, ADR-0003, ADR-0009). The lane container has no access to the
      Docker engine.
 3. **Remote lanes share no infrastructure**, with each other or with local
-   lanes. Local lanes share the main tree's (ADR-0024 point 4); for remote
-   lanes, ADR-0012 is answered with option A (one infra plane per lane), and
-   the memory it costs is the node's. A node keeps an artifact store of its
+   lanes; local lanes have their own as well ([ADR-0030](0030-each-lane-has-its-own-infrastructure.md)), so a lane is the
+   same wherever it runs, and on a node the memory it costs is the node's. A node keeps an artifact store of its
    own; the shared store of ADR-0024 is per machine.
 4. **The main slot may be remote, on a dedicated node only.** A node is
    *dedicated* when its owner has declared that it never reclaims capacity (a

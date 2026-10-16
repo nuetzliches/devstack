@@ -1424,3 +1424,173 @@ fn a_worktree_runs_as_a_lane() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+/// `docker compose -p <project> ps` as (service, name, published host ports).
+fn compose_ps(project: &str) -> Vec<(String, String, Vec<u16>)> {
+    let out = Command::new("docker")
+        .args(["compose", "-p", project, "ps", "--all", "--format", "json"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.trim_start().starts_with('{'))
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .map(|c| {
+            let ports = c["Publishers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|p| p["PublishedPort"].as_u64())
+                .filter(|p| *p != 0)
+                .map(|p| p as u16)
+                .collect();
+            (
+                c["Service"].as_str().unwrap_or("").to_string(),
+                c["Name"].as_str().unwrap_or("").to_string(),
+                ports,
+            )
+        })
+        .collect()
+}
+
+fn started_at(container: &str) -> String {
+    let out = Command::new("docker")
+        .args(["inspect", "-f", "{{.State.StartedAt}}", container])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// ADR-0030: a lane runs its own Compose project, its host ports moved like
+/// its services', without the fixed container names of the main tree; a
+/// `shared` service is the main tree's. Restarting a container of the main
+/// tree leaves the lane's alone; `lane stop` and removing the worktree take
+/// the lane's containers away.
+#[test]
+fn a_lane_has_its_own_containers() {
+    if !enabled("DEVSTACK_INTEGRATION_COMPOSE") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION_COMPOSE=1 (needs the .NET 10 SDK and Docker)");
+        return;
+    }
+    let s = Stack::new(true);
+    let project = s.project.clone().unwrap();
+    // A fixed host port and a fixed container name, as deployment files have them.
+    let db_port = free_port();
+    let main_db = format!("it-db-{db_port}");
+    let ov = s.dir.path().join("dev/compose.dev.yml");
+    let text = std::fs::read_to_string(&ov).unwrap().replace(
+        "  db:\n    ports: [\"127.0.0.1::5432\"]",
+        &format!("  db:\n    container_name: {main_db}\n    ports: [\"127.0.0.1:{db_port}:5432\"]"),
+    );
+    assert!(text.contains(&main_db), "overlay changed: {text}");
+    std::fs::write(&ov, text).unwrap();
+    let toml = std::fs::read_to_string(s.file()).unwrap().replace(
+        "services = [\"db\", \"cache\"]\n",
+        "services = [\"db\", \"cache\"]\nshared = [\"cache\"]\n",
+    );
+    std::fs::write(s.file(), toml).unwrap();
+    s.cli(&["up"], None); // `broken` fails, the rest runs
+
+    let git = |dir: &Path, args: &[&str]| {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    std::fs::write(
+        s.dir.path().join(".gitignore"),
+        ".devstack/\nprep.count\nbin/\nobj/\n",
+    )
+    .unwrap();
+    git(s.dir.path(), &["config", "core.autocrlf", "false"]);
+    git(s.dir.path(), &["add", "-A"]);
+    git(s.dir.path(), &["commit", "-qm", "init"]);
+    let wt = s
+        .dir
+        .path()
+        .parent()
+        .unwrap()
+        .join(format!("wt-{}", s.port));
+    git(
+        s.dir.path(),
+        &["worktree", "add", "-q", "-b", "iso", wt.to_str().unwrap()],
+    );
+    let lane = format!("wt-{}", s.port);
+    let lane_project = format!("{project}-{lane}");
+    let up = Command::new(BIN)
+        .args(["up", "-f"])
+        .arg(wt.join("devstack.toml"))
+        .env("LOCALAPPDATA", s.token_home.path())
+        .env("XDG_STATE_HOME", s.token_home.path())
+        .env("DEVSTACK_NO_HUB", "1")
+        .output()
+        .unwrap();
+    let up = format!(
+        "{}{}",
+        String::from_utf8_lossy(&up.stdout),
+        String::from_utf8_lossy(&up.stderr)
+    );
+    let offset: u16 = s
+        .ok(&["lane", "list"])
+        .lines()
+        .find(|l| l.starts_with(&lane))
+        .and_then(|l| l.split_whitespace().nth(2))
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("lane offset\n{up}"));
+
+    // Its own db, on the moved port, under a name of its own; no cache of its own.
+    let ours = compose_ps(&lane_project);
+    let db = ours
+        .iter()
+        .find(|c| c.0 == "db")
+        .unwrap_or_else(|| panic!("the lane runs its own db: {ours:?}\n{up}"));
+    assert_eq!(db.2, vec![db_port + offset], "{ours:?}");
+    assert_ne!(db.1, main_db, "no fixed container name in a lane");
+    assert!(
+        !ours.iter().any(|c| c.0 == "cache"),
+        "cache is shared: {ours:?}"
+    );
+    let main = compose_ps(&project);
+    assert!(
+        main.iter().any(|c| c.1 == main_db && c.2 == vec![db_port]),
+        "{main:?}"
+    );
+
+    // Restarting the main tree's db does not touch the lane's.
+    let before = started_at(&db.1);
+    let st = Command::new("docker")
+        .args(["restart", &main_db])
+        .output()
+        .unwrap();
+    assert!(st.status.success());
+    assert_eq!(started_at(&db.1), before, "the lane's db was restarted too");
+
+    // `lane stop` gives the containers back; a removed worktree takes the rest.
+    s.ok(&["lane", "stop", &lane]);
+    assert!(
+        compose_ps(&lane_project).is_empty(),
+        "containers after lane stop"
+    );
+    git(
+        s.dir.path(),
+        &["worktree", "remove", "--force", wt.to_str().unwrap()],
+    );
+    assert!(
+        wait_for(
+            || !s.ok(&["lane", "list"]).contains(&lane),
+            Duration::from_secs(15)
+        ),
+        "lane gone with its worktree"
+    );
+    assert!(compose_ps(&lane_project).is_empty());
+    let _ = Command::new("docker")
+        .args(["compose", "-p", &lane_project, "down", "--volumes"])
+        .output();
+}

@@ -245,9 +245,10 @@ port_step = 100   # the default: lane 1 runs api 5000 on 5100, lane 2 on 5200
 Every `git worktree` of the repository is a **lane** of the main tree's
 daemon, the moment git creates it; the dashboard shows it under the stack,
 named by its branch. `devstack up` in it starts it: its own build, its own
-ports (moved by `port_step` times the lane's number), the same infrastructure,
-no background workers. Every devstack command and the MCP server in the
-worktree act on its lane.
+ports (moved by `port_step` times the lane's number), **its own containers**
+([ADR-0030](adr/0030-each-lane-has-its-own-infrastructure.md)), no background
+workers (`devstack up --workers` turns them on). Every devstack command and the
+MCP server in the worktree act on its lane.
 
 Worktrees are git's (or your tool's): devstack never creates or removes one,
 and nothing of a lane runs inside its worktree. Builds run in the lane's
@@ -257,10 +258,21 @@ working), and `{repo}` is the snapshot for them. So `git worktree remove`
 works while the lane runs, and the lane stops with it. Ignored files are not
 in the snapshot: `prepare` installs what is missing.
 
-- Per-lane resources on the shared infrastructure: `{lane}` and
-  `{lane_suffix}` (empty in the main tree), e.g.
-  `ConnectionStrings__Db = "Server=127.0.0.1,1433;Database=app{lane_suffix}"`;
-  a migrator job then creates the lane's database.
+- A lane's containers are a Compose project of their own,
+  `<project>-<lane>`, from its worktree's Compose files, with an overlay
+  devstack writes (`.devstack/lane-<name>/compose/<group>.yml`): host ports
+  moved by the lane's offset, no fixed `container_name`, fixed-name networks
+  and volumes renamed `<name>-<lane>`. Its first start migrates and seeds its
+  own data. `lane stop` removes its containers and keeps their volumes; a
+  removed worktree takes them all.
+- `[compose.<group>] shared = ["mailbox"]`: services a lane uses from the main
+  tree instead of starting its own, for what holds nothing per lane (a
+  telemetry dashboard, a fake SMTP server); reached by their published ports.
+- Before a lane starts, devstack checks that the machine has about the memory
+  the main tree takes now and refuses otherwise (`devstack up --force` starts it
+  anyway).
+- `{lane}` and `{lane_suffix}` (empty in the main tree) are still there, e.g.
+  for a name that shows up outside the stack; data needs them no longer.
 - `lanes = false` keeps a service in the main working tree: a lane neither
   starts it nor waits for it (`after`), `devstack start` refuses it there, and
   the main tree's instance serves every lane. It keeps its background workers

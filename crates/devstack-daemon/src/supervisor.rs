@@ -79,6 +79,13 @@ pub struct Supervisor {
     quiet: Mutex<BTreeMap<String, (Instant, bool)>>,
     /// One `prepare` at a time: two in the same directory would collide.
     preparing: Mutex<()>,
+    /// What a lane's ports are moved by (0 in the main tree): its own
+    /// services' and its own containers' (ADR-0030).
+    port_offset: u16,
+    /// `devstack up --workers` in a lane: its main instances run their
+    /// background workers although the lane does not own the main slot; its
+    /// coordinators are its own (ADR-0030).
+    lane_workers: std::sync::atomic::AtomicBool,
     /// The stack file this daemon runs from, and a hash of what it read at start.
     /// The daemon does not reload it: a change waits for the next start, and the
     /// status says so instead of keeping quiet.
@@ -181,13 +188,15 @@ impl Supervisor {
             proc_opts,
             rt,
             String::new(),
+            0,
             Arc::new(Mutex::new(None)),
         )
     }
 
     /// A supervisor for a lane (plan §3.5): `lane` empty for the main working
-    /// tree. Another lane gets a stack whose ports are already moved
-    /// ([`crate::lanes`]) and never starts or stops infrastructure.
+    /// tree. Another lane gets a stack whose service ports are already moved
+    /// by `port_offset` ([`crate::lanes`]) and runs its own Compose projects,
+    /// their ports moved by the same offset (ADR-0030).
     #[allow(clippy::too_many_arguments)]
     pub fn new_lane(
         stack: Stack,
@@ -197,6 +206,7 @@ impl Supervisor {
         proc_opts: devstack_proc::Options,
         rt: tokio::runtime::Handle,
         lane: String,
+        port_offset: u16,
         main_owner: Arc<Mutex<Option<String>>>,
     ) -> Result<Arc<Self>, String> {
         let stack = with_static_servers(stack);
@@ -277,6 +287,8 @@ impl Supervisor {
             held: Mutex::new(BTreeMap::new()),
             quiet: Mutex::new(BTreeMap::new()),
             preparing: Mutex::new(()),
+            port_offset,
+            lane_workers: std::sync::atomic::AtomicBool::new(false),
             stack_file_hash: stack_file_hash(&stack_file),
             stack_file,
             config_changed: std::sync::atomic::AtomicBool::new(false),
@@ -453,6 +465,16 @@ impl Supervisor {
         on_this_platform(svc) && (self.lane.is_empty() || svc.lanes)
     }
 
+    /// A Compose service a lane uses from the main tree (`shared`, ADR-0030).
+    fn is_shared(&self, group: &str, service: &str) -> bool {
+        !self.lane.is_empty()
+            && self
+                .stack
+                .compose
+                .get(group)
+                .is_some_and(|g| g.shared.iter().any(|s| s == service))
+    }
+
     /// A lane runs from a copy of its worktree, never from the worktree itself
     /// (ADR-0024): git and the tools that manage worktrees can remove one at
     /// any time, and a process inside it would hold it open (Windows).
@@ -596,8 +618,70 @@ impl Supervisor {
 
     // -------------------------------------------------------------- infra
 
+    /// A Compose group as this supervisor runs it. In a lane (ADR-0030): its
+    /// own project `<project>-<lane>`, its own external networks
+    /// `<name>-<lane>`, the overlay written by [`Self::write_lane_overlay`]
+    /// last, and without the `shared` services, which the main tree runs.
     fn compose_group(&self, name: &str) -> Group {
-        Group::from_config(name, &self.stack.compose[name], &self.repo)
+        let cfg = &self.stack.compose[name];
+        let mut g = Group::from_config(name, cfg, &self.repo);
+        if self.lane.is_empty() {
+            return g;
+        }
+        g.project = format!("{}-{}", cfg.project, self.lane);
+        g.networks = cfg
+            .networks
+            .iter()
+            .map(|n| format!("{n}-{}", self.lane))
+            .collect();
+        g.services.retain(|s| !cfg.shared.contains(s));
+        let overlay = self.lane_overlay_file(name);
+        if overlay.is_file() {
+            g.files.push(overlay);
+        }
+        g
+    }
+
+    fn lane_overlay_file(&self, group: &str) -> PathBuf {
+        self.state_dir.join("compose").join(format!("{group}.yml"))
+    }
+
+    /// The overlay that gives a lane's copy of `group` its own ports, names,
+    /// networks and volumes, written from the group's configuration as it
+    /// stands now (the lane's branch may have changed its Compose files).
+    fn write_lane_overlay(&self, group: &str) -> Result<(), String> {
+        let file = self.lane_overlay_file(group);
+        let _ = std::fs::remove_file(&file);
+        let g = self.compose_group(group);
+        let model = self.docker.config(&g).map_err(|e| e.to_string())?;
+        let shared = &self.stack.compose[group].shared;
+        let text = devstack_compose::lane_overlay(
+            &model,
+            &g.project,
+            &self.lane,
+            self.port_offset,
+            shared,
+        )
+        .map_err(|e| format!("compose group `{group}`: {e}"))?;
+        std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;
+        std::fs::write(&file, text).map_err(|e| e.to_string())
+    }
+
+    /// `devstack up --workers` in a lane (ADR-0030).
+    pub fn set_lane_workers(&self, on: bool) {
+        self.lane_workers.store(on, Ordering::SeqCst);
+    }
+
+    /// The host ports the main tree's containers publish: a lane's range
+    /// must not meet them either.
+    pub fn infra_host_ports(&self) -> Vec<u16> {
+        self.infra
+            .lock()
+            .unwrap()
+            .published
+            .values()
+            .filter_map(|a| a.rsplit(':').next()?.parse().ok())
+            .collect()
     }
 
     /// Compose groups in `after` order.
@@ -617,6 +701,15 @@ impl Supervisor {
                 group: g.clone(),
                 message: "starting".into(),
             });
+            if !self.lane.is_empty()
+                && let Err(e) = self.write_lane_overlay(&g)
+            {
+                self.emit(EventBody::Infra {
+                    group: g.clone(),
+                    message: format!("failed: {e}"),
+                });
+                return Err(e);
+            }
             let group = self.compose_group(&g);
             if let Err(e) = self.docker.up(&group, Duration::from_secs(300)) {
                 let msg = e.to_string();
@@ -878,7 +971,8 @@ impl Supervisor {
     }
 
     pub fn up(self: &Arc<Self>) -> Result<(), String> {
-        if self.lane.is_empty() {
+        {
+            // Every lane has its own infrastructure (ADR-0030).
             self.infra_up()?;
             // Healthy inside Docker is not reachable from here: say so
             // (a service that needs the container repairs it, ensure_after).
@@ -891,9 +985,6 @@ impl Supervisor {
                     ),
                 });
             }
-        } else {
-            // The main lane owns the infrastructure; a lane only reads it.
-            self.refresh_infra();
         }
         // A failed service holds back only what comes `after` it; everything
         // independent of it still starts (one broken build must not keep the
@@ -934,8 +1025,9 @@ impl Supervisor {
         for name in self.service_order().into_iter().rev() {
             let _ = self.stop(&name);
         }
-        // A lane never stops the infrastructure the main lane owns.
-        if infra && self.lane.is_empty() {
+        // A lane's infrastructure is its own (ADR-0030); `shared` services
+        // are not in its groups.
+        if infra {
             for g in self.group_order().into_iter().rev() {
                 let _ = self.docker.down(&self.compose_group(&g));
             }
@@ -1465,7 +1557,8 @@ impl Supervisor {
             port,
             // A lane without the main slot never runs workers (ADR-0012 interim rule).
             // What runs in the main tree only keeps its workers: no lane takes them over.
-            is_main: is_main && (self.owns_main() || !svc.lanes),
+            is_main: is_main
+                && (self.owns_main() || !svc.lanes || self.lane_workers.load(Ordering::SeqCst)),
             lane: self.lane.clone(),
             published: infra.published.clone(),
             pending: infra.pending.clone(),
@@ -2197,8 +2290,8 @@ The running instance was left as it was."
     }
 
     pub(crate) fn restart_container(&self, group: &str, service: &str) {
-        if !self.lane.is_empty() {
-            return; // the main lane owns the infrastructure (ADR-0024)
+        if self.is_shared(group, service) {
+            return; // the main tree's container (ADR-0030)
         }
         let message = match self.docker.restart(&self.compose_group(group), service) {
             Ok(()) => format!("{service}: restarted after a change"),
@@ -2341,6 +2434,9 @@ The running instance was left as it was."
     /// restart) is repaired by restarting the container once. Never fails the
     /// start: a port with nothing listening inside looks the same.
     fn ensure_reachable(&self, group: &str, service: &str) -> Result<(), String> {
+        if self.is_shared(group, service) {
+            return Ok(()); // the main tree's container; it repairs its own
+        }
         let lost = lost_forwards(&self.container_ports(group, service));
         self.set_unreachable(group, service, lost.clone());
         if lost.is_empty() {

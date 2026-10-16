@@ -1,8 +1,8 @@
 # ADR-0012: Which infrastructure may be shared between lanes
 
-- **Status:** Open. The interim rule below is what lanes do since 0.5.0
-  ([ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md)); the
-  question stays open for per-lane coordinators.
+- **Status:** Decided by [ADR-0030](0030-each-lane-has-its-own-infrastructure.md) (2026-10-16): option A, one infra plane per
+  lane, with sharing opt-in per Compose service for what holds nothing per
+  lane. The interim rule below held from 0.5.0 to then.
 - **Date:** 2026-10-14
 - **Related:** plan §3.5, [ADR-0004](0004-infrastructure-is-delegated-to-compose.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md)
 

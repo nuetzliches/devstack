@@ -446,7 +446,10 @@ impl Lanes {
     /// lane, another lane and, with `probe`, a port in use on this machine.
     fn free_number(&self, known: &BTreeMap<String, Known>, probe: bool) -> Option<u16> {
         let step = self.main.stack.lanes.port_step;
-        let base = ports(&self.main.stack);
+        // A lane's containers publish the main tree's ports moved by the same
+        // step (ADR-0030): those must be free as well.
+        let mut base = ports(&self.main.stack);
+        base.extend(self.main.infra_host_ports());
         let used: BTreeSet<u16> = known.values().map(|k| k.entry.number).collect();
         let mut taken: BTreeSet<u16> = base.iter().copied().collect();
         for k in known.values() {
@@ -477,6 +480,7 @@ impl Lanes {
         if let Some(l) = self.map.lock().unwrap().remove(name) {
             l.sup.close();
         }
+        self.remove_infra(name);
         {
             let mut known = self.known.lock().unwrap();
             if known.remove(name).is_some() {
@@ -489,6 +493,29 @@ impl Lanes {
             serde_json::json!({ "lane": name, "why": why }),
         );
         self.announce();
+    }
+
+    /// The containers, volumes and networks of lane `name` (ADR-0030), also
+    /// of a lane not started now: Compose finds a project by its name alone.
+    fn remove_infra(&self, name: &str) {
+        let docker = devstack_compose::Docker::default();
+        for (g, cfg) in &self.main.stack.compose {
+            let group = devstack_compose::Group {
+                name: g.clone(),
+                project: format!("{}-{name}", cfg.project),
+                files: Vec::new(),
+                env_files: Vec::new(),
+                networks: cfg.networks.iter().map(|n| format!("{n}-{name}")).collect(),
+                services: Vec::new(),
+                dir: self.main.repo.clone(),
+            };
+            if let Err(e) = docker.remove(&group) {
+                crate::diag::warn(
+                    "lane_infra_not_removed",
+                    serde_json::json!({ "lane": name, "group": g, "error": e.to_string() }),
+                );
+            }
+        }
     }
 
     fn open(&self, entry: &LaneEntry) -> Result<Arc<Lane>, String> {
@@ -523,6 +550,7 @@ impl Lanes {
             self.proc_opts.clone(),
             self.rt.clone(),
             entry.name.clone(),
+            offset,
             self.main.main_owner(),
         )?;
         sup.refresh_infra();
@@ -686,7 +714,9 @@ impl Lanes {
                 "lane `{name}` serves the main slot: `devstack promote --lane main` first"
             ));
         }
-        lane.sup.down(false);
+        // Its containers too: their memory is what a stopped lane gives back
+        // (ADR-0030). Volumes stay for the next start.
+        lane.sup.down(true);
         if let Some(l) = self.map.lock().unwrap().remove(name) {
             l.sup.close();
         }
