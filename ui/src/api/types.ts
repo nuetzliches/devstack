@@ -252,7 +252,16 @@ export type PoolNode = {
   online: boolean;
   /** Seconds since its last report. */
   seen?: number;
-  report?: { sharing: boolean; cpus: number; memory: number; api?: string };
+  report?: {
+    sharing: boolean;
+    cpus: number;
+    memory: number;
+    api?: string;
+    /** What the machine has, what its lanes use (ADR-0036). */
+    total?: PoolAmount;
+    used?: PoolAmount;
+    gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean }[];
+  };
   /** Paused by an admin: no new lanes. */
   paused?: boolean;
   /** `server` (dedicated node), `node` (runs lanes, may reclaim), `machine` (asks for lanes), `unknown` (never reported). */
@@ -329,4 +338,20 @@ export type SharedLane = {
   owner_name: string;
   node: { id: string; name: string; api: string };
   services: SharedService[];
+};
+
+/** A node's or the pool's capacity at one moment (ADR-0036), `GET /hub/pool/history`. */
+export type CapacityPoint = {
+  at: number;
+  total_cpus: number;
+  total_memory: number;
+  offered_cpus: number;
+  offered_memory: number;
+  used_cpus: number;
+  used_memory: number;
+  gpus: number;
+  gpus_offered: number;
+  gpu_load: number;
+  gpu_memory: number;
+  gpu_memory_used: number;
 };

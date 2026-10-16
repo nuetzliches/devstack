@@ -379,6 +379,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/pool/leases/{id}/end", post(pool::end))
         .route("/hub/pool/members/{id}/tags", post(pool::tags))
         .route("/hub/pools", get(pool::pools))
+        .route("/hub/pool/history", get(pool::history))
         .route("/hub/pool/nodes/{id}/policy", post(pool::policy))
         .route("/hub/pool/join", post(pool::join))
         .fallback(get(asset))

@@ -61,6 +61,59 @@ impl Settings {
     }
 }
 
+/// A GPU of a machine (ADR-0036): reported, not placed yet.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Gpu {
+    pub name: String,
+    /// Its memory, and what of it is used now, bytes.
+    pub memory: u64,
+    pub memory_used: u64,
+    /// Its load now, percent.
+    pub load: f64,
+    /// Whether the machine offers it to the pool.
+    #[serde(default)]
+    pub offered: bool,
+}
+
+/// The machine's GPUs, as the vendor's tool reports them (`nvidia-smi`, on
+/// Linux and Windows); none without one.
+pub fn gpus() -> Vec<Gpu> {
+    let Ok(out) = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=name,memory.total,memory.used,utilization.gpu",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    parse_nvidia_smi(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// `name, memory.total, memory.used, utilization.gpu` per line, MiB and
+/// percent.
+pub fn parse_nvidia_smi(text: &str) -> Vec<Gpu> {
+    text.lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split(',').map(str::trim).collect();
+            let [name, total, used, load] = f.as_slice() else {
+                return None;
+            };
+            let mib = |x: &str| x.parse::<u64>().ok().map(|m| m << 20);
+            Some(Gpu {
+                name: (*name).to_string(),
+                memory: mib(total)?,
+                memory_used: mib(used).unwrap_or(0),
+                load: load.parse().unwrap_or(0.0),
+                offered: false,
+            })
+        })
+        .collect()
+}
+
 /// The CPU cores idle between two readings of `devstack_proc::cpu_times`.
 pub fn idle_cpus(before: (u64, u64), after: (u64, u64), cores: usize) -> f64 {
     let idle = after.0.saturating_sub(before.0) as f64;
@@ -74,6 +127,16 @@ pub fn idle_cpus(before: (u64, u64), after: (u64, u64), cores: usize) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gpus_are_read_from_nvidia_smi() {
+        let g = parse_nvidia_smi("NVIDIA GeForce RTX 4090, 24564, 1234, 7\nbroken line\n");
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].name, "NVIDIA GeForce RTX 4090");
+        assert_eq!(g[0].memory, 24564 << 20);
+        assert_eq!(g[0].memory_used, 1234 << 20);
+        assert_eq!(g[0].load, 7.0);
+    }
 
     const GIB: u64 = 1 << 30;
 

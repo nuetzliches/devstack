@@ -450,6 +450,16 @@ impl Local {
         self.get(&format!("/v1/leases/{lease}/shared"))
     }
 
+    /// A node's capacity over time, or the pool's (`node` none); `day`: the
+    /// last 24 hours by minute, else the last hour (ADR-0036).
+    pub fn history(&self, node: Option<&str>, day: bool) -> Result<Vec<crate::coordinator::Point>> {
+        let range = if day { "24h" } else { "1h" };
+        match node {
+            Some(n) => self.get(&format!("/v1/history?node={n}&range={range}")),
+            None => self.get(&format!("/v1/history?range={range}")),
+        }
+    }
+
     /// Set a member's tags (admins only, ADR-0033).
     pub fn admin_tags(&self, id: &str, tags: &[String]) -> Result<MemberView> {
         self.post(

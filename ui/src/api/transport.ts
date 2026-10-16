@@ -60,6 +60,8 @@ export const paths = {
   pool: '/hub/pool',
   pools: '/hub/pools',
   poolShared: '/hub/pool/shared',
+  poolHistory: (pool: string, node: string | undefined, range: string) =>
+    `/hub/pool/history?range=${range}${pool !== 'default' ? `&pool=${enc(pool)}` : ''}${node ? `&node=${enc(node)}` : ''}`,
   poolSharedOpen: (lease: string) => `/hub/pool/shared/${enc(lease)}/open`,
   poolShare: '/hub/pool/share',
   poolApprove: (id: string) => `/hub/pool/members/${enc(id)}/approve`,

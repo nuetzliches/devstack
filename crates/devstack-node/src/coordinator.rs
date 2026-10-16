@@ -131,6 +131,161 @@ pub struct Report {
     /// The leases it holds now.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub leases: Vec<LeaseReport>,
+    /// What the machine has in all (ADR-0036).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<crate::share::Amount>,
+    /// What its lanes for the pool use now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used: Option<crate::share::Amount>,
+    /// Its GPUs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gpus: Vec<crate::share::Gpu>,
+}
+
+/// One moment of a node's capacity, or the pool's (ADR-0036): what it has,
+/// offers and its lanes use, and its GPUs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct Point {
+    /// Unix seconds.
+    pub at: u64,
+    pub total_cpus: f64,
+    pub total_memory: u64,
+    pub offered_cpus: f64,
+    pub offered_memory: u64,
+    pub used_cpus: f64,
+    pub used_memory: u64,
+    pub gpus: u32,
+    pub gpus_offered: u32,
+    /// Summed over the GPUs, percent (two at full load: 200).
+    pub gpu_load: f64,
+    pub gpu_memory: u64,
+    pub gpu_memory_used: u64,
+}
+
+impl Point {
+    fn of(at: u64, r: &Report) -> Self {
+        let total = r.total.unwrap_or_default();
+        let used = r.used.unwrap_or_default();
+        Self {
+            at,
+            total_cpus: total.cpus,
+            total_memory: total.memory,
+            offered_cpus: if r.sharing { r.cpus } else { 0.0 },
+            offered_memory: if r.sharing { r.memory } else { 0 },
+            used_cpus: used.cpus,
+            used_memory: used.memory,
+            gpus: r.gpus.len() as u32,
+            gpus_offered: r.gpus.iter().filter(|g| g.offered).count() as u32,
+            gpu_load: r.gpus.iter().map(|g| g.load).sum(),
+            gpu_memory: r.gpus.iter().map(|g| g.memory).sum(),
+            gpu_memory_used: r.gpus.iter().map(|g| g.memory_used).sum(),
+        }
+    }
+
+    fn add(&mut self, o: &Self) {
+        self.total_cpus += o.total_cpus;
+        self.total_memory += o.total_memory;
+        self.offered_cpus += o.offered_cpus;
+        self.offered_memory += o.offered_memory;
+        self.used_cpus += o.used_cpus;
+        self.used_memory += o.used_memory;
+        self.gpus += o.gpus;
+        self.gpus_offered += o.gpus_offered;
+        self.gpu_load += o.gpu_load;
+        self.gpu_memory += o.gpu_memory;
+        self.gpu_memory_used += o.gpu_memory_used;
+    }
+
+    /// The average of `ps` (at the last one's time).
+    fn mean(ps: &[Self]) -> Self {
+        let n = ps.len().max(1) as f64;
+        let mut sum = Self::default();
+        for p in ps {
+            sum.add(p);
+        }
+        let avg = |x: u64| (x as f64 / n) as u64;
+        Self {
+            at: ps.last().map_or(0, |p| p.at),
+            total_cpus: sum.total_cpus / n,
+            total_memory: avg(sum.total_memory),
+            offered_cpus: sum.offered_cpus / n,
+            offered_memory: avg(sum.offered_memory),
+            used_cpus: sum.used_cpus / n,
+            used_memory: avg(sum.used_memory),
+            gpus: ps.last().map_or(0, |p| p.gpus),
+            gpus_offered: ps.last().map_or(0, |p| p.gpus_offered),
+            gpu_load: sum.gpu_load / n,
+            gpu_memory: avg(sum.gpu_memory),
+            gpu_memory_used: avg(sum.gpu_memory_used),
+        }
+    }
+}
+
+/// A node's history (ADR-0036 point 2): every report of the last hour, then
+/// a point per minute for a day. In memory: a restart starts it again.
+#[derive(Debug, Default)]
+pub struct History {
+    raw: std::collections::VecDeque<Point>,
+    minutes: std::collections::VecDeque<Point>,
+}
+
+const HOUR: u64 = 3600;
+const DAY: u64 = 24 * HOUR;
+
+impl History {
+    pub fn push(&mut self, p: Point) {
+        // A minute that is over becomes one point.
+        if let Some(last) = self.raw.back()
+            && p.at / 60 != last.at / 60
+        {
+            let minute = last.at / 60;
+            let done: Vec<Point> = self
+                .raw
+                .iter()
+                .filter(|x| x.at / 60 == minute)
+                .copied()
+                .collect();
+            if !done.is_empty() {
+                self.minutes.push_back(Point::mean(&done));
+            }
+        }
+        self.raw.push_back(p);
+        while self.raw.front().is_some_and(|x| x.at + HOUR < p.at) {
+            self.raw.pop_front();
+        }
+        while self.minutes.front().is_some_and(|x| x.at + DAY < p.at) {
+            self.minutes.pop_front();
+        }
+    }
+
+    /// The last hour as reported, or the last day by minute.
+    pub fn series(&self, day: bool) -> Vec<Point> {
+        if day {
+            self.minutes.iter().copied().collect()
+        } else {
+            self.raw.iter().copied().collect()
+        }
+    }
+}
+
+/// The pool's history from its nodes': summed per `step` seconds, each node
+/// with its last point in a step.
+pub fn pool_series(nodes: &[Vec<Point>], step: u64) -> Vec<Point> {
+    let mut buckets: std::collections::BTreeMap<u64, Point> = std::collections::BTreeMap::new();
+    for series in nodes {
+        let mut last: std::collections::BTreeMap<u64, Point> = std::collections::BTreeMap::new();
+        for p in series {
+            last.insert(p.at / step, *p);
+        }
+        for (b, p) in last {
+            let e = buckets.entry(b).or_insert(Point {
+                at: b * step,
+                ..Point::default()
+            });
+            e.add(&p);
+        }
+    }
+    buckets.into_values().collect()
 }
 
 /// A lease as its node reports it.
@@ -375,6 +530,8 @@ struct Inner {
     store: Store,
     ca_pem: String,
     reports: Mutex<HashMap<String, (std::time::Instant, Report)>>,
+    /// Each node's capacity over time (ADR-0036).
+    history: Mutex<HashMap<String, History>>,
 }
 
 use crate::tls::Peer;
@@ -443,6 +600,7 @@ fn router(shared: Shared) -> Router {
         .route("/v1/leases/{id}/share", axum::routing::put(lease_share))
         .route("/v1/leases/{id}/shared", get(lease_shared))
         .route("/v1/shared", get(shared_list))
+        .route("/v1/history", get(history))
         .route("/v1/admin/members", get(admin_members))
         .route("/v1/admin/members/{id}/approve", post(admin_approve))
         .route("/v1/admin/members/{id}/remove", post(admin_remove))
@@ -542,6 +700,12 @@ async fn report(
             }
         });
     }
+    s.history
+        .lock()
+        .unwrap()
+        .entry(m.id.clone())
+        .or_default()
+        .push(Point::of(store::now(), &r));
     s.reports
         .lock()
         .unwrap()
@@ -845,6 +1009,35 @@ async fn shared_list(
     Ok(Json(out))
 }
 
+#[derive(Deserialize)]
+pub struct HistoryQuery {
+    /// A node's member id; none: the pool.
+    #[serde(default)]
+    pub node: Option<String>,
+    /// `1h` (default) or `24h`.
+    #[serde(default)]
+    pub range: Option<String>,
+}
+
+/// `GET /v1/history?node=&range=1h|24h`: a node's capacity over time, or
+/// the pool's (ADR-0036).
+async fn history(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    axum::extract::Query(q): axum::extract::Query<HistoryQuery>,
+) -> ApiResult<Json<Vec<Point>>> {
+    member(&s, &peer)?;
+    let day = q.range.as_deref() == Some("24h");
+    let h = s.history.lock().unwrap();
+    Ok(Json(match q.node {
+        Some(n) => h.get(&n).map(|x| x.series(day)).unwrap_or_default(),
+        None => {
+            let all: Vec<Vec<Point>> = h.values().map(|x| x.series(day)).collect();
+            pool_series(&all, if day { 60 } else { 30 })
+        }
+    }))
+}
+
 fn random_hex(bytes: usize) -> String {
     use rand::RngCore;
     let mut b = vec![0u8; bytes];
@@ -991,6 +1184,7 @@ pub async fn serve(
     let shared = Arc::new(Inner {
         dir: dir.to_path_buf(),
         leases: Mutex::new(HashMap::new()),
+        history: Mutex::new(HashMap::new()),
         ending: Mutex::new(std::collections::HashSet::new()),
         store: Store::new(dir),
         ca_pem,
@@ -1026,4 +1220,46 @@ pub async fn stop_signal() {
     }
     #[cfg(not(unix))]
     let _ = tokio::signal::ctrl_c().await;
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    fn p(at: u64, used: f64) -> Point {
+        Point {
+            at,
+            total_cpus: 8.0,
+            used_cpus: used,
+            ..Point::default()
+        }
+    }
+
+    #[test]
+    fn a_node_keeps_an_hour_as_reported_and_a_day_by_minute() {
+        let mut h = History::default();
+        // Two reports in minute 0, one in minute 1: minute 0 is averaged.
+        h.push(p(0, 1.0));
+        h.push(p(30, 3.0));
+        h.push(p(60, 5.0));
+        assert_eq!(h.series(false).len(), 3);
+        let day = h.series(true);
+        assert_eq!(day.len(), 1);
+        assert_eq!(day[0].used_cpus, 2.0);
+        // An hour later the first reports are gone from the hour.
+        h.push(p(2 * HOUR, 0.0));
+        assert_eq!(h.series(false).len(), 1);
+        assert_eq!(h.series(true).len(), 2);
+    }
+
+    #[test]
+    fn the_pool_sums_its_nodes_per_step() {
+        let a = vec![p(0, 1.0), p(15, 2.0), p(31, 4.0)];
+        let b = vec![p(5, 10.0), p(40, 20.0)];
+        let s = pool_series(&[a, b], 30);
+        assert_eq!(s.len(), 2);
+        // Step 0: a's last (2) + b's (10); step 1: 4 + 20.
+        assert_eq!((s[0].used_cpus, s[1].used_cpus), (12.0, 24.0));
+        assert_eq!(s[0].total_cpus, 16.0);
+    }
 }

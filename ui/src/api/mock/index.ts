@@ -208,6 +208,31 @@ export class MockTransport implements Transport {
     if (hub.unpaired) return json(401, { error: 'not paired' });
     if (p === '/hub/stacks' && method === 'GET') return json(200, hub.entries());
     if (p === '/hub/docker' && method === 'GET') return json(200, hub.docker);
+    if (p === '/hub/pool/history' && method === 'GET') {
+      const now = Math.floor(Date.now() / 1000);
+      const node = url.searchParams.get('node');
+      const n = 120;
+      return json(
+        200,
+        Array.from({ length: n }, (_, i) => {
+          const w = Math.sin(i / 9) * 0.5 + 0.5;
+          return {
+            at: now - (n - i) * 30,
+            total_cpus: node ? 32 : 48,
+            total_memory: (node ? 128 : 192) * 2 ** 30,
+            offered_cpus: 12 + 4 * w,
+            offered_memory: (48 + 8 * w) * 2 ** 30,
+            used_cpus: 2 + 6 * w,
+            used_memory: (10 + 14 * w) * 2 ** 30,
+            gpus: 1,
+            gpus_offered: 1,
+            gpu_load: 10 + 60 * w * w,
+            gpu_memory: 24 * 2 ** 30,
+            gpu_memory_used: (2 + 8 * w) * 2 ** 30,
+          };
+        }),
+      );
+    }
     if (p === '/hub/pool/shared' && method === 'GET')
       return json(
         200,

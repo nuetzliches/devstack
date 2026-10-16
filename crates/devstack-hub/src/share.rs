@@ -136,10 +136,11 @@ fn run(poked: &mpsc::Receiver<()>) {
             memory: devstack_proc::memory_total().unwrap_or(0),
         };
         let Some(s) = SHARING.get() else { return };
+        let gpus = devstack_node::share::gpus();
         for (pool, _) in devstack_node::member::pools(&state()) {
             let settings = entry(&mut s.status.lock().unwrap(), &pool).settings.clone();
             let offer = settings.offer(free);
-            let result = report(&pool, &settings, offer);
+            let result = report(&pool, &settings, offer, total, &gpus);
             let mut map = s.status.lock().unwrap();
             let st = entry(&mut map, &pool);
             st.total = total;
@@ -161,7 +162,13 @@ fn run(poked: &mpsc::Receiver<()>) {
 
 /// Report to the coordinator; `Ok(false)` when this machine is no approved
 /// member (nothing to report to).
-fn report(pool: &str, settings: &Settings, offer: Amount) -> Result<bool, String> {
+fn report(
+    pool: &str,
+    settings: &Settings,
+    offer: Amount,
+    total: Amount,
+    gpus: &[devstack_node::share::Gpu],
+) -> Result<bool, String> {
     let local = devstack_node::member::Local::new(&dir(pool));
     match local.membership() {
         Ok(Some(m)) if m.state == State::Approved => {}
@@ -176,6 +183,15 @@ fn report(pool: &str, settings: &Settings, offer: Amount) -> Result<bool, String
             api: None,
             dedicated: false,
             leases: Vec::new(),
+            total: Some(total),
+            used: None,
+            gpus: gpus
+                .iter()
+                .map(|g| devstack_node::share::Gpu {
+                    offered: settings.enabled,
+                    ..g.clone()
+                })
+                .collect(),
         })
         .map(|_| true)
         .map_err(|e| e.to_string())
