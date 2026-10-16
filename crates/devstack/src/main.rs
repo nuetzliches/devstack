@@ -580,6 +580,7 @@ fn main() -> Result<()> {
             envcmd::run(
                 &stack,
                 &repo_of(&cli.file)?,
+                &cli.file,
                 &service,
                 export.is_some(),
                 out.as_deref(),

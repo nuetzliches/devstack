@@ -127,14 +127,21 @@ impl Resolve for Context {
                 .get(s)
                 .cloned()
                 .ok_or_else(|| format!("`{p}`: service `{s}` has no URL")),
+            Placeholder::ServicePort(s) => self
+                .service_urls
+                .get(s)
+                .and_then(|u| u.rsplit(':').next())
+                .map(str::to_string)
+                .ok_or_else(|| format!("`{p}`: service `{s}` has no port")),
             Placeholder::ComposePort {
                 group,
                 service,
                 port,
+                part,
             } => self
                 .published
                 .get(&(group.clone(), service.clone(), *port))
-                .map(|a| format!("http://{a}"))
+                .map(|a| part.of(a))
                 .ok_or_else(|| {
                     format!("`{p}`: port {port} of `{group}/{service}` is not published")
                 }),

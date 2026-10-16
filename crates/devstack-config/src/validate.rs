@@ -54,13 +54,15 @@ impl Check<'_> {
         };
         for p in interpolate::placeholders(&segs) {
             match p {
-                Placeholder::ServiceUrl(name) => match self.stack.services.get(name) {
-                    None => self.err(path, format!("`{p}`: no service `{name}`")),
-                    Some(svc) if svc.port.is_none() => {
-                        self.err(path, format!("`{p}`: service `{name}` has no port"))
+                Placeholder::ServiceUrl(name) | Placeholder::ServicePort(name) => {
+                    match self.stack.services.get(name) {
+                        None => self.err(path, format!("`{p}`: no service `{name}`")),
+                        Some(svc) if svc.port.is_none() => {
+                            self.err(path, format!("`{p}`: service `{name}` has no port"))
+                        }
+                        _ => {}
                     }
-                    _ => {}
-                },
+                }
                 Placeholder::ComposePort { group, service, .. } => {
                     self.compose_service(path, &format!("{p}"), group, service)
                 }

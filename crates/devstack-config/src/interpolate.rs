@@ -22,12 +22,45 @@ pub enum Placeholder {
     LaneSuffix,
     /// `{service.<name>.url}`: URL of that service's main slot.
     ServiceUrl(String),
-    /// `{compose.<group>.<service>.<port>}`: published host address of a container port.
+    /// `{service.<name>.port}`: the port of that service's main slot.
+    ServicePort(String),
+    /// `{compose.<group>.<service>.<port>[.host|.port|.address]}`: where a
+    /// container port is published on this machine: a URL by default, or its
+    /// host, its port, or `host:port` (connection strings want them apart:
+    /// `Server=host,port`, `Host=host;Port=port`).
     ComposePort {
         group: String,
         service: String,
         port: u16,
+        part: AddrPart,
     },
+}
+
+/// Which part of a published address a `{compose.…}` placeholder gives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AddrPart {
+    /// `http://127.0.0.1:15432`
+    #[default]
+    Url,
+    /// `127.0.0.1`
+    Host,
+    /// `15432`
+    Port,
+    /// `127.0.0.1:15432`
+    Address,
+}
+
+impl AddrPart {
+    /// This part of a `host:port` address.
+    pub fn of(self, address: &str) -> String {
+        let (host, port) = address.rsplit_once(':').unwrap_or((address, ""));
+        match self {
+            AddrPart::Url => format!("http://{address}"),
+            AddrPart::Host => host.to_string(),
+            AddrPart::Port => port.to_string(),
+            AddrPart::Address => address.to_string(),
+        }
+    }
 }
 
 impl fmt::Display for Placeholder {
@@ -40,11 +73,21 @@ impl fmt::Display for Placeholder {
             Placeholder::Lane => write!(f, "{{lane}}"),
             Placeholder::LaneSuffix => write!(f, "{{lane_suffix}}"),
             Placeholder::ServiceUrl(s) => write!(f, "{{service.{s}.url}}"),
+            Placeholder::ServicePort(s) => write!(f, "{{service.{s}.port}}"),
             Placeholder::ComposePort {
                 group,
                 service,
                 port,
-            } => write!(f, "{{compose.{group}.{service}.{port}}}"),
+                part,
+            } => {
+                let suffix = match part {
+                    AddrPart::Url => "",
+                    AddrPart::Host => ".host",
+                    AddrPart::Port => ".port",
+                    AddrPart::Address => ".address",
+                };
+                write!(f, "{{compose.{group}.{service}.{port}{suffix}}}")
+            }
         }
     }
 }
@@ -173,11 +216,24 @@ fn placeholder(body: &str) -> Result<Placeholder, InterpError> {
         ["service", name, "url"] if !name.is_empty() => {
             Ok(Placeholder::ServiceUrl(name.to_string()))
         }
-        ["compose", group, service, port] if !group.is_empty() && !service.is_empty() => {
+        ["service", name, "port"] if !name.is_empty() => {
+            Ok(Placeholder::ServicePort(name.to_string()))
+        }
+        ["compose", group, service, port, rest @ ..]
+            if !group.is_empty() && !service.is_empty() && rest.len() <= 1 =>
+        {
+            let part = match rest.first() {
+                None => AddrPart::Url,
+                Some(&"host") => AddrPart::Host,
+                Some(&"port") => AddrPart::Port,
+                Some(&"address") => AddrPart::Address,
+                Some(_) => return Err(unknown()),
+            };
             Ok(Placeholder::ComposePort {
                 group: group.to_string(),
                 service: service.to_string(),
                 port: port.parse().map_err(|_| unknown())?,
+                part,
             })
         }
         _ => Err(unknown()),
@@ -252,9 +308,16 @@ mod tests {
                 Placeholder::Lane => "feat-x".into(),
                 Placeholder::LaneSuffix => "_feat-x".into(),
                 Placeholder::ServiceUrl(s) => format!("http://127.0.0.1:1/{s}"),
-                Placeholder::ComposePort { service, port, .. } => {
-                    format!("http://127.0.0.1:9{port}/{service}")
-                }
+                Placeholder::ServicePort(_) => "1".into(),
+                Placeholder::ComposePort {
+                    service,
+                    port,
+                    part,
+                    ..
+                } => match part {
+                    AddrPart::Url => format!("http://127.0.0.1:9{port}/{service}"),
+                    other => other.of(&format!("127.0.0.1:9{port}")),
+                },
             })
         }
     }
@@ -327,5 +390,22 @@ mod tests {
         let segs = parse("${A:-{service.x.url}}{port}").unwrap();
         let p = placeholders(&segs);
         assert_eq!(p.len(), 2);
+    }
+
+    #[test]
+    fn compose_addresses_come_whole_or_in_parts() {
+        let get = |s: &str| expand(s, &R, &env).unwrap();
+        assert_eq!(get("{compose.app.db.5432}"), "http://127.0.0.1:95432/db");
+        assert_eq!(
+            get("Server={compose.app.db.1433.host},{compose.app.db.1433.port}"),
+            "Server=127.0.0.1,91433"
+        );
+        assert_eq!(get("{compose.app.db.5432.address}"), "127.0.0.1:95432");
+        assert_eq!(get("{service.api.port}"), "1");
+        assert!(parse("{compose.app.db.5432.scheme}").is_err());
+        assert_eq!(
+            placeholder("compose.app.db.5432.port").unwrap().to_string(),
+            "{compose.app.db.5432.port}"
+        );
     }
 }

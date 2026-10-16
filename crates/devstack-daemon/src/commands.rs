@@ -79,6 +79,12 @@ impl Resolve for CommandContext {
                 .get(s)
                 .cloned()
                 .ok_or_else(|| format!("service `{s}` has no URL")),
+            Placeholder::ServicePort(s) => self
+                .urls
+                .get(s)
+                .and_then(|u| u.rsplit(':').next())
+                .map(str::to_string)
+                .ok_or_else(|| format!("service `{s}` has no port")),
             other => Err(format!("`{other}` is not available in a command")),
         }
     }
