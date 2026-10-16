@@ -13,6 +13,9 @@ pub enum Network {
     /// The internet and the node's local network (as a container has it).
     #[default]
     Lan,
+    /// The internet, but no private address range: not the node's local
+    /// network, not the host (iptables rules per lane, `egress`).
+    Internet,
     /// Nothing outside the lane: its containers reach each other only. A
     /// lane that installs packages at start (`prepare`) cannot here.
     None,

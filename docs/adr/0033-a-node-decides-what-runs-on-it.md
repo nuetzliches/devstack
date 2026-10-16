@@ -83,6 +83,8 @@ certificate) and what the container it starts may do.
 memory limit and network per lane), `crates/devstack-node/src/lanerun.rs`
 (`docker run --memory`, `internal` networks for `none`),
 `crates/devstack-node/src/coordinator.rs` (placement and named leases respect
-the policy), `crates/devstack-node/tests/node.rs` (a refused and an admitted
-lease), the pool area in `ui/`. The network mode "the internet, not the local
-network" is still to come.
+the policy), `crates/devstack-node/src/egress.rs` (`internet`: iptables
+chains per lane, set from a helper container on the host's network before
+the lane's containers start), `crates/devstack-node/tests/node.rs` (a refused
+and an admitted lease), the pool area in `ui/`. Not yet: CPU limits per lane
+and placing by node tags (`--on pool:gpu`).

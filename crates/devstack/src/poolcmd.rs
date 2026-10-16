@@ -211,8 +211,9 @@ pub fn members_policy(
     } else {
         let network = match network.as_deref() {
             None | Some("lan") => Network::Lan,
+            Some("internet") => Network::Internet,
             Some("none") => Network::None,
-            Some(o) => bail!("--network {o}: `lan` or `none`"),
+            Some(o) => bail!("--network {o}: `lan`, `internet` or `none`"),
         };
         store.set_policy(
             node,
@@ -248,6 +249,7 @@ pub fn members_policy(
                 .map_or("unlimited".into(), |h| format!("need x {h}")),
             match p.network {
                 Network::Lan => "the internet and the local network",
+                Network::Internet => "the internet, not the local network",
                 Network::None => "only the lane's own containers",
             }
         ),
