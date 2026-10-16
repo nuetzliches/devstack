@@ -69,7 +69,7 @@ function pick(l: LaneView | null) {
         <button
           v-if="current && !current.owns_main && current.active !== false"
           type="button"
-          class="btn btn-sm"
+          class="btn btn-sm btn-stop"
           :title="`Stop ${laneLabel(current)}: its services and containers stop; the worktree stays`"
           data-testid="lane-stop"
           @click="stack.stopLane(current.name)"
@@ -80,7 +80,7 @@ function pick(l: LaneView | null) {
           <button v-if="!stack.running" type="button" class="btn btn-primary btn-sm" :disabled="starting || !stack.entry" data-testid="action-stack-start" @click="stack.startStack()">
             <span v-if="starting" class="spinner" /><Icon v-else name="play" :size="14" /> Start stack
           </button>
-          <button v-else type="button" class="btn btn-sm" :disabled="!!stack.busy.stack" data-testid="action-stack-stop" @click="stack.stopStack()">
+          <button v-else type="button" class="btn btn-sm btn-stop" :disabled="!!stack.busy.stack" data-testid="action-stack-stop" @click="stack.stopStack()">
             <span v-if="stack.busy.stack" class="spinner" /><Icon v-else name="power" :size="14" /> Stop stack
           </button>
         </template>

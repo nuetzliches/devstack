@@ -109,7 +109,7 @@ const kv = computed(() => {
               v-if="a.show"
               type="button"
               class="btn"
-              :class="{ 'btn-primary': a.primary && a.action !== 'promote', 'btn-warn': a.action === 'promote' }"
+              :class="{ 'btn-primary': a.primary && a.action !== 'promote', 'btn-warn': a.action === 'promote', 'btn-stop': a.action === 'stop' }"
               :disabled="!!busy || stack.stale"
               :title="a.title"
               :data-testid="`action-${a.action}`"

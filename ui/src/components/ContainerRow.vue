@@ -86,8 +86,8 @@ const extraUrls = computed(() => (props.container?.urls ?? []).filter((u) => !pr
     >
       <Icon name="pin" :size="14" />
     </button>
-    <StatusPill v-if="look" :tone="look.tone" :label="look.label" :busy="look.busy" :title="container ? `${container.name}: ${container.state}${container.health ? ` (${container.health})` : ''}` : undefined" />
-    <StatusPill v-else tone="neutral" label="Missing" />
+    <StatusPill class="row-pill" v-if="look" :tone="look.tone" :label="look.label" :busy="look.busy" :title="container ? `${container.name}: ${container.state}${container.health ? ` (${container.health})` : ''}` : undefined" />
+    <StatusPill v-else class="row-pill" tone="neutral" label="Missing" />
     <button
       v-if="!running"
       type="button"
@@ -114,7 +114,7 @@ const extraUrls = computed(() => (props.container?.urls ?? []).filter((u) => !pr
       </button>
       <button
         type="button"
-        class="btn btn-ghost btn-sm btn-icon"
+        class="btn btn-ghost btn-sm btn-icon btn-stop"
         :aria-label="`Stop container ${service}`"
         title="Stop container"
         :disabled="busy || stack.stale"
@@ -204,14 +204,12 @@ const extraUrls = computed(() => (props.container?.urls ?? []).filter((u) => !pr
 }
 .pin {
   color: var(--text-faint);
-  opacity: 0;
-}
-.ctr-row:hover .pin,
-.pin:focus-visible,
-.pin.on {
-  opacity: 1;
 }
 .pin.on {
   color: var(--accent);
+}
+.row-pill {
+  min-width: 88px;
+  justify-content: center;
 }
 </style>
