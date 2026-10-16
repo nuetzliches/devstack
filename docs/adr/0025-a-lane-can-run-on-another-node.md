@@ -100,6 +100,16 @@ workers, ADR-0012), and a forward inside the container, since services and the
 daemon listen on its loopback. A lane container needs no port offset; only the
 requester's forwards do.
 
+*Measured with M2b, 2026-10-16*, on a Linux server as the node, driven from a
+Windows machine over the pool's network: the fixture's lane leased, synced (6
+files) and started there in 2.8 s, its API built and healthy 5 s later, the
+lane container at 157 MiB. The daemon there runs in lane mode
+(`DEVSTACK_REMOTE_LANE`: no workers; `DEVSTACK_LISTEN`: its API on the lane's
+network, still behind its token and a loopback `Host`), as the agent's user
+with a home of its own, and the lane publishes no host port on the node
+(`devstack_compose::node_overlay`). An expired lease took container, Compose
+project, network and mirror with it.
+
 ## Alternatives considered
 
 - **Remote builds only, run locally.** Moves CPU, not memory; the memory of a

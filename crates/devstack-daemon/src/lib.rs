@@ -25,6 +25,29 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// Whether this daemon runs a lane on another machine of the pool, in a
+/// node's lane container (`DEVSTACK_REMOTE_LANE`, set by the node agent,
+/// ADR-0025): it never holds the main slot, so it runs no workers.
+pub fn remote_lane() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("DEVSTACK_REMOTE_LANE").is_some_and(|v| !v.is_empty()))
+}
+
+/// Where the API listens: `DEVSTACK_LISTEN` (`address:port`) in a node's lane
+/// container, where the node agent proxies to it from the lane's network;
+/// else a free loopback port. The API still requires its token and a
+/// loopback `Host` (ADR-0019); the agent sends both.
+fn listen_addr() -> Result<Option<std::net::SocketAddr>, String> {
+    match std::env::var("DEVSTACK_LISTEN") {
+        Ok(v) if !v.trim().is_empty() => v
+            .trim()
+            .parse()
+            .map(Some)
+            .map_err(|e| format!("DEVSTACK_LISTEN={v}: {e}")),
+        _ => Ok(None),
+    }
+}
+
 /// Written to `<state>/daemon.json` while the daemon runs: how clients find it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonInfo {
@@ -131,9 +154,11 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     let _watcher = watch::start(sup.clone());
 
     rt.block_on(async move {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .map_err(|e| e.to_string())?;
+        let listener = match listen_addr()? {
+            Some(addr) => tokio::net::TcpListener::bind(addr).await,
+            None => tokio::net::TcpListener::bind(("127.0.0.1", 0)).await,
+        }
+        .map_err(|e| e.to_string())?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         let info = DaemonInfo {
             pid: std::process::id(),

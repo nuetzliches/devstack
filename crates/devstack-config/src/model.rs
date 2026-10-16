@@ -7,6 +7,7 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -45,12 +46,23 @@ pub struct Lanes {
     /// number (1, 2, ...): with 100, `api` on 5000 is 5100 in the first lane.
     #[serde(default = "default_port_step")]
     pub port_step: u16,
+    /// The image a lane runs in on another machine (ADR-0028): a Linux image
+    /// with the stack's toolchains, without devstack. With `dockerfile` too,
+    /// `image` wins.
+    #[serde(default)]
+    pub image: Option<String>,
+    /// A Dockerfile in the repository the node builds the lane image from
+    /// instead (ADR-0028 point 6), relative to the stack file.
+    #[serde(default)]
+    pub dockerfile: Option<PathBuf>,
 }
 
 impl Default for Lanes {
     fn default() -> Self {
         Self {
             port_step: default_port_step(),
+            image: None,
+            dockerfile: None,
         }
     }
 }

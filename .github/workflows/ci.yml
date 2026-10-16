@@ -118,6 +118,29 @@ jobs:
           DEVSTACK_INTEGRATION: '1'
           DEVSTACK_INTEGRATION_COMPOSE: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
 
+  remote-lane:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    # A lane on a node of the pool (ADR-0025): coordinator, node agent and
+    # requester on one Linux runner, the fixture's lane in its .NET SDK image.
+    # The lane container mounts a static build, as a node does.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - name: musl tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+      - name: static build for the lane container
+        run: cargo build --release -p devstack --target x86_64-unknown-linux-musl
+      - name: lane on a node
+        run: cargo test -p devstack --test remote_lane -- --nocapture
+        env:
+          DEVSTACK_INTEGRATION_NODE: '1'
+          DEVSTACK_LANE_BIN: ${{ github.workspace }}/target/x86_64-unknown-linux-musl/release/devstack
+
   ui:
     needs: changes
     if: needs.changes.outputs.ui == 'true'

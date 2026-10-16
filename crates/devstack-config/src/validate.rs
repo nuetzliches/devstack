@@ -125,6 +125,26 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         );
     }
 
+    if let Some(img) = &stack.lanes.image
+        && img.trim().is_empty()
+    {
+        c.err(
+            "lanes.image",
+            "must not be empty: an image name, e.g. `registry/shop-lane:1`",
+        );
+    }
+    if let Some(df) = &stack.lanes.dockerfile
+        && (df.is_absolute()
+            || df
+                .components()
+                .any(|x| matches!(x, std::path::Component::ParentDir)))
+    {
+        c.err(
+            "lanes.dockerfile",
+            "must be a path inside the repository, relative to the stack file",
+        );
+    }
+
     // ---------------------------------------------------------- compose groups
     let mut projects = BTreeMap::new();
     for (g, group) in &stack.compose {

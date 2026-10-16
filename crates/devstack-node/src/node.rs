@@ -11,14 +11,18 @@
 //! - `POST /v1/leases/{id}/sync/missing` `{hashes}`: the blobs it lacks
 //! - `PUT /v1/blobs/{hash}`: one blob, by its BLAKE3 hash
 //! - `POST /v1/leases/{id}/sync/apply` `{files}`: make the mirror exactly this
+//! - `POST /v1/leases/{id}/start` `{stack_file}`, `POST /v1/leases/{id}/stop`,
+//!   `GET /v1/leases/{id}/lane`: the lane itself (`lanerun`)
+//! - `ANY /v1/leases/{id}/api/{*rest}`: the lane daemon's API, streamed
 
 use crate::coordinator::{Lease, LeaseReport, Report};
+use crate::lanerun::{DaemonAddr, LaneRun};
 use crate::member::Local;
 use crate::share::{Amount, Settings, idle_cpus};
 use crate::tls::Peer;
 use axum::extract::{DefaultBodyLimit, Path as UrlPath, State as AxState};
 use axum::http::StatusCode;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{any, delete, get, post, put};
 use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -59,6 +63,9 @@ pub struct NodeLease {
     pub expires: u64,
     /// Unix seconds.
     pub admitted: u64,
+    /// The stack file the lane runs, relative to its root, once started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stack_file: Option<String>,
 }
 
 impl NodeLease {
@@ -131,6 +138,15 @@ struct Inner {
     members: Mutex<(Option<Instant>, HashSet<String>)>,
     /// What the node offers now, before what its leases need.
     offer: Mutex<Amount>,
+    /// A static Linux `devstack` the lane containers mount (ADR-0028 point
+    /// 2); `None` where the agent is not one (a node on Windows cannot run
+    /// lanes yet).
+    bin: Option<PathBuf>,
+    /// The agent's own container, when it runs in one
+    /// (`DEVSTACK_NODE_CONTAINER`): it joins each lane's network.
+    container: Option<String>,
+    /// Where each running lane's daemon is.
+    daemons: Mutex<HashMap<String, DaemonAddr>>,
 }
 
 type Shared = Arc<Inner>;
@@ -179,8 +195,30 @@ impl Inner {
         }
     }
 
-    fn drop_lease(&self, id: &str) {
-        let _ = std::fs::remove_dir_all(self.lanes().join(id));
+    fn run(&self, l: &NodeLease) -> LaneRun {
+        LaneRun {
+            id: l.id.clone(),
+            lane: l.lane.clone(),
+            dir: self.lanes().join(&l.id),
+            stack_file: l
+                .stack_file
+                .clone()
+                .unwrap_or_else(|| "devstack.toml".into()),
+        }
+    }
+
+    /// A lease is over: its lane stops, its mirror goes. Off the caller's
+    /// thread, Docker takes its time.
+    fn drop_lease(self: &Arc<Self>, l: NodeLease) {
+        self.daemons.lock().unwrap().remove(&l.id);
+        let s = self.clone();
+        std::thread::spawn(move || {
+            let run = s.run(&l);
+            if l.stack_file.is_some() {
+                run.stop(s.container.as_deref());
+            }
+            let _ = std::fs::remove_dir_all(&run.dir);
+        });
     }
 }
 
@@ -238,6 +276,10 @@ fn router(s: Shared) -> Router {
         .route("/v1/leases/{id}/renew", post(renew))
         .route("/v1/leases/{id}/sync/missing", post(missing))
         .route("/v1/leases/{id}/sync/apply", post(apply))
+        .route("/v1/leases/{id}/start", post(start))
+        .route("/v1/leases/{id}/stop", post(stop))
+        .route("/v1/leases/{id}/lane", get(lane_state))
+        .route("/v1/leases/{id}/api/{*rest}", any(proxy))
         .route(
             "/v1/blobs/{hash}",
             put(blob).layer(DefaultBodyLimit::max(MAX_BLOB)),
@@ -321,6 +363,7 @@ async fn admit(
         need: lease.need,
         expires: now + TTL.as_secs(),
         admitted: now,
+        stack_file: None,
     };
     std::fs::create_dir_all(s.lanes().join(&l.id).join("src")).map_err(internal)?;
     let mut leases = s.leases.lock().unwrap();
@@ -351,12 +394,15 @@ async fn release(
 ) -> ApiResult<StatusCode> {
     let who = caller(&s, &peer).await?;
     lease_of(&s, &id, &who)?;
-    {
+    let gone = {
         let mut leases = s.leases.lock().unwrap();
-        leases.remove(&id);
+        let l = leases.remove(&id);
         s.save(&leases);
+        l
+    };
+    if let Some(l) = gone {
+        s.drop_lease(l);
     }
-    s.drop_lease(&id);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -530,6 +576,190 @@ pub fn apply_files(
     Ok(out)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Start {
+    /// The stack file, relative to the lane's root.
+    #[serde(default = "default_stack_file")]
+    pub stack_file: String,
+}
+
+fn default_stack_file() -> String {
+    "devstack.toml".into()
+}
+
+/// `GET /v1/leases/{id}/lane`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LaneState {
+    pub started: bool,
+    pub running: bool,
+}
+
+/// Start the lane from its mirror: infrastructure, the lane container, its
+/// daemon (ADR-0025 point 2). Again on a running lane: it starts afresh.
+async fn start(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+    body: Option<Json<Start>>,
+) -> ApiResult<Json<LaneState>> {
+    let who = caller(&s, &peer).await?;
+    let mut l = lease_of(&s, &id, &who)?;
+    let Some(bin) = s.bin.clone() else {
+        return Err(err(
+            StatusCode::CONFLICT,
+            format!("{} cannot run lanes: its agent is no Linux build", s.name),
+        ));
+    };
+    let stack_file = body.map_or_else(default_stack_file, |Json(b)| b.stack_file);
+    if safe_path(&stack_file).is_none() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "the stack file must be inside the lane",
+        ));
+    }
+    l.stack_file = Some(stack_file);
+    {
+        let mut leases = s.leases.lock().unwrap();
+        if let Some(x) = leases.get_mut(&id) {
+            x.stack_file = l.stack_file.clone();
+        }
+        s.save(&leases);
+    }
+    let s2 = s.clone();
+    let addr = tokio::task::spawn_blocking(move || {
+        let run = s2.run(&l);
+        run.start(&bin, s2.container.as_deref())
+    })
+    .await
+    .map_err(internal)?
+    .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
+    s.daemons.lock().unwrap().insert(id, addr);
+    Ok(Json(LaneState {
+        started: true,
+        running: true,
+    }))
+}
+
+async fn stop(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<Json<LaneState>> {
+    let who = caller(&s, &peer).await?;
+    let l = lease_of(&s, &id, &who)?;
+    s.daemons.lock().unwrap().remove(&id);
+    let s2 = s.clone();
+    tokio::task::spawn_blocking(move || s2.run(&l).stop(s2.container.as_deref()))
+        .await
+        .map_err(internal)?;
+    Ok(Json(LaneState {
+        started: true,
+        running: false,
+    }))
+}
+
+async fn lane_state(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<Json<LaneState>> {
+    let who = caller(&s, &peer).await?;
+    let l = lease_of(&s, &id, &who)?;
+    if l.stack_file.is_none() {
+        return Ok(Json(LaneState::default()));
+    }
+    let s2 = s.clone();
+    let running = tokio::task::spawn_blocking(move || s2.run(&l).running())
+        .await
+        .map_err(internal)?;
+    Ok(Json(LaneState {
+        started: true,
+        running,
+    }))
+}
+
+/// Where the lane's daemon is: known since its start, or found again after
+/// the agent restarted while the lane kept running.
+async fn daemon_of(s: &Shared, l: NodeLease) -> ApiResult<DaemonAddr> {
+    if let Some(d) = s.daemons.lock().unwrap().get(&l.id) {
+        return Ok(d.clone());
+    }
+    if l.stack_file.is_none() {
+        return Err(err(StatusCode::CONFLICT, "the lane is not started"));
+    }
+    let s2 = s.clone();
+    let id = l.id.clone();
+    let d = tokio::task::spawn_blocking(move || s2.run(&l).attach(s2.container.as_deref()))
+        .await
+        .map_err(internal)?
+        .map_err(|e| err(StatusCode::CONFLICT, e.to_string()))?;
+    s.daemons.lock().unwrap().insert(id, d.clone());
+    Ok(d)
+}
+
+/// The lane daemon's API (ADR-0025 point 6), passed through as it is:
+/// streams stay streams. The agent adds the daemon's token and the loopback
+/// `Host` its API expects (ADR-0019).
+async fn proxy(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath((id, rest)): UrlPath<(String, String)>,
+    req: axum::extract::Request,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let target = async {
+        let who = caller(&s, &peer).await?;
+        let l = lease_of(&s, &id, &who)?;
+        daemon_of(&s, l).await
+    };
+    let d = match target.await {
+        Ok(d) => d,
+        Err(e) => return e.into_response(),
+    };
+    let query = req
+        .uri()
+        .query()
+        .map(|q| format!("?{q}"))
+        .unwrap_or_default();
+    let path = format!("/{rest}{query}");
+    let (parts, body) = req.into_parts();
+    let tcp = match tokio::net::TcpStream::connect(&d.addr).await {
+        Ok(t) => t,
+        Err(e) => {
+            return err(StatusCode::BAD_GATEWAY, format!("the lane's daemon: {e}")).into_response();
+        }
+    };
+    let (mut send, conn) =
+        match hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(tcp)).await {
+            Ok(x) => x,
+            Err(e) => return err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        };
+    tokio::spawn(conn);
+    let mut out = hyper::Request::builder()
+        .method(parts.method)
+        .uri(path)
+        .header(
+            hyper::header::HOST,
+            format!("127.0.0.1:{}", crate::lanerun::DAEMON_PORT),
+        )
+        .header(hyper::header::AUTHORIZATION, format!("Bearer {}", d.token));
+    for (k, v) in &parts.headers {
+        if k != hyper::header::HOST
+            && k != hyper::header::AUTHORIZATION
+            && k != hyper::header::ORIGIN
+        {
+            out = out.header(k, v);
+        }
+    }
+    let Ok(out) = out.body(body) else {
+        return err(StatusCode::BAD_REQUEST, "bad request").into_response();
+    };
+    match send.send_request(out).await {
+        Ok(res) => res.map(axum::body::Body::new).into_response(),
+        Err(e) => err(StatusCode::BAD_GATEWAY, format!("the lane's daemon: {e}")).into_response(),
+    }
+}
+
 async fn apply(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
@@ -573,23 +803,21 @@ async fn background(s: Shared) {
         *s.offer.lock().unwrap() = offer;
 
         let now = crate::store::now();
-        let expired: Vec<String> = {
+        let expired: Vec<NodeLease> = {
             let mut leases = s.leases.lock().unwrap();
             let gone: Vec<String> = leases
                 .values()
                 .filter(|l| l.expires <= now)
                 .map(|l| l.id.clone())
                 .collect();
-            for id in &gone {
-                leases.remove(id);
-            }
-            if !gone.is_empty() {
+            let out: Vec<NodeLease> = gone.iter().filter_map(|id| leases.remove(id)).collect();
+            if !out.is_empty() {
                 s.save(&leases);
             }
-            gone
+            out
         };
-        for id in expired {
-            s.drop_lease(&id);
+        for l in expired {
+            s.drop_lease(l);
         }
 
         let available = s.available();
@@ -653,6 +881,7 @@ pub async fn serve(
         .into_iter()
         .map(|l| (l.id.clone(), l))
         .collect();
+    let bin = linux_binary(&root);
     let s = Arc::new(Inner {
         local,
         me: m.id,
@@ -663,11 +892,40 @@ pub async fn serve(
         leases: Mutex::new(leases),
         members: Mutex::new((None, HashSet::new())),
         offer: Mutex::new(Amount::default()),
+        bin,
+        container: std::env::var("DEVSTACK_NODE_CONTAINER")
+            .ok()
+            .filter(|c| !c.trim().is_empty()),
+        daemons: Mutex::new(HashMap::new()),
     });
     let bg = tokio::spawn(background(s.clone()));
     crate::tls::serve(tls, listener, router(s), stop).await;
     bg.abort();
     Ok(())
+}
+
+/// A copy of the agent's own binary that lane containers mount, when it is
+/// a Linux build (the release's is static, ADR-0028 point 2). A copy per
+/// version, so a running lane keeps its binary when the agent updates.
+///
+/// `DEVSTACK_LANE_BIN` names another one (a test whose own build is not
+/// static).
+fn linux_binary(root: &Path) -> Option<PathBuf> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let exe = std::env::var_os("DEVSTACK_LANE_BIN")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_exe().ok())?;
+    let dir = root.join("bin");
+    let target = dir.join(format!("devstack-{}", env!("CARGO_PKG_VERSION")));
+    std::fs::create_dir_all(&dir).ok()?;
+    // Always fresh: one version number covers many builds from main.
+    let tmp = dir.join(".devstack.tmp");
+    std::fs::copy(&exe, &tmp).ok()?;
+    std::fs::rename(&tmp, &target).ok()?;
+    Some(target)
 }
 
 /// Run the node agent until Ctrl-C (or SIGTERM).
