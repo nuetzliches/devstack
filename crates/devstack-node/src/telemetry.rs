@@ -39,7 +39,13 @@ impl Collector {
                 .ok()
                 .and_then(|b| serde_json::from_slice(&b).ok())?,
         };
-        (!c.endpoint.trim().is_empty()).then_some(c)
+        // A secret store or an env file may add a line break; a header
+        // value with one is refused, and telemetry would stop silently.
+        let c = Self {
+            endpoint: c.endpoint.trim().to_string(),
+            token: c.token.trim().to_string(),
+        };
+        (!c.endpoint.is_empty()).then_some(c)
     }
 
     /// Pass an OTLP/JSON body on; `kind` is `logs` or `metrics`. Blocking.
@@ -228,6 +234,24 @@ pub fn metrics_body(service: &str, gauges: &[Gauge], durations: &[Durations]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_line_break_around_the_token_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("telemetry.json"),
+            r#"{"endpoint": " http://collector:4318\n", "token": "abc\r\n"}"#,
+        )
+        .unwrap();
+        if std::env::var_os("DEVSTACK_TELEMETRY_ENDPOINT").is_some() {
+            return;
+        }
+        let c = Collector::of(dir.path()).unwrap();
+        assert_eq!(
+            (c.endpoint.as_str(), c.token.as_str()),
+            ("http://collector:4318", "abc")
+        );
+    }
 
     #[test]
     fn the_coordinator_sets_who_sent_it() {
