@@ -1,0 +1,23 @@
+# Frozen for 0.9.0: a stack whose lanes can run on another machine of the
+# pool (`[lanes] image` or `dockerfile`, ADR-0028).
+version = 1
+
+[stack]
+name = "shop"
+requires = "0.9.0"
+
+[lanes]
+port_step = 100
+dockerfile = "dev/lane.Dockerfile"
+
+[compose.app]
+project = "shop"
+files = ["deploy/compose.yml"]
+services = ["db"]
+
+[services.api]
+build = "dotnet build src/Api/Api.csproj -c Debug"
+output = "src/Api/bin/Debug/net10.0"
+run = "dotnet {artifact}/Api.dll"
+port = 5000
+after = ["compose.app.db"]
