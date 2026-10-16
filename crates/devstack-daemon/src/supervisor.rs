@@ -2289,6 +2289,36 @@ The running instance was left as it was."
         groups.next().is_none().then_some(first)
     }
 
+    /// `start`, `stop` or `restart` of one container from the dashboard or
+    /// the CLI. A lane acts on its own containers only (ADR-0030).
+    pub fn container_action(&self, group: &str, service: &str, action: &str) -> Result<(), String> {
+        if self.is_shared(group, service) {
+            return Err(format!(
+                "`{service}` is shared: the main working tree runs it (`shared` in the stack file)"
+            ));
+        }
+        let mut g = self.compose_group(group);
+        let result = match action {
+            "start" => {
+                g.services = vec![service.to_string()];
+                self.docker.up(&g, Duration::from_secs(300))
+            }
+            "stop" => self.docker.stop(&g, service),
+            "restart" => self.docker.restart(&g, service),
+            _ => return Err(format!("unknown action `{action}`")),
+        };
+        let message = match &result {
+            Ok(()) => format!("{service}: {action} done"),
+            Err(e) => format!("{service}: {action} failed: {e}"),
+        };
+        self.emit(EventBody::Infra {
+            group: group.into(),
+            message,
+        });
+        self.refresh_containers();
+        result.map_err(|e| e.to_string())
+    }
+
     pub(crate) fn restart_container(&self, group: &str, service: &str) {
         if self.is_shared(group, service) {
             return; // the main tree's container (ADR-0030)

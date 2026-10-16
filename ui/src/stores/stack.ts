@@ -428,15 +428,21 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
-  async function restartContainer(group: string, service: string) {
+  /** Start, stop or restart one container of the stack shown (a lane: its own). */
+  async function containerAction(group: string, service: string, action: 'start' | 'stop' | 'restart') {
     if (!id.value) return;
     const key = `ctr:${group}/${service}`;
-    busy.value[key] = 'restart';
+    busy.value[key] = action;
+    const label = { start: 'Start', stop: 'Stop', restart: 'Restart' }[action];
     try {
-      await act({ label: `Restart ${service}`, path: paths.api(id.value, v1.infraRestart(group, service)), success: `${service}: restart requested` });
+      await act({ label: `${label} ${service}`, path: paths.api(id.value, v1.infraAction(group, service, action)), success: `${service}: ${action} done` });
     } finally {
       delete busy.value[key];
     }
+  }
+
+  function restartContainer(group: string, service: string) {
+    return containerAction(group, service, 'restart');
   }
 
   async function startStack() {
@@ -542,6 +548,7 @@ export const useStack = defineStore('stack', () => {
     serviceAction,
     groupAction,
     restartContainer,
+    containerAction,
     startStack,
     stopStack,
     restartStack,

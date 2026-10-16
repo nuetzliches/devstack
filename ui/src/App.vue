@@ -7,6 +7,7 @@ import Toasts from '@/components/Toasts.vue';
 import GlobalDialogs from '@/components/GlobalDialogs.vue';
 import CommandPalette from '@/components/CommandPalette.vue';
 import Icon from '@/components/icons/Icon.vue';
+import Sidebar from '@/components/Sidebar.vue';
 import UnpairedView from '@/views/UnpairedView.vue';
 
 const hub = useHub();
@@ -63,12 +64,15 @@ async function startHub() {
         <span class="retry"><span class="spinner" aria-hidden="true" /> retrying</span>
       </div>
     </div>
-    <main id="main" tabindex="-1">
-      <div v-if="booting" class="boot" aria-busy="true">
-        <span class="spinner" /> Connecting to the devstack hub…
-      </div>
-      <RouterView v-else />
-    </main>
+    <div class="shell">
+      <Sidebar v-if="!booting" class="side" />
+      <main id="main" tabindex="-1">
+        <div v-if="booting" class="boot" aria-busy="true">
+          <span class="spinner" /> Connecting to the devstack hub…
+        </div>
+        <RouterView v-else />
+      </main>
+    </div>
     <Toasts />
     <GlobalDialogs />
     <CommandPalette />
@@ -91,6 +95,27 @@ async function startHub() {
 }
 main {
   outline: none;
+  min-width: 0;
+}
+/* Stacks and worktrees on the left on a wide screen; the stack switcher in
+   the top bar does that job on a narrow one. */
+.shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.side {
+  display: none;
+}
+@media (min-width: 1000px) {
+  .shell {
+    grid-template-columns: 248px minmax(0, 1fr);
+  }
+  .side {
+    display: flex;
+    position: sticky;
+    top: var(--topbar-h);
+    height: calc(100vh - var(--topbar-h));
+  }
 }
 .hub-banner {
   background: var(--danger-soft);

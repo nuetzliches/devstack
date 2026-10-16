@@ -86,7 +86,7 @@ export const v1 = {
   keptLog: (service: string, file: string, tail = 2000) => `/v1/services/${enc(service)}/logs?file=${enc(file)}&tail=${tail}`,
   serviceAction: (service: string, action: ServiceAction) => `/v1/services/${enc(service)}/${action}`,
   groupAction: (group: string, action: GroupAction) => `/v1/groups/${enc(group)}/${action}`,
-  infraRestart: (group: string, service: string) => `/v1/infra/${enc(group)}/${enc(service)}/restart`,
+  infraAction: (group: string, service: string, action: 'start' | 'stop' | 'restart') => `/v1/infra/${enc(group)}/${enc(service)}/${action}`,
   infraLogs: (group: string, service: string, tail = 1000) => `/v1/infra/${enc(group)}/${enc(service)}/logs?tail=${tail}`,
   command: (name: string) => `/v1/commands/${enc(name)}`,
   commandRuns: (name: string) => `/v1/commands/${enc(name)}/runs`,

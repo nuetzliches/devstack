@@ -59,6 +59,18 @@ const to = computed(() => ({ name: 'service', params: { stack: stack.id ?? '', n
         >
           <span v-if="busy" class="spinner" /><Icon v-else name="restart" />
         </button>
+        <button
+          v-if="!isStopped"
+          type="button"
+          class="btn btn-ghost btn-sm btn-icon"
+          :aria-label="`Stop ${service.name}`"
+          title="Stop"
+          :disabled="!!busy || stack.stale"
+          data-testid="action-stop"
+          @click="stack.serviceAction(service.name, 'stop')"
+        >
+          <Icon name="stop" />
+        </button>
       </div>
     </div>
     <p v-if="look.detail && !cand" class="detail">{{ look.detail }}</p>

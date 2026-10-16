@@ -13,6 +13,7 @@ export const router = createRouter({
         { path: '', name: 'overview', component: () => import('./views/OverviewView.vue'), meta: { title: 'Overview' } },
         { path: 'services/:name', name: 'service', component: () => import('./views/ServiceDetailView.vue'), meta: { title: 'Service' } },
         { path: 'infra', name: 'infra', component: () => import('./views/InfraView.vue'), meta: { title: 'Infrastructure' } },
+        { path: 'infra/:group/:service', name: 'container', component: () => import('./views/ContainerDetailView.vue'), meta: { title: 'Container' } },
         { path: 'commands', name: 'commands', component: () => import('./views/CommandsView.vue'), meta: { title: 'Commands' } },
         { path: 'usage', name: 'usage', component: () => import('./views/UsageView.vue'), meta: { title: 'Usage' } },
         { path: 'events', name: 'events', component: () => import('./views/EventsView.vue'), meta: { title: 'Events' } },
