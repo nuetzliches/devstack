@@ -205,6 +205,7 @@ impl Inner {
                 .clone()
                 .unwrap_or_else(|| "devstack.toml".into()),
             display_root: None,
+            port_offset: 0,
         }
     }
 
@@ -586,6 +587,10 @@ pub struct Start {
     /// lane's logs point there (ADR-0029 point 5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_root: Option<String>,
+    /// What the lane's ports are moved by on its requester's machine: it
+    /// runs on those ports here too.
+    #[serde(default)]
+    pub port_offset: u16,
 }
 
 fn default_stack_file() -> String {
@@ -615,9 +620,9 @@ async fn start(
             format!("{} cannot run lanes: its agent is no Linux build", s.name),
         ));
     };
-    let (stack_file, display_root) = body.map_or_else(
-        || (default_stack_file(), None),
-        |Json(b)| (b.stack_file, b.display_root),
+    let (stack_file, display_root, port_offset) = body.map_or_else(
+        || (default_stack_file(), None, 0),
+        |Json(b)| (b.stack_file, b.display_root, b.port_offset),
     );
     if safe_path(&stack_file).is_none() {
         return Err(err(
@@ -637,6 +642,7 @@ async fn start(
     let addr = tokio::task::spawn_blocking(move || {
         let mut run = s2.run(&l);
         run.display_root = display_root;
+        run.port_offset = port_offset;
         run.start(&bin, s2.container.as_deref())
     })
     .await

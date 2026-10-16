@@ -95,6 +95,9 @@ pub struct RemoteSpec<'a> {
     /// listens on the stack's ports there, here on them moved by its offset,
     /// as a local lane does (ADR-0029 point 4).
     pub ports: Vec<(u16, u16)>,
+    /// What the lane's ports are moved by here; it runs on those ports on
+    /// the node too.
+    pub port_offset: u16,
     /// Listen on them at once; else when [`RemoteLane::start_forwarding`]
     /// says so (a lane moving here, ADR-0025 point 10).
     pub forward: bool,
@@ -112,6 +115,7 @@ impl RemoteLane {
             need,
             scratch,
             ports,
+            port_offset,
             forward,
         } = spec;
         let local = local_member();
@@ -137,7 +141,9 @@ impl RemoteLane {
             // Paths in its logs point into the worktree, `/` as compilers
             // on the node write them.
             let display = worktree.to_string_lossy().replace('\\', "/");
-            client.start(&offer.id, stack_file, Some(&display)).await
+            client
+                .start(&offer.id, stack_file, Some(&display), port_offset)
+                .await
         });
         if let Err(e) = started {
             let _ = rt.block_on(client.release(&offer.id));
