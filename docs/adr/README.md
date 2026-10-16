@@ -73,3 +73,5 @@ before code exists it names where it *will* live.
 | [0033](0033-a-node-decides-what-runs-on-it.md) | A node decides who runs lanes on it, and what a lane there may do | Accepted |
 | [0034](0034-a-machine-can-belong-to-several-pools.md) | A machine can belong to several pools; pools do not trust each other | Accepted |
 | [0035](0035-lanes-can-be-shared-with-the-pool.md) | The pool sees the lanes its members share, and can use them | Accepted |
+| [0036](0036-the-pool-shows-its-capacity-over-time.md) | The pool shows its capacity, GPUs included, and how it changed | Proposed |
+| [0037](0037-telemetry-goes-to-the-pools-collector-with-consent.md) | Telemetry goes to the pool's collector, if the pool has one and the member agrees | Proposed |
