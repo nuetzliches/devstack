@@ -3,6 +3,7 @@ import { createPinia } from 'pinia';
 import App from './App.vue';
 import { router } from './router';
 import { initTransport, isMock } from './api';
+import { installTooltips } from './lib/tooltip';
 import './styles/tokens.css';
 import './styles/base.css';
 import './styles/components.css';
@@ -13,6 +14,7 @@ async function start() {
   app.use(createPinia());
   app.use(router);
   app.mount('#app');
+  installTooltips();
 
   // The service worker caches the app shell so the page opens without the hub.
   // Not in mock builds served by the dev server.

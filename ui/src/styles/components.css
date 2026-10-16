@@ -452,3 +452,42 @@ select.input {
   color: var(--accent-text);
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
+
+/* Tooltips for every `title` (lib/tooltip.ts), instead of the browser's. */
+.app-tooltip {
+  position: absolute;
+  z-index: 1000;
+  max-width: min(420px, calc(100vw - 12px));
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: var(--text);
+  color: var(--bg-elev);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  box-shadow: var(--shadow-lg);
+  pointer-events: none;
+}
+
+/* An error in one line: the rest in its tooltip, a button copies all of it. */
+.err-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12.5px;
+}
+.err-line .txt {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.err-line.danger {
+  color: var(--danger-text);
+}
+.err-line.warn {
+  color: var(--warn-text);
+}

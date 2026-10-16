@@ -6,6 +6,7 @@ import { ago, bytes, dateTime, percent, serviceUrl, shortBuild, useNow } from '@
 import { kindIcon, kindLabel, statusLook } from '@/lib/status';
 import { useStack } from '@/stores/stack';
 import StatusPill from '@/components/StatusPill.vue';
+import ErrorLine from '@/components/ErrorLine.vue';
 import CandidatePanel from '@/components/CandidatePanel.vue';
 import LogView from '@/components/LogView.vue';
 import BuildLogModal from '@/components/BuildLogModal.vue';
@@ -117,7 +118,7 @@ const kv = computed(() => {
 
       <div v-if="look.detail" class="banner warn">
         <Icon name="alert" :size="18" />
-        <span class="grow">{{ look.detail }}</span>
+        <ErrorLine class="grow" :text="look.detail" :tone="look.tone === 'danger' ? 'danger' : 'warn'" />
       </div>
 
       <CandidatePanel v-if="svc.candidate" class="stale-dim" :service="svc" @build-log="showBuildLog = true" />
