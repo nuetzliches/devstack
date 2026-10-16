@@ -93,7 +93,9 @@ export function containerLook(c: ContainerView): StatusLook {
     return { label: 'Running', tone: 'ok', busy: false, detail: null };
   }
   if (state === 'restarting' || state === 'created') return { label: cap(state), tone: 'accent', busy: true, detail: null };
-  if (state === 'exited' || state === 'dead') return { label: cap(state), tone: 'danger', busy: false, detail: null };
+  // 0, 130, 137, 143: stopped (by devstack, Docker or a signal), not failed.
+  if (state === 'exited' && [0, 130, 137, 143].includes(c.exit_code ?? -1)) return { label: 'Stopped', tone: 'neutral', busy: false, detail: null };
+  if (state === 'exited' || state === 'dead') return { label: cap(state), tone: 'danger', busy: false, detail: c.exit_code ? `exit code ${c.exit_code}` : null };
   if (state === 'paused') return { label: 'Paused', tone: 'warn', busy: false, detail: null };
   return { label: cap(state || 'unknown'), tone: 'neutral', busy: false, detail: null };
 }

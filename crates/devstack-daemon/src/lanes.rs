@@ -314,6 +314,14 @@ impl Lanes {
         let Some(trees) = worktrees(&self.main.repo) else {
             return;
         };
+        if let Some(main) = trees.iter().find(|w| same_tree(&w.path, &self.main.repo)) {
+            self.main.set_branch(main.branch.clone());
+        }
+        for l in self.map.lock().unwrap().values() {
+            if let Some(w) = trees.iter().find(|w| same_tree(&w.path, &l.entry.path)) {
+                l.sup.set_branch(w.branch.clone());
+            }
+        }
         let trees: Vec<Worktree> = trees
             .into_iter()
             .filter(|w| !same_tree(&w.path, &self.main.repo))

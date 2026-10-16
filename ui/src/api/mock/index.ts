@@ -540,6 +540,12 @@ export class MockTransport implements Transport {
       const off = s.subscribeLogs(decodeURIComponent(mm[1]), tail, listener<LogStreamEvent>());
       return { stop: off };
     }
+    // A container's log: the mock replays a service's lines under its name.
+    mm = /^\/v1\/infra\/[^/]+\/([^/]+)\/logs\/stream$/.exec(restInLane);
+    if (mm) {
+      const off = s.subscribeLogs('api', Number(url.searchParams.get('tail') ?? '200'), listener<LogStreamEvent>());
+      return { stop: off };
+    }
     mm = /^\/v1\/runs\/(\d+)\/log\/stream$/.exec(restInLane);
     if (mm) {
       const off = s.subscribeRunLog(Number(mm[1]), listener<RunLogEvent>());

@@ -108,6 +108,8 @@ export type ContainerView = {
   name: string;
   state: string;
   health: string;
+  /** Exit code once it is not running; 0/130/137/143 is a stop. Older daemons omit it. */
+  exit_code?: number;
   ports: string[];
   /** Links for the dashboard (stack file `urls`, or http://localhost:<port> per published port). Older daemons omit it. */
   urls?: string[];
@@ -127,6 +129,8 @@ export type StackView = {
   infra: InfraView[];
   groups: GroupView[];
   commands: CommandView[];
+  /** The branch checked out in this working tree. Older daemons omit it. */
+  branch?: string | null;
   /** The stack file changed since the daemon started; applies with the next start. Older daemons omit it. */
   config_changed?: boolean;
 };

@@ -127,8 +127,6 @@ const mismatch = computed(() => {
   border-bottom: 1px solid var(--border);
 }
 .topbar-inner {
-  max-width: 1280px;
-  margin: 0 auto;
   height: var(--topbar-h);
   display: flex;
   align-items: center;

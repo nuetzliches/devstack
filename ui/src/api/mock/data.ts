@@ -126,7 +126,7 @@ export function shopSeed(now: number): MockStackSeed {
       daemon: { pid: 21544, port: 52711, started: now - 26 * MIN, version: '0.2.0' },
       last_seen: now,
     },
-    view: { name: 'shop', repo, version: '0.2.0', services, infra, groups, commands },
+    view: { name: 'shop', repo, branch: 'main', version: '0.2.0', services, infra, groups, commands },
     previous,
   };
 }

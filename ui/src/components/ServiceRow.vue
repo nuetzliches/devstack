@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import type { ServiceView } from '@/api/types';
 import { ago, serviceUrl, shortBuild, useNow } from '@/lib/format';
 import { candidateLook, candidateSummary, kindIcon, kindLabel, statusLook } from '@/lib/status';
@@ -18,10 +19,18 @@ const candLook = computed(() => (cand.value ? candidateLook(cand.value) : null))
 const busy = computed(() => stack.busy[`svc:${props.service.name}`]);
 const isStopped = computed(() => ['stopped', 'completed', 'exited', 'failed'].includes(props.service.status.state));
 const to = computed(() => ({ name: 'service', params: { stack: stack.id ?? '', name: props.service.name } }));
+const route = useRoute();
+const router = useRouter();
+const selected = computed(() => route.name === 'service' && route.params.name === props.service.name);
+/** A click anywhere on the row but its buttons and links opens the detail. */
+function open(e: MouseEvent) {
+  if ((e.target as Element).closest('button, a, input, label')) return;
+  void router.push(to.value);
+}
 </script>
 
 <template>
-  <li class="svc-row" :class="{ 'has-cand': !!cand }" data-testid="service-row" :data-service="service.name" :data-state="service.status.state">
+  <li class="svc-row" :class="{ 'has-cand': !!cand, selected }" :aria-current="selected ? 'true' : undefined" @click="open" data-testid="service-row" :data-service="service.name" :data-state="service.status.state">
     <div class="main">
       <span class="kind" :title="kindLabel(service)"><Icon :name="kindIcon(service)" :size="15" /></span>
       <div class="grow name-col">
@@ -95,6 +104,16 @@ const to = computed(() => ({ name: 'service', params: { stack: stack.id ?? '', n
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.svc-row {
+  cursor: pointer;
+}
+.svc-row:hover {
+  background: var(--surface-hover);
+}
+.svc-row.selected {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 .svc-row:last-child {
   border-bottom: 0;

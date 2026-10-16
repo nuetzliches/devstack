@@ -1,0 +1,18 @@
+# devstack, run with devstack: the dashboard of this working tree as a dev
+# server, against the mock hub (ui/src/api/mock), with hot module replacement.
+# `devstack up` here, then open `dashboard` in the dashboard (or :5199).
+# A worktree of this repository is a lane and gets its own port (+100, ...).
+version = 1
+
+[stack]
+name = "devstack"
+
+[services.dashboard]
+kind = "devserver"
+cwd = "ui"
+run = "npx vite --mode mock --host 127.0.0.1 --port {port} --strictPort"
+port = 5199
+health = { http = "/", timeout = "90s" }
+restart_on = ["ui/vite.config.ts", "ui/package.json"]
+# A lane's copy has no node_modules (ignored files are not copied).
+prepare = { run = "npm ci", inputs = ["ui/package-lock.json"] }

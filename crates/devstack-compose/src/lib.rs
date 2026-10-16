@@ -343,6 +343,39 @@ impl Docker {
         self.run(&g.dir, &a).map(|_| ())
     }
 
+    /// `docker compose logs --follow` of one container: the last `tail`
+    /// lines, then every new one, timestamped, on the child's stdout and
+    /// stderr (the container's two streams). The caller reads and ends it.
+    pub fn follow_logs(
+        &self,
+        g: &Group,
+        service: &str,
+        tail: usize,
+    ) -> Result<std::process::Child> {
+        let mut a = g.base_args();
+        a.extend([
+            "logs".into(),
+            "--follow".into(),
+            "--no-color".into(),
+            "--no-log-prefix".into(),
+            "--timestamps".into(),
+            "--tail".into(),
+            tail.to_string().into(),
+            service.into(),
+        ]);
+        Command::new(&self.program)
+            .args(&a)
+            .current_dir(&g.dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|source| ComposeError::Spawn {
+                program: self.program.clone(),
+                source,
+            })
+    }
+
     /// Stop one container; it stays (and starts again with `up`).
     pub fn stop(&self, g: &Group, service: &str) -> Result<()> {
         let mut a = g.base_args();
