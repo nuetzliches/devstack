@@ -249,6 +249,18 @@ impl NodeClient {
     /// Make the node's mirror of `lease` hold exactly `files` (paths relative
     /// to `root`, `/`-separated), uploading only the content it lacks.
     pub async fn sync(&self, lease: &str, root: &Path, files: &[String]) -> Result<SyncStats> {
+        self.sync_with(lease, root, files, &|_, _, _| {}).await
+    }
+
+    /// [`NodeClient::sync`], telling `uploaded` after each blob: how many of
+    /// how many the node lacked, and the bytes so far.
+    pub async fn sync_with(
+        &self,
+        lease: &str,
+        root: &Path,
+        files: &[String],
+        uploaded: &(dyn Fn(usize, usize, u64) + Send + Sync),
+    ) -> Result<SyncStats> {
         let root = root.to_path_buf();
         let list = files.to_vec();
         let entries: Vec<(FileEntry, std::path::PathBuf, u64)> =
@@ -290,6 +302,7 @@ impl NodeClient {
             .await?;
             stats.uploaded += 1;
             stats.bytes += size;
+            uploaded(stats.uploaded, missing.hashes.len(), stats.bytes);
         }
         let applied: Applied = self
             .json(

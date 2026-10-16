@@ -101,6 +101,9 @@ pub struct RemoteSpec<'a> {
     /// Listen on them at once; else when [`RemoteLane::start_forwarding`]
     /// says so (a lane moving here, ADR-0025 point 10).
     pub forward: bool,
+    /// Hears each step: its number (1 lease, 2 sync, 3 start on the node)
+    /// and what it does now.
+    pub step: &'a (dyn Fn(u8, &str) + Send + Sync),
 }
 
 impl RemoteLane {
@@ -117,7 +120,9 @@ impl RemoteLane {
             ports,
             port_offset,
             forward,
+            step,
         } = spec;
+        step(1, &format!("lease on {on}"));
         let local = local_member();
         let offer = local
             .lease(&LeaseRequest {
@@ -132,7 +137,15 @@ impl RemoteLane {
         let t0 = Instant::now();
         let started = rt.block_on(async {
             client.admit(&offer).await?;
-            let s = client.sync(&offer.id, worktree, &list).await?;
+            step(2, &format!("sync: comparing {} files", list.len()));
+            let s = client
+                .sync_with(&offer.id, worktree, &list, &|n, of, bytes| {
+                    step(
+                        2,
+                        &format!("sync: {n} of {of} changed files sent ({} KiB)", bytes / 1024),
+                    );
+                })
+                .await?;
             crate::diag::info(
                 "remote_lane_synced",
                 serde_json::json!({ "lane": name, "node": offer.node.name, "files": s.files,
@@ -143,6 +156,7 @@ impl RemoteLane {
             let display = worktree.to_string_lossy().replace('\\', "/");
             let lane = name.to_string();
             let node = offer.node.name.clone();
+            step(3, &format!("on {node}: starting"));
             client
                 .start(
                     &offer.id,
@@ -151,6 +165,7 @@ impl RemoteLane {
                     port_offset,
                     Duration::from_secs(1800),
                     &move |p| {
+                        step(3, &format!("on {node}: {p}"));
                         crate::diag::info(
                             "remote_lane_starting",
                             serde_json::json!({ "lane": lane, "node": node, "phase": p }),
@@ -327,7 +342,13 @@ impl RemoteLane {
 
     /// Start the lane's services (`POST /v1/up` there) and wait until every
     /// one of `expected` is ready, or one failed, or `within` ran out.
-    pub async fn up_and_wait(&self, expected: &[String], within: Duration) -> Result<(), String> {
+    /// `ready` hears how many of `expected` are ready so far.
+    pub async fn up_and_wait(
+        &self,
+        expected: &[String],
+        within: Duration,
+        ready: &(dyn Fn(usize, usize) + Send + Sync),
+    ) -> Result<(), String> {
         let (st, body) = self
             .client
             .api(&self.lease, "POST", "/v1/up", None)
@@ -341,9 +362,11 @@ impl RemoteLane {
             tokio::time::sleep(Duration::from_secs(2)).await;
             if let Ok((200, body)) = self.client.api(&self.lease, "GET", "/v1/stack", None).await
                 && let Ok(v) = serde_json::from_str::<serde_json::Value>(&body)
-                && let Some(done) = readiness(&v, expected)
             {
-                return done;
+                ready(ready_count(&v, expected), expected.len());
+                if let Some(done) = readiness(&v, expected) {
+                    return done;
+                }
             }
             if Instant::now() > until {
                 return Err(format!("not ready within {} s", within.as_secs()));
@@ -444,6 +467,21 @@ impl RemoteLane {
             serde_json::json!({ "lane": self.name, "node": self.node.name, "lease": self.lease }),
         );
     }
+}
+
+/// How many of `expected` are ready in a stack view.
+pub fn ready_count(view: &serde_json::Value, expected: &[String]) -> usize {
+    view["services"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|s| {
+            expected
+                .iter()
+                .any(|e| Some(e.as_str()) == s["name"].as_str())
+                && matches!(s["status"]["state"].as_str(), Some("healthy" | "running"))
+        })
+        .count()
 }
 
 /// Whether the services in `expected` are all ready in a stack view

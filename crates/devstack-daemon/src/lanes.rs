@@ -71,7 +71,34 @@ pub struct LaneView {
     /// What went wrong with a lane on a node lately (a sync, a renewal).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_error: Option<String>,
+    /// A start on a node or a move under way, or one that failed lately.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub moving: Option<LaneMove>,
 }
+
+/// A lane being started on a node (`up --on`) or moved (`lane move`), as the
+/// clients show it: step `step` of `steps`, what it does, or why it failed.
+#[derive(Debug, Clone, Serialize)]
+pub struct LaneMove {
+    /// `start` or `move`.
+    pub kind: &'static str,
+    /// The node, or `local`.
+    pub to: String,
+    pub step: u8,
+    pub steps: u8,
+    pub what: String,
+    /// Unix ms when it began.
+    pub since: u128,
+    /// Why it stopped; shown for a while, then gone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Unix ms when it failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_at: Option<u128>,
+}
+
+/// How long a failed start or move stays shown.
+const MOVE_ERROR_FOR_MS: u128 = 10 * 60 * 1000;
 
 /// A started lane.
 pub struct Lane {
@@ -115,6 +142,8 @@ pub struct Lanes {
     map: Mutex<BTreeMap<String, Arc<Lane>>>,
     /// The started lanes that run on a node of the pool.
     remote: Mutex<BTreeMap<String, Arc<RemoteLane>>>,
+    /// Starts on a node and moves under way, or failed lately.
+    moves: Mutex<BTreeMap<String, LaneMove>>,
     /// Lanes being started right now, so one is not started twice.
     pending: Mutex<BTreeSet<String>>,
     /// One main-slot hand-over at a time, and what it took from the main tree.
@@ -284,6 +313,7 @@ impl Lanes {
             known: Mutex::new(BTreeMap::new()),
             map: Mutex::new(BTreeMap::new()),
             remote: Mutex::new(BTreeMap::new()),
+            moves: Mutex::new(BTreeMap::new()),
             pending: Mutex::new(BTreeSet::new()),
             handover: Mutex::new(Handover::default()),
             syncing: Mutex::new(()),
@@ -633,6 +663,15 @@ impl Lanes {
     fn views(&self) -> Vec<LaneView> {
         let map = self.map.lock().unwrap();
         let remote = self.remote.lock().unwrap();
+        let now = crate::state::now_ms();
+        let moves = {
+            let mut m = self.moves.lock().unwrap();
+            m.retain(|_, x| {
+                x.failed_at
+                    .is_none_or(|t| now.saturating_sub(t) < MOVE_ERROR_FOR_MS)
+            });
+            m.clone()
+        };
         let services = self.main.stack.services.len();
         self.known
             .lock()
@@ -663,6 +702,7 @@ impl Lanes {
                     services,
                     node: on_node.map(|r| r.node.name.clone()),
                     node_error: node_state.and_then(|st| st.error),
+                    moving: moves.get(&k.entry.name).cloned(),
                 }
             })
             .collect()
@@ -966,6 +1006,63 @@ impl Lanes {
         }
     }
 
+    /// What a start or move of `name` reports its steps to: the lane's
+    /// `moving`, announced to every client at each change.
+    fn stepper<'a>(
+        &'a self,
+        name: &str,
+        kind: &'static str,
+        to: &str,
+        steps: u8,
+    ) -> impl Fn(u8, &str) + Send + Sync + 'a {
+        let since = crate::state::now_ms();
+        self.moves.lock().unwrap().insert(
+            name.to_string(),
+            LaneMove {
+                kind,
+                to: to.to_string(),
+                step: 0,
+                steps,
+                what: "preparing".into(),
+                since,
+                error: None,
+                failed_at: None,
+            },
+        );
+        self.announce();
+        let name = name.to_string();
+        move |step: u8, what: &str| {
+            if let Some(m) = self.moves.lock().unwrap().get_mut(&name) {
+                if m.step == step && m.what == what {
+                    return;
+                }
+                m.step = step;
+                m.what = what.to_string();
+            }
+            self.announce();
+        }
+    }
+
+    /// The start or move of `name` is over: gone when it worked, kept with
+    /// its reason for a while when it did not.
+    fn finish(&self, name: &str, error: Option<&String>) {
+        {
+            let mut moves = self.moves.lock().unwrap();
+            match error {
+                None => {
+                    moves.remove(name);
+                }
+                Some(e) => {
+                    if let Some(m) = moves.get_mut(name) {
+                        m.error = Some(e.clone());
+                        m.failed_at = Some(crate::state::now_ms());
+                    }
+                }
+            }
+        }
+        self.announce();
+    }
+
     /// Release a lane on a node, on a thread of its own: the call blocks on
     /// the node, and this may run on the runtime's.
     fn stop_remote(&self, r: Arc<RemoteLane>) {
@@ -1018,7 +1115,10 @@ impl Lanes {
             .unwrap()
             .retain(|n, r| n != &name || !r.state().ended);
         if let Some(r) = self.remote.lock().unwrap().get(&name) {
-            return if r.node.name.eq_ignore_ascii_case(on) || r.node.id.starts_with(on) {
+            return if on.eq_ignore_ascii_case("pool")
+                || r.node.name.eq_ignore_ascii_case(on)
+                || r.node.id.starts_with(on)
+            {
                 Ok(name)
             } else {
                 Err(format!(
@@ -1030,7 +1130,9 @@ impl Lanes {
         if !self.pending.lock().unwrap().insert(name.clone()) {
             return Err(format!("lane `{name}` is being started"));
         }
-        let result = self.start_remote(&entry, on, need, true);
+        let step = self.stepper(&name, "start", on, 3);
+        let result = self.start_remote(&entry, on, need, true, &step);
+        self.finish(&name, result.as_ref().err());
         self.pending.lock().unwrap().remove(&name);
         let lane = result?;
         self.remote.lock().unwrap().insert(name.clone(), lane);
@@ -1046,6 +1148,7 @@ impl Lanes {
         on: &str,
         need: devstack_node::share::Amount,
         forward: bool,
+        step: &(dyn Fn(u8, &str) + Send + Sync),
     ) -> Result<Arc<RemoteLane>, String> {
         let stack_file = self
             .main
@@ -1074,6 +1177,7 @@ impl Lanes {
                     .collect(),
                 port_offset: entry.number * self.main.stack.lanes.port_step,
                 forward,
+                step,
             },
         )
     }
@@ -1144,10 +1248,13 @@ impl Lanes {
         let t0 = std::time::Instant::now();
         let result = if here {
             let r = remote.expect("checked: it runs on a node");
-            self.move_here(&entry, r)
+            let step = self.stepper(name, "move", "local", 3);
+            self.move_here(&entry, r, &step)
         } else {
-            self.move_to_node(&entry, to, need, local, remote)
+            let step = self.stepper(name, "move", to, 5);
+            self.move_to_node(&entry, to, need, local, remote, &step)
         };
+        self.finish(name, result.as_ref().err());
         self.pending.lock().unwrap().remove(name);
         match &result {
             Ok(()) => crate::diag::info(
@@ -1170,18 +1277,23 @@ impl Lanes {
         need: devstack_node::share::Amount,
         local: Option<Arc<Lane>>,
         remote: Option<Arc<RemoteLane>>,
+        step: &(dyn Fn(u8, &str) + Send + Sync),
     ) -> Result<(), String> {
         let name = &entry.name;
-        let next = self.start_remote(entry, to, need, false)?;
+        let next = self.start_remote(entry, to, need, false, step)?;
         let expected = self.expected_remote();
-        let ready = self
-            .rt
-            .block_on(next.up_and_wait(&expected, std::time::Duration::from_secs(900)));
+        step(4, &format!("services: starting {}", expected.len()));
+        let ready = self.rt.block_on(next.up_and_wait(
+            &expected,
+            std::time::Duration::from_secs(900),
+            &|n, of| step(4, &format!("services: {n} of {of} ready")),
+        ));
         if let Err(e) = ready {
             self.stop_remote(next);
             return Err(format!("lane `{name}` on {to}: {e}; it stays where it was"));
         }
         // Ready there: the old placement goes, the ports switch.
+        step(5, "switching the ports here to it");
         if let Some(r) = remote {
             self.remote.lock().unwrap().remove(name);
             r.stop_forwarding();
@@ -1198,11 +1310,18 @@ impl Lanes {
         Ok(())
     }
 
-    fn move_here(&self, entry: &LaneEntry, r: Arc<RemoteLane>) -> Result<(), String> {
+    fn move_here(
+        &self,
+        entry: &LaneEntry,
+        r: Arc<RemoteLane>,
+        step: &(dyn Fn(u8, &str) + Send + Sync),
+    ) -> Result<(), String> {
         let name = &entry.name;
+        step(1, "handing the ports over");
         r.stop_forwarding();
         self.remote.lock().unwrap().remove(name);
         self.pending.lock().unwrap().remove(name);
+        step(2, "starting it here (build, infrastructure, services)");
         let started = self.activate(&entry.path).and_then(|lane| {
             lane.sup.up().inspect_err(|_| {
                 lane.sup.down(true);
@@ -1214,6 +1333,7 @@ impl Lanes {
         self.pending.lock().unwrap().insert(name.clone());
         match started {
             Ok(_) => {
+                step(3, "releasing its lease on the node");
                 self.stop_remote(r);
                 Ok(())
             }

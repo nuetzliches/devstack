@@ -5,7 +5,7 @@
 // worktrees fold only with its toggle, never by navigating. The shown
 // stack's lanes come live from its stream; the others' are read when the
 // hub's list of stacks changes (no polling, ADR-0021).
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { api, paths, v1 } from '@/api';
 import type { LaneView, StackEntry } from '@/api/types';
@@ -89,20 +89,16 @@ function openStack(s: StackEntry) {
   void router.push({ name: 'overview', params: { stack: s.id } });
 }
 
+// A lane not started is shown with its start options (here, a node, the
+// pool), never started by navigating to it.
 async function openLane(s: StackEntry, l: LaneView) {
-  const idle = l.active === false;
   if (s.id === stack.id) {
-    if (idle) void stack.startLane(l.name);
-    else stack.selectLane(l.name);
+    stack.selectLane(l.name);
     void router.push({ name: 'overview', params: { stack: s.id } });
     return;
   }
-  if (!idle) persist.set(`lane.${s.id}`, l.name);
+  persist.set(`lane.${s.id}`, l.name);
   await router.push({ name: 'overview', params: { stack: s.id } });
-  if (idle) {
-    await nextTick();
-    void stack.startLane(l.name);
-  }
 }
 
 const isCurrent = (s: StackEntry) => s.id === stack.id;
@@ -163,14 +159,15 @@ const isCurrent = (s: StackEntry) => s.id === stack.id;
                 type="button"
                 class="item lane idle"
                 :class="{ active: isCurrent(s) && stack.lane === l.name }"
-                :title="`${l.path} — click to start it`"
+                :title="`${l.path}: not started`"
                 data-testid="sidebar-lane"
                 :data-lane="l.name"
                 @click="openLane(s, l)"
               >
                 <Icon name="gitBranch" :size="13" class="branch" />
                 <span class="label truncate">{{ laneLabel(l) }}</span>
-                <span class="faint small">start</span>
+                <span v-if="l.moving && !l.moving.error" class="spinner sm" :title="l.moving.what" />
+                <span v-else class="faint small">stopped</span>
               </button>
             </li>
           </template>

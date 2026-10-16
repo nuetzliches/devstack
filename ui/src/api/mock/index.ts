@@ -319,6 +319,9 @@ export class MockTransport implements Transport {
       const l = lanes().find((x) => x.path === body?.path);
       if (!l) return json(409, { error: 'no worktree there' });
       s.startedLanes.add(l.name);
+      // `on`: a node, or `pool` (the coordinator picks build-server here).
+      if (body?.on) laneNodes.set(l.name, body.on === 'pool' ? 'build-server' : String(body.on));
+      else laneNodes.set(l.name, 'local');
       return json(201, { ...l, active: true, running: 5 });
     }
     const lm = /^\/v1\/lanes\/([^/]+)\/main$/.exec(p);

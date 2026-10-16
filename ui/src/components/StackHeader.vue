@@ -45,7 +45,17 @@ const moveTargets = computed(() => {
     .map((n) => ({ to: n.name, label: n.name, hint: `${n.report!.cpus.toFixed(1)} CPU free` }));
   return l.node ? [{ to: 'local', label: 'This machine', hint: 'here' }, ...nodes] : nodes;
 });
-const moving = computed(() => stack.busy['lane-move'] ?? null);
+/** A move of the shown lane under way (from the daemon: it survives navigating away). */
+const moving = computed(() => {
+  const m = current.value?.moving;
+  if (m && !m.error && m.kind === 'move') return m;
+  return null;
+});
+const moveFailed = computed(() => {
+  const m = current.value?.moving;
+  return m?.error && m.kind === 'move' ? m : null;
+});
+const placeName = (to: string) => (to === 'local' ? 'this machine' : to === 'pool' ? 'the pool' : to);
 function moveTo(to: string) {
   moveClose();
   if (current.value) void stack.moveLane(current.value.name, to);
@@ -57,10 +67,7 @@ const { open, close } = usePopover(root, trigger);
 
 function pick(l: LaneView | null) {
   close();
-  if (l && l.active === false) {
-    void stack.startLane(l.name);
-    return;
-  }
+  // A lane not started is shown with its start options, not started here.
   stack.selectLane(l?.name ?? null);
 }
 </script>
@@ -101,7 +108,7 @@ function pick(l: LaneView | null) {
             @click="moveOpen = !moveOpen"
           >
             <span v-if="moving" class="spinner" /><Icon v-else name="server" :size="14" />
-            {{ moving ? `Moving to ${moving === 'local' ? 'this machine' : moving}…` : 'Move' }}
+            {{ moving ? `Moving to ${placeName(moving.to)}… ${moving.step}/${moving.steps}` : 'Move' }}
           </button>
           <div v-if="moveOpen" class="menu menu-right" role="menu">
             <button v-for="t in moveTargets" :key="t.to" type="button" class="opt" role="menuitem" data-testid="lane-move-target" @click="moveTo(t.to)">
@@ -176,6 +183,13 @@ function pick(l: LaneView | null) {
         </div>
       </div>
       <span v-if="daemon && !current" class="muted small">daemon pid {{ daemon.pid }} · port {{ daemon.port }} · up {{ duration(now - daemon.started) }}</span>
+      <span v-if="moving" class="muted small move-line" data-testid="lane-moving" :title="moving.what">
+        <span class="bar"><span :style="{ width: `${(100 * moving.step) / moving.steps}%` }" /></span>
+        {{ moving.what }}
+      </span>
+      <span v-else-if="moveFailed" class="err small" data-testid="lane-move-failed" :title="moveFailed.error">
+        Moving to {{ placeName(moveFailed.to) }} failed: {{ moveFailed.error }}
+      </span>
       <span v-else-if="current && current.active !== false" class="muted small" data-testid="lane-placement">
         <template v-if="current.node">runs on <strong>{{ current.node }}</strong> · </template>
         <template v-else>runs on this machine · </template>
@@ -256,6 +270,26 @@ h1 {
   padding: 6px;
   display: flex;
   flex-direction: column;
+}
+.move-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.bar {
+  width: 90px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--surface-hover);
+  overflow: hidden;
+  flex: none;
+}
+.bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s;
 }
 .menu-right {
   left: auto;

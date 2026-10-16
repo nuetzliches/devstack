@@ -55,8 +55,9 @@ enum Cmd {
         #[arg(long)]
         force: bool,
         /// In a worktree: run its lane on this node of the pool (its name or
-        /// member id, see `devstack pool`) instead of on this machine
-        /// (ADR-0025). Everything of the lane runs there; the worktree stays.
+        /// member id, see `devstack pool`), or `pool` to let the coordinator
+        /// choose, instead of on this machine (ADR-0025). Everything of the
+        /// lane runs there; the worktree stays.
         #[arg(long, value_name = "NODE")]
         on: Option<String>,
     },
