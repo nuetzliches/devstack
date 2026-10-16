@@ -71,3 +71,4 @@ before code exists it names where it *will* live.
 | [0031](0031-a-coordinator-places-lanes.md) | A coordinator places lanes and admits members; nodes admit leases; data goes directly | Accepted |
 | [0032](0032-the-pool-is-administered-in-the-dashboard.md) | The pool is administered in the dashboard, by members with the admin role | Accepted |
 | [0033](0033-a-node-decides-what-runs-on-it.md) | A node decides who runs lanes on it, and what a lane there may do | Proposed |
+| [0034](0034-a-machine-can-belong-to-several-pools.md) | A machine can belong to several pools; pools do not trust each other | Proposed |
