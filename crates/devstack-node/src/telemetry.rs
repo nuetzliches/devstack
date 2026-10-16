@@ -94,6 +94,10 @@ pub struct Info {
     /// What members send, in words, for the dashboard.
     #[serde(default)]
     pub collects: Vec<String>,
+    /// Why the last pass to the collector failed, while it does (admins
+    /// look here; members cannot do anything about it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 /// What is sent, as the pool area says it.

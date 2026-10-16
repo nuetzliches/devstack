@@ -534,6 +534,8 @@ struct Inner {
     history: Mutex<HashMap<String, History>>,
     /// Where telemetry goes (ADR-0037); `None`: nowhere.
     collector: Option<crate::telemetry::Collector>,
+    /// The last failure passing telemetry on, and when it was logged.
+    telemetry_error: Arc<Mutex<(Option<String>, Option<std::time::Instant>)>>,
 }
 
 use crate::tls::Peer;
@@ -1054,6 +1056,7 @@ async fn telemetry_info(
     member(&s, &peer)?;
     Ok(Json(crate::telemetry::Info {
         enabled: s.collector.is_some(),
+        last_error: s.telemetry_error.lock().unwrap().0.clone(),
         collects: crate::telemetry::collects(),
     }))
 }
@@ -1090,8 +1093,36 @@ async fn telemetry_post(
             ("devstack.pool.coordinator", pool),
         ],
     );
+    let errors = s.telemetry_error.clone();
     tokio::task::spawn_blocking(move || {
-        let _ = collector.send(&kind, &body);
+        // A panic in here would vanish with the task: catch it and say so.
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            collector.send(&kind, &body)
+        }))
+        .unwrap_or_else(|p| {
+            Err(format!(
+                "panicked: {}",
+                p.downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| p.downcast_ref::<&str>().copied())
+                    .unwrap_or("?")
+            ))
+        });
+        let mut e = errors.lock().unwrap();
+        match r {
+            Ok(()) => e.0 = None,
+            Err(why) => {
+                // Logged at most once a minute: a collector that is down
+                // would otherwise fill the log.
+                if e.1
+                    .is_none_or(|at| at.elapsed() > std::time::Duration::from_secs(60))
+                {
+                    eprintln!("telemetry: passing {kind} on failed: {why}");
+                    e.1 = Some(std::time::Instant::now());
+                }
+                e.0 = Some(why);
+            }
+        }
     });
     Ok(StatusCode::ACCEPTED)
 }
@@ -1244,6 +1275,7 @@ pub async fn serve(
         leases: Mutex::new(HashMap::new()),
         history: Mutex::new(HashMap::new()),
         collector: crate::telemetry::Collector::of(dir),
+        telemetry_error: Arc::default(),
         ending: Mutex::new(std::collections::HashSet::new()),
         store: Store::new(dir),
         ca_pem,
