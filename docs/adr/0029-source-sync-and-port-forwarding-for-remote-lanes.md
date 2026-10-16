@@ -1,6 +1,6 @@
 # ADR-0029: A remote lane works on a mirror of the requester's tree; ports and API come back over one connection
 
-- **Status:** Proposed (local lanes are built, ADR-0024; this extends them)
+- **Status:** Accepted (2026-10-16)
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** plan §3.2, §3.4, [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0011](0011-platform-windows-native-first.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0027](0027-trust-between-nodes.md)

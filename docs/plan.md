@@ -756,7 +756,7 @@ What is open, roughly in the order it pays off, and where it comes from.
 
 | Item | From | Size |
 |---|---|---|
-| Lanes on other machines | [ADR-0025](adr/0025-a-lane-can-run-on-another-node.md) to [ADR-0029](adr/0029-source-sync-and-port-forwarding-for-remote-lanes.md) (proposed) | large |
+| Lanes on other machines, for 0.9.0: M0 spike (devstackd in a lane container, infra by the node, hosts by service name), M1 node agent and coordinator (join, approval, certificates), M2 a lane on a node (lease, mirror sync, API proxy, `devstack up --on`), M3 forwarded ports, M4 lifecycle and the dashboard's pool view | [ADR-0025](adr/0025-a-lane-can-run-on-another-node.md) to [ADR-0031](adr/0031-a-coordinator-places-lanes.md) | large |
 | Own domain for the landing page (now on GitHub Pages) | phase 4 | small |
 | Code signing of the Windows binary (deferred) | [#3](https://github.com/nuetzliches/devstack/issues/3) | small |
 | Remove the downstream stack's old orchestrator once its team works without it | phase 4 | downstream |
