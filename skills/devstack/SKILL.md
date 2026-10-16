@@ -83,6 +83,12 @@ shows no `not yet active` line for the service.** The states:
 
 A `devserver` (hot reload) has no candidates: it picks up changes itself.
 
+A folder that was moved or renamed (`mv`, `git mv`, an IDE's "move folder")
+counts as one change, on the folder's own path. A `watch` pattern like
+`src/**/*.cs` does not match it, so no candidate starts and `devstack status`
+shows nothing pending although the running build lacks the folder's files.
+After moving a folder with sources, run `devstack restart <service>`.
+
 ## 3. This stack
 
 {{devstack:services_table}}
