@@ -1,6 +1,6 @@
 # ADR-0026: The requester places a lane; the node admits it, under a lease
 
-- **Status:** Proposed (local lanes are built, ADR-0024; this extends them)
+- **Status:** Accepted (2026-10-16); points 1 and 3 replaced by [ADR-0031](0031-a-coordinator-places-lanes.md) (a coordinator places), the rest stands
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md), [ADR-0028](0028-lane-images.md), plan §12

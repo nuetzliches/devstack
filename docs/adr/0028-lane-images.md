@@ -1,6 +1,6 @@
 # ADR-0028: A remote lane runs in a stack-provided toolchain image; the node supplies devstack
 
-- **Status:** Proposed (local lanes are built, ADR-0024; this extends them)
+- **Status:** Accepted (2026-10-16), amended 2026-10-16 (a Dockerfile the node builds)
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0023](0023-stack-file-compatibility.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md)
@@ -36,6 +36,11 @@ belongs to the node and the requester and must match their protocol.
    (ADR-0026).
 5. The new key is additive: files without it load and behave as before
    (ADR-0023).
+6. *Amended 2026-10-16.* Instead of an image, the stack may name a Dockerfile
+   in its repository: `[lanes] dockerfile = "dev/lane.Dockerfile"`. The node
+   builds it from the lane's mirror and keeps it, keyed by the Dockerfile's
+   content, so a project needs neither a registry nor a CI job for its lane
+   image. `image` stays for teams that publish one; with both, `image` wins.
 
 ## Alternatives considered
 

@@ -1,6 +1,6 @@
 # ADR-0027: Nodes and requesters trust each other by pinned keys, never by network location
 
-- **Status:** Proposed (local lanes are built, ADR-0024; this extends them)
+- **Status:** Accepted (2026-10-16); points 1 and 2 replaced by [ADR-0031](0031-a-coordinator-places-lanes.md) (certificates from the coordinator instead of pinned pairs), the rest stands
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** [ADR-0019](0019-control-api-security.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md)

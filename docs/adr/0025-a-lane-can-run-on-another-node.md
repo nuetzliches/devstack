@@ -1,6 +1,6 @@
 # ADR-0025: A lane can run on another node, as a Linux container with its own infrastructure
 
-- **Status:** Proposed (local lanes are built, ADR-0024; this extends them)
+- **Status:** Accepted (2026-10-16); placement and trust in detail: ADR-0026 to ADR-0031
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** plan §3.5, §9, [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (local lanes, built in 0.5.0), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0004](0004-infrastructure-is-delegated-to-compose.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0011](0011-platform-windows-native-first.md), [ADR-0012](0012-shared-infrastructure-between-lanes.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md), [ADR-0027](0027-trust-between-nodes.md), [ADR-0028](0028-lane-images.md), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md)
