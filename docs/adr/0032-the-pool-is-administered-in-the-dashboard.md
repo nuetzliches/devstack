@@ -1,6 +1,6 @@
 # ADR-0032: The pool is administered in the dashboard, by members with the admin role
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-16)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0031](0031-a-coordinator-places-lanes.md) (point 2 extended here), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0019](0019-control-api-security.md), [ADR-0006](0006-dashboard-vue-same-origin.md)
@@ -51,11 +51,13 @@ who may change the pool.
 - **SSH only (ADR-0031 as written).** Nothing to build, but admitting a
   colleague needs shell access to the coordinator's host, and the pool has no
   place in the dashboard where its state is changed.
-- **Sign-in as a person (OpenID Connect against the team's Git server).** An
-  admin would be a person on any machine, and a stolen laptop would not be an
-  admin by itself. It needs an identity provider, a login flow in the hub and
-  tokens next to the certificates, for a pool of a handful of machines whose
-  owners are their admins. Can come later on top: the role stays on the
+- **Sign-in as a person.** An admin would be a person on any machine, and a
+  stolen laptop would not be an admin by itself. Someone has to vouch for who
+  that person is: an identity provider the team already has (any OpenID
+  Connect provider, such as its Git server or its office suite), or passkeys
+  registered on the coordinator itself. Either needs a login flow in the hub
+  and tokens next to the certificates, for a pool of a handful of machines
+  whose owners are their admins. Can come later on top: the role stays on the
   coordinator, only how a caller proves who they are would change.
 - **Admin by a separate admin certificate.** A second certificate per admin
   machine for admin requests only. Distinguishes "this machine" from "this

@@ -69,4 +69,4 @@ before code exists it names where it *will* live.
 | [0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) | A remote lane works on a mirror of the requester's tree; ports and API come back over one connection | Accepted |
 | [0030](0030-each-lane-has-its-own-infrastructure.md) | Each lane has its own infrastructure | Accepted |
 | [0031](0031-a-coordinator-places-lanes.md) | A coordinator places lanes and admits members; nodes admit leases; data goes directly | Accepted |
-| [0032](0032-the-pool-is-administered-in-the-dashboard.md) | The pool is administered in the dashboard, by members with the admin role | Proposed |
+| [0032](0032-the-pool-is-administered-in-the-dashboard.md) | The pool is administered in the dashboard, by members with the admin role | Accepted |
