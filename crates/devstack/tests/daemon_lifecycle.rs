@@ -1123,9 +1123,14 @@ fn a_worktree_runs_as_a_lane() {
     // A dev server (no HTTP proxy): `promote --lane` forwards its port byte
     // for byte. devstack's own file server stands in for `ng serve`.
     let web_port = free_port();
+    // Something that may run once per machine (a tray app): main tree only.
+    let tray_port = free_port();
     let mut toml = std::fs::read_to_string(s.file()).unwrap();
     toml.push_str(&format!(
         "\n[services.web]\nkind = \"devserver\"\nrun = '\"{BIN}\" serve-static src/Site --port {{port}}'\nport = {web_port}\nprepare = {{ run = \"echo x>>prepared.count\" }}\n"
+    ));
+    toml.push_str(&format!(
+        "\n[services.tray]\nkind = \"tool\"\nlanes = false\nrun = '\"{BIN}\" serve-static src/Site --port {{port}}'\nport = {tray_port}\n"
     ));
     std::fs::write(s.file(), toml).unwrap();
     s.cli(&["up"], None); // `broken` fails, the API runs
@@ -1250,6 +1255,22 @@ fn a_worktree_runs_as_a_lane() {
             Duration::from_secs(30)
         ),
         "the lane's dev server answers on its own port"
+    );
+
+    // The lane's API takes requests for one service (a path parameter of
+    // its own under /v1/lanes/<lane>/v1/...), and a `lanes = false` service
+    // runs in the main tree only: there it answers, in the lane it is refused.
+    let logs = wt_cli(&["logs", "api"]);
+    assert!(!logs.contains("path arguments"), "{logs}");
+    assert!(
+        get_on(tray_port, "/").is_some(),
+        "the main tree runs the tray"
+    );
+    let refused = wt_cli(&["start", "tray"]);
+    assert!(refused.contains("main working tree only"), "{refused}");
+    assert!(
+        get_on(tray_port + offset, "/").is_none(),
+        "no tray in the lane"
     );
 
     // 3. An edit in the worktree reaches the lane only.

@@ -42,8 +42,9 @@ pub fn ignored(rel: &str) -> bool {
 /// could not be set up.
 pub fn start(sup: Arc<Supervisor>) -> Option<Watcher> {
     let platform = devstack_config::model::Platform::current();
+    let in_lane = !sup.lane.is_empty();
     let runs = |s: &devstack_config::model::Service| {
-        s.platforms.is_empty() || s.platforms.contains(&platform)
+        (s.platforms.is_empty() || s.platforms.contains(&platform)) && (!in_lane || s.lanes)
     };
     let built: Vec<(String, GlobSet)> = sup
         .stack

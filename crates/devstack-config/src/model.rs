@@ -227,6 +227,12 @@ pub struct Service {
     /// Restrict to these platforms; empty = all.
     #[serde(default)]
     pub platforms: Vec<Platform>,
+    /// `false`: runs in the main working tree only, never in a lane
+    /// (ADR-0024). For what may run once per machine (a tray app, something
+    /// that holds a global lock); the main tree's instance serves every lane
+    /// and keeps its workers while a lane holds the main slot.
+    #[serde(default = "yes")]
+    pub lanes: bool,
     /// Compose service whose environment is the base (ADR-0014).
     pub compose: Option<ComposeRef>,
     /// Compose services whose `name:port` is rewritten to the published host

@@ -447,6 +447,12 @@ impl Supervisor {
         self.state_dir.join("logs").join(name)
     }
 
+    /// `svc` runs in this supervisor: on this platform, and in a lane only
+    /// unless it says `lanes = false`.
+    fn runs_here(&self, svc: &Service) -> bool {
+        on_this_platform(svc) && (self.lane.is_empty() || svc.lanes)
+    }
+
     /// A lane runs from a copy of its worktree, never from the worktree itself
     /// (ADR-0024): git and the tools that manage worktrees can remove one at
     /// any time, and a process inside it would hold it open (Windows).
@@ -895,7 +901,7 @@ impl Supervisor {
         let mut failed: BTreeSet<String> = BTreeSet::new();
         for name in self.service_order() {
             let svc = self.service(&name)?;
-            if !svc.autostart || !runs_here(svc) {
+            if !svc.autostart || !self.runs_here(svc) {
                 continue;
             }
             if let Some(dep) = svc.after.iter().find(|d| failed.contains(*d)) {
@@ -1069,7 +1075,7 @@ impl Supervisor {
         self.stack
             .services
             .iter()
-            .filter(|(_, s)| s.proxied() && runs_here(s))
+            .filter(|(_, s)| s.proxied() && s.lanes && self.runs_here(s))
             .map(|(n, _)| n.clone())
             .collect()
     }
@@ -1082,7 +1088,11 @@ impl Supervisor {
             .services
             .iter()
             .filter(|(_, s)| {
-                s.port.is_some() && !s.proxied() && s.kind != Kind::Job && runs_here(s)
+                s.port.is_some()
+                    && !s.proxied()
+                    && s.kind != Kind::Job
+                    && s.lanes
+                    && self.runs_here(s)
             })
             .map(|(n, _)| n.clone())
             .collect()
@@ -1116,7 +1126,10 @@ impl Supervisor {
         self.stack
             .services
             .iter()
-            .filter(|(n, s)| s.workers.is_some() && slots[n.as_str()].view.status.is_active())
+            // `lanes = false` keeps its workers wherever the main slot is.
+            .filter(|(n, s)| {
+                s.workers.is_some() && s.lanes && slots[n.as_str()].view.status.is_active()
+            })
             .map(|(n, _)| n.clone())
             .collect()
     }
@@ -1157,8 +1170,13 @@ impl Supervisor {
                 "lane `{lane}` serves the main ports: `devstack promote --lane main` first"
             ));
         }
-        if !runs_here(&svc) {
+        if !on_this_platform(&svc) {
             return Err(format!("`{name}` does not run on this platform"));
+        }
+        if !self.runs_here(&svc) {
+            return Err(format!(
+                "`{name}` runs in the main working tree only (`lanes = false`); its instance there serves this lane too"
+            ));
         }
         if let Err(e) = self.ensure_after(&svc) {
             self.set_status(name, Status::Failed { reason: e.clone() });
@@ -1446,7 +1464,8 @@ impl Supervisor {
             artifact: artifact.map(Path::to_path_buf),
             port,
             // A lane without the main slot never runs workers (ADR-0012 interim rule).
-            is_main: is_main && self.owns_main(),
+            // What runs in the main tree only keeps its workers: no lane takes them over.
+            is_main: is_main && (self.owns_main() || !svc.lanes),
             lane: self.lane.clone(),
             published: infra.published.clone(),
             pending: infra.pending.clone(),
@@ -2381,7 +2400,7 @@ The running instance was left as it was."
             let Some(d) = self.stack.services.get(dep) else {
                 continue;
             };
-            if !runs_here(d) {
+            if !self.runs_here(d) {
                 continue;
             }
             let status = self.slots.lock().unwrap()[dep].view.status.clone();
@@ -2487,7 +2506,7 @@ fn first_lines(text: &str, n: usize) -> String {
     text.lines().take(n).collect::<Vec<_>>().join("\n")
 }
 
-fn runs_here(svc: &Service) -> bool {
+fn on_this_platform(svc: &Service) -> bool {
     svc.platforms.is_empty() || svc.platforms.contains(&Platform::current())
 }
 

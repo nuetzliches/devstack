@@ -209,6 +209,7 @@ and starts it as usual again. For a debugging session, not as the default
 | Key | Meaning |
 | --- | --- |
 | `autostart = false` | started only on demand (`devstack start <service>`) |
+| `lanes = false` | runs in the main working tree only, never in a lane: for what may run once per machine (a tray app, something holding a global lock); see `[lanes]` |
 | `platforms = ["windows"]` | only on these platforms (`windows`, `linux`, `macos`) |
 | `ensure_dirs = ["{repo}/data/files"]` | created before start |
 | `prepare = { run = "npm ci", inputs = ["web/package-lock.json"] }` | installs what a copy of the source lacks (see below) |
@@ -260,6 +261,10 @@ in the snapshot: `prepare` installs what is missing.
   `{lane_suffix}` (empty in the main tree), e.g.
   `ConnectionStrings__Db = "Server=127.0.0.1,1433;Database=app{lane_suffix}"`;
   a migrator job then creates the lane's database.
+- `lanes = false` keeps a service in the main working tree: a lane neither
+  starts it nor waits for it (`after`), `devstack start` refuses it there, and
+  the main tree's instance serves every lane. It keeps its background workers
+  while a lane holds the main slot, and `promote --lane` leaves it alone.
 - A dev server runs in a lane only if its `run` takes `{port}` (otherwise its
   fixed port is the main tree's).
 - `devstack promote --lane <name>` lets a lane's services answer on the main

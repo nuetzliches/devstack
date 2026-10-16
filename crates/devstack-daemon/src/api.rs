@@ -290,7 +290,7 @@ async fn lanes_take_main(State(s): State<AppState>, Path(lane): Path<String>) ->
 async fn lane_forward(
     State(s): State<AppState>,
     Path((lane, rest)): Path<(String, String)>,
-    mut req: Request,
+    req: Request,
 ) -> Response {
     use tower::ServiceExt;
     let lanes = match lanes_of(&s) {
@@ -313,8 +313,16 @@ async fn lane_forward(
     let Ok(uri) = format!("/v1/{rest}{query}").parse::<axum::http::Uri>() else {
         return err(StatusCode::BAD_REQUEST, "bad path");
     };
-    *req.uri_mut() = uri;
-    match l.router.clone().oneshot(req).await {
+    // A new request, not this one with another URI: its extensions hold this
+    // route's path parameters (`lane`, `rest`), and the lane's handlers would
+    // read them as theirs ("Wrong number of path arguments").
+    let (parts, body) = req.into_parts();
+    let mut inner = Request::new(body);
+    *inner.method_mut() = parts.method;
+    *inner.uri_mut() = uri;
+    *inner.version_mut() = parts.version;
+    *inner.headers_mut() = parts.headers;
+    match l.router.clone().oneshot(inner).await {
         Ok(r) => r,
         Err(e) => match e {},
     }

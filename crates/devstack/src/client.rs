@@ -483,6 +483,7 @@ pub fn start_and_wait(
                 && (s.platforms.is_empty()
                     || s.platforms
                         .contains(&devstack_config::model::Platform::current()))
+                && (c.lane().is_none() || s.lanes)
         })
         .map(|(n, _)| n.clone())
         .collect();
