@@ -271,8 +271,7 @@ pub fn pool() -> Result<()> {
                 .map_or(id.to_string(), |n| n.name.clone())
         };
         println!(
-            "
-{:<18}{:<24}{:<24}{:<10}LANE",
+            "\n{:<18}{:<24}{:<24}{:<10}LANE",
             "LEASE", "NODE", "FOR", "STATE"
         );
         for l in &leases {
