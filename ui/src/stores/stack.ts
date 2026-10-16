@@ -98,6 +98,10 @@ export const useStack = defineStore('stack', () => {
   function select(next: string) {
     if (next === id.value) return;
     id.value = next;
+    // Another stack's lanes are not this one's, even while it is offline and
+    // loads none.
+    lanes.value = [];
+    lanesOf.value = null;
     persist.saveLastStack(next);
     lane.value = persist.get<string | null>(`lane.${next}`) ?? null;
     reset(next);
