@@ -72,9 +72,20 @@ export const useStack = defineStore('stack', () => {
 
   /** The lanes now; the one shown is gone (its worktree was removed): back to the main tree. */
   function setLanes(next: LaneView[]) {
+    const wasActive = lane.value ? laneActive(lane.value) : null;
     lanes.value = next;
     lanesOf.value = id.value;
-    if (lane.value && !next.some((l) => l.name === lane.value)) selectLane(null);
+    if (lane.value && !next.some((l) => l.name === lane.value)) {
+      selectLane(null);
+      return;
+    }
+    // The shown lane started, or stopped: its own stream, or the main tree's.
+    if (lane.value && id.value && wasActive !== laneActive(lane.value)) reset(id.value);
+  }
+
+  /** A lane that is started; one not started has no API of its own. */
+  function laneActive(name: string) {
+    return lanes.value.find((l) => l.name === name)?.active !== false;
   }
 
   function selectLane(next: string | null) {
@@ -94,7 +105,9 @@ export const useStack = defineStore('stack', () => {
 
   function reset(next: string) {
     disconnect();
-    setLane(lane.value);
+    // A lane not started is shown with its start, from the main tree's
+    // stream (which carries the lanes, its progress included).
+    setLane(lane.value && laneActive(lane.value) ? lane.value : null);
     const cached = lane.value ? (laneViews.get(`${next}#${lane.value}`) ?? null) : persist.stack(next);
     view.value = cached?.view ?? null;
     viewAt.value = cached?.at ?? null;
@@ -124,15 +137,16 @@ export const useStack = defineStore('stack', () => {
   }
 
   /** Start a lane not started yet (what `devstack up` in its worktree does), then show it. */
-  async function startLane(name: string) {
+  /** `on`: a node of the pool, or `pool` (the coordinator chooses); absent: this machine. */
+  async function startLane(name: string, on?: string) {
     const l = lanes.value.find((x) => x.name === name);
     if (!id.value || !l) return;
     busy.value[`lane-start`] = name;
     try {
       const res = await act({
-        label: `Start lane ${name}`,
+        label: on ? `Start lane ${name} on ${on === 'pool' ? 'the pool' : on}` : `Start lane ${name}`,
         path: paths.api(id.value, v1.lanes),
-        body: { path: l.path, infra: true },
+        body: on ? { path: l.path, on } : { path: l.path, infra: true },
         success: false,
       });
       if (!res.ok) return;

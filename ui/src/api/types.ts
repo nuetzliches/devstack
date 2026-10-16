@@ -81,6 +81,21 @@ export type LaneView = {
   node?: string;
   /** What went wrong with it on its node lately (a sync, a renewal). */
   node_error?: string;
+  /** A start on a node or a move under way (step of steps), or one that failed lately. */
+  moving?: LaneMove;
+};
+
+export type LaneMove = {
+  kind: 'start' | 'move';
+  /** The node, `pool` (the coordinator chooses) or `local`. */
+  to: string;
+  step: number;
+  steps: number;
+  what: string;
+  /** Unix ms. */
+  since: number;
+  error?: string;
+  failed_at?: number;
 };
 
 export type ServiceView = {

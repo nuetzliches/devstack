@@ -488,7 +488,7 @@ async fn nodes(
 async fn lease_create(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
-    Json(r): Json<LeaseRequest>,
+    Json(mut r): Json<LeaseRequest>,
 ) -> ApiResult<Json<LeaseOffer>> {
     let me = member(&s, &peer)?;
     let ms = s.store.list().map_err(internal)?;
@@ -497,6 +497,39 @@ async fn lease_create(
             .filter(|m| m.state == State::Approved && f(m))
             .collect()
     };
+    // No node named (`pool`): the coordinator places the lane (ADR-0031
+    // point 4): of the nodes that are online, run lanes, share, are not
+    // paused and offer enough, the one with the most memory free, not the
+    // requester itself.
+    if r.node.is_empty() || r.node.eq_ignore_ascii_case("pool") {
+        let reports = s.reports.lock().unwrap();
+        let best = ms
+            .iter()
+            .filter(|m| m.state == State::Approved && !m.paused && m.id != me.id)
+            .filter_map(|m| {
+                let (at, rep) = reports.get(&m.id)?;
+                (at.elapsed() < ONLINE_FOR
+                    && rep.api.is_some()
+                    && rep.sharing
+                    && rep.cpus >= r.need.cpus
+                    && rep.memory >= r.need.memory)
+                    .then_some((m, rep.memory))
+            })
+            .max_by_key(|(_, mem)| *mem)
+            .map(|(m, _)| m.id.clone());
+        drop(reports);
+        let Some(id) = best else {
+            return Err((
+                StatusCode::CONFLICT,
+                format!(
+                    "no node of the pool can take the lane now ({:.1} CPU, {} MiB): none online, sharing and with that much free",
+                    r.need.cpus,
+                    r.need.memory >> 20
+                ),
+            ));
+        };
+        r.node = id;
+    }
     let mut hits = pick(&|m| m.id == r.node || m.id.starts_with(&r.node));
     if hits.is_empty() {
         hits = pick(&|m| m.name.eq_ignore_ascii_case(&r.node));

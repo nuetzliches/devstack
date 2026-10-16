@@ -114,6 +114,21 @@ fn a_lane_is_leased_admitted_and_synced() {
     });
     assert!(too_much.unwrap_err().to_string().starts_with("409"));
 
+    // No node named: the coordinator places it, on the only node that runs
+    // lanes (ADR-0031 point 4).
+    let placed = requester
+        .lease(&LeaseRequest {
+            node: "pool".into(),
+            repo: "shop".into(),
+            lane: "placed".into(),
+            need: Amount {
+                cpus: 0.1,
+                memory: 64 << 20,
+            },
+        })
+        .unwrap();
+    assert_eq!(placed.node.id, node_id, "the coordinator picks the node");
+
     let offer = requester
         .lease(&LeaseRequest {
             node: "node-pc".into(),

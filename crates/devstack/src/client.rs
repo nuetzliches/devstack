@@ -68,8 +68,10 @@ impl Client {
     pub fn connect(state_dir: &Path) -> Option<Self> {
         let info = devstack_daemon::read_info(state_dir)?;
         let token = devstack_daemon::token::load()?;
+        // Long enough for a lane's first start on a node or its move, which
+        // the daemon answers when done (it waits up to 30 minutes itself).
         let agent = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(600)))
+            .timeout_global(Some(Duration::from_secs(1900)))
             .http_status_as_error(false)
             .build()
             .new_agent();
@@ -446,8 +448,26 @@ pub fn up(stack_file: &Path, workers: bool, force: bool, on: Option<&str>) -> Re
         if let Some(node) = on {
             println!("leasing, syncing and starting the lane on {node}...");
         }
-        let name = c.join_lane(wt, workers, force, on)?;
-        match on {
+        let follow = on.map(|_| follow_steps(stack_file, None, Some(wt.path.clone())));
+        let joined = c.join_lane(wt, workers, force, on);
+        if let Some((done, steps)) = follow {
+            done.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = steps.join();
+        }
+        let name = joined?;
+        // `pool`: the coordinator chose; say which node.
+        let placed = on.map(|node| {
+            c.call_raw("GET", "/v1/lanes", None)
+                .ok()
+                .and_then(|(_, body)| serde_json::from_str::<Vec<Value>>(&body).ok())
+                .and_then(|ls| {
+                    ls.into_iter()
+                        .find(|l| l["name"] == name.as_str())
+                        .and_then(|l| l["node"].as_str().map(str::to_string))
+                })
+                .unwrap_or_else(|| node.to_string())
+        });
+        match placed.as_deref() {
             Some(node) => println!(
                 "this worktree runs as lane `{name}` of {} on {node}",
                 wt.main_file.display()
@@ -828,15 +848,70 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Print the steps of a lane's start on a node or its move while `done` is
+/// false: the lane is the one named `name`, or the one in `path`.
+fn follow_steps(
+    stack_file: &Path,
+    name: Option<String>,
+    path: Option<PathBuf>,
+) -> (
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+    std::thread::JoinHandle<()>,
+) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let done = std::sync::Arc::new(AtomicBool::new(false));
+    let d = done.clone();
+    let file = stack_file.to_path_buf();
+    let handle = std::thread::spawn(move || {
+        let Ok(c) = main_client(&file) else { return };
+        let mut last = String::new();
+        while !d.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(700));
+            let Ok(text) = c.get("/v1/lanes") else {
+                continue;
+            };
+            let Ok(lanes) = serde_json::from_str::<Vec<Value>>(&text) else {
+                continue;
+            };
+            let lane = lanes.iter().find(|l| {
+                name.as_deref().is_some_and(|n| l["name"] == n)
+                    || path.as_ref().is_some_and(|p| {
+                        l["path"]
+                            .as_str()
+                            .is_some_and(|lp| same_dir(Path::new(lp), p))
+                    })
+            });
+            let Some(m) = lane.map(|l| &l["moving"]).filter(|m| m.is_object()) else {
+                continue;
+            };
+            let line = format!(
+                "  [{}/{}] {}",
+                m["step"],
+                m["steps"],
+                m["what"].as_str().unwrap_or("")
+            );
+            if line != last && m["step"] != 0 {
+                println!("{line}");
+                last = line;
+            }
+        }
+    });
+    (done, handle)
+}
+
 pub fn lane_move(stack_file: &Path, name: &str, to: &str) -> Result<()> {
     let c = main_client(stack_file)?;
     println!("moving lane `{name}` to {to}: starting it there; it takes over once it is ready...");
     let t0 = Instant::now();
-    let (status, body) = c.call_raw(
+    let (done, steps) = follow_steps(stack_file, Some(name.to_string()), None);
+    let answer = c.call_raw(
         "POST",
         &format!("/v1/lanes/{name}/move"),
         Some(serde_json::json!({ "to": to })),
-    )?;
+    );
+    done.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = steps.join();
+    let (status, body) = answer?;
     if status >= 400 {
         bail!("{}", error_text(&body));
     }

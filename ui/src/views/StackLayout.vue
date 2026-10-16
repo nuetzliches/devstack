@@ -6,6 +6,7 @@ import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import Icon from '@/components/icons/Icon.vue';
 import StackHeader from '@/components/StackHeader.vue';
+import LaneStart from '@/components/LaneStart.vue';
 import type { IconName } from '@/components/icons/icons';
 
 const route = useRoute();
@@ -21,6 +22,11 @@ watch(
   { immediate: true },
 );
 
+/** The shown lane, when it is not started: its start options instead of its views. */
+const idleLane = computed(() => {
+  const l = stack.lanes.find((x) => x.name === stack.lane);
+  return l && l.active === false ? l : null;
+});
 const hubDown = computed(() => hub.status === 'unreachable' || hub.stream === 'error');
 const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 const unknown = computed(() => hub.fresh && !stack.entry && !stack.view);
@@ -152,7 +158,10 @@ function isActive(name: string) {
       </div>
     </div>
 
-    <div :data-stale="stack.stale && !!stack.view ? 'true' : 'false'">
+    <div v-if="idleLane" class="idle-lane">
+      <LaneStart :lane="idleLane" />
+    </div>
+    <div v-else :data-stale="stack.stale && !!stack.view ? 'true' : 'false'">
       <RouterView v-slot="{ Component }">
         <component :is="Component" />
       </RouterView>
@@ -161,6 +170,9 @@ function isActive(name: string) {
 </template>
 
 <style scoped>
+.idle-lane {
+  padding: 0 var(--space-5);
+}
 .subnav {
   border-bottom: 1px solid var(--border);
   background: var(--bg-elev);
