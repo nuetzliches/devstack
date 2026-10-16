@@ -1138,12 +1138,15 @@ async fn background(s: Shared) {
             sent = Instant::now();
             if collects.is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(600)) {
                 let s2 = s.clone();
-                let on = tokio::task::spawn_blocking(move || s2.local.telemetry_info())
+                // Only an answer is kept: a coordinator that does not answer
+                // yet (it restarted with this node) is asked again next time.
+                if let Some(info) = tokio::task::spawn_blocking(move || s2.local.telemetry_info())
                     .await
                     .ok()
                     .and_then(Result::ok)
-                    .is_some_and(|i| i.enabled);
-                collects = Some((Instant::now(), on));
+                {
+                    collects = Some((Instant::now(), info.enabled));
+                }
             }
             if collects.is_some_and(|(_, on)| on) {
                 let body = capacity_metrics(
