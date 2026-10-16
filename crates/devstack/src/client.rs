@@ -106,11 +106,13 @@ impl Client {
 
     /// Register this worktree as a lane (and make sure the shared
     /// infrastructure runs); from then on calls go to it.
-    pub fn join_lane(&mut self, wt: &Worktree) -> Result<String> {
+    pub fn join_lane(&mut self, wt: &Worktree, workers: bool, force: bool) -> Result<String> {
         let (status, body) = self.call_raw(
             "POST",
             "/v1/lanes",
-            Some(serde_json::json!({ "path": wt.path, "infra": true })),
+            Some(serde_json::json!({
+                "path": wt.path, "infra": true, "workers": workers, "force": force
+            })),
         )?;
         if status >= 400 {
             bail!("{}", error_text(&body));
@@ -419,14 +421,14 @@ fn truncate(s: &str, n: usize) -> String {
 
 /// `devstack up`: infra, then autostart services; follow until all are ready
 /// or one fails. Exit code 1 on failure.
-pub fn up(stack_file: &Path) -> Result<()> {
+pub fn up(stack_file: &Path, workers: bool, force: bool) -> Result<()> {
     ensure_engine(stack_file)?;
     let sd = state_dir(stack_file)?;
     let mut c = ensure_daemon(&daemon_file(stack_file), &sd)?;
     if let Some(wt) = worktree()
         && c.lane().is_none_or(|l| l == "-")
     {
-        let name = c.join_lane(wt)?;
+        let name = c.join_lane(wt, workers, force)?;
         println!(
             "this worktree runs as lane `{name}` of {}",
             wt.main_file.display()

@@ -52,13 +52,11 @@ names (the containers of one tree served the other), workers twice.
    whose whole range is free is taken. The moved ports are the lane's own
    proxies (ADR-0010), so candidates and promotion work inside a lane exactly as
    in the main tree.
-4. **Infrastructure is shared and owned by the main tree.** A lane reads the
-   published ports of the main tree's Compose groups and never starts, stops or
-   restarts them. Per-lane resources on it come from `{lane}` and
-   `{lane_suffix}` (empty in the main tree), e.g. `Database=app{lane_suffix}`.
-   This is ADR-0012's interim rule, which stays in force: a lane without the
-   main slot runs **without workers**, so it never talks to coordinators that
-   dispatch work.
+4. *Replaced by [ADR-0030](0030-each-lane-has-its-own-infrastructure.md) (2026-10-16): every lane runs its own Compose
+   projects; sharing is opt-in per service.* As first decided: infrastructure
+   is shared and owned by the main tree; a lane reads its published ports,
+   separates its data by `{lane}` / `{lane_suffix}` and runs without
+   workers (ADR-0012 interim rule).
 5. **`promote --lane <name>` moves the main slot.** The fixed port of every
    proxied service forwards to the lane's port, and the workers move: the old
    owner restarts its worker services without them, the new owner with them.

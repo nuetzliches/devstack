@@ -60,15 +60,16 @@ pub fn start(sup: Arc<Supervisor>) -> Option<Watcher> {
         .filter(|(_, s)| s.kind == Kind::Devserver && runs(s))
         .filter_map(|(n, s)| set(&s.restart_on).map(|g| (n.clone(), g)))
         .collect();
-    // Containers belong to the main lane: a lane never restarts them (ADR-0024).
+    // A lane restarts its own containers, never the `shared` ones of the
+    // main tree (ADR-0030).
     let containers: Vec<(String, String, GlobSet)> = sup
         .stack
         .compose
         .iter()
-        .filter(|_| sup.lane.is_empty())
         .flat_map(|(g, c)| {
             c.restart_on
                 .iter()
+                .filter(move |(s, _)| !in_lane || !c.shared.contains(s))
                 .filter_map(move |(s, p)| set(p).map(|set| (g.clone(), s.clone(), set)))
         })
         .collect();

@@ -73,7 +73,7 @@ devstack logs postgres       # a container's output, by its Compose service name
 devstack builds api          # its builds: which went live, failed, were replaced
 devstack hot-reload api on   # the toolchain's watcher from the source tree (`hot_reload` in the stack file)
 git worktree add ../shop-fix -b login-fix  # a worktree is a lane at once (git's, not devstack's)
-devstack up                  # in a `git worktree`: starts its lane, ports +100, same infrastructure
+devstack up                  # in a `git worktree`: starts its lane, ports +100, its own containers
 devstack promote --lane x    # lane x answers on the main ports; `--lane main` gives them back
 devstack update           # the latest release; the dashboard says when there is one and installs it with a click
 devstack logs --daemon    # devstack's own decisions with their reasons (--hub: the dashboard hub)

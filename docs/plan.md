@@ -207,8 +207,10 @@ a lane is a supervisor in the main working tree's daemon; every linked
 worktree is one (`git worktree list` decides; git creates and removes them,
 devstack follows), `devstack up` in it starts it, and it runs from a copy of
 the worktree, never in it; its ports move by `[lanes] port_step` times its
-number, `{lane}` / `{lane_suffix}` name per-lane resources, `promote --lane`
-forwards the fixed ports of the proxied services and moves the workers. Not
+number, and it runs its own Compose projects with the same offset, sharing
+only what the stack file marks `shared` ([ADR-0030](adr/0030-each-lane-has-its-own-infrastructure.md));
+`promote --lane` forwards the fixed ports of the proxied services and moves
+the workers. Not
 yet: lanes on other machines ([ADR-0025](adr/0025-a-lane-can-run-on-another-node.md) to [ADR-0029](adr/0029-source-sync-and-port-forwarding-for-remote-lanes.md) (proposed)).
 
 ### 3.6 Daemon crash, restart and update

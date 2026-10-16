@@ -218,6 +218,37 @@ pub fn ensure_console() -> Result<bool> {
 /// by its 8.3 name would not be recognised in their messages. Unlike
 /// `canonicalize`, `subst` drives and junctions stay as they are. Returns the
 /// path unchanged elsewhere and when the lookup fails.
+/// Physical memory available for new work, in bytes; `None` where devstack
+/// cannot tell (the lane memory check, ADR-0030, then does not refuse).
+pub fn memory_available() -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        let mut m: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+        m.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+        // SAFETY: `m` is a properly sized MEMORYSTATUSEX with dwLength set.
+        let ok = unsafe { GlobalMemoryStatusEx(&mut m) } != 0;
+        ok.then_some(m.ullAvailPhys)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+        let kb: u64 = text
+            .lines()
+            .find_map(|l| l.strip_prefix("MemAvailable:"))?
+            .trim()
+            .trim_end_matches("kB")
+            .trim()
+            .parse()
+            .ok()?;
+        Some(kb * 1024)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        None
+    }
+}
+
 pub fn long_path(path: &std::path::Path) -> std::path::PathBuf {
     #[cfg(windows)]
     {

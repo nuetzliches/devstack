@@ -44,7 +44,16 @@ enum Cmd {
         lane: String,
     },
     /// Start the stack: daemon (if needed), infrastructure, services in order.
-    Up,
+    /// In a worktree: its lane, with its own infrastructure (ADR-0030).
+    Up {
+        /// In a worktree: the lane's services run their background workers.
+        #[arg(long)]
+        workers: bool,
+        /// In a worktree: start the lane although its memory check says it
+        /// does not fit.
+        #[arg(long)]
+        force: bool,
+    },
     /// Stop the services and the daemon; `--infra` also removes the containers.
     Down {
         #[arg(long)]
@@ -392,7 +401,7 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Up => client::up(&cli.file),
+        Cmd::Up { workers, force } => client::up(&cli.file, workers, force),
         Cmd::Down { infra } => client::down(&cli.file, infra),
         Cmd::Status => {
             let c = client::need(&client::state_dir(&cli.file)?)?;

@@ -141,6 +141,12 @@ pub struct ComposeGroup {
     pub networks: Vec<String>,
     /// Services started (`--no-deps`); every other service of the files stays down.
     pub services: Vec<String>,
+    /// Of `services`, those a lane uses from the main tree instead of
+    /// starting its own (ADR-0030): only for what holds nothing that belongs
+    /// to one lane (a telemetry dashboard, a fake SMTP server). Reached by
+    /// their published ports; containers of a lane do not see them by name.
+    #[serde(default)]
+    pub shared: Vec<String>,
     /// Groups that must be healthy first.
     #[serde(default)]
     pub after: Vec<String>,
