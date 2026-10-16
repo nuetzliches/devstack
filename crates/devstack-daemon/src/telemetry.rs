@@ -83,10 +83,14 @@ fn run(service: &str) {
                     .get(&dir)
                     .filter(|(at, _)| at.elapsed() < ASK_EVERY)
                     .map(|(_, on)| *on);
-                let on = known.unwrap_or_else(|| {
-                    let on = local.telemetry_info().is_ok_and(|i| i.enabled);
-                    collects.insert(dir.clone(), (Instant::now(), on));
-                    on
+                // Only an answer is kept; a coordinator that does not
+                // answer is asked again at the next round.
+                let on = known.unwrap_or_else(|| match local.telemetry_info() {
+                    Ok(i) => {
+                        collects.insert(dir.clone(), (Instant::now(), i.enabled));
+                        i.enabled
+                    }
+                    Err(_) => false,
                 });
                 on.then_some(local)
             })
