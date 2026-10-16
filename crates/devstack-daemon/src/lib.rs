@@ -6,6 +6,7 @@ pub mod ansi;
 pub mod api;
 pub mod commands;
 pub mod diag;
+pub mod external;
 pub mod health;
 pub mod lanes;
 pub mod logfiles;
