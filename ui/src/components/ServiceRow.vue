@@ -5,6 +5,7 @@ import { ago, serviceUrl, shortBuild, useNow } from '@/lib/format';
 import { candidateLook, candidateSummary, kindIcon, kindLabel, statusLook } from '@/lib/status';
 import { useStack } from '@/stores/stack';
 import StatusPill from './StatusPill.vue';
+import ErrorLine from './ErrorLine.vue';
 import Icon from './icons/Icon.vue';
 
 const props = defineProps<{ service: ServiceView }>();
@@ -73,7 +74,7 @@ const to = computed(() => ({ name: 'service', params: { stack: stack.id ?? '', n
         </button>
       </div>
     </div>
-    <p v-if="look.detail && !cand" class="detail">{{ look.detail }}</p>
+    <ErrorLine v-if="look.detail && !cand" class="detail" :text="look.detail" :tone="look.tone === 'danger' ? 'danger' : 'warn'" />
     <RouterLink v-if="cand && candLook" :to="to" class="cand-line" :class="`tone-${candLook.tone}`" data-testid="candidate-line" :data-state="cand.state">
       <span v-if="candLook.busy" class="spinner sm" aria-hidden="true" />
       <Icon v-else :name="candLook.icon" :size="14" />
@@ -153,8 +154,6 @@ const to = computed(() => ({ name: 'service', params: { stack: stack.id ?? '', n
   gap: 2px;
 }
 .detail {
-  font-size: 12px;
-  color: var(--warn-text);
   padding-left: 38px;
 }
 .cand-line {

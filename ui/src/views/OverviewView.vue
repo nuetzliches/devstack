@@ -9,6 +9,7 @@ import ServiceRow from '@/components/ServiceRow.vue';
 import ContainerRow from '@/components/ContainerRow.vue';
 import CommandRow from '@/components/CommandRow.vue';
 import CandidatePanel from '@/components/CandidatePanel.vue';
+import ErrorLine from '@/components/ErrorLine.vue';
 import BuildLogModal from '@/components/BuildLogModal.vue';
 import Icon from '@/components/icons/Icon.vue';
 
@@ -62,6 +63,24 @@ const cards = computed(() => {
   return out;
 });
 
+/** A stat tile picked as filter: only those members show (click again: all). */
+type Filter = 'healthy' | 'starting' | 'failed' | 'idle' | 'pending';
+const filter = ref<Filter | null>(null);
+function toggle(f: Filter) {
+  filter.value = filter.value === f ? null : f;
+}
+function matches(m: Member, f: Filter): boolean {
+  if (m.kind === 'service') return f === 'pending' ? !!m.service.candidate : statusBucket(m.service.status) === f;
+  if (m.kind === 'container') return f !== 'pending' && !!m.container && containerBucket(m.container) === f;
+  return false;
+}
+const shown = computed(() => {
+  const f = filter.value;
+  if (!f) return cards.value;
+  return cards.value.map((c) => ({ ...c, members: c.members.filter((m) => matches(m, f)) })).filter((c) => c.members.length);
+});
+const filterLabel: Record<Filter, string> = { healthy: 'healthy', starting: 'starting', failed: 'failing', idle: 'stopped or done', pending: 'not live yet' };
+
 const counts = computed(() => {
   const c = { healthy: 0, starting: 0, failed: 0, idle: 0 };
   const v = view.value;
@@ -104,28 +123,70 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
             </button>
           </div>
         </div>
-        <div class="stats stale-dim">
-          <div class="stat ok">
+        <div class="stats stale-dim" role="group" aria-label="Filter the overview by state">
+          <button
+            type="button"
+            class="stat ok"
+            :class="{ active: filter === 'healthy' }"
+            :aria-pressed="filter === 'healthy'"
+            :title="filter === 'healthy' ? 'Show everything again' : 'Show only what is healthy'"
+            data-filter="healthy"
+            @click="toggle('healthy')"
+          >
             <span class="v tabular">{{ counts.healthy }}</span><span class="l">healthy</span>
-          </div>
-          <div class="stat accent">
+          </button>
+          <button
+            type="button"
+            class="stat accent"
+            :class="{ active: filter === 'starting' }"
+            :aria-pressed="filter === 'starting'"
+            :title="filter === 'starting' ? 'Show everything again' : 'Show only what is starting'"
+            data-filter="starting"
+            @click="toggle('starting')"
+          >
             <span class="v tabular">{{ counts.starting }}</span><span class="l">starting</span>
-          </div>
-          <div class="stat danger" :class="{ zero: !counts.failed }">
+          </button>
+          <button
+            type="button"
+            class="stat danger"
+            :class="{ active: filter === 'failed', zero: !counts.failed }"
+            :aria-pressed="filter === 'failed'"
+            :title="filter === 'failed' ? 'Show everything again' : 'Show only what is failing'"
+            data-filter="failed"
+            @click="toggle('failed')"
+          >
             <span class="v tabular">{{ counts.failed }}</span><span class="l">failing</span>
-          </div>
-          <div class="stat neutral">
+          </button>
+          <button
+            type="button"
+            class="stat neutral"
+            :class="{ active: filter === 'idle' }"
+            :aria-pressed="filter === 'idle'"
+            :title="filter === 'idle' ? 'Show everything again' : 'Show only what is stopped or done'"
+            data-filter="idle"
+            @click="toggle('idle')"
+          >
             <span class="v tabular">{{ counts.idle }}</span><span class="l">stopped or done</span>
-          </div>
-          <div class="stat warn" :class="{ zero: !stack.pending.length }" data-testid="pending-count">
+          </button>
+          <button
+            type="button"
+            class="stat warn"
+            :class="{ active: filter === 'pending', zero: !stack.pending.length }"
+            :aria-pressed="filter === 'pending'"
+            :title="filter === 'pending' ? 'Show everything again' : 'Show only what is not live yet'"
+            data-filter="pending"
+            data-testid="pending-count"
+            @click="toggle('pending')"
+          >
             <span class="v tabular">{{ stack.pending.length }}</span><span class="l">not live yet</span>
-          </div>
+          </button>
         </div>
       </section>
 
       <div v-for="g in infraErrors" :key="g.group" class="banner danger">
         <Icon name="alert" :size="18" />
-        <span class="grow"><strong>Compose group {{ g.group }}:</strong> {{ g.error }}</span>
+        <strong>Compose group {{ g.group }}:</strong>
+        <ErrorLine class="grow" :text="g.error ?? ''" tone="danger" />
       </div>
 
       <section v-if="attention.length" class="attention stale-dim" aria-label="Needs attention">
@@ -137,8 +198,12 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
       </section>
       <p v-if="inFlight" class="inflight muted"><span class="spinner" /> {{ inFlight }} change{{ inFlight === 1 ? '' : 's' }} on the way; the running instances keep serving until the new builds are healthy.</p>
 
+      <p v-if="filter" class="filter-note muted" data-testid="overview-filter">
+        Showing only what is {{ filterLabel[filter] }}<template v-if="!shown.length">: nothing right now</template>.
+        <button type="button" class="link-btn" @click="filter = null">Show everything</button>
+      </p>
       <div class="grid-cards stale-dim">
-        <section v-for="card in cards" :key="card.key" class="card" :data-testid="`group-${card.key}`">
+        <section v-for="card in shown" :key="card.key" class="card" :data-testid="`group-${card.key}`">
           <header class="card-header">
             <h2>{{ card.label }}</h2>
             <span class="count">{{ card.members.length }}</span>
@@ -232,6 +297,14 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
   --tone: var(--text-muted);
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
   padding: 10px 12px;
   border-radius: var(--radius);
   background: var(--surface-2);
@@ -317,5 +390,26 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
   padding: 10px 16px;
   color: var(--text-muted);
   font-size: 13px;
+}
+.stat:hover {
+  border-color: color-mix(in srgb, var(--tone) 55%, var(--border));
+}
+.stat.active {
+  border-color: var(--tone);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tone) 35%, transparent);
+  background: color-mix(in srgb, var(--tone) 8%, var(--surface-2));
+}
+.filter-note {
+  font-size: 13px;
+  margin: 0;
+}
+.link-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
 }
 </style>
