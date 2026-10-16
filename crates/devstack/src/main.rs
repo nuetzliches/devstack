@@ -317,6 +317,24 @@ enum NodeAction {
         #[arg(long)]
         dir: Option<PathBuf>,
     },
+    /// Run other members' lanes on this machine (ADR-0025): admit leases,
+    /// keep their source mirrors, report to the coordinator. The machine
+    /// must have joined the pool (`devstack join`).
+    Agent {
+        /// Address and port to listen on.
+        #[arg(long)]
+        listen: String,
+        /// Where requesters reach this node: `https://host:port`; default
+        /// from `--listen`.
+        #[arg(long)]
+        api: Option<String>,
+        /// The most CPU cores it offers (default: half of what is free).
+        #[arg(long)]
+        max_cpus: Option<f64>,
+        /// The most memory it offers, in GiB.
+        #[arg(long)]
+        max_memory_gib: Option<f64>,
+    },
     /// The CA's fingerprint, which a member passes to `devstack join`.
     Fingerprint {
         #[arg(long)]
@@ -602,6 +620,12 @@ fn main() -> Result<()> {
             NodeAction::Init { addresses, dir } => poolcmd::init(dir, &addresses),
             NodeAction::Serve { listen, dir } => poolcmd::serve(dir, &listen),
             NodeAction::Fingerprint { dir } => poolcmd::print_fingerprint(dir),
+            NodeAction::Agent {
+                listen,
+                api,
+                max_cpus,
+                max_memory_gib,
+            } => poolcmd::agent(&listen, api, max_cpus, max_memory_gib),
             NodeAction::Members { action, dir } => match action.unwrap_or(MembersAction::List) {
                 MembersAction::List => poolcmd::members_list(dir),
                 MembersAction::Approve { member, admin } => {

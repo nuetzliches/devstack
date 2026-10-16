@@ -102,14 +102,27 @@ pub fn member_id(csr_pem: &str) -> Result<String> {
     Ok(h.to_hex()[..16].to_string())
 }
 
-/// Sign a member's request: a client certificate whose common name is the
-/// member id.
+/// The name a member's certificate is issued for, and what a requester
+/// checks when it connects to that member as a node: its identity is its
+/// key, wherever it is reached (ADR-0027).
+pub fn member_dns(id: &str) -> String {
+    format!("{id}.member.devstack")
+}
+
+/// Sign a member's request: a certificate whose common name is the member id,
+/// for [`member_dns`], good as a client (every member) and as a server (a
+/// member that runs lanes as a node).
 pub fn sign_member(ca: &Pair, csr_pem: &str, id: &str) -> Result<String> {
     let mut csr = CertificateSigningRequestParams::from_pem(csr_pem)?;
     csr.params.distinguished_name = dn(id);
-    csr.params.subject_alt_names = Vec::new();
+    csr.params.subject_alt_names = vec![SanType::DnsName(
+        member_dns(id).try_into().map_err(PkiError::Rcgen)?,
+    )];
     csr.params.is_ca = IsCa::NoCa;
-    csr.params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+    csr.params.extended_key_usages = vec![
+        ExtendedKeyUsagePurpose::ClientAuth,
+        ExtendedKeyUsagePurpose::ServerAuth,
+    ];
     csr.params.not_after = years_from_now(5);
     Ok(csr.signed_by(&issuer(ca)?)?.pem())
 }
@@ -128,6 +141,13 @@ pub fn fingerprint_der(der: &[u8]) -> String {
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// The member id a certificate was issued to (its common name).
+pub fn member_of(der: &[u8]) -> Option<String> {
+    let (_, cert) = x509_parser::parse_x509_certificate(der).ok()?;
+    let cn = cert.subject().iter_common_name().next()?;
+    cn.as_str().ok().map(str::to_string)
 }
 
 /// The DER bytes of the first certificate in a PEM text.
@@ -156,6 +176,10 @@ mod tests {
             "the same key asks as the same member"
         );
         let cert = sign_member(&ca, &csr, &id).unwrap();
+        assert_eq!(
+            member_of(&first_der(&cert).unwrap()).as_deref(),
+            Some(id.as_str())
+        );
         assert_ne!(fingerprint(&cert).unwrap(), fingerprint(&ca.cert).unwrap());
         assert_eq!(fingerprint(&ca.cert).unwrap().len(), 64);
     }

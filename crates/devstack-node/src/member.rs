@@ -3,7 +3,8 @@
 //! call to the coordinator after the first is mutual TLS with the pool's CA.
 
 use crate::coordinator::{
-    ApproveRequest, JoinAnswer, JoinRequest, MemberView, NodeView, Report, RoleRequest,
+    ApproveRequest, JoinAnswer, JoinRequest, LeaseOffer, LeaseRequest, MemberView, NodeView,
+    Report, RoleRequest,
 };
 use crate::pki;
 use crate::store::{AuditEntry, Role, State};
@@ -288,6 +289,22 @@ impl Local {
         } else {
             &text
         })
+    }
+
+    /// The pool's CA, this member's certificate and key, PEM (for a client
+    /// that talks to a node).
+    pub fn pems(&self) -> Result<(String, String, String)> {
+        self.client()?;
+        let read = |f: &str| {
+            let p = self.path(f);
+            std::fs::read_to_string(&p).map_err(|e| MemberError::Io(p, e))
+        };
+        Ok((read("ca.pem")?, read("member.pem")?, read("member.key")?))
+    }
+
+    /// Ask the coordinator for a lane on a node (ADR-0031 point 4).
+    pub fn lease(&self, r: &LeaseRequest) -> Result<LeaseOffer> {
+        self.post("/v1/leases", r)
     }
 
     pub fn me(&self) -> Result<MemberView> {

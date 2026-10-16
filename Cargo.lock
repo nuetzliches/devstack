@@ -598,8 +598,12 @@ version = "0.8.0"
 dependencies = [
  "axum",
  "blake3",
+ "bytes",
+ "devstack-proc",
+ "http-body-util",
  "hyper",
  "hyper-util",
+ "rand",
  "rcgen",
  "rustls",
  "rustls-pki-types",
@@ -612,6 +616,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "ureq",
+ "x509-parser",
 ]
 
 [[package]]

@@ -6,6 +6,9 @@
 //! - `POST /v1/join` `{name, csr}`: ask to join; `GET /v1/join/{id}`: the answer
 //! - members only: `GET /v1/me`, `GET /v1/members`, `POST /v1/nodes/report`,
 //!   `GET /v1/nodes`
+//! - leases (ADR-0031 point 4): `POST /v1/leases` `{node, repo, lane, need}`
+//!   (a requester), `GET /v1/leases/{id}?token=` (the node, to admit it),
+//!   `GET /v1/leases`
 //! - admins only (ADR-0032): `GET /v1/admin/members`,
 //!   `POST /v1/admin/members/{id}/approve` `{role?}`,
 //!   `POST /v1/admin/members/{id}/remove` (also rejects a request),
@@ -120,6 +123,71 @@ pub struct Report {
     /// Where its node API listens (an address on the pool's network).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api: Option<String>,
+    /// The leases it holds now.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub leases: Vec<LeaseReport>,
+}
+
+/// A lease as its node reports it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeaseReport {
+    pub id: String,
+    /// The requester.
+    pub member: String,
+    pub repo: String,
+    pub lane: String,
+    /// Seconds until it expires unless renewed.
+    pub expires_in: u64,
+}
+
+/// `POST /v1/leases`: a requester asks for a lane on `node`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeaseRequest {
+    /// The node's member id or name (`--on`).
+    pub node: String,
+    /// The repository, as the requester names it (its stack id).
+    pub repo: String,
+    pub lane: String,
+    /// What the lane is expected to need.
+    #[serde(default)]
+    pub need: crate::share::Amount,
+}
+
+/// A member that runs lanes, as a requester reaches it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeRef {
+    pub id: String,
+    pub name: String,
+    /// `https://host:port`
+    pub api: String,
+}
+
+/// The coordinator's answer to a `LeaseRequest`: the requester takes it to
+/// the node, which admits it (ADR-0031 point 4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeaseOffer {
+    pub id: String,
+    /// Proves to the node that the coordinator created this lease for this
+    /// requester.
+    pub token: String,
+    pub node: NodeRef,
+}
+
+/// A lease as the coordinator keeps it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Lease {
+    pub id: String,
+    pub node: String,
+    pub member: String,
+    pub repo: String,
+    pub lane: String,
+    pub need: crate::share::Amount,
+    /// `offered` (created, not yet admitted by the node) or `running`.
+    pub state: String,
+    /// Unix seconds.
+    pub created: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_in: Option<u64>,
 }
 
 /// A member as the pool shows it.
@@ -198,20 +266,19 @@ pub struct JoinAnswer {
     pub cert: Option<String>,
 }
 
+/// An offered lease not admitted within this time is dropped.
+const OFFER_FOR: Duration = Duration::from_secs(300);
+
 struct Inner {
     dir: PathBuf,
+    /// Leases by id, with their token and when they were offered.
+    leases: Mutex<HashMap<String, (Lease, String, std::time::Instant)>>,
     store: Store,
     ca_pem: String,
     reports: Mutex<HashMap<String, (std::time::Instant, Report)>>,
 }
 
-/// The fingerprint of the client certificate a connection presented, and
-/// where the connection came from.
-#[derive(Clone)]
-struct Peer {
-    fp: Option<String>,
-    addr: std::net::SocketAddr,
-}
+use crate::tls::Peer;
 
 type Shared = Arc<Inner>;
 type ApiResult<T> = std::result::Result<T, (StatusCode, String)>;
@@ -272,6 +339,8 @@ fn router(shared: Shared) -> Router {
         .route("/v1/members", get(members))
         .route("/v1/nodes/report", post(report))
         .route("/v1/nodes", get(nodes))
+        .route("/v1/leases", get(leases).post(lease_create))
+        .route("/v1/leases/{id}", get(lease_get))
         .route("/v1/admin/members", get(admin_members))
         .route("/v1/admin/members/{id}/approve", post(admin_approve))
         .route("/v1/admin/members/{id}/remove", post(admin_remove))
@@ -339,6 +408,23 @@ async fn report(
     Json(r): Json<Report>,
 ) -> ApiResult<StatusCode> {
     let m = member(&s, &peer)?;
+    {
+        let mut leases = s.leases.lock().unwrap();
+        // What the node holds is running; what it no longer holds is over.
+        leases.retain(|id, (l, _, at)| {
+            if l.node != m.id {
+                return l.state != "offered" || at.elapsed() < OFFER_FOR;
+            }
+            match r.leases.iter().find(|x| &x.id == id) {
+                Some(x) => {
+                    l.state = "running".into();
+                    l.expires_in = Some(x.expires_in);
+                    true
+                }
+                None => l.state == "offered" && at.elapsed() < OFFER_FOR,
+            }
+        });
+    }
     s.reports
         .lock()
         .unwrap()
@@ -369,6 +455,156 @@ async fn nodes(
             })
             .collect(),
     ))
+}
+
+async fn lease_create(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    Json(r): Json<LeaseRequest>,
+) -> ApiResult<Json<LeaseOffer>> {
+    let me = member(&s, &peer)?;
+    let ms = s.store.list().map_err(internal)?;
+    let pick = |f: &dyn Fn(&Member) -> bool| -> Vec<&Member> {
+        ms.iter()
+            .filter(|m| m.state == State::Approved && f(m))
+            .collect()
+    };
+    let mut hits = pick(&|m| m.id == r.node || m.id.starts_with(&r.node));
+    if hits.is_empty() {
+        hits = pick(&|m| m.name.eq_ignore_ascii_case(&r.node));
+    }
+    let node = match hits.as_slice() {
+        [n] => (*n).clone(),
+        [] => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                format!("no node `{}` in the pool", r.node),
+            ));
+        }
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("`{}` names more than one member", r.node),
+            ));
+        }
+    };
+    let (api, offer) = {
+        let reports = s.reports.lock().unwrap();
+        let Some((at, rep)) = reports
+            .get(&node.id)
+            .filter(|(at, _)| at.elapsed() < ONLINE_FOR)
+        else {
+            return Err((StatusCode::CONFLICT, format!("{} is offline", node.name)));
+        };
+        let _ = at;
+        let Some(api) = rep.api.clone() else {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("{} runs no node agent: it cannot run lanes", node.name),
+            ));
+        };
+        if !rep.sharing {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("{} does not share right now", node.name),
+            ));
+        }
+        (
+            api,
+            crate::share::Amount {
+                cpus: rep.cpus,
+                memory: rep.memory,
+            },
+        )
+    };
+    if r.need.cpus > offer.cpus || r.need.memory > offer.memory {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "{} offers {:.1} CPU and {} MiB now; the lane needs {:.1} CPU and {} MiB",
+                node.name,
+                offer.cpus,
+                offer.memory >> 20,
+                r.need.cpus,
+                r.need.memory >> 20
+            ),
+        ));
+    }
+    let id = random_hex(8);
+    let token = random_hex(24);
+    let lease = Lease {
+        id: id.clone(),
+        node: node.id.clone(),
+        member: me.id,
+        repo: r.repo,
+        lane: r.lane,
+        need: r.need,
+        state: "offered".into(),
+        created: store::now(),
+        expires_in: None,
+    };
+    s.leases.lock().unwrap().insert(
+        id.clone(),
+        (lease, token.clone(), std::time::Instant::now()),
+    );
+    Ok(Json(LeaseOffer {
+        id,
+        token,
+        node: NodeRef {
+            id: node.id,
+            name: node.name,
+            api,
+        },
+    }))
+}
+
+#[derive(Deserialize)]
+struct TokenQuery {
+    token: String,
+}
+
+/// The node asks about a lease a requester brought it: only the node it
+/// was created for, with its token.
+async fn lease_get(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+    axum::extract::Query(q): axum::extract::Query<TokenQuery>,
+) -> ApiResult<Json<Lease>> {
+    let me = member(&s, &peer)?;
+    let leases = s.leases.lock().unwrap();
+    match leases.get(&id) {
+        Some((l, token, _)) if l.node == me.id && crate::tls::same(token, &q.token) => {
+            Ok(Json(l.clone()))
+        }
+        _ => Err((
+            StatusCode::NOT_FOUND,
+            format!("no lease `{id}` for this node"),
+        )),
+    }
+}
+
+async fn leases(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+) -> ApiResult<Json<Vec<Lease>>> {
+    member(&s, &peer)?;
+    let mut v: Vec<Lease> = s
+        .leases
+        .lock()
+        .unwrap()
+        .values()
+        .map(|(l, _, _)| l.clone())
+        .collect();
+    v.sort_by_key(|l| l.created);
+    Ok(Json(v))
+}
+
+fn random_hex(bytes: usize) -> String {
+    use rand::RngCore;
+    let mut b = vec![0u8; bytes];
+    rand::rng().fill_bytes(&mut b);
+    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 async fn admin_members(
@@ -423,82 +659,29 @@ async fn admin_audit(
     Ok(Json(s.store.audit(200).map_err(internal)?))
 }
 
-fn provider() -> Arc<rustls::crypto::CryptoProvider> {
-    Arc::new(rustls::crypto::ring::default_provider())
-}
-
-fn tls_config(dir: &Path) -> Result<rustls::ServerConfig> {
-    use rustls_pki_types::pem::PemObject;
-    use rustls_pki_types::{CertificateDer, PrivateKeyDer};
-    let pem_err = |e: rustls_pki_types::pem::Error| CoordError::Other(format!("PEM: {e:?}"));
-    let mut roots = rustls::RootCertStore::empty();
-    roots.add(CertificateDer::from(pki::first_der(&read(
-        &dir.join("ca.pem"),
-    )?)?))?;
-    let verifier =
-        rustls::server::WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider())
-            .allow_unauthenticated()
-            .build()
-            .map_err(|e| CoordError::Other(format!("client verifier: {e}")))?;
-    let chain = CertificateDer::pem_slice_iter(read(&dir.join("server.pem"))?.as_bytes())
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(pem_err)?;
-    let key = PrivateKeyDer::from_pem_slice(read(&dir.join("server.key"))?.as_bytes())
-        .map_err(pem_err)?;
-    Ok(rustls::ServerConfig::builder_with_provider(provider())
-        .with_safe_default_protocol_versions()?
-        .with_client_cert_verifier(verifier)
-        .with_single_cert(chain, key)?)
-}
-
 /// Serve the coordinator in `dir` on `listener` until `stop` resolves.
 pub async fn serve(
     dir: &Path,
     listener: tokio::net::TcpListener,
     stop: impl std::future::Future<Output = ()>,
 ) -> Result<()> {
-    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_config(dir)?));
+    let ca_pem = read(&dir.join("ca.pem"))?;
+    let config = crate::tls::server_config(
+        &ca_pem,
+        &read(&dir.join("server.pem"))?,
+        &read(&dir.join("server.key"))?,
+        false,
+    )
+    .map_err(|e| CoordError::Other(e.to_string()))?;
     let shared = Arc::new(Inner {
         dir: dir.to_path_buf(),
+        leases: Mutex::new(HashMap::new()),
         store: Store::new(dir),
-        ca_pem: read(&dir.join("ca.pem"))?,
+        ca_pem,
         reports: Mutex::new(HashMap::new()),
     });
-    let app = router(shared);
-    tokio::pin!(stop);
-    loop {
-        let (tcp, addr) = tokio::select! {
-            a = listener.accept() => match a {
-                Ok(a) => a,
-                Err(_) => {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                    continue;
-                }
-            },
-            () = &mut stop => return Ok(()),
-        };
-        let acceptor = acceptor.clone();
-        let app = app.clone();
-        tokio::spawn(async move {
-            let Ok(Ok(tls)) =
-                tokio::time::timeout(Duration::from_secs(10), acceptor.accept(tcp)).await
-            else {
-                return;
-            };
-            let fp = tls
-                .get_ref()
-                .1
-                .peer_certificates()
-                .and_then(|c| c.first())
-                .map(|c| pki::fingerprint_der(c));
-            let svc = hyper_util::service::TowerToHyperService::new(
-                app.layer(Extension(Peer { fp, addr })),
-            );
-            let _ = hyper::server::conn::http1::Builder::new()
-                .serve_connection(hyper_util::rt::TokioIo::new(tls), svc)
-                .await;
-        });
-    }
+    crate::tls::serve(config, listener, router(shared), stop).await;
+    Ok(())
 }
 
 /// Serve the coordinator in `dir` on `listen` until Ctrl-C (or SIGTERM).
@@ -512,7 +695,7 @@ pub fn serve_blocking(dir: &Path, listen: std::net::SocketAddr) -> Result<()> {
     })
 }
 
-async fn stop_signal() {
+pub async fn stop_signal() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};

@@ -1,0 +1,729 @@
+//! The node agent (ADR-0025 point 2, ADR-0026, ADR-0031): a member that runs
+//! other members' lanes. It admits a lease the coordinator created when it
+//! fits what the node shares, keeps the lane's source mirror (ADR-0029), lets
+//! a lease expire unless its requester renews it, and reports what it shares
+//! and holds to the coordinator.
+//!
+//! API (mutual TLS; the caller is the approved member its certificate names):
+//! - `GET /v1/node`
+//! - `POST /v1/leases` `{id, token}`: admit a lease
+//! - `POST /v1/leases/{id}/renew`, `DELETE /v1/leases/{id}` (the requester)
+//! - `POST /v1/leases/{id}/sync/missing` `{hashes}`: the blobs it lacks
+//! - `PUT /v1/blobs/{hash}`: one blob, by its BLAKE3 hash
+//! - `POST /v1/leases/{id}/sync/apply` `{files}`: make the mirror exactly this
+
+use crate::coordinator::{Lease, LeaseReport, Report};
+use crate::member::Local;
+use crate::share::{Amount, Settings, idle_cpus};
+use crate::tls::Peer;
+use axum::extract::{DefaultBodyLimit, Path as UrlPath, State as AxState};
+use axum::http::StatusCode;
+use axum::routing::{delete, get, post, put};
+use axum::{Extension, Json, Router};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+/// How long a lease lives without a renewal.
+pub const TTL: Duration = Duration::from_secs(120);
+/// How often the node measures, reaps and reports.
+const EVERY: Duration = Duration::from_secs(15);
+/// A lease admitted this recently is not in the measured usage yet, so its
+/// need still counts against what the node offers.
+const SETTLING: Duration = Duration::from_secs(180);
+/// The largest blob a requester may upload.
+const MAX_BLOB: usize = 512 << 20;
+
+pub struct NodeConfig {
+    /// This machine's membership (`member::default_dir`); the node keeps its
+    /// own state in `node/` under it.
+    pub dir: PathBuf,
+    /// Where requesters reach the node API: `https://host:port`.
+    pub api: String,
+    /// What the node shares; `enabled` is implied.
+    pub share: Settings,
+}
+
+/// A lease the node admitted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeLease {
+    pub id: String,
+    /// The requester.
+    pub member: String,
+    pub repo: String,
+    pub lane: String,
+    pub need: Amount,
+    /// Unix seconds.
+    pub expires: u64,
+    /// Unix seconds.
+    pub admitted: u64,
+}
+
+impl NodeLease {
+    fn expires_in(&self) -> u64 {
+        self.expires.saturating_sub(crate::store::now())
+    }
+}
+
+/// `GET /v1/node`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeView {
+    pub id: String,
+    pub name: String,
+    pub offer: Amount,
+    pub leases: Vec<NodeLease>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Admit {
+    pub id: String,
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Hashes {
+    pub hashes: Vec<String>,
+}
+
+/// One file of a mirror: its path relative to the lane's root (with `/`),
+/// the BLAKE3 hash of its content, whether it is executable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileEntry {
+    pub path: String,
+    pub hash: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exec: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Apply {
+    /// Every file the mirror is to hold; what is not listed goes.
+    pub files: Vec<FileEntry>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Applied {
+    pub written: usize,
+    pub removed: usize,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum NodeError {
+    #[error("{0}: {1}")]
+    Io(PathBuf, std::io::Error),
+    #[error("{0}")]
+    Member(#[from] crate::member::MemberError),
+    #[error("{0}")]
+    Other(String),
+}
+
+struct Inner {
+    local: Local,
+    me: String,
+    name: String,
+    root: PathBuf,
+    api: String,
+    share: Settings,
+    leases: Mutex<HashMap<String, NodeLease>>,
+    /// The approved members, as the coordinator last listed them.
+    members: Mutex<(Option<Instant>, HashSet<String>)>,
+    /// What the node offers now, before what its leases need.
+    offer: Mutex<Amount>,
+}
+
+type Shared = Arc<Inner>;
+type ApiResult<T> = std::result::Result<T, (StatusCode, String)>;
+
+fn err(status: StatusCode, msg: impl Into<String>) -> (StatusCode, String) {
+    (status, msg.into())
+}
+
+fn internal(e: impl std::fmt::Display) -> (StatusCode, String) {
+    err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+}
+
+impl Inner {
+    fn lanes(&self) -> PathBuf {
+        self.root.join("lanes")
+    }
+
+    fn blobs(&self) -> PathBuf {
+        self.root.join("blobs")
+    }
+
+    fn save(&self, leases: &HashMap<String, NodeLease>) {
+        let v: Vec<&NodeLease> = leases.values().collect();
+        let _ = std::fs::write(
+            self.root.join("leases.json"),
+            serde_json::to_vec_pretty(&v).expect("leases serialise"),
+        );
+    }
+
+    /// What is left for a new lease: the offer, less what recently admitted
+    /// leases need (they are not in the measured usage yet).
+    fn available(&self) -> Amount {
+        let offer = *self.offer.lock().unwrap();
+        let now = crate::store::now();
+        let leases = self.leases.lock().unwrap();
+        let settling = leases
+            .values()
+            .filter(|l| now.saturating_sub(l.admitted) < SETTLING.as_secs());
+        let (cpus, memory) = settling.fold((0.0, 0u64), |(c, m), l| {
+            (c + l.need.cpus, m + l.need.memory)
+        });
+        Amount {
+            cpus: (offer.cpus - cpus).max(0.0),
+            memory: offer.memory.saturating_sub(memory),
+        }
+    }
+
+    fn drop_lease(&self, id: &str) {
+        let _ = std::fs::remove_dir_all(self.lanes().join(id));
+    }
+}
+
+/// The approved member behind a request; asks the coordinator again when it
+/// does not know the caller or its list is old. When the coordinator is
+/// down the last list holds (ADR-0031 point 6).
+async fn caller(s: &Shared, peer: &Peer) -> ApiResult<String> {
+    let Some(id) = peer.member.clone() else {
+        return Err(err(StatusCode::UNAUTHORIZED, "no member certificate"));
+    };
+    let fresh = {
+        let m = s.members.lock().unwrap();
+        m.0.is_some_and(|at| at.elapsed() < Duration::from_secs(30)) && m.1.contains(&id)
+    };
+    if !fresh {
+        let s2 = s.clone();
+        let listed = tokio::task::spawn_blocking(move || s2.local.members())
+            .await
+            .map_err(internal)?;
+        if let Ok(list) = listed {
+            let ids = list
+                .into_iter()
+                .filter(|m| m.state == crate::store::State::Approved)
+                .map(|m| m.id)
+                .collect();
+            *s.members.lock().unwrap() = (Some(Instant::now()), ids);
+        }
+    }
+    if s.members.lock().unwrap().1.contains(&id) {
+        Ok(id)
+    } else {
+        Err(err(
+            StatusCode::FORBIDDEN,
+            "this certificate is not an approved member of the pool",
+        ))
+    }
+}
+
+/// The lease `id`, if `member` holds it.
+fn lease_of(s: &Inner, id: &str, member: &str) -> ApiResult<NodeLease> {
+    match s.leases.lock().unwrap().get(id) {
+        Some(l) if l.member == member => Ok(l.clone()),
+        _ => Err(err(
+            StatusCode::NOT_FOUND,
+            format!("no lease `{id}` of yours here"),
+        )),
+    }
+}
+
+fn router(s: Shared) -> Router {
+    Router::new()
+        .route("/v1/node", get(node))
+        .route("/v1/leases", post(admit))
+        .route("/v1/leases/{id}", delete(release))
+        .route("/v1/leases/{id}/renew", post(renew))
+        .route("/v1/leases/{id}/sync/missing", post(missing))
+        .route("/v1/leases/{id}/sync/apply", post(apply))
+        .route(
+            "/v1/blobs/{hash}",
+            put(blob).layer(DefaultBodyLimit::max(MAX_BLOB)),
+        )
+        .with_state(s)
+}
+
+async fn node(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+) -> ApiResult<Json<NodeView>> {
+    caller(&s, &peer).await?;
+    let mut leases: Vec<NodeLease> = s.leases.lock().unwrap().values().cloned().collect();
+    leases.sort_by_key(|l| l.admitted);
+    Ok(Json(NodeView {
+        id: s.me.clone(),
+        name: s.name.clone(),
+        offer: s.available(),
+        leases,
+    }))
+}
+
+async fn admit(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    Json(a): Json<Admit>,
+) -> ApiResult<(StatusCode, Json<NodeLease>)> {
+    let who = caller(&s, &peer).await?;
+    if let Some(l) = s.leases.lock().unwrap().get(&a.id) {
+        return if l.member == who {
+            Ok((StatusCode::OK, Json(l.clone())))
+        } else {
+            Err(err(
+                StatusCode::CONFLICT,
+                "the lease belongs to someone else",
+            ))
+        };
+    }
+    // The coordinator created it, for this node and this requester.
+    let s2 = s.clone();
+    let (id, token) = (a.id.clone(), a.token.clone());
+    let lease: Lease = tokio::task::spawn_blocking(move || {
+        s2.local.get(&format!("/v1/leases/{id}?token={token}"))
+    })
+    .await
+    .map_err(internal)?
+    .map_err(|e| match e {
+        crate::member::MemberError::Status(404, m) => err(StatusCode::FORBIDDEN, m),
+        e => err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("cannot confirm the lease with the coordinator: {e}"),
+        ),
+    })?;
+    if lease.node != s.me || lease.member != who {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "the lease is not for this node and you",
+        ));
+    }
+    // The node admits against what it has now (ADR-0031 point 4).
+    let free = s.available();
+    if lease.need.cpus > free.cpus || lease.need.memory > free.memory {
+        return Err(err(
+            StatusCode::CONFLICT,
+            format!(
+                "{} offers {:.1} CPU and {} MiB now; the lane needs {:.1} CPU and {} MiB",
+                s.name,
+                free.cpus,
+                free.memory >> 20,
+                lease.need.cpus,
+                lease.need.memory >> 20
+            ),
+        ));
+    }
+    let now = crate::store::now();
+    let l = NodeLease {
+        id: lease.id,
+        member: who,
+        repo: lease.repo,
+        lane: lease.lane,
+        need: lease.need,
+        expires: now + TTL.as_secs(),
+        admitted: now,
+    };
+    std::fs::create_dir_all(s.lanes().join(&l.id).join("src")).map_err(internal)?;
+    let mut leases = s.leases.lock().unwrap();
+    leases.insert(l.id.clone(), l.clone());
+    s.save(&leases);
+    Ok((StatusCode::CREATED, Json(l)))
+}
+
+async fn renew(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<Json<NodeLease>> {
+    let who = caller(&s, &peer).await?;
+    lease_of(&s, &id, &who)?;
+    let mut leases = s.leases.lock().unwrap();
+    let l = leases.get_mut(&id).expect("checked above");
+    l.expires = crate::store::now() + TTL.as_secs();
+    let out = l.clone();
+    s.save(&leases);
+    Ok(Json(out))
+}
+
+async fn release(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<StatusCode> {
+    let who = caller(&s, &peer).await?;
+    lease_of(&s, &id, &who)?;
+    {
+        let mut leases = s.leases.lock().unwrap();
+        leases.remove(&id);
+        s.save(&leases);
+    }
+    s.drop_lease(&id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn valid_hash(h: &str) -> bool {
+    h.len() == 64
+        && h.bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
+async fn missing(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+    Json(h): Json<Hashes>,
+) -> ApiResult<Json<Hashes>> {
+    let who = caller(&s, &peer).await?;
+    lease_of(&s, &id, &who)?;
+    let blobs = s.blobs();
+    let mut seen = HashSet::new();
+    let hashes = h
+        .hashes
+        .into_iter()
+        .filter(|x| valid_hash(x) && seen.insert(x.clone()) && !blobs.join(x).exists())
+        .collect();
+    Ok(Json(Hashes { hashes }))
+}
+
+async fn blob(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(hash): UrlPath<String>,
+    body: bytes::Bytes,
+) -> ApiResult<StatusCode> {
+    let who = caller(&s, &peer).await?;
+    // Only a member with a lease here may store anything.
+    if !s.leases.lock().unwrap().values().any(|l| l.member == who) {
+        return Err(err(StatusCode::FORBIDDEN, "no lease of yours here"));
+    }
+    if !valid_hash(&hash) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "a blob is named by its BLAKE3 hash",
+        ));
+    }
+    if blake3::hash(&body).to_hex().as_str() != hash {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "the content does not have that hash",
+        ));
+    }
+    let dir = s.blobs();
+    let path = dir.join(&hash);
+    if path.exists() {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    std::fs::create_dir_all(&dir).map_err(internal)?;
+    let tmp = dir.join(format!("{hash}.{}", crate::store::now()));
+    std::fs::write(&tmp, &body).map_err(internal)?;
+    std::fs::rename(&tmp, &path).map_err(internal)?;
+    Ok(StatusCode::CREATED)
+}
+
+/// A mirror path from a requester, made safe: relative, no `..`, no drive or
+/// root, `/`-separated.
+fn safe_path(p: &str) -> Option<PathBuf> {
+    let p = p.replace('\\', "/");
+    if p.contains(':') {
+        return None;
+    }
+    let mut out = PathBuf::new();
+    for seg in p.split('/') {
+        if seg.is_empty() || seg == "." || seg == ".." {
+            return None;
+        }
+        out.push(seg);
+    }
+    out.components()
+        .all(|c| matches!(c, Component::Normal(_)))
+        .then_some(out)
+}
+
+/// What the mirror holds, by path: the hash it was written from.
+fn manifest(dir: &Path) -> HashMap<String, String> {
+    std::fs::read(dir.join("manifest.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+/// Make the mirror of lane `lane_dir` hold exactly `files`, from `blobs`.
+pub fn apply_files(
+    blobs: &Path,
+    lane_dir: &Path,
+    files: &[FileEntry],
+) -> Result<Applied, NodeError> {
+    let io = |p: &Path| {
+        let p = p.to_path_buf();
+        move |e| NodeError::Io(p, e)
+    };
+    let src = lane_dir.join("src");
+    let mut have = manifest(lane_dir);
+    let mut out = Applied::default();
+    let mut wanted = HashSet::new();
+    for f in files {
+        let rel = safe_path(&f.path)
+            .ok_or_else(|| NodeError::Other(format!("unsafe path `{}`", f.path)))?;
+        if !valid_hash(&f.hash) {
+            return Err(NodeError::Other(format!("`{}`: no hash", f.path)));
+        }
+        wanted.insert(f.path.clone());
+        let target = src.join(&rel);
+        if have.get(&f.path) == Some(&f.hash) && target.exists() {
+            continue;
+        }
+        let blob = blobs.join(&f.hash);
+        if !blob.exists() {
+            return Err(NodeError::Other(format!(
+                "`{}`: blob {} not uploaded",
+                f.path, f.hash
+            )));
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(io(parent))?;
+        }
+        let tmp = target.with_file_name(format!(
+            ".{}.devstack-tmp",
+            target
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default()
+        ));
+        std::fs::copy(&blob, &tmp).map_err(io(&tmp))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = if f.exec { 0o755 } else { 0o644 };
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))
+                .map_err(io(&tmp))?;
+        }
+        std::fs::rename(&tmp, &target).map_err(io(&target))?;
+        have.insert(f.path.clone(), f.hash.clone());
+        out.written += 1;
+    }
+    let gone: Vec<String> = have
+        .keys()
+        .filter(|p| !wanted.contains(*p))
+        .cloned()
+        .collect();
+    for p in gone {
+        have.remove(&p);
+        if let Some(rel) = safe_path(&p) {
+            let target = src.join(rel);
+            if std::fs::remove_file(&target).is_ok() {
+                out.removed += 1;
+            }
+            // Directories left empty go too.
+            let mut dir = target.parent().map(Path::to_path_buf);
+            while let Some(d) = dir {
+                if d == src || std::fs::remove_dir(&d).is_err() {
+                    break;
+                }
+                dir = d.parent().map(Path::to_path_buf);
+            }
+        }
+    }
+    std::fs::write(
+        lane_dir.join("manifest.json"),
+        serde_json::to_vec(&have).expect("a manifest serialises"),
+    )
+    .map_err(io(lane_dir))?;
+    Ok(out)
+}
+
+async fn apply(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+    Json(a): Json<Apply>,
+) -> ApiResult<Json<Applied>> {
+    let who = caller(&s, &peer).await?;
+    lease_of(&s, &id, &who)?;
+    let (blobs, lane) = (s.blobs(), s.lanes().join(&id));
+    let r = tokio::task::spawn_blocking(move || apply_files(&blobs, &lane, &a.files))
+        .await
+        .map_err(internal)?;
+    r.map(Json)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e.to_string()))
+}
+
+/// Measure, let expired leases go, and report, every `EVERY`.
+async fn background(s: Shared) {
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let mut before = devstack_proc::cpu_times();
+    let mut wait = Duration::from_secs(2);
+    loop {
+        tokio::time::sleep(wait).await;
+        wait = EVERY;
+        let after = devstack_proc::cpu_times();
+        let free = Amount {
+            cpus: match (before, after) {
+                (Some(b), Some(a)) => idle_cpus(b, a, cores),
+                _ => 0.0,
+            },
+            memory: devstack_proc::memory_available().unwrap_or(0),
+        };
+        if after.is_some() {
+            before = after;
+        }
+        let offer = Settings {
+            enabled: true,
+            ..s.share.clone()
+        }
+        .offer(free);
+        *s.offer.lock().unwrap() = offer;
+
+        let now = crate::store::now();
+        let expired: Vec<String> = {
+            let mut leases = s.leases.lock().unwrap();
+            let gone: Vec<String> = leases
+                .values()
+                .filter(|l| l.expires <= now)
+                .map(|l| l.id.clone())
+                .collect();
+            for id in &gone {
+                leases.remove(id);
+            }
+            if !gone.is_empty() {
+                s.save(&leases);
+            }
+            gone
+        };
+        for id in expired {
+            s.drop_lease(&id);
+        }
+
+        let available = s.available();
+        let report = Report {
+            sharing: true,
+            cpus: available.cpus,
+            memory: available.memory,
+            api: Some(s.api.clone()),
+            leases: s
+                .leases
+                .lock()
+                .unwrap()
+                .values()
+                .map(|l| LeaseReport {
+                    id: l.id.clone(),
+                    member: l.member.clone(),
+                    repo: l.repo.clone(),
+                    lane: l.lane.clone(),
+                    expires_in: l.expires_in(),
+                })
+                .collect(),
+        };
+        let s2 = s.clone();
+        let _ = tokio::task::spawn_blocking(move || s2.local.report(&report)).await;
+    }
+}
+
+/// Run the node agent of the member in `config.dir` on `listener` until
+/// `stop` resolves.
+pub async fn serve(
+    config: NodeConfig,
+    listener: tokio::net::TcpListener,
+    stop: impl std::future::Future<Output = ()>,
+) -> Result<(), NodeError> {
+    let local = Local::new(&config.dir);
+    let m = local
+        .membership()?
+        .filter(|m| m.state == crate::store::State::Approved)
+        .ok_or_else(|| {
+            NodeError::Other(
+                "this machine is no approved member of a pool: `devstack join` first".into(),
+            )
+        })?;
+    let read = |f: &str| {
+        let p = config.dir.join(f);
+        std::fs::read_to_string(&p).map_err(|e| NodeError::Io(p, e))
+    };
+    let tls = crate::tls::server_config(
+        &read("ca.pem")?,
+        &read("member.pem")?,
+        &read("member.key")?,
+        true,
+    )
+    .map_err(|e| NodeError::Other(e.to_string()))?;
+    let root = config.dir.join("node");
+    std::fs::create_dir_all(root.join("lanes")).map_err(|e| NodeError::Io(root.clone(), e))?;
+    let leases: HashMap<String, NodeLease> = std::fs::read(root.join("leases.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Vec<NodeLease>>(&b).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|l| (l.id.clone(), l))
+        .collect();
+    let s = Arc::new(Inner {
+        local,
+        me: m.id,
+        name: m.name,
+        root,
+        api: config.api,
+        share: config.share,
+        leases: Mutex::new(leases),
+        members: Mutex::new((None, HashSet::new())),
+        offer: Mutex::new(Amount::default()),
+    });
+    let bg = tokio::spawn(background(s.clone()));
+    crate::tls::serve(tls, listener, router(s), stop).await;
+    bg.abort();
+    Ok(())
+}
+
+/// Run the node agent until Ctrl-C (or SIGTERM).
+pub fn serve_blocking(config: NodeConfig, listen: std::net::SocketAddr) -> Result<(), NodeError> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| NodeError::Other(e.to_string()))?;
+    rt.block_on(async {
+        let listener = tokio::net::TcpListener::bind(listen)
+            .await
+            .map_err(|e| NodeError::Other(format!("listen on {listen}: {e}")))?;
+        serve(config, listener, crate::coordinator::stop_signal()).await
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_path_from_a_requester_stays_in_the_mirror() {
+        assert!(safe_path("src/Api/Program.cs").is_some());
+        assert!(safe_path("src\\Api\\Program.cs").is_some());
+        for bad in ["", "/etc/passwd", "../x", "a/../../x", "C:/x", "a/./b"] {
+            assert!(safe_path(bad).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn apply_writes_what_changed_and_removes_what_went() {
+        let d = tempfile::tempdir().unwrap();
+        let (blobs, lane) = (d.path().join("blobs"), d.path().join("lane"));
+        std::fs::create_dir_all(&blobs).unwrap();
+        let put = |text: &str| {
+            let h = blake3::hash(text.as_bytes()).to_hex().to_string();
+            std::fs::write(blobs.join(&h), text).unwrap();
+            h
+        };
+        let (a, b) = (put("a"), put("b"));
+        let f = |p: &str, h: &str| FileEntry {
+            path: p.into(),
+            hash: h.into(),
+            exec: false,
+        };
+        let r = apply_files(&blobs, &lane, &[f("x/a.txt", &a), f("b.txt", &b)]).unwrap();
+        assert_eq!((r.written, r.removed), (2, 0));
+        assert_eq!(
+            std::fs::read_to_string(lane.join("src/x/a.txt")).unwrap(),
+            "a"
+        );
+        let r = apply_files(&blobs, &lane, &[f("b.txt", &a)]).unwrap();
+        assert_eq!((r.written, r.removed), (1, 1));
+        assert_eq!(
+            std::fs::read_to_string(lane.join("src/b.txt")).unwrap(),
+            "a"
+        );
+        assert!(!lane.join("src/x").exists(), "an emptied directory goes");
+        let missing = "0".repeat(64);
+        assert!(apply_files(&blobs, &lane, &[f("c.txt", &missing)]).is_err());
+    }
+}
