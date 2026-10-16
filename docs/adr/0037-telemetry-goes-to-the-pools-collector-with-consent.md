@@ -1,6 +1,6 @@
 # ADR-0037: Telemetry goes to the pool's collector, if the pool has one and the member agrees
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-16)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0031](0031-a-coordinator-places-lanes.md) (the coordinator, member certificates), [ADR-0034](0034-a-machine-can-belong-to-several-pools.md), [ADR-0036](0036-the-pool-shows-its-capacity-over-time.md), plan §11 (the diagnostic log)

@@ -1,6 +1,6 @@
 # ADR-0036: The pool shows its capacity, GPUs included, and how it changed
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-16)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md) (what a node offers), [ADR-0031](0031-a-coordinator-places-lanes.md) (point 3: reports), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md), [ADR-0037](0037-telemetry-goes-to-the-pools-collector-with-consent.md)
