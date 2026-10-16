@@ -1,5 +1,6 @@
 //! Is there a newer devstack? One request to the GitHub API for the latest
-//! release, made by the hub (at start, then every 12 hours) and by
+//! release, made by the hub (at start, every 12 hours by the clock and when a
+//! dashboard connects to a stale answer; see `watch_release`) and by
 //! `devstack update --check` / `devstack doctor`. `DEVSTACK_NO_UPDATE_CHECK=1`
 //! turns the hub's check off (a machine without internet, a policy).
 

@@ -75,7 +75,7 @@ devstack hot-reload api on   # the toolchain's watcher from the source tree (`ho
 git worktree add ../shop-fix -b login-fix  # a worktree is a lane at once (git's, not devstack's)
 devstack up                  # in a `git worktree`: starts its lane, ports +100, same infrastructure
 devstack promote --lane x    # lane x answers on the main ports; `--lane main` gives them back
-devstack update           # the latest release; the dashboard says when there is one
+devstack update           # the latest release; the dashboard says when there is one and installs it with a click
 devstack logs --daemon    # devstack's own decisions with their reasons (--hub: the dashboard hub)
 devstack run reset        # a command from the stack file
 devstack top --watch      # CPU, memory and disk per service, container, group and lane

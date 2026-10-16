@@ -104,6 +104,11 @@ struct AppState {
     engine: watch::Receiver<Engine>,
     /// A newer release than this hub, if the check found one (`release`).
     newer: watch::Receiver<Option<String>>,
+    /// Asks the release check to look again if its last answer is older than
+    /// an hour (a dashboard connected, see `watch_release`).
+    release_poke: std::sync::mpsc::Sender<()>,
+    /// `POST /hub/update`: running, or how the last one failed.
+    update: watch::Sender<UpdateState>,
     /// Until when (ms) to look at the engine every 2 s: after a start request.
     engine_fast_until: Arc<std::sync::atomic::AtomicU64>,
     shutdown: Arc<tokio::sync::Notify>,
@@ -267,7 +272,7 @@ pub fn serve() -> Result<(), String> {
 
         let engine_fast_until = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let engine_rx = watch_engine(engine_fast_until.clone());
-        let newer_rx = watch_release();
+        let (newer_rx, release_poke) = watch_release();
 
         let shutdown = Arc::new(tokio::sync::Notify::new());
         let state = AppState {
@@ -278,6 +283,8 @@ pub fn serve() -> Result<(), String> {
             stacks: rx,
             engine: engine_rx,
             newer: newer_rx,
+            release_poke,
+            update: watch::channel(UpdateState::default()).0,
             engine_fast_until,
             shutdown: shutdown.clone(),
         };
@@ -331,6 +338,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/docker/start", post(docker_start))
         .route("/hub/events", get(events))
         .route("/hub/ws", get(ws::ws))
+        .route("/hub/update", post(update))
         .route("/hub/inspect", get(inspect))
         .route("/hub/pick-folder", post(pick_folder))
         .route("/hub/stacks/add", post(stack_add))
@@ -585,40 +593,138 @@ fn watch_engine(fast_until: Arc<std::sync::atomic::AtomicU64>) -> watch::Receive
     rx
 }
 
-/// Look for a newer release at start and every 12 hours (`release::latest`),
-/// unless `DEVSTACK_NO_UPDATE_CHECK` is set. Publishes the newer version, or
-/// `None`; a failed check changes nothing.
-fn watch_release() -> watch::Receiver<Option<String>> {
+/// Look for a newer release at start, then every 12 hours by the wall clock,
+/// and when a dashboard connects and the last answer is older than an hour
+/// (the `Sender` pokes). Not with a 12-hour sleep: on Windows a sleeping
+/// thread's time stands still while the machine is in standby, so a hub from
+/// last night would not look again until well into the day. A failed check
+/// is tried again after an hour. `DEVSTACK_NO_UPDATE_CHECK` turns it off.
+fn watch_release() -> (watch::Receiver<Option<String>>, std::sync::mpsc::Sender<()>) {
+    use std::sync::mpsc::RecvTimeoutError;
+    use std::time::SystemTime;
+    const EVERY: Duration = Duration::from_secs(12 * 3600);
+    const RETRY: Duration = Duration::from_secs(3600);
+    const FRESH: Duration = Duration::from_secs(3600);
     let (tx, rx) = watch::channel(None);
+    let (poke, pokes) = std::sync::mpsc::channel::<()>();
     if release::check_disabled() {
-        return rx;
+        return (rx, poke);
     }
     std::thread::spawn(move || {
+        let mut last: Option<SystemTime> = None;
+        let mut next = SystemTime::now();
         loop {
+            // The first look at once, then once a minute or when poked.
+            let wait = if last.is_none() {
+                Duration::ZERO
+            } else {
+                Duration::from_secs(60)
+            };
+            let poked = match pokes.recv_timeout(wait) {
+                Ok(()) => true,
+                Err(RecvTimeoutError::Timeout) => false,
+                Err(RecvTimeoutError::Disconnected) => return,
+            };
+            let now = SystemTime::now();
+            let stale = |t: Option<SystemTime>| {
+                t.is_none_or(|t| now.duration_since(t).unwrap_or(FRESH) >= FRESH)
+            };
+            if now < next && !(poked && stale(last)) {
+                continue;
+            }
+            last = Some(now);
             match release::latest() {
                 Ok(latest) => {
-                    let next = release::newer(&latest, VERSION).then_some(latest);
+                    next = now + EVERY;
+                    let newer = release::newer(&latest, VERSION).then_some(latest);
                     tx.send_if_modified(|cur| {
-                        if *cur == next {
+                        if *cur == newer {
                             false
                         } else {
-                            if let Some(v) = &next {
+                            if let Some(v) = &newer {
                                 diag::info("release", serde_json::json!({ "newer": v }));
                             }
-                            *cur = next;
+                            *cur = newer;
                             true
                         }
                     });
                 }
-                Err(e) => diag::warn("release_check", serde_json::json!({ "error": e })),
+                Err(e) => {
+                    next = now + RETRY;
+                    diag::warn("release_check", serde_json::json!({ "error": e }));
+                }
             }
             if tx.is_closed() {
                 return;
             }
-            std::thread::sleep(Duration::from_secs(12 * 3600));
         }
     });
-    rx
+    (rx, poke)
+}
+
+/// The dashboard's update (`POST /hub/update`), as the hub stream tells it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+struct UpdateState {
+    running: bool,
+    /// Why the last one failed: the end of its output.
+    error: Option<String>,
+}
+
+/// `POST /hub/update`: `devstack update` in the background, as if typed in a
+/// terminal. On success it stops this hub and starts the new one, so the
+/// dashboard reconnects to the new version; running stacks keep theirs until
+/// they restart. On failure the hub stream says why. Output goes to
+/// `hub/update.log`.
+async fn update(State(s): State<AppState>) -> Response {
+    if s.update.borrow().running {
+        return err(StatusCode::CONFLICT, "an update is running");
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "cannot find devstack");
+    };
+    let log = state_dir().join("update.log");
+    let out = match std::fs::File::create(&log) {
+        Ok(f) => f,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let Ok(out2) = out.try_clone() else {
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "cannot open the update log",
+        );
+    };
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("update")
+        .stdin(std::process::Stdio::null())
+        .stdout(out)
+        .stderr(out2);
+    no_window(&mut cmd);
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    diag::info("update", serde_json::json!({ "started": true }));
+    s.update.send_replace(UpdateState {
+        running: true,
+        error: None,
+    });
+    let tx = s.update.clone();
+    std::thread::spawn(move || {
+        let ok = child.wait().is_ok_and(|st| st.success());
+        let error = (!ok).then(|| {
+            let text = std::fs::read_to_string(&log).unwrap_or_default();
+            let lines: Vec<&str> = text.lines().collect();
+            lines[lines.len().saturating_sub(10)..].join("\n")
+        });
+        if let Some(e) = &error {
+            diag::warn("update_failed", serde_json::json!({ "output": e }));
+        }
+        tx.send_replace(UpdateState {
+            running: false,
+            error,
+        });
+    });
+    StatusCode::ACCEPTED.into_response()
 }
 
 async fn docker(State(s): State<AppState>) -> Response {
@@ -664,13 +770,18 @@ async fn events(State(s): State<AppState>) -> Response {
 
 /// What `/hub/events` sends, as values (also over WebSocket, `ws`).
 fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Value> + Send + use<> {
+    // A dashboard just connected, often after the machine woke up: a release
+    // check from yesterday evening is not what it should show.
+    let _ = s.release_poke.send(());
+    let update = tokio_stream::wrappers::WatchStream::new(s.update.subscribe())
+        .map(|u| serde_json::json!({ "type": "update", "update": u }));
     let stacks = tokio_stream::wrappers::WatchStream::new(s.stacks.clone())
         .map(|stacks| serde_json::json!({ "type": "stacks", "stacks": stacks }));
     let docker = tokio_stream::wrappers::WatchStream::new(s.engine.clone())
         .map(|engine| serde_json::json!({ "type": "docker", "docker": engine }));
     let release = tokio_stream::wrappers::WatchStream::new(s.newer.clone())
         .map(|newer| serde_json::json!({ "type": "release", "current": VERSION, "newer": newer }));
-    stacks.merge(docker).merge(release)
+    stacks.merge(docker).merge(release).merge(update)
 }
 
 fn entry(s: &AppState, id: &str) -> Option<StackEntry> {
