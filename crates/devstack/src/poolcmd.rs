@@ -24,8 +24,21 @@ pub fn coordinator_dir(dir: Option<PathBuf>) -> PathBuf {
 }
 
 /// This machine's membership: `pool/` in devstack's per-user state.
-fn member_dir() -> PathBuf {
-    devstack_node::member::default_dir(&data_dir())
+/// The membership of `pool` (ADR-0034).
+fn member_dir(pool: &str) -> Result<PathBuf> {
+    if !devstack_node::member::valid_pool_name(pool) {
+        bail!("--pool {pool}: a-z, 0-9, `-` and `_`, at most 32");
+    }
+    Ok(devstack_node::member::pool_dir(&data_dir(), pool))
+}
+
+/// ` --pool <name>` for messages, empty for the default pool.
+fn pool_arg(pool: &str) -> String {
+    if pool == devstack_node::member::DEFAULT_POOL {
+        String::new()
+    } else {
+        format!(" --pool {pool}")
+    }
 }
 
 fn need_coordinator(dir: &Path) -> Result<()> {
@@ -278,8 +291,14 @@ fn hostname() -> String {
         .unwrap_or_else(|| "member".into())
 }
 
-pub fn join(coordinator: &str, fingerprint: &str, name: Option<&str>, wait: bool) -> Result<()> {
-    let local = Local::new(&member_dir());
+pub fn join(
+    pool: &str,
+    coordinator: &str,
+    fingerprint: &str,
+    name: Option<&str>,
+    wait: bool,
+) -> Result<()> {
+    let local = Local::new(&member_dir(pool)?);
     // Asking again keeps the name it asked with.
     let name = match name {
         Some(n) => n.to_string(),
@@ -292,7 +311,10 @@ pub fn join(coordinator: &str, fingerprint: &str, name: Option<&str>, wait: bool
             m.id, m.id
         );
         if !wait {
-            println!("`devstack join` again (or `devstack pool`) once approved");
+            println!(
+                "`devstack join{}` again (or `devstack pool`) once approved",
+                pool_arg(pool)
+            );
             return Ok(());
         }
         println!("waiting for the approval (Ctrl-C stops waiting; the request stays)...");
@@ -302,7 +324,10 @@ pub fn join(coordinator: &str, fingerprint: &str, name: Option<&str>, wait: bool
         }
     }
     match m.state {
-        State::Approved => println!("joined the pool at {} as {} ({name})", m.coordinator, m.id),
+        State::Approved => println!(
+            "joined the pool `{pool}` at {} as {} ({name})",
+            m.coordinator, m.id
+        ),
         State::Removed => bail!(
             "the coordinator removed this machine ({}) from the pool",
             m.id
@@ -312,18 +337,49 @@ pub fn join(coordinator: &str, fingerprint: &str, name: Option<&str>, wait: bool
     Ok(())
 }
 
-pub fn pool() -> Result<()> {
-    let local = Local::new(&member_dir());
+/// `devstack pool`: every pool this machine belongs to, or the one named.
+pub fn pool(only: Option<&str>) -> Result<()> {
+    let all = devstack_node::member::pools(&data_dir());
+    let mut shown = 0;
+    for (name, dir) in &all {
+        if only.is_some_and(|o| o != name) {
+            continue;
+        }
+        let local = Local::new(dir);
+        if local.membership()?.is_none() {
+            continue;
+        }
+        if shown > 0 {
+            println!();
+        }
+        shown += 1;
+        if let Err(e) = pool_one(name, &local) {
+            println!("pool `{name}`: {e}");
+        }
+    }
+    if shown == 0 {
+        match only {
+            Some(p) => bail!(
+                "this machine is in no pool `{p}`: `devstack join <coordinator> --fingerprint <fp>{}`",
+                pool_arg(p)
+            ),
+            None => bail!(
+                "this machine is in no pool: `devstack join <coordinator> --fingerprint <fp>`"
+            ),
+        }
+    }
+    Ok(())
+}
+
+fn pool_one(pool: &str, local: &Local) -> Result<()> {
     let m = match local.membership()? {
         Some(m) if m.state != State::Approved => local.refresh()?,
         Some(m) => m,
-        None => {
-            bail!("this machine is in no pool: `devstack join <coordinator> --fingerprint <fp>`")
-        }
+        None => unreachable!("checked by the caller"),
     };
     let nodes = local.nodes()?;
     println!(
-        "pool at {} (this machine: {} {})",
+        "pool `{pool}` at {} (this machine: {} {})",
         m.coordinator, m.id, m.name
     );
     println!(
@@ -376,6 +432,7 @@ pub fn pool() -> Result<()> {
 }
 
 pub fn agent(
+    pool: &str,
     listen: &str,
     api: Option<String>,
     max_cpus: Option<f64>,
@@ -397,15 +454,18 @@ pub fn agent(
         max_cpus,
         max_memory: max_memory_gib.map(|g| (g * f64::from(1u32 << 30)) as u64),
     };
-    let dir = member_dir();
+    let dir = member_dir(pool)?;
     let m = Local::new(&dir)
         .membership()?
         .filter(|m| m.state == State::Approved)
         .ok_or_else(|| {
-            anyhow!("this machine is no approved member of a pool: `devstack join` first")
+            anyhow!(
+                "this machine is no approved member of the pool `{pool}`: `devstack join{}` first",
+                pool_arg(pool)
+            )
         })?;
     println!(
-        "node agent of {} ({}) on {addr}; requesters reach it at {api}",
+        "node agent of {} ({}) in the pool `{pool}` on {addr}; requesters reach it at {api}",
         m.name, m.id
     );
     devstack_node::node::serve_blocking(
@@ -431,9 +491,11 @@ pub fn run_lane(file: &Path, on: &str, lane: &str, keep: bool) -> Result<()> {
         .ok_or_else(|| anyhow!("{} has no directory", file.display()))?
         .to_path_buf();
     let stack = devstack_config::load(&file).map_err(|e| anyhow!("{e}"))?;
-    let local = Local::new(&member_dir());
+    let (pool, node) =
+        devstack_node::member::resolve_on(&data_dir(), on).map_err(|e| anyhow!("{e}"))?;
+    let local = Local::new(&member_dir(&pool)?);
     let offer = local.lease(&LeaseRequest {
-        node: on.into(),
+        node,
         repo: stack.stack.name.clone(),
         lane: lane.into(),
         need: devstack_node::share::Amount {

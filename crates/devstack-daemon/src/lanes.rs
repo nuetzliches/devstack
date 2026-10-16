@@ -68,6 +68,9 @@ pub struct LaneView {
     /// The node it runs on; `None`: this machine (ADR-0025 point 10).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
+    /// The pool of that node (ADR-0034).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool: Option<String>,
     /// What went wrong with a lane on a node lately (a sync, a renewal).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_error: Option<String>,
@@ -725,6 +728,7 @@ impl Lanes {
                     running,
                     services,
                     node: on_node.map(|r| r.node.name.clone()),
+                    pool: on_node.map(|r| r.pool.clone()),
                     node_error: node_state.and_then(|st| st.error),
                     moving: moves.get(&k.entry.name).cloned(),
                 }
@@ -1139,10 +1143,7 @@ impl Lanes {
             .unwrap()
             .retain(|n, r| n != &name || !r.state().ended);
         if let Some(r) = self.remote.lock().unwrap().get(&name) {
-            return if on.eq_ignore_ascii_case("pool")
-                || r.node.name.eq_ignore_ascii_case(on)
-                || r.node.id.starts_with(on)
-            {
+            return if r.is_at(on) {
                 Ok(name)
             } else {
                 Err(format!(
@@ -1266,7 +1267,7 @@ impl Lanes {
         }
         if let Some(r) = &remote
             && !here
-            && (r.node.name.eq_ignore_ascii_case(to) || r.node.id.starts_with(to))
+            && r.is_at(to)
         {
             return Ok(());
         }

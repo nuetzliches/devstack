@@ -236,10 +236,18 @@ enum Cmd {
         /// Ask and return; `devstack join` again picks up the approval.
         #[arg(long)]
         no_wait: bool,
+        /// The name this machine gives the pool (ADR-0034): a machine may
+        /// belong to several, e.g. a customer's beside its team's.
+        #[arg(long, default_value = "default")]
+        pool: String,
     },
-    /// The pool this machine belongs to: its members, online or not, and what
-    /// each shares.
-    Pool,
+    /// The pools this machine belongs to: their members, online or not, and
+    /// what each shares.
+    Pool {
+        /// Only this pool.
+        #[arg(long)]
+        pool: Option<String>,
+    },
     /// Print the JSON Schema of the stack file (for editors).
     Schema,
     /// Is this machine ready for the stack? Docker, Compose, the tools the stack
@@ -367,6 +375,9 @@ enum NodeAction {
         /// one; a developer's machine leaves it out.
         #[arg(long)]
         dedicated: bool,
+        /// The pool it runs lanes for (ADR-0034); one agent per pool.
+        #[arg(long, default_value = "default")]
+        pool: String,
     },
     /// The CA's fingerprint, which a member passes to `devstack join`.
     Fingerprint {
@@ -686,7 +697,8 @@ fn main() -> Result<()> {
                 max_cpus,
                 max_memory_gib,
                 dedicated,
-            } => poolcmd::agent(&listen, api, max_cpus, max_memory_gib, dedicated),
+                pool,
+            } => poolcmd::agent(&pool, &listen, api, max_cpus, max_memory_gib, dedicated),
             NodeAction::Members { action, dir } => match action.unwrap_or(MembersAction::List) {
                 MembersAction::List => poolcmd::members_list(dir),
                 MembersAction::Approve { member, admin } => {
@@ -718,8 +730,9 @@ fn main() -> Result<()> {
             fingerprint,
             name,
             no_wait,
-        } => poolcmd::join(&coordinator, &fingerprint, name.as_deref(), !no_wait),
-        Cmd::Pool => poolcmd::pool(),
+            pool,
+        } => poolcmd::join(&pool, &coordinator, &fingerprint, name.as_deref(), !no_wait),
+        Cmd::Pool { pool } => poolcmd::pool(pool.as_deref()),
         Cmd::OpenUrl { url } => integration::open_url(&url),
         Cmd::Init { dir, print, json } => {
             let repo = match dir {

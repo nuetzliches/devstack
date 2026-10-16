@@ -9,7 +9,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { api, paths, v1 } from '@/api';
 import type { LaneView, StackEntry } from '@/api/types';
-import { laneLabel, orderLanes } from '@/lib/lanes';
+import { laneLabel, orderLanes, nodeLabel } from '@/lib/lanes';
 import { persist } from '@/lib/persist';
 import { useHub } from '@/stores/hub';
 import { usePool } from '@/stores/pool';
@@ -135,14 +135,14 @@ const isCurrent = (s: StackEntry) => s.id === stack.id;
               type="button"
               class="item lane"
               :class="{ active: isCurrent(s) && stack.lane === l.name }"
-              :title="l.node ? `${l.path} · runs on ${l.node}` : `${l.path} · ports +${l.port_offset}`"
+              :title="l.node ? `${l.path} · runs on ${nodeLabel(l)}` : `${l.path} · ports +${l.port_offset}`"
               data-testid="sidebar-lane"
               :data-lane="l.name"
               @click="openLane(s, l)"
             >
               <Icon name="gitBranch" :size="13" class="branch" />
               <span class="label truncate">{{ laneLabel(l) }}</span>
-              <span v-if="l.node" class="pill sm info" data-testid="sidebar-lane-node">{{ l.node }}</span>
+              <span v-if="l.node" class="pill sm info" data-testid="sidebar-lane-node">{{ nodeLabel(l) }}</span>
               <span v-if="l.owns_main" class="pill sm ok">main ports</span>
               <span v-else class="faint small tabular">{{ l.running }}/{{ l.services }}</span>
             </button>

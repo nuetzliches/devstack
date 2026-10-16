@@ -4,7 +4,7 @@
 // ADR-0024), the lane's actions and start/stop. Replaces the lane banner.
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { duration, ago, useNow } from '@/lib/format';
-import { laneLabel, orderLanes } from '@/lib/lanes';
+import { laneLabel, orderLanes, nodeLabel } from '@/lib/lanes';
 import { usePopover } from '@/lib/popover';
 import type { LaneView } from '@/api/types';
 import { useHub } from '@/stores/hub';
@@ -40,9 +40,10 @@ const { open: moveOpen, close: moveClose } = usePopover(moveRoot, moveTrigger);
 const moveTargets = computed(() => {
   const l = current.value;
   if (!l) return [];
-  const nodes = (pool.overview?.nodes ?? [])
-    .filter((n) => n.online && n.report?.api && n.report.sharing && n.name !== l.node)
-    .map((n) => ({ to: n.name, label: n.name, hint: `${n.report!.cpus.toFixed(1)} CPU free` }));
+  const at = l.node ? nodeLabel(l) : null;
+  const nodes = pool.targets
+    .filter((t) => t.label !== at)
+    .map((t) => ({ to: t.on, label: t.label, hint: `${t.node.report!.cpus.toFixed(1)} CPU free` }));
   return l.node ? [{ to: 'local', label: 'This machine', hint: 'here' }, ...nodes] : nodes;
 });
 /** A move of the shown lane under way (from the daemon: it survives navigating away). */
@@ -175,7 +176,7 @@ function pick(l: LaneView | null) {
           >
             <span class="dot" :class="l.active === false ? 'off' : l.running ? 'on' : 'off'" />
             <span class="grow truncate">{{ laneLabel(l) }}</span>
-            <span v-if="l.node" class="pill sm info" :title="`Runs on ${l.node}`">{{ l.node }}</span>
+            <span v-if="l.node" class="pill sm info" :title="`Runs on ${nodeLabel(l)}`">{{ nodeLabel(l) }}</span>
             <span v-if="l.owns_main" class="pill sm ok">main ports</span>
             <span v-else-if="l.active === false" class="faint">start</span>
             <span v-else class="faint tabular">{{ l.running }}/{{ l.services }}</span>
@@ -191,7 +192,7 @@ function pick(l: LaneView | null) {
         Moving to {{ placeName(moveFailed.to) }} failed: {{ moveFailed.error }}
       </span>
       <span v-else-if="current && current.active !== false" class="muted small" data-testid="lane-placement">
-        <template v-if="current.node">runs on <strong>{{ current.node }}</strong> · </template>
+        <template v-if="current.node">runs on <strong>{{ nodeLabel(current) }}</strong> · </template>
         <template v-else>runs on this machine · </template>
         {{ current.owns_main ? 'serves the main ports' : 'no background workers' }}
         <span v-if="current.node_error" class="err" :title="current.node_error"> · {{ current.node_error }}</span>

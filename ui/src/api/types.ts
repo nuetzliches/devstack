@@ -79,6 +79,8 @@ export type LaneView = {
   services: number;
   /** The node of the pool it runs on (ADR-0025); absent: this machine. */
   node?: string;
+  /** The pool of that node (ADR-0034). */
+  pool?: string;
   /** What went wrong with it on its node lately (a sync, a renewal). */
   node_error?: string;
   /** A start on a node or a move under way (step of steps), or one that failed lately. */
@@ -303,4 +305,12 @@ export type ShareStatus = {
   /** Unix ms of the last report that reached the coordinator. */
   reported_at: number | null;
   error: string | null;
+};
+
+/** A pool this machine belongs to or asked to join (ADR-0034), `GET /hub/pools`. */
+export type PoolEntry = {
+  name: string;
+  joined: boolean;
+  state?: 'pending' | 'approved' | 'removed' | null;
+  coordinator?: string | null;
 };

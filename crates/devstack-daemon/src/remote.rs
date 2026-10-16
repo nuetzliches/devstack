@@ -37,6 +37,8 @@ pub struct RemoteState {
 
 pub struct RemoteLane {
     pub name: String,
+    /// The pool it runs in (ADR-0034).
+    pub pool: String,
     pub node: NodeRef,
     pub lease: String,
     worktree: PathBuf,
@@ -54,13 +56,34 @@ pub struct RemoteLane {
     listening: tokio::sync::watch::Sender<bool>,
 }
 
-/// This machine's membership of the pool, in devstack's per-user state.
-pub fn local_member() -> Local {
-    let state = crate::token::token_path()
+/// devstack's per-user state, where this machine's memberships live.
+fn state_dir() -> PathBuf {
+    crate::token::token_path()
         .parent()
         .expect("token path has a parent")
-        .to_path_buf();
-    Local::new(&devstack_node::member::default_dir(&state))
+        .to_path_buf()
+}
+
+/// This machine's membership of `pool`, in devstack's per-user state.
+pub fn local_member(pool: &str) -> Local {
+    Local::new(&devstack_node::member::pool_dir(&state_dir(), pool))
+}
+
+/// `--on` split into the pool and the node asked for (ADR-0034 point 3).
+pub fn resolve_on(on: &str) -> Result<(String, String), String> {
+    devstack_node::member::resolve_on(&state_dir(), on)
+}
+
+impl RemoteLane {
+    /// Is it where `on` asks for (`pool` or the pool alone: anywhere in it)?
+    pub fn is_at(&self, on: &str) -> bool {
+        resolve_on(on).is_ok_and(|(pool, node)| {
+            pool == self.pool
+                && (node.eq_ignore_ascii_case("pool")
+                    || self.node.name.eq_ignore_ascii_case(&node)
+                    || self.node.id.starts_with(&node))
+        })
+    }
 }
 
 /// What the worktree's files look like now: path, size, modification time.
@@ -196,10 +219,11 @@ impl RemoteLane {
             step,
         } = spec;
         step(1, &format!("lease on {on}"));
-        let local = local_member();
+        let (pool, node) = resolve_on(on)?;
+        let local = local_member(&pool);
         let offer = local
             .lease(&LeaseRequest {
-                node: on.into(),
+                node,
                 repo: repo.into(),
                 lane: name.into(),
                 need,
@@ -268,6 +292,7 @@ impl RemoteLane {
         );
         let lane = Arc::new(Self {
             name: name.into(),
+            pool,
             node: offer.node,
             lease: offer.id,
             worktree: worktree.to_path_buf(),

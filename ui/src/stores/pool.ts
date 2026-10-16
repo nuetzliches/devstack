@@ -1,14 +1,27 @@
-// The pool this machine belongs to (ADR-0031, ADR-0032), as the hub reads it
-// from the coordinator with this machine's certificate. Read on a timer: the
-// coordinator has no stream yet, and its answer is small.
+// The pools this machine belongs to (ADR-0031, ADR-0032, ADR-0034), as the hub
+// reads them from their coordinators with this machine's certificates. Read
+// on a timer: a coordinator has no stream yet, and its answer is small. The
+// pool area shows one pool at a time (`current`); lanes start and move to the
+// nodes of all of them.
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, paths, Unreachable } from '@/api';
-import type { NodePolicy, PoolOverview, PoolRole, ShareSettings, ShareStatus } from '@/api/types';
+import type { NodePolicy, PoolEntry, PoolNode, PoolOverview, PoolRole, ShareSettings, ShareStatus } from '@/api/types';
 import { act } from '@/lib/actions';
+import { persist } from '@/lib/persist';
+
+export const DEFAULT_POOL = 'default';
+
+/** A node a lane can start on or move to, with what `--on` names it by. */
+export type LaneTarget = { pool: string; node: PoolNode; on: string; label: string };
 
 export const usePool = defineStore('pool', () => {
-  const overview = ref<PoolOverview | null>(null);
+  /** The pools this machine belongs to; the default one first. */
+  const pools = ref<PoolEntry[]>([{ name: DEFAULT_POOL, joined: false }]);
+  /** The pool the pool area shows. */
+  const current = ref<string>(persist.get<string>('pool.current') ?? DEFAULT_POOL);
+  const overviews = ref<Record<string, PoolOverview>>({});
+  const overview = computed<PoolOverview | null>(() => overviews.value[current.value] ?? null);
   /** Why the last read failed (the coordinator down, the hub unreachable). */
   const error = ref<string | null>(null);
   const loading = ref(false);
@@ -20,9 +33,19 @@ export const usePool = defineStore('pool', () => {
   const isAdmin = computed(() => overview.value?.me?.role === 'admin');
   const pending = computed(() => (overview.value?.members ?? []).filter((m) => m.state === 'pending'));
 
+  /** `path` for the pool `p` (the current one by default). */
+  const at = (path: string, p = current.value) => (p === DEFAULT_POOL ? path : `${path}${path.includes('?') ? '&' : '?'}pool=${encodeURIComponent(p)}`);
+
+  function select(p: string) {
+    current.value = p;
+    persist.set('pool.current', p);
+    share.value = null;
+    void load();
+  }
+
   async function loadShare() {
     try {
-      const res = await api().request<ShareStatus>('GET', paths.poolShare);
+      const res = await api().request<ShareStatus>('GET', at(paths.poolShare));
       if (res.ok && res.body && typeof res.body === 'object') share.value = res.body;
     } catch {
       /* keep what is known */
@@ -33,9 +56,23 @@ export const usePool = defineStore('pool', () => {
     loading.value = true;
     void loadShare();
     try {
-      const res = await api().request<PoolOverview>('GET', paths.pool);
+      const list = await api().request<PoolEntry[]>('GET', paths.pools);
+      if (list.ok && Array.isArray(list.body) && list.body.length) pools.value = list.body;
+      if (!pools.value.some((p) => p.name === current.value)) current.value = DEFAULT_POOL;
+      // The other pools' nodes, for starting and moving lanes there.
+      for (const p of pools.value) {
+        if (p.name === current.value || !p.joined) continue;
+        void api()
+          .request<PoolOverview>('GET', at(paths.pool, p.name))
+          .then((r) => {
+            if (r.ok && r.body && typeof r.body === 'object') overviews.value = { ...overviews.value, [p.name]: r.body };
+          })
+          .catch(() => undefined);
+      }
+      const shown = current.value;
+      const res = await api().request<PoolOverview>('GET', at(paths.pool, shown));
       if (res.ok && res.body && typeof res.body === 'object') {
-        overview.value = res.body;
+        overviews.value = { ...overviews.value, [shown]: res.body };
         error.value = null;
       } else {
         const b = res.body as { error?: string } | string | null;
@@ -68,7 +105,7 @@ export const usePool = defineStore('pool', () => {
   async function approve(id: string, name: string, role: PoolRole = 'member') {
     const r = await act({
       label: `Approve ${name}`,
-      path: paths.poolApprove(id),
+      path: at(paths.poolApprove(id)),
       body: { role },
       success: `${name} is a ${role} of the pool; it picks up its certificate by itself`,
     });
@@ -84,7 +121,7 @@ export const usePool = defineStore('pool', () => {
         : '';
     const r = await act({
       label: pendingRequest ? `Reject ${name}` : `Remove ${name}`,
-      path: paths.poolRemove(id),
+      path: at(paths.poolRemove(id)),
       confirmText: pendingRequest
         ? `Reject the request of ${name}? It can only ask again with a new key.`
         : `Remove ${name} from the pool? Its certificate is refused from now on; it can only join again with a new key.${asNode}`,
@@ -97,7 +134,7 @@ export const usePool = defineStore('pool', () => {
   async function setRole(id: string, name: string, role: PoolRole) {
     const r = await act({
       label: role === 'admin' ? `Make ${name} an admin` : `Make ${name} a member`,
-      path: paths.poolRole(id),
+      path: at(paths.poolRole(id)),
       body: { role },
       success: `${name} is ${role === 'admin' ? 'an admin' : 'a member'} now`,
     });
@@ -107,7 +144,7 @@ export const usePool = defineStore('pool', () => {
   async function setPaused(id: string, name: string, paused: boolean) {
     const r = await act({
       label: paused ? `Pause ${name}` : `Resume ${name}`,
-      path: paths.poolPause(id, paused),
+      path: at(paths.poolPause(id, paused)),
       success: paused ? `${name} takes no new lanes; running ones stay` : `${name} takes lanes again`,
     });
     if (r.ok) await load();
@@ -116,7 +153,7 @@ export const usePool = defineStore('pool', () => {
   async function endLease(id: string, what: string) {
     const r = await act({
       label: `End ${what}`,
-      path: paths.poolEnd(id),
+      path: at(paths.poolEnd(id)),
       confirmText: `End ${what}? Its node stops the lane within about 15 s; its owner sees it ended and can start it again.`,
       confirmLabel: 'End it',
       success: `${what} ends`,
@@ -127,7 +164,7 @@ export const usePool = defineStore('pool', () => {
   async function setTags(id: string, name: string, tags: string[]) {
     const r = await act({
       label: `Tags of ${name}`,
-      path: paths.poolTags(id),
+      path: at(paths.poolTags(id)),
       body: { tags },
       success: tags.length ? `${name}: ${tags.join(', ')}` : `${name} has no tags`,
     });
@@ -138,21 +175,22 @@ export const usePool = defineStore('pool', () => {
   async function setPolicy(id: string, name: string, policy: NodePolicy | null) {
     const r = await act({
       label: `What runs on ${name}`,
-      path: paths.poolPolicy(id),
+      path: at(paths.poolPolicy(id)),
       body: policy as unknown as Record<string, unknown>,
       success: policy ? `${name}: policy saved` : `${name}: every member may run any lane there`,
     });
     if (r.ok) await load();
   }
 
-  async function join(coordinator: string, fingerprint: string, name: string) {
+  /** Ask to join a pool, under the name `as` here (ADR-0034); it becomes the one shown. */
+  async function join(coordinator: string, fingerprint: string, name: string, as = current.value) {
     const r = await act({
-      label: 'Join the pool',
-      path: paths.poolJoin,
+      label: as === DEFAULT_POOL ? 'Join the pool' : `Join the pool ${as}`,
+      path: at(paths.poolJoin, as),
       body: { coordinator, fingerprint, name },
       success: 'Asked to join: an admin of the pool approves it',
     });
-    if (r.ok) await load();
+    if (r.ok) select(as);
     return r.ok;
   }
 
@@ -161,7 +199,7 @@ export const usePool = defineStore('pool', () => {
     const r = await act<ShareStatus>({
       label: next.enabled ? 'Share this machine' : 'Stop sharing this machine',
       method: 'PUT',
-      path: paths.poolShare,
+      path: at(paths.poolShare),
       body: next as unknown as Record<string, unknown>,
       success: false,
     });
@@ -169,5 +207,54 @@ export const usePool = defineStore('pool', () => {
     setTimeout(() => void load(), 1500);
   }
 
-  return { overview, error, loading, share, isAdmin, pending, load, loadShare, watch, approve, remove, setRole, setShare, setPaused, endLease, join, setTags, setPolicy };
+  /** The nodes of every pool that can take a lane now, but this machine. */
+  const targets = computed<LaneTarget[]>(() =>
+    pools.value.flatMap((p) => {
+      const o = overviews.value[p.name];
+      return (o?.nodes ?? [])
+        .filter((n) => n.online && n.report?.api && n.report.sharing && !n.paused && n.id !== o?.me?.id)
+        .map((n) => ({
+          pool: p.name,
+          node: n,
+          on: p.name === DEFAULT_POOL ? n.name : `${p.name}:${n.name}`,
+          label: p.name === DEFAULT_POOL ? n.name : `${p.name}:${n.name}`,
+        }));
+    }),
+  );
+  /** Pools whose coordinator can place a lane now, with what `--on` names them by. */
+  const placeable = computed(() =>
+    pools.value
+      .filter((p) => targets.value.some((t) => t.pool === p.name))
+      .map((p) => ({ pool: p.name, on: p.name === DEFAULT_POOL ? 'pool' : p.name })),
+  );
+  /** Joined any pool at all. */
+  const joinedAny = computed(() => pools.value.some((p) => p.joined));
+
+  return {
+    overview,
+    overviews,
+    pools,
+    current,
+    targets,
+    placeable,
+    joinedAny,
+    error,
+    loading,
+    share,
+    isAdmin,
+    pending,
+    select,
+    load,
+    loadShare,
+    watch,
+    approve,
+    remove,
+    setRole,
+    setShare,
+    setPaused,
+    endLease,
+    join,
+    setTags,
+    setPolicy,
+  };
 });
