@@ -58,6 +58,7 @@ export const paths = {
   down: (stack: string, infra = false) => `/hub/stacks/${enc(stack)}/down?infra=${infra}`,
   forget: (stack: string) => `/hub/stacks/${enc(stack)}`,
   pool: '/hub/pool',
+  poolShare: '/hub/pool/share',
   poolApprove: (id: string) => `/hub/pool/members/${enc(id)}/approve`,
   poolRemove: (id: string) => `/hub/pool/members/${enc(id)}/remove`,
   poolRole: (id: string) => `/hub/pool/members/${enc(id)}/role`,

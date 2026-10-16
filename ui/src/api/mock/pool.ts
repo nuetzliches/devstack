@@ -1,7 +1,7 @@
 // A fake pool for the mock hub (ADR-0031, ADR-0032): this machine is an admin,
 // two colleagues are members, a request waits. `?mock=nopool` is a machine in
 // no pool, `?mock=poolmember` one without the admin role.
-import type { PoolAuditEntry, PoolMember, PoolNode, PoolOverview, PoolRole } from '../types';
+import type { PoolAuditEntry, PoolMember, PoolNode, PoolOverview, PoolRole, ShareSettings, ShareStatus } from '../types';
 
 type R = { status: number; body: unknown };
 
@@ -12,6 +12,26 @@ export class MockPool {
   nodes: PoolNode[];
   audit: PoolAuditEntry[] = [];
   private me = 'a1b2c3d4e5f60718';
+  settings: ShareSettings = { enabled: false };
+
+  /** `GET /hub/pool/share`: a machine with 16 cores and 64 GiB, about a third busy. */
+  share(): ShareStatus {
+    const free = { cpus: 10.4 + Math.random(), memory: 38 * 2 ** 30 };
+    const half = { cpus: free.cpus / 2, memory: free.memory / 2 };
+    const s = this.settings;
+    const offer = s.enabled
+      ? { cpus: Math.min(half.cpus, s.max_cpus ?? Infinity), memory: Math.min(half.memory, s.max_memory ?? Infinity) }
+      : { cpus: 0, memory: 0 };
+    return { settings: s, total: { cpus: 16, memory: 64 * 2 ** 30 }, free, offer, member: this.joined, reported_at: this.joined ? Date.now() - 4000 : null, error: null };
+  }
+
+  setShare(next: ShareSettings): ShareStatus {
+    this.settings = next;
+    const node = this.nodes.find((n) => n.id === this.me);
+    const st = this.share();
+    if (node) node.report = { sharing: next.enabled, cpus: st.offer.cpus, memory: st.offer.memory };
+    return st;
+  }
 
   constructor(q: string) {
     const s = Math.floor(Date.now() / 1000);

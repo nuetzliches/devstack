@@ -35,6 +35,7 @@ static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 mod dialog;
 mod pool;
 pub mod release;
+mod share;
 mod ws;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -285,6 +286,7 @@ pub fn serve() -> Result<(), String> {
             }
         });
 
+        share::start();
         let engine_fast_until = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let engine_rx = watch_engine(engine_fast_until.clone());
         let (newer_rx, release_poke) = watch_release();
@@ -365,6 +367,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/stacks/{id}", delete(forget))
         .route("/hub/stacks/{id}/api/{*rest}", any(forward))
         .route("/hub/pool", get(pool::overview))
+        .route("/hub/pool/share", get(share::get).put(share::put))
         .route("/hub/pool/members/{id}/approve", post(pool::approve))
         .route("/hub/pool/members/{id}/remove", post(pool::remove))
         .route("/hub/pool/members/{id}/role", post(pool::role))

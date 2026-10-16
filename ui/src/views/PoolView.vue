@@ -7,6 +7,7 @@ import { computed, onBeforeUnmount, ref } from 'vue';
 import { ago, bytes } from '@/lib/format';
 import { usePool } from '@/stores/pool';
 import Icon from '@/components/icons/Icon.vue';
+import ShareSwitch from '@/components/ShareSwitch.vue';
 import type { PoolMember } from '@/api/types';
 
 const pool = usePool();
@@ -72,6 +73,14 @@ const actionText: Record<string, string> = {
         </template>
         <p v-else class="muted">Reading the pool…</p>
       </div>
+    </section>
+
+    <section v-if="me?.state === 'approved'" class="card" data-testid="pool-share">
+      <header class="card-header">
+        <Icon name="power" :size="18" />
+        <h2>This machine shares</h2>
+      </header>
+      <div class="card-body"><ShareSwitch /></div>
     </section>
 
     <section v-if="pool.isAdmin && pool.pending.length" class="card" data-testid="pool-requests">

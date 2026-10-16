@@ -228,3 +228,19 @@ export type PoolOverview = {
   /** Admins only. */
   audit?: PoolAuditEntry[];
 };
+
+/** CPU cores and memory (bytes). */
+export type PoolAmount = { cpus: number; memory: number };
+export type ShareSettings = { enabled: boolean; max_cpus?: number; max_memory?: number };
+/** `GET /hub/pool/share`: what this machine shares (ADR-0031 point 3). */
+export type ShareStatus = {
+  settings: ShareSettings;
+  total: PoolAmount;
+  free: PoolAmount;
+  offer: PoolAmount;
+  /** An approved member of a pool: only then is anything reported. */
+  member: boolean;
+  /** Unix ms of the last report that reached the coordinator. */
+  reported_at: number | null;
+  error: string | null;
+};
