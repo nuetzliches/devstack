@@ -75,7 +75,7 @@ const kv = computed(() => {
         <button v-if="running" type="button" class="btn" :disabled="!!busy || stack.stale" data-testid="action-container-restart" @click="stack.containerAction(group, service, 'restart')">
           <span v-if="busy === 'restart'" class="spinner" /><Icon v-else name="restart" /> Restart
         </button>
-        <button v-if="running" type="button" class="btn" :disabled="!!busy || stack.stale" data-testid="action-container-stop" @click="stack.containerAction(group, service, 'stop')">
+        <button v-if="running" type="button" class="btn btn-stop" :disabled="!!busy || stack.stale" data-testid="action-container-stop" @click="stack.containerAction(group, service, 'stop')">
           <span v-if="busy === 'stop'" class="spinner" /><Icon v-else name="stop" /> Stop
         </button>
       </div>

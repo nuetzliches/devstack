@@ -490,3 +490,12 @@ select.input {
 .err-line.warn {
   color: var(--warn-text);
 }
+
+/* Stop: red, also as a ghost or icon button. */
+.btn.btn-stop {
+  color: var(--danger-text);
+}
+.btn.btn-stop:hover:not(:disabled) {
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}

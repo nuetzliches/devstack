@@ -9,6 +9,7 @@ import ContainerRow from '@/components/ContainerRow.vue';
 import CommandRow from '@/components/CommandRow.vue';
 import Icon from '@/components/icons/Icon.vue';
 import Sparkline from '@/components/Sparkline.vue';
+import RowUsage from '@/components/RowUsage.vue';
 import { bytes, percent } from '@/lib/format';
 import { persist } from '@/lib/persist';
 import { usePins } from '@/lib/pins';
@@ -204,7 +205,7 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
               <h2>{{ card.label }}</h2>
               <span class="count">{{ card.members.length }}</span>
             </button>
-            <span v-if="groupLoad(card.key)" class="count tabular" :title="`This group now: CPU ${percent(groupLoad(card.key)!.cpu)}, memory ${bytes(groupLoad(card.key)!.memory)}`">{{ bytes(groupLoad(card.key)!.memory) }} · {{ percent(groupLoad(card.key)!.cpu) }}</span>
+            <RowUsage :series-key="`grp:${card.key}`" :load="groupLoad(card.key)" />
             <span class="grow" />
             <div v-if="card.key !== '__other' && card.key !== '__pinned' && card.members.some((m) => m.kind === 'service')" class="group-actions" role="group" :aria-label="`Actions for ${card.label}`">
               <button
@@ -212,6 +213,7 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
                 :key="a.action"
                 type="button"
                 class="btn btn-ghost btn-sm btn-icon"
+                :class="{ 'btn-stop': a.action === 'stop' }"
                 :title="`${a.title} ${card.label}`"
                 :aria-label="`${a.title} ${card.label}`"
                 :disabled="!!stack.busy[`grp:${card.key}`] || stack.stale || hubAway"
