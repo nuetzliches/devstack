@@ -19,6 +19,8 @@ use std::time::{Duration, Instant, SystemTime};
 const SYNC_EVERY: Duration = Duration::from_secs(2);
 /// How often the lease is renewed (the node's TTL is two minutes).
 const RENEW_EVERY: Duration = Duration::from_secs(30);
+/// How long a lease lives without a renewal (the node's TTL), and a margin.
+const LEASE_LIVES: Duration = Duration::from_secs(150);
 /// How often the lane's state is read for the lists.
 const STATE_EVERY: Duration = Duration::from_secs(5);
 
@@ -33,6 +35,8 @@ pub struct RemoteState {
     /// The lease is over (an admin ended it, or it expired): the lane no
     /// longer runs there.
     pub ended: bool,
+    /// Its services that run now (healthy or running), by name.
+    pub active: Vec<String>,
 }
 
 pub struct RemoteLane {
@@ -46,6 +50,9 @@ pub struct RemoteLane {
     main: PathBuf,
     /// `[lanes] sync`: ignored files the lane takes along.
     extra: Vec<String>,
+    /// Whether it holds the main slot here (ADR-0025 point 4), told the
+    /// lane again with each renewal (a lane daemon that restarted forgets).
+    owns_main: std::sync::atomic::AtomicBool,
     /// Whom it is shared with (ADR-0035), told the coordinator again with
     /// each renewal (a coordinator that restarted forgets it).
     sharing: Mutex<Option<devstack_node::coordinator::Sharing>>,
@@ -305,6 +312,7 @@ impl RemoteLane {
             main: main.to_path_buf(),
             extra: extra.to_vec(),
             sharing: Mutex::new(None),
+            owns_main: std::sync::atomic::AtomicBool::new(false),
             client,
             state: Mutex::new(RemoteState::default()),
             stopped: tokio::sync::watch::channel(false).0,
@@ -329,6 +337,28 @@ impl RemoteLane {
 
     pub fn state(&self) -> RemoteState {
         self.state.lock().unwrap().clone()
+    }
+
+    /// Give the lane the main slot, or take it back: its workers run on the
+    /// node, or no longer. Blocking.
+    pub fn set_main(&self, rt: &tokio::runtime::Handle, owns: bool) -> Result<(), String> {
+        self.owns_main
+            .store(owns, std::sync::atomic::Ordering::SeqCst);
+        match rt.block_on(self.client.api(
+            &self.lease,
+            "POST",
+            "/v1/main-slot",
+            Some(serde_json::json!({ "owns": owns })),
+        )) {
+            Ok((200, _)) => Ok(()),
+            Ok((code, body)) => Err(format!("the lane answered {code}: {body}")),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// Whether it holds the main slot here.
+    pub fn owns_main(&self) -> bool {
+        self.owns_main.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Share the lane, or stop sharing it (`None`); the coordinator hears
@@ -412,6 +442,17 @@ impl RemoteLane {
                 match self.client.renew(&self.lease).await {
                     Ok(_) => {
                         renewed = Instant::now();
+                        if self.owns_main() {
+                            let _ = self
+                                .client
+                                .api(
+                                    &self.lease,
+                                    "POST",
+                                    "/v1/main-slot",
+                                    Some(serde_json::json!({ "owns": true })),
+                                )
+                                .await;
+                        }
                         let sharing = self.sharing.lock().unwrap().clone();
                         if let Some(sh) = sharing {
                             let (pool, lease) = (self.pool.clone(), self.lease.clone());
@@ -438,7 +479,29 @@ impl RemoteLane {
                         );
                         return;
                     }
-                    Err(e) => self.trouble(Some(format!("renewing the lease: {e}"))),
+                    Err(e) => {
+                        self.trouble(Some(format!("renewing the lease: {e}")));
+                        // Not renewed for longer than a lease lives: the
+                        // node let it go, or cannot be reached; either way
+                        // the lane is gone for this machine.
+                        if renewed.elapsed() > LEASE_LIVES {
+                            {
+                                let mut st = self.state.lock().unwrap();
+                                st.ended = true;
+                                st.error = Some(format!(
+                                    "{} has not answered for {} s: the lane counts as gone",
+                                    self.node.name,
+                                    renewed.elapsed().as_secs()
+                                ));
+                            }
+                            self.listening.send_replace(false);
+                            crate::diag::warn(
+                                "remote_lane_lost",
+                                serde_json::json!({ "lane": self.name, "node": self.node.name, "lease": self.lease }),
+                            );
+                            return;
+                        }
+                    }
                 }
             }
             if read.elapsed() >= STATE_EVERY {
@@ -457,9 +520,17 @@ impl RemoteLane {
                             )
                         })
                         .count();
+                    let active = svcs
+                        .iter()
+                        .filter(|s| {
+                            matches!(s["status"]["state"].as_str(), Some("healthy" | "running"))
+                        })
+                        .filter_map(|s| s["name"].as_str().map(str::to_string))
+                        .collect();
                     let mut st = self.state.lock().unwrap();
                     st.running = running;
                     st.services = svcs.len();
+                    st.active = active;
                 }
             }
         }
