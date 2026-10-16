@@ -371,7 +371,11 @@ pub fn run_lane(file: &Path, on: &str, lane: &str, keep: bool) -> Result<()> {
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_else(|_| "devstack.toml".into());
         let t0 = std::time::Instant::now();
-        client.start(&id, &rel, None, 0).await?;
+        client
+            .start(&id, &rel, None, 0, Duration::from_secs(1800), &|p| {
+                println!("  {p}")
+            })
+            .await?;
         println!(
             "lane started in {:.1} s; starting its services",
             t0.elapsed().as_secs_f64()

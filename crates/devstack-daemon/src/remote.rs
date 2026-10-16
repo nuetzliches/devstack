@@ -141,8 +141,22 @@ impl RemoteLane {
             // Paths in its logs point into the worktree, `/` as compilers
             // on the node write them.
             let display = worktree.to_string_lossy().replace('\\', "/");
+            let lane = name.to_string();
+            let node = offer.node.name.clone();
             client
-                .start(&offer.id, stack_file, Some(&display), port_offset)
+                .start(
+                    &offer.id,
+                    stack_file,
+                    Some(&display),
+                    port_offset,
+                    Duration::from_secs(1800),
+                    &move |p| {
+                        crate::diag::info(
+                            "remote_lane_starting",
+                            serde_json::json!({ "lane": lane, "node": node, "phase": p }),
+                        );
+                    },
+                )
                 .await
         });
         let started = match started {

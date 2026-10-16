@@ -147,6 +147,8 @@ struct Inner {
     container: Option<String>,
     /// Where each running lane's daemon is.
     daemons: Mutex<HashMap<String, DaemonAddr>>,
+    /// Lanes starting now, or whose start failed: the phase, or the error.
+    starting: Mutex<HashMap<String, Result<String, String>>>,
 }
 
 type Shared = Arc<Inner>;
@@ -602,6 +604,15 @@ fn default_stack_file() -> String {
 pub struct LaneState {
     pub started: bool,
     pub running: bool,
+    /// While it starts: what it does now. Absent once it is ready.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    /// Why its start failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Started and its daemon reached: the lane's API answers.
+    #[serde(default)]
+    pub ready: bool,
     /// After a start: the ports its containers are published on at the
     /// requester's machine.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -642,22 +653,45 @@ async fn start(
         }
         s.save(&leases);
     }
+    // A first start pulls or builds the lane image and the infrastructure's
+    // images: minutes. It runs on, and `GET .../lane` says how far it got.
+    if matches!(s.starting.lock().unwrap().get(&id), Some(Ok(_))) {
+        return Err(err(StatusCode::CONFLICT, "the lane is starting"));
+    }
+    s.daemons.lock().unwrap().remove(&id);
+    s.starting
+        .lock()
+        .unwrap()
+        .insert(id.clone(), Ok("starting".into()));
     let s2 = s.clone();
-    let addr = tokio::task::spawn_blocking(move || {
+    let lid = id.clone();
+    tokio::task::spawn_blocking(move || {
         let mut run = s2.run(&l);
         run.display_root = display_root;
         run.port_offset = port_offset;
-        run.start(&bin, s2.container.as_deref())
-    })
-    .await
-    .map_err(internal)?
-    .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
-    let infra_ports = addr.infra_ports.clone();
-    s.daemons.lock().unwrap().insert(id, addr);
+        let s3 = s2.clone();
+        let pid = lid.clone();
+        let phase = move |p: &str| {
+            s3.starting
+                .lock()
+                .unwrap()
+                .insert(pid.clone(), Ok(p.to_string()));
+        };
+        match run.start(&bin, s2.container.as_deref(), &phase) {
+            Ok(addr) => {
+                s2.daemons.lock().unwrap().insert(lid.clone(), addr);
+                s2.starting.lock().unwrap().remove(&lid);
+            }
+            Err(e) => {
+                s2.starting.lock().unwrap().insert(lid, Err(e.to_string()));
+            }
+        }
+    });
     Ok(Json(LaneState {
         started: true,
-        running: true,
-        infra_ports,
+        running: false,
+        phase: Some("starting".into()),
+        ..LaneState::default()
     }))
 }
 
@@ -675,8 +709,7 @@ async fn stop(
         .map_err(internal)?;
     Ok(Json(LaneState {
         started: true,
-        running: false,
-        infra_ports: Vec::new(),
+        ..LaneState::default()
     }))
 }
 
@@ -690,6 +723,29 @@ async fn lane_state(
     if l.stack_file.is_none() {
         return Ok(Json(LaneState::default()));
     }
+    match s.starting.lock().unwrap().get(&id).cloned() {
+        Some(Ok(phase)) => {
+            return Ok(Json(LaneState {
+                started: true,
+                phase: Some(phase),
+                ..LaneState::default()
+            }));
+        }
+        Some(Err(e)) => {
+            return Ok(Json(LaneState {
+                started: true,
+                error: Some(e),
+                ..LaneState::default()
+            }));
+        }
+        None => {}
+    }
+    let infra_ports = s
+        .daemons
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|d| d.infra_ports.clone());
     let s2 = s.clone();
     let running = tokio::task::spawn_blocking(move || s2.run(&l).running())
         .await
@@ -697,7 +753,9 @@ async fn lane_state(
     Ok(Json(LaneState {
         started: true,
         running,
-        infra_ports: Vec::new(),
+        ready: running && infra_ports.is_some(),
+        infra_ports: infra_ports.unwrap_or_default(),
+        ..LaneState::default()
     }))
 }
 
@@ -965,6 +1023,7 @@ pub async fn serve(
             .ok()
             .filter(|c| !c.trim().is_empty()),
         daemons: Mutex::new(HashMap::new()),
+        starting: Mutex::new(HashMap::new()),
     });
     let bg = tokio::spawn(background(s.clone()));
     crate::tls::serve(tls, listener, router(s), stop).await;
