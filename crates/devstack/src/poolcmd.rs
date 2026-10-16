@@ -367,6 +367,9 @@ pub fn telemetry(pool: &str, state: Option<&str>) -> Result<()> {
             None => "did not answer",
         }
     );
+    if let Some(e) = info.as_ref().and_then(|i| i.last_error.as_ref()) {
+        println!("the coordinator could not pass the last of it on: {e}");
+    }
     if consent || state.is_none() {
         println!("what is sent:");
         for w in devstack_node::telemetry::collects() {
