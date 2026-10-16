@@ -174,4 +174,9 @@ down` (the daemon ends) each left nothing on the node.
 
 Will live in: `crates/devstack-node` (agent: lane container, Compose project per
 lane), the lane model of phase 3 in `crates/devstack-daemon` (placement), plan
-§3.5 and §9, `devstack check` (Windows-only components).
+§3.5 and §9, `devstack check` (Windows-only components). Point 4 lives in
+`crates/devstack-daemon/src/lanes.rs` (`take_main` for a lane on a dedicated
+node, `main_slot_check` giving the ports back when it is gone),
+`crates/devstack-daemon/src/remote.rs` (`set_main`, a lane counts as gone after
+a lease's life without renewal), `POST /v1/main-slot` in the lane daemon, and
+`crates/devstack/tests/remote_lane.rs`.

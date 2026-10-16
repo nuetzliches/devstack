@@ -499,6 +499,7 @@ impl Lanes {
                     if me.main.closed() {
                         return;
                     }
+                    me.main_slot_check();
                     let now = fingerprint(&dir);
                     if now != last || since.elapsed() >= std::time::Duration::from_secs(30) {
                         last = now;
@@ -507,6 +508,33 @@ impl Lanes {
                     }
                 }
             });
+    }
+
+    /// A lane on a node that serves the main ports and is gone (its lease
+    /// over, its node not answering): the main tree takes them back
+    /// (ADR-0025 point 4).
+    fn main_slot_check(&self) {
+        let Some(owner) = self.main.served_by() else {
+            return;
+        };
+        if self.map.lock().unwrap().contains_key(&owner) {
+            return;
+        }
+        let gone = self.remote(&owner).is_none_or(|r| r.state().ended);
+        if !gone {
+            return;
+        }
+        let Ok(mut ho) = self.handover.try_lock() else {
+            return;
+        };
+        if self.main.served_by().as_deref() != Some(owner.as_str()) {
+            return;
+        }
+        crate::diag::warn(
+            "main_slot_lost",
+            serde_json::json!({ "lane": owner, "reason": "the lane on its node is gone" }),
+        );
+        let _ = self.give_back(&mut ho);
     }
 
     /// The first lane number whose port range collides with nothing: the main
@@ -736,7 +764,9 @@ impl Lanes {
                     number: k.entry.number,
                     port_offset: k.entry.number * self.main.stack.lanes.port_step,
                     active: lane.is_some() || node_state.as_ref().is_some_and(|st| !st.ended),
-                    owns_main: lane.is_some_and(|l| l.sup.owns_main()),
+                    owns_main: lane.is_some_and(|l| l.sup.owns_main())
+                        || (on_node.is_some()
+                            && self.main.served_by().as_deref() == Some(k.entry.name.as_str())),
                     running,
                     services,
                     node: on_node.map(|r| r.node.name.clone()),
@@ -826,6 +856,11 @@ impl Lanes {
     /// started; its snapshot and builds stay for the next start. The worktree
     /// is git's business and stays as it is.
     pub fn stop(&self, name: &str) -> Result<(), String> {
+        if self.main.served_by().as_deref() == Some(name) && self.remote(name).is_some() {
+            return Err(format!(
+                "lane `{name}` serves the main slot: `devstack promote --lane main` first"
+            ));
+        }
         let remote = self.remote.lock().unwrap().remove(name);
         if let Some(r) = remote {
             self.stop_remote(r);
@@ -867,12 +902,6 @@ impl Lanes {
     /// The ports move first; the owner changes only when all of them did. A
     /// port that cannot move gives everything back to the main tree.
     pub fn take_main(&self, name: &str) -> Result<(), String> {
-        if let Some(r) = self.remote.lock().unwrap().get(name) {
-            return Err(format!(
-                "lane `{name}` runs on {}: the main slot stays on this machine for now (ADR-0025 point 4)",
-                r.node.name
-            ));
-        }
         let main = &self.main;
         let mut ho = self.handover.lock().unwrap();
         let current = main.served_by();
@@ -883,13 +912,49 @@ impl Lanes {
         let Some(t) = target else {
             return self.give_back(&mut ho);
         };
-        let lane = self.started(&t)?;
-        let views = lane.sup.view().services;
-        let active = |s: &str| {
-            views
+        // A lane on a node (ADR-0025 point 4): on a dedicated node only; its
+        // services answer here on their lane ports, forwarded to the node.
+        let remote = self.remote(&t);
+        if let Some(r) = &remote {
+            if r.state().ended {
+                return Err(format!("lane `{t}` on {} is over", r.node.name));
+            }
+            let dedicated = crate::remote::local_member(&r.pool)
+                .nodes()
+                .ok()
+                .and_then(|ns| ns.into_iter().find(|n| n.id == r.node.id))
+                .and_then(|n| n.report)
+                .is_some_and(|rep| rep.dedicated);
+            if !dedicated {
+                return Err(format!(
+                    "lane `{t}` runs on {}, which is no dedicated node (a server): the main slot goes to a lane there only (ADR-0025 point 4)",
+                    r.node.name
+                ));
+            }
+        }
+        let views = match &remote {
+            Some(_) => Vec::new(),
+            None => self.started(&t)?.sup.view().services,
+        };
+        let offset = self
+            .known
+            .lock()
+            .unwrap()
+            .get(&t)
+            .map_or(0, |k| k.entry.number * main.stack.lanes.port_step);
+        let remote_active = remote.as_ref().map(|r| r.state().active);
+        let active = |s: &str| match &remote_active {
+            Some(names) => names.iter().any(|n| n == s).then(|| {
+                main.stack
+                    .services
+                    .get(s)
+                    .and_then(|svc| svc.port)
+                    .map(|p| (p + offset, None))
+            })?,
+            None => views
                 .iter()
                 .find(|v| v.name == s && v.status.is_active())
-                .and_then(|v| v.port.map(|p| (p, v.build_id.clone())))
+                .and_then(|v| v.port.map(|p| (p, v.build_id.clone()))),
         };
         let down: Vec<String> = main
             .proxied_services()
@@ -905,6 +970,7 @@ impl Lanes {
         let prev = current
             .as_deref()
             .and_then(|c| self.map.lock().unwrap().get(c).cloned());
+        let prev_remote = current.as_deref().and_then(|c| self.remote(c));
 
         // 1. Free the fixed ports. Forwards to the previous lane end; the main
         //    tree stops what the lane takes over, and remembers it.
@@ -961,15 +1027,27 @@ impl Lanes {
             for s in p.sup.running_worker_services() {
                 let _ = p.sup.relaunch(&s);
             }
+        } else if let Some(r) = &prev_remote {
+            let _ = r.set_main(&self.rt, false);
         } else {
             for s in main.running_worker_services() {
                 let _ = main.relaunch(&s);
             }
         }
-        for s in lane.sup.running_worker_services() {
-            let _ = lane.sup.relaunch(&s);
-        }
         let mut failed = Vec::new();
+        match &remote {
+            Some(r) => {
+                if let Err(e) = r.set_main(&self.rt, true) {
+                    failed.push(format!("the workers on {}: {e}", r.node.name));
+                }
+            }
+            None => {
+                let lane = self.started(&t)?;
+                for s in lane.sup.running_worker_services() {
+                    let _ = lane.sup.relaunch(&s);
+                }
+            }
+        }
         for s in back_home {
             if let Err(e) = main.start(&s) {
                 failed.push(format!("{s}: {e}"));
@@ -994,6 +1072,9 @@ impl Lanes {
         let prev = main
             .served_by()
             .and_then(|c| self.map.lock().unwrap().get(&c).cloned());
+        if let Some(r) = main.served_by().and_then(|c| self.remote(&c)) {
+            let _ = r.set_main(&self.rt, false);
+        }
         for s in main.forwarded_services() {
             let _ = main.tcp_forward(&s, None);
         }
@@ -1343,7 +1424,9 @@ impl Lanes {
                 "lane `{name}` is not started: `devstack up --on {to}` in its worktree starts it there"
             ));
         }
-        if local.as_ref().is_some_and(|l| l.sup.owns_main()) {
+        if local.as_ref().is_some_and(|l| l.sup.owns_main())
+            || (remote.is_some() && self.main.served_by().as_deref() == Some(name))
+        {
             return Err(format!(
                 "lane `{name}` serves the main slot: `devstack promote --lane main` first"
             ));

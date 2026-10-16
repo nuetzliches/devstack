@@ -66,6 +66,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/lanes/{lane}/stop", post(lanes_stop))
         .route("/v1/lanes/{lane}/move", post(lanes_move))
         .route("/v1/lanes/{lane}/share", post(lanes_share))
+        .route("/v1/main-slot", post(main_slot))
         .route("/v1/lanes/{lane}/main", post(lanes_take_main))
         .route(
             "/v1/lanes/{lane}/v1/{*rest}",
@@ -424,6 +425,35 @@ struct LaneMove {
 /// another node of the pool or to this machine (ADR-0025 point 10), a cold
 /// start at the target that takes over once it is ready. Answers when it is
 /// done: the lanes after it.
+#[derive(Deserialize)]
+struct MainSlot {
+    owns: bool,
+}
+
+/// `POST /v1/main-slot {"owns"}`: a lane on a node holds its requester's
+/// main slot, or no longer (ADR-0025 point 4). Its worker services restart
+/// with the switch. Only a daemon in a lane container takes it.
+async fn main_slot(State(s): State<AppState>, Json(b): Json<MainSlot>) -> Response {
+    if !crate::remote_lane() {
+        return err(
+            StatusCode::CONFLICT,
+            "only a lane on a node takes the main slot this way",
+        );
+    }
+    let was = crate::REMOTE_MAIN.swap(b.owns, std::sync::atomic::Ordering::SeqCst);
+    if was != b.owns {
+        let sup = s.sup.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            for svc in sup.running_worker_services() {
+                let _ = sup.relaunch(&svc);
+            }
+        })
+        .await;
+        crate::diag::info("main_slot", serde_json::json!({ "owns": b.owns }));
+    }
+    Json(serde_json::json!({ "owns": b.owns })).into_response()
+}
+
 #[derive(Deserialize)]
 struct LaneShare {
     /// Member ids or tags of the pool, `*` for every member; empty: nobody.

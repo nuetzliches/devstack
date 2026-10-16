@@ -30,6 +30,11 @@ use std::sync::Arc;
 /// Whether this daemon runs a lane on another machine of the pool, in a
 /// node's lane container (`DEVSTACK_REMOTE_LANE`, set by the node agent,
 /// ADR-0025): it never holds the main slot, so it runs no workers.
+/// A lane on a node that holds the main slot of its requester (ADR-0025
+/// point 4): its workers run there. Set by the requester (`POST
+/// /v1/main-slot`), told again with every renewal.
+pub static REMOTE_MAIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn remote_lane() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("DEVSTACK_REMOTE_LANE").is_some_and(|v| !v.is_empty()))

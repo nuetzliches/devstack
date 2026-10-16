@@ -136,6 +136,9 @@ fn a_lane_runs_on_a_node_of_the_pool() {
                 "2",
                 "--max-memory-gib",
                 "2",
+                // A server: a lane there may take the main slot (ADR-0025
+                // point 4).
+                "--dedicated",
             ])
             .env("DEVSTACK_POOL_DIR", node.path())
             .env("DEVSTACK_LANE_BIN", &lane_bin)
@@ -248,6 +251,19 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     let port = 5080 + offset;
     let body = http_get(port, "/health");
     assert!(body.contains("ok"), "GET /health on {port}: {body}");
+
+    // The main slot to the lane on the node: the fixed port answers from
+    // there, and comes back to the main tree (ADR-0025 point 4).
+    cli(&main, &["promote", "--lane", "wt"]);
+    let body = http_get(5080, "/health");
+    assert!(body.contains("ok"), "GET /health on the main port: {body}");
+    let list = cli(&main, &["lane", "list"]);
+    assert!(
+        list.lines()
+            .any(|l| l.starts_with("wt") && l.contains("ci-node")),
+        "{list}"
+    );
+    cli(&main, &["promote", "--lane", "main"]);
 
     // The daemon ends: the lane on the node goes with it (ADR-0025 point 7).
     cli(&main, &["down"]);
