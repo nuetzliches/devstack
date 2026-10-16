@@ -43,6 +43,9 @@ pub struct LaneRun {
     pub stack_file: String,
     /// Where the requester has the lane's files (`DEVSTACK_DISPLAY_ROOT`).
     pub display_root: Option<String>,
+    /// The lane's port offset on the requester's machine
+    /// (`DEVSTACK_PORT_OFFSET`): it runs on those ports here too.
+    pub port_offset: u16,
 }
 
 /// Where the lane's daemon is reached, and its token.
@@ -248,6 +251,7 @@ impl LaneRun {
         let stack_in = format!("/src/{}", self.stack_file);
         let listen = format!("DEVSTACK_LISTEN=0.0.0.0:{DAEMON_PORT}");
         let lane_env = format!("DEVSTACK_REMOTE_LANE={}", self.lane);
+        let offset = format!("DEVSTACK_PORT_OFFSET={}", self.port_offset);
         let display = format!(
             "DEVSTACK_DISPLAY_ROOT={}",
             self.display_root.as_deref().unwrap_or("")
@@ -293,6 +297,8 @@ impl LaneRun {
             "XDG_STATE_HOME=/src/.devstack/xdg",
             "-e",
             &display,
+            "-e",
+            &offset,
         ];
         if let Some(n) = networks.first() {
             args.extend(["--network", n.as_str()]);

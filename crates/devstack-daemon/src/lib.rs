@@ -139,6 +139,17 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
             return Err(e.to_string());
         }
     };
+    // A lane on a node runs on the ports it has on its developer's machine
+    // (`DEVSTACK_PORT_OFFSET`): links, `{service.x.port}` and the forwarded
+    // ports there are the same (ADR-0029 point 4).
+    let stack = match std::env::var("DEVSTACK_PORT_OFFSET")
+        .ok()
+        .and_then(|v| v.trim().parse::<u16>().ok())
+        .filter(|o| *o > 0)
+    {
+        Some(offset) => lanes::lane_stack(&stack, offset)?,
+        None => stack,
+    };
     devstack_proc::ensure_console().map_err(|e| e.to_string())?;
     let token = token::load_or_create().map_err(|e| format!("token: {e}"))?;
     // Known to the hub from now on (ADR-0021); a failure costs only the listing.

@@ -1065,13 +1065,14 @@ impl Lanes {
                 on,
                 need,
                 scratch: &scratch,
+                // The lane runs on its lane ports there as well: the same
+                // port on both ends.
                 ports: ports(&self.main.stack)
                     .into_iter()
-                    .filter_map(|p| {
-                        p.checked_add(entry.number * self.main.stack.lanes.port_step)
-                            .map(|here| (p, here))
-                    })
+                    .filter_map(|p| p.checked_add(entry.number * self.main.stack.lanes.port_step))
+                    .map(|p| (p, p))
                     .collect(),
+                port_offset: entry.number * self.main.stack.lanes.port_step,
                 forward,
             },
         )
