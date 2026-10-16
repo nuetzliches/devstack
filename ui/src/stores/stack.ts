@@ -389,7 +389,7 @@ export const useStack = defineStore('stack', () => {
 
   // ------------------------------------------------------------ actions
 
-  const actionLabels: Record<ServiceAction, string> = { start: 'Start', stop: 'Stop', restart: 'Restart', promote: 'Promote', rollback: 'Roll back', 'hot-reload-on': 'Hot reload on for', 'hot-reload-off': 'Hot reload off for' };
+  const actionLabels: Record<ServiceAction, string> = { start: 'Start', stop: 'Stop', restart: 'Restart', rebuild: 'Rebuild', promote: 'Promote', rollback: 'Roll back', 'hot-reload-on': 'Hot reload on for', 'hot-reload-off': 'Hot reload off for' };
 
   async function serviceAction(name: string, action: ServiceAction) {
     if (!id.value) return;
