@@ -18,6 +18,17 @@
 use std::io;
 use std::process::{Child, Command};
 
+/// Make this process's standard handles non-inheritable. A child started
+/// with redirected stdio inherits every inheritable handle, and a caller's
+/// pipe handed on that way to a process that starts the hub (`devstack
+/// update` runs `devstack hub start`) ends up held by the hub, so the reader
+/// never sees the end. Only for a short-lived CLI that does not need them
+/// inheritable afterwards; `Stdio::inherit` still works (it duplicates).
+pub fn keep_std_handles() {
+    #[cfg(windows)]
+    imp::keep_std_handles();
+}
+
 /// Spawn `cmd` detached from the caller's terminal. Set the child's stdio
 /// (null or a log file) before calling.
 pub fn spawn_detached(cmd: &mut Command) -> io::Result<Child> {
@@ -39,12 +50,7 @@ mod imp {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const ERROR_ACCESS_DENIED: i32 = 5;
 
-    pub fn spawn_detached(cmd: &mut Command) -> io::Result<Child> {
-        // Only the standard handles are a problem: Rust opens its own handles
-        // non-inheritable, but the ones this process got from its parent may
-        // be inheritable, and with redirected stdio every inheritable handle
-        // goes to the child. This process is a short-lived CLI; it does not
-        // need them inheritable afterwards.
+    pub fn keep_std_handles() {
         for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
             // SAFETY: plain Win32 calls on this process's standard handles.
             unsafe {
@@ -54,6 +60,14 @@ mod imp {
                 }
             }
         }
+    }
+
+    pub fn spawn_detached(cmd: &mut Command) -> io::Result<Child> {
+        // Only the standard handles are a problem: Rust opens its own handles
+        // non-inheritable, but the ones this process got from its parent may
+        // be inheritable, and with redirected stdio every inheritable handle
+        // goes to the child.
+        keep_std_handles();
         // Letting the child AllocConsole and hide the window does not work where
         // Windows Terminal is the default terminal: the console then opens a
         // terminal window that the console's window handle does not refer to.

@@ -24,7 +24,7 @@ mod builds;
 mod detach;
 mod lock;
 pub use builds::{Build, BuildJob};
-pub use detach::spawn_detached;
+pub use detach::{keep_std_handles, spawn_detached};
 pub use lock::{LockError, StateLock};
 
 #[cfg(unix)]
