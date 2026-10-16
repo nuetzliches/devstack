@@ -11,4 +11,5 @@ pub mod pki;
 pub mod policy;
 pub mod share;
 pub mod store;
+pub mod telemetry;
 pub mod tls;

@@ -208,6 +208,12 @@ export class MockTransport implements Transport {
     if (hub.unpaired) return json(401, { error: 'not paired' });
     if (p === '/hub/stacks' && method === 'GET') return json(200, hub.entries());
     if (p === '/hub/docker' && method === 'GET') return json(200, hub.docker);
+    if (p === '/hub/pool/telemetry')
+      return json(200, {
+        consent: method === 'PUT' ? !!(body as { enabled?: boolean } | undefined)?.enabled : false,
+        collects: true,
+        what: ["devstack's diagnostic log", 'durations and outcomes of lane starts, syncs, moves and builds', 'never: file contents, environment values'],
+      });
     if (p === '/hub/pool/history' && method === 'GET') {
       const now = Math.floor(Date.now() / 1000);
       const node = url.searchParams.get('node');

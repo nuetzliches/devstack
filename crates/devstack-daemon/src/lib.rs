@@ -17,6 +17,7 @@ pub mod state;
 pub mod staticsrv;
 pub mod supervisor;
 pub mod tcpfwd;
+pub mod telemetry;
 pub mod timeline;
 pub mod token;
 pub mod usage;
@@ -215,6 +216,46 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
             token.clone(),
             port,
         );
+        // What the pool's collector gets every minute, if this machine
+        // agreed (ADR-0037): lanes and services running.
+        {
+            let (sup, lanes) = (sup.clone(), lanes.clone());
+            telemetry::set_gauges(move || {
+                use devstack_node::telemetry::Gauge;
+                let v = sup.view();
+                let running = v.services.iter().filter(|s| s.status.is_active()).count();
+                let failed = v
+                    .services
+                    .iter()
+                    .filter(|s| matches!(s.status, state::Status::Failed { .. }))
+                    .count();
+                let ls = lanes.views();
+                let started = |remote: bool| {
+                    ls.iter()
+                        .filter(|l| l.active && l.node.is_some() == remote)
+                        .count() as f64
+                };
+                let stack = vec![("devstack.repository".to_string(), v.name.clone())];
+                let g = |name: &str, value: f64, extra: Option<(&str, &str)>| {
+                    let mut labels = stack.clone();
+                    if let Some((k, x)) = extra {
+                        labels.push((k.into(), x.into()));
+                    }
+                    Gauge {
+                        name: name.into(),
+                        unit: "1".into(),
+                        value,
+                        labels,
+                    }
+                };
+                vec![
+                    g("devstack.services", running as f64, Some(("devstack.state", "running"))),
+                    g("devstack.services", failed as f64, Some(("devstack.state", "failed"))),
+                    g("devstack.lanes", started(false), Some(("devstack.place", "local"))),
+                    g("devstack.lanes", started(true), Some(("devstack.place", "remote"))),
+                ]
+            });
+        }
         let app = api::router(api::AppState {
             sup: sup.clone(),
             runs: Arc::new(commands::Runs::default()),

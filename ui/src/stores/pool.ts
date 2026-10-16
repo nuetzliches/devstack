@@ -21,6 +21,8 @@ export const usePool = defineStore('pool', () => {
   /** The pool the pool area shows. */
   const current = ref<string>(persist.get<string>('pool.current') ?? DEFAULT_POOL);
   const overviews = ref<Record<string, PoolOverview>>({});
+  /** Whether this machine sends the shown pool telemetry, and whether it collects (ADR-0037). */
+  const telemetry = ref<{ consent: boolean; collects: boolean; what: string[] } | null>(null);
   /** Lanes others share with this machine, per pool (ADR-0035). */
   const sharedBy = ref<Record<string, SharedLane[]>>({});
   const overview = computed<PoolOverview | null>(() => overviews.value[current.value] ?? null);
@@ -42,6 +44,7 @@ export const usePool = defineStore('pool', () => {
     current.value = p;
     persist.set('pool.current', p);
     share.value = null;
+    telemetry.value = null;
     void load();
   }
 
@@ -54,9 +57,31 @@ export const usePool = defineStore('pool', () => {
     }
   }
 
+  async function loadTelemetry() {
+    try {
+      const r = await api().request<{ consent: boolean; collects: boolean; what: string[] }>('GET', at(paths.poolTelemetry));
+      if (r.ok && r.body && typeof r.body === 'object') telemetry.value = r.body;
+    } catch {
+      /* keep what is known */
+    }
+  }
+
+  /** Agree to send the shown pool telemetry, or take it back. */
+  async function setTelemetry(enabled: boolean) {
+    const r = await act({
+      label: enabled ? 'Send telemetry' : 'Stop sending telemetry',
+      method: 'PUT',
+      path: at(paths.poolTelemetry),
+      body: { enabled },
+      success: enabled ? 'This machine sends the pool telemetry' : 'This machine sends the pool no telemetry',
+    });
+    if (r.ok) await loadTelemetry();
+  }
+
   async function load() {
     loading.value = true;
     void loadShare();
+    void loadTelemetry();
     try {
       const list = await api().request<PoolEntry[]>('GET', paths.pools);
       if (list.ok && Array.isArray(list.body) && list.body.length) pools.value = list.body;
@@ -265,6 +290,8 @@ export const usePool = defineStore('pool', () => {
     placeable,
     shared,
     openShared,
+    telemetry,
+    setTelemetry,
     joinedAny,
     error,
     loading,

@@ -64,6 +64,7 @@ impl DiagLog {
                 line.entry(k).or_insert(v);
             }
         }
+        crate::telemetry::record(&line);
         if let Some(tx) = OTLP.get().and_then(Option::as_ref) {
             let _ = tx.try_send(Value::Object(line.clone()));
         }
@@ -131,6 +132,7 @@ pub fn init(path: impl Into<PathBuf>) -> &'static DiagLog {
             .ok()?;
         Some(tx)
     });
+    crate::telemetry::start(service);
     GLOBAL.get_or_init(|| DiagLog::open(path))
 }
 

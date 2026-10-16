@@ -699,7 +699,7 @@ impl Lanes {
     }
 
     /// The lanes as they are known now, without asking git.
-    fn views(&self) -> Vec<LaneView> {
+    pub(crate) fn views(&self) -> Vec<LaneView> {
         let map = self.map.lock().unwrap();
         let remote = self.remote.lock().unwrap();
         let now = crate::state::now_ms();

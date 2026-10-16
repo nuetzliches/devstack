@@ -532,6 +532,8 @@ struct Inner {
     reports: Mutex<HashMap<String, (std::time::Instant, Report)>>,
     /// Each node's capacity over time (ADR-0036).
     history: Mutex<HashMap<String, History>>,
+    /// Where telemetry goes (ADR-0037); `None`: nowhere.
+    collector: Option<crate::telemetry::Collector>,
 }
 
 use crate::tls::Peer;
@@ -601,6 +603,11 @@ fn router(shared: Shared) -> Router {
         .route("/v1/leases/{id}/shared", get(lease_shared))
         .route("/v1/shared", get(shared_list))
         .route("/v1/history", get(history))
+        .route("/v1/telemetry", get(telemetry_info))
+        .route(
+            "/v1/telemetry/{kind}",
+            post(telemetry_post).layer(axum::extract::DefaultBodyLimit::max(4 << 20)),
+        )
         .route("/v1/admin/members", get(admin_members))
         .route("/v1/admin/members/{id}/approve", post(admin_approve))
         .route("/v1/admin/members/{id}/remove", post(admin_remove))
@@ -1038,6 +1045,57 @@ async fn history(
     }))
 }
 
+/// `GET /v1/telemetry`: whether this pool collects telemetry, and what
+/// (ADR-0037).
+async fn telemetry_info(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+) -> ApiResult<Json<crate::telemetry::Info>> {
+    member(&s, &peer)?;
+    Ok(Json(crate::telemetry::Info {
+        enabled: s.collector.is_some(),
+        collects: crate::telemetry::collects(),
+    }))
+}
+
+/// `POST /v1/telemetry/{logs|metrics}`: OTLP/JSON from a member, passed on
+/// with its identity set from its certificate. Without a collector: `404`,
+/// and the member stops sending. Lossy: answered at once, dropped if the
+/// collector does not take it.
+async fn telemetry_post(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(kind): UrlPath<String>,
+    Json(mut body): Json<serde_json::Value>,
+) -> ApiResult<StatusCode> {
+    let m = member(&s, &peer)?;
+    let Some(collector) = s.collector.clone() else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            "this pool collects no telemetry".into(),
+        ));
+    };
+    if kind != "logs" && kind != "metrics" {
+        return Err((StatusCode::NOT_FOUND, format!("no telemetry `{kind}`")));
+    }
+    let pool = names(&s.dir)
+        .ok()
+        .and_then(|n| n.first().cloned())
+        .unwrap_or_default();
+    crate::telemetry::stamp(
+        &mut body,
+        &[
+            ("devstack.member.id", m.id.clone()),
+            ("devstack.member.name", m.name.clone()),
+            ("devstack.pool.coordinator", pool),
+        ],
+    );
+    tokio::task::spawn_blocking(move || {
+        let _ = collector.send(&kind, &body);
+    });
+    Ok(StatusCode::ACCEPTED)
+}
+
 fn random_hex(bytes: usize) -> String {
     use rand::RngCore;
     let mut b = vec![0u8; bytes];
@@ -1185,6 +1243,7 @@ pub async fn serve(
         dir: dir.to_path_buf(),
         leases: Mutex::new(HashMap::new()),
         history: Mutex::new(HashMap::new()),
+        collector: crate::telemetry::Collector::of(dir),
         ending: Mutex::new(std::collections::HashSet::new()),
         store: Store::new(dir),
         ca_pem,
