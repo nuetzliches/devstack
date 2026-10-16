@@ -181,14 +181,22 @@ impl LaneRun {
     /// lane container. `bin` is a static Linux `devstack` the container
     /// mounts; `agent`, the agent's own container when it runs in one (it
     /// joins the lane's network to reach the daemon).
-    pub fn start(&self, bin: &Path, agent: Option<&str>) -> Result<DaemonAddr> {
+    /// `phase` hears what it does now ("image", "infrastructure: app", ...).
+    pub fn start(
+        &self,
+        bin: &Path,
+        agent: Option<&str>,
+        phase: &dyn Fn(&str),
+    ) -> Result<DaemonAddr> {
         let stack = self.stack()?;
+        phase("lane image: pulled or built once, then kept");
         let image = self.image(&stack)?;
         let dc = Docker::default();
         let mut infra = BTreeMap::new();
         let mut networks = Vec::new();
         let mut infra_ports = Vec::new();
         for name in order(&stack) {
+            phase(&format!("infrastructure: {name}"));
             let overlay = self.overlay(&name);
             let _ = std::fs::remove_file(&overlay);
             let g = self.group(&stack, &name);
@@ -263,6 +271,7 @@ impl LaneRun {
         .map_err(|e| RunError::Io(file.clone(), e))?;
 
         let name = self.container();
+        phase("lane container");
         let _ = docker(&["rm", "-f", &name]);
         let src = self.src().to_string_lossy().into_owned();
         let mount_src = format!("{src}:/src");
@@ -337,6 +346,7 @@ impl LaneRun {
             docker(&["network", "connect", n, &name])?;
         }
         let addr = self.address(&networks, agent)?;
+        phase("the lane's daemon");
         let token = self.wait_token(Duration::from_secs(60))?;
         infra_ports.sort_unstable();
         infra_ports.dedup();

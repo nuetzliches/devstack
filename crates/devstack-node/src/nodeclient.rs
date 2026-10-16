@@ -130,23 +130,60 @@ impl NodeClient {
 
     /// Start the lane from its mirror (infrastructure, lane container,
     /// daemon); `stack_file` relative to the lane's root.
+    ///
+    /// The node starts it in the background (a first start pulls or builds
+    /// images); this waits until the lane is ready or its start failed, at
+    /// most `within`, and tells `phase` every new step.
     pub async fn start(
         &self,
         lease: &str,
         stack_file: &str,
         display_root: Option<&str>,
         port_offset: u16,
+        within: std::time::Duration,
+        phase: &(dyn Fn(&str) + Send + Sync),
     ) -> Result<LaneState> {
-        self.json(
-            "POST",
-            &format!("/v1/leases/{lease}/start"),
-            Some(&Start {
-                stack_file: stack_file.into(),
-                display_root: display_root.map(str::to_string),
-                port_offset,
-            }),
-        )
-        .await
+        let _: LaneState = self
+            .json(
+                "POST",
+                &format!("/v1/leases/{lease}/start"),
+                Some(&Start {
+                    stack_file: stack_file.into(),
+                    display_root: display_root.map(str::to_string),
+                    port_offset,
+                }),
+            )
+            .await?;
+        let until = std::time::Instant::now() + within;
+        let mut last = String::new();
+        let mut renewed = std::time::Instant::now();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            // The lease lives two minutes unless renewed, a start may take more.
+            if renewed.elapsed() >= std::time::Duration::from_secs(30) {
+                self.renew(lease).await?;
+                renewed = std::time::Instant::now();
+            }
+            let st = self.lane(lease).await?;
+            if let Some(e) = st.error {
+                return Err(ClientError::Other(format!("starting the lane: {e}")));
+            }
+            if st.ready {
+                return Ok(st);
+            }
+            if let Some(p) = &st.phase
+                && *p != last
+            {
+                phase(p);
+                last = p.clone();
+            }
+            if std::time::Instant::now() > until {
+                return Err(ClientError::Other(format!(
+                    "the lane did not start within {} min (last: {last})",
+                    within.as_secs() / 60
+                )));
+            }
+        }
     }
 
     pub async fn stop(&self, lease: &str) -> Result<LaneState> {
