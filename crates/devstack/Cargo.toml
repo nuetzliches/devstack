@@ -16,6 +16,7 @@ devstack-config.workspace = true
 devstack-daemon.workspace = true
 devstack-env.workspace = true
 devstack-hub.workspace = true
+devstack-node.workspace = true
 devstack-proc.workspace = true
 serde.workspace = true
 jiff.workspace = true

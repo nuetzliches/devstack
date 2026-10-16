@@ -39,6 +39,11 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net",
 tokio-stream = { version = "0.1", features = ["sync"] }
 toml = "0.9"
 ureq = "3"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring", "x509-parser"] }
+rustls-pki-types = "1"
+time = "0.3"
 sha2 = "0.11"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 flate2 = "1"
@@ -63,6 +68,7 @@ devstack-compose = { path = "crates/devstack-compose" }
 devstack-env = { path = "crates/devstack-env" }
 devstack-build = { path = "crates/devstack-build" }
 devstack-daemon = { path = "crates/devstack-daemon" }
+devstack-node = { path = "crates/devstack-node" }
 devstack-hub = { path = "crates/devstack-hub" }
 
 [workspace.lints.rust]

@@ -13,6 +13,7 @@ mod hubcmd;
 mod init;
 mod integration;
 mod mcp;
+mod poolcmd;
 mod selfcmd;
 mod skills;
 mod topcmd;
@@ -209,6 +210,30 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<HubAction>,
     },
+    /// The coordinator of a pool of machines that run lanes (ADR-0031), on an
+    /// always-on host.
+    Node {
+        #[command(subcommand)]
+        action: NodeAction,
+    },
+    /// Ask a pool's coordinator to admit this machine, and wait for the
+    /// approval (ADR-0031). Asking again is the same request.
+    Join {
+        /// The coordinator, `https://host:port`.
+        coordinator: String,
+        /// The SHA-256 of the coordinator's CA (`devstack node fingerprint` on it).
+        #[arg(long)]
+        fingerprint: String,
+        /// How the machine shows in the pool; default its host name.
+        #[arg(long)]
+        name: Option<String>,
+        /// Ask and return; `devstack join` again picks up the approval.
+        #[arg(long)]
+        no_wait: bool,
+    },
+    /// The pool this machine belongs to: its members, online or not, and what
+    /// each shares.
+    Pool,
     /// Print the JSON Schema of the stack file (for editors).
     Schema,
     /// Is this machine ready for the stack? Docker, Compose, the tools the stack
@@ -267,6 +292,53 @@ enum LaneAction {
     /// builds stay). The worktree is git's: devstack never creates or removes
     /// one.
     Stop { name: String },
+}
+
+#[derive(Subcommand)]
+enum NodeAction {
+    /// Create the coordinator: its certificate authority and a server
+    /// certificate for the addresses members reach it at.
+    Init {
+        /// An IP address or host name members reach the coordinator at (repeat
+        /// for more).
+        #[arg(long = "address", required = true)]
+        addresses: Vec<String>,
+        /// Its directory; default `DEVSTACK_COORDINATOR_DIR`, else devstack's
+        /// per-user state.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+    /// Run the coordinator in the foreground.
+    Serve {
+        /// Address and port to listen on, e.g. the host's address in the
+        /// pool's private network.
+        #[arg(long)]
+        listen: String,
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+    /// The CA's fingerprint, which a member passes to `devstack join`.
+    Fingerprint {
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+    /// The members: who asked, who is approved.
+    Members {
+        #[command(subcommand)]
+        action: Option<MembersAction>,
+        #[arg(long, global = true)]
+        dir: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum MembersAction {
+    /// Every member and its state (the default).
+    List,
+    /// Admit a member (by id, a unique prefix of it, or its name).
+    Approve { member: String },
+    /// Remove a member: its certificate is refused from now on.
+    Remove { member: String },
 }
 
 #[derive(Subcommand)]
@@ -517,6 +589,23 @@ fn main() -> Result<()> {
             println!("{}", integration::status_text());
             Ok(())
         }
+        Cmd::Node { action } => match action {
+            NodeAction::Init { addresses, dir } => poolcmd::init(dir, &addresses),
+            NodeAction::Serve { listen, dir } => poolcmd::serve(dir, &listen),
+            NodeAction::Fingerprint { dir } => poolcmd::print_fingerprint(dir),
+            NodeAction::Members { action, dir } => match action.unwrap_or(MembersAction::List) {
+                MembersAction::List => poolcmd::members_list(dir),
+                MembersAction::Approve { member } => poolcmd::members_approve(dir, &member),
+                MembersAction::Remove { member } => poolcmd::members_remove(dir, &member),
+            },
+        },
+        Cmd::Join {
+            coordinator,
+            fingerprint,
+            name,
+            no_wait,
+        } => poolcmd::join(&coordinator, &fingerprint, name.as_deref(), !no_wait),
+        Cmd::Pool => poolcmd::pool(),
         Cmd::OpenUrl { url } => integration::open_url(&url),
         Cmd::Init { dir, print, json } => {
             let repo = match dir {
