@@ -136,7 +136,9 @@ impl Proxy {
                         a = listener.accept() => a,
                         _ = closed.wait_for(|c| *c) => return,
                     };
-                    let Ok((stream, _)) = accepted else {
+                    let Ok((stream, _)) = accepted.inspect(|(s, _)| {
+                        let _ = s.set_nodelay(true);
+                    }) else {
                         // A connection reset before it was accepted, or no
                         // file handles left: keep listening, without spinning.
                         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -274,10 +276,14 @@ async fn aborted(rx: &mut watch::Receiver<bool>) {
 }
 
 async fn connect(port: u16) -> std::io::Result<TcpStream> {
-    match TcpStream::connect(("127.0.0.1", port)).await {
-        Ok(s) => Ok(s),
-        Err(e) => TcpStream::connect(("::1", port)).await.map_err(|_| e),
-    }
+    let s = match TcpStream::connect(("127.0.0.1", port)).await {
+        Ok(s) => s,
+        Err(e) => TcpStream::connect(("::1", port)).await.map_err(|_| e)?,
+    };
+    // Small writes go out at once: without, every request after the first on
+    // a kept-alive connection waits for a delayed ACK (about 40 ms on Linux).
+    let _ = s.set_nodelay(true);
+    Ok(s)
 }
 
 async fn handle(sh: Arc<Shared>, mut req: Request<Incoming>) -> Result<Response<Body>, Infallible> {

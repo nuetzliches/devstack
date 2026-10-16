@@ -43,6 +43,16 @@ On the way back, the developer's browser, tests and tools address services on
    (ADR-0007), and maps paths in compiler messages and logs from the mirror back
    to the local tree, as it already maps the snapshot (plan §3.2).
 
+*Measured with M3, 2026-10-16:* the requester listens on each service's
+lane port and carries every connection as an HTTP upgrade (`devstack-tcp`)
+through the node agent to the lane daemon's `/v1/tunnel/{port}`, which
+connects to the service on its container's loopback; only the stack's service
+ports, behind the API's token and the pool's mutual TLS. From a Windows
+machine to a Linux node: 0.5 ms per request on a kept-alive connection, 5 to
+30 ms for a new one (its TLS handshake to the node). `TCP_NODELAY` on every
+hop matters: without it each kept-alive request waited about 40 ms for a
+delayed ACK, the daemon's own service proxy included.
+
 ## Alternatives considered
 
 - **Commit and push, the node builds from the branch.** Needs a commit for every

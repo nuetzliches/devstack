@@ -1,8 +1,9 @@
 //! A lane on another machine of the pool, end to end through the CLI
-//! (ADR-0025, ADR-0031): a coordinator, a node agent and a requester on one
-//! Linux host; the requester leases the fixture stack's lane on the node,
-//! syncs it, starts it there and waits until its API is healthy. Released,
-//! the lane leaves nothing behind.
+//! (ADR-0025, ADR-0029, ADR-0031): a coordinator, a node agent and a
+//! requester on one Linux host. First without the daemon (`node run-lane`),
+//! then as a developer runs it: `devstack up --on` in a worktree, the lane's
+//! API on its forwarded local port, `devstack down`. Each time the node is
+//! left with nothing.
 //!
 //! Opt-in: it needs Docker and a static Linux build of devstack for the lane
 //! container (the release's kind), named by `DEVSTACK_LANE_BIN`:
@@ -177,6 +178,84 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     assert!(log.contains("api=healthy"), "{log}");
 
     // Released: its container and its Compose project are gone.
+    node_is_clear();
+
+    // As a developer runs it: a worktree of a repository with the fixture.
+    let repo = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let main = repo.path().join("main");
+    let wt = repo.path().join("wt");
+    copy_fixture(&main);
+    git(&main, &["init", "-q"]);
+    git(&main, &["add", "-A"]);
+    git(
+        &main,
+        &[
+            "-c",
+            "user.email=ci@example.invalid",
+            "-c",
+            "user.name=ci",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+    );
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            &wt.to_string_lossy(),
+            "-b",
+            "ci-remote",
+        ],
+    );
+    let cli = |dir: &Path, args: &[&str]| {
+        let out = Command::new(BIN)
+            .args(args)
+            .current_dir(dir)
+            .env("DEVSTACK_POOL_DIR", me.path())
+            .env("XDG_STATE_HOME", state.path())
+            .env("DEVSTACK_NO_HUB", "1")
+            .env("DEVSTACK_NO_UPDATE_CHECK", "1")
+            .output()
+            .unwrap();
+        let both = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "devstack {}: {both}", args.join(" "));
+        both
+    };
+    let up = cli(&wt, &["up", "--on", "ci-node"]);
+    assert!(up.contains("on ci-node"), "{up}");
+    assert!(up.contains("healthy"), "{up}");
+    let list = cli(&main, &["lane", "list"]);
+    let line = list
+        .lines()
+        .find(|l| l.starts_with("wt"))
+        .unwrap_or_else(|| panic!("{list}"));
+    assert!(line.contains("ci-node"), "{list}");
+    let offset: u16 = line
+        .split_whitespace()
+        .nth(2)
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("{list}"));
+
+    // The lane's API on its port here, forwarded to the node (ADR-0029 point 4).
+    let port = 5080 + offset;
+    let body = http_get(port, "/health");
+    assert!(body.contains("ok"), "GET /health on {port}: {body}");
+
+    // The daemon ends: the lane on the node goes with it (ADR-0025 point 7).
+    cli(&main, &["down"]);
+    node_is_clear();
+}
+
+/// No lane container is left on the node.
+fn node_is_clear() {
     let until = Instant::now() + Duration::from_secs(60);
     loop {
         let ps = Command::new("docker")
@@ -184,9 +263,57 @@ fn a_lane_runs_on_a_node_of_the_pool() {
             .output()
             .unwrap();
         if ps.stdout.is_empty() {
-            break;
+            return;
         }
-        assert!(Instant::now() < until, "the lane container stays");
+        assert!(Instant::now() < until, "a lane container stays on the node");
         std::thread::sleep(Duration::from_secs(1));
     }
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {}: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// The fixture stack's files (not its local build output) into `to`.
+fn copy_fixture(to: &Path) {
+    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/fixture-stack");
+    for rel in [
+        "devstack.toml",
+        "deploy/compose.yml",
+        "dev/compose.dev.yml",
+        "dev/.env.defaults",
+        "src/Api/Api.csproj",
+        "src/Api/Program.cs",
+    ] {
+        let target = to.join(rel);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::copy(from.join(rel), &target).unwrap();
+    }
+    std::fs::write(to.join(".gitignore"), ".devstack/\nbin/\nobj/\n").unwrap();
+}
+
+/// A plain HTTP GET on loopback; the body.
+fn http_get(port: u16, path: &str) -> String {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port))
+        .unwrap_or_else(|e| panic!("connect to {port}: {e}"));
+    s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    write!(
+        s,
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut out = String::new();
+    let _ = s.read_to_string(&mut out);
+    out
 }

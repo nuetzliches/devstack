@@ -704,9 +704,15 @@ async fn proxy(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
     UrlPath((id, rest)): UrlPath<(String, String)>,
-    req: axum::extract::Request,
+    mut req: axum::extract::Request,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
+    // A tunnel (`Upgrade`, ADR-0029 point 4) is passed through as well: once
+    // the lane's daemon switched protocols, the two connections are spliced.
+    let upgrade_in = req
+        .headers()
+        .contains_key(hyper::header::UPGRADE)
+        .then(|| hyper::upgrade::on(&mut req));
     let target = async {
         let who = caller(&s, &peer).await?;
         let l = lease_of(&s, &id, &who)?;
@@ -724,7 +730,10 @@ async fn proxy(
     let path = format!("/{rest}{query}");
     let (parts, body) = req.into_parts();
     let tcp = match tokio::net::TcpStream::connect(&d.addr).await {
-        Ok(t) => t,
+        Ok(t) => {
+            let _ = t.set_nodelay(true);
+            t
+        }
         Err(e) => {
             return err(StatusCode::BAD_GATEWAY, format!("the lane's daemon: {e}")).into_response();
         }
@@ -734,7 +743,7 @@ async fn proxy(
             Ok(x) => x,
             Err(e) => return err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
         };
-    tokio::spawn(conn);
+    tokio::spawn(conn.with_upgrades());
     let mut out = hyper::Request::builder()
         .method(parts.method)
         .uri(path)
@@ -755,6 +764,26 @@ async fn proxy(
         return err(StatusCode::BAD_REQUEST, "bad request").into_response();
     };
     match send.send_request(out).await {
+        Ok(mut res) if res.status() == StatusCode::SWITCHING_PROTOCOLS => {
+            let Some(upgrade_in) = upgrade_in else {
+                return err(
+                    StatusCode::BAD_GATEWAY,
+                    "the lane's daemon switched protocols unasked",
+                )
+                .into_response();
+            };
+            let upgrade_out = hyper::upgrade::on(&mut res);
+            tokio::spawn(async move {
+                let (Ok(a), Ok(b)) = (upgrade_in.await, upgrade_out.await) else {
+                    return;
+                };
+                let mut a = hyper_util::rt::TokioIo::new(a);
+                let mut b = hyper_util::rt::TokioIo::new(b);
+                let _ = tokio::io::copy_bidirectional(&mut a, &mut b).await;
+            });
+            let (parts, _) = res.into_parts();
+            axum::response::Response::from_parts(parts, axum::body::Body::empty())
+        }
         Ok(res) => res.map(axum::body::Body::new).into_response(),
         Err(e) => err(StatusCode::BAD_GATEWAY, format!("the lane's daemon: {e}")).into_response(),
     }

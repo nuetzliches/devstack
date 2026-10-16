@@ -65,7 +65,10 @@ pub fn start(port: u16, target: u16, rt: &tokio::runtime::Handle) -> std::io::Re
 async fn accept(listener: TcpListener, port: u16, target: u16) {
     loop {
         let (mut inbound, _) = match listener.accept().await {
-            Ok(c) => c,
+            Ok(c) => {
+                let _ = c.0.set_nodelay(true);
+                c
+            }
             Err(e) => {
                 // A connection reset before it was accepted, or no file
                 // handles left: say so, and keep listening.
@@ -88,10 +91,12 @@ async fn accept(listener: TcpListener, port: u16, target: u16) {
 async fn connect(port: u16) -> Option<TcpStream> {
     let v4: SocketAddr = ([127, 0, 0, 1], port).into();
     let v6: SocketAddr = (std::net::Ipv6Addr::LOCALHOST, port).into();
-    match TcpStream::connect(v4).await {
-        Ok(s) => Some(s),
-        Err(_) => TcpStream::connect(v6).await.ok(),
-    }
+    let s = match TcpStream::connect(v4).await {
+        Ok(s) => s,
+        Err(_) => TcpStream::connect(v6).await.ok()?,
+    };
+    let _ = s.set_nodelay(true);
+    Some(s)
 }
 
 #[cfg(test)]

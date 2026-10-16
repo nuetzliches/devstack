@@ -112,6 +112,9 @@ pub async fn serve(
             },
             () = &mut stop => return,
         };
+        // Small writes go out at once: a tunnel's request/answer turns would
+        // otherwise wait for delayed ACKs (about 40 ms each).
+        let _ = tcp.set_nodelay(true);
         let acceptor = acceptor.clone();
         let app = app.clone();
         tokio::spawn(async move {
@@ -167,6 +170,7 @@ pub async fn request(
     .await
     .map_err(|_| TlsError::Other(format!("{authority}: no answer within 10 s")))?
     .map_err(|e| TlsError::Other(format!("{authority}: {e}")))?;
+    let _ = tcp.set_nodelay(true);
     let name = ServerName::try_from(pki::member_dns(member))
         .map_err(|e| TlsError::Other(format!("server name: {e}")))?;
     let tls = tokio_rustls::TlsConnector::from(config)
@@ -235,6 +239,7 @@ where
     .await
     .map_err(|_| TlsError::Other(format!("{authority}: no answer within 10 s")))?
     .map_err(|e| TlsError::Other(format!("{authority}: {e}")))?;
+    let _ = tcp.set_nodelay(true);
     let name = ServerName::try_from(pki::member_dns(member))
         .map_err(|e| TlsError::Other(format!("server name: {e}")))?;
     let tls = tokio_rustls::TlsConnector::from(config)
@@ -244,7 +249,8 @@ where
     let (mut s, conn) = hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(tls))
         .await
         .map_err(|e| TlsError::Other(format!("{authority}: {e}")))?;
-    tokio::spawn(conn);
+    // Upgrades too: a tunnel to a lane's port is one (ADR-0029 point 4).
+    tokio::spawn(conn.with_upgrades());
     req.headers_mut().insert(
         hyper::header::HOST,
         hyper::header::HeaderValue::from_str(&authority)
