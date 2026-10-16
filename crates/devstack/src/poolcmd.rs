@@ -5,7 +5,7 @@
 use anyhow::{Result, anyhow, bail};
 use devstack_node::coordinator;
 use devstack_node::member::Local;
-use devstack_node::store::{State, Store};
+use devstack_node::store::{Role, SHELL, State, Store};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -25,9 +25,7 @@ pub fn coordinator_dir(dir: Option<PathBuf>) -> PathBuf {
 
 /// This machine's membership: `pool/` in devstack's per-user state.
 fn member_dir() -> PathBuf {
-    std::env::var_os("DEVSTACK_POOL_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| data_dir().join("pool"))
+    devstack_node::member::default_dir(&data_dir())
 }
 
 fn need_coordinator(dir: &Path) -> Result<()> {
@@ -115,13 +113,22 @@ pub fn members_list(dir: Option<PathBuf>) -> Result<()> {
         return Ok(());
     }
     let now = devstack_node::store::now();
-    println!("{:<18}{:<10}{:<24}ASKED", "ID", "STATE", "NAME");
+    println!(
+        "{:<18}{:<10}{:<8}{:<24}{:<18}ASKED",
+        "ID", "STATE", "ROLE", "NAME", "FROM"
+    );
     for m in &ms {
         println!(
-            "{:<18}{:<10}{:<24}{}",
+            "{:<18}{:<10}{:<8}{:<24}{:<18}{}",
             m.id,
             m.state.as_str(),
+            if m.state == State::Approved {
+                m.role.as_str()
+            } else {
+                "-"
+            },
             m.name,
+            m.address.as_deref().unwrap_or("-"),
             ago(now.saturating_sub(m.requested_at))
         );
     }
@@ -129,24 +136,45 @@ pub fn members_list(dir: Option<PathBuf>) -> Result<()> {
     if pending > 0 {
         println!("\n{pending} pending: `devstack node members approve <id>` admits one");
     }
+    let admins = ms
+        .iter()
+        .filter(|m| m.state == State::Approved && m.role == Role::Admin)
+        .count();
+    if admins == 0 && ms.iter().any(|m| m.state == State::Approved) {
+        println!(
+            "no admin yet: `devstack node members role <id> admin` lets one manage the pool in the dashboard"
+        );
+    }
     Ok(())
 }
 
-pub fn members_approve(dir: Option<PathBuf>, member: &str) -> Result<()> {
+pub fn members_approve(dir: Option<PathBuf>, member: &str, admin: bool) -> Result<()> {
     let dir = coordinator_dir(dir);
     need_coordinator(&dir)?;
-    let m = Store::new(&dir).approve(member, &coordinator::ca(&dir)?)?;
+    let role = admin.then_some(Role::Admin);
+    let m = Store::new(&dir).approve(member, &coordinator::ca(&dir)?, role, SHELL)?;
     println!(
-        "approved {} ({}); it picks up its certificate by itself",
-        m.id, m.name
+        "approved {} ({}) as {}; it picks up its certificate by itself",
+        m.id,
+        m.name,
+        m.role.as_str()
     );
+    Ok(())
+}
+
+pub fn members_role(dir: Option<PathBuf>, member: &str, role: &str) -> Result<()> {
+    let dir = coordinator_dir(dir);
+    need_coordinator(&dir)?;
+    let role: Role = role.parse().map_err(|e: String| anyhow!(e))?;
+    let m = Store::new(&dir).set_role(member, role, SHELL)?;
+    println!("{} ({}) is {} now", m.id, m.name, m.role.as_str());
     Ok(())
 }
 
 pub fn members_remove(dir: Option<PathBuf>, member: &str) -> Result<()> {
     let dir = coordinator_dir(dir);
     need_coordinator(&dir)?;
-    let m = Store::new(&dir).remove(member)?;
+    let m = Store::new(&dir).remove(member, SHELL)?;
     println!(
         "removed {} ({}); its certificate is refused from now on",
         m.id, m.name

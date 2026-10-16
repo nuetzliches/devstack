@@ -574,6 +574,7 @@ dependencies = [
  "devstack-compose",
  "devstack-config",
  "devstack-daemon",
+ "devstack-node",
  "devstack-proc",
  "http-body-util",
  "hyper",

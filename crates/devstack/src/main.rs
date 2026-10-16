@@ -336,9 +336,18 @@ enum MembersAction {
     /// Every member and its state (the default).
     List,
     /// Admit a member (by id, a unique prefix of it, or its name).
-    Approve { member: String },
-    /// Remove a member: its certificate is refused from now on.
+    Approve {
+        member: String,
+        /// As an admin, who manages the pool from the dashboard (ADR-0032).
+        #[arg(long)]
+        admin: bool,
+    },
+    /// Remove a member, or reject its request: its certificate is refused
+    /// from now on.
     Remove { member: String },
+    /// Change an approved member's role: `member` or `admin` (the last admin
+    /// stays one).
+    Role { member: String, role: String },
 }
 
 #[derive(Subcommand)]
@@ -595,7 +604,10 @@ fn main() -> Result<()> {
             NodeAction::Fingerprint { dir } => poolcmd::print_fingerprint(dir),
             NodeAction::Members { action, dir } => match action.unwrap_or(MembersAction::List) {
                 MembersAction::List => poolcmd::members_list(dir),
-                MembersAction::Approve { member } => poolcmd::members_approve(dir, &member),
+                MembersAction::Approve { member, admin } => {
+                    poolcmd::members_approve(dir, &member, admin)
+                }
+                MembersAction::Role { member, role } => poolcmd::members_role(dir, &member, &role),
                 MembersAction::Remove { member } => poolcmd::members_remove(dir, &member),
             },
         },

@@ -3,7 +3,7 @@
 
 use devstack_node::coordinator::{self, Report};
 use devstack_node::member::Local;
-use devstack_node::store::{State, Store};
+use devstack_node::store::{Role, SHELL, State, Store};
 use std::path::Path;
 
 /// A coordinator in `dir`, serving on a free loopback port until the test ends.
@@ -45,7 +45,7 @@ fn a_member_joins_is_approved_and_removed() {
 
     let store = Store::new(coord.path());
     store
-        .approve(&m.id, &coordinator::ca(coord.path()).unwrap())
+        .approve(&m.id, &coordinator::ca(coord.path()).unwrap(), None, SHELL)
         .unwrap();
     assert_eq!(me.refresh().unwrap().state, State::Approved);
     assert_eq!(me.me().unwrap().id, m.id);
@@ -77,7 +77,78 @@ fn a_member_joins_is_approved_and_removed() {
     let r = anonymous.get(&format!("{url}/v1/nodes")).call().unwrap();
     assert_eq!(r.status(), 401);
 
-    store.remove(&m.id).unwrap();
+    store.remove(&m.id, SHELL).unwrap();
     let e = me.nodes().unwrap_err().to_string();
     assert!(e.contains("403"), "{e}");
+}
+
+/// Admins approve, reject, remove and change roles over the API; members may
+/// not (ADR-0032).
+#[test]
+fn an_admin_manages_the_pool_over_the_api() {
+    let coord = tempfile::tempdir().unwrap();
+    let (url, fp) = start(coord.path());
+    let store = Store::new(coord.path());
+    let ca = coordinator::ca(coord.path()).unwrap();
+
+    let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let [admin, colleague, stranger] = [0, 1, 2].map(|i| Local::new(dirs[i].path()));
+    let a = admin.join(&url, &fp, "admin-pc").unwrap();
+    store.approve(&a.id, &ca, Some(Role::Admin), SHELL).unwrap();
+    admin.refresh().unwrap();
+    assert_eq!(admin.me().unwrap().role, Role::Admin);
+
+    let c = colleague.join(&url, &fp, "colleague-pc").unwrap();
+    let s = stranger.join(&url, &fp, "stranger").unwrap();
+    let pending = admin.admin_members().unwrap();
+    let asked = pending.iter().find(|m| m.id == c.id).unwrap();
+    assert_eq!(asked.state, State::Pending);
+    assert_eq!(
+        asked.address.as_deref(),
+        Some("127.0.0.1"),
+        "admins see where a request came from"
+    );
+
+    admin.admin_approve(&c.id, None).unwrap();
+    admin.admin_remove(&s.id).unwrap();
+    colleague.refresh().unwrap();
+    assert_eq!(stranger.refresh().unwrap().state, State::Removed);
+
+    // A member is no admin.
+    let e = colleague.admin_members().unwrap_err().to_string();
+    assert!(e.starts_with("403"), "{e}");
+    assert!(
+        colleague
+            .members()
+            .unwrap()
+            .iter()
+            .all(|m| m.address.is_none())
+    );
+
+    // The last admin stays one; with a second, the first may step down.
+    let e = admin
+        .admin_role(&a.id, Role::Member)
+        .unwrap_err()
+        .to_string();
+    assert!(e.starts_with("409"), "{e}");
+    admin.admin_role(&c.id, Role::Admin).unwrap();
+    admin.admin_role(&a.id, Role::Member).unwrap();
+    assert!(admin.admin_members().is_err());
+
+    let log: Vec<String> = colleague
+        .admin_audit()
+        .unwrap()
+        .into_iter()
+        .map(|e| format!("{} {}", e.action, e.name))
+        .collect();
+    assert_eq!(
+        log,
+        [
+            "role admin-pc",
+            "role colleague-pc",
+            "reject stranger",
+            "approve colleague-pc",
+            "approve admin-pc"
+        ]
+    );
 }

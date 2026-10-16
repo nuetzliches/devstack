@@ -191,3 +191,40 @@ export type Run = {
   error: string | null;
   log: string | null;
 };
+
+// ---------------------------------------------------------------- pool (ADR-0031, ADR-0032)
+
+export type PoolRole = 'member' | 'admin';
+export type PoolMemberState = 'pending' | 'approved' | 'removed';
+
+/** A member of the pool. Times here are Unix seconds, as the coordinator keeps them. */
+export type PoolMember = {
+  id: string;
+  name: string;
+  state: PoolMemberState;
+  role: PoolRole;
+  requested_at: number;
+  /** Where the request came from; only an admin sees it. */
+  address?: string;
+};
+
+export type PoolNode = {
+  id: string;
+  name: string;
+  online: boolean;
+  /** Seconds since its last report. */
+  seen?: number;
+  report?: { sharing: boolean; cpus: number; memory: number; api?: string };
+};
+
+export type PoolAuditEntry = { at: number; by: string; action: 'approve' | 'reject' | 'remove' | 'role'; member: string; name: string; detail?: string };
+
+/** `GET /hub/pool`: what this machine sees of its pool. */
+export type PoolOverview = {
+  joined: boolean;
+  me?: { id: string; name: string; state: PoolMemberState; role?: PoolRole; coordinator: string };
+  members?: PoolMember[];
+  nodes?: PoolNode[];
+  /** Admins only. */
+  audit?: PoolAuditEntry[];
+};

@@ -5,13 +5,14 @@
 // worktrees fold only with its toggle, never by navigating. The shown
 // stack's lanes come live from its stream; the others' are read when the
 // hub's list of stacks changes (no polling, ADR-0021).
-import { computed, nextTick, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { api, paths, v1 } from '@/api';
 import type { LaneView, StackEntry } from '@/api/types';
 import { laneLabel, orderLanes } from '@/lib/lanes';
 import { persist } from '@/lib/persist';
 import { useHub } from '@/stores/hub';
+import { usePool } from '@/stores/pool';
 import { useStack } from '@/stores/stack';
 import AddStackDialog from './AddStackDialog.vue';
 import Icon from './icons/Icon.vue';
@@ -19,6 +20,19 @@ import Icon from './icons/Icon.vue';
 const hub = useHub();
 const stack = useStack();
 const router = useRouter();
+const route = useRoute();
+// The pool (ADR-0032): always in reach, with the requests waiting for an
+// admin as a badge.
+const pool = usePool();
+onBeforeUnmount(pool.watch(30_000));
+const poolHint = computed(() => {
+  const o = pool.overview;
+  if (!o) return '';
+  if (!o.joined) return 'not joined';
+  if (o.me?.state === 'pending') return 'waiting';
+  const n = o.nodes ?? [];
+  return `${n.filter((x) => x.online).length}/${n.length}`;
+});
 const adding = ref(false);
 const unfolded = ref<Record<string, boolean>>({});
 /** Stacks whose worktrees are folded away; only the toggle changes it. */
@@ -162,6 +176,19 @@ const isCurrent = (s: StackEntry) => s.id === stack.id;
       </li>
       <li v-if="!stacks.length" class="empty">No stacks yet. Add one, or run <code>devstack up</code> in a project.</li>
     </ul>
+    <button
+      type="button"
+      class="item pool-item"
+      :class="{ active: route.name === 'pool' }"
+      :title="pool.pending.length ? `${pool.pending.length} request(s) to join the pool` : 'The machines that run lanes for each other'"
+      data-testid="sidebar-pool"
+      @click="router.push({ name: 'pool' })"
+    >
+      <Icon name="server" :size="14" class="branch" />
+      <span class="label">Pool</span>
+      <span v-if="pool.isAdmin && pool.pending.length" class="pill sm warn" data-testid="sidebar-pool-badge">{{ pool.pending.length }}</span>
+      <span v-else class="faint small tabular">{{ poolHint }}</span>
+    </button>
     <button type="button" class="add" data-testid="sidebar-add-stack" @click="adding = true"><Icon name="plus" :size="14" /> Add a stack…</button>
     <AddStackDialog :open="adding" @close="adding = false" />
   </aside>
@@ -266,6 +293,12 @@ ul {
   padding: 8px;
   color: var(--text-muted);
   font-size: 12px;
+}
+.pool-item {
+  margin-top: auto;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  padding-top: 10px;
 }
 .add {
   display: flex;
