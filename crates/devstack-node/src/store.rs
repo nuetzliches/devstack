@@ -85,6 +85,13 @@ pub struct Member {
     /// As a node: paused by an admin, no new lanes (running ones stay).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub paused: bool,
+    /// Set by admins (ADR-0033): who a member is for nodes' policies
+    /// (`team:backend`), what a node offers (`gpu`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// As a node: what it lets run on it (ADR-0033).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<crate::policy::NodePolicy>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -111,7 +118,8 @@ pub struct AuditEntry {
     pub at: u64,
     /// Who: a member (`id (name)`) or [`SHELL`].
     pub by: String,
-    /// `approve`, `reject`, `remove`, `role`, `pause`, `resume`, `end`.
+    /// `approve`, `reject`, `remove`, `role`, `pause`, `resume`, `end`,
+    /// `tags`, `policy`.
     pub action: String,
     pub member: String,
     pub name: String,
@@ -213,6 +221,8 @@ impl Store {
                 cert: None,
                 cert_fp: None,
                 paused: false,
+                tags: Vec::new(),
+                policy: None,
             };
             ms.push(m.clone());
             Ok((m, true))
@@ -393,6 +403,47 @@ impl Store {
         })?;
         if changed {
             self.log(by, if paused { "pause" } else { "resume" }, &m, None)?;
+        }
+        Ok(m)
+    }
+
+    /// Set a member's tags (ADR-0033): trimmed, sorted, without repeats.
+    pub fn set_tags(&self, key: &str, tags: &[String], by: &str) -> Result<Member, StoreError> {
+        let mut tags: Vec<String> = tags
+            .iter()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+        tags.sort();
+        tags.dedup();
+        let (m, changed) = self.change(|ms| {
+            let i = Self::find(ms, key)?;
+            let changed = ms[i].tags != tags;
+            ms[i].tags = tags.clone();
+            Ok(((ms[i].clone(), changed), changed))
+        })?;
+        if changed {
+            self.log(by, "tags", &m, Some(m.tags.join(", ")))?;
+        }
+        Ok(m)
+    }
+
+    /// Set what a node lets run on it (ADR-0033); `None` lifts it.
+    pub fn set_policy(
+        &self,
+        key: &str,
+        policy: Option<crate::policy::NodePolicy>,
+        by: &str,
+    ) -> Result<Member, StoreError> {
+        let (m, changed) = self.change(|ms| {
+            let i = Self::find(ms, key)?;
+            let changed = ms[i].policy != policy;
+            ms[i].policy = policy.clone();
+            Ok(((ms[i].clone(), changed), changed))
+        })?;
+        if changed {
+            let detail = serde_json::to_string(&m.policy).unwrap_or_default();
+            self.log(by, "policy", &m, Some(detail))?;
         }
         Ok(m)
     }

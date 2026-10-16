@@ -6,8 +6,9 @@
 //!   for an admin the members with their addresses and the audit log
 //! - `POST /hub/pool/members/{id}/approve` `{role?}`, `.../remove`,
 //!   `.../role` `{role}`, `POST /hub/pool/nodes/{id}/pause|resume`,
-//!   `POST /hub/pool/leases/{id}/end`: an admin's changes, passed on as they
-//!   are
+//!   `POST /hub/pool/leases/{id}/end`, `POST /hub/pool/members/{id}/tags`
+//!   `{tags}`, `POST /hub/pool/nodes/{id}/policy` (a policy or `null`): an
+//!   admin's changes, passed on as they are
 //! - `POST /hub/pool/join` `{coordinator, fingerprint, name?}`: ask to join a
 //!   pool (`devstack join` without waiting)
 
@@ -128,6 +129,26 @@ pub async fn pause(Path(id): Path<String>) -> Response {
 
 pub async fn resume(Path(id): Path<String>) -> Response {
     match blocking(move |l| l.admin_pause(&id, false)).await {
+        Ok(m) => Json(m).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+pub async fn tags(
+    Path(id): Path<String>,
+    Json(t): Json<devstack_node::coordinator::TagsRequest>,
+) -> Response {
+    match blocking(move |l| l.admin_tags(&id, &t.tags)).await {
+        Ok(m) => Json(m).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+pub async fn policy(
+    Path(id): Path<String>,
+    Json(p): Json<Option<devstack_node::policy::NodePolicy>>,
+) -> Response {
+    match blocking(move |l| l.admin_policy(&id, p)).await {
         Ok(m) => Json(m).into_response(),
         Err(e) => error(&e),
     }

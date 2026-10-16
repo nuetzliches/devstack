@@ -138,7 +138,10 @@ struct Inner {
     dedicated: bool,
     leases: Mutex<HashMap<String, NodeLease>>,
     /// The approved members, as the coordinator last listed them.
-    members: Mutex<(Option<Instant>, HashSet<String>)>,
+    /// With their tags, which this node's policy may ask for (ADR-0033).
+    members: Mutex<(Option<Instant>, MemberTags)>,
+    /// What this node lets run on it, as the coordinator last said.
+    policy: Mutex<Option<crate::policy::NodePolicy>>,
     /// What the node offers now, before what its leases need.
     offer: Mutex<Amount>,
     /// A static Linux `devstack` the lane containers mount (ADR-0028 point
@@ -155,6 +158,8 @@ struct Inner {
 }
 
 type Shared = Arc<Inner>;
+/// The approved members, each with its tags.
+type MemberTags = HashMap<String, Vec<String>>;
 type ApiResult<T> = std::result::Result<T, (StatusCode, String)>;
 
 fn err(status: StatusCode, msg: impl Into<String>) -> (StatusCode, String) {
@@ -211,6 +216,8 @@ impl Inner {
                 .unwrap_or_else(|| "devstack.toml".into()),
             display_root: None,
             port_offset: 0,
+            memory_limit: None,
+            isolated: false,
         }
     }
 
@@ -238,7 +245,7 @@ async fn caller(s: &Shared, peer: &Peer) -> ApiResult<String> {
     };
     let fresh = {
         let m = s.members.lock().unwrap();
-        m.0.is_some_and(|at| at.elapsed() < Duration::from_secs(30)) && m.1.contains(&id)
+        m.0.is_some_and(|at| at.elapsed() < Duration::from_secs(30)) && m.1.contains_key(&id)
     };
     if !fresh {
         let s2 = s.clone();
@@ -249,12 +256,12 @@ async fn caller(s: &Shared, peer: &Peer) -> ApiResult<String> {
             let ids = list
                 .into_iter()
                 .filter(|m| m.state == crate::store::State::Approved)
-                .map(|m| m.id)
+                .map(|m| (m.id, m.tags))
                 .collect();
             *s.members.lock().unwrap() = (Some(Instant::now()), ids);
         }
     }
-    if s.members.lock().unwrap().1.contains(&id) {
+    if s.members.lock().unwrap().1.contains_key(&id) {
         Ok(id)
     } else {
         Err(err(
@@ -345,6 +352,21 @@ async fn admit(
             StatusCode::FORBIDDEN,
             "the lease is not for this node and you",
         ));
+    }
+    // What this node lets run on it (ADR-0033), whatever the coordinator
+    // checked already.
+    let tags = s
+        .members
+        .lock()
+        .unwrap()
+        .1
+        .get(&who)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(p) = s.policy.lock().unwrap().as_ref()
+        && let Err(why) = p.admits(&who, &tags, &lease.repo)
+    {
+        return Err(err(StatusCode::FORBIDDEN, format!("{}: {why}", s.name)));
     }
     // The node admits against what it has now (ADR-0031 point 4).
     let free = s.available();
@@ -672,6 +694,10 @@ async fn start(
         let mut run = s2.run(&l);
         run.display_root = display_root;
         run.port_offset = port_offset;
+        if let Some(p) = s2.policy.lock().unwrap().as_ref() {
+            run.memory_limit = p.memory_limit(l.need.memory);
+            run.isolated = p.network == crate::policy::Network::None;
+        }
         let s3 = s2.clone();
         let pid = lid.clone();
         let phase = move |p: &str| {
@@ -956,6 +982,12 @@ async fn background(s: Shared) {
         };
         let s2 = s.clone();
         let answer = tokio::task::spawn_blocking(move || s2.local.report(&report)).await;
+        // What an admin set for this node (ADR-0033); the last known holds
+        // while the coordinator does not answer.
+        let s3 = s.clone();
+        if let Ok(Ok(me)) = tokio::task::spawn_blocking(move || s3.local.me()).await {
+            *s.policy.lock().unwrap() = me.policy;
+        }
         // Leases an admin ended: their lanes stop like expired ones.
         if let Ok(Ok(a)) = answer
             && !a.end.is_empty()
@@ -1021,7 +1053,8 @@ pub async fn serve(
         share: config.share,
         dedicated: config.dedicated,
         leases: Mutex::new(leases),
-        members: Mutex::new((None, HashSet::new())),
+        members: Mutex::new((None, HashMap::new())),
+        policy: Mutex::new(None),
         offer: Mutex::new(Amount::default()),
         bin,
         container: std::env::var("DEVSTACK_NODE_CONTAINER")

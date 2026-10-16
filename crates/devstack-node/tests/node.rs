@@ -297,6 +297,26 @@ fn an_admin_pauses_a_node_and_ends_a_lease() {
         })
     };
 
+    // A policy (ADR-0033): only members tagged `team:x`.
+    let store = Store::new(c.path());
+    store
+        .set_policy(
+            &node_id,
+            Some(devstack_node::policy::NodePolicy {
+                allow: vec!["team:x".into()],
+                ..Default::default()
+            }),
+            SHELL,
+        )
+        .unwrap();
+    let e = ask().unwrap_err().to_string();
+    assert!(e.contains("team:x"), "{e}");
+    store
+        .set_tags(&admin_id, &["team:x".into()], SHELL)
+        .unwrap();
+    assert!(ask().is_ok(), "a member with the tag may");
+    store.set_policy(&node_id, None, SHELL).unwrap();
+
     admin.admin_pause(&node_id, true).unwrap();
     assert!(
         admin
@@ -349,4 +369,5 @@ fn an_admin_pauses_a_node_and_ends_a_lease() {
         .map(|e| e.action)
         .collect();
     assert_eq!(&log[..3], ["end", "resume", "pause"]);
+    assert!(log.contains(&"policy".to_string()) && log.contains(&"tags".to_string()));
 }

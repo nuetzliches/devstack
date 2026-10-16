@@ -78,7 +78,11 @@ certificate) and what the container it starts may do.
 
 ## Enforced by
 
-Will live in: `crates/devstack-node/src/node.rs` (admission by member and
-repository), `crates/devstack-node/src/lanerun.rs` (container limits, the
-lane networks' egress), `crates/devstack-node/src/coordinator.rs`
-(placement respects the reported policy), the pool area in `ui/`.
+`crates/devstack-node/src/policy.rs` (the policy and its checks),
+`crates/devstack-node/src/node.rs` (admission by member, tag and repository;
+memory limit and network per lane), `crates/devstack-node/src/lanerun.rs`
+(`docker run --memory`, `internal` networks for `none`),
+`crates/devstack-node/src/coordinator.rs` (placement and named leases respect
+the policy), `crates/devstack-node/tests/node.rs` (a refused and an admitted
+lease), the pool area in `ui/`. The network mode "the internet, not the local
+network" is still to come.

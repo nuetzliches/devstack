@@ -4,7 +4,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, paths, Unreachable } from '@/api';
-import type { PoolOverview, PoolRole, ShareSettings, ShareStatus } from '@/api/types';
+import type { NodePolicy, PoolOverview, PoolRole, ShareSettings, ShareStatus } from '@/api/types';
 import { act } from '@/lib/actions';
 
 export const usePool = defineStore('pool', () => {
@@ -124,6 +124,27 @@ export const usePool = defineStore('pool', () => {
     if (r.ok) setTimeout(() => void load(), 1500);
   }
 
+  async function setTags(id: string, name: string, tags: string[]) {
+    const r = await act({
+      label: `Tags of ${name}`,
+      path: paths.poolTags(id),
+      body: { tags },
+      success: tags.length ? `${name}: ${tags.join(', ')}` : `${name} has no tags`,
+    });
+    if (r.ok) await load();
+  }
+
+  /** `null` lifts the node's policy: every member may run any lane there. */
+  async function setPolicy(id: string, name: string, policy: NodePolicy | null) {
+    const r = await act({
+      label: `What runs on ${name}`,
+      path: paths.poolPolicy(id),
+      body: policy as unknown as Record<string, unknown>,
+      success: policy ? `${name}: policy saved` : `${name}: every member may run any lane there`,
+    });
+    if (r.ok) await load();
+  }
+
   async function join(coordinator: string, fingerprint: string, name: string) {
     const r = await act({
       label: 'Join the pool',
@@ -148,5 +169,5 @@ export const usePool = defineStore('pool', () => {
     setTimeout(() => void load(), 1500);
   }
 
-  return { overview, error, loading, share, isAdmin, pending, load, loadShare, watch, approve, remove, setRole, setShare, setPaused, endLease, join };
+  return { overview, error, loading, share, isAdmin, pending, load, loadShare, watch, approve, remove, setRole, setShare, setPaused, endLease, join, setTags, setPolicy };
 });

@@ -336,6 +336,25 @@ impl Local {
         self.post(&format!("/v1/admin/nodes/{id}/{what}"), &())
     }
 
+    /// Set a member's tags (admins only, ADR-0033).
+    pub fn admin_tags(&self, id: &str, tags: &[String]) -> Result<MemberView> {
+        self.post(
+            &format!("/v1/admin/members/{id}/tags"),
+            &crate::coordinator::TagsRequest {
+                tags: tags.to_vec(),
+            },
+        )
+    }
+
+    /// Set what a node lets run on it; `None` lifts it (admins only).
+    pub fn admin_policy(
+        &self,
+        id: &str,
+        policy: Option<crate::policy::NodePolicy>,
+    ) -> Result<MemberView> {
+        self.post(&format!("/v1/admin/nodes/{id}/policy"), &policy)
+    }
+
     /// End a lease (admins only): its node stops the lane.
     pub fn admin_end(&self, lease: &str) -> Result<()> {
         self.post::<serde_json::Value>(&format!("/v1/admin/leases/{lease}/end"), &())?;
