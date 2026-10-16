@@ -1,6 +1,6 @@
 # ADR-0031: A coordinator places lanes and admits members; nodes admit leases; data goes directly
 
-- **Status:** Accepted (2026-10-16)
+- **Status:** Accepted (2026-10-16), amended 2026-10-16 (one binary: `devstack node`)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md) (points 1 and 3 replaced here), [ADR-0027](0027-trust-between-nodes.md) (points 1 and 2 replaced here), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0015](0015-devstack-is-optional.md)
@@ -36,6 +36,15 @@ bottleneck of every lane.
    authority; every connection between members is mutual TLS with those
    certificates. Removing a member revokes it: nodes take the member list from
    the coordinator and refuse what is not on it.
+
+   *Amended 2026-10-16.* The coordinator and the node agent are subcommands of
+   the one `devstack` binary, not a second one: `devstack node init --address
+   <a>` creates the CA, `devstack node serve --listen <addr>` runs the
+   coordinator, `devstack node members approve <id>` admits a member. The
+   member compares the CA it is served with the fingerprint `devstack node
+   fingerprint` prints on the coordinator (`devstack join <url> --fingerprint
+   <fp>`); from then on it trusts that CA only. A member's id is a hash of its
+   public key, so asking again is the same request.
 3. **Nodes share what they can spare.** A member that shares (a switch in the
    dashboard, prominent in its header or sidebar) offers by default half of
    its memory and CPU that are free right now, recomputed as it goes, never
@@ -78,6 +87,8 @@ bottleneck of every lane.
 
 ## Enforced by
 
-Will live in: `crates/devstack-node` (coordinator: members, approvals, CA,
-leases, placement; node: admission, reports), `devstack join` and the remote
-client in `crates/devstack-daemon`, the dashboard's pool view and share switch.
+`crates/devstack-node` (`pki`, `store`, `coordinator`, `member`; the test
+`tests/pool.rs`: join with the fingerprint, approval, mutual TLS, removal)
+and `crates/devstack/src/poolcmd.rs`. Will live there too: leases, placement,
+the node's admission and reports, the remote client in `crates/devstack-daemon`,
+the dashboard's pool view and share switch.

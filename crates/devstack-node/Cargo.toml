@@ -1,0 +1,32 @@
+[package]
+name = "devstack-node"
+description = "Members, nodes and the coordinator of a pool of machines that run lanes (ADR-0025, ADR-0031)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+axum.workspace = true
+blake3.workspace = true
+hyper.workspace = true
+hyper-util = { workspace = true, features = ["service"] }
+rcgen.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+ureq.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
