@@ -67,6 +67,14 @@ async function copyJoin() {
 const leases = computed(() => o.value?.leases ?? []);
 const nameOf = (id: string) => (o.value?.members ?? []).find((m) => m.id === id)?.name ?? nodes.value.find((n) => n.id === id)?.name ?? id;
 const lanesOn = (node: string) => leases.value.filter((l) => l.node === node).length;
+const kindOf = (id: string) => nodes.value.find((n) => n.id === id)?.kind ?? 'unknown';
+const kindText: Record<string, string> = { server: 'server', node: 'node', machine: 'developer machine', unknown: 'not seen yet' };
+const kindTitle: Record<string, string> = {
+  server: 'Runs lanes for the pool and never reclaims them (a dedicated node)',
+  node: 'Runs lanes for the pool; its owner may reclaim them',
+  machine: 'A developer machine: asks for lanes, may share',
+  unknown: 'Has not reported to the coordinator yet',
+};
 const leaseWhat = (l: PoolLease) => `lane ${l.repo}/${l.lane} on ${nameOf(l.node)}`;
 </script>
 
@@ -184,7 +192,10 @@ const leaseWhat = (l: PoolLease) => `lane ${l.repo}/${l.lane} on ${nameOf(l.node
           </thead>
           <tbody>
             <tr v-for="n in nodes" :key="n.id" :data-node="n.id">
-              <td><strong>{{ n.name }}</strong> <span v-if="isMe(n.id)" class="pill sm outline">this machine</span></td>
+              <td>
+                <strong>{{ n.name }}</strong> <span v-if="isMe(n.id)" class="pill sm outline">this machine</span>
+                <span class="pill sm" :class="n.kind === 'server' ? 'accent' : 'outline'" :title="kindTitle[n.kind ?? 'unknown']" data-testid="pool-kind">{{ kindText[n.kind ?? 'unknown'] }}</span>
+              </td>
               <td>
                 <span class="pill sm" :class="n.online ? 'ok' : 'outline'">{{ n.online ? 'online' : 'offline' }}</span>
                 <span v-if="n.paused" class="pill sm warn" title="Paused by an admin: no new lanes, running ones stay">paused</span>
@@ -254,7 +265,10 @@ const leaseWhat = (l: PoolLease) => `lane ${l.repo}/${l.lane} on ${nameOf(l.node
           </thead>
           <tbody>
             <tr v-for="m in members" :key="m.id" :data-member="m.id">
-              <td><strong>{{ m.name }}</strong> <span v-if="isMe(m.id)" class="pill sm outline">this machine</span></td>
+              <td>
+                <strong>{{ m.name }}</strong> <span v-if="isMe(m.id)" class="pill sm outline">this machine</span>
+                <span class="pill sm" :class="kindOf(m.id) === 'server' ? 'accent' : 'outline'" :title="kindTitle[kindOf(m.id)]">{{ kindText[kindOf(m.id)] }}</span>
+              </td>
               <td class="mono faint">{{ m.id }}</td>
               <td><span class="pill sm" :class="m.role === 'admin' ? 'accent' : 'outline'">{{ m.role }}</span></td>
               <td v-if="pool.isAdmin" class="mono">{{ m.address ?? '–' }}</td>

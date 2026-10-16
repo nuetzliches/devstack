@@ -76,12 +76,18 @@ export const usePool = defineStore('pool', () => {
   }
 
   async function remove(id: string, name: string, pendingRequest: boolean) {
+    const node = overview.value?.nodes?.find((n) => n.id === id);
+    const lanesOn = (overview.value?.leases ?? []).filter((l) => l.node === id).length;
+    const asNode =
+      node && (node.kind === 'server' || node.kind === 'node')
+        ? ` It is a ${node.kind === 'server' ? 'server' : 'node'} of the pool: it stops taking lanes${lanesOn ? `, and the ${lanesOn} lane(s) running on it lose their lease` : ''}.`
+        : '';
     const r = await act({
       label: pendingRequest ? `Reject ${name}` : `Remove ${name}`,
       path: paths.poolRemove(id),
       confirmText: pendingRequest
         ? `Reject the request of ${name}? It can only ask again with a new key.`
-        : `Remove ${name} from the pool? Its certificate is refused from now on; it can only join again with a new key.`,
+        : `Remove ${name} from the pool? Its certificate is refused from now on; it can only join again with a new key.${asNode}`,
       confirmLabel: pendingRequest ? 'Reject' : 'Remove',
       success: pendingRequest ? `${name}'s request rejected` : `${name} removed from the pool`,
     });

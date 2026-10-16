@@ -45,9 +45,9 @@ export class MockPool {
       { id: '5566778899aabbcc', name: 'laptop-ben', state: 'pending', role: 'member', requested_at: s - 240, address: '100.64.0.12' },
     ];
     this.nodes = [
-      { id: this.me, name: 'dev-pc', online: true, seen: 4, report: { sharing: false, cpus: 0, memory: 0 } },
-      { id: '9f8e7d6c5b4a3921', name: 'build-server', online: true, seen: 7, report: { sharing: true, cpus: 12, memory: 48 * 2 ** 30, api: 'https://10.0.0.14:4261' } },
-      { id: '1122334455667788', name: 'laptop-anna', online: false, seen: 7200 },
+      { id: this.me, name: 'dev-pc', online: true, seen: 4, report: { sharing: false, cpus: 0, memory: 0 }, kind: 'machine' },
+      { id: '9f8e7d6c5b4a3921', name: 'build-server', online: true, seen: 7, report: { sharing: true, cpus: 12, memory: 48 * 2 ** 30, api: 'https://10.0.0.14:4261' }, kind: 'server' },
+      { id: '1122334455667788', name: 'laptop-anna', online: false, seen: 7200, kind: 'machine' },
     ];
     this.leases = [
       { id: '7c1e9a0b22d4f610', node: '9f8e7d6c5b4a3921', member: this.me, repo: 'shop', lane: 'review-cart', state: 'running', created: s - 1800, expires_in: 110 },

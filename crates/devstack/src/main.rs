@@ -363,6 +363,10 @@ enum NodeAction {
         /// The most memory it offers, in GiB.
         #[arg(long)]
         max_memory_gib: Option<f64>,
+        /// A server its owner never reclaims (ADR-0026): the pool shows it as
+        /// one; a developer's machine leaves it out.
+        #[arg(long)]
+        dedicated: bool,
     },
     /// The CA's fingerprint, which a member passes to `devstack join`.
     Fingerprint {
@@ -658,7 +662,8 @@ fn main() -> Result<()> {
                 api,
                 max_cpus,
                 max_memory_gib,
-            } => poolcmd::agent(&listen, api, max_cpus, max_memory_gib),
+                dedicated,
+            } => poolcmd::agent(&listen, api, max_cpus, max_memory_gib, dedicated),
             NodeAction::Members { action, dir } => match action.unwrap_or(MembersAction::List) {
                 MembersAction::List => poolcmd::members_list(dir),
                 MembersAction::Approve { member, admin } => {

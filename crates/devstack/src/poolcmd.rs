@@ -294,6 +294,7 @@ pub fn agent(
     api: Option<String>,
     max_cpus: Option<f64>,
     max_memory_gib: Option<f64>,
+    dedicated: bool,
 ) -> Result<()> {
     let addr: std::net::SocketAddr = listen.parse().map_err(|e| {
         anyhow!("--listen {listen}: {e} (an address and a port, e.g. 10.0.0.5:4261)")
@@ -321,7 +322,15 @@ pub fn agent(
         "node agent of {} ({}) on {addr}; requesters reach it at {api}",
         m.name, m.id
     );
-    devstack_node::node::serve_blocking(devstack_node::node::NodeConfig { dir, api, share }, addr)?;
+    devstack_node::node::serve_blocking(
+        devstack_node::node::NodeConfig {
+            dir,
+            api,
+            share,
+            dedicated,
+        },
+        addr,
+    )?;
     Ok(())
 }
 
