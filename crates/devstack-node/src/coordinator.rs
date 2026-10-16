@@ -6,9 +6,13 @@
 //! - `POST /v1/join` `{name, csr}`: ask to join; `GET /v1/join/{id}`: the answer
 //! - members only: `GET /v1/me`, `GET /v1/members`, `POST /v1/nodes/report`,
 //!   `GET /v1/nodes`
+//! - admins only (ADR-0032): `GET /v1/admin/members`,
+//!   `POST /v1/admin/members/{id}/approve` `{role?}`,
+//!   `POST /v1/admin/members/{id}/remove` (also rejects a request),
+//!   `POST /v1/admin/members/{id}/role` `{role}`, `GET /v1/admin/audit`
 
 use crate::pki::{self, Pair};
-use crate::store::{self, Member, State, Store};
+use crate::store::{self, AuditEntry, Member, Role, State, Store};
 use axum::extract::{Path as UrlPath, State as AxState};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -131,13 +135,18 @@ pub struct NodeView {
     pub report: Option<Report>,
 }
 
-/// A member as `/v1/members` lists it (no request or certificate).
+/// A member as `/v1/members` lists it (no request or certificate); the
+/// address it asked from only for admins.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemberView {
     pub id: String,
     pub name: String,
     pub state: State,
+    #[serde(default)]
+    pub role: Role,
     pub requested_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
 }
 
 impl From<&Member> for MemberView {
@@ -146,9 +155,33 @@ impl From<&Member> for MemberView {
             id: m.id.clone(),
             name: m.name.clone(),
             state: m.state,
+            role: m.role,
             requested_at: m.requested_at,
+            address: None,
         }
     }
+}
+
+impl MemberView {
+    fn for_admin(m: &Member) -> Self {
+        Self {
+            address: m.address.clone(),
+            ..Self::from(m)
+        }
+    }
+}
+
+/// `POST /v1/admin/members/{id}/approve`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ApproveRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<Role>,
+}
+
+/// `POST /v1/admin/members/{id}/role`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoleRequest {
+    pub role: Role,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,14 +199,19 @@ pub struct JoinAnswer {
 }
 
 struct Inner {
+    dir: PathBuf,
     store: Store,
     ca_pem: String,
     reports: Mutex<HashMap<String, (std::time::Instant, Report)>>,
 }
 
-/// The fingerprint of the client certificate a connection presented.
+/// The fingerprint of the client certificate a connection presented, and
+/// where the connection came from.
 #[derive(Clone)]
-struct Peer(Option<String>);
+struct Peer {
+    fp: Option<String>,
+    addr: std::net::SocketAddr,
+}
 
 type Shared = Arc<Inner>;
 type ApiResult<T> = std::result::Result<T, (StatusCode, String)>;
@@ -184,7 +222,7 @@ fn internal(e: impl std::fmt::Display) -> (StatusCode, String) {
 
 /// The approved member behind a request.
 fn member(s: &Inner, peer: &Peer) -> ApiResult<Member> {
-    let Some(fp) = &peer.0 else {
+    let Some(fp) = &peer.fp else {
         return Err((
             StatusCode::UNAUTHORIZED,
             "no client certificate: join the pool first (`devstack join`)".into(),
@@ -194,6 +232,32 @@ fn member(s: &Inner, peer: &Peer) -> ApiResult<Member> {
         StatusCode::FORBIDDEN,
         "this certificate is not an approved member of the pool".into(),
     ))
+}
+
+/// The approved admin behind a request, and how the audit log names them.
+fn admin(s: &Inner, peer: &Peer) -> ApiResult<(Member, String)> {
+    let m = member(s, peer)?;
+    if m.role != Role::Admin {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "only an admin of the pool may do this".into(),
+        ));
+    }
+    let by = format!("{} ({})", m.id, m.name);
+    Ok((m, by))
+}
+
+/// A store error as an answer: unknown and ambiguous members are the
+/// caller's mistake, a refused change a conflict.
+fn store_err(e: store::StoreError) -> (StatusCode, String) {
+    use store::StoreError as E;
+    let status = match &e {
+        E::Unknown(_) => StatusCode::NOT_FOUND,
+        E::Ambiguous(..) => StatusCode::BAD_REQUEST,
+        E::Refused(_) => StatusCode::CONFLICT,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, e.to_string())
 }
 
 fn router(shared: Shared) -> Router {
@@ -208,11 +272,17 @@ fn router(shared: Shared) -> Router {
         .route("/v1/members", get(members))
         .route("/v1/nodes/report", post(report))
         .route("/v1/nodes", get(nodes))
+        .route("/v1/admin/members", get(admin_members))
+        .route("/v1/admin/members/{id}/approve", post(admin_approve))
+        .route("/v1/admin/members/{id}/remove", post(admin_remove))
+        .route("/v1/admin/members/{id}/role", post(admin_role))
+        .route("/v1/admin/audit", get(admin_audit))
         .with_state(shared)
 }
 
 async fn join(
     AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
     Json(r): Json<JoinRequest>,
 ) -> ApiResult<Json<JoinAnswer>> {
     let id = pki::member_id(&r.csr).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
@@ -224,7 +294,7 @@ async fn join(
         .collect();
     let m = s
         .store
-        .request(&id, name.trim(), &r.csr)
+        .request(&id, name.trim(), &r.csr, Some(&peer.addr.ip().to_string()))
         .map_err(internal)?;
     Ok(Json(answer(&m)))
 }
@@ -301,6 +371,58 @@ async fn nodes(
     ))
 }
 
+async fn admin_members(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+) -> ApiResult<Json<Vec<MemberView>>> {
+    admin(&s, &peer)?;
+    let ms = s.store.list().map_err(internal)?;
+    Ok(Json(ms.iter().map(MemberView::for_admin).collect()))
+}
+
+async fn admin_approve(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+    body: Option<Json<ApproveRequest>>,
+) -> ApiResult<Json<MemberView>> {
+    let (_, by) = admin(&s, &peer)?;
+    let role = body.and_then(|Json(b)| b.role);
+    let ca = ca(&s.dir).map_err(internal)?;
+    let m = s.store.approve(&id, &ca, role, &by).map_err(store_err)?;
+    Ok(Json(MemberView::for_admin(&m)))
+}
+
+async fn admin_remove(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<Json<MemberView>> {
+    let (_, by) = admin(&s, &peer)?;
+    let m = s.store.remove(&id, &by).map_err(store_err)?;
+    s.reports.lock().unwrap().remove(&m.id);
+    Ok(Json(MemberView::for_admin(&m)))
+}
+
+async fn admin_role(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+    Json(r): Json<RoleRequest>,
+) -> ApiResult<Json<MemberView>> {
+    let (_, by) = admin(&s, &peer)?;
+    let m = s.store.set_role(&id, r.role, &by).map_err(store_err)?;
+    Ok(Json(MemberView::for_admin(&m)))
+}
+
+async fn admin_audit(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+) -> ApiResult<Json<Vec<AuditEntry>>> {
+    admin(&s, &peer)?;
+    Ok(Json(s.store.audit(200).map_err(internal)?))
+}
+
 fn provider() -> Arc<rustls::crypto::CryptoProvider> {
     Arc::new(rustls::crypto::ring::default_provider())
 }
@@ -337,6 +459,7 @@ pub async fn serve(
 ) -> Result<()> {
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_config(dir)?));
     let shared = Arc::new(Inner {
+        dir: dir.to_path_buf(),
         store: Store::new(dir),
         ca_pem: read(&dir.join("ca.pem"))?,
         reports: Mutex::new(HashMap::new()),
@@ -344,7 +467,7 @@ pub async fn serve(
     let app = router(shared);
     tokio::pin!(stop);
     loop {
-        let (tcp, _) = tokio::select! {
+        let (tcp, addr) = tokio::select! {
             a = listener.accept() => match a {
                 Ok(a) => a,
                 Err(_) => {
@@ -368,7 +491,9 @@ pub async fn serve(
                 .peer_certificates()
                 .and_then(|c| c.first())
                 .map(|c| pki::fingerprint_der(c));
-            let svc = hyper_util::service::TowerToHyperService::new(app.layer(Extension(Peer(fp))));
+            let svc = hyper_util::service::TowerToHyperService::new(
+                app.layer(Extension(Peer { fp, addr })),
+            );
             let _ = hyper::server::conn::http1::Builder::new()
                 .serve_connection(hyper_util::rt::TokioIo::new(tls), svc)
                 .await;

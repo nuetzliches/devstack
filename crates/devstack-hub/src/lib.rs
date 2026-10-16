@@ -33,6 +33,7 @@ use tokio_stream::StreamExt;
 static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 
 mod dialog;
+mod pool;
 pub mod release;
 mod ws;
 
@@ -363,6 +364,10 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/stacks/{id}/down", post(stack_down))
         .route("/hub/stacks/{id}", delete(forget))
         .route("/hub/stacks/{id}/api/{*rest}", any(forward))
+        .route("/hub/pool", get(pool::overview))
+        .route("/hub/pool/members/{id}/approve", post(pool::approve))
+        .route("/hub/pool/members/{id}/remove", post(pool::remove))
+        .route("/hub/pool/members/{id}/role", post(pool::role))
         .fallback(get(asset))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .layer(middleware::from_fn(audit))

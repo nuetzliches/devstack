@@ -6,6 +6,7 @@
 //   ?mock=configchanged  the shop stack's file changed since it started
 //   ?mock=newer      a newer release (0.5.0) is out
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
+//   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
 import type { DockerEngine, HubEvent, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
@@ -13,6 +14,7 @@ import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
 import { crmSeed, docsSeed, failedReason, shopSeed, stamp } from './data';
 import { Abort, MockStack, sleep, type Listener } from './stack';
+import { MockPool } from './pool';
 
 type Route = { stop(): void } | null;
 
@@ -24,6 +26,7 @@ class MockHub {
   empty = false;
   docker: DockerEngine = { state: 'running', version: '28.4.0' };
   newer: string | null = null;
+  pool = new MockPool(new URLSearchParams(location.search).get('mock') ?? '');
   private streams = new Set<{ reconnect(): void }>();
 
   constructor() {
@@ -202,6 +205,12 @@ export class MockTransport implements Transport {
     if (hub.unpaired) return json(401, { error: 'not paired' });
     if (p === '/hub/stacks' && method === 'GET') return json(200, hub.entries());
     if (p === '/hub/docker' && method === 'GET') return json(200, hub.docker);
+    if (p === '/hub/pool' && method === 'GET') return json(200, hub.pool.overview());
+    const pm = /^\/hub\/pool\/members\/([^/]+)\/(approve|remove|role)$/.exec(p);
+    if (pm && method === 'POST') {
+      const r = hub.pool.act(decodeURIComponent(pm[1]), pm[2], body as { role?: 'member' | 'admin' } | undefined);
+      return json(r.status, r.body);
+    }
     if (p === '/hub/inspect' && method === 'GET') {
       const path = url.searchParams.get('path') ?? '';
       if (!/^([a-z]:\\|\/)/i.test(path)) return json(400, { error: 'an absolute path, e.g. C:\\src\\shop or /home/me/src/shop' });

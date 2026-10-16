@@ -36,6 +36,10 @@ Origin `http://127.0.0.1:4250` (or `localhost:4250`).
 | `POST /hub/stacks/{id}/down?infra=false` | cookie + Origin | `202`; services stop, the daemon exits |
 | `DELETE /hub/stacks/{id}` | cookie + Origin | `204`; forget a stack (it registers again when it starts) |
 | `ANY /hub/stacks/{id}/api/<path>` | cookie (+ Origin for non-GET) | the daemon's `/<path>`, streams passed through; `503 {"error":"stack not running"}` when its daemon is down |
+| `GET /hub/pool` | cookie | `PoolOverview`: this machine's pool, read from the coordinator with its member certificate (ADR-0032); `{"joined":false}` in no pool; `502 {"error"}` when the coordinator does not answer |
+| `POST /hub/pool/members/{id}/approve {"role"?}` | cookie + Origin | admins only: approve a request, as `member` (default) or `admin`; the member's `PoolMember` |
+| `POST /hub/pool/members/{id}/remove` | cookie + Origin | admins only: remove a member or reject its request; `409 {"error"}` for the last admin |
+| `POST /hub/pool/members/{id}/role {"role"}` | cookie + Origin | admins only: `member` or `admin`; `409 {"error"}` for the last admin. A member who is no admin gets `403` from all three |
 | `POST /hub/pair` | `Authorization: Bearer <user token>` | `{"code": "...", "url": "http://127.0.0.1:4250/auth?code=..."}` (CLI only) |
 
 ```ts
@@ -49,6 +53,18 @@ type StackEntry = {
   last_seen: number | null; // when the hub last saw it running
   start_error?: string;  // why the last start from the dashboard failed (end of `devstack up`'s output; hub/up-<id>.log), until it runs
 };
+```
+
+```ts
+// Times in the pool are Unix seconds, as the coordinator keeps them.
+type PoolOverview = {
+  joined: boolean;
+  me?: { id: string; name: string; state: 'pending' | 'approved' | 'removed'; role?: 'member' | 'admin'; coordinator: string };
+  members?: PoolMember[];   // approved ones for a member; every one, with `address`, for an admin
+  nodes?: { id: string; name: string; online: boolean; seen?: number; report?: { sharing: boolean; cpus: number; memory: number; api?: string } }[];
+  audit?: { at: number; by: string; action: 'approve' | 'reject' | 'remove' | 'role'; member: string; name: string; detail?: string }[]; // admins only, newest first
+};
+type PoolMember = { id: string; name: string; state: 'pending' | 'approved' | 'removed'; role: 'member' | 'admin'; requested_at: number; address?: string };
 ```
 
 ## Daemon (through the hub)

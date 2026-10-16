@@ -2,9 +2,11 @@
 //! to join, and once approved its certificate, in its own directory. Every
 //! call to the coordinator after the first is mutual TLS with the pool's CA.
 
-use crate::coordinator::{JoinAnswer, JoinRequest, MemberView, NodeView, Report};
+use crate::coordinator::{
+    ApproveRequest, JoinAnswer, JoinRequest, MemberView, NodeView, Report, RoleRequest,
+};
 use crate::pki;
-use crate::store::State;
+use crate::store::{AuditEntry, Role, State};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -17,6 +19,9 @@ pub enum MemberError {
     Pki(#[from] pki::PkiError),
     #[error("coordinator: {0}")]
     Http(#[from] ureq::Error),
+    /// The coordinator answered, with an error.
+    #[error("{0}: {1}")]
+    Status(u16, String),
     #[error("{0}")]
     Other(String),
 }
@@ -84,12 +89,23 @@ fn body(mut r: ureq::http::Response<ureq::Body>) -> Result<String> {
     if status.is_success() {
         Ok(text)
     } else {
-        Err(MemberError::Other(format!("{status}: {}", text.trim())))
+        Err(MemberError::Status(
+            status.as_u16(),
+            text.trim().to_string(),
+        ))
     }
 }
 
 fn json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T> {
     serde_json::from_str(text).map_err(|e| MemberError::Other(format!("unexpected answer: {e}")))
+}
+
+/// Where this machine's membership lives: `DEVSTACK_POOL_DIR`, else `pool/`
+/// in devstack's per-user state `state` (the CLI and the hub share it).
+pub fn default_dir(state: &Path) -> PathBuf {
+    std::env::var_os("DEVSTACK_POOL_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| state.join("pool"))
 }
 
 /// This machine's membership, in `dir`.
@@ -248,32 +264,74 @@ impl Local {
         Ok((m, agent(tls)))
     }
 
-    pub fn me(&self) -> Result<MemberView> {
+    /// `GET` a coordinator path as this member.
+    pub fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
         let (m, a) = self.client()?;
-        json(&body(a.get(&format!("{}/v1/me", m.coordinator)).call()?)?)
+        json(&body(a.get(&format!("{}{path}", m.coordinator)).call()?)?)
+    }
+
+    /// `POST` JSON to a coordinator path as this member; an empty answer
+    /// reads as `null`.
+    pub fn post<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        payload: &impl Serialize,
+    ) -> Result<T> {
+        let (m, a) = self.client()?;
+        let text = body(
+            a.post(&format!("{}{path}", m.coordinator))
+                .header("Content-Type", "application/json")
+                .send(serde_json::to_string(payload).expect("a request serialises"))?,
+        )?;
+        json(if text.trim().is_empty() {
+            "null"
+        } else {
+            &text
+        })
+    }
+
+    pub fn me(&self) -> Result<MemberView> {
+        self.get("/v1/me")
     }
 
     pub fn members(&self) -> Result<Vec<MemberView>> {
-        let (m, a) = self.client()?;
-        json(&body(
-            a.get(&format!("{}/v1/members", m.coordinator)).call()?,
-        )?)
+        self.get("/v1/members")
     }
 
     pub fn nodes(&self) -> Result<Vec<NodeView>> {
-        let (m, a) = self.client()?;
-        json(&body(
-            a.get(&format!("{}/v1/nodes", m.coordinator)).call()?,
-        )?)
+        self.get("/v1/nodes")
     }
 
     pub fn report(&self, r: &Report) -> Result<()> {
-        let (m, a) = self.client()?;
-        body(
-            a.post(&format!("{}/v1/nodes/report", m.coordinator))
-                .header("Content-Type", "application/json")
-                .send(serde_json::to_string(r).expect("a report serialises"))?,
-        )?;
+        self.post::<serde_json::Value>("/v1/nodes/report", r)?;
         Ok(())
+    }
+
+    /// Every member with the address it asked from (admins only, ADR-0032).
+    pub fn admin_members(&self) -> Result<Vec<MemberView>> {
+        self.get("/v1/admin/members")
+    }
+
+    pub fn admin_approve(&self, id: &str, role: Option<Role>) -> Result<MemberView> {
+        self.post(
+            &format!("/v1/admin/members/{id}/approve"),
+            &ApproveRequest { role },
+        )
+    }
+
+    /// Remove a member, or reject its request.
+    pub fn admin_remove(&self, id: &str) -> Result<MemberView> {
+        self.post(&format!("/v1/admin/members/{id}/remove"), &())
+    }
+
+    pub fn admin_role(&self, id: &str, role: Role) -> Result<MemberView> {
+        self.post(
+            &format!("/v1/admin/members/{id}/role"),
+            &RoleRequest { role },
+        )
+    }
+
+    pub fn admin_audit(&self) -> Result<Vec<AuditEntry>> {
+        self.get("/v1/admin/audit")
     }
 }

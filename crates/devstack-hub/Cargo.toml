@@ -15,6 +15,7 @@ devstack-config.workspace = true
 blake3.workspace = true
 bytes.workspace = true
 devstack-daemon.workspace = true
+devstack-node.workspace = true
 devstack-proc.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true

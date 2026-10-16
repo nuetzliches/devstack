@@ -27,6 +27,7 @@ export const router = createRouter({
         { path: 'events', name: 'events', component: () => import('./views/EventsView.vue'), meta: { title: 'Events' } },
       ],
     },
+    { path: '/pool', name: 'pool', component: () => import('./views/PoolView.vue'), meta: { title: 'Pool' } },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
   scrollBehavior(to, from) {
