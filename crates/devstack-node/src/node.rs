@@ -217,7 +217,7 @@ impl Inner {
             display_root: None,
             port_offset: 0,
             memory_limit: None,
-            isolated: false,
+            network: crate::policy::Network::Lan,
         }
     }
 
@@ -696,7 +696,7 @@ async fn start(
         run.port_offset = port_offset;
         if let Some(p) = s2.policy.lock().unwrap().as_ref() {
             run.memory_limit = p.memory_limit(l.need.memory);
-            run.isolated = p.network == crate::policy::Network::None;
+            run.network = p.network;
         }
         let s3 = s2.clone();
         let pid = lid.clone();

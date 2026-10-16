@@ -414,8 +414,8 @@ enum MembersAction {
         /// A lane's memory limit as its expected need times this.
         #[arg(long)]
         memory_headroom: Option<f64>,
-        /// `lan` (the internet and the local network) or `none` (only the
-        /// lane's own containers).
+        /// `lan` (the internet and the local network), `internet` (not the
+        /// local network) or `none` (only the lane's own containers).
         #[arg(long)]
         network: Option<String>,
         /// Lift the node's policy.

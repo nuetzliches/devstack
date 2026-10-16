@@ -305,6 +305,16 @@ impl Docker {
         Ok(())
     }
 
+    /// Create the group's selected services and their networks without
+    /// starting anything (rules for the networks can go in first).
+    pub fn create(&self, g: &Group) -> Result<()> {
+        self.ensure_networks(g)?;
+        let mut a = g.base_args();
+        a.extend(["create".into(), "--no-recreate".into()]);
+        a.extend(g.services.iter().map(OsString::from));
+        self.run(&g.dir, &a).map(|_| ())
+    }
+
     /// Start exactly the group's selected services and wait until they are
     /// running and healthy (`--wait`), at most `timeout`.
     pub fn up(&self, g: &Group, timeout: Duration) -> Result<()> {

@@ -48,8 +48,8 @@ pub struct LaneRun {
     pub port_offset: u16,
     /// The lane container's memory limit (ADR-0033), bytes.
     pub memory_limit: Option<u64>,
-    /// Its networks reach nothing outside the lane (ADR-0033: `none`).
-    pub isolated: bool,
+    /// What its networks reach beyond the lane (ADR-0033 point 5).
+    pub network: crate::policy::Network,
 }
 
 /// Where the lane's daemon is reached, and its token.
@@ -205,12 +205,23 @@ impl LaneRun {
             let _ = std::fs::remove_file(&overlay);
             let g = self.group(&stack, &name);
             let model = dc.config(&g)?;
-            let text = devstack_compose::node_overlay(&model, &g.project, &self.id, self.isolated)
+            let isolated = self.network == crate::policy::Network::None;
+            let text = devstack_compose::node_overlay(&model, &g.project, &self.id, isolated)
                 .map_err(|e| RunError::Config(format!("compose group `{name}`: {e}")))?;
             std::fs::create_dir_all(overlay.parent().expect("has a parent"))
                 .map_err(|e| RunError::Io(overlay.clone(), e))?;
             std::fs::write(&overlay, text).map_err(|e| RunError::Io(overlay.clone(), e))?;
             let g = self.group(&stack, &name);
+            if self.network == crate::policy::Network::Internet {
+                // Its networks exist, nothing runs yet: the rules first.
+                dc.create(&g)?;
+                for n in project_networks(&g) {
+                    if !networks.contains(&n) {
+                        networks.push(n);
+                    }
+                }
+                crate::egress::apply(&self.id, &subnets(&networks)).map_err(RunError::Docker)?;
+            }
             dc.up(&g, Duration::from_secs(300))?;
             // Ports and environments as the stack file's Compose files have them
             // (`model`, read before the overlay that publishes nothing): the lane
@@ -272,6 +283,24 @@ impl LaneRun {
                 .expect("infra serialises"),
         )
         .map_err(|e| RunError::Io(file.clone(), e))?;
+
+        // A lane without infrastructure gets a network of its own: never
+        // Docker's default one, where the node's policy could not hold it.
+        if networks.is_empty() {
+            let own = self.own_network();
+            if docker(&["network", "inspect", &own]).is_err() {
+                let mut a = vec!["network", "create", "--label", "devstack.lane=1"];
+                if self.network == crate::policy::Network::None {
+                    a.push("--internal");
+                }
+                a.push(&own);
+                docker(&a)?;
+            }
+            networks.push(own);
+            if self.network == crate::policy::Network::Internet {
+                crate::egress::apply(&self.id, &subnets(&networks)).map_err(RunError::Docker)?;
+            }
+        }
 
         let name = self.container();
         phase("lane container");
@@ -455,10 +484,21 @@ impl LaneRun {
         .is_ok_and(|s| s == "true")
     }
 
+    /// The network of a lane without infrastructure.
+    fn own_network(&self) -> String {
+        format!("devstack-lane-{}", self.id)
+    }
+
     /// Stop the lane: its container and its Compose projects, volumes
     /// included (a remote lane is disposable, ADR-0025 point 5).
     pub fn stop(&self, agent: Option<&str>) {
         let _ = docker(&["rm", "-f", &self.container()]);
+        let own = self.own_network();
+        if let Some(me) = agent {
+            let _ = docker(&["network", "disconnect", "-f", &own, me]);
+        }
+        let _ = docker(&["network", "rm", &own]);
+        crate::egress::remove(&self.id);
         let Ok(stack) = self.stack() else { return };
         let dc = Docker::default();
         for name in order(&stack).into_iter().rev() {
@@ -473,6 +513,28 @@ impl LaneRun {
             let _ = dc.remove(&g);
         }
     }
+}
+
+/// The subnets of Docker networks.
+fn subnets(networks: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for n in networks {
+        let text = docker(&[
+            "network",
+            "inspect",
+            "-f",
+            "{{range .IPAM.Config}}{{.Subnet}} {{end}}",
+            n,
+        ])
+        .unwrap_or_default();
+        for s in text.split_whitespace() {
+            // IPv4 only: the rules are iptables'.
+            if s.contains('.') && !out.iter().any(|o| o == s) {
+                out.push(s.to_string());
+            }
+        }
+    }
+    out
 }
 
 /// `uid:gid` of this process (Linux), for the lane container to run as.

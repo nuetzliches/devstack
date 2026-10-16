@@ -2,6 +2,7 @@
 //! (ADR-0025, ADR-0031).
 
 pub mod coordinator;
+pub mod egress;
 pub mod lanerun;
 pub mod member;
 pub mod node;
