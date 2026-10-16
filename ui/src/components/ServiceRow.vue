@@ -7,10 +7,15 @@ import { candidateLook, candidateSummary, kindIcon, kindLabel, statusLook } from
 import { useStack } from '@/stores/stack';
 import StatusPill from './StatusPill.vue';
 import ErrorLine from './ErrorLine.vue';
+import RowUsage from './RowUsage.vue';
+import { usePins } from '@/lib/pins';
 import Icon from './icons/Icon.vue';
 
 const props = defineProps<{ service: ServiceView }>();
 const stack = useStack();
+const pins = usePins();
+const pinned = computed(() => pins.has(stack.id, props.service.name));
+const load = computed(() => stack.usage?.services.find((u) => u.name === props.service.name) ?? null);
 const now = useNow();
 
 const look = computed(() => statusLook(props.service.status));
@@ -43,8 +48,21 @@ function open(e: MouseEvent) {
           <span v-if="service.kind !== 'service'" class="m">{{ kindLabel(service) }}</span>
         </div>
       </div>
+      <RowUsage :series-key="`svc:${service.name}`" :load="load" />
       <StatusPill :tone="look.tone" :label="look.label" :busy="look.busy" :title="look.detail ?? `since ${ago(service.since, now)}`" />
       <div class="actions">
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm btn-icon pin"
+          :class="{ on: pinned }"
+          :aria-pressed="pinned"
+          :aria-label="pinned ? `Unpin ${service.name}` : `Pin ${service.name}`"
+          :title="pinned ? 'Unpin' : 'Pin to the top (this browser only)'"
+          data-testid="action-pin"
+          @click="pins.toggle(stack.id, service.name)"
+        >
+          <Icon name="pin" :size="14" />
+        </button>
         <button
           v-if="isStopped"
           type="button"
@@ -245,5 +263,17 @@ function open(e: MouseEvent) {
   .cl-build {
     display: none;
   }
+}
+.pin {
+  color: var(--text-faint);
+  opacity: 0;
+}
+.svc-row:hover .pin,
+.pin:focus-visible,
+.pin.on {
+  opacity: 1;
+}
+.pin.on {
+  color: var(--accent);
 }
 </style>

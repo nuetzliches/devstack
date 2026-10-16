@@ -57,7 +57,6 @@ const tabs: { name: string; label: string; icon: IconName }[] = [
   { name: 'overview', label: 'Overview', icon: 'grid' },
   { name: 'infra', label: 'Infrastructure', icon: 'box' },
   { name: 'commands', label: 'Commands', icon: 'terminal' },
-  { name: 'usage', label: 'Usage', icon: 'gauge' },
   { name: 'events', label: 'Events', icon: 'activity' },
 ];
 

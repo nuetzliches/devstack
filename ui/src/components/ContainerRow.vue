@@ -6,9 +6,15 @@ import { containerLook } from '@/lib/status';
 import { useStack } from '@/stores/stack';
 import StatusPill from './StatusPill.vue';
 import Icon from './icons/Icon.vue';
+import RowUsage from './RowUsage.vue';
+import { usePins } from '@/lib/pins';
 
 const props = withDefaults(defineProps<{ group: string; container: ContainerView | null; service: string; showGroup?: boolean }>(), { showGroup: false });
 const stack = useStack();
+const pins = usePins();
+const pinKey = computed(() => `compose.${props.group}.${props.service}`);
+const pinned = computed(() => pins.has(stack.id, pinKey.value));
+const load = computed(() => stack.usage?.containers.find((u) => u.group === props.group && u.service === props.service) ?? null);
 const look = computed(() => (props.container ? containerLook(props.container) : null));
 const busy = computed(() => !!stack.busy[`ctr:${props.group}/${props.service}`]);
 const running = computed(() => props.container?.state === 'running' || props.container?.state === 'restarting');
@@ -67,6 +73,19 @@ const extraUrls = computed(() => (props.container?.urls ?? []).filter((u) => !pr
         <span v-else class="faint">not created</span>
       </div>
     </div>
+    <RowUsage :series-key="`ctr:${group}/${service}`" :load="load" />
+    <button
+      type="button"
+      class="btn btn-ghost btn-sm btn-icon pin"
+      :class="{ on: pinned }"
+      :aria-pressed="pinned"
+      :aria-label="pinned ? `Unpin ${service}` : `Pin ${service}`"
+      :title="pinned ? 'Unpin' : 'Pin to the top (this browser only)'"
+      data-testid="action-pin"
+      @click="pins.toggle(stack.id, pinKey)"
+    >
+      <Icon name="pin" :size="14" />
+    </button>
     <StatusPill v-if="look" :tone="look.tone" :label="look.label" :busy="look.busy" :title="container ? `${container.name}: ${container.state}${container.health ? ` (${container.health})` : ''}` : undefined" />
     <StatusPill v-else tone="neutral" label="Missing" />
     <button
@@ -182,5 +201,17 @@ const extraUrls = computed(() => (props.container?.urls ?? []).filter((u) => !pr
 .port-link:hover {
   color: var(--accent);
   text-decoration: underline;
+}
+.pin {
+  color: var(--text-faint);
+  opacity: 0;
+}
+.ctr-row:hover .pin,
+.pin:focus-visible,
+.pin.on {
+  opacity: 1;
+}
+.pin.on {
+  color: var(--accent);
 }
 </style>
