@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { CommandView, ContainerView, ServiceView } from '@/api/types';
 import { containerBucket, parseComposeMember, statusBucket } from '@/lib/status';
 import { useHub } from '@/stores/hub';
@@ -8,6 +8,10 @@ import ServiceRow from '@/components/ServiceRow.vue';
 import ContainerRow from '@/components/ContainerRow.vue';
 import CommandRow from '@/components/CommandRow.vue';
 import Icon from '@/components/icons/Icon.vue';
+import Sparkline from '@/components/Sparkline.vue';
+import { bytes, percent } from '@/lib/format';
+import { persist } from '@/lib/persist';
+import { usePins } from '@/lib/pins';
 
 const stack = useStack();
 const hub = useHub();
@@ -68,11 +72,41 @@ function matches(m: Member, f: Filter): boolean {
   if (m.kind === 'container') return f !== 'pending' && !!m.container && containerBucket(m.container) === f;
   return false;
 }
+const pins = usePins();
+/** Pinned members first, in their own section (they stay in their group too). */
+const withPinned = computed(() => {
+  const keys = pins.list(stack.id);
+  if (!keys.length) return cards.value;
+  const all = new Map<string, Member>();
+  for (const c of cards.value) for (const m of c.members) all.set(m.key, m);
+  const members = keys.map((k) => all.get(k)).filter((m): m is Member => !!m);
+  return members.length ? [{ key: '__pinned', label: 'Pinned', members }, ...cards.value] : cards.value;
+});
 const shown = computed(() => {
   const f = filter.value;
-  if (!f) return cards.value;
-  return cards.value.map((c) => ({ ...c, members: c.members.filter((m) => matches(m, f)) })).filter((c) => c.members.length);
+  if (!f) return withPinned.value;
+  return withPinned.value.map((c) => ({ ...c, members: c.members.filter((m) => matches(m, f)) })).filter((c) => c.members.length);
 });
+
+/** Sections folded away, per stack, kept in this browser; only their head folds them. */
+const folded = ref<Record<string, boolean>>({});
+watch(
+  () => stack.id,
+  (id) => (folded.value = (id && persist.get<Record<string, boolean>>(`folded.${id}`)) || {}),
+  { immediate: true },
+);
+function fold(key: string) {
+  folded.value[key] = !folded.value[key];
+  if (stack.id) persist.set(`folded.${stack.id}`, folded.value);
+}
+
+/** What a group costs now (the usage report sums it). */
+function groupLoad(key: string) {
+  return stack.usage?.groups.find((g) => g.name === key) ?? null;
+}
+/** The shown tree in total: its services, containers and builds. */
+const total = computed(() => stack.usage?.lanes.find((l) => l.name === (stack.lane ?? 'main')) ?? stack.usage?.lanes[0] ?? null);
+const totalMem = computed(() => (stack.history.get(`lane:${total.value?.name ?? 'main'}`) ?? []).map((p) => p.memory));
 const filterLabel: Record<Filter, string> = { healthy: 'healthy', starting: 'starting', failed: 'failing', idle: 'stopped or done', pending: 'not live yet' };
 
 const counts = computed(() => {
@@ -149,6 +183,11 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
           >
             <span class="v tabular">{{ stack.pending.length }}</span><span class="l">not live yet</span>
           </button>
+          <RouterLink class="stat usage" :to="{ name: 'usage', params: { stack: stack.id ?? '' } }" title="CPU and memory of this tree now, memory over the last 10 minutes; click for the details (builds, disk)" data-testid="usage-total">
+            <span class="v tabular">{{ bytes(total?.memory) }}</span>
+            <span class="l">memory · CPU {{ percent(total?.cpu) }}</span>
+            <Sparkline class="spark" :values="totalMem" :width="90" :height="22" :min-max="64 * 1024 * 1024" :zero-based="false" color="var(--ok)" />
+          </RouterLink>
         </div>
 
       <p v-if="filter" class="filter-note muted" data-testid="overview-filter">
@@ -157,12 +196,17 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
       </p>
       <div class="md">
       <div class="list stale-dim" data-testid="member-list">
-        <section v-for="card in shown" :key="card.key" class="card" :data-testid="`group-${card.key}`">
-          <header class="card-header">
-            <h2>{{ card.label }}</h2>
-            <span class="count">{{ card.members.length }}</span>
+        <section v-for="card in shown" :key="card.key" class="card section" :class="{ folded: folded[card.key] }" :data-testid="`group-${card.key}`">
+          <header class="card-header section-head">
+            <button type="button" class="fold" :aria-expanded="!folded[card.key]" :title="folded[card.key] ? 'Show' : 'Fold away'" data-testid="section-fold" @click="fold(card.key)">
+              <Icon :name="folded[card.key] ? 'chevronRight' : 'chevronDown'" :size="14" />
+              <Icon v-if="card.key === '__pinned'" name="pin" :size="13" />
+              <h2>{{ card.label }}</h2>
+              <span class="count">{{ card.members.length }}</span>
+            </button>
+            <span v-if="groupLoad(card.key)" class="count tabular" :title="`This group now: CPU ${percent(groupLoad(card.key)!.cpu)}, memory ${bytes(groupLoad(card.key)!.memory)}`">{{ bytes(groupLoad(card.key)!.memory) }} · {{ percent(groupLoad(card.key)!.cpu) }}</span>
             <span class="grow" />
-            <div v-if="card.key !== '__other' && card.members.some((m) => m.kind === 'service')" class="group-actions" role="group" :aria-label="`Actions for ${card.label}`">
+            <div v-if="card.key !== '__other' && card.key !== '__pinned' && card.members.some((m) => m.kind === 'service')" class="group-actions" role="group" :aria-label="`Actions for ${card.label}`">
               <button
                 v-for="a in groupActions"
                 :key="a.action"
@@ -178,7 +222,7 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
               </button>
             </div>
           </header>
-          <ul class="members">
+          <ul v-show="!folded[card.key]" class="members">
             <template v-for="m in card.members" :key="m.key">
               <ServiceRow v-if="m.kind === 'service'" :service="m.service" />
               <ContainerRow v-else-if="m.kind === 'container'" :group="m.group" :service="m.name" :container="m.container" />
@@ -397,5 +441,42 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
     position: static;
     max-height: none;
   }
+}
+.stats {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.stat.usage {
+  --tone: var(--ok);
+  text-decoration: none;
+  position: relative;
+}
+.stat.usage .spark {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  opacity: 0.8;
+}
+.section-head {
+  gap: 8px;
+}
+.fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+.fold h2 {
+  margin: 0;
+}
+.section.folded .section-head {
+  border-bottom: 0;
 }
 </style>
