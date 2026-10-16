@@ -1,7 +1,7 @@
 # devstack: plan
 
-- **Status:** Active: phases 0 to 2 done (0.4.0), phase 3 built for one machine (0.7.0; each lane with its own infrastructure since 0.8.0, ADR-0030), phase 4 under way; lanes on other machines of a pool since 0.9.0 (ADR-0025 to 0032: coordinator, node agent, `devstack up --on`, forwarded ports, moving lanes; see §7 and the backlog, §13)
-- **Date:** 2026-10-14, status updated 2026-10-16
+- **Status:** Active: phases 0 to 2 done (0.4.0), phase 3 done (lanes per worktree 0.7.0, each with its own infrastructure since 0.8.0, ADR-0030), phase 4 under way; the pool since 0.9.0: lanes on other machines, moved, shared, given the main ports; node policies, several pools, capacity over time, telemetry with consent (ADR-0025 to ADR-0037, 0.9.0 to 0.9.7; [pool.md](pool.md), §7.4, backlog §13)
+- **Date:** 2026-10-14, status updated 2026-10-17
 - **Inputs:** [problem-statement.md](problem-statement.md), [ADR index](adr/README.md)
 
 This document is the planning artefact. Decisions it relies on are recorded as
@@ -195,10 +195,10 @@ A lane is a source root (the main working tree or another worktree) plus its
 snapshot, artifacts, candidates and per-lane resources. Exactly one lane owns
 the main slot at a time; `devstack promote --lane <name>` moves it.
 
-Per-lane resources are declared in the stack file (e.g. a database name
-template `app_{lane}` on the shared SQL container). Which infrastructure may be
-shared between lanes at all is open and not built in the first phases
-([ADR-0012](adr/0012-shared-infrastructure-between-lanes.md)). Until then: a
+Each lane runs its own Compose projects, so its data is its own; only what
+the stack file marks `shared` (a telemetry dashboard, a fake SMTP server)
+comes from the main tree ([ADR-0030](adr/0030-each-lane-has-its-own-infrastructure.md),
+which settled [ADR-0012](adr/0012-shared-infrastructure-between-lanes.md)). A
 non-main lane runs its candidates **without workers** and therefore never talks
 to coordinators that dispatch work (schedulers, pull queues).
 
@@ -210,8 +210,14 @@ the worktree, never in it; its ports move by `[lanes] port_step` times its
 number, and it runs its own Compose projects with the same offset, sharing
 only what the stack file marks `shared` ([ADR-0030](adr/0030-each-lane-has-its-own-infrastructure.md));
 `promote --lane` forwards the fixed ports of the proxied services and moves
-the workers. Not
-yet: lanes on other machines ([ADR-0025](adr/0025-a-lane-can-run-on-another-node.md) to [ADR-0029](adr/0029-source-sync-and-port-forwarding-for-remote-lanes.md) (proposed)).
+the workers.
+
+**Built (0.9.0 to 0.9.7, [ADR-0025](adr/0025-a-lane-can-run-on-another-node.md) to
+[ADR-0037](adr/0037-telemetry-goes-to-the-pools-collector-with-consent.md)):** a
+lane runs on another machine of a pool (`devstack up --on <node>`), its ports
+forwarded here; it moves, is shared with others in the pool, and on a
+dedicated node takes the main ports. How to set up and use a pool:
+[pool.md](pool.md).
 
 ### 3.6 Daemon crash, restart and update
 
@@ -224,6 +230,11 @@ was last promoted to main, without building. An update is the same path after a
 graceful stop.
 
 ## 4. Stack file (schema version 1, draft)
+
+> The reference is [stack-file.md](stack-file.md), kept in step with the
+> code (and `devstack schema`). The tables below are the original draft and lack
+> what came later (`[lanes]`, `compose.shared`, `kind = "static"`, `prepare`,
+> `hot_reload`, lane placeholders).
 
 Format: TOML, `devstack.toml` in the repository root, no profiles in version 1
 ([ADR-0017](adr/0017-stack-file-is-toml.md), provisional). A complete example is
@@ -312,8 +323,8 @@ members = ["portal-api", "portal-spa", "compose.app.portal-db", "command.portal-
 members = ["telephony-mock", "compose.app.webhooks", "api"]   # api is in two groups
 ```
 
-CLI and API accept a group wherever they accept a service list
-(`devstack restart --group portal`, `devstack logs --group telephony`).
+CLI and API accept a group wherever they accept a service
+(`devstack restart portal`, `devstack start portal`).
 
 ### 4.5 Interpolation
 
@@ -327,6 +338,8 @@ Closed set; an unknown placeholder is an error.
 | `{is_main}` | `true` in the main slot, `false` otherwise |
 | `{service.<name>.url}` | `http(s)://127.0.0.1:<port>` of that service's main slot |
 | `{compose.<group>.<service>.<container port>}` | `http://127.0.0.1:<published host port>` |
+| `{service.<name>.port}`, `{compose.<group>.<service>.<port>.host}` / `.port` / `.address` | One part of an address |
+| `{lane}`, `{lane_suffix}` | The lane's name; `_<lane>` in a lane, empty in the main tree |
 | `${VAR}`, `${VAR:-default}` | From the process environment and the group's env files |
 
 Resolution order: `{…}` first, then `${…}`, so a default may contain a placeholder.
@@ -334,7 +347,7 @@ Resolution order: `{…}` first, then `${…}`, so a default may contain a place
 ### 4.6 Deliberately not in version 1
 
 Profiles and layering of stack files, conditionals and expressions, per-lane
-overrides and lane placeholders such as `{lane}` (phase 3, plan §3.5), secrets management of its own (secrets come from env files, which the
+overrides, secrets management of its own (secrets come from env files, which the
 downstream secret tooling fills).
 
 ### 4.7 Findings from writing the first real stack file
@@ -356,6 +369,9 @@ schema. Four points it surfaced, now part of the draft:
    the downstream repository (`exec`), as §4.4 intends; no new step types.
 
 ## 5. Control API (sketch)
+
+> The API as built, with the hub's and the pool's routes:
+> [dashboard-api.md](dashboard-api.md). The sketch below is the original plan.
 
 | Endpoint | Purpose |
 |---|---|
@@ -418,7 +434,7 @@ downstream stack.
 | **0: Spikes** | (a) process ownership, see §7.1; (b) build cancellation, see §7.2; (c) snapshot sync cost for the reference tree; (d) platform benchmark for [ADR-0011](adr/0011-platform-windows-native-first.md) | Each spike answers its question with numbers, recorded in the relevant ADR | Done (2026-10-14) |
 | **1: Run plane + CLI** | Stack file, compose driver, `devstack check`, `devstack env --export`, port preflight, artifact builds on demand (`devstack build api`), main slot, jobs, health, logs, job-object ownership, build-id env, CLI, MCP | Reference stack runs end to end without the previous orchestrator; no file-lock failure possible by construction | Done, released as 0.1.0 (§7.3) |
 | **2: Candidate pipeline** | Watch, debounce, supersede/cancel, candidates without workers, promotion gate, rollback, SSE events, first dashboard | A broken edit never replaces main; three concurrent writers produce at most one running build per service | Done, released as 0.2.0 (§7.4) |
-| **3: Lanes** | Worktree lanes, per-lane resources, `promote --lane`, static frontend artifacts for e2e | Two worktrees run side by side without touching each other's database or the main slot | Built for one machine (0.5.0, ADR-0024): shared infrastructure under ADR-0012's interim rule, per-lane resources by `{lane}` / `{lane_suffix}`, `kind = "static"` (0.6.0); remote lanes open ([ADR-0025](adr/0025-a-lane-can-run-on-another-node.md) to [ADR-0029](adr/0029-source-sync-and-port-forwarding-for-remote-lanes.md) (proposed)) |
+| **3: Lanes** | Worktree lanes, per-lane resources, `promote --lane`, static frontend artifacts for e2e | Two worktrees run side by side without touching each other's database or the main slot | Done: lanes per worktree (0.5.0 to 0.7.0, ADR-0024), each with its own infrastructure (0.8.0, ADR-0030), `kind = "static"` (0.6.0); lanes on other machines of a pool (0.9.x, ADR-0025 to ADR-0037, [pool.md](pool.md)) |
 | **4: Adoption** | Migrate the downstream stack, delete its old orchestrator, publish | Downstream runbook shrinks to the stack file and a page of notes | Under way: the reference stack runs on devstack and its runbook is a generated skill plus one page; its old orchestrator stays as a fallback for now; public since 2026-10-15 with a landing page on GitHub Pages |
 
 ### 7.1 Spike (a): process ownership
@@ -626,6 +642,26 @@ may go back to, and an artifact is renamed away before it is deleted. A lane
 never restarts the main tree's containers, and a removed lane releases its
 ports and threads. `[lanes] port_step = 0` is an error.
 
+**0.8.0:** each lane has its own infrastructure: a Compose project per lane
+with ports moved by its offset, fixed-name networks and volumes renamed, only
+`shared` services from the main tree (ADR-0030). The dashboard lists stacks and
+their worktrees in a sidebar, gives containers pages, and installs updates
+with a click; `devstack ui --browser` pairs the browser you develop in.
+
+**0.9.0 to 0.9.7: the pool** ([pool.md](pool.md)). A coordinator admits members
+with mutual TLS and places lanes; node agents run them in Linux containers
+with their own infrastructure (ADR-0025 to ADR-0031). `devstack up --on` syncs a
+worktree to a node by content and forwards its ports here, its containers'
+too; lanes move between machines with make-before-break, show their start
+step by step, and start where you choose. The dashboard administers the pool
+(ADR-0032), a node decides who runs what there with limits and a network
+mode (ADR-0033), a machine belongs to several pools (ADR-0034), lanes are
+shared with others in the pool (ADR-0035), the pool shows its capacity, GPUs
+included, over time (ADR-0036), and sends telemetry to its collector only
+with the member's consent (ADR-0037). A lane on a dedicated node takes the
+main ports (0.9.7, ADR-0025 point 4). Tested end to end in CI: a coordinator,
+a node agent and a lane in Docker (`tests/remote_lane.rs`).
+
 **Not covered by an automated test:** a machine reboot, a Docker Desktop
 restart, the `devstack://` link opened from a browser, an IDE terminal closing.
 
@@ -636,10 +672,10 @@ restart, the `devstack://` link opened from a browser, an IDE terminal closing.
 | O-1 | Stack file format: TOML, provisional | [ADR-0017](adr/0017-stack-file-is-toml.md), reviewed at the end of phase 1 |
 | O-2 | Promotion mechanism: restart on fixed port vs. reverse proxy | [ADR-0010](adr/0010-promotion-mechanism.md): resolved, proxy (B), measured |
 | O-3 | Windows-native vs. WSL | [ADR-0011](adr/0011-platform-windows-native-first.md) |
-| O-4 | Which infrastructure may be shared between lanes | [ADR-0012](adr/0012-shared-infrastructure-between-lanes.md), deliberately deferred |
+| O-4 | Which infrastructure may be shared between lanes | Resolved: each lane its own, `shared` marks the exceptions ([ADR-0030](adr/0030-each-lane-has-its-own-infrastructure.md)) |
 | O-5 | Licence | Resolved: MIT OR Apache-2.0; the repository is public since 2026-10-15 |
 | O-6 | Default daemon port | Resolved: the daemon takes a free port and writes it to `.devstack/daemon.json`; the hub has a fixed one (4250, `DEVSTACK_HUB_PORT`) |
-| O-7 | Lanes per worktree only, or also per agent session in one tree | Phase 3 |
+| O-7 | Lanes per worktree only, or also per agent session in one tree | Resolved: per worktree; agents work in worktrees ([ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md); owner, 2026-10-17: devstack never creates worktrees) |
 | O-8 | Development values that are not secret (local passwords, dev API keys): a tracked `dev/.env.defaults` next to the untracked `dev/.env`, or everything through the downstream secret chain | Downstream decision; devstack supports several env files per group either way |
 | O-10 | How build servers outlive a single build but die with the daemon (spike (b)) | [ADR-0020](adr/0020-builds-share-one-long-lived-build-job.md), accepted |
 | O-9 | Minimum Docker Compose version (overlays rely on `!reset`, `!override`, `required: false`) | Resolved: 2.24.4, checked by `devstack doctor` |
@@ -756,7 +792,9 @@ What is open, roughly in the order it pays off, and where it comes from.
 
 | Item | From | Size |
 |---|---|---|
-| Lanes on other machines, for 0.9.0: M0 spike (devstackd in a lane container, infra by the node, hosts by service name), M1 coordinator and membership (join, approval, certificates, mutual TLS, `devstack pool`; done), M1b the pool in the dashboard ([ADR-0032](adr/0032-the-pool-is-administered-in-the-dashboard.md): roles, admin API with audit log, the hub calling the coordinator with this machine's certificate, a pool area where admins approve, reject and remove members and change roles), M2 a lane on a node: M2a the node agent (`devstack node agent`: leases the coordinator creates and the node admits, mirror sync by content; done), M2b the lane running there (infrastructure, lane container, devstackd in lane mode, the API through the agent; done, smoke test `devstack node run-lane`), M2c the requester (`devstack up --on`, sync from the worktree, renewal, the lane's API under `/v1/lanes/<name>`; every lane shows where it runs: a badge in the sidebar and the lane header, a column in `devstack lane list`; done), M3 forwarded ports (every service port of the lane on this machine at its lane port, through a tunnel to the lane daemon; done), M3c the published ports of a remote lane's containers forwarded here too, on the ports a local lane would publish them on, and its container links pointing there (database tools, dashboards of infrastructure; done), M3b moving a lane (`devstack lane move <lane> --to <node|local>` and in the dashboard: a cold start at the target, the forwarded ports switch once it is healthy, then the old lease goes; ADR-0025 point 10; done), M5 a lane's start or move shows its steps everywhere (the daemon keeps them with the lane: navigating away loses nothing), a lane not started is shown with where to start it (here, a node, or the pool, where the coordinator places it; `devstack up --on pool`), never started by navigating to it; a remote lane on a dedicated node serves the main ports (`devstack promote --lane`, ADR-0025 point 4; owner, 2026-10-17, revising 2026-10-16; done: the fixed ports forward to its forwarded ports, its workers run on the node, the main tree takes the ports back by itself when the lane is gone); not planned: moving the main working tree itself (owner, 2026-10-16); ADR-0033 (who runs lanes on a node, tags, a memory limit, the lane's network: `lan`, `internet`, `none`; done; CPU limits and placing by node tags open), ADR-0034 (several pools per machine; done), ADR-0035 (lanes shared with the pool; done); ADR-0036 (the pool's capacity over time, GPUs reported; done); ADR-0037 (telemetry to the pool's collector, with consent; done); next: GPUs placed (a lane asking for one, `--gpus`, policy); M4 lifecycle and the rest of the pool area (lanes per node, pausing a node, ending a lease; joining from the dashboard: a form for the coordinator and its fingerprint for a machine in no pool, and the join command with both, ready to copy; compiler paths of a remote lane pointing into the worktree; the share switch came early; done) | [ADR-0025](adr/0025-a-lane-can-run-on-another-node.md) to [ADR-0031](adr/0031-a-coordinator-places-lanes.md) | large |
+| GPUs placed: a lane asks for one, the node hands it to the lane's container (`--gpus`), its policy decides (ADR-0036 point 4; reported since 0.9.6) | ADR-0036 | medium |
+| Placing by node tags (ADR-0033 point 2: `--on pool:gpu`); the syntax clashes with `<pool>:<node>` (ADR-0034) and is to be decided first | ADR-0033 | small |
+| Metrics in the pool's collector: the devstack tenant takes logs only; durations and gauges need a metrics pipeline with TSDB templates and a retention | ADR-0037 | small |
 | Own domain for the landing page (now on GitHub Pages) | phase 4 | small |
 | Code signing of the Windows binary (deferred) | [#3](https://github.com/nuetzliches/devstack/issues/3) | small |
 | Remove the downstream stack's old orchestrator once its team works without it | phase 4 | downstream |

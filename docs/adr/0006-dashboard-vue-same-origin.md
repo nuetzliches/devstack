@@ -1,6 +1,6 @@
 # ADR-0006: The dashboard is a Vue 3 SPA served same-origin by the daemon
 
-- **Status:** Accepted
+- **Status:** Accepted; who serves the dashboard replaced by [ADR-0021](0021-a-hub-serves-the-dashboard.md) (the hub, for every stack); the rest holds
 - **Date:** 2026-10-14
 - **Deciders:** project owner
 - **Related:** [ADR-0007](0007-one-http-api-is-the-control-surface.md)
