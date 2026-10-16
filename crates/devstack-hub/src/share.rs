@@ -139,6 +139,7 @@ fn report(settings: &Settings, offer: Amount) -> Result<bool, String> {
             cpus: offer.cpus,
             memory: offer.memory,
             api: None,
+            leases: Vec::new(),
         })
         .map(|()| true)
         .map_err(|e| e.to_string())

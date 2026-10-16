@@ -262,5 +262,63 @@ pub fn pool() -> Result<()> {
             n.seen.map_or("never".into(), ago)
         );
     }
+    let leases: Vec<devstack_node::coordinator::Lease> = local.get("/v1/leases")?;
+    if !leases.is_empty() {
+        let name = |id: &str| {
+            nodes
+                .iter()
+                .find(|n| n.id == id)
+                .map_or(id.to_string(), |n| n.name.clone())
+        };
+        println!("
+{:<18}{:<24}{:<24}{:<10}LANE", "LEASE", "NODE", "FOR", "STATE");
+        for l in &leases {
+            println!(
+                "{:<18}{:<24}{:<24}{:<10}{}/{}",
+                l.id,
+                name(&l.node),
+                name(&l.member),
+                l.state,
+                l.repo,
+                l.lane
+            );
+        }
+    }
+    Ok(())
+}
+
+pub fn agent(
+    listen: &str,
+    api: Option<String>,
+    max_cpus: Option<f64>,
+    max_memory_gib: Option<f64>,
+) -> Result<()> {
+    let addr: std::net::SocketAddr = listen.parse().map_err(|e| {
+        anyhow!("--listen {listen}: {e} (an address and a port, e.g. 10.0.0.5:4261)")
+    })?;
+    if addr.ip().is_unspecified() && api.is_none() {
+        bail!(
+            "--listen {addr} is every address: name the one requesters reach with --api https://<address>:{}",
+            addr.port()
+        );
+    }
+    let api = api.unwrap_or_else(|| format!("https://{addr}"));
+    let share = devstack_node::share::Settings {
+        enabled: true,
+        max_cpus,
+        max_memory: max_memory_gib.map(|g| (g * f64::from(1u32 << 30)) as u64),
+    };
+    let dir = member_dir();
+    let m = Local::new(&dir)
+        .membership()?
+        .filter(|m| m.state == State::Approved)
+        .ok_or_else(|| {
+            anyhow!("this machine is no approved member of a pool: `devstack join` first")
+        })?;
+    println!(
+        "node agent of {} ({}) on {addr}; requesters reach it at {api}",
+        m.name, m.id
+    );
+    devstack_node::node::serve_blocking(devstack_node::node::NodeConfig { dir, api, share }, addr)?;
     Ok(())
 }

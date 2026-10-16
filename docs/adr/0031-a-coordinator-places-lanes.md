@@ -89,6 +89,7 @@ bottleneck of every lane.
 
 `crates/devstack-node` (`pki`, `store`, `coordinator`, `member`; the test
 `tests/pool.rs`: join with the fingerprint, approval, mutual TLS, removal)
-and `crates/devstack/src/poolcmd.rs`. Will live there too: leases, placement,
-the node's admission and reports, the remote client in `crates/devstack-daemon`,
-the dashboard's pool view and share switch.
+and `crates/devstack/src/poolcmd.rs`; leases (`coordinator`: `/v1/leases`), the
+node's admission, mirrors and reports (`node`, `nodeclient`; `tests/node.rs`),
+the share switch (`share`, `crates/devstack-hub/src/share.rs`). Will live there
+too: placement and the remote client in `crates/devstack-daemon`.

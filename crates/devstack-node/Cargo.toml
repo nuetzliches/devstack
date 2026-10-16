@@ -11,6 +11,10 @@ publish = false
 [dependencies]
 axum.workspace = true
 blake3.workspace = true
+devstack-proc.workspace = true
+bytes.workspace = true
+http-body-util.workspace = true
+rand.workspace = true
 hyper.workspace = true
 hyper-util = { workspace = true, features = ["service"] }
 rcgen.workspace = true
@@ -24,6 +28,7 @@ time.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true
 ureq.workspace = true
+x509-parser.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

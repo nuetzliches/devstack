@@ -3,6 +3,9 @@
 
 pub mod coordinator;
 pub mod member;
+pub mod node;
+pub mod nodeclient;
 pub mod pki;
 pub mod share;
 pub mod store;
+pub mod tls;
