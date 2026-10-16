@@ -429,6 +429,59 @@ impl Supervisor {
         self.builder.usage()
     }
 
+    /// The infrastructure is run by a node's agent (ADR-0025): its file, if so.
+    pub fn external_infra(&self) -> Option<std::path::PathBuf> {
+        crate::external::path()
+    }
+
+    /// The cache from the agent's file: environments, addresses on the
+    /// lane's Compose network, states.
+    fn refresh_external(&self, file: &Path) {
+        let mut cache = InfraCache::default();
+        let ext = crate::external::read(file);
+        for g in self.group_order() {
+            let mut view = InfraView {
+                group: g.clone(),
+                project: String::new(),
+                containers: Vec::new(),
+                error: None,
+            };
+            match &ext {
+                Ok(ext) => {
+                    let eg = ext.groups.get(&g).cloned().unwrap_or_default();
+                    view.project = eg.project.clone();
+                    for (svc, s) in eg.services {
+                        for (port, addr) in &s.ports {
+                            cache
+                                .published
+                                .insert((g.clone(), svc.clone(), *port), addr.clone());
+                        }
+                        cache
+                            .envs
+                            .insert((g.clone(), svc.clone()), s.environment.clone());
+                        if !s.state.is_empty() {
+                            let ports: Vec<String> =
+                                s.ports.iter().map(|(p, a)| format!("{p}->{a}")).collect();
+                            view.containers.push(ContainerView {
+                                service: svc.clone(),
+                                name: format!("{}-{svc}", eg.project),
+                                exit_code: 0,
+                                state: s.state.clone(),
+                                health: s.health.clone(),
+                                urls: Vec::new(),
+                                ports,
+                                unreachable: Vec::new(),
+                            });
+                        }
+                    }
+                }
+                Err(e) => view.error = Some(e.clone()),
+            }
+            cache.views.push(view);
+        }
+        *self.infra.lock().unwrap() = cache;
+    }
+
     pub(crate) fn docker(&self) -> &Docker {
         &self.docker
     }
@@ -705,6 +758,11 @@ impl Supervisor {
     }
 
     pub fn infra_up(&self) -> Result<(), String> {
+        if self.external_infra().is_some() {
+            // The node's agent started it before this daemon (ADR-0025).
+            self.refresh_infra();
+            return Ok(());
+        }
         for g in self.group_order() {
             self.emit(EventBody::Infra {
                 group: g.clone(),
@@ -762,6 +820,9 @@ impl Supervisor {
     /// enough to run every few seconds, so a container that stopped or turned
     /// unhealthy shows as such. Every change is an event.
     pub fn refresh_containers(&self) {
+        if let Some(f) = self.external_infra() {
+            return self.refresh_external(&f);
+        }
         for g in self.group_order() {
             let group = self.compose_group(&g);
             let Ok(containers) = self.docker.ps(&group) else {
@@ -849,6 +910,9 @@ impl Supervisor {
     /// Re-read Compose: environments of every service (also parked ones) and
     /// published addresses of running containers.
     pub fn refresh_infra(&self) {
+        if let Some(f) = self.external_infra() {
+            return self.refresh_external(&f);
+        }
         let mut cache = InfraCache::default();
         for g in self.group_order() {
             let group = self.compose_group(&g);
@@ -1055,8 +1119,8 @@ impl Supervisor {
             let _ = self.stop(&name);
         }
         // A lane's infrastructure is its own (ADR-0030); `shared` services
-        // are not in its groups.
-        if infra {
+        // are not in its groups. On a node the agent runs it (ADR-0025).
+        if infra && self.external_infra().is_none() {
             for g in self.group_order().into_iter().rev() {
                 let _ = self.docker.down(&self.compose_group(&g));
             }
@@ -2409,6 +2473,9 @@ The running instance was left as it was."
     /// `start`, `stop` or `restart` of one container from the dashboard or
     /// the CLI. A lane acts on its own containers only (ADR-0030).
     pub fn container_action(&self, group: &str, service: &str, action: &str) -> Result<(), String> {
+        if self.external_infra().is_some() {
+            return Err("the node runs this lane's containers (ADR-0025)".into());
+        }
         if self.is_shared(group, service) {
             return Err(format!(
                 "`{service}` is shared: the main working tree runs it (`shared` in the stack file)"
@@ -2437,7 +2504,7 @@ The running instance was left as it was."
     }
 
     pub(crate) fn restart_container(&self, group: &str, service: &str) {
-        if self.is_shared(group, service) {
+        if self.is_shared(group, service) || self.external_infra().is_some() {
             return; // the main tree's container (ADR-0030)
         }
         let message = match self.docker.restart(&self.compose_group(group), service) {
@@ -2536,6 +2603,9 @@ The running instance was left as it was."
     /// and record lost port forwards in the view (on demand: a probe is a
     /// connection the server sees, so it does not run with every refresh).
     pub fn check_forwards(&self) -> Vec<(String, String, Vec<String>)> {
+        if self.external_infra().is_some() {
+            return Vec::new(); // addresses on a Compose network, not host forwards
+        }
         let targets: Vec<(String, String, Vec<String>)> = self
             .infra
             .lock()
@@ -2581,7 +2651,7 @@ The running instance was left as it was."
     /// restart) is repaired by restarting the container once. Never fails the
     /// start: a port with nothing listening inside looks the same.
     fn ensure_reachable(&self, group: &str, service: &str) -> Result<(), String> {
-        if self.is_shared(group, service) {
+        if self.is_shared(group, service) || self.external_infra().is_some() {
             return Ok(()); // the main tree's container; it repairs its own
         }
         let lost = lost_forwards(&self.container_ports(group, service));

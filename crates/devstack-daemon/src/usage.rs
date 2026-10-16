@@ -264,6 +264,9 @@ impl Sampler {
             }
         }
         let names: Vec<String> = running.keys().cloned().collect();
+        if names.is_empty() || sup.external_infra().is_some() {
+            return; // no Docker here: the node measures its containers
+        }
         let stats = sup.docker().stats(&names);
         let mut inner = self.inner.lock().unwrap();
         let mut seen = Vec::new();
@@ -292,7 +295,7 @@ impl Sampler {
 
     fn sample_volumes(&self, sup: &Supervisor) {
         let projects: Vec<String> = sup.view().infra.into_iter().map(|g| g.project).collect();
-        if projects.is_empty() {
+        if projects.is_empty() || sup.external_infra().is_some() {
             return;
         }
         if let Ok(vols) = sup.docker().volumes() {

@@ -88,6 +88,18 @@ The guard of plan §9 becomes: *devstack places whole lanes on nodes; inside a
 lane, Compose owns containers and devstack never schedules, places or networks
 individual containers or services.*
 
+*Measured in spike M0, 2026-10-16* ([`spikes/remote-lane`](../../spikes/remote-lane/README.md)):
+an unmodified daemon in the stack's toolchain image ran the fixture stack's
+lane from a mirror without `.git`, with the infrastructure started by the
+agent and described to it in a file instead of Docker (`DEVSTACK_EXTERNAL_INFRA`:
+environments, `service:port` addresses on the lane's network, states). The API
+built and was healthy in 5 s, an edit in the mirror was a running new build 5 s
+later, the container took about 300 MiB. Hosts keep their Compose names, which
+resolve on the lane's network. Still to do: a lane mode for that daemon (no
+workers, ADR-0012), and a forward inside the container, since services and the
+daemon listen on its loopback. A lane container needs no port offset; only the
+requester's forwards do.
+
 ## Alternatives considered
 
 - **Remote builds only, run locally.** Moves CPU, not memory; the memory of a

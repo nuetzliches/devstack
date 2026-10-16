@@ -62,8 +62,13 @@ impl Snapshot {
         })
     }
 
-    /// Tracked and untracked, non-ignored files of the source (needs git).
+    /// Tracked and untracked, non-ignored files of the source. Without a git
+    /// repository (a node's mirror of a worktree, ADR-0029, holds exactly
+    /// those already): every file but devstack's own state.
     pub fn list(&self) -> Result<Vec<String>> {
+        if !self.source.join(".git").exists() {
+            return Ok(walk(&self.source));
+        }
         let out = std::process::Command::new("git")
             .args(["ls-files", "-co", "--exclude-standard", "-z"])
             .current_dir(&self.source)
@@ -158,5 +163,49 @@ impl Snapshot {
             removed,
             elapsed: t0.elapsed(),
         })
+    }
+}
+
+/// Every file below `root`, relative with `/`, without `.devstack/` and `.git/`.
+fn walk(root: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for e in fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            let Ok(rel) = p.strip_prefix(root) else {
+                continue;
+            };
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            if rel == ".git"
+                || rel == ".devstack"
+                || EXCLUDED_PREFIXES.iter().any(|x| rel.starts_with(x))
+            {
+                continue;
+            }
+            match e.file_type() {
+                Ok(t) if t.is_dir() => stack.push(p),
+                Ok(t) if t.is_file() => out.push(rel),
+                _ => {}
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_tree_without_git_lists_every_file_but_devstacks_state() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("src/a")).unwrap();
+        std::fs::create_dir_all(d.path().join(".devstack/lanes")).unwrap();
+        std::fs::write(d.path().join("src/a/x.cs"), "x").unwrap();
+        std::fs::write(d.path().join("devstack.toml"), "").unwrap();
+        std::fs::write(d.path().join(".devstack/lanes/y"), "").unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let snap = super::Snapshot::open(d.path(), state.path()).unwrap();
+        assert_eq!(snap.list().unwrap(), vec!["devstack.toml", "src/a/x.cs"]);
     }
 }
