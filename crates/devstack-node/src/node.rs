@@ -294,6 +294,7 @@ fn router(s: Shared) -> Router {
         .route("/v1/leases/{id}/stop", post(stop))
         .route("/v1/leases/{id}/lane", get(lane_state))
         .route("/v1/leases/{id}/api/{*rest}", any(proxy))
+        .route("/v1/leases/{id}/shared/{port}", get(shared_tunnel))
         .route(
             "/v1/blobs/{hash}",
             put(blob).layer(DefaultBodyLimit::max(MAX_BLOB)),
@@ -837,7 +838,75 @@ async fn proxy(
         .query()
         .map(|q| format!("?{q}"))
         .unwrap_or_default();
-    let path = format!("/{rest}{query}");
+    pass(d, format!("/{rest}{query}"), upgrade_in, req).await
+}
+
+/// `GET /v1/leases/{id}/shared/{port}` with `Upgrade`: a tunnel to a port of
+/// a lane its owner shares (ADR-0035 point 3), for a member it is shared
+/// with. Asked of the coordinator at every connection: unsharing, or
+/// removing the member, holds from the next one.
+async fn shared_tunnel(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath((id, port)): UrlPath<(String, u16)>,
+    mut req: axum::extract::Request,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let upgrade_in = req
+        .headers()
+        .contains_key(hyper::header::UPGRADE)
+        .then(|| hyper::upgrade::on(&mut req));
+    let target = async {
+        let who = caller(&s, &peer).await?;
+        let l = s
+            .leases
+            .lock()
+            .unwrap()
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("no lane `{id}` here")))?;
+        if l.member != who {
+            let s2 = s.clone();
+            let lease = id.clone();
+            let sharing = tokio::task::spawn_blocking(move || s2.local.lease_shared(&lease))
+                .await
+                .map_err(internal)?
+                .map_err(|e| err(StatusCode::BAD_GATEWAY, format!("the coordinator: {e}")))?;
+            let tags = s
+                .members
+                .lock()
+                .unwrap()
+                .1
+                .get(&who)
+                .cloned()
+                .unwrap_or_default();
+            let ok = sharing.is_some_and(|sh| {
+                sh.admits(&who, &tags) && sh.services.iter().any(|x| x.port == port)
+            });
+            if !ok {
+                return Err(err(
+                    StatusCode::FORBIDDEN,
+                    "that lane is not shared with you, or not that port",
+                ));
+            }
+        }
+        daemon_of(&s, l).await
+    };
+    match target.await {
+        Ok(d) => pass(d, format!("/v1/tunnel/{port}"), upgrade_in, req).await,
+        Err(e) => e.into_response(),
+    }
+}
+
+/// Pass `req` to the lane's daemon at `path`, with its token; a tunnel is
+/// spliced once the daemon switched protocols.
+async fn pass(
+    d: DaemonAddr,
+    path: String,
+    upgrade_in: Option<hyper::upgrade::OnUpgrade>,
+    req: axum::extract::Request,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
     let (parts, body) = req.into_parts();
     let tcp = match tokio::net::TcpStream::connect(&d.addr).await {
         Ok(t) => {

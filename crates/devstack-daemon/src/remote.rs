@@ -46,6 +46,9 @@ pub struct RemoteLane {
     main: PathBuf,
     /// `[lanes] sync`: ignored files the lane takes along.
     extra: Vec<String>,
+    /// Whom it is shared with (ADR-0035), told the coordinator again with
+    /// each renewal (a coordinator that restarted forgets it).
+    sharing: Mutex<Option<devstack_node::coordinator::Sharing>>,
     client: NodeClient,
     state: Mutex<RemoteState>,
     stopped: tokio::sync::watch::Sender<bool>,
@@ -177,6 +180,8 @@ pub struct RemoteSpec<'a> {
     pub main: &'a Path,
     /// `[lanes] sync`.
     pub extra: &'a [String],
+    /// Whom it is shared with from the start (ADR-0035).
+    pub sharing: Option<devstack_node::coordinator::Sharing>,
     /// The stack file, relative to the worktree's root.
     pub stack_file: &'a str,
     /// The node: its name or member id.
@@ -209,6 +214,7 @@ impl RemoteLane {
             worktree,
             main,
             extra,
+            sharing,
             stack_file,
             on,
             need,
@@ -298,12 +304,18 @@ impl RemoteLane {
             worktree: worktree.to_path_buf(),
             main: main.to_path_buf(),
             extra: extra.to_vec(),
+            sharing: Mutex::new(None),
             client,
             state: Mutex::new(RemoteState::default()),
             stopped: tokio::sync::watch::channel(false).0,
             ports,
             listening: tokio::sync::watch::channel(false).0,
         });
+        if sharing.is_some()
+            && let Err(e) = lane.share(sharing)
+        {
+            lane.trouble(Some(format!("sharing: {e}")));
+        }
         let l = lane.clone();
         let scratch = scratch.to_path_buf();
         if forward {
@@ -317,6 +329,29 @@ impl RemoteLane {
 
     pub fn state(&self) -> RemoteState {
         self.state.lock().unwrap().clone()
+    }
+
+    /// Share the lane, or stop sharing it (`None`); the coordinator hears
+    /// it at once. Blocking.
+    pub fn share(
+        &self,
+        sharing: Option<devstack_node::coordinator::Sharing>,
+    ) -> Result<(), String> {
+        let r = local_member(&self.pool)
+            .share_lease(&self.lease, sharing.as_ref())
+            .map_err(|e| e.to_string());
+        *self.sharing.lock().unwrap() = sharing;
+        r
+    }
+
+    /// Whom it is shared with.
+    pub fn shared_with(&self) -> Vec<String> {
+        self.sharing
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|s| s.with.clone())
+            .unwrap_or_default()
     }
 
     fn trouble(&self, what: Option<String>) {
@@ -375,7 +410,17 @@ impl RemoteLane {
             }
             if renewed.elapsed() >= RENEW_EVERY {
                 match self.client.renew(&self.lease).await {
-                    Ok(_) => renewed = Instant::now(),
+                    Ok(_) => {
+                        renewed = Instant::now();
+                        let sharing = self.sharing.lock().unwrap().clone();
+                        if let Some(sh) = sharing {
+                            let (pool, lease) = (self.pool.clone(), self.lease.clone());
+                            let _ = tokio::task::spawn_blocking(move || {
+                                local_member(&pool).share_lease(&lease, Some(&sh))
+                            })
+                            .await;
+                        }
+                    }
                     Err(devstack_node::nodeclient::ClientError::Status(404, _)) => {
                         {
                             let mut st = self.state.lock().unwrap();

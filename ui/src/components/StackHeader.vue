@@ -57,6 +57,29 @@ const moveFailed = computed(() => {
   return m?.error && m.kind === 'move' ? m : null;
 });
 const placeName = (to: string) => (to === 'local' ? 'this machine' : to === 'pool' ? 'the pool' : to);
+
+// Sharing the shown lane with the pool (ADR-0035): nobody, everyone, or
+// members by id or tag.
+const shareRoot = ref<HTMLElement | null>(null);
+const shareTrigger = ref<HTMLButtonElement | null>(null);
+const { open: shareOpen, close: shareClose } = usePopover(shareRoot, shareTrigger);
+const shareText = ref('');
+const sharedWith = computed(() => current.value?.shared_with ?? []);
+const shareLabel = computed(() =>
+  !sharedWith.value.length ? 'Not shared' : sharedWith.value.includes('*') ? 'Shared with the pool' : `Shared with ${sharedWith.value.join(', ')}`,
+);
+function share(withWhom: string[]) {
+  shareClose();
+  if (current.value) void stack.shareLane(current.value.name, withWhom);
+}
+function shareTags() {
+  share(
+    shareText.value
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean),
+  );
+}
 function moveTo(to: string) {
   moveClose();
   if (current.value) void stack.moveLane(current.value.name, to);
@@ -96,6 +119,35 @@ function pick(l: LaneView | null) {
         <button v-if="servedBy" type="button" class="btn btn-sm" :disabled="busyMain" :title="`${laneLabel(servedBy)} serves the main ports`" data-testid="lane-main-back" @click="stack.laneMain('main')">
           <Icon name="rollback" :size="14" /> Main ports back
         </button>
+        <div v-if="current && current.node" ref="shareRoot" class="picker" data-testid="lane-share">
+          <button
+            ref="shareTrigger"
+            type="button"
+            class="btn btn-sm"
+            :class="{ 'btn-primary': sharedWith.length }"
+            :aria-expanded="shareOpen"
+            title="Who in the pool sees this lane and may open its services (ADR-0035)"
+            @click="
+              shareText = sharedWith.filter((w) => w !== '*').join(', ');
+              shareOpen = !shareOpen;
+            "
+          >
+            <Icon name="globe" :size="13" /> {{ shareLabel }}
+          </button>
+          <div v-if="shareOpen" class="menu" role="menu">
+            <button type="button" class="opt" role="menuitem" data-testid="lane-share-none" @click="share([])">
+              <span>Nobody</span><span class="faint small">only you</span>
+            </button>
+            <button type="button" class="opt" role="menuitem" data-testid="lane-share-all" @click="share(['*'])">
+              <span>Everyone in the pool</span><span class="faint small">every member</span>
+            </button>
+            <form class="share-tags" @submit.prevent="shareTags">
+              <input v-model="shareText" class="input" placeholder="team:qa, customer:acme" data-testid="lane-share-tags" />
+              <button type="submit" class="btn btn-xs btn-primary">Share</button>
+            </form>
+            <p class="faint small share-note">They open its services through its node; they do not control the lane.</p>
+          </div>
+        </div>
         <div v-if="current && !current.owns_main && current.active !== false && (moveTargets.length || moving)" ref="moveRoot" class="picker">
           <button
             ref="moveTrigger"
@@ -202,6 +254,20 @@ function pick(l: LaneView | null) {
 </template>
 
 <style scoped>
+.share-tags {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+}
+.share-tags .input {
+  flex: 1;
+  min-width: 160px;
+}
+.share-note {
+  padding: 0 8px 6px;
+  margin: 0;
+  max-width: 260px;
+}
 .stack-head {
   padding: 14px var(--space-5) 10px;
   border-bottom: 1px solid var(--border);

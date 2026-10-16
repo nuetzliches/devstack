@@ -71,6 +71,10 @@ pub struct LaneView {
     /// The pool of that node (ADR-0034).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pool: Option<String>,
+    /// Whom it is shared with in the pool (ADR-0035): member ids or tags,
+    /// `*` for every member; empty: nobody.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub shared_with: Vec<String>,
     /// What went wrong with a lane on a node lately (a sync, a renewal).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_error: Option<String>,
@@ -149,6 +153,9 @@ pub struct Lanes {
     moves: Mutex<BTreeMap<String, LaneMove>>,
     /// Lanes being started right now, so one is not started twice.
     pending: Mutex<BTreeSet<String>>,
+    /// Whom each lane is shared with, where its owner said so (ADR-0035);
+    /// else `[lanes] share`. Kept in `.devstack/lane-shares.json`.
+    shares: Mutex<BTreeMap<String, Vec<String>>>,
     /// One main-slot hand-over at a time, and what it took from the main tree.
     handover: Mutex<Handover>,
     /// One [`Lanes::sync`] at a time: asking git and applying the answer go
@@ -306,6 +313,10 @@ impl Lanes {
         token: Arc<String>,
         port: u16,
     ) -> Arc<Self> {
+        let shares = std::fs::read(root_state.join("lane-shares.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
         let me = Arc::new(Self {
             root_state,
             main,
@@ -318,6 +329,7 @@ impl Lanes {
             remote: Mutex::new(BTreeMap::new()),
             moves: Mutex::new(BTreeMap::new()),
             pending: Mutex::new(BTreeSet::new()),
+            shares: Mutex::new(shares),
             handover: Mutex::new(Handover::default()),
             syncing: Mutex::new(()),
         });
@@ -729,6 +741,7 @@ impl Lanes {
                     services,
                     node: on_node.map(|r| r.node.name.clone()),
                     pool: on_node.map(|r| r.pool.clone()),
+                    shared_with: self.share_of(&k.entry.name),
                     node_error: node_state.and_then(|st| st.error),
                     moving: moves.get(&k.entry.name).cloned(),
                 }
@@ -1167,6 +1180,78 @@ impl Lanes {
         Ok(name)
     }
 
+    /// Whom the lane `name` is shared with: what its owner said, else the
+    /// stack's default.
+    fn share_of(&self, name: &str) -> Vec<String> {
+        self.shares
+            .lock()
+            .unwrap()
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| self.main.stack.lanes.share.clone())
+    }
+
+    /// What the coordinator is told of the lane `entry` shared: whom with,
+    /// and its services with a port (on the node, and here).
+    fn sharing_of(&self, entry: &LaneEntry) -> Option<devstack_node::coordinator::Sharing> {
+        let with = self.share_of(&entry.name);
+        if with.is_empty() {
+            return None;
+        }
+        let offset = entry.number * self.main.stack.lanes.port_step;
+        let services = self
+            .main
+            .stack
+            .services
+            .iter()
+            .filter_map(|(name, s)| {
+                let port = s.port?;
+                Some(devstack_node::coordinator::SharedService {
+                    name: name.clone(),
+                    port,
+                    scheme: s.scheme().into(),
+                    here: port.checked_add(offset)?,
+                })
+            })
+            .collect();
+        Some(devstack_node::coordinator::Sharing { with, services })
+    }
+
+    /// Share the lane `name` with `with` (member ids, tags, `*`), or with
+    /// nobody (empty), ADR-0035. A lane on a node tells the coordinator at
+    /// once; one not on a node keeps it for when it goes to one.
+    pub fn share_lane(&self, name: &str, with: Vec<String>) -> Result<(), String> {
+        let entry = self
+            .known
+            .lock()
+            .unwrap()
+            .get(name)
+            .map(|k| k.entry.clone())
+            .ok_or_else(|| format!("no lane `{name}` (see `devstack lane list`)"))?;
+        let with: Vec<String> = with
+            .into_iter()
+            .map(|w| w.trim().to_string())
+            .filter(|w| !w.is_empty())
+            .collect();
+        {
+            let mut shares = self.shares.lock().unwrap();
+            shares.insert(name.to_string(), with);
+            let path = self.root_state.join("lane-shares.json");
+            let _ = std::fs::create_dir_all(&self.root_state);
+            let _ = std::fs::write(
+                &path,
+                serde_json::to_vec_pretty(&*shares).expect("shares serialise"),
+            );
+        }
+        let r = if let Some(remote) = self.remote(name) {
+            remote.share(self.sharing_of(&entry))
+        } else {
+            Ok(())
+        };
+        self.announce();
+        r
+    }
+
     /// Lease, sync and start the lane of `entry` on `on`; `forward`: listen
     /// on its ports here at once.
     fn start_remote(
@@ -1193,6 +1278,7 @@ impl Lanes {
                 worktree: &worktree,
                 main: &self.main.repo,
                 extra: &self.main.stack.lanes.sync,
+                sharing: self.sharing_of(entry),
                 stack_file: &stack_file,
                 on,
                 need,

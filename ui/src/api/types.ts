@@ -81,6 +81,8 @@ export type LaneView = {
   node?: string;
   /** The pool of that node (ADR-0034). */
   pool?: string;
+  /** Whom it is shared with in its pool (ADR-0035): member ids, tags, `*` for everyone. */
+  shared_with?: string[];
   /** What went wrong with it on its node lately (a sync, a renewal). */
   node_error?: string;
   /** A start on a node or a move under way (step of steps), or one that failed lately. */
@@ -313,4 +315,18 @@ export type PoolEntry = {
   joined: boolean;
   state?: 'pending' | 'approved' | 'removed' | null;
   coordinator?: string | null;
+};
+
+/** A service of a lane someone shares (ADR-0035). */
+export type SharedService = { name: string; port: number; scheme: string; here: number };
+
+/** A lane another member shares with this machine, `GET /hub/pool/shared`. */
+export type SharedLane = {
+  lease: string;
+  repo: string;
+  lane: string;
+  owner: string;
+  owner_name: string;
+  node: { id: string; name: string; api: string };
+  services: SharedService[];
 };

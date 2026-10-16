@@ -315,6 +315,15 @@ enum LaneAction {
         #[arg(long)]
         to: String,
     },
+    /// Share a lane on a node with others in its pool (ADR-0035): they see
+    /// it in their dashboard and open its services. Without `--with`: with
+    /// nobody again.
+    Share {
+        name: String,
+        /// A member id or a tag (`team:qa`), or `*` for every member; repeat.
+        #[arg(long)]
+        with: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -602,6 +611,7 @@ fn main() -> Result<()> {
             LaneAction::List => client::lane_list(&cli.file),
             LaneAction::Stop { name } => client::lane_stop(&cli.file, &name),
             LaneAction::Move { name, to } => client::lane_move(&cli.file, &name, &to),
+            LaneAction::Share { name, with } => client::lane_share(&cli.file, &name, &with),
         },
         Cmd::Rollback { service } => client::service_action(&cli.file, &service, "rollback"),
         Cmd::Logs {

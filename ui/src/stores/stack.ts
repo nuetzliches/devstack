@@ -166,6 +166,18 @@ export const useStack = defineStore('stack', () => {
 
   /** Stop a lane: its services stop, it is no longer started; the worktree stays (git's). */
   /** Move a started lane to a node of the pool or to `local` (ADR-0025 point 10). */
+  /** Share a lane on a node with others in its pool, or with nobody (`[]`), ADR-0035. */
+  async function shareLane(name: string, withWhom: string[]) {
+    if (!id.value) return;
+    const r = await act<LaneView[]>({
+      label: withWhom.length ? `Share ${name}` : `Stop sharing ${name}`,
+      path: paths.api(id.value, `/v1/lanes/${encodeURIComponent(name)}/share`),
+      body: { with: withWhom },
+      success: withWhom.length ? `${name} is shared with ${withWhom.includes('*') ? 'everyone in the pool' : withWhom.join(', ')}` : `${name} is shared with nobody`,
+    });
+    if (r.ok && Array.isArray(r.body)) setLanes(r.body);
+  }
+
   async function moveLane(name: string, to: string) {
     if (!id.value) return;
     busy.value[`lane-move`] = to;
@@ -609,6 +621,5 @@ export const useStack = defineStore('stack', () => {
     containerAction,
     startStack,
     stopStack,
-    restartStack,
-  };
+    restartStack, shareLane };
 });

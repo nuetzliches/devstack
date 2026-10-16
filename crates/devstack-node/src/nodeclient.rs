@@ -246,6 +246,33 @@ impl NodeClient {
         Ok(tls::send(self.config.clone(), &self.node.api, &self.node.id, req).await?)
     }
 
+    /// A connection to `port` of a lane someone shares with this machine
+    /// (ADR-0035); the node checks the sharing.
+    pub async fn open_shared(&self, lease: &str, port: u16) -> Result<hyper::upgrade::Upgraded> {
+        let req = hyper::Request::builder()
+            .method("GET")
+            .uri(format!("/v1/leases/{lease}/shared/{port}"))
+            .header(hyper::header::CONNECTION, "upgrade")
+            .header(hyper::header::UPGRADE, "devstack-tcp")
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .map_err(|e| ClientError::Other(e.to_string()))?;
+        let mut res = tls::send(self.config.clone(), &self.node.api, &self.node.id, req).await?;
+        if res.status() != hyper::StatusCode::SWITCHING_PROTOCOLS {
+            use http_body_util::BodyExt;
+            let code = res.status().as_u16();
+            let text = res
+                .into_body()
+                .collect()
+                .await
+                .map(|b| String::from_utf8_lossy(&b.to_bytes()).into_owned())
+                .unwrap_or_default();
+            return Err(ClientError::Status(code, text));
+        }
+        hyper::upgrade::on(&mut res)
+            .await
+            .map_err(|e| ClientError::Other(e.to_string()))
+    }
+
     /// Make the node's mirror of `lease` hold exactly `files` (paths relative
     /// to `root`, `/`-separated), uploading only the content it lacks.
     pub async fn sync(&self, lease: &str, root: &Path, files: &[String]) -> Result<SyncStats> {

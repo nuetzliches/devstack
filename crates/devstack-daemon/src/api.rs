@@ -65,6 +65,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/lanes", get(lanes_list).post(lanes_start))
         .route("/v1/lanes/{lane}/stop", post(lanes_stop))
         .route("/v1/lanes/{lane}/move", post(lanes_move))
+        .route("/v1/lanes/{lane}/share", post(lanes_share))
         .route("/v1/lanes/{lane}/main", post(lanes_take_main))
         .route(
             "/v1/lanes/{lane}/v1/{*rest}",
@@ -423,6 +424,35 @@ struct LaneMove {
 /// another node of the pool or to this machine (ADR-0025 point 10), a cold
 /// start at the target that takes over once it is ready. Answers when it is
 /// done: the lanes after it.
+#[derive(Deserialize)]
+struct LaneShare {
+    /// Member ids or tags of the pool, `*` for every member; empty: nobody.
+    #[serde(default)]
+    with: Vec<String>,
+}
+
+/// `POST /v1/lanes/{lane}/share {"with"}`: share a lane on a node with
+/// others in its pool, or stop (ADR-0035). Answers with the lanes.
+async fn lanes_share(
+    State(s): State<AppState>,
+    Path(lane): Path<String>,
+    Json(body): Json<LaneShare>,
+) -> Response {
+    let lanes = match lanes_of(&s) {
+        Ok(l) => l.clone(),
+        Err(r) => return r,
+    };
+    let res = tokio::task::spawn_blocking(move || {
+        lanes.share_lane(&lane, body.with).map(|()| lanes.list())
+    })
+    .await;
+    match res {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err(StatusCode::CONFLICT, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 async fn lanes_move(
     State(s): State<AppState>,
     Path(lane): Path<String>,
