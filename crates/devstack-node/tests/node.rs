@@ -210,6 +210,11 @@ fn a_lane_is_leased_admitted_and_synced() {
     assert_eq!(view.leases.len(), 1);
 
     rt.block_on(client.release(&lease.id)).unwrap();
+    // The node clears a lane off the request's thread (Docker takes its time).
+    let until = std::time::Instant::now() + Duration::from_secs(10);
+    while mirror.exists() && std::time::Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(100));
+    }
     assert!(
         !mirror.exists(),
         "a released lease takes its mirror with it"
