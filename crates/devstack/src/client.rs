@@ -797,8 +797,8 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<24} {:<24} {:<16} {:>8} {:>9}  {:<5}  PATH",
-        "LANE", "BRANCH", "RUNS ON", "PORTS +", "RUNNING", "MAIN"
+        "{:<24} {:<24} {:>8} {:>9}  {:<5}  {:<16} PATH",
+        "LANE", "BRANCH", "PORTS +", "RUNNING", "MAIN", "RUNS ON"
     );
     let mut troubles = Vec::new();
     for l in lanes {
@@ -812,13 +812,13 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
             troubles.push(format!("{name}: {e}"));
         }
         println!(
-            "{:<24} {:<24} {:<16} {:>8} {:>9}  {:<5}  {}",
+            "{:<24} {:<24} {:>8} {:>9}  {:<5}  {:<16} {}",
             name,
             l["branch"].as_str().unwrap_or("(detached)"),
-            l["node"].as_str().unwrap_or("this machine"),
             l["port_offset"],
             running,
             if l["owns_main"] == true { "yes" } else { "" },
+            l["node"].as_str().unwrap_or("local"),
             l["path"].as_str().unwrap_or("")
         );
     }
