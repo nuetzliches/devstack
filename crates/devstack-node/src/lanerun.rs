@@ -54,6 +54,10 @@ pub struct DaemonAddr {
     /// `host:port` on the lane's network.
     pub addr: String,
     pub token: String,
+    /// The ports its containers are published on at the requester's machine
+    /// (the Compose files' host ports moved by the lane's offset): the
+    /// requester forwards them like the services' (ADR-0029 point 4).
+    pub infra_ports: Vec<u16>,
 }
 
 fn docker(args: &[&str]) -> Result<String> {
@@ -183,6 +187,7 @@ impl LaneRun {
         let dc = Docker::default();
         let mut infra = BTreeMap::new();
         let mut networks = Vec::new();
+        let mut infra_ports = Vec::new();
         for name in order(&stack) {
             let overlay = self.overlay(&name);
             let _ = std::fs::remove_file(&overlay);
@@ -217,11 +222,25 @@ impl LaneRun {
                         .iter()
                         .map(|p| (p.target.to_string(), format!("{svc}:{}", p.target)))
                         .collect();
+                    // Where a local lane would publish each port: the host
+                    // port of the Compose files, moved by the lane's offset.
+                    let published: BTreeMap<String, u16> = m
+                        .ports
+                        .iter()
+                        .filter_map(|p| {
+                            let host: u16 = p.published.as_deref()?.trim().parse().ok()?;
+                            Some((p.target.to_string(), host.checked_add(self.port_offset)?))
+                        })
+                        .collect();
+                    if !c.map(|c| c.state.clone()).unwrap_or_default().is_empty() {
+                        infra_ports.extend(published.values().copied());
+                    }
                     (
                         svc.clone(),
                         serde_json::json!({
                             "environment": m.environment,
                             "ports": ports,
+                            "published": published,
                             "state": c.map(|c| c.state.clone()).unwrap_or_default(),
                             "health": c.map(|c| c.health.clone()).unwrap_or_default(),
                         }),
@@ -319,7 +338,13 @@ impl LaneRun {
         }
         let addr = self.address(&networks, agent)?;
         let token = self.wait_token(Duration::from_secs(60))?;
-        Ok(DaemonAddr { addr, token })
+        infra_ports.sort_unstable();
+        infra_ports.dedup();
+        Ok(DaemonAddr {
+            addr,
+            token,
+            infra_ports,
+        })
     }
 
     /// The networks the lane container is on.
@@ -374,6 +399,7 @@ impl LaneRun {
         Ok(DaemonAddr {
             addr: self.address(&networks, agent)?,
             token: self.wait_token(Duration::from_secs(5))?,
+            infra_ports: Vec::new(),
         })
     }
 

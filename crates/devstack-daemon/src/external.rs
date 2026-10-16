@@ -32,6 +32,11 @@ pub struct ExternalService {
     /// Container port -> address the lane container reaches it at.
     #[serde(default)]
     pub ports: BTreeMap<u16, String>,
+    /// Container port -> the port it is on at the lane's developer's machine
+    /// (what a local lane would publish it on): its links point there, and
+    /// the developer's tunnels to it come in on that port (ADR-0029 point 4).
+    #[serde(default)]
+    pub published: BTreeMap<u16, u16>,
     /// Empty: not started (a parked service that is only an environment source).
     #[serde(default)]
     pub state: String,

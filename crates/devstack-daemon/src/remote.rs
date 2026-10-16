@@ -145,9 +145,19 @@ impl RemoteLane {
                 .start(&offer.id, stack_file, Some(&display), port_offset)
                 .await
         });
-        if let Err(e) = started {
-            let _ = rt.block_on(client.release(&offer.id));
-            return Err(format!("lane `{name}` on {}: {e}", offer.node.name));
+        let started = match started {
+            Ok(st) => st,
+            Err(e) => {
+                let _ = rt.block_on(client.release(&offer.id));
+                return Err(format!("lane `{name}` on {}: {e}", offer.node.name));
+            }
+        };
+        // Its containers' ports here too, where a local lane publishes them.
+        let mut ports = ports;
+        for p in started.infra_ports {
+            if !ports.iter().any(|(_, here)| *here == p) {
+                ports.push((p, p));
+            }
         }
         crate::diag::info(
             "remote_lane_started",

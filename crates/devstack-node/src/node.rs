@@ -602,6 +602,10 @@ fn default_stack_file() -> String {
 pub struct LaneState {
     pub started: bool,
     pub running: bool,
+    /// After a start: the ports its containers are published on at the
+    /// requester's machine.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub infra_ports: Vec<u16>,
 }
 
 /// Start the lane from its mirror: infrastructure, the lane container, its
@@ -648,10 +652,12 @@ async fn start(
     .await
     .map_err(internal)?
     .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
+    let infra_ports = addr.infra_ports.clone();
     s.daemons.lock().unwrap().insert(id, addr);
     Ok(Json(LaneState {
         started: true,
         running: true,
+        infra_ports,
     }))
 }
 
@@ -670,6 +676,7 @@ async fn stop(
     Ok(Json(LaneState {
         started: true,
         running: false,
+        infra_ports: Vec::new(),
     }))
 }
 
@@ -690,6 +697,7 @@ async fn lane_state(
     Ok(Json(LaneState {
         started: true,
         running,
+        infra_ports: Vec::new(),
     }))
 }
 

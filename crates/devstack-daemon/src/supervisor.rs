@@ -429,6 +429,22 @@ impl Supervisor {
         self.builder.usage()
     }
 
+    /// In a lane on a node: the container address a tunnel on `port` goes
+    /// to, when `port` is where a container of the lane is published for its
+    /// developer (ADR-0029 point 4).
+    pub fn infra_tunnel(&self, port: u16) -> Option<String> {
+        let ext = crate::external::read(&self.external_infra()?).ok()?;
+        ext.groups
+            .values()
+            .flat_map(|g| g.services.values())
+            .find_map(|s| {
+                s.published
+                    .iter()
+                    .find(|(_, h)| **h == port)
+                    .and_then(|(target, _)| s.ports.get(target).cloned())
+            })
+    }
+
     /// The infrastructure is run by a node's agent (ADR-0025): its file, if so.
     pub fn external_infra(&self) -> Option<std::path::PathBuf> {
         crate::external::path()
@@ -460,15 +476,27 @@ impl Supervisor {
                             .envs
                             .insert((g.clone(), svc.clone()), s.environment.clone());
                         if !s.state.is_empty() {
-                            let ports: Vec<String> =
-                                s.ports.iter().map(|(p, a)| format!("{p}->{a}")).collect();
+                            // Shown, and linked, as the developer reaches it.
+                            let ports: Vec<String> = s
+                                .ports
+                                .iter()
+                                .map(|(p, a)| match s.published.get(p) {
+                                    Some(h) => format!("{h}->{a}"),
+                                    None => format!("{p}->{a}"),
+                                })
+                                .collect();
+                            let here: Vec<String> = s
+                                .published
+                                .values()
+                                .map(|h| format!("localhost:{h}"))
+                                .collect();
                             view.containers.push(ContainerView {
                                 service: svc.clone(),
                                 name: format!("{}-{svc}", eg.project),
                                 exit_code: 0,
                                 state: s.state.clone(),
                                 health: s.health.clone(),
-                                urls: Vec::new(),
+                                urls: self.container_urls(&g, &svc, &here),
                                 ports,
                                 unreachable: Vec::new(),
                             });
