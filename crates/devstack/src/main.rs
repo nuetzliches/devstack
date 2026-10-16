@@ -192,6 +192,11 @@ enum Cmd {
         /// Print the one-time pairing link instead of opening a browser.
         #[arg(long)]
         print: bool,
+        /// The browser to pair: `chrome`, `edge`, `firefox`, `brave`, or the
+        /// path of a browser executable. Default: `DEVSTACK_BROWSER`, then
+        /// `BROWSER`, then the system's default browser.
+        #[arg(long, value_name = "NAME|PATH")]
+        browser: Option<String>,
     },
     /// The hub that serves the dashboard for every stack; without an action it
     /// runs in the foreground (normally started by `devstack up` / `devstack ui`).
@@ -471,7 +476,7 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Mcp => mcp::serve(&cli.file),
-        Cmd::Ui { print } => hubcmd::ui(print),
+        Cmd::Ui { print, browser } => hubcmd::ui(print, browser.as_deref()),
         Cmd::Hub { action: None } => devstack_hub::serve().map_err(|e| anyhow::anyhow!(e)),
         Cmd::Hub {
             action: Some(HubAction::Status),

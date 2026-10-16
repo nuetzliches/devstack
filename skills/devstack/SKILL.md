@@ -65,7 +65,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack start` / `stop <service>` | one service |
 | `devstack run <command>` | a command of the stack file (list below) |
 | `devstack top` | CPU, memory, disk per service and container |
-| `devstack ui` | dashboard in the browser (pairs the browser once) |
+| `devstack ui` | dashboard in the browser (pairs the browser once); `--browser chrome\|edge\|firefox\|<path>` or `DEVSTACK_BROWSER` picks the browser, `--print` only prints the link |
 | `devstack update` | install the newest devstack (`--check` only asks); stacks switch at their next restart |
 | `devstack down` | stop the services and the daemon; containers keep running. `down --infra` removes them too |
 
