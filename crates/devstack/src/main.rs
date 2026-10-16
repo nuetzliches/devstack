@@ -240,6 +240,10 @@ enum Cmd {
         /// belong to several, e.g. a customer's beside its team's.
         #[arg(long, default_value = "default")]
         pool: String,
+        /// Agree to send the pool's collector telemetry, if it has one
+        /// (ADR-0037); `devstack pool telemetry off` takes it back.
+        #[arg(long)]
+        telemetry: bool,
     },
     /// The pools this machine belongs to: their members, online or not, and
     /// what each shares.
@@ -247,6 +251,8 @@ enum Cmd {
         /// Only this pool.
         #[arg(long)]
         pool: Option<String>,
+        #[command(subcommand)]
+        action: Option<PoolAction>,
     },
     /// Print the JSON Schema of the stack file (for editors).
     Schema,
@@ -296,6 +302,13 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum PoolAction {
+    /// Whether this machine sends the pool's collector telemetry (ADR-0037):
+    /// `on`, `off`, or nothing to show it and what is sent.
+    Telemetry { state: Option<String> },
 }
 
 #[derive(Subcommand)]
@@ -741,8 +754,21 @@ fn main() -> Result<()> {
             name,
             no_wait,
             pool,
-        } => poolcmd::join(&pool, &coordinator, &fingerprint, name.as_deref(), !no_wait),
-        Cmd::Pool { pool } => poolcmd::pool(pool.as_deref()),
+            telemetry,
+        } => {
+            if telemetry {
+                poolcmd::telemetry(&pool, Some("on"))?;
+            }
+            poolcmd::join(&pool, &coordinator, &fingerprint, name.as_deref(), !no_wait)
+        }
+        Cmd::Pool { pool, action } => match action {
+            None => poolcmd::pool(pool.as_deref()),
+            Some(PoolAction::Telemetry { state }) => poolcmd::telemetry(
+                pool.as_deref()
+                    .unwrap_or(devstack_node::member::DEFAULT_POOL),
+                state.as_deref(),
+            ),
+        },
         Cmd::OpenUrl { url } => integration::open_url(&url),
         Cmd::Init { dir, print, json } => {
             let repo = match dir {

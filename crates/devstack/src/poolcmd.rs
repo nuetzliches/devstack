@@ -337,6 +337,41 @@ pub fn join(
     Ok(())
 }
 
+/// `devstack pool telemetry [on|off]` (ADR-0037).
+pub fn telemetry(pool: &str, state: Option<&str>) -> Result<()> {
+    use devstack_node::telemetry::Consent;
+    let dir = member_dir(pool)?;
+    match state {
+        Some("on") => Consent { enabled: true }.save(&dir)?,
+        Some("off") => Consent { enabled: false }.save(&dir)?,
+        Some(o) => bail!("`{o}`: `on` or `off`"),
+        None => {}
+    }
+    let consent = Consent::load(&dir).enabled;
+    let local = Local::new(&dir);
+    let info = if local.membership()?.is_some() {
+        local.telemetry_info().ok()
+    } else {
+        None
+    };
+    println!(
+        "pool `{pool}`: this machine {} telemetry; the pool {}",
+        if consent { "sends" } else { "sends no" },
+        match &info {
+            Some(i) if i.enabled => "collects it",
+            Some(_) => "collects none (its coordinator has no collector)",
+            None => "did not answer",
+        }
+    );
+    if consent || state.is_none() {
+        println!("what is sent:");
+        for w in devstack_node::telemetry::collects() {
+            println!("  - {w}");
+        }
+    }
+    Ok(())
+}
+
 /// `devstack pool`: every pool this machine belongs to, or the one named.
 pub fn pool(only: Option<&str>) -> Result<()> {
     let all = devstack_node::member::pools(&data_dir());

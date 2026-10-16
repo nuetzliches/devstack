@@ -72,6 +72,13 @@ must not leave it unasked, and not to anyone but the pool they joined.
 
 ## Enforced by
 
-Will live in: `crates/devstack-node/src/coordinator.rs` (setting, relay,
-identity), a telemetry module beside `crates/devstack-daemon/src/diag.rs`
-(metrics, queue), the join command and the pool area in `ui/`.
+`crates/devstack-node/src/telemetry.rs` (the collector setting:
+`DEVSTACK_TELEMETRY_ENDPOINT` and `DEVSTACK_TELEMETRY_TOKEN`, else
+`telemetry.json` in the coordinator's directory; consent per pool; the
+identity stamp; OTLP metrics), `crates/devstack-node/src/coordinator.rs`
+(`GET /v1/telemetry`, `POST /v1/telemetry/{logs,metrics}`),
+`crates/devstack-daemon/src/telemetry.rs` (a daemon's and the hub's
+diagnostic lines, durations by event as histograms, lanes and services
+running), `crates/devstack-node/src/node.rs` (a node's capacity, with the
+coordinator's setting alone), `devstack join --telemetry`, `devstack pool
+telemetry on|off`, the pool area in `ui/`, `crates/devstack-node/tests/telemetry.rs`.

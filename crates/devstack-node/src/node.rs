@@ -984,6 +984,59 @@ async fn apply(
         .map_err(|e| err(StatusCode::BAD_REQUEST, e.to_string()))
 }
 
+/// A node's capacity as OTLP gauges (ADR-0037 point 4).
+fn capacity_metrics(
+    total: Amount,
+    offered: Amount,
+    used: Amount,
+    gpus: &[crate::share::Gpu],
+    lanes: usize,
+) -> serde_json::Value {
+    use crate::telemetry::Gauge;
+    let g = |name: &str, unit: &str, value: f64, kind: Option<&str>| Gauge {
+        name: name.into(),
+        unit: unit.into(),
+        value,
+        labels: kind
+            .map(|k| vec![("devstack.kind".to_string(), k.to_string())])
+            .unwrap_or_default(),
+    };
+    let mut v = vec![
+        g("devstack.node.cpus", "1", total.cpus, Some("total")),
+        g("devstack.node.cpus", "1", offered.cpus, Some("offered")),
+        g("devstack.node.cpus", "1", used.cpus, Some("used")),
+        g(
+            "devstack.node.memory",
+            "By",
+            total.memory as f64,
+            Some("total"),
+        ),
+        g(
+            "devstack.node.memory",
+            "By",
+            offered.memory as f64,
+            Some("offered"),
+        ),
+        g(
+            "devstack.node.memory",
+            "By",
+            used.memory as f64,
+            Some("used"),
+        ),
+        g("devstack.node.lanes", "1", lanes as f64, None),
+    ];
+    if !gpus.is_empty() {
+        v.push(g("devstack.node.gpus", "1", gpus.len() as f64, None));
+        v.push(g(
+            "devstack.node.gpu_load",
+            "%",
+            gpus.iter().map(|x| x.load).sum(),
+            None,
+        ));
+    }
+    crate::telemetry::metrics_body("devstack-node", &v, &[])
+}
+
 /// What the containers of the lanes `ids` use now (`docker stats`): their
 /// names carry the lease's id.
 fn lanes_use(ids: &[String]) -> Amount {
@@ -1019,6 +1072,9 @@ async fn background(s: Shared) {
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
     let mut before = devstack_proc::cpu_times();
     let mut wait = Duration::from_secs(2);
+    // Whether the pool collects telemetry, and when that was asked (ADR-0037).
+    let mut collects: Option<(Instant, bool)> = None;
+    let mut sent = Instant::now() - Duration::from_secs(60);
     loop {
         tokio::time::sleep(wait).await;
         wait = EVERY;
@@ -1074,6 +1130,33 @@ async fn background(s: Shared) {
             .into_iter()
             .map(|g| crate::share::Gpu { offered: true, ..g })
             .collect();
+        // A node sends what concerns the pool's lanes with the coordinator's
+        // setting alone (ADR-0037 point 3): its capacity, every minute.
+        if sent.elapsed() >= Duration::from_secs(60) {
+            sent = Instant::now();
+            if collects.is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(600)) {
+                let s2 = s.clone();
+                let on = tokio::task::spawn_blocking(move || s2.local.telemetry_info())
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .is_some_and(|i| i.enabled);
+                collects = Some((Instant::now(), on));
+            }
+            if collects.is_some_and(|(_, on)| on) {
+                let body = capacity_metrics(
+                    total,
+                    available,
+                    used,
+                    &gpus,
+                    s.leases.lock().unwrap().len(),
+                );
+                let s2 = s.clone();
+                let _ =
+                    tokio::task::spawn_blocking(move || s2.local.telemetry_send("metrics", &body))
+                        .await;
+            }
+        }
         let report = Report {
             total: Some(total),
             used: Some(used),

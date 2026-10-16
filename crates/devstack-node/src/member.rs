@@ -201,6 +201,11 @@ impl Local {
         Self { dir: dir.into() }
     }
 
+    /// Where the membership lives.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     fn path(&self, f: &str) -> PathBuf {
         self.dir.join(f)
     }
@@ -458,6 +463,18 @@ impl Local {
             Some(n) => self.get(&format!("/v1/history?node={n}&range={range}")),
             None => self.get(&format!("/v1/history?range={range}")),
         }
+    }
+
+    /// Whether the pool collects telemetry (ADR-0037).
+    pub fn telemetry_info(&self) -> Result<crate::telemetry::Info> {
+        self.get("/v1/telemetry")
+    }
+
+    /// Send OTLP/JSON (`logs` or `metrics`) to the pool's collector, through
+    /// the coordinator.
+    pub fn telemetry_send(&self, kind: &str, body: &serde_json::Value) -> Result<()> {
+        let _: serde_json::Value = self.post(&format!("/v1/telemetry/{kind}"), body)?;
+        Ok(())
     }
 
     /// Set a member's tags (admins only, ADR-0033).

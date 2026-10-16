@@ -283,6 +283,32 @@ function policyText(id: string) {
       <div class="card-body"><ShareSwitch /></div>
     </section>
 
+    <section v-if="!addingPool && me?.state === 'approved' && pool.telemetry" class="card" data-testid="pool-telemetry">
+      <header class="card-header">
+        <Icon name="activity" :size="18" />
+        <h2>Telemetry</h2>
+        <span class="faint small">{{ pool.telemetry.collects ? 'this pool collects it' : 'this pool collects none' }}</span>
+      </header>
+      <div class="card-body">
+        <label class="consent">
+          <input
+            type="checkbox"
+            :checked="pool.telemetry.consent"
+            data-testid="pool-telemetry-consent"
+            @change="pool.setTelemetry(($event.target as HTMLInputElement).checked)"
+          />
+          <span>Send this pool's collector telemetry from this machine</span>
+        </label>
+        <p class="muted small">
+          Off until you turn it on, for this pool only; it goes to the pool's coordinator, which passes it on with this machine's
+          identity. <template v-if="!pool.telemetry.collects">Its coordinator has no collector now: nothing is sent.</template>
+        </p>
+        <ul class="small muted what">
+          <li v-for="w in pool.telemetry.what" :key="w">{{ w }}</li>
+        </ul>
+      </div>
+    </section>
+
     <section v-if="!addingPool && me?.state === 'approved'" class="card" data-testid="pool-capacity">
       <header class="card-header">
         <Icon name="gauge" :size="18" />
@@ -656,6 +682,16 @@ function policyText(id: string) {
 }
 .tags-form .input {
   width: 220px;
+}
+.consent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.what {
+  margin: 6px 0 0;
+  padding-left: 18px;
 }
 .pool-tabs {
   display: flex;

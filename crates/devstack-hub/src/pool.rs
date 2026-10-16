@@ -224,6 +224,51 @@ pub async fn policy(
     }
 }
 
+#[derive(Deserialize)]
+pub struct ConsentBody {
+    enabled: bool,
+}
+
+/// `GET /hub/pool/telemetry`: whether this machine agreed to send the
+/// pool's collector telemetry, whether the pool collects, and what
+/// (ADR-0037).
+pub async fn telemetry(Query(q): Query<PoolQuery>) -> Response {
+    let r = blocking(&q, |l| {
+        let consent = devstack_node::telemetry::Consent::load(l.dir());
+        let info = if l.membership()?.is_some() {
+            l.telemetry_info().unwrap_or_default()
+        } else {
+            devstack_node::telemetry::Info::default()
+        };
+        Ok(json!({
+            "consent": consent.enabled,
+            "collects": info.enabled,
+            "what": devstack_node::telemetry::collects(),
+        }))
+    })
+    .await;
+    match r {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+/// `PUT /hub/pool/telemetry {enabled}`: agree, or take it back.
+pub async fn set_telemetry(Query(q): Query<PoolQuery>, Json(b): Json<ConsentBody>) -> Response {
+    let r = blocking(&q, move |l| {
+        devstack_node::telemetry::Consent { enabled: b.enabled }
+            .save(l.dir())
+            .map_err(|e| MemberError::Other(e.to_string()))?;
+        devstack_daemon::diag::info("telemetry_consent", json!({ "enabled": b.enabled }));
+        Ok(json!({ "consent": b.enabled }))
+    })
+    .await;
+    match r {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
 #[derive(Deserialize, Default)]
 pub struct HistoryQuery {
     #[serde(default)]
