@@ -55,6 +55,12 @@ pub struct Lanes {
     /// instead (ADR-0028 point 6), relative to the stack file.
     #[serde(default)]
     pub dockerfile: Option<PathBuf>,
+    /// Files git ignores that a lane on another machine needs all the same
+    /// (a local TLS certificate, say): globs relative to the repository,
+    /// taken from the lane's worktree or, where it has none, from the main
+    /// tree. Keep them narrow: they are looked for at every sync.
+    #[serde(default)]
+    pub sync: Vec<String>,
 }
 
 impl Default for Lanes {
@@ -63,6 +69,7 @@ impl Default for Lanes {
             port_step: default_port_step(),
             image: None,
             dockerfile: None,
+            sync: Vec::new(),
         }
     }
 }

@@ -281,3 +281,13 @@ fn a_lane_port_step_of_zero_is_an_error() {
         "{issues:?}"
     );
 }
+
+#[test]
+fn lane_sync_globs_stay_inside_the_repository() {
+    let issues = invalid(&format!(
+        "{MINIMAL}\n[lanes]\nsync = [\"certs/*.pem\", \"../secrets/*\", \"a/[b\"]\n"
+    ));
+    let sync: Vec<_> = issues.iter().filter(|i| i.contains("lanes.sync")).collect();
+    assert_eq!(sync.len(), 2, "{issues:?}");
+    assert!(sync.iter().any(|i| i.contains("../secrets")), "{issues:?}");
+}

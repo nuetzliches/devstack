@@ -1,6 +1,6 @@
 # ADR-0029: A remote lane works on a mirror of the requester's tree; ports and API come back over one connection
 
-- **Status:** Accepted (2026-10-16)
+- **Status:** Accepted (2026-10-16); point 2 amended (2026-10-16)
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** plan §3.2, §3.4, [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0011](0011-platform-windows-native-first.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0027](0027-trust-between-nodes.md)
@@ -29,6 +29,9 @@ On the way back, the developer's browser, tests and tools address services on
    this needs), hashes them, asks the node which blobs it lacks, uploads only
    those and applies the change set to the mirror atomically. A first sync to a
    node with a mirror of the same repository sends only the difference.
+   *Amended 2026-10-16:* files git ignores that the lane needs all the same
+   (a local TLS certificate the browser trusts) are named in `[lanes] sync`
+   and go too, from the worktree or, where it has none, from the main tree.
 3. **One mutually authenticated connection** (ADR-0027) per lane carries
    multiplexed streams: sync, the remote daemon's API and event stream, and
    forwarded TCP connections.

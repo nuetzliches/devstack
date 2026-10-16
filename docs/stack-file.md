@@ -261,6 +261,7 @@ port_step = 100   # the default: lane 1 runs api 5000 on 5100, lane 2 on 5200
 # For lanes on another machine of the pool (ADR-0025, ADR-0028), one of:
 image      = "registry.example/shop-lane:1"   # a Linux image with the stack's toolchains
 dockerfile = "dev/lane.Dockerfile"            # or one the node builds from the lane's source
+sync       = ["web/certs/*.pem"]              # ignored files such a lane needs all the same
 ```
 
 Every `git worktree` of the repository is a **lane** of the main tree's
@@ -286,6 +287,12 @@ in the snapshot: `prepare` installs what is missing.
   and volumes renamed `<name>-<lane>`. Its first start migrates and seeds its
   own data. `lane stop` removes its containers and keeps their volumes; a
   removed worktree takes them all.
+- `sync`: a lane on another machine gets the worktree's files without the
+  ignored ones, like a local lane's snapshot. What it needs all the same, a
+  TLS certificate made for `localhost` by a local CA the browser trusts, say,
+  is named here: globs relative to the repository, taken from the worktree
+  or, where it has none, from the main tree. Without it, a dev server that
+  makes its own certificate on the node makes one no browser here trusts.
 - `[compose.<group>] shared = ["mailbox"]`: services a lane uses from the main
   tree instead of starting its own, for what holds nothing per lane (a
   telemetry dashboard, a fake SMTP server); reached by their published ports.

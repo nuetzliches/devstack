@@ -261,10 +261,26 @@ impl NodeClient {
         files: &[String],
         uploaded: &(dyn Fn(usize, usize, u64) + Send + Sync),
     ) -> Result<SyncStats> {
+        self.sync_from(lease, root, files, &Elsewhere::new(), uploaded)
+            .await
+    }
+
+    /// [`NodeClient::sync_with`], with some of the files read from
+    /// elsewhere than `root` (`[lanes] sync`: the main tree's copy of an
+    /// ignored file the worktree lacks).
+    pub async fn sync_from(
+        &self,
+        lease: &str,
+        root: &Path,
+        files: &[String],
+        elsewhere: &Elsewhere,
+        uploaded: &(dyn Fn(usize, usize, u64) + Send + Sync),
+    ) -> Result<SyncStats> {
         let root = root.to_path_buf();
         let list = files.to_vec();
+        let elsewhere = elsewhere.clone();
         let entries: Vec<(FileEntry, std::path::PathBuf, u64)> =
-            tokio::task::spawn_blocking(move || hash_all(&root, &list))
+            tokio::task::spawn_blocking(move || hash_all(&root, &list, &elsewhere))
                 .await
                 .map_err(|e| ClientError::Other(e.to_string()))??;
         let missing: Hashes = self
@@ -319,6 +335,10 @@ impl NodeClient {
     }
 }
 
+/// Files of a sync that are read from another path than the root's: relative
+/// path in the lane, where to read it.
+pub type Elsewhere = std::collections::HashMap<String, std::path::PathBuf>;
+
 fn executable(meta: &std::fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -334,10 +354,17 @@ fn executable(meta: &std::fs::Metadata) -> bool {
 
 /// Hash every listed file that exists (a file deleted since it was listed is
 /// simply not there).
-fn hash_all(root: &Path, files: &[String]) -> Result<Vec<(FileEntry, std::path::PathBuf, u64)>> {
+fn hash_all(
+    root: &Path,
+    files: &[String],
+    elsewhere: &Elsewhere,
+) -> Result<Vec<(FileEntry, std::path::PathBuf, u64)>> {
     let mut out = Vec::with_capacity(files.len());
     for rel in files {
-        let path = root.join(rel);
+        let path = elsewhere
+            .get(rel)
+            .cloned()
+            .unwrap_or_else(|| root.join(rel));
         let Ok(meta) = std::fs::metadata(&path) else {
             continue;
         };

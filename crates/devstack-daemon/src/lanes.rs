@@ -1190,6 +1190,8 @@ impl Lanes {
                 name: &entry.name,
                 repo: &self.main.stack.stack.name,
                 worktree: &worktree,
+                main: &self.main.repo,
+                extra: &self.main.stack.lanes.sync,
                 stack_file: &stack_file,
                 on,
                 need,
