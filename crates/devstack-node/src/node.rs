@@ -48,6 +48,8 @@ pub struct NodeConfig {
     pub api: String,
     /// What the node shares; `enabled` is implied.
     pub share: Settings,
+    /// A server its owner never reclaims (ADR-0026).
+    pub dedicated: bool,
 }
 
 /// A lease the node admitted.
@@ -133,6 +135,7 @@ struct Inner {
     root: PathBuf,
     api: String,
     share: Settings,
+    dedicated: bool,
     leases: Mutex<HashMap<String, NodeLease>>,
     /// The approved members, as the coordinator last listed them.
     members: Mutex<(Option<Instant>, HashSet<String>)>,
@@ -936,6 +939,7 @@ async fn background(s: Shared) {
             cpus: available.cpus,
             memory: available.memory,
             api: Some(s.api.clone()),
+            dedicated: s.dedicated,
             leases: s
                 .leases
                 .lock()
@@ -1015,6 +1019,7 @@ pub async fn serve(
         root,
         api: config.api,
         share: config.share,
+        dedicated: config.dedicated,
         leases: Mutex::new(leases),
         members: Mutex::new((None, HashSet::new())),
         offer: Mutex::new(Amount::default()),

@@ -81,6 +81,7 @@ fn a_lane_is_leased_admitted_and_synced() {
             max_cpus: Some(4.0),
             max_memory: Some(4 << 30),
         },
+        dedicated: true,
     };
     std::thread::spawn(move || {
         rt_node
@@ -266,6 +267,7 @@ fn an_admin_pauses_a_node_and_ends_a_lease() {
             max_cpus: Some(4.0),
             max_memory: Some(4 << 30),
         },
+        dedicated: true,
     };
     std::thread::spawn(move || {
         rt_node

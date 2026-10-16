@@ -124,6 +124,10 @@ pub struct Report {
     /// Where its node API listens (an address on the pool's network).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api: Option<String>,
+    /// A server its owner never reclaims (ADR-0026): it may hold long
+    /// leases; a developer's machine that runs lanes is not.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dedicated: bool,
     /// The leases it holds now.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub leases: Vec<LeaseReport>,
@@ -205,6 +209,21 @@ pub struct NodeView {
     /// Paused by an admin: no new lanes.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub paused: bool,
+    /// `server` (a dedicated node), `node` (a machine that runs lanes and
+    /// may reclaim them), `machine` (a developer's machine that asks for
+    /// lanes), from its last report; `unknown` before one.
+    #[serde(default)]
+    pub kind: String,
+}
+
+/// What a member is, from its last report.
+pub fn kind_of(report: Option<&Report>) -> &'static str {
+    match report {
+        Some(r) if r.api.is_some() && r.dedicated => "server",
+        Some(r) if r.api.is_some() => "node",
+        Some(_) => "machine",
+        None => "unknown",
+    }
 }
 
 /// The coordinator's answer to a node's report: what it is to do.
@@ -479,6 +498,7 @@ async fn nodes(
                     seen: age.map(|a| a.as_secs()),
                     report: r.map(|(_, r)| r.clone()),
                     paused: m.paused,
+                    kind: kind_of(r.map(|(_, r)| r)).into(),
                 }
             })
             .collect(),

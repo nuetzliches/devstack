@@ -236,6 +236,8 @@ export type PoolNode = {
   report?: { sharing: boolean; cpus: number; memory: number; api?: string };
   /** Paused by an admin: no new lanes. */
   paused?: boolean;
+  /** `server` (dedicated node), `node` (runs lanes, may reclaim), `machine` (asks for lanes), `unknown` (never reported). */
+  kind?: 'server' | 'node' | 'machine' | 'unknown';
 };
 
 /** A lane on a node, as the coordinator knows it. */

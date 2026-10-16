@@ -55,6 +55,7 @@ fn a_member_joins_is_approved_and_removed() {
         cpus: 4.0,
         memory: 8 << 30,
         api: None,
+        dedicated: false,
         leases: Vec::new(),
     })
     .unwrap();
