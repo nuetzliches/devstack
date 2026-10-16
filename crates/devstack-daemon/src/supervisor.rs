@@ -65,6 +65,9 @@ pub struct Supervisor {
     op_locks: BTreeMap<String, Mutex<()>>,
     snapshot: Mutex<Snapshot>,
     infra: Mutex<InfraCache>,
+    /// In a lane on a node: each published container on its loopback port
+    /// (the one it has on the developer's machine), by that port.
+    loopback: Mutex<BTreeMap<u16, crate::tcpfwd::Forward>>,
     persisted: Mutex<Persisted>,
     seq: AtomicU64,
     pub events: broadcast::Sender<Event>,
@@ -281,6 +284,7 @@ impl Supervisor {
             op_locks,
             snapshot: Mutex::new(snapshot),
             infra: Mutex::new(InfraCache::default()),
+            loopback: Mutex::new(BTreeMap::new()),
             persisted: Mutex::new(Persisted {
                 main: persisted.main,
                 records: Vec::new(),
@@ -429,6 +433,27 @@ impl Supervisor {
         self.builder.usage()
     }
 
+    /// A loopback forward on `host` to `addr`, started once; whether it runs.
+    fn loopback_forward(&self, host: u16, addr: &str) -> bool {
+        let mut fw = self.loopback.lock().unwrap();
+        if fw.contains_key(&host) {
+            return true;
+        }
+        match crate::tcpfwd::start_to(host, addr.to_string(), &self.rt) {
+            Ok(f) => {
+                fw.insert(host, f);
+                true
+            }
+            Err(e) => {
+                crate::diag::warn(
+                    "loopback_forward_failed",
+                    serde_json::json!({ "port": host, "to": addr, "error": e.to_string() }),
+                );
+                false
+            }
+        }
+    }
+
     /// In a lane on a node: the container address a tunnel on `port` goes
     /// to, when `port` is where a container of the lane is published for its
     /// developer (ADR-0029 point 4).
@@ -468,9 +493,17 @@ impl Supervisor {
                     view.project = eg.project.clone();
                     for (svc, s) in eg.services {
                         for (port, addr) in &s.ports {
-                            cache
-                                .published
-                                .insert((g.clone(), svc.clone(), *port), addr.clone());
+                            // A published container is reached on loopback,
+                            // as on the developer's machine: the same
+                            // addresses for the services (`rewrite_hosts`),
+                            // and loopback where they insist on it.
+                            let at = match s.published.get(port) {
+                                Some(host) if self.loopback_forward(*host, addr) => {
+                                    format!("127.0.0.1:{host}")
+                                }
+                                _ => addr.clone(),
+                            };
+                            cache.published.insert((g.clone(), svc.clone(), *port), at);
                         }
                         cache
                             .envs
@@ -573,7 +606,9 @@ impl Supervisor {
     /// (ADR-0024): git and the tools that manage worktrees can remove one at
     /// any time, and a process inside it would hold it open (Windows).
     fn runs_from_copy(&self) -> bool {
-        !self.lane.is_empty()
+        // A lane on a node runs from a copy of its mirror too: `prepare`
+        // installs there what the mirror lacks (ignored files, node_modules).
+        !self.lane.is_empty() || crate::remote_lane()
     }
 
     /// Where processes without an artifact run and what `{repo}` means for

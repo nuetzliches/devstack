@@ -62,6 +62,32 @@ pub fn start(port: u16, target: u16, rt: &tokio::runtime::Handle) -> std::io::Re
     Ok(Forward { tasks })
 }
 
+/// Listen on `port` (127.0.0.1) and forward every connection to `addr`
+/// (`croniq:4000`): in a lane on a node, its containers are on the lane's
+/// network, and this puts each on the loopback port it has on the
+/// developer's machine, so the services see the same addresses there as
+/// here (ADR-0029 point 4).
+pub fn start_to(port: u16, addr: String, rt: &tokio::runtime::Handle) -> std::io::Result<Forward> {
+    let v4 = rt.block_on(TcpListener::bind(("127.0.0.1", port)))?;
+    let task = rt.spawn(async move {
+        loop {
+            let Ok((mut inbound, _)) = v4.accept().await else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            };
+            let _ = inbound.set_nodelay(true);
+            let addr = addr.clone();
+            tokio::spawn(async move {
+                if let Ok(mut outbound) = TcpStream::connect(addr.as_str()).await {
+                    let _ = outbound.set_nodelay(true);
+                    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                }
+            });
+        }
+    });
+    Ok(Forward { tasks: vec![task] })
+}
+
 async fn accept(listener: TcpListener, port: u16, target: u16) {
     loop {
         let (mut inbound, _) = match listener.accept().await {
