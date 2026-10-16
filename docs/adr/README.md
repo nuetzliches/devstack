@@ -68,4 +68,4 @@ before code exists it names where it *will* live.
 | [0028](0028-lane-images.md) | A remote lane runs in a stack-provided toolchain image; the node supplies devstack | Accepted, amended |
 | [0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) | A remote lane works on a mirror of the requester's tree; ports and API come back over one connection | Accepted |
 | [0030](0030-each-lane-has-its-own-infrastructure.md) | Each lane has its own infrastructure | Accepted |
-| [0031](0031-a-coordinator-places-lanes.md) | A coordinator places lanes and admits members; nodes admit leases; data goes directly | Proposed |
+| [0031](0031-a-coordinator-places-lanes.md) | A coordinator places lanes and admits members; nodes admit leases; data goes directly | Accepted |
