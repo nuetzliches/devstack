@@ -37,7 +37,10 @@ impl PoolQuery {
             .filter(|p| !p.is_empty())
             .unwrap_or(devstack_node::member::DEFAULT_POOL);
         if !devstack_node::member::valid_pool_name(p) {
-            return Err(Box::new(error(StatusCode::BAD_REQUEST, format!("pool `{p}`"))));
+            return Err(Box::new(error(
+                StatusCode::BAD_REQUEST,
+                format!("pool `{p}`"),
+            )));
         }
         let state = devstack_daemon::token::token_path()
             .parent()
