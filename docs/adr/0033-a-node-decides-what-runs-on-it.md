@@ -25,24 +25,30 @@ certificate) and what the container it starts may do.
 
 ## Decision
 
-1. **Who:** each node has a list of the members, or roles, that may start
-   lanes on it; by default every approved member. A lease for a member not
-   on it is refused when the node admits it (ADR-0026 point 4), and the
-   coordinator does not place such a lane there.
-2. **Which repositories:** a node may name the repositories it runs (by the
+1. **Tags.** Admins give members tags, free-form and flat (`team:backend`,
+   `company:nuts`, `customer:acme`); groups are tags. Nodes get tags too
+   (`site:office`, `gpu`). The role (admin, member) stays what administers
+   the pool (ADR-0032); tags say who may run what where.
+2. **Who:** each node says which members may start lanes on it, by tag
+   (`allow = ["team:backend"]`) or by member; by default every approved
+   member. A lease for a member it does not allow is refused when the node
+   admits it (ADR-0026 point 4), and the coordinator does not place such a
+   lane there. A request may ask for node tags (`--on pool:gpu`), and the
+   coordinator places only on nodes that carry them.
+3. **Which repositories:** a node may name the repositories it runs (by the
    name the stack file gives, `[stack] name`); others are refused the same
    way. This guards against mistakes, not against a member who lies about
    the name, and the dashboard says so where it is set.
-3. **How much:** a lane's container gets hard limits, CPU and memory, from
+4. **How much:** a lane's container gets hard limits, CPU and memory, from
    what its lease admitted (`--cpus`, `--memory`), with room above the
    expected need the node's owner sets; a lane that outgrows them is
    stopped by the kernel, not the node.
-4. **Which network:** a node sets what its lane containers may reach
+5. **Which network:** a node sets what its lane containers may reach
    beyond their own infrastructure: the internet and the local network
    (the default today), the internet only (no private address ranges), or
    nothing. The node enforces it on the lane's networks (firewall rules on
    the host, or an egress proxy).
-5. **Where it is set:** on the node (its agent's configuration, for a
+6. **Where it is set:** on the node (its agent's configuration, for a
    server deployed as code) and, for admins, in the pool area of the
    dashboard; the node reports its policy to the coordinator, which
    shows it and places lanes accordingly. The node is the one that
@@ -56,6 +62,8 @@ certificate) and what the container it starts may do.
   The requester syncs a worktree with uncommitted changes, so there is no
   fixed content to sign; checking the remote URL only moves the trust to a
   string the requester sends.
+- **Fixed groups or more roles.** A role per kind of access (lane runner,
+  node owner, ...) multiplies with every node; groups that are tags do not.
 - **A sandbox runtime (gVisor, Kata) for lane containers.** Stronger
   isolation of the kernel, at a cost in speed and setup per node; it can
   come on top of points 3 and 4 for nodes that want it.
