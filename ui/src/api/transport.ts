@@ -59,6 +59,8 @@ export const paths = {
   forget: (stack: string) => `/hub/stacks/${enc(stack)}`,
   pool: '/hub/pool',
   pools: '/hub/pools',
+  poolShared: '/hub/pool/shared',
+  poolSharedOpen: (lease: string) => `/hub/pool/shared/${enc(lease)}/open`,
   poolShare: '/hub/pool/share',
   poolApprove: (id: string) => `/hub/pool/members/${enc(id)}/approve`,
   poolRemove: (id: string) => `/hub/pool/members/${enc(id)}/remove`,

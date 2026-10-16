@@ -922,6 +922,27 @@ pub fn lane_move(stack_file: &Path, name: &str, to: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn lane_share(stack_file: &Path, name: &str, with: &[String]) -> Result<()> {
+    let c = main_client(stack_file)?;
+    let (status, body) = c.call_raw(
+        "POST",
+        &format!("/v1/lanes/{name}/share"),
+        Some(serde_json::json!({ "with": with })),
+    )?;
+    if status >= 400 {
+        bail!("{}", error_text(&body));
+    }
+    if with.is_empty() {
+        println!("lane `{name}` is shared with nobody");
+    } else {
+        println!(
+            "lane `{name}` is shared with {} (while it runs on a node of the pool)",
+            with.join(", ")
+        );
+    }
+    Ok(())
+}
+
 pub fn lane_stop(stack_file: &Path, name: &str) -> Result<()> {
     let c = main_client(stack_file)?;
     let (status, body) = c.call_raw("POST", &format!("/v1/lanes/{name}/stop"), None)?;

@@ -61,6 +61,11 @@ pub struct Lanes {
     /// tree. Keep them narrow: they are looked for at every sync.
     #[serde(default)]
     pub sync: Vec<String>,
+    /// Whom a lane on a node is shared with unless its owner says otherwise
+    /// (ADR-0035): member ids or tags of the pool, `*` for every member;
+    /// none (the default): nobody.
+    #[serde(default)]
+    pub share: Vec<String>,
 }
 
 impl Default for Lanes {
@@ -70,6 +75,7 @@ impl Default for Lanes {
             image: None,
             dockerfile: None,
             sync: Vec::new(),
+            share: Vec::new(),
         }
     }
 }

@@ -208,6 +208,27 @@ export class MockTransport implements Transport {
     if (hub.unpaired) return json(401, { error: 'not paired' });
     if (p === '/hub/stacks' && method === 'GET') return json(200, hub.entries());
     if (p === '/hub/docker' && method === 'GET') return json(200, hub.docker);
+    if (p === '/hub/pool/shared' && method === 'GET')
+      return json(
+        200,
+        url.searchParams.get('pool')
+          ? []
+          : [
+              {
+                lease: '0d3a5b6c7e8f9012',
+                repo: 'crm',
+                lane: 'agent-1242',
+                owner: '1122334455667788',
+                owner_name: 'laptop-anna',
+                node: { id: '9f8e7d6c5b4a3921', name: 'build-server', api: 'https://10.0.0.14:4261' },
+                services: [
+                  { name: 'api', port: 5000, scheme: 'http', here: 5100 },
+                  { name: 'web', port: 4200, scheme: 'https', here: 4300 },
+                ],
+              },
+            ],
+      );
+    if (/^\/hub\/pool\/shared\/[^/]+\/open$/.test(p) && method === 'POST') return json(200, { url: 'http://localhost:5100', port: 5100 });
     if (p === '/hub/pools' && method === 'GET')
       return json(200, [
         { name: 'default', joined: true, state: 'approved', coordinator: 'https://10.0.0.14:4260' },

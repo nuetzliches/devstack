@@ -225,6 +225,65 @@ fn a_lane_is_leased_admitted_and_synced() {
     let view = rt.block_on(client.node()).unwrap();
     assert_eq!(view.leases.len(), 1);
 
+    // Shared (ADR-0035): nobody sees it until its owner shares it; then
+    // the others see it, and the node lets a tunnel through to a shared
+    // port only (this lane was never started: past the check, it answers
+    // that it does not run).
+    use devstack_node::coordinator::{SharedService, Sharing};
+    assert!(other.shared().unwrap().is_empty());
+    assert!(matches!(
+        rt.block_on(theirs.open_shared(&lease.id, 5173)),
+        Err(ClientError::Status(403, _))
+    ));
+    let sharing = Sharing {
+        with: vec!["*".into()],
+        services: vec![SharedService {
+            name: "web".into(),
+            port: 5173,
+            scheme: "http".into(),
+            here: 5273,
+        }],
+    };
+    assert!(
+        other.share_lease(&lease.id, Some(&sharing)).is_err(),
+        "only its owner shares a lane"
+    );
+    requester.share_lease(&lease.id, Some(&sharing)).unwrap();
+    // Listed once the node reported the lease running.
+    let mut seen = Vec::new();
+    for _ in 0..100 {
+        seen = other.shared().unwrap();
+        if !seen.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    assert_eq!(seen.len(), 1, "the other member sees the shared lane");
+    assert_eq!(
+        (
+            seen[0].lane.as_str(),
+            seen[0].owner_name.as_str(),
+            seen[0].node.id.as_str()
+        ),
+        ("login-fix", "dev-pc", node_id.as_str())
+    );
+    assert_eq!(seen[0].services, sharing.services);
+    assert!(requester.shared().unwrap().is_empty(), "not one's own");
+    assert!(matches!(
+        rt.block_on(theirs.open_shared(&lease.id, 5432)),
+        Err(ClientError::Status(403, _))
+    ));
+    assert!(matches!(
+        rt.block_on(theirs.open_shared(&lease.id, 5173)),
+        Err(ClientError::Status(409, _))
+    ));
+    requester.share_lease(&lease.id, None).unwrap();
+    assert!(other.shared().unwrap().is_empty());
+    assert!(matches!(
+        rt.block_on(theirs.open_shared(&lease.id, 5173)),
+        Err(ClientError::Status(403, _))
+    ));
+
     rt.block_on(client.release(&lease.id)).unwrap();
     // The node clears a lane off the request's thread (Docker takes its time).
     let until = std::time::Instant::now() + Duration::from_secs(10);

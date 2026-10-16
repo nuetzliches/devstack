@@ -57,8 +57,13 @@ lane, node, requester).
 
 ## Enforced by
 
-Will live in: `crates/devstack-daemon` (sharing per lane, the report),
-`crates/devstack-node/src/coordinator.rs` (shared lanes, who may see them),
-`crates/devstack-node/src/node.rs` (tunnels for others, checked),
-`crates/devstack-hub` (opening a shared service), `ui/` (pool area, sidebar
-grouped by node, the share control of a lane).
+`crates/devstack-daemon/src/lanes.rs` (sharing per lane, `[lanes] share`,
+`.devstack/lane-shares.json`), `crates/devstack-daemon/src/remote.rs` (told
+the coordinator with each renewal), `crates/devstack-node/src/coordinator.rs`
+(`PUT /v1/leases/{id}/share`, `GET /v1/shared`, `GET /v1/leases/{id}/shared`
+for the node), `crates/devstack-node/src/node.rs` (`/v1/leases/{id}/shared/{port}`:
+a tunnel for others, checked with the coordinator at every connection, to
+shared ports only), `crates/devstack-hub/src/shared.rs` (listing, opening a
+forward), `crates/devstack-node/tests/node.rs` (unshared, shared, a port not
+shared, unshared again), `ui/` (pool area and sidebar by node, the lane's
+share button). Not yet: `devstack open <lane> <service>` from the CLI.

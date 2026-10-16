@@ -193,6 +193,59 @@ pub struct Lease {
     pub created: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_in: Option<u64>,
+    /// Whom its owner shares the lane with, and which services (ADR-0035).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared: Option<Sharing>,
+}
+
+/// A lane shared with others in the pool (ADR-0035).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Sharing {
+    /// Member ids or tags; `*`: every member of the pool.
+    pub with: Vec<String>,
+    /// What they may open.
+    pub services: Vec<SharedService>,
+}
+
+impl Sharing {
+    /// May the member `id` with `tags` use it?
+    pub fn admits(&self, id: &str, tags: &[String]) -> bool {
+        self.with
+            .iter()
+            .any(|w| w == "*" || w == id || tags.iter().any(|t| t == w))
+    }
+}
+
+/// A service of a shared lane: its port on the node (the stack's port).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SharedService {
+    pub name: String,
+    pub port: u16,
+    /// `http` or `https`.
+    #[serde(default = "http")]
+    pub scheme: String,
+    /// The port its owner reaches it on (the lane's port there): the one a
+    /// member opening it gets too, if free, so links between its services
+    /// work alike.
+    #[serde(default)]
+    pub here: u16,
+}
+
+fn http() -> String {
+    "http".into()
+}
+
+/// A lane shared with the caller, as `GET /v1/shared` lists it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SharedLane {
+    pub lease: String,
+    pub repo: String,
+    pub lane: String,
+    /// Its owner: member id and name.
+    pub owner: String,
+    pub owner_name: String,
+    pub node: NodeRef,
+    pub services: Vec<SharedService>,
 }
 
 /// A member as the pool shows it.
@@ -387,6 +440,9 @@ fn router(shared: Shared) -> Router {
         .route("/v1/nodes", get(nodes))
         .route("/v1/leases", get(leases).post(lease_create))
         .route("/v1/leases/{id}", get(lease_get))
+        .route("/v1/leases/{id}/share", axum::routing::put(lease_share))
+        .route("/v1/leases/{id}/shared", get(lease_shared))
+        .route("/v1/shared", get(shared_list))
         .route("/v1/admin/members", get(admin_members))
         .route("/v1/admin/members/{id}/approve", post(admin_approve))
         .route("/v1/admin/members/{id}/remove", post(admin_remove))
@@ -654,6 +710,7 @@ async fn lease_create(
         state: "offered".into(),
         created: store::now(),
         expires_in: None,
+        shared: None,
     };
     s.leases.lock().unwrap().insert(
         id.clone(),
@@ -710,6 +767,82 @@ async fn leases(
         .collect();
     v.sort_by_key(|l| l.created);
     Ok(Json(v))
+}
+
+/// `PUT /v1/leases/{id}/share` (its owner): share the lane, or stop
+/// sharing it with `null` (ADR-0035).
+async fn lease_share(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+    Json(sharing): Json<Option<Sharing>>,
+) -> ApiResult<StatusCode> {
+    let me = member(&s, &peer)?;
+    let mut leases = s.leases.lock().unwrap();
+    match leases.get_mut(&id) {
+        Some((l, _, _)) if l.member == me.id => {
+            l.shared = sharing.filter(|x| !x.with.is_empty() && !x.services.is_empty());
+            Ok(StatusCode::NO_CONTENT)
+        }
+        _ => Err((StatusCode::NOT_FOUND, format!("no lease `{id}` of yours"))),
+    }
+}
+
+/// `GET /v1/leases/{id}/shared` (the lease's node): whom it is shared with,
+/// so the node can check a tunnel of someone else (ADR-0035 point 3).
+async fn lease_shared(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<Json<Option<Sharing>>> {
+    let me = member(&s, &peer)?;
+    let leases = s.leases.lock().unwrap();
+    match leases.get(&id) {
+        Some((l, _, _)) if l.node == me.id => Ok(Json(l.shared.clone())),
+        _ => Err((
+            StatusCode::NOT_FOUND,
+            format!("no lease `{id}` on this node"),
+        )),
+    }
+}
+
+/// `GET /v1/shared`: the lanes shared with the caller, but its own.
+async fn shared_list(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+) -> ApiResult<Json<Vec<SharedLane>>> {
+    let me = member(&s, &peer)?;
+    let all = s.store.list().map_err(internal)?;
+    let name = |id: &str| all.iter().find(|m| m.id == id).map(|m| m.name.clone());
+    let reports = s.reports.lock().unwrap();
+    let mut out: Vec<SharedLane> = s
+        .leases
+        .lock()
+        .unwrap()
+        .values()
+        .filter_map(|(l, _, _)| {
+            let sh = l.shared.as_ref()?;
+            if l.member == me.id || l.state != "running" || !sh.admits(&me.id, &me.tags) {
+                return None;
+            }
+            let api = reports.get(&l.node)?.1.api.clone()?;
+            Some(SharedLane {
+                lease: l.id.clone(),
+                repo: l.repo.clone(),
+                lane: l.lane.clone(),
+                owner: l.member.clone(),
+                owner_name: name(&l.member).unwrap_or_else(|| l.member.clone()),
+                node: NodeRef {
+                    id: l.node.clone(),
+                    name: name(&l.node).unwrap_or_else(|| l.node.clone()),
+                    api,
+                },
+                services: sh.services.clone(),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| (&a.node.name, &a.repo, &a.lane).cmp(&(&b.node.name, &b.repo, &b.lane)));
+    Ok(Json(out))
 }
 
 fn random_hex(bytes: usize) -> String {

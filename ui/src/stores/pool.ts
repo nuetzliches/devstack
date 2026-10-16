@@ -6,7 +6,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, paths, Unreachable } from '@/api';
-import type { NodePolicy, PoolEntry, PoolNode, PoolOverview, PoolRole, ShareSettings, ShareStatus } from '@/api/types';
+import type { NodePolicy, PoolEntry, PoolNode, PoolOverview, PoolRole, ShareSettings, SharedLane, ShareStatus } from '@/api/types';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
 
@@ -21,6 +21,8 @@ export const usePool = defineStore('pool', () => {
   /** The pool the pool area shows. */
   const current = ref<string>(persist.get<string>('pool.current') ?? DEFAULT_POOL);
   const overviews = ref<Record<string, PoolOverview>>({});
+  /** Lanes others share with this machine, per pool (ADR-0035). */
+  const sharedBy = ref<Record<string, SharedLane[]>>({});
   const overview = computed<PoolOverview | null>(() => overviews.value[current.value] ?? null);
   /** Why the last read failed (the coordinator down, the hub unreachable). */
   const error = ref<string | null>(null);
@@ -59,6 +61,16 @@ export const usePool = defineStore('pool', () => {
       const list = await api().request<PoolEntry[]>('GET', paths.pools);
       if (list.ok && Array.isArray(list.body) && list.body.length) pools.value = list.body;
       if (!pools.value.some((p) => p.name === current.value)) current.value = DEFAULT_POOL;
+      // What others share, in every pool.
+      for (const p of pools.value) {
+        if (!p.joined) continue;
+        void api()
+          .request<SharedLane[]>('GET', at(paths.poolShared, p.name))
+          .then((r) => {
+            if (r.ok && Array.isArray(r.body)) sharedBy.value = { ...sharedBy.value, [p.name]: r.body };
+          })
+          .catch(() => undefined);
+      }
       // The other pools' nodes, for starting and moving lanes there.
       for (const p of pools.value) {
         if (p.name === current.value || !p.joined) continue;
@@ -227,6 +239,20 @@ export const usePool = defineStore('pool', () => {
       .filter((p) => targets.value.some((t) => t.pool === p.name))
       .map((p) => ({ pool: p.name, on: p.name === DEFAULT_POOL ? 'pool' : p.name })),
   );
+  /** Every lane shared with this machine, with its pool. */
+  const shared = computed(() => pools.value.flatMap((p) => (sharedBy.value[p.name] ?? []).map((l) => ({ ...l, pool: p.name }))));
+
+  /** Open a service of a shared lane: a forward here, then the page. */
+  async function openShared(pool: string, lease: string, service: string) {
+    const r = await act<{ url: string; port: number }>({
+      label: `Open ${service}`,
+      path: at(paths.poolSharedOpen(lease), pool),
+      body: { service },
+      success: false,
+    });
+    if (r.ok && r.body?.url) window.open(r.body.url, '_blank', 'noopener');
+  }
+
   /** Joined any pool at all. */
   const joinedAny = computed(() => pools.value.some((p) => p.joined));
 
@@ -237,6 +263,8 @@ export const usePool = defineStore('pool', () => {
     current,
     targets,
     placeable,
+    shared,
+    openShared,
     joinedAny,
     error,
     loading,

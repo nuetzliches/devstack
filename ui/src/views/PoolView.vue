@@ -61,6 +61,8 @@ async function join() {
   joining.value = false;
 }
 const joinedPools = computed(() => pool.pools.filter((p) => p.joined));
+/** Lanes others share with this machine in the shown pool (ADR-0035). */
+const sharedHere = computed(() => pool.shared.filter((l) => l.pool === pool.current));
 
 const ui = useUi();
 async function copyJoin() {
@@ -261,6 +263,46 @@ function policyText(id: string) {
         <h2>This machine shares</h2>
       </header>
       <div class="card-body"><ShareSwitch /></div>
+    </section>
+
+    <section v-if="!addingPool && sharedHere.length" class="card" data-testid="pool-shared">
+      <header class="card-header">
+        <Icon name="globe" :size="18" />
+        <h2>Shared with you</h2>
+        <span class="faint small">{{ sharedHere.length }}</span>
+      </header>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Lane</th>
+            <th>On</th>
+            <th>Shared by</th>
+            <th>Services</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="l in sharedHere" :key="l.lease">
+            <td>
+              <strong>{{ l.lane }}</strong> <span class="faint">{{ l.repo }}</span>
+            </td>
+            <td>{{ l.node.name }}</td>
+            <td>{{ l.owner_name }}</td>
+            <td>
+              <button
+                v-for="s in l.services"
+                :key="s.name"
+                type="button"
+                class="btn btn-xs"
+                :title="`${s.scheme}://localhost:${s.here} if free here`"
+                data-testid="pool-shared-open"
+                @click="pool.openShared(l.pool, l.lease, s.name)"
+              >
+                <Icon name="external" :size="12" /> {{ s.name }}
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </section>
 
     <section v-if="pool.isAdmin && pool.pending.length" class="card" data-testid="pool-requests">

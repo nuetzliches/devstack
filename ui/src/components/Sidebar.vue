@@ -34,6 +34,15 @@ const poolHint = computed(() => {
   const n = o.nodes ?? [];
   return `${n.filter((x) => x.online).length}/${n.length}`;
 });
+// Lanes others share with this machine (ADR-0035), by node.
+const sharedByNode = computed(() => {
+  const by = new Map<string, typeof pool.shared>();
+  for (const l of pool.shared) {
+    const key = l.pool === 'default' ? l.node.name : `${l.pool}:${l.node.name}`;
+    by.set(key, [...(by.get(key) ?? []), l]);
+  }
+  return [...by.entries()].sort(([a], [b]) => a.localeCompare(b));
+});
 const adding = ref(false);
 const unfolded = ref<Record<string, boolean>>({});
 /** Stacks whose worktrees are folded away; only the toggle changes it. */
@@ -175,6 +184,32 @@ const isCurrent = (s: StackEntry) => s.id === stack.id;
       </li>
       <li v-if="!stacks.length" class="empty">No stacks yet. Add one, or run <code>devstack up</code> in a project.</li>
     </ul>
+    <template v-if="sharedByNode.length">
+      <div class="head" data-testid="sidebar-shared">Shared with you</div>
+      <ul class="tree shared">
+        <li v-for="[node, lanes] in sharedByNode" :key="node">
+          <div class="node-name faint small"><Icon name="server" :size="12" /> {{ node }}</div>
+          <ul>
+            <li v-for="l in lanes" :key="l.lease" class="shared-lane" :title="`${l.repo} · ${l.lane}, shared by ${l.owner_name}`">
+              <span class="label">{{ l.lane }} <span class="faint small">{{ l.owner_name }}</span></span>
+              <span class="svcs">
+                <button
+                  v-for="s in l.services"
+                  :key="s.name"
+                  type="button"
+                  class="pill sm outline svc"
+                  :title="`Open ${s.name}`"
+                  data-testid="sidebar-shared-open"
+                  @click="pool.openShared(l.pool, l.lease, s.name)"
+                >
+                  {{ s.name }}
+                </button>
+              </span>
+            </li>
+          </ul>
+        </li>
+      </ul>
+    </template>
     <div class="pool-block">
     <ShareSwitch compact />
     <button
@@ -230,6 +265,37 @@ ul {
   border-left: 1px solid var(--border);
   margin-left: 30px;
   padding-left: 4px;
+}
+.shared {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0 8px;
+}
+.shared ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 18px;
+}
+.node-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 0 2px;
+}
+.shared-lane {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 3px 0;
+  font-size: 13px;
+}
+.svcs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.svc {
+  cursor: pointer;
 }
 .item {
   display: flex;

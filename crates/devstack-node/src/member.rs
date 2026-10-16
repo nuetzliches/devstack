@@ -373,6 +373,18 @@ impl Local {
         })
     }
 
+    /// `PUT` JSON to a coordinator path as this member; the answer is not
+    /// read.
+    pub fn put(&self, path: &str, payload: &impl Serialize) -> Result<()> {
+        let (m, a) = self.client()?;
+        body(
+            a.put(&format!("{}{path}", m.coordinator))
+                .header("Content-Type", "application/json")
+                .send(serde_json::to_string(payload).expect("a request serialises"))?,
+        )?;
+        Ok(())
+    }
+
     /// The pool's CA, this member's certificate and key, PEM (for a client
     /// that talks to a node).
     pub fn pems(&self) -> Result<(String, String, String)> {
@@ -416,6 +428,26 @@ impl Local {
     pub fn admin_pause(&self, id: &str, paused: bool) -> Result<MemberView> {
         let what = if paused { "pause" } else { "resume" };
         self.post(&format!("/v1/admin/nodes/{id}/{what}"), &())
+    }
+
+    /// Share a lane this machine leased, or stop sharing it (`None`,
+    /// ADR-0035).
+    pub fn share_lease(
+        &self,
+        lease: &str,
+        sharing: Option<&crate::coordinator::Sharing>,
+    ) -> Result<()> {
+        self.put(&format!("/v1/leases/{lease}/share"), &sharing)
+    }
+
+    /// The lanes others share with this machine.
+    pub fn shared(&self) -> Result<Vec<crate::coordinator::SharedLane>> {
+        self.get("/v1/shared")
+    }
+
+    /// Whom a lease on this node is shared with (the node asks).
+    pub fn lease_shared(&self, lease: &str) -> Result<Option<crate::coordinator::Sharing>> {
+        self.get(&format!("/v1/leases/{lease}/shared"))
     }
 
     /// Set a member's tags (admins only, ADR-0033).

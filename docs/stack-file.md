@@ -262,6 +262,7 @@ port_step = 100   # the default: lane 1 runs api 5000 on 5100, lane 2 on 5200
 image      = "registry.example/shop-lane:1"   # a Linux image with the stack's toolchains
 dockerfile = "dev/lane.Dockerfile"            # or one the node builds from the lane's source
 sync       = ["web/certs/*.pem"]              # ignored files such a lane needs all the same
+share      = ["team:qa"]                      # whom such a lane is shared with by default (`*`: everyone); none: nobody
 ```
 
 Every `git worktree` of the repository is a **lane** of the main tree's
@@ -287,6 +288,11 @@ in the snapshot: `prepare` installs what is missing.
   and volumes renamed `<name>-<lane>`. Its first start migrates and seeds its
   own data. `lane stop` removes its containers and keeps their volumes; a
   removed worktree takes them all.
+- `share`: a lane on a node is private unless shared (ADR-0035): this is
+  whom it is shared with until its owner says otherwise (`devstack lane
+  share <lane> --with <id|tag|*>`, or the lane's share button). Members it
+  is shared with see it in their dashboard and open its services (those
+  with a `port`) through its node; they do not control it.
 - `sync`: a lane on another machine gets the worktree's files without the
   ignored ones, like a local lane's snapshot. What it needs all the same, a
   TLS certificate made for `localhost` by a local CA the browser trusts, say,
