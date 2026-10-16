@@ -48,6 +48,8 @@ pub struct LaneRun {
     pub port_offset: u16,
     /// The lane container's memory limit (ADR-0033), bytes.
     pub memory_limit: Option<u64>,
+    /// Its CPU limit, cores.
+    pub cpu_limit: Option<f64>,
     /// What its networks reach beyond the lane (ADR-0033 point 5).
     pub network: crate::policy::Network,
 }
@@ -325,6 +327,7 @@ impl LaneRun {
         let mount_home = format!("{}:/home/lane", home.display());
         let user = own_user();
         let memory = self.memory_limit.map(|m| format!("{m}b"));
+        let cpus = self.cpu_limit.map(|c| format!("{c:.2}"));
         let mut args: Vec<&str> = vec![
             "run",
             "-d",
@@ -369,6 +372,9 @@ impl LaneRun {
         }
         if let Some(m) = &memory {
             args.extend(["--memory", m.as_str()]);
+        }
+        if let Some(c) = &cpus {
+            args.extend(["--cpus", c.as_str()]);
         }
         args.extend([
             image.as_str(),

@@ -40,6 +40,112 @@ fn running_text() -> String {
     }
 }
 
+/// `GET` a hub path as this user (the hub is started if needed).
+fn hub_get(path: &str) -> Result<Value> {
+    let port = devstack_hub::ensure_running().map_err(|e| anyhow!(e))?;
+    let mut r = agent()
+        .get(&format!("http://127.0.0.1:{port}{path}"))
+        .header("Authorization", &format!("Bearer {}", token()?))
+        .call()?;
+    let text = r.body_mut().read_to_string()?;
+    let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    if r.status() != 200 {
+        bail!("{}", v["error"].as_str().unwrap_or(&text));
+    }
+    Ok(v)
+}
+
+fn pool_query(pool: Option<&str>) -> String {
+    pool.filter(|p| *p != "default")
+        .map(|p| format!("?pool={p}"))
+        .unwrap_or_default()
+}
+
+/// `devstack pool shared`: the lanes others share with this machine
+/// (ADR-0035).
+pub fn shared(pool: Option<&str>) -> Result<()> {
+    let v = hub_get(&format!("/hub/pool/shared{}", pool_query(pool)))?;
+    let lanes = v.as_array().cloned().unwrap_or_default();
+    if lanes.is_empty() {
+        println!("nobody shares a lane with this machine");
+        return Ok(());
+    }
+    println!(
+        "{:<24} {:<16} {:<18} {:<16} SERVICES",
+        "LANE", "REPOSITORY", "ON", "SHARED BY"
+    );
+    for l in lanes {
+        let services: Vec<&str> = l["services"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s["name"].as_str())
+            .collect();
+        println!(
+            "{:<24} {:<16} {:<18} {:<16} {}",
+            l["lane"].as_str().unwrap_or(""),
+            l["repo"].as_str().unwrap_or(""),
+            l["node"]["name"].as_str().unwrap_or(""),
+            l["owner_name"].as_str().unwrap_or(""),
+            services.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// `devstack open <lane> [service]`: open a service of a lane someone shares
+/// with this machine, through a forward the hub keeps (ADR-0035 point 3).
+pub fn open_shared(lane: &str, service: Option<&str>, pool: Option<&str>) -> Result<()> {
+    let q = pool_query(pool);
+    let v = hub_get(&format!("/hub/pool/shared{q}"))?;
+    let lanes = v.as_array().cloned().unwrap_or_default();
+    let found: Vec<&Value> = lanes
+        .iter()
+        .filter(|l| l["lane"] == lane || l["lease"].as_str().is_some_and(|x| x.starts_with(lane)))
+        .collect();
+    let l = match found.as_slice() {
+        [one] => *one,
+        [] => bail!(
+            "no lane `{lane}` is shared with this machine (`devstack pool shared` lists them)"
+        ),
+        _ => bail!(
+            "several shared lanes are called `{lane}`: name its lease (`devstack pool shared`)"
+        ),
+    };
+    let services: Vec<&str> = l["services"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| s["name"].as_str())
+        .collect();
+    let service = match (service, services.as_slice()) {
+        (Some(s), _) => s,
+        (None, [one]) => one,
+        (None, _) => bail!("which service: {}", services.join(", ")),
+    };
+    let port = devstack_hub::ensure_running().map_err(|e| anyhow!(e))?;
+    let lease = l["lease"].as_str().unwrap_or("");
+    let mut r = agent()
+        .post(&format!(
+            "http://127.0.0.1:{port}/hub/pool/shared/{lease}/open{q}"
+        ))
+        .header("Authorization", &format!("Bearer {}", token()?))
+        .header("Content-Type", "application/json")
+        .send(serde_json::json!({ "service": service }).to_string())?;
+    let text = r.body_mut().read_to_string()?;
+    let a: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    let Some(url) = a["url"].as_str() else {
+        bail!("{}", a["error"].as_str().unwrap_or(&text));
+    };
+    println!(
+        "{service} of lane `{lane}` ({}, on {}): {url}",
+        l["owner_name"].as_str().unwrap_or(""),
+        l["node"]["name"].as_str().unwrap_or("")
+    );
+    let _ = open_browser(url);
+    Ok(())
+}
+
 /// Start the hub if needed and get a pairing link for the browser.
 pub fn pairing_url() -> Result<String> {
     let port = devstack_hub::ensure_running().map_err(|e| anyhow!(e))?;

@@ -805,7 +805,7 @@ fn human_bytes(b: u64) -> String {
     }
 }
 
-fn main_client(stack_file: &Path) -> Result<Client> {
+pub(crate) fn main_client(stack_file: &Path) -> Result<Client> {
     need(&state_dir(stack_file)?)
 }
 
@@ -838,7 +838,11 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
             l["port_offset"],
             running,
             if l["owns_main"] == true { "yes" } else { "" },
-            l["node"].as_str().unwrap_or("local"),
+            match (l["pool"].as_str(), l["node"].as_str()) {
+                (Some(p), Some(n)) if p != "default" => format!("{p}:{n}"),
+                (_, Some(n)) => n.to_string(),
+                _ => "local".into(),
+            },
             l["path"].as_str().unwrap_or("")
         );
     }

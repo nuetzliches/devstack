@@ -78,6 +78,7 @@ const reported = computed(() => {
       </button>
       <span class="label">
         <strong>{{ on ? 'Sharing' : 'Not sharing' }}</strong>
+        <span v-if="props.compact && pool.pools.filter((p) => p.joined).length > 1" class="faint small" data-testid="share-pool">{{ pool.current }}</span>
         <span v-if="on" class="faint small tabular" data-testid="share-offer">{{ offerText }}</span>
       </span>
     </div>

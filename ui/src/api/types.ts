@@ -242,6 +242,8 @@ export type NodePolicy = {
   repos?: string[];
   /** A lane's memory limit: its expected need times this (at least 2 GiB). */
   memory_headroom?: number;
+  /** The most CPU cores one lane may use. */
+  max_cpus?: number;
   /** `lan`: the internet and the local network; `internet`: not the local network; `none`: only the lane's own containers. */
   network?: 'lan' | 'internet' | 'none';
 };

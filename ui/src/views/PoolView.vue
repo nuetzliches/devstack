@@ -117,17 +117,22 @@ async function saveTags(m: PoolMember) {
   editTags.value = null;
 }
 const editPolicy = ref<string | null>(null);
-const pol = ref({ allow: '', repos: '', headroom: '', network: 'lan' as 'lan' | 'internet' | 'none' });
+const pol = ref({ allow: '', repos: '', headroom: '', cpus: '', network: 'lan' as 'lan' | 'internet' | 'none' });
 function startPolicy(id: string) {
   const p = memberOf(id)?.policy;
   pol.value = {
     allow: (p?.allow ?? []).join(', '),
     repos: (p?.repos ?? []).join(', '),
     headroom: p?.memory_headroom !== undefined ? String(p.memory_headroom) : '',
+    cpus: p?.max_cpus !== undefined ? String(p.max_cpus) : '',
     network: p?.network ?? 'lan',
   };
   editPolicy.value = id;
 }
+const cpusOf = (t: string) => {
+  const c = Number(t.replace(',', '.'));
+  return t.trim() && Number.isFinite(c) && c > 0 ? c : undefined;
+};
 const list = (t: string) => t.split(',').map((x) => x.trim()).filter(Boolean);
 async function savePolicy(id: string, name: string, clear = false) {
   const h = Number(pol.value.headroom.replace(',', '.'));
@@ -140,6 +145,7 @@ async function savePolicy(id: string, name: string, clear = false) {
           allow: list(pol.value.allow),
           repos: list(pol.value.repos),
           memory_headroom: pol.value.headroom.trim() && Number.isFinite(h) && h > 0 ? h : undefined,
+          max_cpus: cpusOf(pol.value.cpus),
           network: pol.value.network,
         },
   );
@@ -156,7 +162,7 @@ function policyText(id: string) {
       : p.network === 'internet'
         ? ' · internet, not the local network'
         : '';
-  const mem = p.memory_headroom ? ` · memory need ×${p.memory_headroom}` : '';
+  const mem = (p.memory_headroom ? ` · memory need ×${p.memory_headroom}` : '') + (p.max_cpus ? ` · at most ${p.max_cpus} CPU per lane` : '');
   return `${who} · ${what}${mem}${net}`;
 }
 </script>
@@ -468,6 +474,7 @@ function policyText(id: string) {
                     <label><span>Who (member ids or tags)</span><input v-model="pol.allow" class="input" placeholder="everyone" /></label>
                     <label><span>Repositories</span><input v-model="pol.repos" class="input" placeholder="any" /></label>
                     <label><span>Memory limit (× need)</span><input v-model="pol.headroom" class="input" placeholder="none" /></label>
+                    <label><span>CPU per lane (cores)</span><input v-model="pol.cpus" class="input" placeholder="no limit" /></label>
                     <label>
                       <span>Network</span>
                       <select v-model="pol.network" class="input">

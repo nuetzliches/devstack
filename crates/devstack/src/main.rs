@@ -107,9 +107,10 @@ enum Cmd {
         lane: Option<String>,
     },
     /// Lanes: the repository's other working trees (`git worktree`), running
-    /// beside the main one on their own ports, against the same
-    /// infrastructure (plan §3.5). Every worktree is a lane (`git worktree
-    /// add` makes one); `devstack up` in it starts it.
+    /// beside the main one on their own ports with their own containers
+    /// (plan §3.5, ADR-0030), here or on a node of the pool (ADR-0025). Every
+    /// worktree is a lane (`git worktree add` makes one); `devstack up` in
+    /// it starts it, `devstack up --on <node>` there.
     Lane {
         #[command(subcommand)]
         action: LaneAction,
@@ -296,6 +297,17 @@ enum Cmd {
     /// Internal: what the system runs for a `devstack://` link (only `devstack://hub/start`).
     #[command(hide = true)]
     OpenUrl { url: String },
+    /// Open a service of a lane someone in the pool shares with you
+    /// (ADR-0035): a forward on this machine, then the browser.
+    Open {
+        /// The lane's name (or its lease, see `devstack pool shared`).
+        lane: String,
+        /// The service; may be left out when the lane shares one.
+        service: Option<String>,
+        /// The pool (ADR-0034); default the default one.
+        #[arg(long)]
+        pool: Option<String>,
+    },
     /// Internal (Linux): the shim between daemon and service (ADR-0009).
     #[command(hide = true)]
     Shim {
@@ -309,6 +321,8 @@ enum PoolAction {
     /// Whether this machine sends the pool's collector telemetry (ADR-0037):
     /// `on`, `off`, or nothing to show it and what is sent.
     Telemetry { state: Option<String> },
+    /// The lanes others share with this machine (ADR-0035).
+    Shared,
 }
 
 #[derive(Subcommand)]
@@ -447,6 +461,9 @@ enum MembersAction {
         /// A lane's memory limit as its expected need times this.
         #[arg(long)]
         memory_headroom: Option<f64>,
+        /// The most CPU cores one lane may use.
+        #[arg(long)]
+        max_cpus: Option<f64>,
         /// `lan` (the internet and the local network), `internet` (not the
         /// local network) or `none` (only the lane's own containers).
         #[arg(long)]
@@ -734,6 +751,7 @@ fn main() -> Result<()> {
                     allow,
                     repo,
                     memory_headroom,
+                    max_cpus,
                     network,
                     clear,
                 } => poolcmd::members_policy(
@@ -741,7 +759,7 @@ fn main() -> Result<()> {
                     &node,
                     allow,
                     repo,
-                    memory_headroom,
+                    (memory_headroom, max_cpus),
                     network,
                     clear,
                 ),
@@ -763,6 +781,7 @@ fn main() -> Result<()> {
         }
         Cmd::Pool { pool, action } => match action {
             None => poolcmd::pool(pool.as_deref()),
+            Some(PoolAction::Shared) => hubcmd::shared(pool.as_deref()),
             Some(PoolAction::Telemetry { state }) => poolcmd::telemetry(
                 pool.as_deref()
                     .unwrap_or(devstack_node::member::DEFAULT_POOL),
@@ -770,6 +789,11 @@ fn main() -> Result<()> {
             ),
         },
         Cmd::OpenUrl { url } => integration::open_url(&url),
+        Cmd::Open {
+            lane,
+            service,
+            pool,
+        } => hubcmd::open_shared(&lane, service.as_deref(), pool.as_deref()),
         Cmd::Init { dir, print, json } => {
             let repo = match dir {
                 Some(d) => d,
