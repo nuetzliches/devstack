@@ -4,4 +4,5 @@
 pub mod coordinator;
 pub mod member;
 pub mod pki;
+pub mod share;
 pub mod store;

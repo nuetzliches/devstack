@@ -15,6 +15,7 @@ import { useHub } from '@/stores/hub';
 import { usePool } from '@/stores/pool';
 import { useStack } from '@/stores/stack';
 import AddStackDialog from './AddStackDialog.vue';
+import ShareSwitch from './ShareSwitch.vue';
 import Icon from './icons/Icon.vue';
 
 const hub = useHub();
@@ -176,6 +177,8 @@ const isCurrent = (s: StackEntry) => s.id === stack.id;
       </li>
       <li v-if="!stacks.length" class="empty">No stacks yet. Add one, or run <code>devstack up</code> in a project.</li>
     </ul>
+    <div class="pool-block">
+    <ShareSwitch compact />
     <button
       type="button"
       class="item pool-item"
@@ -189,6 +192,7 @@ const isCurrent = (s: StackEntry) => s.id === stack.id;
       <span v-if="pool.isAdmin && pool.pending.length" class="pill sm warn" data-testid="sidebar-pool-badge">{{ pool.pending.length }}</span>
       <span v-else class="faint small tabular">{{ poolHint }}</span>
     </button>
+    </div>
     <button type="button" class="add" data-testid="sidebar-add-stack" @click="adding = true"><Icon name="plus" :size="14" /> Add a stack…</button>
     <AddStackDialog :open="adding" @close="adding = false" />
   </aside>
@@ -294,11 +298,13 @@ ul {
   color: var(--text-muted);
   font-size: 12px;
 }
-.pool-item {
+.pool-block {
   margin-top: auto;
-  border-top: 1px solid var(--border);
-  border-radius: 0;
   padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 .add {
   display: flex;

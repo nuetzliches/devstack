@@ -4,7 +4,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, paths, Unreachable } from '@/api';
-import type { PoolOverview, PoolRole } from '@/api/types';
+import type { PoolOverview, PoolRole, ShareSettings, ShareStatus } from '@/api/types';
 import { act } from '@/lib/actions';
 
 export const usePool = defineStore('pool', () => {
@@ -12,14 +12,26 @@ export const usePool = defineStore('pool', () => {
   /** Why the last read failed (the coordinator down, the hub unreachable). */
   const error = ref<string | null>(null);
   const loading = ref(false);
+  /** What this machine shares; `null` until read (or from an older hub). */
+  const share = ref<ShareStatus | null>(null);
   let timer: ReturnType<typeof setInterval> | null = null;
   let users = 0;
 
   const isAdmin = computed(() => overview.value?.me?.role === 'admin');
   const pending = computed(() => (overview.value?.members ?? []).filter((m) => m.state === 'pending'));
 
+  async function loadShare() {
+    try {
+      const res = await api().request<ShareStatus>('GET', paths.poolShare);
+      if (res.ok && res.body && typeof res.body === 'object') share.value = res.body;
+    } catch {
+      /* keep what is known */
+    }
+  }
+
   async function load() {
     loading.value = true;
+    void loadShare();
     try {
       const res = await api().request<PoolOverview>('GET', paths.pool);
       if (res.ok && res.body && typeof res.body === 'object') {
@@ -86,5 +98,18 @@ export const usePool = defineStore('pool', () => {
     if (r.ok) await load();
   }
 
-  return { overview, error, loading, isAdmin, pending, load, watch, approve, remove, setRole };
+  /** Change the switch or the caps; the hub reports at once. */
+  async function setShare(next: ShareSettings) {
+    const r = await act<ShareStatus>({
+      label: next.enabled ? 'Share this machine' : 'Stop sharing this machine',
+      method: 'PUT',
+      path: paths.poolShare,
+      body: next as unknown as Record<string, unknown>,
+      success: false,
+    });
+    if (r.ok && r.body) share.value = r.body;
+    setTimeout(() => void load(), 1500);
+  }
+
+  return { overview, error, loading, share, isAdmin, pending, load, loadShare, watch, approve, remove, setRole, setShare };
 });

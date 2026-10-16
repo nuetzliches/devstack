@@ -8,7 +8,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { DockerEngine, HubEvent, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
+import type { DockerEngine, HubEvent, ShareSettings, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -206,6 +206,8 @@ export class MockTransport implements Transport {
     if (p === '/hub/stacks' && method === 'GET') return json(200, hub.entries());
     if (p === '/hub/docker' && method === 'GET') return json(200, hub.docker);
     if (p === '/hub/pool' && method === 'GET') return json(200, hub.pool.overview());
+    if (p === '/hub/pool/share' && method === 'GET') return json(200, hub.pool.share());
+    if (p === '/hub/pool/share' && method === 'PUT') return json(200, hub.pool.setShare(body as unknown as ShareSettings));
     const pm = /^\/hub\/pool\/members\/([^/]+)\/(approve|remove|role)$/.exec(p);
     if (pm && method === 'POST') {
       const r = hub.pool.act(decodeURIComponent(pm[1]), pm[2], body as { role?: 'member' | 'admin' } | undefined);
