@@ -13,6 +13,8 @@ export type StackEntry = {
   running: boolean;
   daemon: DaemonInfo | null;
   last_seen: number | null;
+  /** Why the last start from the dashboard failed, while the stack is down. Older hubs omit it. */
+  start_error?: string;
 };
 
 export type HubSession = { version: string };

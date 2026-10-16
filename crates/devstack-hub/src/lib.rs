@@ -90,7 +90,14 @@ pub struct StackEntry {
     pub running: bool,
     pub daemon: Option<DaemonEntry>,
     pub last_seen: Option<u128>,
+    /// Why the last start from the dashboard failed (the end of `devstack
+    /// up`'s output), while the stack is not running (#11).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_error: Option<String>,
 }
+
+/// Start failures by stack id, from `stack_up` to `scan`.
+type StartErrors = Arc<Mutex<HashMap<String, String>>>;
 
 #[derive(Clone)]
 struct AppState {
@@ -109,6 +116,8 @@ struct AppState {
     release_poke: std::sync::mpsc::Sender<()>,
     /// `POST /hub/update`: running, or how the last one failed.
     update: watch::Sender<UpdateState>,
+    /// Why a start from the dashboard failed, by stack id (#11).
+    start_errors: StartErrors,
     /// Until when (ms) to look at the engine every 2 s: after a start request.
     engine_fast_until: Arc<std::sync::atomic::AtomicU64>,
     shutdown: Arc<tokio::sync::Notify>,
@@ -127,7 +136,8 @@ fn random_hex() -> String {
 
 /// Which registered stacks run: their daemon's info file exists and its port
 /// answers. Checked by the hub every second; the dashboard only hears changes.
-fn scan(last_seen: &mut HashMap<String, u128>) -> Vec<StackEntry> {
+fn scan(last_seen: &mut HashMap<String, u128>, errors: &StartErrors) -> Vec<StackEntry> {
+    let mut errors = errors.lock().unwrap();
     registry::list()
         .into_iter()
         .map(|e| {
@@ -141,8 +151,10 @@ fn scan(last_seen: &mut HashMap<String, u128>) -> Vec<StackEntry> {
             });
             if daemon.is_some() {
                 last_seen.insert(e.id.clone(), now_ms());
+                errors.remove(&e.id); // it runs: whatever failed before is over
             }
             StackEntry {
+                start_error: errors.get(&e.id).cloned(),
                 running: daemon.is_some(),
                 daemon: daemon.map(|i| DaemonEntry {
                     pid: i.pid,
@@ -251,10 +263,12 @@ pub fn serve() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
         let (tx, rx) = watch::channel(Vec::new());
+        let start_errors: StartErrors = Arc::default();
+        let errors = start_errors.clone();
         tokio::task::spawn_blocking(move || {
             let mut seen = HashMap::new();
             loop {
-                let next = scan(&mut seen);
+                let next = scan(&mut seen, &errors);
                 tx.send_if_modified(|cur| {
                     if *cur == next {
                         false
@@ -285,6 +299,7 @@ pub fn serve() -> Result<(), String> {
             newer: newer_rx,
             release_poke,
             update: watch::channel(UpdateState::default()).0,
+            start_errors,
             engine_fast_until,
             shutdown: shutdown.clone(),
         };
@@ -802,6 +817,7 @@ fn entry(s: &AppState, id: &str) -> Option<StackEntry> {
                     running: false,
                     daemon: None,
                     last_seen: None,
+                    start_error: None,
                 })
         })
 }
@@ -1112,19 +1128,62 @@ async fn stack_up(State(s): State<AppState>, Path(id): Path<String>) -> Response
     let Ok(exe) = std::env::current_exe() else {
         return err(StatusCode::INTERNAL_SERVER_ERROR, "cannot find devstack");
     };
+    // What `up` says goes to a file: when it fails before the daemon runs
+    // (a stack file that needs a newer devstack, a port taken), its last
+    // lines are what the dashboard shows instead of "Starting…" (#11).
+    s.start_errors.lock().unwrap().remove(&id);
+    let log = state_dir().join(format!("up-{id}.log"));
+    let (out, out2) = match std::fs::File::create(&log).and_then(|f| Ok((f.try_clone()?, f))) {
+        Ok(f) => f,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("up")
         .arg("-f")
         .arg(&e.file)
         .current_dir(&e.repo)
+        .env("NO_COLOR", "1")
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stdout(out)
+        .stderr(out2);
     no_window(&mut cmd);
-    match cmd.spawn() {
-        Ok(_) => StatusCode::ACCEPTED.into_response(),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    }
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let errors = s.start_errors.clone();
+    let repo = e.repo.clone();
+    std::thread::spawn(move || {
+        if child.wait().is_ok_and(|st| st.success()) {
+            return;
+        }
+        // `up` also fails when a service does; only a stack whose daemon
+        // does not run is a failed start.
+        let running = devstack_daemon::read_info(&repo.join(".devstack")).is_some_and(|i| {
+            std::net::TcpStream::connect_timeout(
+                &std::net::SocketAddr::from(([127, 0, 0, 1], i.port)),
+                Duration::from_millis(300),
+            )
+            .is_ok()
+        });
+        if running {
+            return;
+        }
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+        let tail = lines[lines.len().saturating_sub(12)..].join("\n");
+        let tail = if tail.is_empty() {
+            "devstack up ended without a word".to_string()
+        } else {
+            tail
+        };
+        diag::warn(
+            "stack_start_failed",
+            serde_json::json!({ "id": id, "output": tail }),
+        );
+        errors.lock().unwrap().insert(id, tail);
+    });
+    StatusCode::ACCEPTED.into_response()
 }
 
 #[derive(Deserialize)]

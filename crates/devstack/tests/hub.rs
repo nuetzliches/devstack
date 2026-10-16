@@ -538,3 +538,64 @@ Connection: close
         assert!(s == 401 || s == 403, "{extra}: {s}");
     }
 }
+
+/// #11: a start from the dashboard that fails before the daemon runs (here a
+/// stack file that needs a newer devstack) is reported on the stack's entry,
+/// instead of leaving the page on "Starting…".
+#[test]
+fn a_failed_start_is_reported() {
+    let h = start();
+    let p = h.port;
+    let with = format!("Cookie: {}\r\n", paired_cookie(&h));
+    let own = format!("Origin: http://127.0.0.1:{p}\r\n");
+    let post = |path: &str, body: &str| {
+        http(
+            p,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\n{with}{own}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+    };
+    let shop = h.home.path().join("future");
+    std::fs::create_dir_all(&shop).unwrap();
+    let file = shop.join("devstack.toml");
+    std::fs::write(&file, "version = 1\n[stack]\nname = \"future\"\n").unwrap();
+    let dir = serde_json::to_string(&shop.to_string_lossy()).unwrap();
+    let (s, _, body) = post("/hub/stacks/add", &format!("{{\"path\":{dir}}}"));
+    assert_eq!(s, 200, "{body}");
+    let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // Registered; now the file asks for a devstack that does not exist yet.
+    std::fs::write(
+        &file,
+        "version = 1\n[stack]\nname = \"future\"\nrequires = \"99.0.0\"\n",
+    )
+    .unwrap();
+    let (s, _, body) = post(&format!("/hub/stacks/{id}/up"), "");
+    assert_eq!(s, 202, "{body}");
+    let t0 = Instant::now();
+    loop {
+        let (_, _, list) = get(p, "/hub/stacks", &with);
+        let entry = serde_json::from_str::<serde_json::Value>(&list)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["id"] == id.as_str())
+            .cloned()
+            .unwrap_or_default();
+        if let Some(why) = entry["start_error"].as_str() {
+            assert!(why.contains("99.0.0"), "{why}");
+            assert_eq!(entry["running"], false);
+            break;
+        }
+        assert!(
+            t0.elapsed() < Duration::from_secs(30),
+            "no start_error: {list}"
+        );
+        std::thread::sleep(Duration::from_millis(300));
+    }
+}

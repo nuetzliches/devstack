@@ -142,6 +142,15 @@ function isActive(name: string) {
           <strong>{{ stack.entry.name }} is not running.</strong>
           <template v-if="stack.view"> Showing the last known state<template v-if="stack.viewAt"> from {{ ago(stack.viewAt, now) }}</template>.</template>
           <template v-else> No state has been seen yet.</template>
+          <template v-if="stack.entry.start_error">
+            <span class="start-error-head"><strong>The last start failed:</strong></span>
+            <pre class="start-error" data-testid="stack-start-error">{{ stack.entry.start_error }}</pre>
+            <span v-if="/needs devstack/.test(stack.entry.start_error)">
+              The stack file needs a newer devstack.
+              <button v-if="hub.newer" type="button" class="btn btn-sm" :disabled="hub.updating" @click="hub.installUpdate()">Update to {{ hub.newer }}</button>
+              <template v-else>Run <code>devstack update</code>.</template>
+            </span>
+          </template>
         </span>
         <button type="button" class="btn btn-primary btn-sm" :disabled="starting" data-testid="action-start-stack" @click="stack.startStack()">
           <span v-if="starting" class="spinner" /><Icon v-else name="play" :size="14" />
@@ -239,5 +248,19 @@ function isActive(name: string) {
 }
 .banners .banner {
   flex-wrap: wrap;
+}
+.start-error-head {
+  display: block;
+  margin-top: 8px;
+}
+.start-error {
+  margin: 4px 0 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  font-size: 12px;
+  white-space: pre-wrap;
+  max-height: 14em;
+  overflow: auto;
 }
 </style>
