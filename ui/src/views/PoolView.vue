@@ -9,6 +9,7 @@ import { ago, bytes } from '@/lib/format';
 import { usePool } from '@/stores/pool';
 import Icon from '@/components/icons/Icon.vue';
 import ShareSwitch from '@/components/ShareSwitch.vue';
+import CapacityChart from '@/components/CapacityChart.vue';
 import type { PoolLease, PoolMember } from '@/api/types';
 import { useUi } from '@/stores/ui';
 
@@ -61,6 +62,23 @@ async function join() {
   joining.value = false;
 }
 const joinedPools = computed(() => pool.pools.filter((p) => p.joined));
+// What the pool has, offers and uses now (ADR-0036), over the nodes online.
+const capacity = computed(() => {
+  const on = nodes.value.filter((n) => n.online && n.report);
+  const sum = (f: (n: (typeof on)[number]) => number) => on.reduce((a, n) => a + f(n), 0);
+  return {
+    cpus: sum((n) => n.report!.total?.cpus ?? 0),
+    memory: sum((n) => n.report!.total?.memory ?? 0),
+    offeredCpus: sum((n) => (n.report!.sharing ? n.report!.cpus : 0)),
+    offeredMemory: sum((n) => (n.report!.sharing ? n.report!.memory : 0)),
+    usedCpus: sum((n) => n.report!.used?.cpus ?? 0),
+    usedMemory: sum((n) => n.report!.used?.memory ?? 0),
+    gpus: sum((n) => n.report!.gpus?.length ?? 0),
+    gpusOffered: sum((n) => n.report!.gpus?.filter((g) => g.offered).length ?? 0),
+  };
+});
+/** The node whose history is open. */
+const openNode = ref<string | null>(null);
 /** Lanes others share with this machine in the shown pool (ADR-0035). */
 const sharedHere = computed(() => pool.shared.filter((l) => l.pool === pool.current));
 
@@ -265,6 +283,19 @@ function policyText(id: string) {
       <div class="card-body"><ShareSwitch /></div>
     </section>
 
+    <section v-if="!addingPool && me?.state === 'approved'" class="card" data-testid="pool-capacity">
+      <header class="card-header">
+        <Icon name="gauge" :size="18" />
+        <h2>Capacity</h2>
+        <span class="faint small tabular">
+          {{ capacity.cpus.toFixed(0) }} cores · {{ bytes(capacity.memory) }}<template v-if="capacity.gpus"> · {{ capacity.gpus }} GPU</template> in all ·
+          offered {{ capacity.offeredCpus.toFixed(1) }} CPU, {{ bytes(capacity.offeredMemory) }}<template v-if="capacity.gpus">, {{ capacity.gpusOffered }} GPU</template> ·
+          lanes use {{ capacity.usedCpus.toFixed(1) }} CPU, {{ bytes(capacity.usedMemory) }}
+        </span>
+      </header>
+      <div class="card-body"><CapacityChart :pool="pool.current" /></div>
+    </section>
+
     <section v-if="!addingPool && sharedHere.length" class="card" data-testid="pool-shared">
       <header class="card-header">
         <Icon name="globe" :size="18" />
@@ -357,6 +388,16 @@ function policyText(id: string) {
               <td>
                 <strong>{{ n.name }}</strong> <span v-if="isMe(n.id)" class="pill sm outline">this machine</span>
                 <span class="pill sm" :class="n.kind === 'server' ? 'accent' : 'outline'" :title="kindTitle[n.kind ?? 'unknown']" data-testid="pool-kind">{{ kindText[n.kind ?? 'unknown'] }}</span>
+                <span v-for="g in n.report?.gpus ?? []" :key="g.name" class="pill sm info" :title="`${g.name}, ${bytes(g.memory)}`">GPU</span>
+                <button
+                  type="button"
+                  class="btn btn-xs btn-ghost"
+                  :title="openNode === n.id ? 'Hide its history' : 'What it had, offered and its lanes used, over time'"
+                  data-testid="pool-node-history"
+                  @click="openNode = openNode === n.id ? null : n.id"
+                >
+                  <Icon name="activity" :size="12" />
+                </button>
               </td>
               <td>
                 <span class="pill sm" :class="n.online ? 'ok' : 'outline'">{{ n.online ? 'online' : 'offline' }}</span>
@@ -391,6 +432,9 @@ function policyText(id: string) {
                 </button>
               </td>
             </tr>
+              <tr v-if="openNode === n.id" class="history-row">
+                <td :colspan="pool.isAdmin ? 6 : 5"><CapacityChart :pool="pool.current" :node="n.id" /></td>
+              </tr>
               <tr v-if="n.report?.api && (pool.isAdmin || memberOf(n.id)?.policy)" class="policy-row">
                 <td :colspan="pool.isAdmin ? 6 : 5" class="faint small">
                   <template v-if="editPolicy !== n.id">Runs lanes of: {{ policyText(n.id) }}</template>

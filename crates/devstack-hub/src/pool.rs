@@ -224,6 +224,27 @@ pub async fn policy(
     }
 }
 
+#[derive(Deserialize, Default)]
+pub struct HistoryQuery {
+    #[serde(default)]
+    pool: Option<String>,
+    #[serde(default)]
+    node: Option<String>,
+    #[serde(default)]
+    range: Option<String>,
+}
+
+/// `GET /hub/pool/history?node=&range=1h|24h`: a node's capacity over
+/// time, or the pool's (ADR-0036).
+pub async fn history(Query(h): Query<HistoryQuery>) -> Response {
+    let q = PoolQuery { pool: h.pool };
+    let day = h.range.as_deref() == Some("24h");
+    match blocking(&q, move |l| l.history(h.node.as_deref(), day)).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
 pub async fn end(Path(id): Path<String>, Query(q): Query<PoolQuery>) -> Response {
     match blocking(&q, move |l| l.admin_end(&id)).await {
         Ok(()) => StatusCode::ACCEPTED.into_response(),

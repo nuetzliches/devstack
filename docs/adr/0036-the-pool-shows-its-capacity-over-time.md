@@ -57,6 +57,10 @@ pool has to know which nodes have one before it can place such a lane.
 
 ## Enforced by
 
-Will live in: `crates/devstack-node/src/share.rs` (measuring, GPUs),
-`crates/devstack-node/src/coordinator.rs` (report, history, overview), the
-pool area in `ui/`.
+`crates/devstack-node/src/share.rs` (GPUs from `nvidia-smi`),
+`crates/devstack-node/src/node.rs` (a node's total, its lanes' use from
+`docker stats`, its GPUs in the report), `crates/devstack-hub/src/share.rs`
+(a developer's machine reports its total and GPUs),
+`crates/devstack-node/src/coordinator.rs` (`History`, `pool_series`,
+`GET /v1/history`), the hub's `GET /hub/pool/history`, the pool area in `ui/`
+(the capacity card with the pool's history, a node's history by its row).

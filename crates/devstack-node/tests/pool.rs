@@ -57,6 +57,7 @@ fn a_member_joins_is_approved_and_removed() {
         api: None,
         dedicated: false,
         leases: Vec::new(),
+        ..Report::default()
     })
     .unwrap();
     let nodes = me.nodes().unwrap();

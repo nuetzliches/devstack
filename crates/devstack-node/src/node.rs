@@ -984,6 +984,36 @@ async fn apply(
         .map_err(|e| err(StatusCode::BAD_REQUEST, e.to_string()))
 }
 
+/// What the containers of the lanes `ids` use now (`docker stats`): their
+/// names carry the lease's id.
+fn lanes_use(ids: &[String]) -> Amount {
+    if ids.is_empty() {
+        return Amount::default();
+    }
+    let Ok(out) = std::process::Command::new("docker")
+        .args(["ps", "--format", "{{.Names}}"])
+        .output()
+    else {
+        return Amount::default();
+    };
+    let names: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|n| ids.iter().any(|id| n.contains(id.as_str())))
+        .map(str::to_string)
+        .collect();
+    if names.is_empty() {
+        return Amount::default();
+    }
+    let stats = devstack_compose::Docker::default()
+        .stats(&names)
+        .unwrap_or_default();
+    Amount {
+        cpus: stats.iter().map(|s| s.cpu / 100.0).sum(),
+        memory: stats.iter().map(|s| s.memory).sum(),
+    }
+}
+
 /// Measure, let expired leases go, and report, every `EVERY`.
 async fn background(s: Shared) {
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
@@ -1029,7 +1059,25 @@ async fn background(s: Shared) {
         }
 
         let available = s.available();
+        // What the machine has, what its lanes use, its GPUs (ADR-0036).
+        let total = Amount {
+            cpus: cores as f64,
+            memory: devstack_proc::memory_total().unwrap_or(0),
+        };
+        let ids: Vec<String> = s.leases.lock().unwrap().keys().cloned().collect();
+        let used = tokio::task::spawn_blocking(move || lanes_use(&ids))
+            .await
+            .unwrap_or_default();
+        let gpus: Vec<crate::share::Gpu> = tokio::task::spawn_blocking(crate::share::gpus)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|g| crate::share::Gpu { offered: true, ..g })
+            .collect();
         let report = Report {
+            total: Some(total),
+            used: Some(used),
+            gpus,
             sharing: true,
             cpus: available.cpus,
             memory: available.memory,
