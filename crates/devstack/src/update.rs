@@ -63,6 +63,9 @@ pub fn run(check_only: bool, version: Option<&str>) -> Result<()> {
     while devstack_hub::answers(port) && t0.elapsed() < std::time::Duration::from_secs(5) {
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
+    // The hub this starts must not inherit our caller's pipe (see
+    // `keep_std_handles`): `devstack update | tail` would never end.
+    devstack_proc::keep_std_handles();
     let started = std::process::Command::new(&installed)
         .args(["hub", "start"])
         .status()
