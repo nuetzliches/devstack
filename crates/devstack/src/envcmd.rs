@@ -1,6 +1,8 @@
 //! `devstack env <service>`: the environment a native service would get, with
 //! the origin of every variable, or exported as a dotenv file (ADR-0014,
-//! ADR-0015). Needs Docker for the Compose data, not the daemon.
+//! ADR-0015). With a daemon running it asks the daemon, which knows what it
+//! starts the service with (in a worktree: the lane's ports, containers and
+//! names); without one it reads Compose itself (needs Docker).
 
 use anyhow::{Context as _, Result, bail};
 use devstack_compose::{Docker, Group};
@@ -97,14 +99,41 @@ pub fn context_for(
     Ok((ctx, envs))
 }
 
-pub fn run(stack: &Stack, repo: &Path, name: &str, export: bool, out: Option<&Path>) -> Result<()> {
-    let docker = Docker::default();
-    let (ctx, envs) = context_for(stack, repo, name, &docker)?;
-    let svc = &stack.services[name];
+pub fn run(
+    stack: &Stack,
+    repo: &Path,
+    stack_file: &Path,
+    name: &str,
+    export: bool,
+    out: Option<&Path>,
+) -> Result<()> {
     // The export is steps 1-3 only (ADR-0015); the listing shows step 4 too.
-    let env = devstack_env::compose(name, svc, &ctx, &envs, !export)?;
+    let env: Vec<(String, String, String)> = match from_daemon(stack_file, name, export)? {
+        Some(env) => env,
+        None => {
+            let docker = Docker::default();
+            let (ctx, envs) = context_for(stack, repo, name, &docker)?;
+            let svc = &stack.services[name];
+            devstack_env::compose(name, svc, &ctx, &envs, !export)?
+                .into_iter()
+                .map(|(k, v)| (k, v.value, v.origin.to_string()))
+                .collect()
+        }
+    };
     if export {
-        let text = devstack_env::to_dotenv(&env);
+        let text = devstack_env::to_dotenv(
+            &env.iter()
+                .map(|(k, v, _)| {
+                    (
+                        k.clone(),
+                        devstack_env::Var {
+                            value: v.clone(),
+                            origin: devstack_env::Origin::StackFile,
+                        },
+                    )
+                })
+                .collect(),
+        );
         match out {
             Some(p) => {
                 std::fs::write(p, text).with_context(|| format!("write {}", p.display()))?;
@@ -121,19 +150,12 @@ pub fn run(stack: &Stack, repo: &Path, name: &str, export: bool, out: Option<&Pa
     if env.is_empty() {
         bail!("`{name}` gets no variables from devstack (no `compose`, `env` or `workers`)");
     }
-    let width = env.keys().map(String::len).max().unwrap_or(0);
+    let width = env.iter().map(|(k, _, _)| k.len()).max().unwrap_or(0);
     let mut by_origin: BTreeMap<String, usize> = BTreeMap::new();
-    for (k, v) in &env {
-        println!("{k:width$} = {}    # {}", v.value, v.origin);
+    for (k, v, origin) in &env {
+        println!("{k:width$} = {v}    # {origin}");
         *by_origin
-            .entry(
-                v.origin
-                    .to_string()
-                    .split(',')
-                    .next()
-                    .unwrap_or("")
-                    .to_string(),
-            )
+            .entry(origin.split(',').next().unwrap_or("").to_string())
             .or_default() += 1;
     }
     eprintln!(
@@ -146,4 +168,38 @@ pub fn run(stack: &Stack, repo: &Path, name: &str, export: bool, out: Option<&Pa
             .join(", ")
     );
     Ok(())
+}
+
+/// The environment from the running daemon (in a worktree: its lane's);
+/// `None` without a daemon. A worktree whose lane is not started has no
+/// environment of its own yet: saying the main tree's would mislead.
+fn from_daemon(
+    stack_file: &Path,
+    name: &str,
+    export: bool,
+) -> Result<Option<Vec<(String, String, String)>>> {
+    let Some(c) = crate::client::Client::connect(&crate::client::state_dir(stack_file)?) else {
+        if crate::client::worktree().is_some() {
+            bail!(
+                "this worktree's lane is not running: `devstack up` here first; only the lane knows its ports and databases"
+            );
+        }
+        return Ok(None);
+    };
+    if c.lane() == Some("-") {
+        bail!(
+            "this worktree's lane is not started: `devstack up` here first; only the lane knows its ports and databases"
+        );
+    }
+    let body = c.get(&format!("/v1/services/{name}/env?export={export}"))?;
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&body)
+        .map_err(|_| anyhow::anyhow!("{}", crate::client::error_text(&body)))?;
+    Ok(Some(
+        rows.iter()
+            .map(|r| {
+                let s = |k: &str| r[k].as_str().unwrap_or("").to_string();
+                (s("name"), s("value"), s("origin"))
+            })
+            .collect(),
+    ))
 }

@@ -900,6 +900,24 @@ impl Supervisor {
                 }
                 Err(e) => view.error = Some(e.to_string()),
             }
+            // A lane's `shared` services run in the main tree's project: their
+            // addresses come from there, also when Docker assigned the port.
+            let shared = &self.stack.compose[&g].shared;
+            if !self.lane.is_empty() && !shared.is_empty() {
+                let main = Group::from_config(&g, &self.stack.compose[&g], &self.repo);
+                for c in self.docker.ps(&main).unwrap_or_default() {
+                    if !shared.contains(&c.service) {
+                        continue;
+                    }
+                    for p in &c.publishers {
+                        if let Some(addr) = c.published(p.target_port) {
+                            let key = (g.clone(), c.service.clone(), p.target_port);
+                            cache.pending.remove(&key);
+                            cache.published.insert(key, addr);
+                        }
+                    }
+                }
+            }
             cache.views.push(view);
         }
         *self.infra.lock().unwrap() = cache;
@@ -1757,6 +1775,26 @@ impl Supervisor {
     /// Build first; only a successful build replaces the running instance
     /// (ADR-0003). Behind the proxy the replacement is a candidate that takes
     /// over without dropping a request; otherwise a restart in place.
+    /// The environment `name` gets from this supervisor, as it would start
+    /// now: in a lane with the lane's ports, its own containers and
+    /// `{lane}` (`devstack env` in a worktree). `include_devstack`: also
+    /// devstack's own variables (build id, lane, slot).
+    pub fn env_of(&self, name: &str, include_devstack: bool) -> Result<devstack_env::Env, String> {
+        let svc = self.effective(name, &self.service(name)?.clone());
+        let (build, port) = {
+            let slots = self.slots.lock().unwrap();
+            let v = &slots[name].view;
+            (v.build_id.clone(), v.instance_port.or(svc.port))
+        };
+        let artifact = build
+            .map(|id| self.layout.artifact(name, &id))
+            .filter(|d| d.is_dir());
+        let ctx = self.context(&svc, artifact.as_deref(), port, true);
+        let infra = self.infra.lock().unwrap();
+        devstack_env::compose(name, &svc, &ctx, &infra.envs, include_devstack)
+            .map_err(|e| e.to_string())
+    }
+
     /// `restart --rebuild`: build again even if an artifact for the same
     /// inputs exists (an input devstack does not see changed), then restart.
     pub fn rebuild(self: &Arc<Self>, name: &str) -> Result<(), String> {

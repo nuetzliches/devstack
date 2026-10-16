@@ -347,7 +347,9 @@ be in several groups, and members of no group appear under "Other".
 | `{lane}` | the lane's name, `main` in the main working tree |
 | `{lane_suffix}` | empty in the main working tree, `_<lane>` in a lane: `app{lane_suffix}` keeps the main tree's name |
 | `{service.<name>.url}` | URL of that service's main slot (`http(s)://127.0.0.1:<port>`) |
-| `{compose.<group>.<service>.<port>}` | published host address of a container port |
+| `{service.<name>.port}` | that service's port |
+| `{compose.<group>.<service>.<port>}` | where a container port is published, as a URL (`http://127.0.0.1:15432`) |
+| `{compose.<group>.<service>.<port>.host}`, `.port`, `.address` | its host (`127.0.0.1`), its port (`15432`), or both (`127.0.0.1:15432`), for connection strings: `Server={compose.app.sql.1433.host},{compose.app.sql.1433.port}`, `Host=…host;Port=…port`. In a lane: the lane's own container, or the main tree's for a `shared` one |
 | `${VAR}`, `${VAR:-default}` | from the env files and the process environment; placeholders inside a default are resolved too |
 
 `{{` and `}}` are literal braces. Durations: `500ms`, `30s`, `5m`, `1h` (a bare

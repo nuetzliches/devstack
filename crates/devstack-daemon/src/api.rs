@@ -39,6 +39,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/groups/{name}/{action}", post(group_action))
         .route("/v1/logs", get(logs_all))
         .route("/v1/services/{name}/logs", get(logs))
+        .route("/v1/services/{name}/env", get(service_env))
         .route("/v1/services/{name}/logs/stream", get(log_stream))
         .route("/v1/services/{name}/logs/files", get(log_files))
         .route("/v1/services/{name}/builds", get(builds))
@@ -365,6 +366,33 @@ async fn lane_forward(
     match l.router.clone().oneshot(inner).await {
         Ok(r) => r,
         Err(e) => match e {},
+    }
+}
+
+#[derive(Deserialize)]
+struct EnvQuery {
+    /// Only what Compose and the stack file give (`devstack env --export`).
+    #[serde(default)]
+    export: bool,
+}
+
+/// `GET /v1/services/{name}/env[?export=true]`: the environment the service
+/// gets from this daemon (in a lane: the lane's), `[{name, value, origin}]`.
+async fn service_env(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Query(q): Query<EnvQuery>,
+) -> Response {
+    let sup = s.sup.clone();
+    match tokio::task::spawn_blocking(move || sup.env_of(&name, !q.export)).await {
+        Ok(Ok(env)) => Json(
+            env.into_iter()
+                .map(|(k, v)| serde_json::json!({ "name": k, "value": v.value, "origin": v.origin.to_string() }))
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Ok(Err(e)) => err(StatusCode::CONFLICT, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 

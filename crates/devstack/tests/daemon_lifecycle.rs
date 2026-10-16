@@ -1276,6 +1276,13 @@ fn a_worktree_runs_as_a_lane() {
     // The lane's API takes requests for one service (a path parameter of
     // its own under /v1/lanes/<lane>/v1/...), and a `lanes = false` service
     // runs in the main tree only: there it answers, in the lane it is refused.
+    // `devstack env` in the worktree shows what the lane gets, not the main tree.
+    let env = wt_cli(&["env", "api"]);
+    assert!(
+        env.lines()
+            .any(|l| l.starts_with("Jobs__Enabled") && l.contains("= false")),
+        "the lane's environment: {env}"
+    );
     let logs = wt_cli(&["logs", "api"]);
     assert!(!logs.contains("path arguments"), "{logs}");
     assert!(
@@ -1572,6 +1579,24 @@ fn a_lane_has_its_own_containers() {
     assert!(
         !ours.iter().any(|c| c.0 == "cache"),
         "cache is shared: {ours:?}"
+    );
+    // `devstack env` in the worktree: the lane's db, on its moved port.
+    let env = Command::new(BIN)
+        .args(["env", "api", "-f"])
+        .arg(wt.join("devstack.toml"))
+        .env("LOCALAPPDATA", s.token_home.path())
+        .env("XDG_STATE_HOME", s.token_home.path())
+        .output()
+        .unwrap();
+    let env = format!(
+        "{}{}",
+        String::from_utf8_lossy(&env.stdout),
+        String::from_utf8_lossy(&env.stderr)
+    );
+    assert!(
+        env.contains(&format!("127.0.0.1:{}", db_port + offset))
+            && !env.contains(&format!("127.0.0.1:{db_port};")),
+        "the lane's db in its environment: {env}"
     );
     let main = compose_ps(&project);
     assert!(

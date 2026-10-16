@@ -81,6 +81,7 @@ devstack logs --daemon    # devstack's own decisions with their reasons (--hub: 
 devstack run reset        # a command from the stack file
 devstack top --watch      # CPU, memory and disk per service, container, group and lane
 devstack env api --export dotenv   # run the service without devstack (ADR-0015)
+devstack env api                   # what it gets, with origins; in a worktree: the lane's values
 devstack down --infra
 ```
 
