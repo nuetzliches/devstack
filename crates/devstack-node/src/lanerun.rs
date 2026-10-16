@@ -212,14 +212,13 @@ impl LaneRun {
             // (`model`, read before the overlay that publishes nothing): the lane
             // container reaches every target port by the service's name.
             let ps = dc.ps(&g)?;
-            networks.push(
-                model
-                    .networks
-                    .get("default")
-                    .and_then(|n| n.as_ref())
-                    .and_then(|n| n.name.clone())
-                    .unwrap_or_else(|| format!("{}_default", g.project)),
-            );
+            // The networks the group's containers are on now, as Docker has
+            // them: a project with networks of its own has no `_default`.
+            for n in project_networks(&g) {
+                if !networks.contains(&n) {
+                    networks.push(n);
+                }
+            }
             let services: BTreeMap<String, serde_json::Value> = model
                 .services
                 .iter()
@@ -456,14 +455,12 @@ impl LaneRun {
         let dc = Docker::default();
         for name in order(&stack).into_iter().rev() {
             let g = self.group(&stack, &name);
+            // The agent leaves the lane's networks first: Docker does not
+            // remove a network something is still on.
             if let Some(me) = agent {
-                let _ = docker(&[
-                    "network",
-                    "disconnect",
-                    "-f",
-                    &format!("{}_default", g.project),
-                    me,
-                ]);
+                for n in project_networks(&g) {
+                    let _ = docker(&["network", "disconnect", "-f", &n, me]);
+                }
             }
             let _ = dc.remove(&g);
         }
@@ -480,4 +477,26 @@ fn own_user() -> Option<String> {
             .map(str::to_string)
     };
     Some(format!("{}:{}", field("Uid:")?, field("Gid:")?))
+}
+
+/// The networks of a group's Compose project (by Compose's project label),
+/// and the group's own fixed-name networks: what a lane container joins.
+fn project_networks(g: &Group) -> Vec<String> {
+    let label = format!("label=com.docker.compose.project={}", g.project);
+    let mut out: Vec<String> =
+        docker(&["network", "ls", "--filter", &label, "--format", "{{.Name}}"])
+            .map(|t| {
+                t.lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+    for n in &g.networks {
+        if !out.contains(n) {
+            out.push(n.clone());
+        }
+    }
+    out
 }
