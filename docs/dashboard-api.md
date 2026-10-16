@@ -47,6 +47,7 @@ type StackEntry = {
   running: boolean;      // its daemon answers
   daemon: { pid: number; port: number; started: number; version: string } | null;
   last_seen: number | null; // when the hub last saw it running
+  start_error?: string;  // why the last start from the dashboard failed (end of `devstack up`'s output; hub/up-<id>.log), until it runs
 };
 ```
 

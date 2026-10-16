@@ -467,6 +467,17 @@ export const useStack = defineStore('stack', () => {
     if (!ok) return;
     busy.value['stack'] = 'restart';
     try {
+      // A stack file this devstack cannot load (it needs a newer one) would
+      // stop the stack for good: say so and leave it running (#11).
+      const repo = entry.value?.repo;
+      if (repo) {
+        const res = await api().request<{ valid?: { Err?: string } | null }>('GET', paths.inspect(repo));
+        const why = res.ok && res.body && typeof res.body === 'object' ? res.body.valid?.Err : null;
+        if (why) {
+          ui.toast('error', `${name} would not start again`, `${why} It keeps running.`, 15000);
+          return;
+        }
+      }
       const down = await act({ label: `Stop ${name}`, path: paths.down(stackId, false), success: false });
       if (!down.ok) return;
       // The hub's stack stream says when the daemon is gone; 60 s at most.

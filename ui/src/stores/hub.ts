@@ -82,7 +82,8 @@ export const useHub = defineStore('hub', () => {
         lastContact.value = Date.now();
         fresh.value = true;
         if (status.value !== 'ok') void checkSession();
-        for (const s of ev.stacks) if (s.running && starting.value[s.id]) delete starting.value[s.id];
+        // Running, or its start failed (the hub says why): no longer "Starting…".
+        for (const s of ev.stacks) if ((s.running || s.start_error) && starting.value[s.id]) delete starting.value[s.id];
         save();
       },
       onState(s) {

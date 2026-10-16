@@ -67,7 +67,6 @@ fn cgroup_root(stack: &str) -> Option<PathBuf> {
 const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub fn serve(stack_file: &Path) -> Result<(), String> {
-    let stack = devstack_config::load(stack_file).map_err(|e| e.to_string())?;
     let abs = std::path::absolute(stack_file).map_err(|e| e.to_string())?;
     let abs_file = devstack_proc::long_path(&abs);
     let repo = abs.parent().map(Path::to_path_buf).unwrap_or(abs);
@@ -90,6 +89,18 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     };
     // Only the lock holder writes the diagnostic log (plan §11).
     diag::init(state_dir.join("daemon.log"));
+    // Read after the log is open: a stack file this devstack cannot run (one
+    // that needs a newer devstack) says so in `devstack logs --daemon` (#11).
+    let stack = match devstack_config::load(stack_file) {
+        Ok(s) => s,
+        Err(e) => {
+            diag::warn(
+                "daemon_start_failed",
+                serde_json::json!({ "error": e.to_string() }),
+            );
+            return Err(e.to_string());
+        }
+    };
     devstack_proc::ensure_console().map_err(|e| e.to_string())?;
     let token = token::load_or_create().map_err(|e| format!("token: {e}"))?;
     // Known to the hub from now on (ADR-0021); a failure costs only the listing.
