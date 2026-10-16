@@ -66,7 +66,10 @@ names (the containers of one tree served the other), workers twice.
    `proxy = false` that run in the lane get a plain TCP forward on their fixed
    port instead (an HTTP proxy in front of a TLS dev server would break it;
    bytes pass unchanged, WebSockets included); one that does not run in the
-   lane keeps running in the main tree. While a lane holds the main slot, the
+   lane keeps running in the main tree. A service with `lanes = false` never
+   runs in a lane (something that may run once per machine): the main tree's
+   instance serves every lane and keeps its workers wherever the main slot is.
+   While a lane holds the main slot, the
    main tree builds no candidates for the moved services.
 6. **Who owns the main slot is runtime state**, one value shared by every
    supervisor of the daemon. A daemon restart starts clean (ADR-0016) with the
