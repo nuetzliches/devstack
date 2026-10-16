@@ -147,6 +147,23 @@ export const useStack = defineStore('stack', () => {
   }
 
   /** Stop a lane: its services stop, it is no longer started; the worktree stays (git's). */
+  /** Move a started lane to a node of the pool or to `local` (ADR-0025 point 10). */
+  async function moveLane(name: string, to: string) {
+    if (!id.value) return;
+    busy.value[`lane-move`] = to;
+    try {
+      const res = await act({
+        label: `Move lane ${name} to ${to === 'local' ? 'this machine' : to}`,
+        path: paths.api(id.value, v1.laneMove(name)),
+        body: { to },
+        success: `Lane ${name} runs on ${to === 'local' ? 'this machine' : to} now`,
+      });
+      if (res.ok) await loadLanes();
+    } finally {
+      delete busy.value['lane-move'];
+    }
+  }
+
   async function stopLane(name: string) {
     if (!id.value) return;
     const res = await act({
@@ -567,6 +584,7 @@ export const useStack = defineStore('stack', () => {
     laneMain,
     startLane,
     stopLane,
+    moveLane,
     serviceAction,
     groupAction,
     restartContainer,

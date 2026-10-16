@@ -18,6 +18,9 @@ import { MockPool } from './pool';
 
 type Route = { stop(): void } | null;
 
+/** Where a mock lane was moved to (`local` or a node). */
+const laneNodes = new Map<string, string>();
+
 class MockHub {
   stacks: MockStack[] = [];
   hubSubs = new Set<Listener<HubEvent>>();
@@ -289,8 +292,10 @@ export class MockTransport implements Transport {
           ].map((l) => {
             const active = l.name === 'agent-login-fix' || s.startedLanes.has(l.name);
             const owns = l.name === 'agent-login-fix' && s.laneOwnsMain;
-            // review-cart runs on a node of the pool once started (ADR-0025).
-            const node = active && l.name === 'review-cart' ? { node: 'build-server' } : {};
+            // review-cart runs on a node of the pool once started (ADR-0025);
+            // a lane moved goes where it was moved.
+            const placed = laneNodes.get(l.name) ?? (l.name === 'review-cart' ? 'build-server' : 'local');
+            const node = active && placed !== 'local' ? { node: placed } : {};
             return { ...l, active, owns_main: owns, running: active ? (l.name === 'agent-login-fix' ? 3 : 5) : 0, services: 5, ...node };
           })
         : [];
@@ -307,6 +312,12 @@ export class MockTransport implements Transport {
       await sleep(1200);
       s.laneOwnsMain = lm[1] !== 'main';
       return json(200, []);
+    }
+    const mv = /^\/v1\/lanes\/([^/]+)\/move$/.exec(p);
+    if (mv && method === 'POST') {
+      await sleep(2500);
+      laneNodes.set(decodeURIComponent(mv[1]), String(body?.to ?? 'local'));
+      return json(200, lanes());
     }
     const stop = /^\/v1\/lanes\/([^/]+)\/stop$/.exec(p);
     if (stop && method === 'POST') {

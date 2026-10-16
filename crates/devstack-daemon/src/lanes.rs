@@ -1017,7 +1017,7 @@ impl Lanes {
                 Ok(name)
             } else {
                 Err(format!(
-                    "lane `{name}` runs on {} already (moving it: ADR-0025 point 10, planned)",
+                    "lane `{name}` runs on {} already: `devstack lane move {name} --to {on}` moves it",
                     r.node.name
                 ))
             };
@@ -1025,18 +1025,35 @@ impl Lanes {
         if !self.pending.lock().unwrap().insert(name.clone()) {
             return Err(format!("lane `{name}` is being started"));
         }
+        let result = self.start_remote(&entry, on, need, true);
+        self.pending.lock().unwrap().remove(&name);
+        let lane = result?;
+        self.remote.lock().unwrap().insert(name.clone(), lane);
+        self.announce();
+        Ok(name)
+    }
+
+    /// Lease, sync and start the lane of `entry` on `on`; `forward`: listen
+    /// on its ports here at once.
+    fn start_remote(
+        &self,
+        entry: &LaneEntry,
+        on: &str,
+        need: devstack_node::share::Amount,
+        forward: bool,
+    ) -> Result<Arc<RemoteLane>, String> {
         let stack_file = self
             .main
             .stack_file()
             .strip_prefix(&self.main.repo)
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_else(|_| "devstack.toml".into());
-        let scratch = self.state_dir(&name).join("remote");
+        let scratch = self.state_dir(&entry.name).join("remote");
         let worktree = devstack_proc::long_path(&entry.path);
-        let result = RemoteLane::start(
+        RemoteLane::start(
             &self.rt,
             crate::remote::RemoteSpec {
-                name: &name,
+                name: &entry.name,
                 repo: &self.main.stack.stack.name,
                 worktree: &worktree,
                 stack_file: &stack_file,
@@ -1050,13 +1067,157 @@ impl Lanes {
                             .map(|here| (p, here))
                     })
                     .collect(),
+                forward,
             },
-        );
-        self.pending.lock().unwrap().remove(&name);
-        let lane = result?;
-        self.remote.lock().unwrap().insert(name.clone(), lane);
+        )
+    }
+
+    /// The services a lane on a node must have ready before it takes over:
+    /// every autostart service that runs in lanes and on Linux.
+    fn expected_remote(&self) -> Vec<String> {
+        self.main
+            .stack
+            .services
+            .iter()
+            .filter(|(_, s)| {
+                s.autostart
+                    && s.lanes
+                    && (s.platforms.is_empty()
+                        || s.platforms
+                            .contains(&devstack_config::model::Platform::Linux))
+            })
+            .map(|(n, _)| n.clone())
+            .collect()
+    }
+
+    /// `devstack lane move <lane> --to <node|local>` (ADR-0025 point 10): a
+    /// cold start at the target, made before the old placement is broken.
+    /// The target is leased, synced and started, and only once its services
+    /// are ready do the lane's ports here switch to it and the old placement
+    /// go. Back to this machine the ports cannot be held twice: they are
+    /// handed over first, the lane on the node keeps running until the local
+    /// one is ready, and comes back if it does not get there.
+    pub fn move_lane(
+        &self,
+        name: &str,
+        to: &str,
+        need: devstack_node::share::Amount,
+    ) -> Result<(), String> {
+        let here = matches!(to, "local" | "here" | "this-machine");
+        let entry = self
+            .known
+            .lock()
+            .unwrap()
+            .get(name)
+            .map(|k| k.entry.clone())
+            .ok_or_else(|| format!("no lane `{name}` (see `devstack lane list`)"))?;
+        let local = self.map.lock().unwrap().get(name).cloned();
+        let remote = self.remote(name);
+        if local.is_none() && remote.is_none() {
+            return Err(format!(
+                "lane `{name}` is not started: `devstack up --on {to}` in its worktree starts it there"
+            ));
+        }
+        if local.as_ref().is_some_and(|l| l.sup.owns_main()) {
+            return Err(format!(
+                "lane `{name}` serves the main slot: `devstack promote --lane main` first"
+            ));
+        }
+        if here && local.is_some() {
+            return Ok(());
+        }
+        if let Some(r) = &remote
+            && !here
+            && (r.node.name.eq_ignore_ascii_case(to) || r.node.id.starts_with(to))
+        {
+            return Ok(());
+        }
+        if !self.pending.lock().unwrap().insert(name.to_string()) {
+            return Err(format!("lane `{name}` is being started or moved"));
+        }
+        let t0 = std::time::Instant::now();
+        let result = if here {
+            let r = remote.expect("checked: it runs on a node");
+            self.move_here(&entry, r)
+        } else {
+            self.move_to_node(&entry, to, need, local, remote)
+        };
+        self.pending.lock().unwrap().remove(name);
+        match &result {
+            Ok(()) => crate::diag::info(
+                "lane_moved",
+                serde_json::json!({ "lane": name, "to": to, "ms": t0.elapsed().as_millis() as u64 }),
+            ),
+            Err(e) => crate::diag::warn(
+                "lane_not_moved",
+                serde_json::json!({ "lane": name, "to": to, "error": e }),
+            ),
+        }
         self.announce();
-        Ok(name)
+        result
+    }
+
+    fn move_to_node(
+        &self,
+        entry: &LaneEntry,
+        to: &str,
+        need: devstack_node::share::Amount,
+        local: Option<Arc<Lane>>,
+        remote: Option<Arc<RemoteLane>>,
+    ) -> Result<(), String> {
+        let name = &entry.name;
+        let next = self.start_remote(entry, to, need, false)?;
+        let expected = self.expected_remote();
+        let ready = self
+            .rt
+            .block_on(next.up_and_wait(&expected, std::time::Duration::from_secs(900)));
+        if let Err(e) = ready {
+            self.stop_remote(next);
+            return Err(format!("lane `{name}` on {to}: {e}; it stays where it was"));
+        }
+        // Ready there: the old placement goes, the ports switch.
+        if let Some(r) = remote {
+            self.remote.lock().unwrap().remove(name);
+            r.stop_forwarding();
+            self.stop_remote(r);
+        }
+        if let Some(l) = local {
+            l.sup.down(true);
+            if let Some(l) = self.map.lock().unwrap().remove(name) {
+                l.sup.close();
+            }
+        }
+        next.start_forwarding(&self.rt);
+        self.remote.lock().unwrap().insert(name.clone(), next);
+        Ok(())
+    }
+
+    fn move_here(&self, entry: &LaneEntry, r: Arc<RemoteLane>) -> Result<(), String> {
+        let name = &entry.name;
+        r.stop_forwarding();
+        self.remote.lock().unwrap().remove(name);
+        self.pending.lock().unwrap().remove(name);
+        let started = self.activate(&entry.path).and_then(|lane| {
+            lane.sup.up().inspect_err(|_| {
+                lane.sup.down(true);
+                if let Some(l) = self.map.lock().unwrap().remove(name) {
+                    l.sup.close();
+                }
+            })
+        });
+        self.pending.lock().unwrap().insert(name.clone());
+        match started {
+            Ok(_) => {
+                self.stop_remote(r);
+                Ok(())
+            }
+            Err(e) => {
+                // Back to the node it ran on, which never stopped.
+                r.start_forwarding(&self.rt);
+                self.remote.lock().unwrap().insert(name.clone(), r);
+                Err(format!("lane `{name}` here: {e}; it stays on its node"))
+            }
+        }
     }
 }
 

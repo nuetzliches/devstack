@@ -297,6 +297,15 @@ enum LaneAction {
     /// builds stay). The worktree is git's: devstack never creates or removes
     /// one.
     Stop { name: String },
+    /// Move a started lane to another node of the pool, or back to this
+    /// machine (ADR-0025): a cold start there (its data comes from the seed
+    /// jobs again), which takes over once it is ready.
+    Move {
+        name: String,
+        /// A node (its name or member id, see `devstack pool`), or `local`.
+        #[arg(long)]
+        to: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -553,6 +562,7 @@ fn main() -> Result<()> {
         Cmd::Lane { action } => match action {
             LaneAction::List => client::lane_list(&cli.file),
             LaneAction::Stop { name } => client::lane_stop(&cli.file, &name),
+            LaneAction::Move { name, to } => client::lane_move(&cli.file, &name, &to),
         },
         Cmd::Rollback { service } => client::service_action(&cli.file, &service, "rollback"),
         Cmd::Logs {

@@ -92,6 +92,11 @@ placement decision, so this ADR has to move that guard on purpose.
     (data recreated by seed jobs), made before the old placement is broken:
     the target is leased, synced and started, the lane's forwarded ports
     switch to it once it is healthy, and only then is the old lease released.
+    Back to this machine the ports cannot be held twice: they are handed
+    over first, and the lane on the node keeps running until the local one
+    is ready (and takes them back if it does not get there). *Measured with
+    M3b:* from this machine to a node in 8 s, back in 3 s, the lane's port
+    unanswered for about a second, then 0.5 s.
 
 The guard of plan §9 becomes: *devstack places whole lanes on nodes; inside a
 lane, Compose owns containers and devstack never schedules, places or networks

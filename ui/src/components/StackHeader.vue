@@ -2,13 +2,14 @@
 // The stack's head on every tab: name, state, version, where it runs from and
 // which worktree (branch) is shown, with a picker to switch worktrees (lanes,
 // ADR-0024), the lane's actions and start/stop. Replaces the lane banner.
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import { duration, ago, useNow } from '@/lib/format';
 import { laneLabel, orderLanes } from '@/lib/lanes';
 import { usePopover } from '@/lib/popover';
 import type { LaneView } from '@/api/types';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
+import { usePool } from '@/stores/pool';
 import Icon from './icons/Icon.vue';
 
 const hub = useHub();
@@ -28,6 +29,27 @@ const busyMain = computed(() => !!stack.busy['lane-main']);
 const path = computed(() => current.value?.path ?? view.value?.repo ?? stack.entry?.repo ?? '');
 const branch = computed(() => (current.value ? current.value.branch : view.value?.branch) ?? null);
 const tree = computed(() => (current.value ? laneLabel(current.value) : 'main working tree'));
+
+// Where a started lane can move (ADR-0025 point 10): this machine, and the
+// pool's nodes that are online and run lanes.
+const pool = usePool();
+onBeforeUnmount(pool.watch(30_000));
+const moveRoot = ref<HTMLElement | null>(null);
+const moveTrigger = ref<HTMLButtonElement | null>(null);
+const { open: moveOpen, close: moveClose } = usePopover(moveRoot, moveTrigger);
+const moveTargets = computed(() => {
+  const l = current.value;
+  if (!l) return [];
+  const nodes = (pool.overview?.nodes ?? [])
+    .filter((n) => n.online && n.report?.api && n.report.sharing && n.name !== l.node)
+    .map((n) => ({ to: n.name, label: n.name, hint: `${n.report!.cpus.toFixed(1)} CPU free` }));
+  return l.node ? [{ to: 'local', label: 'This machine', hint: 'here' }, ...nodes] : nodes;
+});
+const moving = computed(() => stack.busy['lane-move'] ?? null);
+function moveTo(to: string) {
+  moveClose();
+  if (current.value) void stack.moveLane(current.value.name, to);
+}
 
 const root = ref<HTMLElement | null>(null);
 const trigger = ref<HTMLButtonElement | null>(null);
@@ -66,6 +88,28 @@ function pick(l: LaneView | null) {
         <button v-if="servedBy" type="button" class="btn btn-sm" :disabled="busyMain" :title="`${laneLabel(servedBy)} serves the main ports`" data-testid="lane-main-back" @click="stack.laneMain('main')">
           <Icon name="rollback" :size="14" /> Main ports back
         </button>
+        <div v-if="current && !current.owns_main && current.active !== false && (moveTargets.length || moving)" ref="moveRoot" class="picker">
+          <button
+            ref="moveTrigger"
+            type="button"
+            class="btn btn-sm"
+            :disabled="!!moving"
+            :aria-expanded="moveOpen"
+            aria-haspopup="menu"
+            title="Run this worktree's lane elsewhere: a cold start there that takes over once it is ready"
+            data-testid="lane-move"
+            @click="moveOpen = !moveOpen"
+          >
+            <span v-if="moving" class="spinner" /><Icon v-else name="server" :size="14" />
+            {{ moving ? `Moving to ${moving === 'local' ? 'this machine' : moving}…` : 'Move' }}
+          </button>
+          <div v-if="moveOpen" class="menu menu-right" role="menu">
+            <button v-for="t in moveTargets" :key="t.to" type="button" class="opt" role="menuitem" data-testid="lane-move-target" @click="moveTo(t.to)">
+              <span class="grow">{{ t.label }}</span>
+              <span class="faint">{{ t.hint }}</span>
+            </button>
+          </div>
+        </div>
         <button
           v-if="current && !current.owns_main && current.active !== false"
           type="button"
@@ -212,6 +256,11 @@ h1 {
   padding: 6px;
   display: flex;
   flex-direction: column;
+}
+.menu-right {
+  left: auto;
+  right: 0;
+  min-width: 240px;
 }
 .opt {
   display: flex;

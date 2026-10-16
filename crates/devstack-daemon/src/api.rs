@@ -64,6 +64,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/tunnel/{port}", get(tunnel))
         .route("/v1/lanes", get(lanes_list).post(lanes_start))
         .route("/v1/lanes/{lane}/stop", post(lanes_stop))
+        .route("/v1/lanes/{lane}/move", post(lanes_move))
         .route("/v1/lanes/{lane}/main", post(lanes_take_main))
         .route(
             "/v1/lanes/{lane}/v1/{*rest}",
@@ -397,6 +398,44 @@ async fn lanes_stop(State(s): State<AppState>, Path(lane): Path<String>) -> Resp
         Err(r) => return r,
     };
     match tokio::task::spawn_blocking(move || lanes.stop(&lane).map(|()| lanes.list())).await {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err(StatusCode::CONFLICT, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct LaneMove {
+    /// A node of the pool (its name or member id), or `local`.
+    to: String,
+}
+
+/// `POST /v1/lanes/{lane}/move` with `{"to"}`: move a started lane to
+/// another node of the pool or to this machine (ADR-0025 point 10), a cold
+/// start at the target that takes over once it is ready. Answers when it is
+/// done: the lanes after it.
+async fn lanes_move(
+    State(s): State<AppState>,
+    Path(lane): Path<String>,
+    Json(body): Json<LaneMove>,
+) -> Response {
+    let lanes = match lanes_of(&s) {
+        Ok(l) => l.clone(),
+        Err(r) => return r,
+    };
+    let main = s.sup.clone();
+    let usage = s.usage.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        let need = devstack_node::share::Amount {
+            cpus: 0.5,
+            memory: lane_need(&main, &usage).max(1 << 30),
+        };
+        lanes
+            .move_lane(&lane, body.to.trim(), need)
+            .map(|()| lanes.list())
+    })
+    .await;
+    match res {
         Ok(Ok(v)) => Json(v).into_response(),
         Ok(Err(e)) => err(StatusCode::CONFLICT, e),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
