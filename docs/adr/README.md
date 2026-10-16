@@ -66,7 +66,7 @@ before code exists it names where it *will* live.
 | [0026](0026-placement-by-the-requester-admission-by-the-node.md) | The requester places a lane; the node admits it, under a lease | Accepted; points 1, 3 replaced by ADR-0031 |
 | [0027](0027-trust-between-nodes.md) | Nodes and requesters trust each other by pinned keys, never by network location | Accepted; points 1, 2 replaced by ADR-0031 |
 | [0028](0028-lane-images.md) | A remote lane runs in a stack-provided toolchain image; the node supplies devstack | Accepted, amended |
-| [0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) | A remote lane works on a mirror of the requester's tree; ports and API come back over one connection | Accepted |
+| [0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) | A remote lane works on a mirror of the requester's tree; ports and API come back over one connection | Accepted; point 2 amended (`[lanes] sync`) |
 | [0030](0030-each-lane-has-its-own-infrastructure.md) | Each lane has its own infrastructure | Accepted |
 | [0031](0031-a-coordinator-places-lanes.md) | A coordinator places lanes and admits members; nodes admit leases; data goes directly | Accepted |
 | [0032](0032-the-pool-is-administered-in-the-dashboard.md) | The pool is administered in the dashboard, by members with the admin role | Accepted |

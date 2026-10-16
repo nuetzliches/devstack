@@ -7,6 +7,7 @@
 
 use devstack_node::coordinator::{LeaseRequest, NodeRef};
 use devstack_node::member::Local;
+use devstack_node::nodeclient::Elsewhere;
 use devstack_node::nodeclient::NodeClient;
 use devstack_node::share::Amount;
 use std::collections::BTreeMap;
@@ -39,6 +40,10 @@ pub struct RemoteLane {
     pub node: NodeRef,
     pub lease: String,
     worktree: PathBuf,
+    /// Where `[lanes] sync` files come from when the worktree has none.
+    main: PathBuf,
+    /// `[lanes] sync`: ignored files the lane takes along.
+    extra: Vec<String>,
     client: NodeClient,
     state: Mutex<RemoteState>,
     stopped: tokio::sync::watch::Sender<bool>,
@@ -61,16 +66,77 @@ pub fn local_member() -> Local {
 /// What the worktree's files look like now: path, size, modification time.
 type Fingerprint = BTreeMap<String, (u64, Option<SystemTime>)>;
 
-fn files(worktree: &Path, scratch: &Path) -> Result<Vec<String>, String> {
-    devstack_build::snapshot::Snapshot::open(worktree, scratch)
+/// The files to sync: what git does not ignore, and what `[lanes] sync`
+/// names, from the worktree or else from the main tree.
+fn files(
+    worktree: &Path,
+    main: &Path,
+    extra: &[String],
+    scratch: &Path,
+) -> Result<(Vec<String>, Elsewhere), String> {
+    let mut list = devstack_build::snapshot::Snapshot::open(worktree, scratch)
         .and_then(|s| s.list())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let mut elsewhere = Elsewhere::new();
+    let mut have: std::collections::HashSet<String> = list.iter().cloned().collect();
+    for pattern in extra {
+        let Ok(glob) = globset::GlobBuilder::new(pattern)
+            .literal_separator(true)
+            .build()
+            .map(|g| g.compile_matcher())
+        else {
+            continue;
+        };
+        for root in [worktree, main] {
+            for rel in walk(root, glob_base(pattern)) {
+                if glob.is_match(&rel) && have.insert(rel.clone()) {
+                    if root != worktree {
+                        elsewhere.insert(rel.clone(), root.join(&rel));
+                    }
+                    list.push(rel);
+                }
+            }
+        }
+    }
+    Ok((list, elsewhere))
 }
 
-fn fingerprint(worktree: &Path, list: &[String]) -> Fingerprint {
+/// The directory a glob starts in: its leading part without wildcards
+/// (`certs/*.pem` -> `certs`, `a/b.txt` -> `a`).
+fn glob_base(pattern: &str) -> &str {
+    let wild = pattern.find(['*', '?', '[', '{']).unwrap_or(pattern.len());
+    pattern[..wild].rfind('/').map_or("", |i| &pattern[..i])
+}
+
+/// Files below `root/base`, relative to `root`, `/`-separated.
+fn walk(root: &Path, base: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut dirs = vec![root.join(base)];
+    while let Some(dir) = dirs.pop() {
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            match e.file_type() {
+                Ok(t) if t.is_dir() && e.file_name() != ".git" => dirs.push(p),
+                Ok(t) if t.is_file() => {
+                    if let Ok(rel) = p.strip_prefix(root) {
+                        out.push(rel.to_string_lossy().replace('\\', "/"));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+fn fingerprint(worktree: &Path, list: &[String], elsewhere: &Elsewhere) -> Fingerprint {
     list.iter()
         .filter_map(|rel| {
-            let m = std::fs::metadata(worktree.join(rel)).ok()?;
+            let path = elsewhere
+                .get(rel)
+                .cloned()
+                .unwrap_or_else(|| worktree.join(rel));
+            let m = std::fs::metadata(path).ok()?;
             Some((rel.clone(), (m.len(), m.modified().ok())))
         })
         .collect()
@@ -83,6 +149,11 @@ pub struct RemoteSpec<'a> {
     /// The repository, as the pool sees it (the stack's name).
     pub repo: &'a str,
     pub worktree: &'a Path,
+    /// The main working tree, where `[lanes] sync` files come from when the
+    /// worktree has none.
+    pub main: &'a Path,
+    /// `[lanes] sync`.
+    pub extra: &'a [String],
     /// The stack file, relative to the worktree's root.
     pub stack_file: &'a str,
     /// The node: its name or member id.
@@ -113,6 +184,8 @@ impl RemoteLane {
             name,
             repo,
             worktree,
+            main,
+            extra,
             stack_file,
             on,
             need,
@@ -133,13 +206,13 @@ impl RemoteLane {
             })
             .map_err(|e| format!("lease on `{on}`: {e}"))?;
         let client = NodeClient::new(&local, offer.node.clone()).map_err(|e| e.to_string())?;
-        let list = files(worktree, scratch)?;
+        let (list, elsewhere) = files(worktree, main, extra, scratch)?;
         let t0 = Instant::now();
         let started = rt.block_on(async {
             client.admit(&offer).await?;
             step(2, &format!("sync: comparing {} files", list.len()));
             let s = client
-                .sync_with(&offer.id, worktree, &list, &|n, of, bytes| {
+                .sync_from(&offer.id, worktree, &list, &elsewhere, &|n, of, bytes| {
                     step(
                         2,
                         &format!("sync: {n} of {of} changed files sent ({} KiB)", bytes / 1024),
@@ -198,6 +271,8 @@ impl RemoteLane {
             node: offer.node,
             lease: offer.id,
             worktree: worktree.to_path_buf(),
+            main: main.to_path_buf(),
+            extra: extra.to_vec(),
             client,
             state: Mutex::new(RemoteState::default()),
             stopped: tokio::sync::watch::channel(false).0,
@@ -233,18 +308,28 @@ impl RemoteLane {
                 _ = tokio::time::sleep(SYNC_EVERY) => {}
                 _ = stopped.wait_for(|s| *s) => return,
             }
-            let wt = self.worktree.clone();
+            let (wt, main, extra) = (self.worktree.clone(), self.main.clone(), self.extra.clone());
             let sc = scratch.clone();
             let listed = tokio::task::spawn_blocking(move || {
-                let list = files(&wt, &sc)?;
-                let fp = fingerprint(&wt, &list);
-                Ok::<_, String>((list, fp))
+                let (list, elsewhere) = files(&wt, &main, &extra, &sc)?;
+                let fp = fingerprint(&wt, &list, &elsewhere);
+                Ok::<_, String>((list, elsewhere, fp))
             })
             .await;
             match listed {
-                Ok(Ok((list, fp))) => {
+                Ok(Ok((list, elsewhere, fp))) => {
                     if seen.as_ref() != Some(&fp) {
-                        match self.client.sync(&self.lease, &self.worktree, &list).await {
+                        match self
+                            .client
+                            .sync_from(
+                                &self.lease,
+                                &self.worktree,
+                                &list,
+                                &elsewhere,
+                                &|_, _, _| {},
+                            )
+                            .await
+                        {
                             Ok(s) => {
                                 if s.written + s.removed > 0 {
                                     crate::diag::info(
@@ -538,6 +623,38 @@ pub fn readiness(view: &serde_json::Value, expected: &[String]) -> Option<Result
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn glob_base_is_the_part_before_wildcards() {
+        assert_eq!(super::glob_base("app/certs/*.pem"), "app/certs");
+        assert_eq!(super::glob_base("a/b.txt"), "a");
+        assert_eq!(super::glob_base("*.pem"), "");
+        assert_eq!(super::glob_base("**/x"), "");
+    }
+
+    #[test]
+    fn sync_takes_ignored_files_from_the_worktree_or_else_the_main_tree() {
+        let main = tempfile::tempdir().unwrap();
+        let wt = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let put = |root: &std::path::Path, rel: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, rel).unwrap();
+        };
+        put(wt.path(), "src/main.rs");
+        put(wt.path(), "certs/a.pem");
+        put(main.path(), "certs/a.pem");
+        put(main.path(), "certs/b.pem");
+        put(main.path(), "certs/readme.txt");
+        let extra = ["certs/*.pem".to_string()];
+        let (mut list, elsewhere) =
+            super::files(wt.path(), main.path(), &extra, scratch.path()).unwrap();
+        list.sort();
+        assert_eq!(list, ["certs/a.pem", "certs/b.pem", "src/main.rs"]);
+        assert_eq!(elsewhere.len(), 1);
+        assert_eq!(elsewhere["certs/b.pem"], main.path().join("certs/b.pem"));
+    }
+
     #[test]
     fn ready_when_every_expected_service_is() {
         let v = |a: &str, b: &str| {

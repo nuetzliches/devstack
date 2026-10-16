@@ -145,6 +145,18 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         );
     }
 
+    for g in &stack.lanes.sync {
+        if g.starts_with(['/', '\\']) || g.contains(':') || g.split(['/', '\\']).any(|p| p == "..")
+        {
+            c.err(
+                "lanes.sync",
+                format!("`{g}` must be a path inside the repository, relative to it"),
+            );
+        } else if let Err(e) = globset::Glob::new(g) {
+            c.err("lanes.sync", format!("`{g}`: {e}"));
+        }
+    }
+
     // ---------------------------------------------------------- compose groups
     let mut projects = BTreeMap::new();
     for (g, group) in &stack.compose {
