@@ -27,7 +27,7 @@ include_dir = "0.7"
 jiff = "0.2"
 libc = "0.2"
 notify = "8"
-rand = "0.9"
+rand = "0.10"
 raw-window-handle = "0.6"
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 schemars = "1"
