@@ -187,41 +187,91 @@ const SESSION_LIFETIME_MS: u128 = 365 * 24 * 60 * 60 * 1000;
 struct Sessions {
     path: PathBuf,
     by_hash: HashMap<String, u128>,
+    /// The file as last read or written (modified time, length); `None`: no
+    /// file. A different one on disk is read again, so deleting or editing
+    /// the file takes effect with the next request, not the next start.
+    stamp: Option<(std::time::SystemTime, u64)>,
+}
+
+fn file_stamp(path: &std::path::Path) -> Option<(std::time::SystemTime, u64)> {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.modified().ok()?, m.len()))
 }
 
 impl Sessions {
     fn load(path: PathBuf) -> Self {
+        let mut s = Self {
+            path,
+            by_hash: HashMap::new(),
+            stamp: None,
+        };
+        s.reload();
+        s
+    }
+
+    fn reload(&mut self) {
         let now = now_ms();
-        let by_hash: HashMap<String, u128> = std::fs::read(&path)
+        self.stamp = file_stamp(&self.path);
+        let by_hash: HashMap<String, u128> = std::fs::read(&self.path)
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
-        let by_hash = by_hash
+        self.by_hash = by_hash
             .into_iter()
             .filter(|(_, created)| now.saturating_sub(*created) < SESSION_LIFETIME_MS)
             .collect();
-        Self { path, by_hash }
     }
 
     fn hash(cookie: &str) -> String {
         blake3::hash(cookie.as_bytes()).to_hex().to_string()
     }
 
-    fn contains(&self, cookie: &str) -> bool {
+    fn contains(&mut self, cookie: &str) -> bool {
+        if file_stamp(&self.path) != self.stamp {
+            self.reload();
+        }
         self.by_hash
             .get(&Self::hash(cookie))
             .is_some_and(|created| now_ms().saturating_sub(*created) < SESSION_LIFETIME_MS)
     }
 
     fn add(&mut self, cookie: &str) {
+        // Sessions someone removed from the file stay removed.
+        if file_stamp(&self.path) != self.stamp {
+            self.reload();
+        }
         self.by_hash.insert(Self::hash(cookie), now_ms());
-        // Best effort: without the file, the session still works until the hub stops.
+        // Best effort: without the file, the session still works until the
+        // hub stops (or until a file appears that does not list it).
         if let Ok(json) = serde_json::to_vec_pretty(&self.by_hash) {
             let tmp = self.path.with_extension("json.tmp");
-            if std::fs::write(&tmp, json).is_ok() {
-                let _ = std::fs::rename(&tmp, &self.path);
+            if write_private(&tmp, &json).is_ok() && std::fs::rename(&tmp, &self.path).is_ok() {
+                self.stamp = file_stamp(&self.path);
             }
         }
+    }
+}
+
+/// A file only this user may read (`0600` on Unix; on Windows the profile
+/// directory it lives in is the user's alone).
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        // `mode` applies to a new file only.
+        f.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+        f.write_all(bytes)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, bytes)
     }
 }
 
@@ -389,7 +439,46 @@ fn router(state: AppState) -> axum::Router {
         .fallback(get(asset))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .layer(middleware::from_fn(audit))
+        .layer(middleware::from_fn_with_state(state.clone(), page_headers))
         .with_state(state)
+}
+
+/// What the browser may do with the hub's pages (H-2), on every answer,
+/// refused ones included: no framing (another loopback page could otherwise
+/// lay the paired dashboard under its own clicks), scripts and connections
+/// from the hub alone, no sniffing, no referrer. Inline styles stay allowed
+/// (`:style` bindings and the log view's colours); no inline script is.
+async fn page_headers(State(s): State<AppState>, req: Request, next: Next) -> Response {
+    let mut res = next.run(req).await;
+    let h = res.headers_mut();
+    // `'self'` covers the page's own `ws://` in current browsers; named
+    // anyway for older ones. Not `[::1]`: a CSP source cannot be an IPv6
+    // literal, `'self'` covers it.
+    let ws: Vec<String> = own_hosts(s.port)
+        .iter()
+        .filter(|a| !a.starts_with('['))
+        .map(|a| format!("ws://{a}"))
+        .collect();
+    let csp = format!(
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+         img-src 'self' data:; font-src 'self'; connect-src 'self' {}; \
+         manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; \
+         base-uri 'none'; form-action 'self'; object-src 'none'",
+        ws.join(" ")
+    );
+    if let Ok(v) = HeaderValue::from_str(&csp) {
+        h.insert(header::CONTENT_SECURITY_POLICY, v);
+    }
+    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    res
 }
 
 /// Every request that changes something, with its answer (refused ones too,
@@ -414,16 +503,15 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
 }
 
-fn cookie_session(h: &HeaderMap) -> Option<String> {
+/// Every `devstack_hub` cookie the request carries. Cookies are not scoped by
+/// port: another server on a loopback port may set one of the same name, and
+/// the browser then sends both. The guard takes whichever is a session.
+fn cookie_sessions(h: &HeaderMap) -> impl Iterator<Item = &str> {
     h.get_all(header::COOKIE)
         .iter()
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(';'))
-        .find_map(|c| {
-            c.trim()
-                .strip_prefix(&format!("{COOKIE}="))
-                .map(str::to_string)
-        })
+        .filter_map(|c| c.trim().strip_prefix(COOKIE)?.strip_prefix('='))
 }
 
 fn bearer_ok(h: &HeaderMap, token: &str) -> bool {
@@ -439,19 +527,24 @@ fn bearer_ok(h: &HeaderMap, token: &str) -> bool {
         })
 }
 
-/// ADR-0019 on the hub: Host, then the credential for `/hub/*`, then Origin on
-/// mutating requests. The app shell and `/auth` need no session.
+/// ADR-0019 on the hub: Host, then the credential for `/hub/*`, then where
+/// the request comes from. The app shell and `/auth` need no session.
+///
+/// `SameSite=Strict` does not separate loopback ports: a page on
+/// `http://127.0.0.1:3000` is same-site with the hub, and its requests carry
+/// the cookie. So a request with the cookie must come from the hub's own
+/// page, whatever its method: a mutation and the WebSocket handshake name the
+/// hub's own `Origin`; a `GET` names it, or says with `Sec-Fetch-Site` that
+/// it is same-origin or the user's own navigation (`none`). Every current
+/// browser sends `Sec-Fetch-Site`. A request with the token (the CLI) is no
+/// browser's and passes.
 async fn guard(State(s): State<AppState>, req: Request, next: Next) -> Response {
     let h = req.headers();
     let host = h
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    let allowed = [
-        format!("127.0.0.1:{}", s.port),
-        format!("localhost:{}", s.port),
-        format!("[::1]:{}", s.port),
-    ];
+    let allowed = own_hosts(s.port);
     if !allowed.iter().any(|a| a == host) {
         return err(StatusCode::FORBIDDEN, "unexpected Host");
     }
@@ -466,22 +559,58 @@ async fn guard(State(s): State<AppState>, req: Request, next: Next) -> Response 
         return next.run(req).await;
     }
     if path.starts_with("/hub/") {
-        let ok = cookie_session(h).is_some_and(|c| s.sessions.lock().unwrap().contains(&c))
-            || bearer_ok(h, &s.token);
-        if !ok {
+        if bearer_ok(h, &s.token) {
+            return next.run(req).await;
+        }
+        let paired = {
+            let mut sessions = s.sessions.lock().unwrap();
+            cookie_sessions(h).any(|c| sessions.contains(c))
+        };
+        if !paired {
             return err(StatusCode::UNAUTHORIZED, "not paired: run `devstack ui`");
         }
-        // A WebSocket handshake is a GET, but a page of any origin may open one.
-        if (req.method() != Method::GET && req.method() != Method::HEAD) || path == "/hub/ws" {
-            let origin = h.get(header::ORIGIN).and_then(|v| v.to_str().ok());
-            let cookie_auth = !bearer_ok(h, &s.token);
-            let own = origin.is_some_and(|o| allowed.iter().any(|a| o == format!("http://{a}")));
-            if cookie_auth && !own {
-                return err(StatusCode::FORBIDDEN, "foreign or missing Origin");
-            }
+        if !from_own_page(h, req.method(), path, &allowed) {
+            return err(StatusCode::FORBIDDEN, "foreign or missing Origin");
         }
     }
     next.run(req).await
+}
+
+/// The `Host` values of this hub (with `http://`, its origins).
+fn own_hosts(port: u16) -> [String; 3] {
+    [
+        format!("127.0.0.1:{port}"),
+        format!("localhost:{port}"),
+        format!("[::1]:{port}"),
+    ]
+}
+
+/// Whether a request with the session cookie comes from the hub's own page
+/// (see `guard`).
+fn from_own_page(h: &HeaderMap, method: &Method, path: &str, own: &[String]) -> bool {
+    let own_origin = h
+        .get(header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|o| own.iter().any(|a| o == format!("http://{a}")));
+    let fetch_site = h
+        .get("sec-fetch-site")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_ascii_lowercase);
+    // A browser that says the request is not same-origin is believed,
+    // whatever else it sends.
+    if fetch_site
+        .as_deref()
+        .is_some_and(|f| f != "same-origin" && f != "none")
+    {
+        return false;
+    }
+    // A WebSocket handshake is a GET, but a page of any origin may open one.
+    let reads = (method == Method::GET || method == Method::HEAD) && path != "/hub/ws";
+    if reads {
+        own_origin || fetch_site.is_some()
+    } else {
+        own_origin
+    }
 }
 
 #[derive(Deserialize)]
@@ -496,7 +625,7 @@ async fn auth(State(s): State<AppState>, Query(q): Query<CodeQuery>) -> Response
         .lock()
         .unwrap()
         .remove(&q.code)
-        .is_some_and(|t| t.elapsed() < Duration::from_secs(60));
+        .is_some_and(|t| t.elapsed() < CODE_LIFETIME);
     diag::log(
         if valid { "info" } else { "warn" },
         if valid { "paired" } else { "pairing_refused" },
@@ -523,9 +652,17 @@ async fn auth(State(s): State<AppState>, Query(q): Query<CodeQuery>) -> Response
         .into_response()
 }
 
+/// How long a pairing code works.
+const CODE_LIFETIME: Duration = Duration::from_secs(60);
+
 async fn pair(State(s): State<AppState>) -> Response {
     let code = random_hex();
-    s.codes.lock().unwrap().insert(code.clone(), Instant::now());
+    {
+        let mut codes = s.codes.lock().unwrap();
+        // Codes nobody used are dropped once expired, not kept for the hub's life.
+        codes.retain(|_, t| t.elapsed() < CODE_LIFETIME);
+        codes.insert(code.clone(), Instant::now());
+    }
     let url = format!("http://127.0.0.1:{}/auth?code={code}", s.port);
     Json(serde_json::json!({ "code": code, "url": url })).into_response()
 }
@@ -573,12 +710,36 @@ fn ping_cors(h: &HeaderMap) -> Vec<(header::HeaderName, HeaderValue)> {
 /// names, nothing that changes state: the one thing a web page may learn about
 /// this machine, and only the landing page (CORS). The landing page uses it to
 /// show "open the dashboard", "update available" or the install command.
-async fn ping(h: HeaderMap) -> Response {
-    let mut res = Json(serde_json::json!({ "devstack": true, "version": VERSION })).into_response();
+///
+/// With `?nonce=<16 to 128 characters>` the answer also carries `proof`, a
+/// keyed hash of the nonce under a key derived from the user's token (see
+/// `ping_proof`): the CLI asks before it sends the token, so a program of
+/// another user that took the hub's port while the hub was down does not get
+/// it. The proof reveals nothing of the token.
+async fn ping(State(s): State<AppState>, Query(q): Query<PingQuery>, h: HeaderMap) -> Response {
+    let mut body = serde_json::json!({ "devstack": true, "version": VERSION });
+    if let Some(nonce) = q.nonce.filter(|n| (16..=128).contains(&n.len())) {
+        body["proof"] = ping_proof(&s.token, &nonce).into();
+    }
+    let mut res = Json(body).into_response();
     for (k, v) in ping_cors(&h) {
         res.headers_mut().insert(k, v);
     }
     res
+}
+
+#[derive(Deserialize)]
+struct PingQuery {
+    #[serde(default)]
+    nonce: Option<String>,
+}
+
+/// What a hub that knows `token` answers to `nonce` (hex).
+fn ping_proof(token: &str, nonce: &str) -> String {
+    let key = blake3::derive_key("devstack hub ping proof v1", token.as_bytes());
+    blake3::keyed_hash(&key, nonce.as_bytes())
+        .to_hex()
+        .to_string()
 }
 
 async fn ping_preflight(h: HeaderMap) -> Response {
@@ -714,38 +875,52 @@ struct UpdateState {
 /// they restart. On failure the hub stream says why. Output goes to
 /// `hub/update.log`.
 async fn update(State(s): State<AppState>) -> Response {
-    if s.update.borrow().running {
+    // Check and set in one step: a double click starts one updater.
+    let claimed = s.update.send_if_modified(|u| {
+        if u.running {
+            false
+        } else {
+            *u = UpdateState {
+                running: true,
+                error: None,
+            };
+            true
+        }
+    });
+    if !claimed {
         return err(StatusCode::CONFLICT, "an update is running");
     }
-    let Ok(exe) = std::env::current_exe() else {
-        return err(StatusCode::INTERNAL_SERVER_ERROR, "cannot find devstack");
-    };
     let log = state_dir().join("update.log");
-    let out = match std::fs::File::create(&log) {
-        Ok(f) => f,
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    };
-    let Ok(out2) = out.try_clone() else {
-        return err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "cannot open the update log",
-        );
-    };
-    let mut cmd = std::process::Command::new(exe);
-    cmd.arg("update")
-        .stdin(std::process::Stdio::null())
-        .stdout(out)
-        .stderr(out2);
-    no_window(&mut cmd);
-    let mut child = match cmd.spawn() {
+    let spawned = tokio::task::spawn_blocking({
+        let log = log.clone();
+        move || {
+            let exe = std::env::current_exe().map_err(|_| "cannot find devstack".to_string())?;
+            let out = std::fs::File::create(&log).map_err(|e| e.to_string())?;
+            let out2 = out
+                .try_clone()
+                .map_err(|_| "cannot open the update log".to_string())?;
+            let mut cmd = std::process::Command::new(exe);
+            cmd.arg("update")
+                .stdin(std::process::Stdio::null())
+                .stdout(out)
+                .stderr(out2);
+            no_window(&mut cmd);
+            cmd.spawn().map_err(|e| e.to_string())
+        }
+    })
+    .await
+    .unwrap_or_else(|e| Err(e.to_string()));
+    let mut child = match spawned {
         Ok(c) => c,
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Err(e) => {
+            s.update.send_replace(UpdateState {
+                running: false,
+                error: Some(e.clone()),
+            });
+            return err(StatusCode::INTERNAL_SERVER_ERROR, e);
+        }
     };
     diag::info("update", serde_json::json!({ "started": true }));
-    s.update.send_replace(UpdateState {
-        running: true,
-        error: None,
-    });
     let tx = s.update.clone();
     std::thread::spawn(move || {
         let ok = child.wait().is_ok_and(|st| st.success());
@@ -860,12 +1035,23 @@ struct PathQuery {
 
 /// The repository root and its stack file, in the form the daemon registers
 /// (same id, so the daemon's own registration later is the same entry).
+///
+/// Only local paths: a network path (`\\host\share`, `//host/share`, a
+/// device path) would have the hub, as the user, connect to that host just to
+/// look at it (on Windows over SMB or WebDAV, with the user's credentials).
 fn stack_paths(dir: &str) -> Result<(PathBuf, PathBuf), String> {
-    let raw = PathBuf::from(dir.trim().trim_matches('"'));
+    let text = dir.trim().trim_matches('"');
+    let raw = PathBuf::from(text);
     if !raw.is_absolute() {
         return Err("an absolute path, e.g. C:\\src\\shop or /home/me/src/shop".into());
     }
+    if !local_path(text, &raw) {
+        return Err("a folder on this machine, not a network path".into());
+    }
     let abs = std::path::absolute(&raw).map_err(|e| e.to_string())?;
+    if !local_path(&abs.to_string_lossy(), &abs) {
+        return Err("a folder on this machine, not a network path".into());
+    }
     // A pasted path to the stack file itself names its folder.
     let repo = if abs.file_name().is_some_and(|n| n == "devstack.toml") {
         abs.parent().map(PathBuf::from).unwrap_or(abs)
@@ -879,8 +1065,31 @@ fn stack_paths(dir: &str) -> Result<(PathBuf, PathBuf), String> {
     ))
 }
 
+/// A path on a local drive: on Windows one that starts with a drive letter
+/// (`C:\`, or `\\?\C:\`), anywhere one that does not start with two slashes.
+fn local_path(text: &str, path: &std::path::Path) -> bool {
+    use std::path::{Component, Prefix};
+    if cfg!(windows) {
+        return matches!(
+            path.components().next(),
+            Some(Component::Prefix(p)) if matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+        );
+    }
+    !(text.starts_with("//") || text.starts_with("\\\\"))
+}
+
 /// One folder dialog at a time.
 static PICKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Lets the next folder dialog open when dropped: when the dialog closes,
+/// also if the page that asked went away in the meantime.
+struct Picking;
+
+impl Drop for Picking {
+    fn drop(&mut self) {
+        PICKING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
 
 /// `POST /hub/pick-folder`: the operating system's own folder dialog, shown by
 /// the hub (a local program may, a web page may not learn a folder's path).
@@ -891,8 +1100,14 @@ async fn pick_folder() -> Response {
     if PICKING.swap(true, Ordering::SeqCst) {
         return err(StatusCode::CONFLICT, "a folder dialog is open already");
     }
-    let picked = tokio::task::spawn_blocking(dialog::pick_folder).await;
-    PICKING.store(false, Ordering::SeqCst);
+    let picking = Picking;
+    // The guard goes with the dialog: a request the browser gave up on drops
+    // this future, but not the dialog's thread.
+    let picked = tokio::task::spawn_blocking(move || {
+        let _picking = picking;
+        dialog::pick_folder()
+    })
+    .await;
     match picked {
         Ok(Ok(path)) => Json(serde_json::json!({ "path": path })).into_response(),
         Ok(Err(e)) => err(StatusCode::NOT_IMPLEMENTED, e),
@@ -1244,10 +1459,41 @@ async fn forget(Path(id): Path<String>) -> Response {
     }
 }
 
+/// How long the hub waits for a daemon's port to take a connection.
+const DAEMON_CONNECT: Duration = Duration::from_secs(5);
+/// How long a call the hub makes on its own (`stack_down`) may take in all.
+/// A forwarded request has no such limit: the browser decides, and the
+/// forward ends when it goes away.
+const DAEMON_CALL: Duration = Duration::from_secs(300);
+
+async fn connect_daemon(port: u16) -> Result<tokio::net::TcpStream, String> {
+    match tokio::time::timeout(
+        DAEMON_CONNECT,
+        tokio::net::TcpStream::connect(("127.0.0.1", port)),
+    )
+    .await
+    {
+        Ok(r) => r.map_err(|e| e.to_string()),
+        Err(_) => Err(format!(
+            "no connection within {} s",
+            DAEMON_CONNECT.as_secs()
+        )),
+    }
+}
+
 async fn daemon_request(port: u16, token: &str, method: Method, path: &str) -> Result<u16, String> {
-    let stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+    tokio::time::timeout(DAEMON_CALL, daemon_request_once(port, token, method, path))
         .await
-        .map_err(|e| e.to_string())?;
+        .unwrap_or_else(|_| Err(format!("no answer within {} s", DAEMON_CALL.as_secs())))
+}
+
+async fn daemon_request_once(
+    port: u16,
+    token: &str,
+    method: Method,
+    path: &str,
+) -> Result<u16, String> {
+    let stream = connect_daemon(port).await?;
     let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
         .await
         .map_err(|e| e.to_string())?;
@@ -1284,6 +1530,7 @@ async fn forward(
         Ok(u) => u,
         Err(_) => return err(StatusCode::BAD_REQUEST, "bad path"),
     };
+    strip_hop_by_hop(&mut parts.headers);
     parts.headers.remove(header::COOKIE);
     parts.headers.remove(header::ORIGIN);
     parts.headers.remove(header::REFERER);
@@ -1297,11 +1544,42 @@ async fn forward(
     );
     match daemon_send(port, hyper::Request::from_parts(parts, body)).await {
         Ok(resp) => {
-            let (parts, body) = resp.into_parts();
+            let (mut parts, body) = resp.into_parts();
+            // The hub's origin is the browser's; a daemon sets no cookie on it.
+            parts.headers.remove(header::SET_COOKIE);
+            strip_hop_by_hop(&mut parts.headers);
             Response::from_parts(parts, Body::new(body))
         }
         Err((status, msg)) => err(status, msg),
     }
+}
+
+/// Headers that belong to one connection, not to the message a proxy passes
+/// on (RFC 9110 §7.6.1), the ones `Connection` names included.
+fn strip_hop_by_hop(h: &mut HeaderMap) {
+    let named: Vec<String> = h
+        .get_all(header::CONNECTION)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .map(|n| n.trim().to_ascii_lowercase())
+        .filter(|n| !n.is_empty())
+        .collect();
+    for n in named {
+        h.remove(n.as_str());
+    }
+    for n in [
+        header::CONNECTION,
+        header::PROXY_AUTHENTICATE,
+        header::PROXY_AUTHORIZATION,
+        header::TE,
+        header::TRAILER,
+        header::TRANSFER_ENCODING,
+        header::UPGRADE,
+    ] {
+        h.remove(n);
+    }
+    h.remove("keep-alive");
 }
 
 /// Why the hub could not reach a daemon: the status and message to answer with.
@@ -1329,14 +1607,12 @@ async fn daemon_send(
     port: u16,
     req: hyper::Request<Body>,
 ) -> Result<hyper::Response<hyper::body::Incoming>, DaemonError> {
-    let stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                format!("stack not running: {e}"),
-            )
-        })?;
+    let stream = connect_daemon(port).await.map_err(|e| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("stack not running: {e}"),
+        )
+    })?;
     let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
@@ -1394,10 +1670,15 @@ fn no_window(cmd: &mut std::process::Command) {
 fn no_window(_cmd: &mut std::process::Command) {}
 
 /// Start a hub in the background unless one answers; returns its port.
+///
+/// Only this user's hub counts (`who_answers`): the callers send it the
+/// token next. Anything else on the port is an error, never a hub.
 pub fn ensure_running() -> Result<u16, String> {
     let port = port();
-    if answers(port) {
-        return Ok(port);
+    match who_answers(port) {
+        Listener::Ours => return Ok(port),
+        Listener::Foreign => return Err(foreign(port)),
+        Listener::Nothing => {}
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     // What the hub prints before its own log exists (a failed start) goes to
@@ -1416,11 +1697,18 @@ pub fn ensure_running() -> Result<u16, String> {
     // by a virus scanner first.
     const WAIT: Duration = Duration::from_secs(30);
     let t0 = Instant::now();
+    let mut seen = Listener::Nothing;
     while t0.elapsed() < WAIT {
         if answers(port) {
-            return Ok(port);
+            seen = who_answers(port);
+            if seen == Listener::Ours {
+                return Ok(port);
+            }
         }
         std::thread::sleep(Duration::from_millis(100));
+    }
+    if seen == Listener::Foreign {
+        return Err(foreign(port));
     }
     let said = std::fs::read_to_string(&out).unwrap_or_default();
     Err(format!(
@@ -1441,6 +1729,89 @@ pub fn answers(port: u16) -> bool {
         Duration::from_millis(300),
     )
     .is_ok()
+}
+
+/// What listens on the hub's port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Listener {
+    Nothing,
+    /// This user's hub: it proved that it knows the token.
+    Ours,
+    /// Something else: another user's program, or anything that is no hub.
+    /// It must not be sent the token.
+    Foreign,
+}
+
+fn foreign(port: u16) -> String {
+    format!(
+        "port {port} answers, but not as your devstack hub; not sending it your token. \
+         Stop what listens there, or give the hub another port with DEVSTACK_HUB_PORT"
+    )
+}
+
+/// Who answers on `port`. On a machine several people use, another user may
+/// take the port while this user's hub is down; a TCP answer alone proves
+/// nothing. The hub proves it knows the token by hashing a fresh nonce with
+/// it (`GET /hub/ping?nonce=`); the token never goes over the wire for that.
+pub fn who_answers(port: u16) -> Listener {
+    if !answers(port) {
+        return Listener::Nothing;
+    }
+    let Some(token) = devstack_daemon::token::load().filter(|t| !t.is_empty()) else {
+        return Listener::Foreign;
+    };
+    let nonce = random_hex();
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(3)))
+        .http_status_as_error(false)
+        .build()
+        .new_agent();
+    let answer: Option<serde_json::Value> = agent
+        .get(&format!("http://127.0.0.1:{port}/hub/ping?nonce={nonce}"))
+        .call()
+        .ok()
+        .filter(|r| r.status() == 200)
+        .and_then(|mut r| r.body_mut().read_to_string().ok())
+        .and_then(|t| serde_json::from_str(&t).ok());
+    let Some(v) = answer else {
+        return Listener::Foreign;
+    };
+    if let Some(proof) = v["proof"].as_str() {
+        let want = ping_proof(&token, &nonce);
+        let same = proof.len() == want.len()
+            && proof
+                .bytes()
+                .zip(want.bytes())
+                .fold(0u8, |a, (x, y)| a | (x ^ y))
+                == 0;
+        return if same {
+            Listener::Ours
+        } else {
+            Listener::Foreign
+        };
+    }
+    // A hub from before the proof (devstack 0.9.8 and older) answers without
+    // one. It is this user's if this user's hub holds its state lock and
+    // wrote this port into hub.json: both live in the user's own profile,
+    // and a hub takes the lock before it binds the port.
+    let legacy =
+        v["devstack"] == true && read_info().is_some_and(|i| i.port == port) && hub_lock_held();
+    if legacy {
+        Listener::Ours
+    } else {
+        Listener::Foreign
+    }
+}
+
+/// Whether a hub of this user holds the state lock now.
+fn hub_lock_held() -> bool {
+    let Ok(file) = std::fs::OpenOptions::new()
+        .write(true)
+        .open(state_dir().join("lock"))
+    else {
+        return false;
+    };
+    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
 }
 
 #[cfg(test)]
@@ -1475,5 +1846,128 @@ mod scan_tests {
             })
             .collect();
         assert_eq!(found, ["group/crm", "shop"]);
+    }
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+
+    #[test]
+    fn network_paths_are_refused() {
+        for p in [
+            r"\\attacker.example\x",
+            r"\\attacker.example@80\dav",
+            "//attacker.example/x",
+            r"\\?\UNC\attacker.example\x",
+            r"\\.\pipe\x",
+        ] {
+            assert!(stack_paths(p).is_err(), "{p}");
+        }
+        let local = if cfg!(windows) {
+            vec![r"C:\src\shop", r"\\?\C:\src\shop", "C:/src/shop"]
+        } else {
+            vec!["/home/me/src/shop"]
+        };
+        for p in local {
+            assert!(stack_paths(p).is_ok(), "{p}");
+        }
+    }
+
+    fn headers(pairs: &[(&'static str, &str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(*k, HeaderValue::from_str(v).unwrap());
+        }
+        h
+    }
+
+    #[test]
+    fn a_cookie_request_must_come_from_the_hubs_own_page() {
+        let own = own_hosts(4250);
+        let ok = |m: Method, path: &str, h: &[(&'static str, &str)]| {
+            from_own_page(&headers(h), &m, path, &own)
+        };
+        let same = ("sec-fetch-site", "same-origin");
+        let origin = ("origin", "http://127.0.0.1:4250");
+        // The dashboard's own reads, and the user typing the address.
+        assert!(ok(Method::GET, "/hub/stacks", &[same]));
+        assert!(ok(
+            Method::GET,
+            "/hub/stacks",
+            &[("sec-fetch-site", "none")]
+        ));
+        assert!(ok(Method::GET, "/hub/stacks", &[origin]));
+        // Another loopback port is same-site, not same-origin (H-1).
+        assert!(!ok(
+            Method::GET,
+            "/hub/inspect",
+            &[("sec-fetch-site", "same-site")]
+        ));
+        assert!(!ok(
+            Method::GET,
+            "/hub/inspect",
+            &[("sec-fetch-site", "cross-site"), origin]
+        ));
+        assert!(!ok(Method::GET, "/hub/inspect", &[]));
+        // Mutations and the WebSocket need the own Origin.
+        assert!(ok(Method::POST, "/hub/update", &[origin, same]));
+        assert!(!ok(Method::POST, "/hub/update", &[same]));
+        assert!(!ok(Method::GET, "/hub/ws", &[same]));
+        assert!(ok(Method::GET, "/hub/ws", &[origin, same]));
+        assert!(!ok(
+            Method::POST,
+            "/hub/update",
+            &[("origin", "http://127.0.0.1:3000")]
+        ));
+    }
+
+    #[test]
+    fn every_session_cookie_is_tried() {
+        let h = headers(&[("cookie", "devstack_hub=junk; other=1; devstack_hub=good")]);
+        let all: Vec<&str> = cookie_sessions(&h).collect();
+        assert_eq!(all, ["junk", "good"]);
+        let h = headers(&[("cookie", "devstack_hubx=1")]);
+        assert_eq!(cookie_sessions(&h).count(), 0);
+    }
+
+    #[test]
+    fn the_ping_proof_needs_the_token() {
+        let a = ping_proof("token-a", "0123456789abcdef");
+        assert_eq!(a, ping_proof("token-a", "0123456789abcdef"));
+        assert_ne!(a, ping_proof("token-b", "0123456789abcdef"));
+        assert_ne!(a, ping_proof("token-a", "0123456789abcdee"));
+    }
+
+    #[test]
+    fn a_deleted_sessions_file_unpairs_at_once() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join(SESSIONS_FILE);
+        let mut s = Sessions::load(path.clone());
+        s.add("cookie");
+        assert!(s.contains("cookie"));
+        std::fs::remove_file(&path).unwrap();
+        assert!(!s.contains("cookie"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            s.add("again");
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+    }
+
+    #[test]
+    fn hop_by_hop_headers_are_dropped() {
+        let mut h = headers(&[
+            ("connection", "keep-alive, x-private"),
+            ("x-private", "1"),
+            ("keep-alive", "timeout=5"),
+            ("transfer-encoding", "chunked"),
+            ("content-type", "application/json"),
+        ]);
+        strip_hop_by_hop(&mut h);
+        assert_eq!(h.len(), 1, "{h:?}");
+        assert!(h.contains_key("content-type"));
     }
 }
