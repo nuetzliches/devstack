@@ -71,6 +71,33 @@ fn build_needs_output() {
 }
 
 #[test]
+fn only_a_job_has_a_timeout() {
+    let job = format!(
+        "{MINIMAL}[services.migrate]
+kind = \"job\"
+run = \"x\"
+timeout = \"10m\"
+"
+    );
+    let stack = from_str(&job, Path::new("t")).unwrap();
+    assert_eq!(
+        stack.services["migrate"].timeout,
+        Some(std::time::Duration::from_secs(600))
+    );
+    let issues = invalid(&MINIMAL.replace(
+        "port = 5000",
+        "port = 5000
+timeout = \"1m\"",
+    ));
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.contains("only a job has a `timeout`")),
+        "{issues:?}"
+    );
+}
+
+#[test]
 fn references_are_checked() {
     let text = format!(
         "{MINIMAL}after = [\"nope\", \"compose.app.cache\", \"compose.other.db\"]\nenv = {{ A = \"{{service.ghost.url}}\", B = \"{{compose.app.cache.80}}\", C = \"{{bogus}}\" }}\n"
@@ -484,14 +511,18 @@ fn hot_reload_and_prepare_are_checked_like_the_rest() {
 #[test]
 fn keys_of_another_step_kind_are_errors() {
     let issues = invalid(&format!(
-        "{MINIMAL}\n[commands.c]\ndescription = \"d\"\nsteps = [{{ start = \"api\", cwd = \"x\" }}, {{ exec = \"x\", timeout = \"5s\", body = \"b\" }}]\n"
+        "{MINIMAL}\n[commands.c]\ndescription = \"d\"\nsteps = [{{ start = \"api\", cwd = \"x\", timeout = \"5s\" }}, {{ exec = \"x\", timeout = \"5s\", body = \"b\" }}]\n"
     ));
     assert!(
         has(&issues, "commands.c.steps[0].cwd", "`exec`"),
         "{issues:?}"
     );
     assert!(
-        has(&issues, "commands.c.steps[1].timeout", "`http`"),
+        has(&issues, "commands.c.steps[0].timeout", "`exec` or `http`"),
+        "{issues:?}"
+    );
+    assert!(
+        !issues.iter().any(|i| i.contains("steps[1].timeout")),
         "{issues:?}"
     );
     assert!(

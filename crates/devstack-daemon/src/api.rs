@@ -16,6 +16,11 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+
+/// The most lines one log request returns (a service's, a container's, a
+/// command run's).
+const MAX_TAIL: usize = 20_000;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -61,6 +66,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/runs/{id}", get(run_info))
         .route("/v1/runs/{id}/log", get(run_log))
         .route("/v1/runs/{id}/log/stream", get(run_log_stream))
+        .route("/v1/runs/{id}/cancel", post(run_cancel))
         .route("/v1/tunnel/{port}", get(tunnel))
         .route("/v1/lanes", get(lanes_list).post(lanes_start))
         .route("/v1/lanes/{lane}/stop", post(lanes_stop))
@@ -73,25 +79,38 @@ pub fn router(state: AppState) -> axum::Router {
             axum::routing::any(lane_forward),
         )
         .layer(middleware::from_fn_with_state(state.clone(), guard))
-        .layer(middleware::from_fn(audit))
+        .layer(middleware::from_fn_with_state(state.clone(), audit))
         .with_state(state)
 }
 
 /// Every request that changes something goes to the diagnostic log with its
 /// answer, refused ones included (outermost layer): "who restarted that, and
-/// did it work" is answerable afterwards.
-async fn audit(req: Request, next: Next) -> Response {
+/// did it work" is answerable afterwards. Once: a lane's request is logged
+/// by the main API it came through (with the lane), not again by the lane's.
+async fn audit(State(s): State<AppState>, req: Request, next: Next) -> Response {
     let method = req.method().clone();
-    if method == axum::http::Method::GET || method == axum::http::Method::HEAD {
+    if method == axum::http::Method::GET
+        || method == axum::http::Method::HEAD
+        || !s.sup.lane.is_empty()
+    {
         return next.run(req).await;
     }
     let path = req.uri().path().to_string();
     let res = next.run(req).await;
     let status = res.status().as_u16();
+    let mut fields =
+        serde_json::json!({ "method": method.as_str(), "path": path, "status": status });
+    if let Some(lane) = path
+        .strip_prefix("/v1/lanes/")
+        .and_then(|r| r.split_once('/'))
+        .map(|(l, _)| l)
+    {
+        fields["lane"] = lane.into();
+    }
     crate::diag::log(
         if status >= 400 { "warn" } else { "info" },
         "request",
-        serde_json::json!({ "method": method.as_str(), "path": path, "status": status }),
+        fields,
     );
     res
 }
@@ -162,10 +181,16 @@ struct DownQuery {
     infra: bool,
 }
 
+/// `204` once every service (and with `infra` every Compose group) stopped;
+/// `409` naming what did not.
 async fn down(State(s): State<AppState>, Query(q): Query<DownQuery>) -> Response {
     let sup = s.sup.clone();
     match tokio::task::spawn_blocking(move || sup.down(q.infra)).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(failed) if failed.is_empty() => StatusCode::NO_CONTENT.into_response(),
+        Ok(failed) => err(
+            StatusCode::CONFLICT,
+            format!("did not stop:\n{}", failed.join("\n")),
+        ),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -576,12 +601,17 @@ async fn lane_forward(
     // A new request, not this one with another URI: its extensions hold this
     // route's path parameters (`lane`, `rest`), and the lane's handlers would
     // read them as theirs ("Wrong number of path arguments").
-    let (parts, body) = req.into_parts();
+    let (mut parts, body) = req.into_parts();
     let mut inner = Request::new(body);
     *inner.method_mut() = parts.method;
     *inner.uri_mut() = uri;
     *inner.version_mut() = parts.version;
     *inner.headers_mut() = parts.headers;
+    // Of the extensions only the connection's upgrade: a WebSocket or a
+    // tunnel through a lane's API needs it.
+    if let Some(up) = parts.extensions.remove::<hyper::upgrade::OnUpgrade>() {
+        inner.extensions_mut().insert(up);
+    }
     match l.router.clone().oneshot(inner).await {
         Ok(r) => r,
         Err(e) => match e {},
@@ -675,10 +705,17 @@ async fn logs(
             None => err(StatusCode::NOT_FOUND, format!("no service `{name}`")),
         };
     }
-    let tail = q.tail.unwrap_or(200);
+    // Files are read: off the async workers.
+    tokio::task::spawn_blocking(move || service_logs(&s, &name, &q))
+        .await
+        .unwrap_or_else(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+fn service_logs(s: &AppState, name: &str, q: &LogQuery) -> Response {
+    let tail = q.tail.unwrap_or(200).min(MAX_TAIL);
     let grep = q.grep.as_deref().filter(|g| !g.is_empty());
-    let dir = s.sup.log_dir(&name);
-    let current = s.sup.service_log(&name);
+    let dir = s.sup.log_dir(name);
+    let current = s.sup.service_log(name);
     if let Some(file) = q.file.as_deref() {
         let Some(path) = logfiles::resolve(&dir, file) else {
             return err(
@@ -765,7 +802,11 @@ async fn log_files(State(s): State<AppState>, Path(name): Path<String>) -> Respo
         return err(StatusCode::NOT_FOUND, format!("no service `{name}`"));
     }
     let current = s.sup.service_log(&name);
-    Json(logfiles::list(&s.sup.log_dir(&name), current.as_deref())).into_response()
+    let dir = s.sup.log_dir(&name);
+    match tokio::task::spawn_blocking(move || logfiles::list(&dir, current.as_deref())).await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 /// Several logs as one text, oldest first, each after a header line; `tail`
@@ -778,21 +819,25 @@ fn combined(
     grep: Option<&str>,
     prefix: Option<&str>,
 ) -> String {
-    let mut parts: Vec<(String, Vec<String>)> = sel
+    // No part contributes more than `tail` lines; one more says that there
+    // are more than were read.
+    let mut parts: Vec<(String, Vec<String>, bool)> = sel
         .iter()
         .map(|f| {
-            (
-                logfiles::header(f),
-                matching(&dir.join(&f.file), usize::MAX, grep),
-            )
+            let mut lines = matching(&dir.join(&f.file), tail.saturating_add(1), grep);
+            let more = lines.len() > tail;
+            if more {
+                lines.remove(0);
+            }
+            (logfiles::header(f), lines, more)
         })
-        .filter(|(_, lines)| grep.is_none() || !lines.is_empty())
+        .filter(|(_, lines, _)| grep.is_none() || !lines.is_empty())
         .collect();
     // Keep the last `tail` lines across all parts; every part keeps its
     // header, so what was cut is visible.
     let mut left = tail;
     let mut cut = vec![0usize; parts.len()];
-    for (i, (_, lines)) in parts.iter_mut().enumerate().rev() {
+    for (i, (_, lines, _)) in parts.iter_mut().enumerate().rev() {
         let keep = lines.len().min(left);
         cut[i] = lines.len() - keep;
         lines.drain(..cut[i]);
@@ -800,11 +845,13 @@ fn combined(
     }
     let pre = prefix.map(|p| format!("{p} | ")).unwrap_or_default();
     let mut out = Vec::new();
-    for ((h, lines), cut) in parts.into_iter().zip(cut) {
+    for ((h, lines, more), cut) in parts.into_iter().zip(cut) {
         out.push(format!("{pre}{h}"));
-        if cut > 0 {
+        if cut > 0 || more {
+            let plus = if more { "+" } else { "" };
             out.push(format!(
-                "{pre}… {cut} earlier line(s) not shown (raise `tail`)"
+                "{pre}… {}{plus} earlier line(s) not shown (raise `tail`)",
+                cut + usize::from(more)
             ));
         }
         out.extend(lines.into_iter().map(|l| format!("{pre}{l}")));
@@ -822,48 +869,39 @@ async fn logs_all(State(s): State<AppState>, Query(q): Query<LogQuery>) -> Respo
         Ok(v) => v,
         Err(e) => return err(StatusCode::BAD_REQUEST, e),
     };
-    let tail = q.tail.unwrap_or(50);
-    let mut out = Vec::new();
-    for svc in s.sup.view().services {
-        if let Some(since) = since {
-            // Every instance written to within `since`, not only the current one.
-            let dir = s.sup.log_dir(&svc.name);
-            let current = s.sup.service_log(&svc.name);
-            let sel =
-                logfiles::select(&logfiles::list(&dir, current.as_deref()), None, Some(since));
-            let text = combined(&dir, &sel, tail, Some(grep), Some(&svc.name));
-            if !text.is_empty() {
-                out.push(text);
-            }
-        } else if let Some(p) = s.sup.service_log(&svc.name) {
-            for line in matching(&p, tail, Some(grep)) {
-                out.push(format!("{} | {line}", svc.name));
+    let tail = q.tail.unwrap_or(50).min(MAX_TAIL);
+    let grep = grep.to_string();
+    tokio::task::spawn_blocking(move || {
+        let grep = grep.as_str();
+        let mut out = Vec::new();
+        for svc in s.sup.view().services {
+            if let Some(since) = since {
+                // Every instance written to within `since`, not only the current one.
+                let dir = s.sup.log_dir(&svc.name);
+                let current = s.sup.service_log(&svc.name);
+                let sel =
+                    logfiles::select(&logfiles::list(&dir, current.as_deref()), None, Some(since));
+                let text = combined(&dir, &sel, tail, Some(grep), Some(&svc.name));
+                if !text.is_empty() {
+                    out.push(text);
+                }
+            } else if let Some(p) = s.sup.service_log(&svc.name) {
+                for line in matching(&p, tail, Some(grep)) {
+                    out.push(format!("{} | {line}", svc.name));
+                }
             }
         }
-    }
-    text(out.join("\n"))
+        text(out.join("\n"))
+    })
+    .await
+    .unwrap_or_else(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
-/// The last `n` lines of a file, optionally only those containing `grep`.
+/// The last `n` lines of a file, optionally only those containing `grep`
+/// (what a terminal shows, not the colour codes around it); read from the
+/// end. Blocking.
 fn matching(path: &std::path::Path, n: usize, grep: Option<&str>) -> Vec<String> {
-    let text = std::fs::read(path)
-        .map(|b| String::from_utf8_lossy(&b).into_owned())
-        .unwrap_or_default();
-    let needle = grep.map(str::to_lowercase);
-    let mut lines: Vec<String> = text
-        .lines()
-        .rev()
-        // `grep` matches what a terminal shows, not the colour codes around it.
-        .filter(|l| {
-            needle
-                .as_ref()
-                .is_none_or(|g| crate::ansi::strip(l).to_lowercase().contains(g))
-        })
-        .take(n)
-        .map(str::to_string)
-        .collect();
-    lines.reverse();
-    lines
+    logfiles::last_lines(path, n, grep)
 }
 
 fn text(body: String) -> Response {
@@ -891,8 +929,20 @@ async fn events(State(s): State<AppState>) -> Response {
             stack: Box::new(s.sup.view()),
         },
     };
+    let sup = s.sup.clone();
     let stream = tokio_stream::once(snapshot)
-        .chain(BroadcastStream::new(rx).filter_map(|e| e.ok()))
+        .chain(BroadcastStream::new(rx).map(move |e| match e {
+            Ok(e) => e,
+            // The client fell behind (it stalled, or a burst came): the
+            // events it missed are gone, a fresh snapshot sets it right.
+            Err(BroadcastStreamRecvError::Lagged(_)) => crate::state::Event {
+                seq: 0,
+                at: crate::state::now_ms(),
+                body: crate::state::EventBody::Snapshot {
+                    stack: Box::new(sup.view()),
+                },
+            },
+        }))
         .map(|e| {
             Ok::<_, std::convert::Infallible>(SseEvent::default().json_data(e).unwrap_or_default())
         });
@@ -950,8 +1000,24 @@ async fn run_info(State(s): State<AppState>, Path(id): Path<u64>) -> Response {
 
 async fn run_log(State(s): State<AppState>, Path(id): Path<u64>) -> Response {
     match s.runs.get(id) {
-        Some(r) => text_tail(&r.log, usize::MAX),
+        Some(r) => tokio::task::spawn_blocking(move || text_tail(&r.log, MAX_TAIL))
+            .await
+            .unwrap_or_else(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
         None => err(StatusCode::NOT_FOUND, format!("no run {id}")),
+    }
+}
+
+/// `POST /v1/runs/{id}/cancel`: stop a running command run (its `exec`
+/// step killed, its `run` step's job stopped, no further step); `202`, or
+/// `409` when it is not running.
+async fn run_cancel(State(s): State<AppState>, Path(id): Path<u64>) -> Response {
+    let (sup, runs) = (s.sup.clone(), s.runs.clone());
+    match tokio::task::spawn_blocking(move || runs.cancel(&sup, id)).await {
+        Ok(Ok(true)) => StatusCode::ACCEPTED.into_response(),
+        Ok(Ok(false)) => err(StatusCode::CONFLICT, format!("run {id} is not running")),
+        Ok(Err(e)) if e.starts_with("no run") => err(StatusCode::NOT_FOUND, e),
+        Ok(Err(e)) => err(StatusCode::CONFLICT, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 
@@ -992,12 +1058,7 @@ fn read_new(path: &std::path::Path, pos: &mut u64, partial: &mut String) -> Vec<
 }
 
 fn last_lines(path: &std::path::Path, n: usize) -> (Vec<String>, u64) {
-    let text = std::fs::read(path).unwrap_or_default();
-    let len = text.len() as u64;
-    let text = String::from_utf8_lossy(&text);
-    let mut lines: Vec<String> = text.lines().rev().take(n).map(str::to_string).collect();
-    lines.reverse();
-    (lines, len)
+    logfiles::last_lines_at(path, n, None)
 }
 
 #[derive(Deserialize)]
@@ -1128,7 +1189,15 @@ async fn build_log(State(s): State<AppState>, Path(name): Path<String>) -> Respo
     if !s.sup.stack.services.contains_key(&name) {
         return err(StatusCode::NOT_FOUND, format!("no service `{name}`"));
     }
-    match s.sup.latest_build_log(&name) {
+    let (sup, n) = (s.sup.clone(), name.clone());
+    let log = tokio::task::spawn_blocking(move || sup.latest_build_log(&n)).await;
+    let Ok(log) = log else {
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "reading the build log failed",
+        );
+    };
+    match log {
         Some(text) => {
             let mut headers = HeaderMap::new();
             headers.insert(

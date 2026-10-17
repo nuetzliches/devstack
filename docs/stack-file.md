@@ -229,7 +229,10 @@ promote = { hold_if_changed = ["src/Data/Migrations/**"] }   # auto = true by de
 A candidate that changed one of these paths is built and started, but waits
 (`held`) until someone runs `devstack promote <service>`. Use it for schema
 changes, where switching means running a migration. `auto = false` holds every
-candidate.
+candidate. While one is held, every later candidate is held too (it carries the
+held change); `promote` takes the newest. The gate opens with `promote`, with a
+manual `restart` (which builds the tree as it is), or when the tree is back
+where main is; it survives a daemon restart.
 
 ### Background workers ([ADR-0008](adr/0008-background-workers-run-only-in-the-active-slot.md))
 
@@ -308,6 +311,7 @@ and starts it as usual again. For a debugging session, not as the default
 | `platforms = ["windows"]` | only on these platforms (`windows`, `linux`, `macos`) |
 | `ensure_dirs = ["{repo}/data/files"]` | created before start |
 | `prepare = { run = "npm ci", inputs = ["web/package-lock.json"] }` | installs what a copy of the source lacks (see below) |
+| `timeout = "10m"` | `kind = "job"` only: how long it may run before it counts as failed and is stopped; default 30 minutes. `devstack stop <job>` ends it at once |
 
 ### `prepare`: what a copy of the source lacks
 
@@ -418,14 +422,18 @@ steps = [
 ```
 
 `description` and `steps` (at least one) are required; `requires` names
-services. Each step has exactly one action: `exec` (with `cwd`), `http`
-(`METHOD url`, METHOD one of `GET`, `POST`, `PUT`, `PATCH`, `DELETE`; with
-`headers`, `body`, `timeout`), `start`, `stop`, `restart` or `run` (a
+services. Each step has exactly one action: `exec` (with `cwd`, `timeout`),
+`http` (`METHOD url`, METHOD one of `GET`, `POST`, `PUT`, `PATCH`, `DELETE`;
+with `headers`, `body`, `timeout`), `start`, `stop`, `restart` or `run` (a
 service of kind `job`). A key of another action (`cwd` on an `http` step,
-`timeout` on an `exec` step) is an error. Steps may use `{repo}`, `{lane}`,
-`{lane_suffix}`, `{service.<name>.url}`, `{service.<name>.port}` and
-`${VAR}`; `{port}`, `{artifact}`, `{is_main}` and `{compose.…}` have no
-value in a command. Commands run with
+`headers` on an `exec` step) is an error. `timeout` bounds an `exec` step too
+(default: none; `http` 30 s); a run can be cancelled
+(`POST /v1/runs/{id}/cancel`). `exec` runs in the repository, `cwd` relative
+to it; in a lane in the lane's copy, never in its worktree, and `{repo}` is
+that copy. Steps may use `{repo}`, `{lane}`, `{lane_suffix}`,
+`{service.<name>.url}`, `{service.<name>.port}` and `${VAR}`; `{port}`,
+`{artifact}`, `{is_main}` and `{compose.…}` have no value in a command.
+Commands run with
 `devstack run <name>`, from the dashboard and through MCP (`run_command`). A
 command with `confirm` runs from MCP only with `confirm: true`, which an agent
 sends only after the user agreed.

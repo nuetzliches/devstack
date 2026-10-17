@@ -98,7 +98,8 @@ async fn accept(listener: TcpListener, port: u16, target: u16) {
             Err(e) => {
                 // A connection reset before it was accepted, or no file
                 // handles left: say so, and keep listening.
-                crate::diag::warn(
+                crate::diag::warn_limited(
+                    &format!("forward_accept_failed:{port}"),
                     "forward_accept_failed",
                     serde_json::json!({ "port": port, "error": e.to_string() }),
                 );

@@ -120,6 +120,18 @@ pub struct Lane {
 struct Worktree {
     path: PathBuf,
     branch: Option<String>,
+    /// git says its directory is not there (`prunable`).
+    prunable: bool,
+}
+
+/// How long git may list a worktree whose directory is not there (a network
+/// or removable drive gone for a moment) before its lane is forgotten, with
+/// its containers and volumes. A worktree removed with git goes at once.
+const MISSING_GRACE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// What lane `number` moves its ports by; `None` beyond 65535.
+fn lane_offset(number: u16, step: u16) -> Option<u16> {
+    number.checked_mul(step)
 }
 
 #[derive(Debug, Clone)]
@@ -134,6 +146,16 @@ struct Known {
 struct Handover {
     /// Its services that ran and were stopped for the lane.
     stopped: BTreeSet<String>,
+}
+
+/// While it lives, the main ports are moving to a lane: the main tree's
+/// starts keep off them ([`Supervisor::set_handing_over`]).
+struct Handing<'a>(&'a Supervisor);
+
+impl Drop for Handing<'_> {
+    fn drop(&mut self) {
+        self.0.set_handing_over(false);
+    }
 }
 
 pub struct Lanes {
@@ -162,6 +184,9 @@ pub struct Lanes {
     /// together, or an answer from before a worktree was added could be
     /// applied after a newer one and drop it as gone.
     syncing: Mutex<()>,
+    /// Lanes whose worktree git still lists but whose directory is not
+    /// there, since when ([`MISSING_GRACE`]).
+    missing: Mutex<BTreeMap<String, std::time::Instant>>,
 }
 
 /// `Feature/Agent 12` -> `feature-agent-12`; `main` is the main working tree's.
@@ -224,39 +249,47 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
-/// `git worktree list --porcelain`: every worktree whose directory exists,
-/// the main working tree included. `None` when git does not answer: that is
-/// no reason to forget a lane.
+/// `git worktree list --porcelain`: every worktree but a bare one, the main
+/// working tree included.
 fn parse_worktrees(text: &str) -> Vec<Worktree> {
     let mut out = Vec::new();
     for block in text.split("\n\n") {
         let mut path = None;
         let mut branch = None;
-        let mut skip = false;
+        let mut bare = false;
+        let mut prunable = false;
         for line in block.lines() {
             if let Some(p) = line.strip_prefix("worktree ") {
                 path = Some(PathBuf::from(p));
             } else if let Some(b) = line.strip_prefix("branch ") {
                 branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
-            } else if line == "bare" || line.starts_with("prunable") {
-                skip = true;
+            } else if line == "bare" {
+                bare = true;
+            } else if line.starts_with("prunable") {
+                prunable = true;
             }
         }
-        if let (Some(path), false) = (path, skip) {
-            out.push(Worktree { path, branch });
+        if let (Some(path), false) = (path, bare) {
+            out.push(Worktree {
+                path,
+                branch,
+                prunable,
+            });
         }
     }
     out
 }
 
-fn worktrees(repo: &Path) -> Option<Vec<Worktree>> {
+/// The worktrees whose directory exists, and the paths of those git still
+/// lists without one. `None` when git does not answer: that is no reason
+/// to forget a lane.
+fn worktrees(repo: &Path) -> Option<(Vec<Worktree>, Vec<PathBuf>)> {
     let text = git(repo, &["worktree", "list", "--porcelain"]).ok()?;
-    Some(
+    let (here, missing): (Vec<Worktree>, Vec<Worktree>) =
         parse_worktrees(&text.replace("\r\n", "\n"))
             .into_iter()
-            .filter(|w| w.path.is_dir())
-            .collect(),
-    )
+            .partition(|w| !w.prunable && w.path.is_dir());
+    Some((here, missing.into_iter().map(|w| w.path).collect()))
 }
 
 /// What changes in `<git common dir>/worktrees` when a worktree is added or
@@ -332,6 +365,7 @@ impl Lanes {
             shares: Mutex::new(shares),
             handover: Mutex::new(Handover::default()),
             syncing: Mutex::new(()),
+            missing: Mutex::new(BTreeMap::new()),
         });
         let remembered: Vec<LaneEntry> = match std::fs::read(me.file()) {
             Ok(b) => serde_json::from_slice(&b).unwrap_or_else(|e| {
@@ -367,12 +401,27 @@ impl Lanes {
 
     /// Follow `git worktree list`: a new worktree becomes a lane, a removed
     /// one is forgotten with its state. Without an answer from git nothing
-    /// changes.
+    /// changes. A worktree git still lists whose directory is not there is
+    /// forgotten only after [`MISSING_GRACE`].
     pub fn sync(&self) {
-        let _one = self.syncing.lock().unwrap();
-        let Some(trees) = worktrees(&self.main.repo) else {
+        // Forgetting a lane stops it (and may give the main slot back, which
+        // starts services): not while others wait to read the lanes.
+        let Some((gone, changed)) = self.sync_known() else {
             return;
         };
+        for name in &gone {
+            self.forget(name, "its worktree is gone");
+        }
+        if changed {
+            self.announce();
+        }
+    }
+
+    /// Ask git and apply its answer to `known`: the lanes to forget, and
+    /// whether the clients must hear of a change.
+    fn sync_known(&self) -> Option<(Vec<String>, bool)> {
+        let _one = self.syncing.lock().unwrap();
+        let (trees, missing) = worktrees(&self.main.repo)?;
         if let Some(main) = trees.iter().find(|w| same_tree(&w.path, &self.main.repo)) {
             self.main.set_branch(main.branch.clone());
         }
@@ -385,7 +434,7 @@ impl Lanes {
             .into_iter()
             .filter(|w| !same_tree(&w.path, &self.main.repo))
             .collect();
-        let gone: Vec<String>;
+        let mut gone: Vec<String>;
         let changed;
         {
             let mut known = self.known.lock().unwrap();
@@ -395,6 +444,26 @@ impl Lanes {
                 .filter(|(_, k)| !trees.iter().any(|w| same_tree(&w.path, &k.entry.path)))
                 .map(|(n, _)| n.clone())
                 .collect();
+            // Listed by git, but not there right now: give it a while.
+            let mut since = self.missing.lock().unwrap();
+            since.retain(|n, _| gone.contains(n));
+            gone.retain(|n| {
+                let listed = missing
+                    .iter()
+                    .any(|p| same_tree(p, &known[n.as_str()].entry.path));
+                if !listed {
+                    return true;
+                }
+                let t = since.entry(n.clone()).or_insert_with(|| {
+                    crate::diag::warn(
+                        "lane_worktree_missing",
+                        serde_json::json!({ "lane": n, "path": known[n.as_str()].entry.path,
+                            "forgotten_after_s": MISSING_GRACE.as_secs() }),
+                    );
+                    std::time::Instant::now()
+                });
+                t.elapsed() >= MISSING_GRACE
+            });
             let mut added = false;
             let mut moved = false;
             for w in &trees {
@@ -455,12 +524,7 @@ impl Lanes {
             }
             changed = added || moved;
         }
-        for name in &gone {
-            self.forget(name, "its worktree is gone");
-        }
-        if changed {
-            self.announce();
-        }
+        Some((gone, changed))
     }
 
     /// Tell every client what the lanes are now (a `lanes` event): the main
@@ -548,15 +612,16 @@ impl Lanes {
         let used: BTreeSet<u16> = known.values().map(|k| k.entry.number).collect();
         let mut taken: BTreeSet<u16> = base.iter().copied().collect();
         for k in known.values() {
-            taken.extend(
-                base.iter()
-                    .filter_map(|p| p.checked_add(k.entry.number * step)),
-            );
+            if let Some(off) = lane_offset(k.entry.number, step) {
+                taken.extend(base.iter().filter_map(|p| p.checked_add(off)));
+            }
         }
         (1..200u16).filter(|n| !used.contains(n)).find(|n| {
-            base.iter().all(|p| {
-                p.checked_add(n * step).is_some_and(|q| {
-                    !taken.contains(&q) && !(probe && crate::supervisor::port_in_use(q))
+            lane_offset(*n, step).is_some_and(|off| {
+                base.iter().all(|p| {
+                    p.checked_add(off).is_some_and(|q| {
+                        !taken.contains(&q) && !(probe && crate::supervisor::port_in_use(q))
+                    })
                 })
             })
         })
@@ -572,12 +637,17 @@ impl Lanes {
                 serde_json::json!({ "lane": name, "error": e }),
             );
         }
-        if let Some(l) = self.map.lock().unwrap().remove(name) {
+        // Not under the map's lock: stopping its services takes a while, and
+        // `GET /v1/lanes` reads the map.
+        let lane = self.map.lock().unwrap().remove(name);
+        if let Some(l) = lane {
             l.sup.close();
         }
-        if let Some(r) = self.remote.lock().unwrap().remove(name) {
+        let remote = self.remote.lock().unwrap().remove(name);
+        if let Some(r) = remote {
             self.stop_remote(r);
         }
+        self.missing.lock().unwrap().remove(name);
         self.remove_infra(name);
         {
             let mut known = self.known.lock().unwrap();
@@ -593,8 +663,6 @@ impl Lanes {
         self.announce();
     }
 
-    /// The containers, volumes and networks of lane `name` (ADR-0030), also
-    /// of a lane not started now: Compose finds a project by its name alone.
     /// Stop and remove the containers of lane `name` here, keeping their
     /// volumes: what a lane leaves on this machine when it goes to a node
     /// (left over from a local start), which would hold its ports here.
@@ -619,6 +687,9 @@ impl Lanes {
         }
     }
 
+    /// Remove the containers, volumes and networks of lane `name`
+    /// (ADR-0030), also of a lane not started now: Compose finds a project
+    /// by its name alone.
     fn remove_infra(&self, name: &str) {
         let docker = devstack_compose::Docker::default();
         for (g, cfg) in &self.main.stack.compose {
@@ -660,7 +731,8 @@ impl Lanes {
         };
         let stack = devstack_config::load(&file).map_err(|e| e.to_string())?;
         // The main stack's step: the free ranges were chosen with it.
-        let offset = entry.number * self.main.stack.lanes.port_step;
+        let offset = lane_offset(entry.number, self.main.stack.lanes.port_step)
+            .ok_or_else(|| format!("lane number {} is beyond the port range", entry.number))?;
         let stack = lane_stack(&stack, offset)?;
         let state = self.state_dir(&entry.name);
         std::fs::create_dir_all(&state).map_err(|e| e.to_string())?;
@@ -674,6 +746,9 @@ impl Lanes {
             entry.name.clone(),
             offset,
             self.main.main_owner(),
+            // One build job per daemon (ADR-0020): a lane that goes takes no
+            // build server along that the main tree's build uses.
+            Some(self.main.build_job()),
         )?;
         sup.refresh_infra();
         let usage = crate::usage::Sampler::start(sup.clone());
@@ -762,7 +837,8 @@ impl Lanes {
                     path: k.entry.path.clone(),
                     branch: k.branch.clone(),
                     number: k.entry.number,
-                    port_offset: k.entry.number * self.main.stack.lanes.port_step,
+                    port_offset: lane_offset(k.entry.number, self.main.stack.lanes.port_step)
+                        .unwrap_or(0),
                     active: lane.is_some() || node_state.as_ref().is_some_and(|st| !st.ended),
                     owns_main: lane.is_some_and(|l| l.sup.owns_main())
                         || (on_node.is_some()
@@ -819,7 +895,8 @@ impl Lanes {
             let step = self.main.stack.lanes.port_step;
             let mut entry = entry;
             let busy = ports(&self.main.stack).iter().any(|p| {
-                p.checked_add(entry.number * step)
+                lane_offset(entry.number, step)
+                    .and_then(|off| p.checked_add(off))
                     .is_none_or(crate::supervisor::port_in_use)
             });
             if busy {
@@ -877,7 +954,8 @@ impl Lanes {
         // Its containers too: their memory is what a stopped lane gives back
         // (ADR-0030). Volumes stay for the next start.
         lane.sup.down(true);
-        if let Some(l) = self.map.lock().unwrap().remove(name) {
+        let removed = self.map.lock().unwrap().remove(name);
+        if let Some(l) = removed {
             l.sup.close();
         }
         crate::diag::info("lane_stopped", serde_json::json!({ "lane": name }));
@@ -941,7 +1019,10 @@ impl Lanes {
             .lock()
             .unwrap()
             .get(&t)
-            .map_or(0, |k| k.entry.number * main.stack.lanes.port_step);
+            .map_or(Some(0), |k| {
+                lane_offset(k.entry.number, main.stack.lanes.port_step)
+            })
+            .ok_or_else(|| format!("lane `{t}`: its ports are beyond 65535"))?;
         let remote_active = remote.as_ref().map(|r| r.active_now(&self.rt));
         let active = |s: &str| match &remote_active {
             Some(names) => names.iter().any(|n| n == s).then(|| {
@@ -949,7 +1030,8 @@ impl Lanes {
                     .services
                     .get(s)
                     .and_then(|svc| svc.port)
-                    .map(|p| (p + offset, None))
+                    .and_then(|p| p.checked_add(offset))
+                    .map(|p| (p, None))
             })?,
             None => views
                 .iter()
@@ -973,25 +1055,30 @@ impl Lanes {
         let prev_remote = current.as_deref().and_then(|c| self.remote(c));
 
         // 1. Free the fixed ports. Forwards to the previous lane end; the main
-        //    tree stops what the lane takes over, and remembers it.
+        //    tree stops what the lane takes over, and remembers it. From now
+        //    on nothing of the main tree takes a proxy's upstream: a start in
+        //    flight (building, waiting for health) is stopped under its op
+        //    lock, and one that comes later is refused (ADR-0008).
+        let handing = Handing(main);
+        main.set_handing_over(true);
         for s in main.forwarded_services() {
             let _ = main.tcp_forward(&s, None);
         }
         if current.is_none() {
             for s in main.proxied_services() {
-                if main.service_running(&s) {
+                if main.service_active(&s) {
                     ho.stopped.insert(s.clone());
-                    let _ = main.stop(&s);
                 }
+                let _ = main.stop(&s);
             }
         }
         let mut back_home = Vec::new();
         for s in main.unproxied_services() {
             if active(&s).is_some() {
-                if main.service_running(&s) {
+                if main.service_active(&s) {
                     ho.stopped.insert(s.clone());
-                    let _ = main.stop(&s);
                 }
+                let _ = main.stop(&s);
             } else if ho.stopped.remove(&s) {
                 // The previous lane ran it, this one does not: it runs in the
                 // main tree again.
@@ -1014,6 +1101,7 @@ impl Lanes {
         })();
         if let Err(e) = moved {
             ho.stopped.extend(back_home);
+            drop(handing);
             let back = self.give_back(&mut ho);
             return Err(match back {
                 Ok(()) => format!("{e}; the main working tree serves the main ports again"),
@@ -1279,7 +1367,7 @@ impl Lanes {
         if with.is_empty() {
             return None;
         }
-        let offset = entry.number * self.main.stack.lanes.port_step;
+        let offset = lane_offset(entry.number, self.main.stack.lanes.port_step)?;
         let services = self
             .main
             .stack
@@ -1287,6 +1375,15 @@ impl Lanes {
             .iter()
             .filter_map(|(name, s)| {
                 let port = s.port?;
+                // What a colleague's browser or `devstack open` hands to the
+                // OS: a web address, never another protocol's handler.
+                if !matches!(s.scheme(), "http" | "https") {
+                    crate::diag::warn(
+                        "share_scheme_refused",
+                        serde_json::json!({ "lane": entry.name, "service": name, "scheme": s.scheme() }),
+                    );
+                    return None;
+                }
                 Some(devstack_node::coordinator::SharedService {
                     name: name.clone(),
                     port,
@@ -1351,6 +1448,8 @@ impl Lanes {
             .unwrap_or_else(|_| "devstack.toml".into());
         let scratch = self.state_dir(&entry.name).join("remote");
         let worktree = devstack_proc::long_path(&entry.path);
+        let offset = lane_offset(entry.number, self.main.stack.lanes.port_step)
+            .ok_or_else(|| format!("lane `{}`: its ports are beyond 65535", entry.name))?;
         RemoteLane::start(
             &self.rt,
             crate::remote::RemoteSpec {
@@ -1368,10 +1467,10 @@ impl Lanes {
                 // port on both ends.
                 ports: ports(&self.main.stack)
                     .into_iter()
-                    .filter_map(|p| p.checked_add(entry.number * self.main.stack.lanes.port_step))
+                    .filter_map(|p| p.checked_add(offset))
                     .map(|p| (p, p))
                     .collect(),
-                port_offset: entry.number * self.main.stack.lanes.port_step,
+                port_offset: offset,
                 forward,
                 step,
             },
@@ -1499,7 +1598,8 @@ impl Lanes {
         }
         if let Some(l) = local {
             l.sup.down(true);
-            if let Some(l) = self.map.lock().unwrap().remove(name) {
+            let removed = self.map.lock().unwrap().remove(name);
+            if let Some(l) = removed {
                 l.sup.close();
             }
         }
@@ -1526,7 +1626,8 @@ impl Lanes {
         let started = self.activate(&entry.path).and_then(|lane| {
             lane.sup.up().inspect_err(|_| {
                 lane.sup.down(true);
-                if let Some(l) = self.map.lock().unwrap().remove(name) {
+                let removed = self.map.lock().unwrap().remove(name);
+                if let Some(l) = removed {
                     l.sup.close();
                 }
             })
@@ -1575,9 +1676,17 @@ mod tests {
                     worktree /r/wt-b\nHEAD 123\ndetached\n\n\
                     worktree /r/gone\nHEAD 456\nbranch refs/heads/x\nprunable gitdir file points to non-existent location\n";
         let w = parse_worktrees(text);
-        assert_eq!(w.len(), 3, "{w:?}");
+        assert_eq!(w.len(), 4, "{w:?}");
         assert_eq!(w[1].branch.as_deref(), Some("feature/a"));
         assert_eq!(w[2].branch, None);
+        assert!(!w[2].prunable && w[3].prunable, "{w:?}");
+    }
+
+    #[test]
+    fn lane_offsets_never_wrap() {
+        assert_eq!(lane_offset(3, 100), Some(300));
+        assert_eq!(lane_offset(199, 1000), None);
+        assert_eq!(lane_offset(u16::MAX, 2), None);
     }
 
     #[test]

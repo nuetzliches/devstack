@@ -85,3 +85,22 @@ because each new output path invalidates the build's incremental state:
 
 It does not cover hot-reloading dev servers (`kind = "devserver"`), which build
 and serve in one process; see plan §3.4.
+
+## Addendum 2026-10-18: services without `build`
+
+The rule above is about *build output*: nothing runs from what a build wrote
+into the working tree. A service without `build` (`kind = "service"`, `tool`,
+`devserver`) has no build output; it runs a command (an installed tool, a
+script, `docker run`) from the repository root, or in a lane from the lane's
+copy (ADR-0024), never from an artifact. That is deliberate, not a gap, and the
+supervisor does not refuse it: requiring `build` for every `kind = "service"`
+would turn away services that are simply programs installed on the machine.
+What the supervisor enforces is that a service *with* `build` runs from its
+artifact directory (`cwd` and `{artifact}`), never from the snapshot or the
+tree; the "refuses to start" line under *Enforced by* reads that way.
+
+All services of a tree share one snapshot. A build whose inputs another
+build's sync changed while it ran is not published under its id: the daemon
+compares the inputs' id after the build with the one it built for, discards
+the artifact if they differ (`build_discarded` in the daemon log) and builds
+again.

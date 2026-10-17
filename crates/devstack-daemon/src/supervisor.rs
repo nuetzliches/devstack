@@ -18,7 +18,7 @@ use devstack_env::{ComposeEnvs, Context};
 use devstack_proc::{Owned, Spec};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
@@ -41,6 +41,22 @@ pub(crate) struct Slot {
     previous: Option<String>,
     /// Bumped by every start, stop and switch; a monitor of an older generation retires.
     generation: u64,
+    /// The build a start or a candidate is about to run, from the moment its
+    /// artifact is chosen until it runs (or does not): pinned against
+    /// pruning meanwhile (ADR-0002 retention).
+    in_flight: Option<String>,
+}
+
+/// A built candidate a promotion gate holds (ADR-0013). The gate stays until
+/// `promote`, or until a build from the tree as it is now becomes main by
+/// another way (a restart, a start): a later change, however harmless, must
+/// not carry the held one into main.
+#[derive(Clone)]
+struct Held {
+    /// The newest build of the tree, waiting for `promote`; `None` while the
+    /// newest build failed (the gate stays, there is nothing to promote).
+    artifact: Option<(String, PathBuf)>,
+    reason: String,
 }
 
 #[derive(Default)]
@@ -76,8 +92,25 @@ pub struct Supervisor {
     proxies: Mutex<BTreeMap<String, Proxy>>,
     /// Changes seen by the watcher, per service, not yet in a candidate.
     changes: Mutex<BTreeMap<String, Changes>>,
-    /// Built candidates waiting for `promote` (ADR-0013), per service.
-    held: Mutex<BTreeMap<String, (String, PathBuf)>>,
+    /// Built candidates waiting for `promote` (ADR-0013), per service;
+    /// persisted, so a daemon restart keeps the gate.
+    held: Mutex<BTreeMap<String, Held>>,
+    /// Per service, bumped by every `stop`: a start, build or job wait that
+    /// began before gives up (a hanging migrator must not need the daemon
+    /// killed).
+    stops: BTreeMap<String, AtomicU64>,
+    /// Main lane only: `promote --lane` is moving the main ports to a lane;
+    /// nothing of this tree may take a proxy's upstream meanwhile (ADR-0008).
+    handing_over: AtomicBool,
+    /// Services started at least once by this daemon: the first start after
+    /// a daemon start restores the last promoted artifact (ADR-0016).
+    started: Mutex<BTreeSet<String>>,
+    /// The snapshot's manifest as the previous daemon left it: what changed
+    /// in the tree while no daemon watched it, against the tree now.
+    opened_manifest: Mutex<Option<devstack_build::snapshot::Manifest>>,
+    /// Why the file watcher does not work, if it does not (no candidates
+    /// then): shown in the status, not only logged.
+    watcher_error: Mutex<Option<(String, Instant)>>,
     /// Debounced restarts (dev servers, containers): last change, worker running.
     quiet: Mutex<BTreeMap<String, (Instant, bool)>>,
     /// One `prepare` at a time: two in the same directory would collide.
@@ -122,7 +155,6 @@ pub struct Supervisor {
 /// The artifact ids of a service the lanes run or may go back to.
 pub(crate) type LanePins = Box<dyn Fn(&str) -> Vec<String> + Send + Sync>;
 
-/// Hash of the stack file, line endings ignored (a checkout may flip them).
 /// Every state change also goes to the diagnostic log (plan §11): the event as
 /// the clients see it, as a warning when something failed. Snapshots and load
 /// samples stay out (no decision in them, and they would drown the rest).
@@ -161,6 +193,7 @@ fn record(body: &EventBody, lane: &str) {
     );
 }
 
+/// Hash of the stack file, line endings ignored (a checkout may flip them).
 fn stack_file_hash(path: &Path) -> Option<blake3::Hash> {
     let bytes = std::fs::read(path).ok()?;
     let normalized: Vec<u8> = bytes.into_iter().filter(|b| *b != b'\r').collect();
@@ -199,13 +232,15 @@ impl Supervisor {
             String::new(),
             0,
             Arc::new(Mutex::new(None)),
+            None,
         )
     }
 
     /// A supervisor for a lane (plan §3.5): `lane` empty for the main working
     /// tree. Another lane gets a stack whose service ports are already moved
     /// by `port_offset` ([`crate::lanes`]) and runs its own Compose projects,
-    /// their ports moved by the same offset (ADR-0030).
+    /// their ports moved by the same offset (ADR-0030). `build_job`: the
+    /// daemon's one build job (ADR-0020); `None` makes it (the main tree).
     #[allow(clippy::too_many_arguments)]
     pub fn new_lane(
         stack: Stack,
@@ -217,6 +252,7 @@ impl Supervisor {
         lane: String,
         port_offset: u16,
         main_owner: Arc<Mutex<Option<String>>>,
+        build_job: Option<Arc<devstack_proc::BuildJob>>,
     ) -> Result<Arc<Self>, String> {
         let stack = with_static_servers(stack);
         // A lane (`.devstack/lane-<name>/`) shares the main tree's artifact store.
@@ -224,8 +260,12 @@ impl Supervisor {
             Some(root) if !lane.is_empty() => Layout::shared(&state_dir, root.join("artifacts")),
             _ => Layout::new(&state_dir),
         };
-        let builder = Builder::new(layout.clone(), &proc_opts).map_err(|e| e.to_string())?;
+        let builder = match build_job {
+            Some(job) => Builder::with_job(layout.clone(), job),
+            None => Builder::new(layout.clone(), &proc_opts).map_err(|e| e.to_string())?,
+        };
         let snapshot = Snapshot::open(&repo, &layout.lane("main")).map_err(|e| e.to_string())?;
+        let opened_manifest = Some(snapshot.manifest.clone());
         let groups_of = |name: &str| -> Vec<String> {
             stack
                 .groups
@@ -236,6 +276,7 @@ impl Supervisor {
         };
         let mut slots = BTreeMap::new();
         let mut op_locks = BTreeMap::new();
+        let mut stops = BTreeMap::new();
         for (name, svc) in &stack.services {
             slots.insert(
                 name.clone(),
@@ -263,13 +304,33 @@ impl Supervisor {
                     main: None,
                     previous: None,
                     generation: 0,
+                    in_flight: None,
                 },
             );
             op_locks.insert(name.clone(), Mutex::new(()));
+            stops.insert(name.clone(), AtomicU64::new(0));
         }
         let persisted = Persisted::load(&state_dir);
         // ADR-0016: kill what a crashed previous instance left (Linux; a no-op on Windows).
         devstack_proc::cleanup(&persisted.records);
+        // A held candidate stays held across a daemon restart (ADR-0013).
+        let held = persisted
+            .held
+            .iter()
+            .filter(|(name, _)| stack.services.contains_key(*name))
+            .map(|(name, h)| {
+                let dir = layout.artifact(name, &h.build_id);
+                let artifact =
+                    (!h.build_id.is_empty() && dir.is_dir()).then(|| (h.build_id.clone(), dir));
+                (
+                    name.clone(),
+                    Held {
+                        artifact,
+                        reason: h.reason.clone(),
+                    },
+                )
+            })
+            .collect();
         let (events, _) = broadcast::channel(1024);
         Ok(Arc::new(Self {
             stack,
@@ -288,13 +349,19 @@ impl Supervisor {
             persisted: Mutex::new(Persisted {
                 main: persisted.main,
                 records: Vec::new(),
+                held: persisted.held,
             }),
             seq: AtomicU64::new(0),
             events,
             rt,
             proxies: Mutex::new(BTreeMap::new()),
             changes: Mutex::new(BTreeMap::new()),
-            held: Mutex::new(BTreeMap::new()),
+            held: Mutex::new(held),
+            stops,
+            handing_over: AtomicBool::new(false),
+            started: Mutex::new(BTreeSet::new()),
+            opened_manifest: Mutex::new(opened_manifest),
+            watcher_error: Mutex::new(None),
             quiet: Mutex::new(BTreeMap::new()),
             preparing: Mutex::new(()),
             branch: Mutex::new(None),
@@ -416,7 +483,46 @@ impl Supervisor {
             lane: (!self.lane.is_empty()).then(|| self.lane.clone()),
             branch: self.branch.lock().unwrap().clone(),
             main_served_by: self.served_by(),
+            watcher_error: self
+                .watcher_error
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|(e, _)| e.clone()),
         }
+    }
+
+    /// The file watcher failed to start or lost track: say so in the status
+    /// and the log, once per new reason; `None` when it works again.
+    pub(crate) fn set_watcher_error(&self, error: Option<String>) {
+        let mut cur = self.watcher_error.lock().unwrap();
+        if cur.as_ref().map(|(e, _)| e) == error.as_ref() {
+            return;
+        }
+        if let Some(e) = &error {
+            crate::diag::warn(
+                "watcher_failed",
+                serde_json::json!({ "lane": self.lane, "error": e }),
+            );
+        }
+        *cur = error.map(|e| (e, Instant::now()));
+    }
+
+    /// The watcher delivers events again: a lost-events notice goes after a
+    /// minute (long enough to be seen).
+    pub(crate) fn watcher_ok(&self) {
+        let mut cur = self.watcher_error.lock().unwrap();
+        if cur
+            .as_ref()
+            .is_some_and(|(_, at)| at.elapsed() >= Duration::from_secs(60))
+        {
+            *cur = None;
+        }
+    }
+
+    /// The daemon's one build job (ADR-0020), for the lanes' builders.
+    pub(crate) fn build_job(&self) -> Arc<devstack_proc::BuildJob> {
+        self.builder.job()
     }
 
     /// Usage of every running service tree (plan §12).
@@ -661,7 +767,13 @@ impl Supervisor {
     }
 
     /// Run a `prepare` to completion; its output goes to a log of its own.
-    fn run_prepare(&self, name: &str, job: PrepareJob) -> Result<(), String> {
+    /// `cancel`: a stop came in, the prepare is killed.
+    fn run_prepare(
+        &self,
+        name: &str,
+        job: PrepareJob,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<(), String> {
         let _one = self.preparing.lock().unwrap();
         let dir = self.log_dir(name);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -686,6 +798,10 @@ impl Supervisor {
             if let Some(code) = tree.try_exit_code() {
                 break code;
             }
+            if cancel() {
+                tree.kill();
+                return Err(format!("prepare `{}`: {STOPPED}", job.run));
+            }
             std::thread::sleep(Duration::from_millis(100));
         };
         if code != 0 {
@@ -702,16 +818,35 @@ impl Supervisor {
     }
 
     /// A lane's copy, current and prepared for `svc`, before it starts from it.
-    fn copy_ready(&self, name: &str, svc: &Service) -> Result<(), String> {
+    fn copy_ready(
+        &self,
+        name: &str,
+        svc: &Service,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<(), String> {
         let job = {
             let mut snap = self.snapshot.lock().unwrap();
             snap.sync().map_err(|e| e.to_string())?;
             self.prepare_job(name, svc, &snap)?
         };
         match job {
-            Some(job) => self.run_prepare(name, job),
+            Some(job) => self.run_prepare(name, job, cancel),
             None => Ok(()),
         }
+    }
+
+    /// Before a command runs from it (ADR-0024 point 2): a lane's copy,
+    /// current. The main tree runs commands in place.
+    pub(crate) fn sync_copy(&self) -> Result<(), String> {
+        if !self.runs_from_copy() {
+            return Ok(());
+        }
+        self.snapshot
+            .lock()
+            .unwrap()
+            .sync()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     /// Something changed in a lane's worktree: bring the copy its dev servers
@@ -1090,8 +1225,6 @@ impl Supervisor {
         )
     }
 
-    /// Infra, then every autostart service for this platform, in order. Stops at
-    /// the first service that does not become ready.
     /// This lane's instances hold the main slot: workers on (ADR-0008).
     pub fn owns_main(&self) -> bool {
         // A daemon that runs a lane on another machine holds the main slot
@@ -1135,6 +1268,8 @@ impl Supervisor {
         self.closed.load(Ordering::SeqCst)
     }
 
+    /// Infra, then every autostart service for this platform, in order; a
+    /// service that fails holds back only what comes `after` it.
     pub fn up(self: &Arc<Self>) -> Result<(), String> {
         {
             // Every lane has its own infrastructure (ADR-0030).
@@ -1185,22 +1320,27 @@ impl Supervisor {
     }
 
     /// Stop every service, last started first. Infra stays up (ADR-0004: it is
-    /// long-lived) unless `infra` is set.
-    pub fn down(&self, infra: bool) {
+    /// long-lived) unless `infra` is set. Returns what did not stop.
+    pub fn down(&self, infra: bool) -> Vec<String> {
+        let mut failed = Vec::new();
         for name in self.service_order().into_iter().rev() {
-            let _ = self.stop(&name);
+            if let Err(e) = self.stop(&name) {
+                failed.push(format!("{name}: {e}"));
+            }
         }
         // A lane's infrastructure is its own (ADR-0030); `shared` services
         // are not in its groups. On a node the agent runs it (ADR-0025).
         if infra && self.external_infra().is_none() {
             for g in self.group_order().into_iter().rev() {
-                let _ = self.docker.down(&self.compose_group(&g));
+                if let Err(e) = self.docker.down(&self.compose_group(&g)) {
+                    failed.push(format!("compose group `{g}`: {e}"));
+                }
             }
             self.refresh_infra();
         }
+        failed
     }
 
-    /// Build if needed, then start and wait until ready (jobs: until done).
     fn is_hot(&self, name: &str) -> bool {
         self.hot.lock().unwrap().contains(name)
     }
@@ -1252,7 +1392,7 @@ impl Supervisor {
             slot.previous = None;
         }
         self.absorb(name);
-        self.held.lock().unwrap().remove(name);
+        self.release_held(name, None);
         self.set_candidate(name, None);
         crate::diag::log(
             "info",
@@ -1302,6 +1442,7 @@ impl Supervisor {
         if let Some(slot) = self.slots.lock().unwrap().get(name) {
             pinned.extend(slot.view.build_id.clone());
             pinned.extend(slot.previous.clone());
+            pinned.extend(slot.in_flight.clone());
             pinned.extend(
                 slot.view
                     .candidate
@@ -1309,7 +1450,13 @@ impl Supervisor {
                     .and_then(|c| c.build_id.clone()),
             );
         }
-        if let Some((id, _)) = self.held.lock().unwrap().get(name) {
+        if let Some((id, _)) = self
+            .held
+            .lock()
+            .unwrap()
+            .get(name)
+            .and_then(|h| h.artifact.as_ref())
+        {
             pinned.insert(id.clone());
         }
         pinned.extend(self.persisted.lock().unwrap().main.get(name).cloned());
@@ -1392,10 +1539,48 @@ impl Supervisor {
     }
 
     /// Start a running service again from its current build, so a changed
-    /// worker switch takes effect; nothing is built that is not cached.
+    /// worker switch takes effect; nothing is built (a change in the tree,
+    /// held or not, does not come in this way).
     pub fn relaunch(self: &Arc<Self>, name: &str) -> Result<(), String> {
+        let current = self.slots.lock().unwrap()[name].view.build_id.clone();
+        let artifact = current
+            .map(|id| (self.layout.artifact(name, &id), id))
+            .filter(|(dir, _)| dir.is_dir())
+            .map(|(dir, id)| (id, dir));
         self.stop(name)?;
-        self.start(name)
+        self.start_with(name, artifact)
+    }
+
+    /// A start of `name` that would take its main port while a lane serves
+    /// the main ports, or while they move to one (ADR-0008: the workers
+    /// would run in both trees): why not.
+    fn main_ports_elsewhere(&self, name: &str, svc: &Service) -> Option<String> {
+        if !svc.proxied() && !self.forwards.lock().unwrap().contains_key(name) {
+            return None;
+        }
+        if let Some(lane) = self.served_by() {
+            return Some(format!(
+                "lane `{lane}` serves the main ports: `devstack promote --lane main` first"
+            ));
+        }
+        self.handing_over
+            .load(Ordering::SeqCst)
+            .then(|| "the main ports are moving to a lane (`devstack promote --lane`)".into())
+    }
+
+    /// Main lane: `promote --lane` begins (`true`) or ends moving the main
+    /// ports to a lane.
+    pub(crate) fn set_handing_over(&self, on: bool) {
+        self.handing_over.store(on, Ordering::SeqCst);
+    }
+
+    fn stop_epoch(&self, name: &str) -> u64 {
+        self.stops[name].load(Ordering::SeqCst)
+    }
+
+    /// A `stop` of `name` came in since `epoch`.
+    fn stopped_since(&self, name: &str, epoch: u64) -> bool {
+        self.stop_epoch(name) != epoch
     }
 
     /// Main lane: the fixed port of `name` forwards to another lane's port
@@ -1417,15 +1602,23 @@ impl Supervisor {
         Ok(())
     }
 
+    /// Build if needed, then start and wait until ready (jobs: until done).
     pub fn start(self: &Arc<Self>, name: &str) -> Result<(), String> {
+        self.start_with(name, None)
+    }
+
+    /// [`Self::start`] from `prebuilt`, an artifact built for it already (a
+    /// restart, a promoted candidate): nothing is built again.
+    pub(crate) fn start_with(
+        self: &Arc<Self>,
+        name: &str,
+        prebuilt: Option<(String, PathBuf)>,
+    ) -> Result<(), String> {
         let svc = self.effective(name, self.service(name)?);
-        if let Some(lane) = self
-            .served_by()
-            .filter(|_| svc.proxied() || self.forwards.lock().unwrap().contains_key(name))
-        {
-            return Err(format!(
-                "lane `{lane}` serves the main ports: `devstack promote --lane main` first"
-            ));
+        let requested = now_ms();
+        let epoch = self.stop_epoch(name);
+        if let Some(e) = self.main_ports_elsewhere(name, &svc) {
+            return Err(e);
         }
         if !on_this_platform(&svc) {
             return Err(format!("`{name}` does not run on this platform"));
@@ -1440,14 +1633,138 @@ impl Supervisor {
             return Err(e);
         }
         let _op = self.op_locks[name].lock().unwrap();
-        if self.slots.lock().unwrap()[name].view.status.is_active() {
-            return Ok(());
+        {
+            let slots = self.slots.lock().unwrap();
+            let v = &slots[name].view;
+            if v.status.is_active() {
+                return Ok(());
+            }
+            // Two services after the same job: the other one ran it while
+            // this one waited for its op lock.
+            if svc.kind == Kind::Job
+                && v.status == (Status::Completed { exit_code: 0 })
+                && v.since >= requested
+            {
+                return Ok(());
+            }
         }
-        let result = self.start_locked(name, &svc);
+        let result = self.start_locked(name, &svc, prebuilt, epoch);
+        {
+            let mut slots = self.slots.lock().unwrap();
+            let slot = slots.get_mut(name).unwrap();
+            slot.in_flight = None;
+            if result.is_err() && slot.main.is_none() {
+                // The process it started is gone.
+                slot.view.pid = None;
+                slot.view.instance_port = None;
+            }
+        }
         if let Err(e) = &result {
             self.set_status(name, Status::Failed { reason: e.clone() });
         }
         result
+    }
+
+    /// The artifact of the first start of `name` after a daemon start: the
+    /// last one promoted to main, if it is still there (ADR-0016). What the
+    /// tree holds now comes as a candidate, like any change.
+    fn restorable(&self, name: &str) -> Option<(String, PathBuf)> {
+        if self.force_build.lock().unwrap().contains(name) {
+            return None;
+        }
+        let id = self.persisted.lock().unwrap().main.get(name).cloned()?;
+        self.builder.artifact(name, &id)?;
+        Some((id.clone(), self.layout.artifact(name, &id)))
+    }
+
+    /// After a restore: what changed in the tree while no daemon watched it
+    /// becomes a candidate, as if the watcher had seen it (a promotion gate
+    /// sees those paths too).
+    fn follow_restore(self: &Arc<Self>, name: &str, svc: &Service) {
+        let Some(before) = self.opened_manifest.lock().unwrap().clone() else {
+            return;
+        };
+        let Some(watch) = devstack_build::watch_set(&svc.watch).ok().flatten() else {
+            return; // without `watch`, edits make no candidates
+        };
+        let (me, name) = (Arc::clone(self), name.to_string());
+        let _ = std::thread::Builder::new()
+            .name(format!("restored-{name}"))
+            .spawn(move || {
+                let changed: Vec<String> = {
+                    let mut snap = me.snapshot.lock().unwrap();
+                    if snap.sync().is_err() {
+                        return;
+                    }
+                    let now = &snap.manifest.files;
+                    let mut paths: BTreeSet<&String> = now
+                        .iter()
+                        .filter(|(p, e)| before.files.get(*p) != Some(*e))
+                        .map(|(p, _)| p)
+                        .collect();
+                    paths.extend(before.files.keys().filter(|p| !now.contains_key(*p)));
+                    paths
+                        .into_iter()
+                        .filter(|p| {
+                            !crate::watch::ignored(p)
+                                && (watch.is_match(p.as_str()) || devstack_build::is_build_file(p))
+                        })
+                        .cloned()
+                        .collect()
+                };
+                if !changed.is_empty() {
+                    crate::diag::info(
+                        "restored_tree_changed",
+                        serde_json::json!({ "lane": me.lane, "service": name, "paths": changed }),
+                    );
+                }
+                for p in changed {
+                    me.changed(&name, &p);
+                }
+            });
+    }
+
+    /// The promotion gate of `name` opens (ADR-0013): its held candidate
+    /// went into main, or a build of the tree as it is now did. `only`:
+    /// just when the held build is that one.
+    fn release_held(&self, name: &str, only: Option<&str>) {
+        let mut held = self.held.lock().unwrap();
+        let matches = held.get(name).is_some_and(|h| {
+            only.is_none_or(|id| h.artifact.as_ref().is_some_and(|(a, _)| a == id))
+        });
+        if matches {
+            held.remove(name);
+            self.save_held(&held);
+        }
+    }
+
+    /// Hold `artifact` of `name` for `promote` (`None`: its newest build
+    /// failed, the gate stays).
+    fn hold(&self, name: &str, artifact: Option<(String, PathBuf)>, reason: String) {
+        let mut held = self.held.lock().unwrap();
+        held.insert(name.to_string(), Held { artifact, reason });
+        self.save_held(&held);
+    }
+
+    fn save_held(&self, held: &BTreeMap<String, Held>) {
+        let mut pers = self.persisted.lock().unwrap();
+        pers.held = held
+            .iter()
+            .map(|(n, h)| {
+                (
+                    n.clone(),
+                    crate::state::HeldRecord {
+                        build_id: h
+                            .artifact
+                            .as_ref()
+                            .map(|(id, _)| id.clone())
+                            .unwrap_or_default(),
+                        reason: h.reason.clone(),
+                    },
+                )
+            })
+            .collect();
+        pers.save(&self.state_dir);
     }
 
     /// The proxy on the service's fixed port, bound on first use (ADR-0010).
@@ -1470,13 +1787,45 @@ impl Supervisor {
         self.proxies.lock().unwrap().get(name).cloned()
     }
 
-    fn start_locked(self: &Arc<Self>, name: &str, svc: &Service) -> Result<(), String> {
-        // 1. Build into an artifact (services and jobs with `build`).
-        let artifact = if svc.build.is_some() {
-            Some(self.build_locked(name, svc, &|| false)?)
-        } else {
-            None
+    fn start_locked(
+        self: &Arc<Self>,
+        name: &str,
+        svc: &Service,
+        prebuilt: Option<(String, PathBuf)>,
+        epoch: u64,
+    ) -> Result<(), String> {
+        let cancel = || self.stopped_since(name, epoch);
+        let first = self.started.lock().unwrap().insert(name.to_string());
+        // 1. The artifact (services and jobs with `build`): the one given; at
+        //    the first start after a daemon start the last promoted one
+        //    (ADR-0016); else built from the tree.
+        let (mut restored, mut built) = (false, false);
+        let artifact = match (svc.build.is_some(), prebuilt) {
+            (false, _) => None,
+            (true, Some(a)) => Some(a),
+            (true, None) => match first.then(|| self.restorable(name)).flatten() {
+                Some(a) => {
+                    restored = true;
+                    crate::diag::info(
+                        "restored",
+                        serde_json::json!({
+                            "lane": self.lane,
+                            "service": name,
+                            "build_id": a.0,
+                            "why": "the first start after a daemon start runs the build last promoted to main (ADR-0016); a change in the tree comes as a candidate",
+                        }),
+                    );
+                    Some(a)
+                }
+                None => {
+                    built = true;
+                    Some(self.build_locked(name, svc, &cancel)?)
+                }
+            },
         };
+        if let Some((id, _)) = &artifact {
+            self.slots.lock().unwrap().get_mut(name).unwrap().in_flight = Some(id.clone());
+        }
 
         // 2. The port: behind the proxy an internal one, else the fixed one, free.
         let proxy = if svc.proxied() {
@@ -1509,7 +1858,7 @@ impl Supervisor {
                 )));
             }
         };
-        let mut inst = match self.launch(name, svc, artifact.as_ref(), port, true) {
+        let mut inst = match self.launch(name, svc, artifact.as_ref(), port, true, &cancel) {
             Ok(i) => i,
             Err(e) => {
                 refuse(&e);
@@ -1525,7 +1874,7 @@ impl Supervisor {
             v.instance_port = inst.port;
         }
         self.set_status(name, Status::Starting);
-        let ready = match self.wait_instance(svc, &mut inst) {
+        let ready = match self.wait_instance(svc, &mut inst, &cancel) {
             Ok(s) => s,
             Err(e) => {
                 inst.tree.kill();
@@ -1536,6 +1885,15 @@ impl Supervisor {
         };
 
         // 4. In service: behind the proxy, switch it on; record it; watch it.
+        //    Unless a lane took the main ports meanwhile (`promote --lane`
+        //    while this one built): this instance runs with workers.
+        if proxy.is_some()
+            && let Some(e) = self.main_ports_elsewhere(name, svc)
+        {
+            inst.tree.kill();
+            self.forget_record(&inst.record);
+            return Err(e);
+        }
         if let Some(p) = &proxy {
             p.set_upstream(Some(Upstream {
                 port: inst.port.expect("internal port"),
@@ -1547,6 +1905,10 @@ impl Supervisor {
             let mut pers = self.persisted.lock().unwrap();
             pers.main.insert(name.into(), id.clone());
             pers.save(&self.state_dir);
+        }
+        // The tree as it is now is main: a held candidate is older than it.
+        if built {
+            self.release_held(name, None);
         }
         if svc.kind == Kind::Job {
             self.forget_record(&inst.record);
@@ -1562,6 +1924,9 @@ impl Supervisor {
         };
         self.set_status(name, ready);
         self.spawn_monitor(name.to_string(), svc.clone(), generation);
+        if restored {
+            self.follow_restore(name, svc);
+        }
         Ok(())
     }
 
@@ -1574,9 +1939,10 @@ impl Supervisor {
         artifact: Option<&(String, PathBuf)>,
         port: Option<u16>,
         is_main: bool,
+        cancel: &dyn Fn() -> bool,
     ) -> Result<Instance, String> {
         if artifact.is_none() && self.runs_from_copy() {
-            self.copy_ready(name, svc)?;
+            self.copy_ready(name, svc, cancel)?;
         }
         let ctx = self.context(svc, artifact.map(|(_, d)| d.as_path()), port, is_main);
         let env = {
@@ -1664,12 +2030,38 @@ impl Supervisor {
             }
         };
         building(None);
+        // `--rebuild` once, for every attempt below.
+        let forced = self.force_build.lock().unwrap().remove(name);
+        // All services of a tree share one snapshot: another one's build may
+        // sync it while this one builds. An artifact whose inputs changed
+        // under it is not what its id says (ADR-0002); it goes, and the build
+        // runs again on the tree as it is now.
+        for _ in 0..3 {
+            if let Some(a) = self.build_once(name, svc, cancel, &building, forced)? {
+                self.slots.lock().unwrap().get_mut(name).unwrap().in_flight = Some(a.0.clone());
+                return Ok(a);
+            }
+        }
+        Err("the sources changed under every build attempt (other builds synced the snapshot meanwhile); try again".into())
+    }
+
+    /// One build of [`Self::build_locked`]; `None` when the snapshot's
+    /// inputs of `name` changed while it built (its artifact is discarded).
+    fn build_once(
+        &self,
+        name: &str,
+        svc: &Service,
+        cancel: &dyn Fn() -> bool,
+        building: &dyn Fn(Option<String>),
+        forced: bool,
+    ) -> Result<Option<(String, PathBuf)>, String> {
         let mut snap = self.snapshot.lock().unwrap();
         snap.sync().map_err(|e| e.to_string())?;
-        let mut id = build_id(&snap.manifest, svc).map_err(|e| e.to_string())?;
+        let base = build_id(&snap.manifest, svc).map_err(|e| e.to_string())?;
+        let mut id = base.clone();
         // `--rebuild`: the same inputs once more, under `<id>-<n>`; the artifact
         // that exists may be running and is never overwritten (ADR-0002).
-        if self.force_build.lock().unwrap().remove(name) {
+        if forced {
             let base = id.clone();
             id = (2..)
                 .map(|n| format!("{base}-{n}"))
@@ -1694,9 +2086,10 @@ impl Supervisor {
             building(Some(id.clone()));
             if let Some(job) = self.prepare_job(name, svc, &snap)? {
                 drop(snap);
-                self.run_prepare(name, job)?;
+                self.run_prepare(name, job, cancel)?;
                 snap = self.snapshot.lock().unwrap();
             }
+            let started = now_ms();
             let mut running = self
                 .builder
                 .start_as("main", &snap, name, svc, id.clone())
@@ -1714,7 +2107,24 @@ impl Supervisor {
                 std::thread::sleep(Duration::from_millis(100));
             };
             match outcome {
-                Outcome::Published { .. } => self.prune_artifacts(name),
+                Outcome::Published { .. } => {
+                    let now = build_id(&self.snapshot.lock().unwrap().manifest, svc)
+                        .map_err(|e| e.to_string())?;
+                    if now != base {
+                        crate::diag::warn(
+                            "build_discarded",
+                            serde_json::json!({
+                                "lane": self.lane,
+                                "service": name,
+                                "build_id": id,
+                                "why": "its inputs changed in the snapshot while it built (another build synced it); built again",
+                            }),
+                        );
+                        self.discard_artifact(name, &id, started);
+                        return Ok(None);
+                    }
+                    self.prune_artifacts(name)
+                }
                 Outcome::Failed { exit_code, log, .. } => {
                     // Point compiler messages at the repository, not at the
                     // snapshot, so they stay clickable in the IDE.
@@ -1728,7 +2138,22 @@ impl Supervisor {
                 Outcome::Cancelled { .. } => return Err("build cancelled".into()),
             }
         }
-        Ok((id.clone(), self.layout.artifact(name, &id)))
+        Ok(Some((id.clone(), self.layout.artifact(name, &id))))
+    }
+
+    /// Remove an artifact this daemon just published (since `since`, Unix
+    /// ms), its metadata first: without it the directory is no artifact.
+    fn discard_artifact(&self, name: &str, id: &str, since: u128) {
+        if self
+            .builder
+            .artifact(name, id)
+            .is_none_or(|m| m.created < since)
+        {
+            return; // published before this build: not this build's to remove
+        }
+        let dir = self.layout.artifact(name, id);
+        let _ = std::fs::remove_file(dir.join(devstack_build::META_FILE));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn context(
@@ -1773,26 +2198,49 @@ impl Supervisor {
     /// Until the instance is ready: a job until it finished, a service with a
     /// health check until it answers (on the instance's own port, never through
     /// the proxy: ADR-0010 condition 1), else a moment to fail fast. Returns the
-    /// status to show.
-    fn wait_instance(&self, svc: &Service, inst: &mut Instance) -> Result<Status, String> {
+    /// status to show. A job runs for its `timeout` at most; `cancel` (a
+    /// stop) ends the wait at once. The caller kills the instance on an error.
+    fn wait_instance(
+        &self,
+        svc: &Service,
+        inst: &mut Instance,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<Status, String> {
         match svc.kind {
-            Kind::Job => loop {
-                if let Some(code) = inst.tree.try_exit_code() {
-                    if code == 0 {
-                        return Ok(Status::Completed { exit_code: 0 });
+            Kind::Job => {
+                let limit = svc.timeout.unwrap_or(JOB_TIMEOUT);
+                let t0 = Instant::now();
+                loop {
+                    if let Some(code) = inst.tree.try_exit_code() {
+                        if code == 0 {
+                            return Ok(Status::Completed { exit_code: 0 });
+                        }
+                        return Err(format!(
+                            "job exited with code {code}\n{}",
+                            tail(&inst.log, 15)
+                        ));
                     }
-                    return Err(format!(
-                        "job exited with code {code}\n{}",
-                        tail(&inst.log, 15)
-                    ));
+                    if cancel() {
+                        return Err(STOPPED.into());
+                    }
+                    if t0.elapsed() >= limit {
+                        return Err(format!(
+                            "job still ran after {} s (its `timeout`), and was stopped\n{}",
+                            limit.as_secs(),
+                            tail(&inst.log, 15)
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
                 }
-                std::thread::sleep(Duration::from_millis(100));
-            },
+            }
             _ => match (&svc.health, inst.port) {
                 (Some(h), Some(port)) => {
                     let t0 = Instant::now();
                     let mut last = String::new();
                     while t0.elapsed() < h.timeout {
+                        if cancel() {
+                            return Err(STOPPED.into());
+                        }
                         if let Some(code) = inst.tree.try_exit_code() {
                             return Err(format!(
                                 "exited with code {code} before it became healthy\n{}",
@@ -1855,6 +2303,11 @@ impl Supervisor {
                         let inst = {
                             let mut slots = me.slots.lock().unwrap();
                             let slot = slots.get_mut(&name).unwrap();
+                            // A switch or a stop came in since the exit was
+                            // seen: the slot holds another instance now.
+                            if slot.generation != generation {
+                                return;
+                            }
                             slot.view.pid = None;
                             slot.main.take()
                         };
@@ -1889,8 +2342,11 @@ impl Supervisor {
 
     /// Graceful stop, then kill (ADR-0009). Behind the proxy, requests are
     /// refused with the reason from now on and running ones may finish briefly.
+    /// A start, build or job wait in progress gives up first and lets go of
+    /// the op lock (a hanging migrator, a long build).
     pub fn stop(&self, name: &str) -> Result<(), String> {
         self.service(name)?;
+        self.stops[name].fetch_add(1, Ordering::SeqCst);
         let _op = self.op_locks[name].lock().unwrap();
         let inst = {
             let mut slots = self.slots.lock().unwrap();
@@ -1917,9 +2373,6 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Build first; only a successful build replaces the running instance
-    /// (ADR-0003). Behind the proxy the replacement is a candidate that takes
-    /// over without dropping a request; otherwise a restart in place.
     /// The environment `name` gets from this supervisor, as it would start
     /// now: in a lane with the lane's ports, its own containers and
     /// `{lane}` (`devstack env` in a worktree). `include_devstack`: also
@@ -1952,7 +2405,19 @@ impl Supervisor {
         result
     }
 
+    /// Build first; only a successful build replaces the running instance
+    /// (ADR-0003). Behind the proxy the replacement is a candidate that takes
+    /// over without dropping a request; otherwise a restart in place, from
+    /// the artifact just built.
     pub fn restart(self: &Arc<Self>, name: &str) -> Result<(), String> {
+        let result = self.restart_inner(name);
+        if let Some(s) = self.slots.lock().unwrap().get_mut(name) {
+            s.in_flight = None;
+        }
+        result
+    }
+
+    fn restart_inner(self: &Arc<Self>, name: &str) -> Result<(), String> {
         if self.is_hot(name) {
             // The watcher builds by itself; a restart starts it afresh.
             self.stop(name)?;
@@ -1962,9 +2427,10 @@ impl Supervisor {
         self.absorb(name);
         let mut artifact = None;
         if svc.build.is_some() {
+            let epoch = self.stop_epoch(name);
             let _op = self.op_locks[name].lock().unwrap();
             let before = self.slots.lock().unwrap()[name].view.status.clone();
-            match self.build_locked(name, &svc, &|| false) {
+            match self.build_locked(name, &svc, &|| self.stopped_since(name, epoch)) {
                 Ok(a) => artifact = Some(a),
                 Err(e) => {
                     // Back to what is actually running; the error goes to the caller.
@@ -1999,11 +2465,15 @@ The running instance was left as it was."
         }
         let running = self.slots.lock().unwrap()[name].main.is_some();
         if svc.proxied() && running {
-            return self.replace(name, &svc, artifact);
+            self.replace(name, &svc, artifact)?;
+        } else {
+            self.set_candidate(name, None);
+            self.stop(name)?;
+            self.start_with(name, artifact)?;
         }
-        self.set_candidate(name, None);
-        self.stop(name)?;
-        self.start(name)
+        // A build of the tree as it is now is main: a held candidate is older.
+        self.release_held(name, None);
+        Ok(())
     }
 
     /// Replace the running main instance behind the proxy (ADR-0003, ADR-0010):
@@ -2020,6 +2490,8 @@ The running instance was left as it was."
         svc: &Service,
         artifact: Option<(String, PathBuf)>,
     ) -> Result<(), String> {
+        let epoch = self.stop_epoch(name);
+        let cancel = || self.stopped_since(name, epoch);
         let _op = self.op_locks[name].lock().unwrap();
         let proxy = self.ensure_proxy(name, svc)?;
         let build = artifact.as_ref().map(|(id, _)| id.clone());
@@ -2042,12 +2514,25 @@ The running instance was left as it was."
             "starting {}",
             build.as_deref().unwrap_or("a new instance")
         )));
-        let mut candidate =
-            match self.launch(name, svc, artifact.as_ref(), Some(free_port()?), !relay) {
-                Ok(i) => i,
-                Err(e) => return fail(e),
-            };
-        if let Err(e) = self.wait_instance(svc, &mut candidate) {
+        let mut candidate = match self.launch(
+            name,
+            svc,
+            artifact.as_ref(),
+            Some(free_port()?),
+            !relay,
+            &cancel,
+        ) {
+            Ok(i) => i,
+            Err(e) => return fail(e),
+        };
+        if let Err(e) = self.wait_instance(svc, &mut candidate, &cancel) {
+            candidate.tree.kill();
+            self.forget_record(&candidate.record);
+            return fail(e);
+        }
+        // A lane took the main ports meanwhile (`promote --lane`): the
+        // proxy forwards there now, and stays so.
+        if let Some(e) = self.main_ports_elsewhere(name, svc) {
             candidate.tree.kill();
             self.forget_record(&candidate.record);
             return fail(e);
@@ -2058,12 +2543,18 @@ The running instance was left as it was."
         self.retire(&proxy, old);
 
         if relay {
-            let mut fin = match self.launch(name, svc, artifact.as_ref(), Some(free_port()?), true)
-            {
+            let mut fin = match self.launch(
+                name,
+                svc,
+                artifact.as_ref(),
+                Some(free_port()?),
+                true,
+                &cancel,
+            ) {
                 Ok(i) => i,
                 Err(e) => return self.running_without_workers(name, svc, e),
             };
-            if let Err(e) = self.wait_instance(svc, &mut fin) {
+            if let Err(e) = self.wait_instance(svc, &mut fin, &cancel) {
                 fin.tree.kill();
                 self.forget_record(&fin.record);
                 return self.running_without_workers(name, svc, e);
@@ -2234,6 +2725,14 @@ The running instance was left as it was."
     /// Build a candidate from the current tree and promote it unless a gate
     /// holds it. Returns true if a newer change superseded the build.
     fn candidate_from(self: &Arc<Self>, name: &str, paths: &BTreeSet<String>, epoch: u64) -> bool {
+        let superseded = self.candidate_inner(name, paths, epoch);
+        if let Some(s) = self.slots.lock().unwrap().get_mut(name) {
+            s.in_flight = None;
+        }
+        superseded
+    }
+
+    fn candidate_inner(self: &Arc<Self>, name: &str, paths: &BTreeSet<String>, epoch: u64) -> bool {
         let Ok(svc) = self.service(name).cloned() else {
             return false;
         };
@@ -2248,12 +2747,16 @@ The running instance was left as it was."
             clear();
             return false;
         }
+        // A newer change supersedes the build; a stop ends it.
+        let stops = self.stop_epoch(name);
         let newer = || {
-            self.changes
-                .lock()
-                .unwrap()
-                .get(name)
-                .is_some_and(|c| c.epoch != epoch)
+            self.stopped_since(name, stops)
+                || self
+                    .changes
+                    .lock()
+                    .unwrap()
+                    .get(name)
+                    .is_some_and(|c| c.epoch != epoch)
         };
         if let Some(p) = self.proxy(name) {
             p.set_pending(Some("building".into()));
@@ -2262,6 +2765,10 @@ The running instance was left as it was."
             let _op = self.op_locks[name].lock().unwrap();
             match self.build_locked(name, &svc, &newer) {
                 Ok(a) => a,
+                Err(e) if e == SUPERSEDED && self.stopped_since(name, stops) => {
+                    clear();
+                    return false;
+                }
                 Err(e) if e == SUPERSEDED => {
                     self.set_candidate(name, Some(Candidate::new("superseded", None, None)));
                     return true;
@@ -2273,6 +2780,17 @@ The running instance was left as it was."
                     );
                     if let Some(p) = self.proxy(name) {
                         p.set_pending(Some("failed".into()));
+                    }
+                    // A held candidate's gate stays; there is nothing to
+                    // promote until the tree builds again.
+                    let reason = self
+                        .held
+                        .lock()
+                        .unwrap()
+                        .get(name)
+                        .map(|h| h.reason.clone());
+                    if let Some(reason) = reason {
+                        self.hold(name, None, reason);
                     }
                     return false;
                 }
@@ -2301,14 +2819,21 @@ The running instance was left as it was."
                     "why": "the changed files are not inputs of its build id (watch paths, build files above them)",
                 }),
             );
+            // The tree is back where main is: nothing waits for promote.
+            self.release_held(name, None);
             clear();
             return false;
         }
-        if let Some(reason) = hold_reason(&svc, paths) {
-            self.held
-                .lock()
-                .unwrap()
-                .insert(name.into(), artifact.clone());
+        // A held candidate blocks later auto-promotions (ADR-0013): the
+        // newer build carries its change too, and waits in its place.
+        let waiting = self
+            .held
+            .lock()
+            .unwrap()
+            .get(name)
+            .map(|h| h.reason.clone());
+        if let Some(reason) = hold_reason(&svc, paths).or(waiting) {
+            self.hold(name, Some(artifact.clone()), reason.clone());
             self.set_candidate(
                 name,
                 Some(Candidate::new(
@@ -2365,7 +2890,7 @@ The running instance was left as it was."
         }
         self.set_candidate(name, None);
         self.stop(name)?;
-        self.start(name)
+        self.start_with(name, Some(artifact))
     }
 
     /// Run `action` once the changes for `key` have been quiet for a moment.
@@ -2410,6 +2935,15 @@ The running instance was left as it was."
             });
     }
 
+    /// Building, starting or running: what a hand-over has to give back.
+    pub(crate) fn service_active(&self, name: &str) -> bool {
+        self.slots
+            .lock()
+            .unwrap()
+            .get(name)
+            .is_some_and(|s| s.view.status.is_active())
+    }
+
     pub(crate) fn service_running(&self, name: &str) -> bool {
         self.slots
             .lock()
@@ -2418,7 +2952,6 @@ The running instance was left as it was."
             .is_some_and(|s| s.main.is_some())
     }
 
-    /// `restart_on` of a Compose service: restart the container.
     /// `start`, `stop` or `restart` for every member of a group (plan §6).
     /// Services start one after the other in member order (their `after`
     /// pulls dependencies first) and stop in reverse; restarts build at the
@@ -2495,7 +3028,6 @@ The running instance was left as it was."
         }
     }
 
-    /// A container's output (`docker compose logs`, timestamped).
     /// The branch of this working tree changed (or is first known).
     pub fn set_branch(&self, branch: Option<String>) {
         *self.branch.lock().unwrap() = branch;
@@ -2519,6 +3051,7 @@ The running instance was left as it was."
             .map_err(|e| e.to_string())
     }
 
+    /// A container's output (`docker compose logs`, timestamped).
     pub fn container_logs(
         &self,
         group: &str,
@@ -2577,6 +3110,7 @@ The running instance was left as it was."
         result.map_err(|e| e.to_string())
     }
 
+    /// `restart_on` of a Compose service: restart the container.
     pub(crate) fn restart_container(&self, group: &str, service: &str) {
         if self.is_shared(group, service) || self.external_infra().is_some() {
             return; // the main tree's container (ADR-0030)
@@ -2653,14 +3187,21 @@ The running instance was left as it was."
             ));
         }
         let svc = self.service(name)?.clone();
-        let Some(artifact) = self.held.lock().unwrap().remove(name) else {
+        let Some(held) = self.held.lock().unwrap().get(name).cloned() else {
             return Err(format!("no candidate of `{name}` waits for promotion"));
         };
-        self.take_over(name, &svc, artifact)
+        let Some(artifact) = held.artifact else {
+            return Err(format!(
+                "the newest build of `{name}` failed: fix it, and the next build waits here for `devstack promote {name}`"
+            ));
+        };
+        let id = artifact.0.clone();
+        // Released only once it is main: a failed take-over keeps it held.
+        self.take_over(name, &svc, artifact)?;
+        self.release_held(name, Some(&id));
+        Ok(())
     }
 
-    /// Start what `svc` comes after and is not ready yet (services, jobs that
-    /// have not completed). Compose services are the infra plane's job (`up`).
     /// The published ports of a Compose service, as this machine reaches them.
     fn container_ports(&self, group: &str, service: &str) -> Vec<String> {
         self.infra
@@ -2776,6 +3317,8 @@ The running instance was left as it was."
         }
     }
 
+    /// Start what `svc` comes after and is not ready yet (services, jobs that
+    /// have not completed). Compose services are the infra plane's job (`up`).
     fn ensure_after(self: &Arc<Self>, svc: &Service) -> Result<(), String> {
         for dep in &svc.after {
             if let Some(rest) = dep.strip_prefix("compose.")
@@ -2842,13 +3385,23 @@ fn lost_forwards(ports: &[String]) -> Vec<String> {
 /// The error text of a build killed for a newer change.
 pub(crate) const SUPERSEDED: &str = "superseded by a newer change";
 
-/// Quiet period after the last change before a candidate is built (plan §3.2).
+/// The error text of a start, build or job wait that a `stop` ended.
+const STOPPED: &str = "stopped while it started (`devstack stop`)";
+
+/// How long a job may run without a `timeout` of its own.
+const JOB_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// The path a change carries when the watcher lost events (an overflow, a
+/// rescan): what changed is not known.
+pub(crate) const RESCAN: &str = "(rescan)";
+
 /// Logs kept per service: the newest starts and builds (plan §11).
 pub const KEEP_RUN_LOGS: usize = 20;
 /// Artifacts kept per service beyond the pinned ones (ADR-0002 retention).
 pub const KEEP_ARTIFACTS: usize = 5;
 pub const KEEP_BUILD_LOGS: usize = 10;
 
+/// Quiet period after the last change before a candidate is built (plan §3.2).
 const DEBOUNCE: Duration = Duration::from_secs(2);
 /// How long a lane's worktree has to be quiet before its copy follows: short,
 /// a dev server's hot reload waits for it.
@@ -2873,6 +3426,11 @@ fn hold_reason(svc: &Service, paths: &BTreeSet<String>) -> Option<String> {
     let set = devstack_build::watch_set(&p.hold_if_changed)
         .ok()
         .flatten()?;
+    if paths.contains(RESCAN) {
+        return Some(
+            "the file watcher lost events, so whether schema inputs changed is not known".into(),
+        );
+    }
     let hit: Vec<&str> = paths
         .iter()
         .filter(|x| set.is_match(x.as_str()))
@@ -2901,7 +3459,9 @@ fn on_this_platform(svc: &Service) -> bool {
 /// `error:`, `error[`), each once and at most 20; without any, the last 15
 /// lines. A .NET build ends with pages of warnings, which would bury the error.
 fn build_errors(path: &Path) -> String {
-    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let text = std::fs::read(path)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default();
     let mut seen = BTreeSet::new();
     let errors: Vec<&str> = text
         .lines()
@@ -2919,10 +3479,10 @@ fn build_errors(path: &Path) -> String {
     }
 }
 
+/// The last `n` lines of a log, read from its end (a long log is not read
+/// whole; output that is not UTF-8, an OEM code page, is shown lossily).
 fn tail(path: &Path, n: usize) -> String {
-    let text = std::fs::read_to_string(path).unwrap_or_default();
-    let lines: Vec<&str> = text.lines().rev().take(n).collect();
-    lines.into_iter().rev().collect::<Vec<_>>().join("\n")
+    crate::logfiles::last_lines(path, n, None).join("\n")
 }
 
 /// Topological order (dependencies first), stable by name. The stack file is

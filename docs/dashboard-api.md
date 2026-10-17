@@ -137,6 +137,7 @@ type StackView = {
   lane?: string;                        // in a lane's view: its name
   branch?: string;                      // the checked-out branch of this tree
   main_served_by?: string;              // the lane that serves the main ports, if not the main tree
+  watcher_error?: string;               // the file watcher could not be set up, or lost events: edits make no candidates (or every built service got one)
 };
 type ServiceView = {
   name: string; kind: "service" | "job" | "devserver" | "tool" | "static";
@@ -200,6 +201,12 @@ type Event = { seq: number; at: number } & (
 );
 ```
 
+A client that falls more than 1024 events behind (it stalled, or a burst
+came) gets a fresh `snapshot` in place of what it missed: the state it holds
+is replaced, never patched with a gap. A `snapshot` always replaces the whole
+state, whenever it arrives; `seq` counts the daemon's events (a snapshot has
+`0`), so a gap in it is visible.
+
 ### Usage
 
 `GET /v1/usage?history=true` -> `UsageReport` with `history` (the last ten
@@ -224,7 +231,7 @@ type UsageReport = {
 
 | Method and path | Answer |
 |---|---|
-| `GET /v1/services/{name}/logs?tail=200&grep=` | text, the last (matching, case-insensitive) lines of the current instance |
+| `GET /v1/services/{name}/logs?tail=200&grep=` | text, the last (matching, case-insensitive) lines of the current instance; `tail` at most 20 000 |
 | `GET /v1/services/{name}/logs?build=<id>` | text, the build log of that build and the logs of every instance that ran it (an id prefix is enough), each after a `── … ──` header; `tail` counts across them, cut lines are announced; `404` when none is kept |
 | `GET /v1/services/{name}/logs?since=30m` | text, the logs of every instance written to within that time, oldest first, with headers (lines carry no time of their own) |
 | `GET /v1/services/{name}/logs?file=<name>` | text, one kept log (a name from `logs/files`; no other path) |
@@ -251,12 +258,13 @@ type UsageReport = {
 | Method and path | Answer |
 |---|---|
 | `POST /v1/up` | `202` |
-| `POST /v1/down?infra=false` | `204` when every service stopped; with `infra=true` the containers too |
+| `POST /v1/down?infra=false` | `204` when every service stopped (with `infra=true` the containers too); `409 {"error"}` naming what did not stop |
 | `POST /v1/shutdown` | `202`; the daemon stops (`devstack down`) |
 | `GET /v1/services/{name}/env?export=false` | JSON, its environment with each variable's origin (`devstack env`); `export=true`: only what Compose and the stack file give, for running it without devstack |
-| `GET /v1/runs/{id}/log` | text, a command run's output so far |
+| `GET /v1/runs/{id}/log` | text, a command run's output so far (the last 20 000 lines) |
+| `POST /v1/runs/{id}/cancel` | `202`; the run stops: its `exec` step's process tree is killed, its `run` step's job stopped, no further step starts; it ends `failed` with error `cancelled`. `409` when it is not running, `404` for no such run |
 | `GET /v1/tunnel/{port}` with `Upgrade: devstack-tcp` | a raw TCP connection to that port of the lane (ADR-0029 point 4): how a lane on a node reaches its requester's forwards; the node agent passes it through |
-| `POST /v1/services/{name}/start` \| `stop` \| `restart` \| `promote` \| `rollback` | `200 StackView`, or `409 {"error": "..."}` (e.g. compiler errors; the running instance stays). For a name that is no service but a group, `start`/`stop`/`restart` act on the group. `hot-reload-on` / `hot-reload-off` switch a service with `hot_reload` in the stack file into and out of hot-reload mode (`ServiceView.hot_reload`, `hot_reload_available`) |
+| `POST /v1/services/{name}/start` \| `stop` \| `restart` \| `rebuild` \| `promote` \| `rollback` | `200 StackView`, or `409 {"error": "..."}` (e.g. compiler errors; the running instance stays). `rebuild` is `restart` that builds even when an artifact for the same inputs exists (`devstack restart --rebuild`; the build gets the id `<inputs>-<n>`). A `stop` ends a start in progress (a build, a health wait, a job) at once. For a name that is no service but a group, `start`/`stop`/`restart` act on the group. `hot-reload-on` / `hot-reload-off` switch a service with `hot_reload` in the stack file into and out of hot-reload mode (`ServiceView.hot_reload`, `hot_reload_available`) |
 | `POST /v1/groups/{name}/start` \| `stop` \| `restart` | every member service of the group: start in member order, stop in reverse, restart (build) at the same time; `restart` also restarts container members, commands are left out. `200 StackView`, or `409` naming each member that failed (the others ran) |
 | `POST /v1/infra/{group}/{service}/{start\|stop\|restart}` | `204`; one container (in a lane its own; a `shared` one: `409`). The dashboard shows each container on a page of its own (`/s/<stack>/infra/<group>/<service>`) with its log |
 | `POST /v1/commands/{name}` with `{"confirm": false}` | `202 {"run": 7}`, or `428 {"confirm": "text"}` (ask the user, then send `confirm: true`), `409 {"error"}` (a required service is not ready) |

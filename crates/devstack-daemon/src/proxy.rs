@@ -11,7 +11,11 @@
 //! The conditions of ADR-0010: health checks never pass through here; the
 //! proxy's state is in the API ([`ProxyView`]); services can opt out
 //! (`proxy = false`); long-lived connections are drained with a deadline and
-//! then closed by the proxy, so the old instance can stop at once.
+//! then closed by the proxy, so the old instance can stop at once (a body of
+//! known length is let finish: cut, it is a network error for the client).
+//!
+//! Connections to an upstream are kept and reused (no new connection per
+//! request), and hop-by-hop headers stay on their hop (RFC 9110 §7.6.1).
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, StreamBody, combinators::BoxBody};
@@ -28,6 +32,11 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
 
 type Body = BoxBody<Bytes, hyper::Error>;
+
+/// Idle connections kept per upstream.
+const POOL_MAX: usize = 16;
+
+type Sender = hyper::client::conn::http1::SendRequest<Incoming>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Upstream {
@@ -72,6 +81,8 @@ struct Shared {
     last_error: Mutex<Option<String>>,
     /// `true` ends the listeners (a removed lane's proxies, `Proxy::close`).
     closed: watch::Sender<bool>,
+    /// Idle connections to each upstream port, for the next request.
+    pool: Mutex<HashMap<u16, Vec<Sender>>>,
 }
 
 impl Shared {
@@ -122,6 +133,7 @@ impl Proxy {
             served: AtomicU64::new(0),
             last_error: Mutex::new(None),
             closed: watch::channel(false).0,
+            pool: Mutex::new(HashMap::new()),
         });
         for l in std::iter::once(v4).chain(v6) {
             l.set_nonblocking(true)?;
@@ -164,8 +176,14 @@ impl Proxy {
         self.shared.closed.send_replace(true);
     }
 
+    /// A new upstream starts without the last one's error (ADR-0010
+    /// condition 2: the state shown is the state now).
     pub fn set_upstream(&self, upstream: Option<Upstream>) {
+        let changed = *self.shared.upstream.borrow() != upstream;
         self.shared.upstream.send_replace(upstream);
+        if changed {
+            *self.shared.last_error.lock().unwrap() = None;
+        }
     }
 
     pub fn upstream(&self) -> Option<Upstream> {
@@ -201,6 +219,8 @@ impl Proxy {
             }
         }
         self.shared.tracks.lock().unwrap().remove(&port);
+        // Its kept connections close: the instance stops next.
+        self.shared.pool.lock().unwrap().remove(&port);
         left
     }
 
@@ -275,6 +295,75 @@ async fn aborted(rx: &mut watch::Receiver<bool>) {
     }
 }
 
+/// Remove the hop-by-hop headers (RFC 9110 §7.6.1): those `Connection`
+/// names and the fixed ones. An upgrade keeps `Connection` and `Upgrade`,
+/// which carry it to the next hop.
+fn strip_hop_by_hop(h: &mut hyper::HeaderMap, upgrade: bool) {
+    let named: Vec<hyper::header::HeaderName> = h
+        .get_all(hyper::header::CONNECTION)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .filter_map(|n| hyper::header::HeaderName::from_bytes(n.trim().as_bytes()).ok())
+        .collect();
+    for n in named {
+        if !(upgrade && n == hyper::header::UPGRADE) {
+            h.remove(n);
+        }
+    }
+    for n in [
+        "keep-alive",
+        "proxy-connection",
+        "te",
+        "trailer",
+        "transfer-encoding",
+    ] {
+        h.remove(n);
+    }
+    if !upgrade {
+        h.remove(hyper::header::CONNECTION);
+        h.remove(hyper::header::UPGRADE);
+    }
+}
+
+/// A kept connection to `port` that can take a request, if there is one.
+fn kept(sh: &Shared, port: u16) -> Option<Sender> {
+    loop {
+        let kept = sh.pool.lock().unwrap().get_mut(&port).and_then(Vec::pop)?;
+        if kept.is_ready() {
+            return Some(kept);
+        }
+        // closed meanwhile: next
+    }
+}
+
+/// A new connection to `port`.
+async fn sender(port: u16) -> Result<Sender, String> {
+    let stream = connect(port).await.map_err(|e| e.to_string())?;
+    let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        .await
+        .map_err(|e| e.to_string())?;
+    tokio::spawn(conn.with_upgrades());
+    Ok(sender)
+}
+
+/// Keep `sender` for the next request to `port`, once its connection is
+/// idle again (the response is read to its end), unless it closes.
+async fn give_back(sh: &Shared, port: u16, mut sender: Sender) {
+    if sender.ready().await.is_err() {
+        return;
+    }
+    // The upstream may have changed meanwhile; a drained port keeps nothing.
+    if sh.upstream.borrow().as_ref().is_none_or(|u| u.port != port) {
+        return;
+    }
+    let mut pool = sh.pool.lock().unwrap();
+    let kept = pool.entry(port).or_default();
+    if kept.len() < POOL_MAX {
+        kept.push(sender);
+    }
+}
+
 async fn connect(port: u16) -> std::io::Result<TcpStream> {
     let s = match TcpStream::connect(("127.0.0.1", port)).await {
         Ok(s) => s,
@@ -309,26 +398,41 @@ async fn handle(sh: Arc<Shared>, mut req: Request<Incoming>) -> Result<Response<
         ))
     };
 
-    let stream = match connect(up.port).await {
-        Ok(s) => s,
-        Err(e) => return fail(e.to_string()),
-    };
-    let (mut sender, conn) = match hyper::client::conn::http1::handshake(TokioIo::new(stream)).await
-    {
-        Ok(x) => x,
-        Err(e) => return fail(e.to_string()),
-    };
-    tokio::spawn(conn.with_upgrades());
-
     let client_upgrade = req
         .headers()
         .contains_key(hyper::header::UPGRADE)
         .then(|| hyper::upgrade::on(&mut req));
-    let mut resp = match sender.send_request(req).await {
-        Ok(r) => r,
-        Err(e) => return fail(e.to_string()),
+    strip_hop_by_hop(req.headers_mut(), client_upgrade.is_some());
+    // A kept connection the upstream closed while it was idle gives the
+    // request back unsent: it goes out on a new one.
+    let mut req = Some(req);
+    let mut pooled = kept(&sh, up.port);
+    let (sender, mut resp) = loop {
+        let fresh = pooled.is_none();
+        let mut s = match pooled.take() {
+            Some(s) => s,
+            None => match sender(up.port).await {
+                Ok(s) => s,
+                Err(e) => return fail(e),
+            },
+        };
+        match s
+            .try_send_request(req.take().expect("a request to send"))
+            .await
+        {
+            Ok(r) => break (s, r),
+            Err(mut e) => match e.take_message() {
+                Some(back) if !fresh => req = Some(back),
+                _ => return fail(e.into_error().to_string()),
+            },
+        }
     };
     sh.served.fetch_add(1, Ordering::Relaxed);
+    if sh.last_error.lock().unwrap().is_some() {
+        *sh.last_error.lock().unwrap() = None; // it answers again
+    }
+    let upgraded = resp.status() == StatusCode::SWITCHING_PROTOCOLS && client_upgrade.is_some();
+    strip_hop_by_hop(resp.headers_mut(), upgraded);
     {
         let h = resp.headers_mut();
         if let Some(b) = up.build.as_deref().and_then(|b| b.parse().ok()) {
@@ -367,19 +471,28 @@ async fn handle(sh: Arc<Shared>, mut req: Request<Incoming>) -> Result<Response<
         ));
     }
 
-    // Stream the body through a task that also listens for the drain abort.
+    // Stream the body through a task that also listens for the drain abort;
+    // a body of known length is let finish (cut, it is a network error for
+    // the client, not something to retry). A body read to its end leaves its
+    // connection for the next request.
     let (parts, mut body) = resp.into_parts();
+    let bounded = parts.headers.contains_key(hyper::header::CONTENT_LENGTH);
     let (tx, rx) = mpsc::channel::<Result<Frame<Bytes>, hyper::Error>>(16);
+    let port = up.port;
     tokio::spawn(async move {
         let _guard = guard;
-        loop {
+        let complete = loop {
             tokio::select! {
                 frame = body.frame() => match frame {
-                    Some(f) => if tx.send(f).await.is_err() { break },
-                    None => break,
+                    Some(Ok(f)) => if tx.send(Ok(f)).await.is_err() { break false },
+                    Some(Err(e)) => { let _ = tx.send(Err(e)).await; break false },
+                    None => break true,
                 },
-                _ = aborted(&mut abort) => break,
+                _ = aborted(&mut abort), if !bounded => break false,
             }
+        };
+        if complete {
+            give_back(&sh, port, sender).await;
         }
     });
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
@@ -504,6 +617,79 @@ mod tests {
         assert!(
             h.contains("x-devstack-build: b2") && h.contains("x-devstack-pending: building"),
             "{h}"
+        );
+    }
+
+    #[test]
+    fn hop_by_hop_headers_stay_on_their_hop() {
+        let mut h = hyper::HeaderMap::new();
+        for (k, v) in [
+            ("connection", "keep-alive, x-private"),
+            ("keep-alive", "timeout=5"),
+            ("x-private", "1"),
+            ("te", "trailers"),
+            ("content-type", "text/plain"),
+        ] {
+            h.insert(k, v.parse().unwrap());
+        }
+        strip_hop_by_hop(&mut h, false);
+        let left: Vec<&str> = h.keys().map(|k| k.as_str()).collect();
+        assert_eq!(left, ["content-type"]);
+        let mut up = hyper::HeaderMap::new();
+        up.insert("connection", "upgrade".parse().unwrap());
+        up.insert("upgrade", "websocket".parse().unwrap());
+        strip_hop_by_hop(&mut up, true);
+        assert!(up.contains_key("connection") && up.contains_key("upgrade"));
+    }
+
+    #[test]
+    fn connections_to_the_upstream_are_kept_and_errors_clear() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let up = l.local_addr().unwrap().port();
+        l.set_nonblocking(true).unwrap();
+        let n = accepted.clone();
+        rt.spawn(async move {
+            let l = tokio::net::TcpListener::from_std(l).unwrap();
+            loop {
+                let (s, _) = l.accept().await.unwrap();
+                n.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let svc = hyper::service::service_fn(|_r: Request<Incoming>| async {
+                        Ok::<_, Infallible>(Response::new(Full::new(Bytes::from("ok"))))
+                    });
+                    let _ = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(TokioIo::new(s), svc)
+                        .await;
+                });
+            }
+        });
+        let port = free_port();
+        let p = Proxy::bind("api", port, rt.handle()).unwrap();
+        // Nothing listens there: an error, gone with the next upstream.
+        p.set_upstream(Some(Upstream {
+            port: free_port(),
+            build: None,
+        }));
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        assert_eq!(get(&mut c, "/").0, 502);
+        assert!(p.view().last_error.is_some());
+        p.set_upstream(Some(Upstream {
+            port: up,
+            build: None,
+        }));
+        assert!(p.view().last_error.is_none());
+        for _ in 0..5 {
+            // A new client connection each time: the upstream one is kept.
+            let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            assert_eq!(get(&mut c, "/").2, "ok");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            1,
+            "one upstream connection"
         );
     }
 

@@ -382,7 +382,9 @@ impl Sampler {
                 }
             })
             .collect();
-        // Phase 1 has one lane, `main`, which owns everything (ADR-0012).
+        // One sampler per supervisor: this report is its lane's (`main` for
+        // the main working tree, ADR-0024); its builds are the daemon's one
+        // build job (ADR-0020).
         let mut lane = Load::default();
         services.iter().for_each(|e| lane.add(e.load));
         lane.add(builds.load);
@@ -394,7 +396,11 @@ impl Sampler {
             containers,
             groups,
             lanes: vec![LaneEntry {
-                name: "main".into(),
+                name: if sup.lane.is_empty() {
+                    "main".into()
+                } else {
+                    sup.lane.clone()
+                },
                 load: lane,
                 disk: inner.disk_measured.then(|| inner.disk.clone()),
             }],
