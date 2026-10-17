@@ -202,7 +202,15 @@ anything outside the repository. When one of those changed, `devstack restart
   short gap). Only for services the proxy cannot carry.
 
 Generated directories never count as changes: `bin`, `obj`, `node_modules`,
-`target`, `.git`, `.devstack`.
+`target`, `.git`, `.devstack`. The watcher does not open them either, so a
+package install running in one is never held up by devstack.
+
+A folder that is moved or renamed is reported by its own path, not by its
+files; the files in it count when they are created or saved. A `watch`
+pattern that names file types (`src/**/*.cs`) does not match the folder, so
+moving a folder of sources into place starts no candidate; a pattern that
+covers the folder (`src/Api/**`) does. After such a move, save one of its
+files or run `devstack restart <service>`, which builds first.
 
 ### Health
 

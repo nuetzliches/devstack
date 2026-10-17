@@ -795,6 +795,7 @@ What is open, roughly in the order it pays off, and where it comes from.
 | GPUs placed: a lane asks for one, the node hands it to the lane's container (`--gpus`), its policy decides (ADR-0036 point 4; reported since 0.9.6) | ADR-0036 | medium |
 | Placing by node tags (ADR-0033 point 2: `--on pool:gpu`); the syntax clashes with `<pool>:<node>` (ADR-0034) and is to be decided first | ADR-0033 | small |
 | Metrics in the pool's collector: the devstack tenant takes logs only; durations and gauges need a metrics pipeline with TSDB templates and a retention | ADR-0037 | small |
+| Watcher on Windows: a folder that arrives by a move (into the tree, or from one folder to another) is reported as itself only; report its files by listing it once the tree has been quiet for a moment, never in the watcher callback (the immediate listing raced `pnpm install`) | the EBUSY fix in `watch.rs` | small |
 | Own domain for the landing page (now on GitHub Pages) | phase 4 | small |
 | Code signing of the Windows binary (deferred) | [#3](https://github.com/nuetzliches/devstack/issues/3) | small |
 | Remove the downstream stack's old orchestrator once its team works without it | phase 4 | downstream |
