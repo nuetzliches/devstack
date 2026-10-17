@@ -39,8 +39,23 @@ pub fn ignored(rel: &str) -> bool {
 
 /// Start watching the repository (only its top directory, for the stack file,
 /// when nothing in the stack file asks for more); `None` when the OS watch
-/// could not be set up.
+/// could not be set up, which the status and the log then say. When the OS
+/// drops events (an overflow, a checkout of thousands of files), every built
+/// service gets a candidate, as if all of its files had changed.
 pub fn start(sup: Arc<Supervisor>) -> Option<Watcher> {
+    match watch(sup.clone()) {
+        Ok(w) => Some(w),
+        Err(e) => {
+            sup.set_watcher_error(Some(format!(
+                "the file watcher could not be set up on {}: {e}; edits make no candidates (restart a service to pick them up)",
+                sup.repo.display()
+            )));
+            None
+        }
+    }
+}
+
+fn watch(sup: Arc<Supervisor>) -> Result<Watcher, String> {
     let platform = devstack_config::model::Platform::current();
     let in_lane = !sup.lane.is_empty();
     let runs = |s: &devstack_config::model::Service| {
@@ -83,11 +98,34 @@ pub fn start(sup: Arc<Supervisor>) -> Option<Watcher> {
         .map(|p| p.to_string_lossy().replace('\\', "/"));
     let repo = sup.repo.clone();
     let me = sup.clone();
+    let lane_copy = lane;
+    let rescan = {
+        let (me, built) = (
+            sup.clone(),
+            built.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+        );
+        move |why: String| {
+            me.set_watcher_error(Some(format!(
+                "the file watcher lost events ({why}); every built service was rebuilt as a candidate"
+            )));
+            if lane {
+                me.copy_changed();
+            }
+            for n in &built {
+                me.changed(n, crate::supervisor::RESCAN);
+            }
+        }
+    };
     let mut inner = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        let Ok(ev) = res else { return };
+        let ev = match res {
+            Ok(ev) if ev.need_rescan() => return rescan("the OS asked for a rescan".into()),
+            Ok(ev) => ev,
+            Err(e) => return rescan(e.to_string()),
+        };
         if matches!(ev.kind, EventKind::Access(_)) {
             return;
         }
+        me.watcher_ok();
         // A new directory: inotify watches it only from now on, so files created
         // in it right away are missed. Report what it already contains.
         let mut paths = ev.paths;
@@ -115,7 +153,7 @@ pub fn start(sup: Arc<Supervisor>) -> Option<Watcher> {
             if rel.is_empty() || ignored(&rel) {
                 continue;
             }
-            if lane {
+            if lane_copy {
                 me.copy_changed();
             }
             if stack_rel.as_deref() == Some(rel.as_str()) {
@@ -150,14 +188,15 @@ pub fn start(sup: Arc<Supervisor>) -> Option<Watcher> {
             }
         }
     })
-    .ok()?;
+    .map_err(|e| e.to_string())?;
     let mode = if only_stack_file {
         RecursiveMode::NonRecursive
     } else {
         RecursiveMode::Recursive
     };
-    inner.watch(&sup.repo, mode).ok()?;
-    Some(Watcher { _inner: inner })
+    inner.watch(&sup.repo, mode).map_err(|e| e.to_string())?;
+    sup.set_watcher_error(None);
+    Ok(Watcher { _inner: inner })
 }
 
 #[cfg(test)]

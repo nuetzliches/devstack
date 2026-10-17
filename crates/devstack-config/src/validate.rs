@@ -624,10 +624,15 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                 if step.cwd.is_some() && !is_exec {
                     c.err(format!("{sp}.cwd"), "`cwd` belongs to an `exec` step");
                 }
+                if step.timeout.is_some() && !is_exec && !is_http {
+                    c.err(
+                        format!("{sp}.timeout"),
+                        "`timeout` belongs to an `exec` or `http` step",
+                    );
+                }
                 for (key, set) in [
                     ("headers", !step.headers.is_empty()),
                     ("body", step.body.is_some()),
-                    ("timeout", step.timeout.is_some()),
                 ] {
                     if set && !is_http {
                         c.err(

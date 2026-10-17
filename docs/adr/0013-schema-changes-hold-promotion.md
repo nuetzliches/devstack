@@ -40,3 +40,23 @@ held candidates prominently.
 ## Enforced by
 
 - Promotion gate in the supervisor (planned); stack file validation (planned).
+
+## Addendum 2026-10-18: how long a candidate stays held
+
+"Differs from main's in a matching file" is decided per change as it arrives,
+so the gate must outlive the change that tripped it: once a candidate is held,
+every later candidate of the service is held too (it carries the held change),
+replacing the held one, and `devstack promote` takes the newest. The gate
+opens when
+
+- `devstack promote` put the held build into main (a failed promote keeps it
+  held);
+- a manual `restart` (or a start that builds) put a build of the tree as it is
+  now into main: the user chose to take the tree;
+- a later build is the build main runs (the change was undone).
+
+A held candidate whose newer build failed keeps the gate with nothing to
+promote until the tree builds again. A rollback does not open it. The gate is
+persisted with the main slot (ADR-0016), so a daemon restart keeps it; what
+changed in the tree while no daemon ran becomes a candidate after the restore
+and meets the same gate.

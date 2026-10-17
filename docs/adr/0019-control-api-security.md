@@ -92,3 +92,18 @@ user's profile, or run code as this user, is this user.
   `from_own_page`, `page_headers`, `stack_paths`, `who_answers`);
   `crates/devstack/tests/hub.rs` (`pairing_cookie_and_checks`,
   `the_token_goes_only_to_this_users_hub`).
+
+## Addendum 2026-10-18: IPv4 loopback, and `DEVSTACK_LISTEN`
+
+1. The daemon listens on `127.0.0.1` only, on a free port, which
+   `daemon.json` names; it does not also bind `::1` (the port chosen on IPv4
+   may be another process's on IPv6, and every client connects to
+   `127.0.0.1`). The `Host` check still accepts `[::1]:<port>`, which costs
+   nothing. Point 1's "(and `::1`)" reads as "never anything but loopback".
+2. `DEVSTACK_LISTEN=<address:port>` binds another address, for one case: the
+   daemon inside a lane container on a node (ADR-0025), which the node agent
+   reaches over the lane's network. It is accepted only together with
+   `DEVSTACK_REMOTE_LANE` (the lane container's marker, set by the node
+   agent); anywhere else the daemon refuses to start with an error. In the
+   lane container the API is then reachable from every container on the
+   lane's network, protected by its token and the `Host` check alone.

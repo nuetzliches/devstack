@@ -511,14 +511,18 @@ fn hot_reload_and_prepare_are_checked_like_the_rest() {
 #[test]
 fn keys_of_another_step_kind_are_errors() {
     let issues = invalid(&format!(
-        "{MINIMAL}\n[commands.c]\ndescription = \"d\"\nsteps = [{{ start = \"api\", cwd = \"x\" }}, {{ exec = \"x\", timeout = \"5s\", body = \"b\" }}]\n"
+        "{MINIMAL}\n[commands.c]\ndescription = \"d\"\nsteps = [{{ start = \"api\", cwd = \"x\", timeout = \"5s\" }}, {{ exec = \"x\", timeout = \"5s\", body = \"b\" }}]\n"
     ));
     assert!(
         has(&issues, "commands.c.steps[0].cwd", "`exec`"),
         "{issues:?}"
     );
     assert!(
-        has(&issues, "commands.c.steps[1].timeout", "`http`"),
+        has(&issues, "commands.c.steps[0].timeout", "`exec` or `http`"),
+        "{issues:?}"
+    );
+    assert!(
+        !issues.iter().any(|i| i.contains("steps[1].timeout")),
         "{issues:?}"
     );
     assert!(
