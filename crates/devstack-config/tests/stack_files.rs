@@ -71,6 +71,33 @@ fn build_needs_output() {
 }
 
 #[test]
+fn only_a_job_has_a_timeout() {
+    let job = format!(
+        "{MINIMAL}[services.migrate]
+kind = \"job\"
+run = \"x\"
+timeout = \"10m\"
+"
+    );
+    let stack = from_str(&job, Path::new("t")).unwrap();
+    assert_eq!(
+        stack.services["migrate"].timeout,
+        Some(std::time::Duration::from_secs(600))
+    );
+    let issues = invalid(&MINIMAL.replace(
+        "port = 5000",
+        "port = 5000
+timeout = \"1m\"",
+    ));
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.contains("only a job has a `timeout`")),
+        "{issues:?}"
+    );
+}
+
+#[test]
 fn references_are_checked() {
     let text = format!(
         "{MINIMAL}after = [\"nope\", \"compose.app.cache\", \"compose.other.db\"]\nenv = {{ A = \"{{service.ghost.url}}\", B = \"{{compose.app.cache.80}}\", C = \"{{bogus}}\" }}\n"

@@ -472,6 +472,15 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                 "a job runs to completion; `port` and `health` do not apply",
             );
         }
+        if svc.timeout.is_some() && svc.kind != Kind::Job {
+            c.err(
+                format!("{p}.timeout"),
+                "only a job has a `timeout` (a service's start is bounded by `health.timeout`)",
+            );
+        }
+        if svc.timeout.is_some_and(|t| t.is_zero()) {
+            c.err(format!("{p}.timeout"), "must be more than 0");
+        }
         if svc.kind == Kind::Tool && svc.health.is_some() {
             c.err(format!("{p}.health"), "a tool has no health check");
         }

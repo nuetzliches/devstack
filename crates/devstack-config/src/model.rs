@@ -295,6 +295,11 @@ pub struct Service {
     /// like are not in it. Runs in the snapshot before the service is built
     /// there, and in a lane's copy before the service starts from it.
     pub prepare: Option<Prepare>,
+    /// `kind = "job"`: how long it may run before it counts as failed and is
+    /// stopped, e.g. `"10m"`. Default 30 minutes.
+    #[schemars(with = "Option<String>")]
+    #[serde(default, deserialize_with = "opt_duration")]
+    pub timeout: Option<Duration>,
 }
 
 /// `prepare` of a service: a command run in a copy of the source.
