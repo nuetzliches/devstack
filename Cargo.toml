@@ -37,7 +37,7 @@ tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time", "signal", "io-util"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
-toml = "0.9"
+toml = "1.1"
 # The platform verifier: TLS to GitHub (update, release check) trusts the
 # system's certificate store, so a TLS-inspecting proxy works as it does for
 # the installers.
