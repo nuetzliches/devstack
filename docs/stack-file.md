@@ -34,7 +34,27 @@ env_files = [".env.defaults", ".env"]   # for ${VAR} everywhere; missing files a
 
 `requires` is checked before anything else: an older devstack asks to be
 updated instead of failing on a key it does not know. Raise it when the file
-starts using something new.
+starts using something new. A pre-release devstack (`0.9.8-rc1`) counts as
+older than its release (`0.9.8`). Next comes `version`: a file of another
+schema version says so, not which of its keys is unknown.
+
+### Names, paths, env files
+
+- **Names** of services, Compose groups, commands and groups use lowercase
+  letters, digits and `-`, do not start with `-`, and are none of the names
+  Windows reserves for devices (`con`, `prn`, `aux`, `nul`, `com1`-`com9`,
+  `lpt1`-`lpt9`): they become directory names.
+- **Paths** in `env_files`, `[compose.<group>] files` and `env_files`,
+  `[lanes] dockerfile` and `sync` are relative to the repository and stay
+  inside it: no absolute path, no drive (`C:`), no `..`, judged the same on
+  every platform.
+- **Env files** are read in Compose's dialect: `KEY=VALUE` lines, `#`
+  comments, an optional `export `; an unquoted value ends at ` #`; a
+  `"double-quoted"` one may span lines and knows the escapes `\n`, `\r`,
+  `\t`, `\\`, `\"`, `\$`, and `$$` for a `$`; a `'single-quoted'` one is
+  taken as written. `${VAR}`, `${VAR:-default}`, `${VAR-default}` and `$VAR`
+  in an unquoted or double-quoted value come from the process environment,
+  then from what the files set before; an unknown one is empty.
 
 ## `[compose.<group>]`: the infra plane
 
@@ -65,6 +85,19 @@ SMB). Keys must be in `services`.
 - A container is ready when Compose reports it healthy, or running if it has no
   health check. Give important containers a health check in the overlay.
 
+Rules `devstack check` enforces:
+
+- `files` and `services` need at least one entry each; `project` is not
+  empty and not used by another group.
+- `project` uses lowercase letters, digits, `_` and `-`; names in
+  `services` letters, digits, `_` and `-` (no `.`, which
+  `compose.<group>.<service>` splits on); `networks` may also have `.`.
+  Each starts with a letter or digit (a leading `-` would be a flag to
+  `docker`).
+- `shared`, `restart_on` and `urls` name services of `services`; `urls`
+  are `http://` or `https://` addresses or `""`; `restart_on` holds globs.
+- `after` names other groups, without cycles.
+
 ## `[services.<name>]`: native processes
 
 ```toml
@@ -87,6 +120,24 @@ watch  = ["src/Api/**", "Directory.Packages.props"]
 | `devserver` | builds and serves in one process, hot reload | `health` | `ng serve`, `vite` |
 | `tool` | long-running, interactive, no health check | none | a test UI |
 | `static` | a frontend's production bundle, built into an artifact and served by devstack | `health` | end-to-end runs on a pinned build |
+
+Rules `devstack check` enforces:
+
+- `service`, `job`: `build` and `output` go together (both or neither).
+- `devserver`, `tool`: no `build`, no `output`.
+- `static`: needs `build`, `output` and `port`, has no `run`; `spa` belongs
+  to `static` only.
+- Every other kind needs `run`.
+- `job`: no `port`, no `health`. `tool`: no `health`.
+- `health` needs `port`; `proxy = true` only for a `service` or `static`
+  with a `port`.
+- `port` is 1-65535 and leaves room for a lane (`port` + `[lanes]
+  port_step` at most 65535). Two services may share a port only if at most
+  one of them starts automatically (`autostart`).
+- `after` names services or `compose.<group>.<service>` (a service its
+  group starts), without cycles.
+- `watch`, `restart_on`, `promote.hold_if_changed` and `prepare.inputs`
+  are globs (`**`, `*`, `?`, `[...]`, `{a,b}`) that must compile.
 
 ### A static frontend (`kind = "static"`)
 
@@ -112,7 +163,11 @@ same origin through your own proxy setup).
 ### Builds and artifacts ([ADR-0002](adr/0002-processes-run-from-immutable-artifacts.md))
 
 `build` runs in a snapshot of the working tree (the lane), not in your checkout,
-with the normal output directories. `output` is copied into an artifact named by
+with the normal output directories. In `build` and `output`, `{repo}` is
+the snapshot and `${VAR}` comes from devstack's environment; devstack
+expands both before the shell sees the line, the same under `cmd` and `sh`.
+Other placeholders are not known to a build (lanes share its artifact), and
+`cwd` is a plain path relative to the repository, without placeholders. `output` is copied into an artifact named by
 the build id (a hash of the inputs); `run` starts from `{artifact}`. The same
 inputs never build twice, and a rollback needs no build.
 
@@ -126,7 +181,8 @@ What goes into the build id:
   yarn), `tsconfig.json` / `tsconfig.base.json`, `Cargo.toml`/`.lock`,
   `go.mod`/`.sum`, `pyproject.toml`, `pom.xml`, Gradle build and settings
   files. A change to one starts candidates like a watched file;
-- the `build` command and `output`.
+- the `build` command, `output`, `cwd` and `prepare` (`run`, `cwd`,
+  `inputs`, and the content of the files `inputs` matches).
 
 Not in it: ignored files (they are not in the snapshot either), the SDK and
 anything outside the repository. When one of those changed, `devstack restart
@@ -161,6 +217,8 @@ health = { http = "/health/ready", timeout = "180s", insecure_tls = true }
 - `timeout`: how long a start may take until it counts as failed.
 - `insecure_tls`: the service speaks HTTPS with a self-signed certificate. The
   service's URL (`{service.x.url}`, the dashboard link) then uses `https`.
+
+`http` and `timeout` are required.
 
 ### Promotion ([ADR-0013](adr/0013-schema-changes-hold-promotion.md))
 
@@ -206,10 +264,21 @@ Telemetry__Endpoint = "http://127.0.0.1:4317"
 - `devstack env <service>` shows the resulting environment with the origin of
   every variable; `--export dotenv --out <file>` exports it for running the
   service without devstack ([ADR-0015](adr/0015-devstack-is-optional.md)).
-- Every process also gets `DEVSTACK_SERVICE` (its name), `DEVSTACK_BUILD_ID`
-  (the build it runs, a built service only) and `DEVSTACK_SLOT` (`main`, or
-  `candidate` while it starts beside the running one), so it can tell its
-  instances apart in its own logs or telemetry.
+- The export is in Compose's env-file dialect (every value double-quoted,
+  `$` as `$$`): Compose's `env_file`, `docker compose --env-file` and
+  devstack's own `env_files` read it back as it was. `docker run
+  --env-file` takes lines verbatim and does not.
+- Every process also gets `DEVSTACK_SERVICE` (its name), `DEVSTACK_LANE`
+  (its lane, `main` in the main working tree), `DEVSTACK_BUILD_ID` (the
+  build it runs, a built service only) and `DEVSTACK_SLOT` (`main`, or
+  `candidate` while it starts beside the running one; a lane's own instance
+  is `main` too), so it can tell its instances apart in its own logs or
+  telemetry.
+- On Windows, variable names that differ only in case are one variable: the
+  later layer wins, and `${PATH}` finds `Path`.
+- `rewrite_hosts` needs `compose`; each entry is a service the service's own
+  group starts, or `<group>.<service>` of another. `workers.env` names at
+  least one variable.
 
 ### Hot-reload mode
 
@@ -218,6 +287,9 @@ Telemetry__Endpoint = "http://127.0.0.1:4317"
 run = "dotnet watch run --non-interactive"   # instead of the build and `run`
 cwd = "src/Api"                              # default: the service's `cwd`
 ```
+
+`run` is required and interpolated like the service's `run`, without
+`{artifact}` (there is no build); `cwd` is a plain path.
 
 `devstack hot-reload api on` (or the dashboard) stops the built instance and
 any candidate and runs this command from the **source tree** behind the same
@@ -244,7 +316,9 @@ devstack builds in a snapshot, and a lane runs its dev servers from one
 `node_modules` and the like are not in it. `prepare` runs in the snapshot
 before the service is built there, and in a lane's copy before the service
 starts from it; again only when a file of `inputs` changed (none: once per
-copy). `cwd` defaults to the service's. Its output goes to
+copy). `cwd` defaults to the service's. `run` is required and, like `cwd`,
+used as written: placeholders and `${VAR}` are an error there. `inputs` are
+globs. Its output goes to
 `.devstack/logs/<service>/prepare-*.log`; a failure stops the build or start
 with its tail. The main working tree runs dev servers in place, with the
 developer's own `node_modules`.
@@ -269,6 +343,10 @@ dockerfile = "dev/lane.Dockerfile"            # or one the node builds from the 
 sync       = ["web/certs/*.pem"]              # ignored files such a lane needs all the same
 share      = ["team:qa"]                      # whom such a lane is shared with by default (`*`: everyone); none: nobody
 ```
+
+`port_step` is 1-10000. `dockerfile` and `sync` stay inside the repository
+(see "Names, paths, env files"); `sync` holds globs; `image`, if set, is
+not empty.
 
 Every `git worktree` of the repository is a **lane** of the main tree's
 daemon, the moment git creates it; the dashboard shows it under the stack,
@@ -339,8 +417,15 @@ steps = [
 ]
 ```
 
-Each step has exactly one action: `exec`, `http` (`METHOD url`, with `headers`,
-`body`, `timeout`), `start`, `stop`, `restart` or `run`. Commands run with
+`description` and `steps` (at least one) are required; `requires` names
+services. Each step has exactly one action: `exec` (with `cwd`), `http`
+(`METHOD url`, METHOD one of `GET`, `POST`, `PUT`, `PATCH`, `DELETE`; with
+`headers`, `body`, `timeout`), `start`, `stop`, `restart` or `run` (a
+service of kind `job`). A key of another action (`cwd` on an `http` step,
+`timeout` on an `exec` step) is an error. Steps may use `{repo}`, `{lane}`,
+`{lane_suffix}`, `{service.<name>.url}`, `{service.<name>.port}` and
+`${VAR}`; `{port}`, `{artifact}`, `{is_main}` and `{compose.…}` have no
+value in a command. Commands run with
 `devstack run <name>`, from the dashboard and through MCP (`run_command`). A
 command with `confirm` runs from MCP only with `confirm: true`, which an agent
 sends only after the user agreed.
@@ -356,6 +441,8 @@ members = ["api", "web", "compose.app.db", "command.seed"]
 
 Labels for the dashboard and `devstack status`, not dependencies: a member may
 be in several groups, and members of no group appear under "Other".
+`members` is required, not empty, lists each member once, and names what
+exists (a `compose.<group>.<service>` member is a service its group starts).
 
 ## Placeholders
 
@@ -373,5 +460,13 @@ be in several groups, and members of no group appear under "Other".
 | `{compose.<group>.<service>.<port>.host}`, `.port`, `.address` | its host (`127.0.0.1`), its port (`15432`), or both (`127.0.0.1:15432`), for connection strings: `Server={compose.app.sql.1433.host},{compose.app.sql.1433.port}`, `Host=…host;Port=…port`. In a lane: the lane's own container, or the main tree's for a `shared` one |
 | `${VAR}`, `${VAR:-default}` | from the env files and the process environment; placeholders inside a default are resolved too |
 
-`{{` and `}}` are literal braces. Durations: `500ms`, `30s`, `5m`, `1h` (a bare
+`{{` and `}}` are literal braces, inside a `${VAR:-default}` too (where a
+single `}` ends the default). Durations: `500ms`, `30s`, `5m`, `1h` (a bare
 number is seconds).
+
+Where they have a value: `{port}` only in a service with a `port`,
+`{artifact}` only in a service with `build` (not in `hot_reload.run`),
+`{service.<name>.…}` only for a service with a `port`, `{compose.…}` only
+for a service its group starts. `build` and `output` take `{repo}` only;
+commands no `{port}`, `{artifact}`, `{is_main}` or `{compose.…}`; `cwd`,
+`prepare.run`, `prepare.cwd` and `hot_reload.cwd` none at all.
