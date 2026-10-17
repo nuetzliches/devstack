@@ -148,6 +148,8 @@ jobs:
           command: check advisories
 
   integration:
+    # The name stays `integration (<os>)`: the branch ruleset requires it.
+    name: integration (${{ matrix.os }})
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     # Black-box test of the daemon against the example stack (needs the .NET SDK).
