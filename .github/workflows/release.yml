@@ -1,17 +1,28 @@
 name: release
 
 # A tag v<version> builds devstack for Windows and Linux and publishes a GitHub
-# release with the archives, SHA256SUMS and the install scripts. Asset names
-# carry no version, so ".../releases/latest/download/<asset>" stays stable.
+# release with the archives, SHA256SUMS and the install scripts, and a build
+# provenance attestation for each of them (`gh attestation verify <file>
+# --repo nuetzliches/devstack`). Asset names carry no version, so
+# ".../releases/latest/download/<asset>" stays stable.
 #
-# workflow_dispatch and the schedule build the same archives without publishing
-# (dry run). On main they also keep the release build cache warm: a tag run can
+# workflow_dispatch, the schedule and pull requests that change the release
+# (this file, the installers) build the same archives without publishing (dry
+# run). On main they also keep the release build cache warm: a tag run can
 # read caches of main but not of another tag, and GitHub drops a cache unused
 # for 7 days, hence twice a week.
+#
+# Actions are pinned by commit SHA (the comment names the release);
+# Dependabot (.github/dependabot.yml) proposes updates.
 
 on:
   push:
     tags: ['v*']
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'install.ps1'
+      - 'install.sh'
   workflow_dispatch:
   schedule:
     - cron: '17 3 * * 1,4'
@@ -24,8 +35,8 @@ jobs:
     # The dashboard is the same for every target: build it once.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -33,10 +44,23 @@ jobs:
       - name: dashboard
         working-directory: ui
         run: npm ci && npm run build
-      - uses: actions/upload-artifact@v4
+      # What ships has no known advisory (a warning in ci, required here).
+      - name: npm audit
+        working-directory: ui
+        run: npm audit --omit=dev
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ui-dist
           path: ui/dist
+
+  advisories:
+    # No dependency with a known advisory goes into a release (deny.toml).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
 
   build:
     needs: ui
@@ -52,11 +76,12 @@ jobs:
             archive: devstack-x86_64-unknown-linux-musl.tar.gz
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: release-${{ matrix.target }}
           # Only main writes the cache; tag runs read it.
@@ -64,13 +89,15 @@ jobs:
       - name: musl tools
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - name: tag matches the crate version
+      - name: tag matches the crate and dashboard versions
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           crate=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
           [ "v$crate" = "${GITHUB_REF_NAME}" ] || { echo "::error::tag ${GITHUB_REF_NAME} != Cargo.toml version $crate"; exit 1; }
-      - uses: actions/download-artifact@v4
+          ui=$(grep -m1 '"version":' ui/package.json | cut -d'"' -f4)
+          [ "v$ui" = "${GITHUB_REF_NAME}" ] || { echo "::error::tag ${GITHUB_REF_NAME} != ui/package.json version $ui"; exit 1; }
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ui-dist
           path: ui/dist
@@ -87,20 +114,23 @@ jobs:
             tar -czf "dist/${{ matrix.archive }}" -C "$dir" devstack -C "$GITHUB_WORKSPACE" README.md
           fi
           "$dir/devstack${{ matrix.os == 'windows-latest' && '.exe' || '' }}" --version
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.target }}
           path: dist/${{ matrix.archive }}
 
   publish:
-    needs: build
+    needs: [build, advisories]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # Build provenance: a signed attestation per file (Sigstore, OIDC).
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
           pattern: x86_64-*
@@ -109,9 +139,18 @@ jobs:
         run: |
           cp install.ps1 install.sh dist/
           (cd dist && sha256sum devstack-* > SHA256SUMS && cat SHA256SUMS)
+      - name: build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/devstack-*
+            dist/SHA256SUMS
+            dist/install.ps1
+            dist/install.sh
       - name: release
         env:
           GH_TOKEN: ${{ github.token }}
+        # --verify-tag: only a tag that exists in the repository is released.
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag \
             --title "devstack ${GITHUB_REF_NAME#v}" --generate-notes
