@@ -480,11 +480,12 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
     let n: u64 = num
         .parse()
         .map_err(|_| format!("invalid duration `{s}` (expected e.g. `30s`, `5m`, `500ms`)"))?;
+    let too_long = || format!("duration `{s}` is too long");
     let d = match unit.trim() {
         "ms" => Duration::from_millis(n),
         "" | "s" => Duration::from_secs(n),
-        "m" => Duration::from_secs(n * 60),
-        "h" => Duration::from_secs(n * 3600),
+        "m" => Duration::from_secs(n.checked_mul(60).ok_or_else(too_long)?),
+        "h" => Duration::from_secs(n.checked_mul(3600).ok_or_else(too_long)?),
         other => {
             return Err(format!(
                 "invalid duration unit `{other}` in `{s}` (use ms, s, m or h)"

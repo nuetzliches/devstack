@@ -93,7 +93,12 @@ pub struct Context {
     pub artifact: Option<PathBuf>,
     /// Port of the instance being started.
     pub port: Option<u16>,
+    /// `{is_main}`: the instance runs the background workers (ADR-0008).
     pub is_main: bool,
+    /// The instance starts beside a running one (ADR-0003):
+    /// `DEVSTACK_SLOT=candidate` instead of `main`. Not the same as
+    /// `!is_main`: a lane's main instance runs no workers, but is no candidate.
+    pub candidate: bool,
     /// The lane (plan §3.5); empty means `main`.
     pub lane: String,
     /// Main-slot URL of every service with a port.
@@ -147,6 +152,41 @@ impl Resolve for Context {
                 }),
         }
     }
+}
+
+impl Context {
+    /// A `${VAR}` lookup: case-insensitive on Windows, as the environment
+    /// there is (`${PATH}` finds `Path`).
+    pub fn var(&self, name: &str) -> Option<String> {
+        lookup(&self.vars, name).cloned()
+    }
+}
+
+/// `map[name]`, on Windows without regard to case when there is no exact match.
+pub fn lookup<'a, T>(map: &'a BTreeMap<String, T>, name: &str) -> Option<&'a T> {
+    map.get(name).or_else(|| {
+        if cfg!(windows) {
+            map.iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v)
+        } else {
+            None
+        }
+    })
+}
+
+/// Insert `name`, replacing on Windows an entry that differs only in case:
+/// a process gets one of them, and the later layer has to be the one.
+pub fn insert<T>(map: &mut BTreeMap<String, T>, name: String, value: T) {
+    if cfg!(windows)
+        && let Some(old) = map
+            .keys()
+            .find(|k| **k != name && k.eq_ignore_ascii_case(&name))
+            .cloned()
+    {
+        map.remove(&old);
+    }
+    map.insert(name, value);
 }
 
 /// `main` for the main working tree.
@@ -207,7 +247,8 @@ pub fn compose(
                     service: r.service.clone(),
                 }
             };
-            env.insert(
+            insert(
+                &mut env,
                 k.clone(),
                 Var {
                     value: rewritten,
@@ -218,14 +259,15 @@ pub fn compose(
     }
 
     // 3: stack file.
-    let lookup = |k: &str| ctx.vars.get(k).cloned();
+    let lookup = |k: &str| ctx.var(k);
     for (k, v) in &svc.env {
         let value =
             interpolate::expand(v, ctx, &lookup).map_err(|source| EnvError::Interpolation {
                 var: k.clone(),
                 source,
             })?;
-        env.insert(
+        insert(
+            &mut env,
             k.clone(),
             Var {
                 value,
@@ -244,7 +286,8 @@ pub fn compose(
                         source,
                     }
                 })?;
-                env.insert(
+                insert(
+                    &mut env,
                     k.clone(),
                     Var {
                         value,
@@ -253,17 +296,27 @@ pub fn compose(
                 );
             }
         }
-        env.insert(
+        insert(
+            &mut env,
             "DEVSTACK_SERVICE".into(),
             Var {
                 value: name.into(),
                 origin: Origin::Devstack,
             },
         );
-        env.insert(
+        insert(
+            &mut env,
             "DEVSTACK_SLOT".into(),
             Var {
-                value: if ctx.is_main { "main" } else { "candidate" }.into(),
+                value: if ctx.candidate { "candidate" } else { "main" }.into(),
+                origin: Origin::Devstack,
+            },
+        );
+        insert(
+            &mut env,
+            "DEVSTACK_LANE".into(),
+            Var {
+                value: lane_name(&ctx.lane).into(),
                 origin: Origin::Devstack,
             },
         );
@@ -286,7 +339,13 @@ fn rewrite(
         while let Some(i) = find_host(rest, host) {
             let after = &rest[i + host.len() + 1..];
             let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
-            let port: u16 = digits.parse().unwrap_or(0);
+            let Ok(port) = digits.parse::<u16>() else {
+                // `db:99999` is no port: left as it is, never "port 0".
+                let end = i + host.len() + 1 + digits.len();
+                result.push_str(&rest[..end]);
+                rest = &rest[end..];
+                continue;
+            };
             let key = (group.clone(), host.clone(), port);
             let addr = match ctx.published.get(&key) {
                 Some(a) => a,
@@ -396,45 +455,185 @@ pub fn variables(
     let mut vars = BTreeMap::new();
     for f in files {
         if let Ok(text) = std::fs::read_to_string(repo.join(f)) {
-            vars.extend(parse_env_file(&text));
+            // `${VAR}` in a file sees the process environment, then what the
+            // files before it set.
+            let parsed =
+                parse_env_file_with(&text, &|k| env_var(k).or_else(|| lookup(&vars, k).cloned()));
+            for (k, v) in parsed {
+                insert(&mut vars, k, v);
+            }
         }
     }
-    vars.extend(std::env::vars());
+    for (k, v) in std::env::vars() {
+        insert(&mut vars, k, v);
+    }
     vars
+}
+
+/// A variable of the process environment (case-insensitive on Windows, by
+/// the platform itself).
+fn env_var(name: &str) -> Option<String> {
+    std::env::var(name).ok()
 }
 
 // ------------------------------------------------------------------ dotenv
 
-/// Parse an env file in Compose's format: `KEY=VALUE`, `#` comments, optional
-/// `export `, single or double quotes around the value.
+/// Parse an env file in Compose's dialect:
+///
+/// - `KEY=VALUE` lines, `#` comment lines, an optional `export `;
+/// - unquoted: up to the end of the line or an inline ` #` comment, `${VAR}`
+///   expanded;
+/// - `"double quoted"`: may span lines; `\n`, `\r`, `\t`, `\\`, `\"` and `\$`
+///   are escapes, `$$` is a `$`, `${VAR}` is expanded; a `#` inside is text,
+///   one after the closing quote a comment;
+/// - `'single quoted'`: taken as written, may span lines.
+///
+/// `${VAR}`, `${VAR:-default}`, `${VAR-default}` and `$VAR` look in the
+/// process environment first, then in the variables defined above them; an
+/// unknown one is empty, as in Compose.
 pub fn parse_env_file(text: &str) -> BTreeMap<String, String> {
-    let mut out = BTreeMap::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let line = line.strip_prefix("export ").unwrap_or(line);
-        let Some((k, v)) = line.split_once('=') else {
+    parse_env_file_with(text, &env_var)
+}
+
+/// [`parse_env_file`] with `${VAR}` looked up in `outer` before the
+/// variables defined above it in the file.
+pub fn parse_env_file_with(
+    text: &str,
+    outer: &dyn Fn(&str) -> Option<String>,
+) -> BTreeMap<String, String> {
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        let (line, after) = rest.split_once('\n').unwrap_or((rest, ""));
+        let stmt = line.trim();
+        let stmt = stmt.strip_prefix("export ").map_or(stmt, str::trim_start);
+        let Some((key, value)) = stmt.split_once('=').filter(|_| !stmt.starts_with('#')) else {
+            rest = after;
             continue;
         };
-        let v = v.trim();
-        let v = if v.len() >= 2
-            && ((v.starts_with('"') && v.ends_with('"'))
-                || (v.starts_with('\'') && v.ends_with('\'')))
-        {
-            v[1..v.len() - 1].to_string()
-        } else {
-            // An unquoted value ends at an inline comment.
-            v.split(" #").next().unwrap_or(v).trim().to_string()
+        let key = key.trim().to_string();
+        let value = value.trim_start();
+        let quote = value.chars().next().filter(|c| *c == '"' || *c == '\'');
+        // Where the value starts within `rest`: a quoted one may run past this line.
+        let start = value.as_ptr() as usize - rest.as_ptr() as usize;
+        let lookup = |k: &str| outer(k).or_else(|| lookup(&out, k).cloned());
+        let parsed = match quote {
+            Some(q) => closing_quote(&rest[start + 1..], q).map(|end| {
+                let raw = &rest[start + 1..start + 1 + end];
+                let value = if q == '"' {
+                    expand_value(raw, true, &lookup)
+                } else {
+                    raw.to_string()
+                };
+                // Whatever follows the closing quote on its line is a comment.
+                let tail = &rest[start + 1 + end + 1..];
+                let next = tail.split_once('\n').map_or("", |(_, n)| n);
+                (value, next)
+            }),
+            None => None,
         };
-        out.insert(k.trim().to_string(), v);
+        let (value, next) = parsed.unwrap_or_else(|| {
+            // Unquoted, or a quote that never closes: up to an inline comment.
+            let v = value
+                .split_once(" #")
+                .or_else(|| value.split_once("\t#"))
+                .map_or(value, |(v, _)| v)
+                .trim_end();
+            (expand_value(v, false, &lookup), after)
+        });
+        insert(&mut out, key, value);
+        rest = next;
     }
     out
 }
 
-/// Write an environment as a dotenv file (ADR-0015 export). Values are always
-/// double-quoted with `\`, `"`, `$` and newlines escaped.
+/// Byte offset of the quote that closes a value opened with `q`; a
+/// double-quoted value skips escaped characters.
+fn closing_quote(s: &str, q: char) -> Option<usize> {
+    let mut chars = s.char_indices();
+    while let Some((i, c)) = chars.next() {
+        if c == '\\' && q == '"' {
+            chars.next();
+        } else if c == q {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Escapes (double quotes only) and variable references of a value.
+fn expand_value(s: &str, escapes: bool, lookup: &dyn Fn(&str) -> Option<String>) -> String {
+    let c: Vec<char> = s.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < c.len() {
+        match c[i] {
+            '\\' if escapes && i + 1 < c.len() => {
+                match c[i + 1] {
+                    'n' => out.push('\n'),
+                    'r' => out.push('\r'),
+                    't' => out.push('\t'),
+                    '\\' | '"' | '$' => out.push(c[i + 1]),
+                    other => {
+                        out.push('\\');
+                        out.push(other);
+                    }
+                }
+                i += 2;
+            }
+            '$' if c.get(i + 1) == Some(&'$') => {
+                out.push('$');
+                i += 2;
+            }
+            '$' if c.get(i + 1) == Some(&'{') => {
+                let Some(close) = c[i + 2..].iter().position(|&x| x == '}') else {
+                    out.extend(&c[i..]);
+                    break;
+                };
+                let body: String = c[i + 2..i + 2 + close].iter().collect();
+                let name_len = body
+                    .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                    .unwrap_or(body.len());
+                let (name, op) = body.split_at(name_len);
+                let value = lookup(name);
+                let value = if let Some(d) = op.strip_prefix(":-") {
+                    value
+                        .filter(|v| !v.is_empty())
+                        .unwrap_or_else(|| expand_value(d, false, lookup))
+                } else if let Some(d) = op.strip_prefix('-') {
+                    value.unwrap_or_else(|| expand_value(d, false, lookup))
+                } else {
+                    // `${VAR}`, and `${VAR:?message}`, which only Compose reports.
+                    value.unwrap_or_default()
+                };
+                out.push_str(&value);
+                i += 2 + close + 1;
+            }
+            '$' if c
+                .get(i + 1)
+                .is_some_and(|ch| ch.is_ascii_alphabetic() || *ch == '_') =>
+            {
+                let len = c[i + 1..]
+                    .iter()
+                    .take_while(|ch| ch.is_ascii_alphanumeric() || **ch == '_')
+                    .count();
+                let name: String = c[i + 1..i + 1 + len].iter().collect();
+                out.push_str(&lookup(&name).unwrap_or_default());
+                i += 1 + len;
+            }
+            ch => {
+                out.push(ch);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Write an environment as a dotenv file (ADR-0015 export) in Compose's
+/// dialect, which [`parse_env_file`] reads back: every value double-quoted,
+/// with `\`, `"`, line breaks escaped and `$` written `$$`, so nothing in it
+/// is expanded on the way in.
 pub fn to_dotenv(env: &Env) -> String {
     let mut s = String::from(
         "# Written by `devstack env --export dotenv`. Contains development secrets: keep it git-ignored.\n",
@@ -444,8 +643,9 @@ pub fn to_dotenv(env: &Env) -> String {
             .value
             .replace('\\', "\\\\")
             .replace('"', "\\\"")
-            .replace('$', "\\$")
-            .replace('\n', "\\n");
+            .replace('$', "$$")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r");
         s.push_str(&format!("{k}=\"{escaped}\"\n"));
     }
     s
@@ -573,29 +773,118 @@ mod tests {
         });
         let mut c = ctx();
         c.is_main = false;
+        c.candidate = true;
         let env = compose("api", &s, &c, &compose_env(&[]), true).unwrap();
         assert_eq!(env["Jobs__Enabled"].value, "false");
         assert_eq!(env["DEVSTACK_SLOT"].value, "candidate");
         assert_eq!(env["DEVSTACK_SERVICE"].value, "api");
+        assert_eq!(env["DEVSTACK_LANE"].value, "main");
+
+        // A lane's main instance: no workers, but no candidate either (F-23).
+        let mut c = ctx();
+        c.is_main = false;
+        c.lane = "feat-x".into();
+        let env = compose("api", &s, &c, &compose_env(&[]), true).unwrap();
+        assert_eq!(env["Jobs__Enabled"].value, "false");
+        assert_eq!(env["DEVSTACK_SLOT"].value, "main");
+        assert_eq!(env["DEVSTACK_LANE"].value, "feat-x");
     }
 
     #[test]
-    fn dotenv_round_trip() {
-        let text = "# c\nA=1\nexport B=\"two words\"\nC='x=y'\nD=plain # note\n";
-        let m = parse_env_file(text);
+    fn env_files_in_composes_dialect() {
+        let text = concat!(
+            "# c\n",
+            "A=1\n",
+            "export B=\"two words\"\n",
+            "C='x=y'\n",
+            "D=plain # note\n",
+            "E=\"quoted\" # note\n",
+            "F='single' # note\n",
+            "G=\"has # hash\"\n",
+            "H=\"line1\\nline2\\t\\\"q\\\" \\\\ \\$HOME $$x\"\n",
+            "I=\"multi\n",
+            "line\"\n",
+            "J=${A}-$A-${NOPE:-dflt}-${NOPE-d2}-${EMPTY:-e}-${EMPTY-kept}\n",
+            "EMPTY=\n",
+            "K=${EMPTY:-e}${EMPTY-kept}\n",
+            "L='${A} stays'\n",
+            "M=\"${A}x\"\n",
+            "N=\"never closed\n",
+            "O=ok\r\n",
+        );
+        let m = parse_env_file_with(text, &|_| None);
         assert_eq!(m["A"], "1");
         assert_eq!(m["B"], "two words");
         assert_eq!(m["C"], "x=y");
         assert_eq!(m["D"], "plain");
+        assert_eq!(m["E"], "quoted");
+        assert_eq!(m["F"], "single");
+        assert_eq!(m["G"], "has # hash");
+        assert_eq!(m["H"], "line1\nline2\t\"q\" \\ $HOME $x");
+        assert_eq!(m["I"], "multi\nline");
+        assert_eq!(m["J"], "1-1-dflt-d2-e-kept");
+        assert_eq!(m["K"], "e");
+        assert_eq!(m["L"], "${A} stays");
+        assert_eq!(m["M"], "1x");
+        assert_eq!(m["N"], "\"never closed");
+        assert_eq!(m["O"], "ok");
+        // The process environment comes before the file's own variables.
+        let m = parse_env_file_with("A=file\nB=${A}\n", &|k| (k == "A").then(|| "env".into()));
+        assert_eq!(m["B"], "env");
+    }
+
+    /// F-22: what `--export dotenv` writes reads back as it was.
+    #[test]
+    fn dotenv_round_trip() {
+        let values = [
+            "plain",
+            "a\"b$c",
+            "pa$$word${HOME}$HOME",
+            "line1\nline2\r\n",
+            "back\\slash \\n \\$ \\\"",
+            "trailing\\",
+            "# not a comment",
+            "'single' and \"double\"",
+            "",
+            "ünïcödé",
+            "x = y # z",
+        ];
         let mut env = Env::new();
-        env.insert(
-            "Q".into(),
-            Var {
-                value: "a\"b$c".into(),
-                origin: Origin::StackFile,
-            },
-        );
-        assert!(to_dotenv(&env).contains("Q=\"a\\\"b\\$c\""));
+        for (i, v) in values.iter().enumerate() {
+            env.insert(
+                format!("V{i}"),
+                Var {
+                    value: v.to_string(),
+                    origin: Origin::StackFile,
+                },
+            );
+        }
+        let text = to_dotenv(&env);
+        assert!(text.contains("V1=\"a\\\"b$$c\""), "{text}");
+        let back = parse_env_file_with(&text, &|_| Some("WRONG".into()));
+        for (i, v) in values.iter().enumerate() {
+            assert_eq!(back[&format!("V{i}")], *v, "{text}");
+        }
+        assert_eq!(back.len(), values.len());
+    }
+
+    #[test]
+    fn a_number_too_big_for_a_port_is_left_alone() {
+        let ce = compose_env(&[("DB", Some("db:99999 and db:5432"))]);
+        let env = compose("api", &svc(&["db"], &[]), &ctx(), &ce, false).unwrap();
+        assert_eq!(env["DB"].value, "db:99999 and 127.0.0.1:15432");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn names_differing_in_case_are_one_variable_on_windows() {
+        let ce = compose_env(&[("Path", Some("from-compose"))]);
+        let s = svc(&[], &[("PATH", "${path_var}")]);
+        let mut c = ctx();
+        c.vars.insert("PATH_VAR".into(), "from-vars".into());
+        let env = compose("api", &s, &c, &ce, false).unwrap();
+        assert!(!env.contains_key("Path"), "{env:?}");
+        assert_eq!(env["PATH"].value, "from-vars");
     }
 
     #[test]

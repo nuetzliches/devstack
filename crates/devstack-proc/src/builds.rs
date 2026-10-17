@@ -25,6 +25,9 @@ struct Holder {
 pub struct Build {
     child: Child,
     exit: Option<i32>,
+    /// Windows: when the root was created, the bound of its tree for a cancel.
+    #[cfg(windows)]
+    created: Option<u64>,
 }
 
 impl BuildJob {
@@ -76,7 +79,12 @@ impl BuildJob {
         #[cfg(windows)]
         {
             let child = crate::windows::start_in_job(&self.job, spec)?;
-            Ok(Build { child, exit: None })
+            let created = crate::windows::creation_time(child.id());
+            Ok(Build {
+                child,
+                exit: None,
+                created,
+            })
         }
         #[cfg(unix)]
         {
@@ -223,7 +231,7 @@ impl Build {
     /// outside that tree are left alone.
     pub fn cancel(&mut self) {
         #[cfg(windows)]
-        crate::windows::kill_tree(self.child.id());
+        crate::windows::kill_tree(self.child.id(), self.created);
         #[cfg(unix)]
         {
             let _ = crate::unix::kill_group(self.child.id() as i32, libc::SIGKILL);

@@ -7,8 +7,9 @@
 
 use crate::{BuildError, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -62,37 +63,40 @@ impl Snapshot {
         })
     }
 
-    /// Tracked and untracked, non-ignored files of the source. Without a git
-    /// repository (a node's mirror of a worktree, ADR-0029, holds exactly
+    /// Tracked and untracked, non-ignored files of the source, with those of
+    /// checked-out submodules (their own tracked and untracked files). Without
+    /// a git repository (a node's mirror of a worktree, ADR-0029, holds exactly
     /// those already): every file but devstack's own state.
     pub fn list(&self) -> Result<Vec<String>> {
         if !in_git(&self.source) {
             return Ok(walk(&self.source));
         }
-        let out = std::process::Command::new("git")
-            .args(["ls-files", "-co", "--exclude-standard", "-z"])
-            .current_dir(&self.source)
-            .output()
-            .map_err(|e| BuildError::io("run git ls-files", e))?;
-        if !out.status.success() {
-            return Err(BuildError::Other(format!(
-                "git ls-files failed in {}: {}",
-                self.source.display(),
-                String::from_utf8_lossy(&out.stderr).trim()
-            )));
-        }
-        Ok(String::from_utf8_lossy(&out.stdout)
-            .split('\0')
-            .filter(|p| !p.is_empty() && !EXCLUDED_PREFIXES.iter().any(|x| p.starts_with(x)))
-            .map(str::to_string)
-            .collect())
+        let mut out = Vec::new();
+        git_files(&self.source, "", &mut out)?;
+        out.retain(|p| !EXCLUDED_PREFIXES.iter().any(|x| p.starts_with(x)));
+        out.sort();
+        Ok(out)
     }
 
     pub fn sync(&mut self) -> Result<SyncStats> {
         let t0 = Instant::now();
         let files = self.list()?;
-        let mut next = BTreeMap::new();
+        let listed: BTreeSet<&str> = files.iter().map(String::as_str).collect();
         let (mut copied, mut removed) = (0, 0);
+        // Removals first: a case-only rename (`Foo.cs` -> `foo.cs`) is one
+        // file on a case-insensitive file system, which a later removal of
+        // the old name would take away again; and a file that became a
+        // directory (`a` -> `a/b`) has to go before the directory is made.
+        for gone in self
+            .manifest
+            .files
+            .keys()
+            .filter(|k| !listed.contains(k.as_str()))
+        {
+            let _ = fs::remove_file(self.dir.join(gone));
+            removed += 1;
+        }
+        let mut next = BTreeMap::new();
         let now = SystemTime::now();
         for rel in &files {
             let src = self.source.join(rel);
@@ -107,45 +111,35 @@ impl Snapshot {
                 .ok()
                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                 .map_or(0, |d| d.as_nanos());
-            let unchanged = self.manifest.files.get(rel).filter(|e| {
-                e.size == meta.len() && e.mtime == mtime && self.dir.join(rel).exists()
-            });
+            let dst = self.dir.join(rel);
+            let unchanged = self
+                .manifest
+                .files
+                .get(rel)
+                .filter(|e| e.size == meta.len() && e.mtime == mtime && dst.is_file());
             let entry = match unchanged {
                 Some(e) => e.clone(),
                 None => {
-                    let bytes = fs::read(&src)
-                        .map_err(|e| BuildError::io(format!("read {}", src.display()), e))?;
-                    let dst = self.dir.join(rel);
-                    if let Some(parent) = dst.parent() {
-                        fs::create_dir_all(parent).map_err(|e| {
-                            BuildError::io(format!("create {}", parent.display()), e)
-                        })?;
-                    }
-                    fs::write(&dst, &bytes)
-                        .map_err(|e| BuildError::io(format!("write {}", dst.display()), e))?;
-                    let f = fs::File::options()
-                        .write(true)
-                        .open(&dst)
-                        .map_err(|e| BuildError::io("open copy", e))?;
-                    f.set_modified(now)
-                        .map_err(|e| BuildError::io("stamp copy", e))?;
+                    self.make_room(rel)?;
+                    let hash = copy_hashed(&src, &dst, now)?;
                     copied += 1;
                     Entry {
                         size: meta.len(),
                         mtime,
-                        hash: blake3::hash(&bytes).to_hex().to_string(),
+                        hash,
                     }
                 }
             };
             next.insert(rel.clone(), entry);
         }
-        for gone in self
+        // Listed, but no file any more (a directory now, or gone since).
+        for stale in self
             .manifest
             .files
             .keys()
-            .filter(|k| !next.contains_key(*k))
+            .filter(|k| listed.contains(k.as_str()) && !next.contains_key(*k))
         {
-            let _ = fs::remove_file(self.dir.join(gone));
+            let _ = fs::remove_file(self.dir.join(stale));
             removed += 1;
         }
         self.manifest.files = next;
@@ -164,6 +158,92 @@ impl Snapshot {
             elapsed: t0.elapsed(),
         })
     }
+
+    /// Clear the way for the copy of `rel`: a file where one of its parent
+    /// directories goes, or a directory where the file goes, is what an
+    /// earlier sync left of a path that changed its type.
+    fn make_room(&self, rel: &str) -> Result<()> {
+        let dst = self.dir.join(rel);
+        let mut dir = self.dir.clone();
+        let parents: Vec<&str> = rel.split('/').collect();
+        for part in &parents[..parents.len().saturating_sub(1)] {
+            dir.push(part);
+            if fs::symlink_metadata(&dir).is_ok_and(|m| !m.is_dir()) {
+                fs::remove_file(&dir)
+                    .map_err(|e| BuildError::io(format!("remove {}", dir.display()), e))?;
+            }
+        }
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| BuildError::io(format!("create {}", parent.display()), e))?;
+        }
+        if fs::symlink_metadata(&dst).is_ok_and(|m| m.is_dir()) {
+            fs::remove_dir_all(&dst)
+                .map_err(|e| BuildError::io(format!("remove {}", dst.display()), e))?;
+        }
+        Ok(())
+    }
+}
+
+/// Copy `src` to `dst` in chunks, hashing on the way (a large binary is
+/// never held in memory whole); the copy gets `stamp` as its mtime. Returns
+/// the blake3 hash of the content, hex.
+fn copy_hashed(src: &Path, dst: &Path, stamp: SystemTime) -> Result<String> {
+    let mut from =
+        fs::File::open(src).map_err(|e| BuildError::io(format!("read {}", src.display()), e))?;
+    let mut to =
+        fs::File::create(dst).map_err(|e| BuildError::io(format!("write {}", dst.display()), e))?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buf = vec![0u8; 256 * 1024];
+    loop {
+        let n = match from.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(BuildError::io(format!("read {}", src.display()), e)),
+        };
+        hasher.update(&buf[..n]);
+        to.write_all(&buf[..n])
+            .map_err(|e| BuildError::io(format!("write {}", dst.display()), e))?;
+    }
+    to.set_modified(stamp)
+        .map_err(|e| BuildError::io("stamp copy", e))?;
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// The files `git ls-files` lists in `root/prefix`, as paths below `root`;
+/// a submodule (listed as a directory) contributes its own files when it is
+/// checked out, nothing when it is not (it is an empty directory then).
+fn git_files(root: &Path, prefix: &str, out: &mut Vec<String>) -> Result<()> {
+    let dir = root.join(prefix);
+    let o = std::process::Command::new("git")
+        .args(["ls-files", "-co", "--exclude-standard", "-z"])
+        .current_dir(&dir)
+        .output()
+        .map_err(|e| BuildError::io("run git ls-files", e))?;
+    if !o.status.success() {
+        return Err(BuildError::Other(format!(
+            "git ls-files failed in {}: {}",
+            dir.display(),
+            String::from_utf8_lossy(&o.stderr).trim()
+        )));
+    }
+    for p in String::from_utf8_lossy(&o.stdout).split('\0') {
+        let p = p.trim_end_matches('/');
+        if p.is_empty() {
+            continue;
+        }
+        let rel = format!("{prefix}{p}");
+        let path = root.join(&rel);
+        if path.is_dir() {
+            if path.join(".git").exists() {
+                git_files(root, &format!("{rel}/"), out)?;
+            }
+        } else {
+            out.push(rel);
+        }
+    }
+    Ok(())
 }
 
 /// Whether `dir` is in a git working tree: its root, or below it (a stack in

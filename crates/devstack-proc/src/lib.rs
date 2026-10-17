@@ -155,9 +155,10 @@ impl Owned {
         self.inner.usage()
     }
 
-    /// True while any process of the tree is alive.
+    /// True while any process of the tree is alive, and when that cannot
+    /// be told (a failed query is no ended tree, ADR-0009).
     pub fn is_alive(&mut self) -> bool {
-        !self.pids().is_empty()
+        self.inner.alive() != Some(false)
     }
 
     /// Exit code of the root process once it has exited.
@@ -180,14 +181,21 @@ impl Owned {
         let t0 = Instant::now();
         let signal_error = self.request_stop().err().map(|e| e.to_string());
         if signal_error.is_none() {
+            // Short at first (most trees end at once), then less often.
+            let mut pause = Duration::from_millis(10);
             while self.is_alive() && t0.elapsed() < timeout {
-                std::thread::sleep(Duration::from_millis(25));
+                std::thread::sleep(pause.min(timeout.saturating_sub(t0.elapsed())));
+                pause = (pause * 2).min(Duration::from_millis(100));
             }
         }
-        let graceful = !self.is_alive();
+        // Graceful only when the tree is known to be gone: unless the query
+        // said so, it is killed.
+        let graceful = self.inner.alive() == Some(false);
         if !graceful {
             self.kill();
-            while self.is_alive() && t0.elapsed() < timeout + Duration::from_secs(5) {
+            while self.inner.alive() == Some(true)
+                && t0.elapsed() < timeout + Duration::from_secs(5)
+            {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
