@@ -8,7 +8,7 @@ import Modal from './Modal.vue';
 import Diagnostics from './Diagnostics.vue';
 import Icon from './icons/Icon.vue';
 
-const props = defineProps<{ open: boolean; stackId: string; service: string; initialFile?: string }>();
+const props = defineProps<{ open: boolean; stackId: string; lane?: string | null; service: string; initialFile?: string }>();
 const emit = defineEmits<{ close: [] }>();
 
 type KeptLog = { file: string; kind: 'run' | 'build'; started_ms: number; modified_ms: number; build: string | null; port: number | null; bytes: number; current: boolean };
@@ -29,7 +29,7 @@ async function load() {
   loading.value = true;
   error.value = null;
   try {
-    const res = await api().request<KeptLog[]>('GET', paths.api(props.stackId, v1.logFiles(props.service)));
+    const res = await api().request<KeptLog[]>('GET', paths.api(props.stackId, v1.logFiles(props.service), props.lane ?? null));
     if (res.ok && Array.isArray(res.body)) {
       files.value = res.body;
       const first = res.body.find((f) => f.file === props.initialFile) ?? res.body.find((f) => !f.current && f.kind === 'run') ?? res.body[0];
@@ -46,7 +46,7 @@ async function show(file: string) {
   chosen.value = file;
   text.value = null;
   try {
-    const res = await api().request<string>('GET', paths.api(props.stackId, v1.keptLog(props.service, file)));
+    const res = await api().request<string>('GET', paths.api(props.stackId, v1.keptLog(props.service, file), props.lane ?? null));
     if (res.ok) text.value = typeof res.body === 'string' ? res.body : '';
     else failed(null, res.status);
   } catch (e) {

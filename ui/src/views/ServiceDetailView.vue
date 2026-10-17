@@ -29,7 +29,7 @@ const busy = computed(() => stack.busy[`svc:${name.value}`]);
 const state = computed(() => svc.value?.status.state ?? 'stopped');
 const isDown = computed(() => ['stopped', 'completed', 'exited', 'failed'].includes(state.value));
 
-const logPath = computed(() => (stack.id && stack.running && stack.live && svc.value ? paths.api(stack.id, v1.logStream(name.value, 500)) : null));
+const logPath = computed(() => (stack.id && stack.running && stack.live && svc.value ? paths.api(stack.id, v1.logStream(name.value, 500), stack.apiLane) : null));
 
 const series = computed(() => stack.history.get(`svc:${name.value}`) ?? []);
 const cpuValues = computed(() => series.value.map((p) => p.cpu));
@@ -219,8 +219,8 @@ const kv = computed(() => {
         </div>
       </section>
 
-      <BuildLogModal v-if="stack.id" :open="showBuildLog" :stack-id="stack.id" :service="svc.name" @close="showBuildLog = false" />
-      <KeptLogsModal v-if="stack.id" :open="showKeptLogs" :stack-id="stack.id" :service="svc.name" @close="showKeptLogs = false" />
+      <BuildLogModal v-if="stack.id" :open="showBuildLog" :stack-id="stack.id" :lane="stack.apiLane" :service="svc.name" @close="showBuildLog = false" />
+      <KeptLogsModal v-if="stack.id" :open="showKeptLogs" :stack-id="stack.id" :lane="stack.apiLane" :service="svc.name" @close="showKeptLogs = false" />
     </template>
 
     <div v-else class="card">

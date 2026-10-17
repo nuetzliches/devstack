@@ -35,7 +35,7 @@ const stepIndex = computed(() => {
 const hasProcess = computed(() => !!c.value.build_id && ['starting', 'switching', 'failed'].includes(c.value.state));
 const showConsole = ref(false);
 const consolePath = computed(() =>
-  showConsole.value && hasProcess.value && stack.id && stack.running ? paths.api(stack.id, v1.logStream(props.service.name, 500, c.value.build_id!)) : null,
+  showConsole.value && hasProcess.value && stack.id && stack.running ? paths.api(stack.id, v1.logStream(props.service.name, 500, c.value.build_id!), stack.apiLane) : null,
 );
 
 const heldParts = computed(() => (c.value.reason ?? '').split(/(devstack promote \S+)/g).filter(Boolean));

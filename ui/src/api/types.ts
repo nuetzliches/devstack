@@ -35,7 +35,9 @@ export type HubEvent =
 
 // ---------------------------------------------------------------- daemon state
 
-export type ServiceKind = 'service' | 'job' | 'devserver' | 'tool' | 'static';
+export type KnownServiceKind = 'service' | 'job' | 'devserver' | 'tool' | 'static';
+/** The daemon sends a `String`: a newer daemon may name a kind this page does not know. */
+export type ServiceKind = KnownServiceKind | (string & {});
 
 export type Status =
   | { state: 'stopped' | 'starting' | 'running' | 'healthy' }
@@ -45,7 +47,9 @@ export type Status =
 
 export type StatusState = Status['state'];
 
-export type CandidateState = 'changed' | 'building' | 'superseded' | 'starting' | 'switching' | 'held' | 'failed';
+export type KnownCandidateState = 'changed' | 'building' | 'superseded' | 'starting' | 'switching' | 'held' | 'failed';
+/** The daemon sends a `String`: a newer daemon may send a state this page does not know. */
+export type CandidateState = KnownCandidateState | (string & {});
 
 export type Candidate = {
   state: CandidateState;
@@ -285,7 +289,8 @@ export type PoolLease = {
 export type PoolAuditEntry = {
   at: number;
   by: string;
-  action: 'approve' | 'reject' | 'remove' | 'role' | 'pause' | 'resume' | 'end';
+  /** The coordinator's `String`: these today, others from a newer coordinator. */
+  action: 'approve' | 'reject' | 'remove' | 'role' | 'pause' | 'resume' | 'end' | 'tags' | 'policy' | (string & {});
   member: string;
   name: string;
   detail?: string;

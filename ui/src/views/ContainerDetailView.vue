@@ -3,7 +3,7 @@
 // state, ports, start/stop/restart, its load and its log.
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
-import { bytes, percent } from '@/lib/format';
+import { bytes, percent, webUrl } from '@/lib/format';
 import { containerLook } from '@/lib/status';
 import { useStack } from '@/stores/stack';
 import StatusPill from '@/components/StatusPill.vue';
@@ -34,7 +34,7 @@ function hostPort(p: string): string {
   return m ? `${m[2].replace(/^0\.0\.0\.0:|^127\.0\.0\.1:/, ':')} → ${m[1]}` : p;
 }
 
-const logPath = computed(() => (stack.id && stack.running && stack.live && container.value ? paths.api(stack.id, v1.infraLogStream(group.value, service.value)) : null));
+const logPath = computed(() => (stack.id && stack.running && stack.live && container.value ? paths.api(stack.id, v1.infraLogStream(group.value, service.value), stack.apiLane) : null));
 
 const kv = computed(() => {
   const c = container.value;
@@ -62,7 +62,7 @@ const kv = computed(() => {
           </div>
           <div class="subtitle">
             container · {{ group }}
-            <template v-for="u in container?.urls ?? []" :key="u">
+            <template v-for="u in (container?.urls ?? []).filter((x) => webUrl(x))" :key="u">
               · <a :href="u" target="_blank" rel="noopener" data-testid="container-url">{{ u.replace(/^https?:\/\//, '') }} <Icon name="external" :size="12" /></a>
             </template>
           </div>

@@ -67,7 +67,7 @@ async function repairAll() {
       </div>
     </div>
 
-    <BuildLogModal v-if="buildLogFor && stack.id" :open="!!buildLogFor" :stack-id="stack.id" :service="buildLogFor" @close="buildLogFor = null" />
+    <BuildLogModal v-if="buildLogFor && stack.id" :open="!!buildLogFor" :stack-id="stack.id" :lane="stack.apiLane" :service="buildLogFor" @close="buildLogFor = null" />
   </div>
 </template>
 

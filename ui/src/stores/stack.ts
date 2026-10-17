@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { computed, ref, shallowRef, triggerRef, watch } from 'vue';
-import { api, paths, setLane, v1, type GroupAction, type ServiceAction, type StreamState, type Subscription } from '@/api';
+import { api, paths, v1, type GroupAction, type ServiceAction, type StreamState, type Subscription } from '@/api';
 import type { LaneView, Point, Run, ServiceView, StackEvent, StackView, UsageReport } from '@/api/types';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
@@ -53,6 +53,14 @@ export const useStack = defineStore('stack', () => {
   /** The lane shown (plan §3.5); `null`: the main working tree. */
   const lane = ref<string | null>(null);
   const lanes = ref<LaneView[]>([]);
+  /**
+   * The lane whose API the daemon paths of the shown stack go to: the shown
+   * lane once it is started, else `null` (the main tree, whose stream also
+   * carries a lane's start). Pass it to `paths.api` for this stack.
+   */
+  const apiLane = ref<string | null>(null);
+  /** `paths.api` for this store, in the lane shown. */
+  const daemonPath = (stack: string, path: string) => paths.api(stack, path, apiLane.value);
 
   /** Which stack `lanes` belongs to (it lags behind `id` while a switch loads). */
   const lanesOf = ref<string | null>(null);
@@ -63,7 +71,7 @@ export const useStack = defineStore('stack', () => {
     const sid = id.value;
     if (!sid || !running.value) return;
     try {
-      const res = await api().request<LaneView[]>('GET', paths.api(sid, v1.lanes));
+      const res = await api().request<LaneView[]>('GET', daemonPath(sid, v1.lanes));
       if (sid === id.value && res.ok && Array.isArray(res.body)) setLanes(res.body);
     } catch {
       // keep the list; the next connect loads it again
@@ -111,7 +119,7 @@ export const useStack = defineStore('stack', () => {
     disconnect();
     // A lane not started is shown with its start, from the main tree's
     // stream (which carries the lanes, its progress included).
-    setLane(lane.value && laneActive(lane.value) ? lane.value : null);
+    apiLane.value = lane.value && laneActive(lane.value) ? lane.value : null;
     const cached = lane.value ? (laneViews.get(`${next}#${lane.value}`) ?? null) : persist.stack(next);
     view.value = cached?.view ?? null;
     viewAt.value = cached?.at ?? null;
@@ -131,7 +139,7 @@ export const useStack = defineStore('stack', () => {
     try {
       await act({
         label: name === 'main' ? 'Main ports back to the main tree' : `Lane ${name} serves the main ports`,
-        path: paths.api(id.value, v1.laneMain(name)),
+        path: daemonPath(id.value, v1.laneMain(name)),
         success: name === 'main' ? 'The main working tree serves the main ports again' : `Lane ${name} serves the main ports`,
       });
       await loadLanes();
@@ -149,12 +157,12 @@ export const useStack = defineStore('stack', () => {
     try {
       const res = await act({
         label: on ? `Start lane ${name} on ${on === 'pool' ? 'the pool' : on}` : `Start lane ${name}`,
-        path: paths.api(id.value, v1.lanes),
+        path: daemonPath(id.value, v1.lanes),
         body: on ? { path: l.path, on } : { path: l.path, infra: true },
         success: false,
       });
       if (!res.ok) return;
-      const up = await act({ label: `Start lane ${name}`, path: paths.api(id.value, `${v1.lane(name)}/v1/up`), success: `Lane ${name} is starting` });
+      const up = await act({ label: `Start lane ${name}`, path: daemonPath(id.value, `${v1.lane(name)}/v1/up`), success: `Lane ${name} is starting` });
       await loadLanes();
       // Show it only once the daemon lists it as started: never a lane the
       // list still calls "not started".
@@ -171,7 +179,7 @@ export const useStack = defineStore('stack', () => {
     if (!id.value) return;
     const r = await act<LaneView[]>({
       label: withWhom.length ? `Share ${name}` : `Stop sharing ${name}`,
-      path: paths.api(id.value, `/v1/lanes/${encodeURIComponent(name)}/share`),
+      path: daemonPath(id.value, `/v1/lanes/${encodeURIComponent(name)}/share`),
       body: { with: withWhom },
       success: withWhom.length ? `${name} is shared with ${withWhom.includes('*') ? 'everyone in the pool' : withWhom.join(', ')}` : `${name} is shared with nobody`,
     });
@@ -184,7 +192,7 @@ export const useStack = defineStore('stack', () => {
     try {
       const res = await act({
         label: `Move lane ${name} to ${to === 'local' ? 'this machine' : to}`,
-        path: paths.api(id.value, v1.laneMove(name)),
+        path: daemonPath(id.value, v1.laneMove(name)),
         body: { to },
         success: `Lane ${name} runs on ${to === 'local' ? 'this machine' : to} now`,
       });
@@ -198,7 +206,7 @@ export const useStack = defineStore('stack', () => {
     if (!id.value) return;
     const res = await act({
       label: `Stop lane ${name}`,
-      path: paths.api(id.value, v1.laneStop(name)),
+      path: daemonPath(id.value, v1.laneStop(name)),
       success: `Lane ${name} stopped`,
     });
     if (res.ok) {
@@ -221,7 +229,7 @@ export const useStack = defineStore('stack', () => {
     const stackId = id.value;
     sub?.close();
     live.value = false;
-    sub = api().subscribe<StackEvent>(paths.api(stackId, v1.events), {
+    sub = api().subscribe<StackEvent>(daemonPath(stackId, v1.events), {
       onMessage: (ev) => {
         if (id.value === stackId) handle(ev);
       },
@@ -322,7 +330,7 @@ export const useStack = defineStore('stack', () => {
     const stackId = id.value;
     if (!stackId || !live.value) return;
     try {
-      const res = await api().request<StackView>('GET', paths.api(stackId, v1.stack));
+      const res = await api().request<StackView>('GET', daemonPath(stackId, v1.stack));
       if (res.ok && res.body && typeof res.body === 'object' && id.value === stackId) {
         applyView(res.body);
       }
@@ -353,7 +361,7 @@ export const useStack = defineStore('stack', () => {
     if (!stackId) return;
     usageFetched = true;
     try {
-      const res = await api().request<UsageReport>('GET', paths.api(stackId, v1.usage));
+      const res = await api().request<UsageReport>('GET', daemonPath(stackId, v1.usage));
       if (!res.ok || !res.body || typeof res.body !== 'object' || id.value !== stackId) return;
       const r = res.body;
       const map = new Map<SeriesKey, Point[]>();
@@ -402,7 +410,7 @@ export const useStack = defineStore('stack', () => {
     const stackId = id.value;
     if (!stackId) return;
     try {
-      const res = await api().request<Run[]>('GET', paths.api(stackId, v1.commandRuns(command)));
+      const res = await api().request<Run[]>('GET', daemonPath(stackId, v1.commandRuns(command)));
       if (res.ok && Array.isArray(res.body) && id.value === stackId) {
         // merge: events may already have added newer runs
         const known = new Map((runs.value[command] ?? []).map((r) => [r.id, r]));
@@ -433,7 +441,7 @@ export const useStack = defineStore('stack', () => {
     const cmd = view.value?.commands.find((c) => c.name === name);
     const res = await act<{ run: number }>({
       label: `Run ${name}`,
-      path: paths.api(id.value, v1.command(name)),
+      path: daemonPath(id.value, v1.command(name)),
       body: { confirm: false },
       danger: true,
       confirmLabel: `Run ${name}`,
@@ -456,7 +464,7 @@ export const useStack = defineStore('stack', () => {
     try {
       const res = await act<StackView>({
         label: `${actionLabels[action]} ${name}`,
-        path: paths.api(id.value, v1.serviceAction(name, action)),
+        path: daemonPath(id.value, v1.serviceAction(name, action)),
         success: action === 'promote' ? `${name}: candidate promoted` : action === 'rollback' ? `${name}: rolled back` : `${actionLabels[action]} ${name}: done`,
         conflictHint: action === 'restart' || action === 'promote' ? 'The running instance stays as it is.' : undefined,
       });
@@ -475,7 +483,7 @@ export const useStack = defineStore('stack', () => {
     try {
       const res = await act<StackView>({
         label: `${actionLabels[action]} ${label}`,
-        path: paths.api(id.value, v1.groupAction(group, action)),
+        path: daemonPath(id.value, v1.groupAction(group, action)),
         success: `${actionLabels[action]} ${label}: done`,
         conflictHint: action === 'restart' ? 'Members that failed keep their running instance.' : undefined,
       });
@@ -492,7 +500,7 @@ export const useStack = defineStore('stack', () => {
     busy.value[key] = action;
     const label = { start: 'Start', stop: 'Stop', restart: 'Restart' }[action];
     try {
-      await act({ label: `${label} ${service}`, path: paths.api(id.value, v1.infraAction(group, service, action)), success: `${service}: ${action} done` });
+      await act({ label: `${label} ${service}`, path: daemonPath(id.value, v1.infraAction(group, service, action)), success: `${service}: ${action} done` });
     } finally {
       delete busy.value[key];
     }
@@ -609,6 +617,7 @@ export const useStack = defineStore('stack', () => {
     lane,
     lanes,
     lanesOf,
+    apiLane,
     loadLanes,
     selectLane,
     laneMain,

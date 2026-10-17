@@ -44,6 +44,8 @@ const actionText: Record<string, string> = {
   pause: 'paused',
   resume: 'resumed',
   end: 'ended a lane on',
+  tags: 'changed the tags of',
+  policy: 'changed the policy of',
 };
 
 // Joining a pool from here, as `devstack join` does; another one beside

@@ -1,4 +1,4 @@
-import type { Candidate, CandidateState, ContainerView, ServiceView, Status } from '@/api/types';
+import type { Candidate, CandidateState, ContainerView, KnownCandidateState, KnownServiceKind, ServiceView, Status } from '@/api/types';
 import type { IconName } from '@/components/icons/icons';
 
 export type Tone = 'ok' | 'warn' | 'danger' | 'info' | 'accent' | 'neutral';
@@ -26,6 +26,9 @@ export function statusLook(s: Status): StatusLook {
     case 'exited':
       return { label: `Exited (${s.exit_code})`, tone: s.exit_code === 0 ? 'neutral' : 'danger', busy: false, detail: null };
   }
+  // A state from a newer daemon: shown by its name, never a crash.
+  const state = String((s as { state?: unknown }).state ?? 'unknown');
+  return { label: cap(state), tone: 'neutral', busy: false, detail: null };
 }
 
 /** Healthy/starting/failed buckets for the summary. */
@@ -49,7 +52,7 @@ export function statusBucket(s: Status): 'healthy' | 'starting' | 'failed' | 'id
 
 export type CandidateLook = { label: string; tone: Tone; busy: boolean; icon: IconName; explain: string };
 
-const candidateLooks: Record<CandidateState, CandidateLook> = {
+const candidateLooks: Record<KnownCandidateState, CandidateLook> = {
   changed: { label: 'Changed', tone: 'info', busy: true, icon: 'zap', explain: 'A change was detected; the build starts after the debounce.' },
   building: { label: 'Building', tone: 'accent', busy: true, icon: 'wrench', explain: 'The new build is compiling. The running instance keeps serving.' },
   superseded: { label: 'Superseded', tone: 'neutral', busy: true, icon: 'history', explain: 'A newer change arrived; this build was cancelled and a new one follows.' },
@@ -59,8 +62,17 @@ const candidateLooks: Record<CandidateState, CandidateLook> = {
   failed: { label: 'Failed', tone: 'danger', busy: false, icon: 'xCircle', explain: 'The build or health check failed. The running instance stays.' },
 };
 
+function knownCandidate(s: CandidateState): s is KnownCandidateState {
+  return Object.hasOwn(candidateLooks, s);
+}
+
+/** A state from a newer daemon: shown by its name, never a crash. */
+function unknownCandidateLook(s: string): CandidateLook {
+  return { label: cap(s || 'unknown'), tone: 'neutral', busy: false, icon: 'history', explain: `The daemon reports "${s}", which this dashboard does not know yet.` };
+}
+
 export function candidateLook(c: Candidate): CandidateLook {
-  return candidateLooks[c.state];
+  return knownCandidate(c.state) ? candidateLooks[c.state] : unknownCandidateLook(c.state);
 }
 
 /** One line: "Not yet active: building" etc. */
@@ -80,6 +92,8 @@ export function candidateSummary(c: Candidate): string {
       return 'held, waiting for promote';
     case 'failed':
       return 'build failed';
+    default:
+      return c.state || 'unknown';
   }
 }
 
@@ -109,12 +123,20 @@ function cap(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+const kindLabels: Record<KnownServiceKind, string> = { service: 'service', job: 'job', devserver: 'dev server', tool: 'tool', static: 'static site' };
+const kindIcons: Record<KnownServiceKind, IconName> = { service: 'server', job: 'play', devserver: 'globe', tool: 'wrench', static: 'file' };
+
+function knownKind(k: string): k is KnownServiceKind {
+  return Object.hasOwn(kindLabels, k);
+}
+
+/** A kind from a newer daemon is shown by its name. */
 export function kindLabel(s: ServiceView): string {
-  return { service: 'service', job: 'job', devserver: 'dev server', tool: 'tool', static: 'static site' }[s.kind];
+  return knownKind(s.kind) ? kindLabels[s.kind] : s.kind;
 }
 
 export function kindIcon(s: ServiceView): IconName {
-  return ({ service: 'server', job: 'play', devserver: 'globe', tool: 'wrench', static: 'file' } as const)[s.kind];
+  return knownKind(s.kind) ? kindIcons[s.kind] : 'server';
 }
 
 /** "compose.<group>.<service>" -> [group, service]. Group names do not contain dots. */

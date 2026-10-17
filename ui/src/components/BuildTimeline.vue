@@ -23,7 +23,7 @@ const logFor = ref<string | null>(null);
 async function load() {
   if (!stack.id || !stack.running) return;
   try {
-    const res = await api().request<Build[]>('GET', paths.api(stack.id, v1.builds(props.service)));
+    const res = await api().request<Build[]>('GET', paths.api(stack.id, v1.builds(props.service), stack.apiLane));
     if (res.ok && Array.isArray(res.body)) list.value = res.body;
   } catch {
     // keep what is shown; the next change loads again
@@ -85,7 +85,7 @@ const shown = computed(() => rows.value);
       </table>
     </div>
     <div v-else class="empty"><p>{{ loaded ? 'No build in the diagnostic log yet.' : 'Loading…' }}</p></div>
-    <KeptLogsModal v-if="logFor && stack.id" :open="!!logFor" :stack-id="stack.id" :service="service" :initial-file="`build-${logFor}.log`" @close="logFor = null" />
+    <KeptLogsModal v-if="logFor && stack.id" :open="!!logFor" :stack-id="stack.id" :lane="stack.apiLane" :service="service" :initial-file="`build-${logFor}.log`" @close="logFor = null" />
   </section>
 </template>
 

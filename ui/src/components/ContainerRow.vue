@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import type { ContainerView } from '@/api/types';
 import { containerLook } from '@/lib/status';
+import { webUrl } from '@/lib/format';
 import { useStack } from '@/stores/stack';
 import StatusPill from './StatusPill.vue';
 import Icon from './icons/Icon.vue';
@@ -36,11 +37,14 @@ function hostPort(p: string): string {
 /** The link of a published port: a URL naming its host port. */
 function urlFor(p: string): string | undefined {
   const port = p.split(':').pop();
-  return props.container?.urls?.find((u) => new RegExp(`:${port}(?:/|$)`).test(u));
+  return webUrls.value.find((u) => new RegExp(`:${port}(?:/|$)`).test(u));
 }
 
+/** The container's links that are web addresses; nothing else becomes a link. */
+const webUrls = computed(() => (props.container?.urls ?? []).filter((u) => webUrl(u) !== undefined));
+
 /** A link the stack file set that names none of the ports (another path or host). */
-const extraUrls = computed(() => (props.container?.urls ?? []).filter((u) => !props.container!.ports.some((p) => urlFor(p) === u)));
+const extraUrls = computed(() => webUrls.value.filter((u) => !props.container!.ports.some((p) => urlFor(p) === u)));
 </script>
 
 <template>
