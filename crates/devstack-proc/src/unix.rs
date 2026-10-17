@@ -24,12 +24,11 @@ pub(crate) fn start_time(pid: i32) -> Option<u64> {
     rest.split_whitespace().nth(19)?.parse().ok()
 }
 
-/// (pid, process group, state) of every process.
-fn processes() -> Vec<(i32, i32, char)> {
+/// (pid, process group, state) of every process; `None` when `/proc`
+/// cannot be read.
+fn processes() -> Option<Vec<(i32, i32, char)>> {
     let mut out = Vec::new();
-    let Ok(dir) = fs::read_dir("/proc") else {
-        return out;
-    };
+    let dir = fs::read_dir("/proc").ok()?;
     for e in dir.flatten() {
         let Ok(pid) = e.file_name().to_string_lossy().parse::<i32>() else {
             continue;
@@ -48,29 +47,46 @@ fn processes() -> Vec<(i32, i32, char)> {
         };
         out.push((pid, pgrp, state));
     }
-    out
+    Some(out)
 }
 
-fn group_members(pgid: i32) -> Vec<i32> {
-    processes()
-        .into_iter()
-        .filter(|&(_, g, s)| g == pgid && s != 'Z')
-        .map(|(p, _, _)| p)
-        .collect()
+/// The process exists and is no zombie.
+fn live(pid: i32) -> bool {
+    fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+        stat.rfind(')')
+            .and_then(|i| stat[i + 1..].split_whitespace().next())
+            .is_some_and(|state| state != "Z")
+    })
 }
 
-fn cgroup_members(cg: &Path) -> Vec<i32> {
-    let live: Vec<i32> = processes()
-        .into_iter()
-        .filter(|&(_, _, s)| s != 'Z')
-        .map(|(p, _, _)| p)
-        .collect();
-    fs::read_to_string(cg.join("cgroup.procs"))
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| l.trim().parse().ok())
-        .filter(|p| live.contains(p))
-        .collect()
+/// Live members of a process group; `None` when that cannot be told. A
+/// group that is gone costs one `kill(-pgid, 0)`, not a scan of `/proc`.
+fn group_members(pgid: i32) -> Option<Vec<i32>> {
+    // SAFETY: plain syscall; signal 0 only checks.
+    if unsafe { libc::kill(-pgid, 0) } != 0
+        && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    {
+        return Some(Vec::new());
+    }
+    Some(
+        processes()?
+            .into_iter()
+            .filter(|&(_, g, s)| g == pgid && s != 'Z')
+            .map(|(p, _, _)| p)
+            .collect(),
+    )
+}
+
+/// Live members of a cgroup; `None` when it cannot be read.
+fn cgroup_members(cg: &Path) -> Option<Vec<i32>> {
+    Some(
+        fs::read_to_string(cg.join("cgroup.procs"))
+            .ok()?
+            .lines()
+            .filter_map(|l| l.trim().parse().ok())
+            .filter(|&p| live(p))
+            .collect(),
+    )
 }
 
 pub(crate) fn kill_group(pgid: i32, sig: i32) -> std::io::Result<()> {
@@ -186,12 +202,22 @@ impl Tree {
 
     pub(crate) fn pids(&mut self) -> Vec<u32> {
         let _ = self.try_exit_code(); // reap the shim so it does not linger as a zombie
-        let mut v = match &self.cgroup {
-            Some(cg) => cgroup_members(cg),
-            None => group_members(self.pgid),
-        };
+        let mut v = self.members().unwrap_or_default();
         v.sort();
         v.into_iter().map(|p| p as u32).collect()
+    }
+
+    fn members(&self) -> Option<Vec<i32>> {
+        match &self.cgroup {
+            Some(cg) => cgroup_members(cg),
+            None => group_members(self.pgid),
+        }
+    }
+
+    /// Whether any process of the tree lives; `None` when that cannot be told.
+    pub(crate) fn alive(&mut self) -> Option<bool> {
+        let _ = self.try_exit_code();
+        self.members().map(|m| !m.is_empty())
     }
 
     pub(crate) fn usage(&mut self) -> Usage {
@@ -316,7 +342,7 @@ pub fn shim_main(args: &[String]) -> ! {
             Some(cg) => cgroup_members(cg),
             None => group_members(pgid),
         };
-        if others.iter().all(|&p| p == me) {
+        if others.is_some_and(|o| o.iter().all(|&p| p == me)) {
             // The service may have exited between try_wait and the membership
             // check (zombies do not count as members): collect its code now,
             // never report a guess.
@@ -337,16 +363,21 @@ fn fail(msg: &str) -> ! {
 
 /// Only processes of the recorded group that started no earlier than the
 /// recorded leader are hit, so a process that merely reuses a number is spared.
+/// Without a recorded start (`leader_start == 0`) the group is left alone:
+/// after a reboot its number may belong to anyone.
 pub(crate) fn cleanup(records: &[Record]) -> Vec<(String, usize)> {
     records
         .iter()
         .map(|r| {
             let mut n = 0;
             if let Some(cg) = &r.cgroup {
-                n += cgroup_members(cg).len();
+                n += cgroup_members(cg).map_or(0, |m| m.len());
                 kill_cgroup(cg);
             }
-            for pid in group_members(r.pgid as i32) {
+            if r.leader_start == 0 {
+                return (r.name.clone(), n);
+            }
+            for pid in group_members(r.pgid as i32).unwrap_or_default() {
                 if start_time(pid).is_some_and(|t| t >= r.leader_start) {
                     // SAFETY: plain syscall.
                     unsafe {
@@ -406,4 +437,36 @@ fn proc_rss(pid: u32) -> u64 {
         .unwrap_or(0);
     // SAFETY: plain libc call.
     pages * unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(1) as u64
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    /// F-35: a record without the leader's start time cannot tell its group
+    /// from one that reuses the number; it is left alone.
+    #[test]
+    fn cleanup_without_a_start_time_leaves_the_group_alone() {
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pgid = child.id() as i64;
+        let record = Record {
+            name: "x".into(),
+            pgid,
+            leader_start: 0,
+            cgroup: None,
+        };
+        assert_eq!(cleanup(std::slice::from_ref(&record)), vec![("x".to_string(), 0)]);
+        assert!(child.try_wait().unwrap().is_none(), "still running");
+        let known = Record {
+            leader_start: start_time(pgid as i32).unwrap(),
+            ..record
+        };
+        assert_eq!(cleanup(&[known]), vec![("x".to_string(), 1)]);
+        let _ = child.wait();
+        assert_eq!(group_members(pgid as i32), Some(Vec::new()));
+    }
 }

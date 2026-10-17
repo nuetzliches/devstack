@@ -5,7 +5,7 @@ use std::os::windows::io::AsRawHandle;
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::{mem, ptr};
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{CloseHandle, ERROR_MORE_DATA, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::Console::{
     AllocConsole, CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent, GetConsoleWindow,
 };
@@ -28,6 +28,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
 /// breakaway stays forbidden: the two conditions spike (a) showed the guarantee
 /// depends on.
 pub(crate) struct Job(HANDLE);
+
+/// The most process ids one query asks room for.
+const MAX_JOB_PIDS: usize = 1 << 20;
 
 // The handle is only used through &self/&mut self of the owning Tree.
 unsafe impl Send for Job {}
@@ -60,28 +63,54 @@ impl Job {
         }
     }
 
-    pub(crate) fn pids(&self) -> Vec<u32> {
-        // Room for 4096 ids; JOBOBJECT_BASIC_PROCESS_ID_LIST is two counts and the ids.
-        let mut buf = vec![0usize; 2 + 4096];
-        // SAFETY: buffer is large enough and correctly aligned for the struct.
-        unsafe {
-            let list = buf.as_mut_ptr() as *mut JOBOBJECT_BASIC_PROCESS_ID_LIST;
-            if QueryInformationJobObject(
-                self.0,
-                JobObjectBasicProcessIdList,
-                list as *mut _,
-                (buf.len() * mem::size_of::<usize>()) as u32,
-                ptr::null_mut(),
-            ) == 0
-            {
-                return Vec::new();
+    /// Every process in the job, or `None` when the query failed: that is
+    /// not an empty job, and a stop must not take it for one (ADR-0009).
+    pub(crate) fn query_pids(&self) -> Option<Vec<u32>> {
+        self.query_pids_from(1024)
+    }
+
+    /// [`Self::query_pids`] with room for `room` ids at first; grows when
+    /// the job holds more.
+    fn query_pids_from(&self, mut room: usize) -> Option<Vec<u32>> {
+        loop {
+            // JOBOBJECT_BASIC_PROCESS_ID_LIST is two counts and the ids.
+            let mut buf = vec![0usize; 2 + room];
+            // SAFETY: buffer is large enough and correctly aligned for the struct.
+            unsafe {
+                let list = buf.as_mut_ptr() as *mut JOBOBJECT_BASIC_PROCESS_ID_LIST;
+                let ok = QueryInformationJobObject(
+                    self.0,
+                    JobObjectBasicProcessIdList,
+                    list as *mut _,
+                    (buf.len() * mem::size_of::<usize>()) as u32,
+                    ptr::null_mut(),
+                ) != 0;
+                let assigned = (*list).NumberOfAssignedProcesses as usize;
+                let n = (*list).NumberOfProcessIdsInList as usize;
+                let more = if ok {
+                    n < assigned
+                } else {
+                    std::io::Error::last_os_error().raw_os_error() == Some(ERROR_MORE_DATA as i32)
+                };
+                if more && room < MAX_JOB_PIDS {
+                    room = (assigned.max(room) * 2).min(MAX_JOB_PIDS);
+                    continue;
+                }
+                if !ok {
+                    return None;
+                }
+                return Some(
+                    std::slice::from_raw_parts((*list).ProcessIdList.as_ptr(), n.min(room))
+                        .iter()
+                        .map(|&p| p as u32)
+                        .collect(),
+                );
             }
-            let n = (*list).NumberOfProcessIdsInList as usize;
-            std::slice::from_raw_parts((*list).ProcessIdList.as_ptr(), n)
-                .iter()
-                .map(|&p| p as u32)
-                .collect()
         }
+    }
+
+    pub(crate) fn pids(&self) -> Vec<u32> {
+        self.query_pids().unwrap_or_default()
     }
 
     /// Job accounting for CPU time (it includes exited processes), the summed
@@ -202,7 +231,13 @@ pub(crate) fn start_in_job(job: &Job, spec: Spec) -> Result<Child> {
         let _ = child.kill();
         return Err(e);
     }
-    resume_process(child.id())?;
+    if let Err(e) = resume_process(child.id()) {
+        // Still suspended in the job: in the shared build job it would stay
+        // until the daemon ends.
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(e);
+    }
     Ok(child)
 }
 
@@ -234,6 +269,12 @@ impl Tree {
     pub(crate) fn pids(&mut self) -> Vec<u32> {
         let _ = self.try_exit_code();
         self.job.pids()
+    }
+
+    /// Whether any process of the tree lives; `None` when the job cannot tell.
+    pub(crate) fn alive(&mut self) -> Option<bool> {
+        let _ = self.try_exit_code();
+        self.job.query_pids().map(|p| !p.is_empty())
     }
 
     pub(crate) fn try_exit_code(&mut self) -> Option<i32> {
@@ -317,7 +358,7 @@ pub(crate) fn ensure_console() -> Result<bool> {
 }
 
 /// Creation time of a process (100 ns ticks), or None if it cannot be opened.
-fn creation_time(pid: u32) -> Option<u64> {
+pub(crate) fn creation_time(pid: u32) -> Option<u64> {
     use windows_sys::Win32::Foundation::FILETIME;
     use windows_sys::Win32::System::Threading::{
         GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -340,7 +381,10 @@ fn creation_time(pid: u32) -> Option<u64> {
 /// End `root` and every descendant (ADR-0020: cancelling one build in the
 /// shared build job). A child only counts if it was created after its parent,
 /// so a process that reuses a dead parent's id is never mistaken for a child.
-pub(crate) fn kill_tree(root: u32) {
+/// Where a parent has exited, the nearest ancestor still known stands in for
+/// it, down to `root_created` (when the root was started): a process
+/// older than that is never part of the tree.
+pub(crate) fn kill_tree(root: u32, root_created: Option<u64>) {
     use std::collections::HashMap;
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
@@ -368,25 +412,21 @@ pub(crate) fn kill_tree(root: u32) {
         }
         CloseHandle(snap);
     }
-    let mut tree = vec![root];
+    // (pid, the creation time a child of it must not precede)
+    let mut tree: Vec<(u32, Option<u64>)> = vec![(root, creation_time(root).or(root_created))];
     let mut i = 0;
     while i < tree.len() {
-        let parent = tree[i];
-        let parent_created = creation_time(parent);
+        let (parent, bound) = tree[i];
         for &c in children.get(&parent).map(Vec::as_slice).unwrap_or_default() {
-            let newer = match (parent_created, creation_time(c)) {
-                (Some(p), Some(t)) => t >= p,
-                // The parent has exited: its recorded children are still its own.
-                (None, Some(_)) => true,
-                _ => false,
-            };
-            if newer && !tree.contains(&c) {
-                tree.push(c);
+            let created = creation_time(c);
+            let newer = matches!((bound, created), (Some(b), Some(t)) if t >= b);
+            if newer && !tree.iter().any(|(p, _)| *p == c) {
+                tree.push((c, created));
             }
         }
         i += 1;
     }
-    for pid in tree {
+    for (pid, _) in tree {
         // SAFETY: handle checked and closed.
         unsafe {
             let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
@@ -420,6 +460,38 @@ pub(crate) fn long_path(path: &std::path::Path) -> Option<std::path::PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_job_with_more_processes_than_room_lists_them_all() {
+        let job = super::Job::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let spec = crate::Spec {
+            name: "many".into(),
+            // Three processes at least: cmd, and two pings started from it.
+            command: "start /b ping -n 30 127.0.0.1 >nul & ping -n 30 127.0.0.1 >nul".into(),
+            cwd: dir.path().into(),
+            env: Default::default(),
+            log: std::fs::File::create(dir.path().join("log")).unwrap(),
+        };
+        let mut child = super::start_in_job(&job, spec).unwrap();
+        let t0 = std::time::Instant::now();
+        let mut all = Vec::new();
+        while t0.elapsed() < std::time::Duration::from_secs(10) {
+            all = job.query_pids().unwrap();
+            if all.len() >= 3 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(all.len() >= 3, "{all:?}");
+        let mut small = job.query_pids_from(1).unwrap();
+        small.sort();
+        all.sort();
+        assert!(small.len() >= all.len().min(3), "{small:?} vs {all:?}");
+        job.terminate();
+        let _ = child.wait();
+        assert_eq!(job.query_pids(), Some(Vec::new()));
+    }
+
     #[test]
     fn a_short_path_becomes_the_long_one() {
         use std::os::windows::ffi::{OsStrExt, OsStringExt};
