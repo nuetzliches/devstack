@@ -29,6 +29,8 @@ pub enum ComposeError {
         status: String,
         output: String,
     },
+    #[error("`{command}` did not finish within {secs} s (is Docker answering?)")]
+    Timeout { command: String, secs: u64 },
     #[error("cannot read the output of `{command}`: {message}")]
     Parse { command: String, message: String },
 }
@@ -79,36 +81,122 @@ impl Group {
 
 // ------------------------------------------------------------------- models
 
+/// A field Compose may write as JSON `null` (it serialises empty Go slices
+/// and maps that way): read as its default.
+fn nullable<'de, D, T>(d: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
 /// The parts of `docker compose config --format json` devstack reads.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Model {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable")]
     pub services: BTreeMap<String, ServiceModel>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable")]
     pub networks: BTreeMap<String, Option<NamedModel>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable")]
     pub volumes: BTreeMap<String, Option<NamedModel>>,
+    /// Top-level secrets and configs: one from a `file` is a bind mount.
+    #[serde(default, deserialize_with = "nullable")]
+    pub secrets: BTreeMap<String, Option<FileModel>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub configs: BTreeMap<String, Option<FileModel>>,
 }
 
 /// A top-level network or volume: what decides whether two Compose projects
-/// share it.
+/// share it, and what a node checks before it runs a lane's (ADR-0033).
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct NamedModel {
     pub name: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable")]
+    pub external: bool,
+    pub driver: Option<String>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub driver_opts: BTreeMap<String, serde_json::Value>,
+    /// A network's addresses (`config: [{subnet, ...}]`).
+    pub ipam: Option<serde_json::Value>,
+    pub enable_ipv6: Option<bool>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub internal: bool,
+}
+
+/// A top-level secret or config.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct FileModel {
+    pub file: Option<String>,
+    #[serde(default, deserialize_with = "nullable")]
     pub external: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct ServiceModel {
     /// Values may be null (`environment: [NAME]` without a value).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable")]
     pub environment: BTreeMap<String, Option<String>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable")]
     pub ports: Vec<PortModel>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable")]
     pub profiles: Vec<String>,
     pub container_name: Option<String>,
+    pub image: Option<String>,
+    pub build: Option<BuildModel>,
+    // What reaches beyond the container: a node checks it (ADR-0033).
+    #[serde(default, deserialize_with = "nullable")]
+    pub privileged: bool,
+    #[serde(default, deserialize_with = "nullable")]
+    pub cap_add: Vec<String>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub devices: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub device_cgroup_rules: Vec<String>,
+    pub pid: Option<String>,
+    pub ipc: Option<String>,
+    pub uts: Option<String>,
+    pub cgroup: Option<String>,
+    pub network_mode: Option<String>,
+    pub userns_mode: Option<String>,
+    pub cgroup_parent: Option<String>,
+    pub runtime: Option<String>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub security_opt: Vec<String>,
+    /// A map or a list, as the file has it.
+    pub sysctls: Option<serde_json::Value>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub volumes: Vec<MountModel>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub volumes_from: Vec<String>,
+    /// Paths (strings or `{path}`), when read with `--no-env-resolution`.
+    #[serde(default, deserialize_with = "nullable")]
+    pub env_file: Vec<serde_json::Value>,
+}
+
+/// A service's mount, in the long syntax `config` always writes.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct MountModel {
+    /// `bind`, `volume`, `tmpfs`, `npipe`, `image`, `cluster`.
+    #[serde(rename = "type", default, deserialize_with = "nullable")]
+    pub kind: String,
+    pub source: Option<String>,
+    pub target: Option<String>,
+}
+
+/// A service's `build`.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct BuildModel {
+    pub context: Option<String>,
+    pub dockerfile: Option<String>,
+    pub network: Option<String>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub additional_contexts: BTreeMap<String, String>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub privileged: bool,
+    #[serde(default, deserialize_with = "nullable")]
+    pub entitlements: Vec<String>,
+    pub ssh: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -129,24 +217,25 @@ pub struct Container {
     /// `running`, `exited`, `restarting`, …
     pub state: String,
     /// `healthy`, `unhealthy`, `starting`, or empty without a health check.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable")]
     pub health: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable")]
     pub exit_code: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable")]
     pub publishers: Vec<Publisher>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Publisher {
-    #[serde(rename = "URL")]
+    #[serde(rename = "URL", default, deserialize_with = "nullable")]
     pub url: String,
     pub target_port: u16,
+    #[serde(default, deserialize_with = "nullable")]
     pub published_port: u16,
 }
 
-/// What a published port does when this machine connects to it.
+// What a published port does when this machine connects to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reach {
     /// It answered, or it waits for the client to speak first (a database).
@@ -185,19 +274,24 @@ impl Container {
         self.state == "running" && (self.health.is_empty() || self.health == "healthy")
     }
 
-    /// Host address (`127.0.0.1:<port>`) at which `target` is published, if it is.
+    /// Host address (`127.0.0.1:<port>`) at which `target` is published, if
+    /// it is: loopback for a wildcard or loopback binding (IPv4 first), else
+    /// the address the port is bound to.
     pub fn published(&self, target: u16) -> Option<String> {
-        self.publishers
-            .iter()
-            .filter(|p| p.target_port == target && p.published_port != 0)
-            // IPv4 first: a loopback or wildcard binding is reachable on 127.0.0.1.
-            .find(|p| matches!(p.url.as_str(), "127.0.0.1" | "0.0.0.0" | ""))
-            .or_else(|| {
-                self.publishers
-                    .iter()
-                    .find(|p| p.target_port == target && p.published_port != 0)
-            })
-            .map(|p| format!("127.0.0.1:{}", p.published_port))
+        let mine = || {
+            self.publishers
+                .iter()
+                .filter(move |p| p.target_port == target && p.published_port != 0)
+        };
+        if let Some(p) = mine().find(|p| matches!(p.url.as_str(), "127.0.0.1" | "0.0.0.0" | "")) {
+            return Some(format!("127.0.0.1:{}", p.published_port));
+        }
+        let p = mine().next()?;
+        Some(match p.url.as_str() {
+            "::" | "::1" => format!("[::1]:{}", p.published_port),
+            ip if ip.contains(':') => format!("[{ip}]:{}", p.published_port),
+            ip => format!("{ip}:{}", p.published_port),
+        })
     }
 }
 
@@ -222,6 +316,75 @@ pub fn parse_ps(text: &str) -> std::result::Result<Vec<Container>, String> {
 
 // ------------------------------------------------------------------- driver
 
+/// How long a Docker call may take before devstack gives up on it and ends
+/// it (a Docker Desktop that restarts holds every call). `up` and `create`
+/// pull and build images: they get long budgets.
+pub mod budget {
+    use std::time::Duration;
+    /// `config`, `ps`, `logs`, `network ...`, `stats`.
+    pub const QUICK: Duration = Duration::from_secs(60);
+    /// `stop`, `restart`, `down`: containers take their stop timeout.
+    pub const STOP: Duration = Duration::from_secs(180);
+    /// `system df -v`: Docker walks every volume.
+    pub const SLOW: Duration = Duration::from_secs(300);
+    /// `create`, and `up` on top of its health wait: pulls and builds.
+    pub const PULL: Duration = Duration::from_secs(30 * 60);
+}
+
+/// Hide the console window a child would open on Windows (the daemon and
+/// the hub have none).
+pub fn no_window(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    #[cfg(not(windows))]
+    let _ = cmd;
+}
+
+/// Run `cmd` to its end and collect its output, at most `budget`; `None`
+/// when it took longer (it is killed then). Its streams are read while it
+/// runs, so a chatty child cannot block on a full pipe.
+pub fn output_within(mut cmd: Command, budget: Duration) -> std::io::Result<Option<Output>> {
+    use std::io::Read;
+    use std::process::Stdio;
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn()?;
+    fn reader(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        })
+    }
+    let out = reader(child.stdout.take());
+    let err = reader(child.stderr.take());
+    let t0 = std::time::Instant::now();
+    let status = loop {
+        if let Some(s) = child.try_wait()? {
+            break s;
+        }
+        if t0.elapsed() >= budget {
+            let _ = child.kill();
+            let _ = child.wait();
+            // The readers end once nothing holds the pipes; a grandchild
+            // (Compose's plugin) may, so they are left to finish alone.
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    Ok(Some(Output {
+        status,
+        stdout: out.join().unwrap_or_default(),
+        stderr: err.join().unwrap_or_default(),
+    }))
+}
+
 /// Runs the Docker CLI. `program` is `docker` unless a test substitutes it.
 #[derive(Debug, Clone)]
 pub struct Docker {
@@ -237,14 +400,22 @@ impl Default for Docker {
 }
 
 impl Docker {
-    fn run(&self, dir: &Path, args: &[OsString]) -> Result<Output> {
-        let out = Command::new(&self.program)
-            .args(args)
-            .current_dir(dir)
-            .output()
+    fn command(&self, dir: &Path, args: &[OsString]) -> Command {
+        let mut cmd = Command::new(&self.program);
+        cmd.args(args).current_dir(dir);
+        no_window(&mut cmd);
+        cmd
+    }
+
+    fn run(&self, dir: &Path, args: &[OsString], budget: Duration) -> Result<Output> {
+        let out = output_within(self.command(dir, args), budget)
             .map_err(|source| ComposeError::Spawn {
                 program: self.program.clone(),
                 source,
+            })?
+            .ok_or_else(|| ComposeError::Timeout {
+                command: describe(&self.program, args),
+                secs: budget.as_secs(),
             })?;
         if !out.status.success() {
             let text = format!(
@@ -265,6 +436,12 @@ impl Docker {
     /// The fully interpolated model, with every profile enabled so that parked
     /// services (ADR-0004) can still serve as environment sources (ADR-0014).
     pub fn config(&self, g: &Group) -> Result<Model> {
+        self.config_with(g, &[])
+    }
+
+    /// [`Docker::config`] with more flags for `config` (`--no-env-resolution`:
+    /// services' `env_file` stay paths, unread).
+    pub fn config_with(&self, g: &Group, flags: &[&str]) -> Result<Model> {
         let mut a = g.base_args();
         a.extend([
             "--profile".into(),
@@ -273,7 +450,8 @@ impl Docker {
             "--format".into(),
             "json".into(),
         ]);
-        let out = self.run(&g.dir, &a)?;
+        a.extend(flags.iter().map(OsString::from));
+        let out = self.run(&g.dir, &a, budget::QUICK)?;
         parse_config(&String::from_utf8_lossy(&out.stdout)).map_err(|message| ComposeError::Parse {
             command: describe(&self.program, &a),
             message,
@@ -284,25 +462,29 @@ impl Docker {
     pub fn validate(&self, g: &Group) -> Result<()> {
         let mut a = g.base_args();
         a.extend(["config".into(), "-q".into()]);
-        self.run(&g.dir, &a).map(|_| ())
+        self.run(&g.dir, &a, budget::QUICK).map(|_| ())
     }
 
+    /// Create the group's own networks unless they exist.
     pub fn ensure_networks(&self, g: &Group) -> Result<()> {
         for n in &g.networks {
-            let exists = Command::new(&self.program)
-                .args(["network", "inspect", n])
-                .output()
-                .map_err(|source| ComposeError::Spawn {
-                    program: self.program.clone(),
-                    source,
-                })?
-                .status
-                .success();
-            if !exists {
-                self.run(&g.dir, &["network".into(), "create".into(), n.into()])?;
-            }
+            self.ensure_network(&g.dir, n, &[])?;
         }
         Ok(())
+    }
+
+    /// Create the network `name` with `flags` (`--internal`) unless it
+    /// exists. Created first, "exists already" taken as success: two groups
+    /// (or two devstacks) that need one at once do not race.
+    pub fn ensure_network(&self, dir: &Path, name: &str, flags: &[&str]) -> Result<()> {
+        let mut a: Vec<OsString> = vec!["network".into(), "create".into()];
+        a.extend(flags.iter().map(OsString::from));
+        a.push(name.into());
+        match self.run(dir, &a, budget::QUICK) {
+            Ok(_) => Ok(()),
+            Err(ComposeError::Failed { output, .. }) if output.contains("already exists") => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     /// Create the group's selected services and their networks without
@@ -312,11 +494,12 @@ impl Docker {
         let mut a = g.base_args();
         a.extend(["create".into(), "--no-recreate".into()]);
         a.extend(g.services.iter().map(OsString::from));
-        self.run(&g.dir, &a).map(|_| ())
+        self.run(&g.dir, &a, budget::PULL).map(|_| ())
     }
 
     /// Start exactly the group's selected services and wait until they are
-    /// running and healthy (`--wait`), at most `timeout`.
+    /// running and healthy (`--wait`), at most `timeout` for that, on top of
+    /// what pulling and building their images takes.
     pub fn up(&self, g: &Group, timeout: Duration) -> Result<()> {
         self.ensure_networks(g)?;
         let mut a = g.base_args();
@@ -329,7 +512,7 @@ impl Docker {
             "--no-deps".into(),
         ]);
         a.extend(g.services.iter().map(OsString::from));
-        self.run(&g.dir, &a).map(|_| ())
+        self.run(&g.dir, &a, budget::PULL + timeout).map(|_| ())
     }
 
     pub fn ps(&self, g: &Group) -> Result<Vec<Container>> {
@@ -340,7 +523,7 @@ impl Docker {
             "--format".into(),
             "json".into(),
         ]);
-        let out = self.run(&g.dir, &a)?;
+        let out = self.run(&g.dir, &a, budget::QUICK)?;
         parse_ps(&String::from_utf8_lossy(&out.stdout)).map_err(|message| ComposeError::Parse {
             command: describe(&self.program, &a),
             message,
@@ -350,7 +533,7 @@ impl Docker {
     pub fn restart(&self, g: &Group, service: &str) -> Result<()> {
         let mut a = g.base_args();
         a.extend(["restart".into(), service.into()]);
-        self.run(&g.dir, &a).map(|_| ())
+        self.run(&g.dir, &a, budget::STOP).map(|_| ())
     }
 
     /// `docker compose logs --follow` of one container: the last `tail`
@@ -373,9 +556,7 @@ impl Docker {
             tail.to_string().into(),
             service.into(),
         ]);
-        Command::new(&self.program)
-            .args(&a)
-            .current_dir(&g.dir)
+        self.command(&g.dir, &a)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -395,7 +576,7 @@ impl Docker {
             "10".into(),
             service.into(),
         ]);
-        self.run(&g.dir, &a).map(|_| ())
+        self.run(&g.dir, &a, budget::STOP).map(|_| ())
     }
 
     /// The last `tail` lines of a container's output, each starting with its
@@ -422,7 +603,7 @@ impl Docker {
             a.extend(["--since".into(), s.into()]);
         }
         a.push(service.into());
-        let out = self.run(&g.dir, &a)?;
+        let out = self.run(&g.dir, &a, budget::QUICK)?;
         Ok(merge_by_time(
             &String::from_utf8_lossy(&out.stdout),
             &String::from_utf8_lossy(&out.stderr),
@@ -434,7 +615,7 @@ impl Docker {
     pub fn down(&self, g: &Group) -> Result<()> {
         let mut a = g.base_args();
         a.extend(["down".into(), "--timeout".into(), "10".into()]);
-        self.run(&g.dir, &a).map(|_| ())
+        self.run(&g.dir, &a, budget::STOP).map(|_| ())
     }
 
     /// Remove the group's containers, its volumes and the networks devstack
@@ -448,9 +629,13 @@ impl Docker {
             "--timeout".into(),
             "10".into(),
         ]);
-        self.run(&g.dir, &a)?;
+        self.run(&g.dir, &a, budget::STOP)?;
         for n in &g.networks {
-            let _ = self.run(&g.dir, &["network".into(), "rm".into(), n.into()]);
+            let _ = self.run(
+                &g.dir,
+                &["network".into(), "rm".into(), n.into()],
+                budget::QUICK,
+            );
         }
         Ok(())
     }
@@ -458,67 +643,153 @@ impl Docker {
 
 /// The Compose overlay that makes a lane's copy of a group its own (ADR-0030):
 /// every published host port moved by `offset`, no fixed `container_name`,
-/// and every network or volume that has a fixed name (external networks
-/// included) renamed `<name>-<lane>`, so nothing is shared with the main
-/// tree or another lane. External volumes stay as they are: they hold data
-/// someone put there on purpose. `model` is the group's configuration under
-/// the lane's `project`, whose own names (`<project>_<key>`) are its own
-/// already. `keep` are services the lane does not run (`shared`); they are
-/// left alone. YAML, with the merge tags of Compose 2.24 (`!override`,
-/// `!reset`).
+/// and every network or volume that has a fixed name renamed `<name>-<lane>`,
+/// so nothing is shared with the main tree or another lane. An external
+/// network is renamed only when it is one of the group's own `networks`
+/// (`own`, the stack file's names), which devstack creates per lane; any
+/// other external network is someone else's and stays as it is, like
+/// external volumes, which hold data someone put there on purpose. `model`
+/// is the group's configuration under the lane's `project`, whose own names
+/// (`<project>_<key>`) are its own already. `keep` are services the lane does
+/// not run (`shared`); they are left alone. YAML, with the merge tags of
+/// Compose 2.24 (`!override`, `!reset`).
 pub fn lane_overlay(
     model: &Model,
     project: &str,
     lane: &str,
     offset: u16,
     keep: &[String],
+    own: &[String],
 ) -> std::result::Result<String, String> {
-    overlay(model, project, lane, Some(offset), keep)
+    Ok(overlay(model, project, lane, Some(offset), keep, own)?.render(lane))
+}
+
+/// What a node adds to a lane's overlay (ADR-0033).
+#[derive(Debug, Clone, Default)]
+pub struct NodeOptions {
+    /// The group's own networks, as the stack file names them (ADR-0030).
+    pub own_networks: Vec<String>,
+    /// Every network of the lane `internal`: its containers reach each other
+    /// and nothing else (a node's `none`).
+    pub isolated: bool,
+    /// No IPv6 on the lane's networks: the node's egress rules are IPv4's.
+    pub no_ipv6: bool,
+    /// Images are built without a network (`build.network: none`).
+    pub build_offline: bool,
+    /// Limits of every container: memory (bytes), CPU (cores), processes.
+    pub memory: Option<u64>,
+    pub cpus: Option<f64>,
+    pub pids: Option<u32>,
+    /// The image name a service with `build` is built as: one the node
+    /// chose, so another lane cannot name it.
+    pub build_images: BTreeMap<String, String>,
 }
 
 /// The overlay for a lane on a node (ADR-0025): as [`lane_overlay`], but
-/// nothing is published on the node's host at all. The lane container
-/// reaches every service by its name on the lane's network, and two lanes
-/// on one node would otherwise want the same host ports.
-///
-/// `isolated`: every network of the lane is `internal`, so its containers
-/// reach each other and nothing else (ADR-0033: a node's `none`).
+/// nothing is published on the node's host at all (the lane container
+/// reaches every service by its name on the lane's network, and two lanes on
+/// one node would otherwise want the same host ports), with what the node's
+/// `options` add.
 pub fn node_overlay(
     model: &Model,
     project: &str,
     lane: &str,
-    isolated: bool,
+    options: &NodeOptions,
 ) -> std::result::Result<String, String> {
-    let mut text = overlay(model, project, lane, None, &[])?;
-    if isolated {
-        // The `default` network always exists for services without networks.
-        let mut keys: Vec<&str> = model.networks.keys().map(String::as_str).collect();
-        if !keys.contains(&"default") {
-            keys.push("default");
-        }
-        if text.contains("\nnetworks:\n") {
-            // Renamed networks are listed already: add `internal` to the
-            // ones there and append the rest.
-            for k in &keys {
-                let head = format!("\n  \"{k}\":\n");
-                if let Some(i) = text.find(&head) {
-                    text.insert_str(i + head.len(), "    internal: true\n");
-                } else {
-                    text = text.replacen(
-                        "\nnetworks:\n",
-                        &format!("\nnetworks:\n  \"{k}\":\n    internal: true\n"),
-                        1,
-                    );
-                }
+    let mut o = overlay(model, project, lane, None, &[], &options.own_networks)?;
+    for (name, svc) in &model.services {
+        let body = o.services.entry(name.clone()).or_default();
+        if options.memory.is_some() || options.cpus.is_some() || options.pids.is_some() {
+            // One place for the limits: Compose refuses `mem_limit` beside a
+            // different `deploy.resources.limits.memory`.
+            body.push("    mem_limit: !reset null".into());
+            body.push("    memswap_limit: !reset null".into());
+            body.push("    cpus: !reset null".into());
+            body.push("    pids_limit: !reset null".into());
+            body.push("    deploy:\n      resources:\n        limits:".into());
+            if let Some(m) = options.memory {
+                body.push(format!("          memory: {m}"));
             }
-        } else {
-            text.push_str("networks:\n");
-            for k in &keys {
-                text.push_str(&format!("  \"{k}\":\n    internal: true\n"));
+            if let Some(c) = options.cpus {
+                body.push(format!("          cpus: {}", quote(&format!("{c:.2}"))));
+            }
+            if let Some(p) = options.pids {
+                body.push(format!("          pids: {p}"));
+            }
+        }
+        if svc.build.is_some() {
+            if options.build_offline {
+                body.push("    build:\n      network: none".into());
+            }
+            if let Some(image) = options.build_images.get(name) {
+                body.push(format!("    image: {}", quote(image)));
             }
         }
     }
-    Ok(text)
+    if options.isolated || options.no_ipv6 {
+        // The `default` network always exists for services without networks.
+        let mut keys: Vec<&str> = model
+            .networks
+            .iter()
+            .filter(|(_, m)| !m.as_ref().is_some_and(|m| m.external))
+            .map(|(k, _)| k.as_str())
+            .collect();
+        if !model.networks.contains_key("default") {
+            keys.push("default");
+        }
+        for k in keys {
+            let body = o.networks.entry(k.to_string()).or_default();
+            if options.isolated {
+                body.push("    internal: true".into());
+            }
+            if options.no_ipv6 {
+                body.push("    enable_ipv6: false".into());
+            }
+        }
+    }
+    Ok(o.render(lane))
+}
+
+/// A YAML string.
+fn quote(v: &str) -> String {
+    format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// An overlay as it is put together: the lines under each service, network
+/// and volume, by key.
+#[derive(Default)]
+struct Overlay {
+    services: BTreeMap<String, Vec<String>>,
+    networks: BTreeMap<String, Vec<String>>,
+    volumes: BTreeMap<String, Vec<String>>,
+}
+
+impl Overlay {
+    fn render(&self, lane: &str) -> String {
+        let mut out = format!(
+            "# Written by devstack for lane `{lane}` (ADR-0030): its own ports, names,\n# networks and volumes. Do not edit; it is written again at every start.\n"
+        );
+        for (kind, items) in [
+            ("services", &self.services),
+            ("networks", &self.networks),
+            ("volumes", &self.volumes),
+        ] {
+            let items: Vec<_> = items.iter().filter(|(_, b)| !b.is_empty()).collect();
+            if items.is_empty() {
+                continue;
+            }
+            out.push_str(kind);
+            out.push_str(":\n");
+            for (key, body) in items {
+                out.push_str(&format!("  {}:\n", quote(key)));
+                for line in body {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+            }
+        }
+        out
+    }
 }
 
 /// `offset`: move published ports by it; `None`: publish none.
@@ -528,9 +799,9 @@ fn overlay(
     lane: &str,
     offset: Option<u16>,
     keep: &[String],
-) -> std::result::Result<String, String> {
+    own: &[String],
+) -> std::result::Result<Overlay, String> {
     let by = offset.unwrap_or(0);
-    let q = |v: &str| format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""));
     let shift = |p: &str| -> std::result::Result<String, String> {
         let one = |n: &str| -> std::result::Result<String, String> {
             let n: u16 = n
@@ -546,16 +817,13 @@ fn overlay(
             None => one(p),
         }
     };
-    let mut out = format!(
-        "# Written by devstack for lane `{lane}` (ADR-0030): its own ports, names,\n# networks and volumes. Do not edit; it is written again at every start.\n"
-    );
-    let mut services = String::new();
+    let mut o = Overlay::default();
     for (name, svc) in model.services.iter().filter(|(n, _)| !keep.contains(n)) {
-        let mut body = String::new();
+        let mut body = Vec::new();
         if !svc.ports.is_empty() && offset.is_none() {
-            body.push_str("    ports: !reset []\n");
+            body.push("    ports: !reset []".to_string());
         } else if !svc.ports.is_empty() {
-            body.push_str("    ports: !override\n");
+            body.push("    ports: !override".to_string());
             for port in &svc.ports {
                 let mut spec = String::new();
                 if let Some(published) = &port.published {
@@ -571,53 +839,41 @@ fn overlay(
                     spec.push('/');
                     spec.push_str(proto);
                 }
-                body.push_str(&format!("      - {}\n", q(&spec)));
+                body.push(format!("      - {}", quote(&spec)));
             }
         }
         if svc.container_name.is_some() {
-            body.push_str("    container_name: !reset null\n");
+            body.push("    container_name: !reset null".to_string());
         }
         if !body.is_empty() {
-            services.push_str(&format!("  {}:\n{body}", q(name)));
+            o.services.insert(name.clone(), body);
         }
     }
-    if !services.is_empty() {
-        out.push_str("services:\n");
-        out.push_str(&services);
-    }
-    let renamed = |kind: &str, items: &BTreeMap<String, Option<NamedModel>>, external_too: bool| {
-        let mut text = String::new();
+    let renamed = |items: &BTreeMap<String, Option<NamedModel>>,
+                   external: &dyn Fn(&str) -> bool| {
+        let mut out = BTreeMap::new();
         for (key, m) in items {
             let Some(m) = m else { continue };
-            if m.external && !external_too {
+            let name = m.name.as_deref().unwrap_or(key);
+            if m.external && !external(name) {
                 continue;
             }
-            let Some(name) = m
-                .name
-                .as_deref()
-                .or(m.external.then_some(key.as_str()))
-                .filter(|n| *n != format!("{project}_{key}"))
-            else {
+            if !m.external && (m.name.is_none() || name == format!("{project}_{key}")) {
                 continue; // project-scoped already
-            };
-            text.push_str(&format!(
-                "  {}:\n    name: {}\n",
-                q(key),
-                q(&format!("{name}-{lane}"))
-            ));
+            }
+            out.insert(
+                key.clone(),
+                vec![format!("    name: {}", quote(&format!("{name}-{lane}")))],
+            );
         }
-        if text.is_empty() {
-            String::new()
-        } else {
-            format!("{kind}:\n{text}")
-        }
+        out
     };
-    out.push_str(&renamed("networks", &model.networks, true));
-    out.push_str(&renamed("volumes", &model.volumes, false));
-    Ok(out)
+    o.networks = renamed(&model.networks, &|n| own.iter().any(|o| o == n));
+    o.volumes = renamed(&model.volumes, &|_| false);
+    Ok(o)
 }
 
-/// Two timestamped streams as one, in time order, the last `tail` lines.
+// Two timestamped streams as one, in time order, the last `tail` lines.
 /// RFC 3339 timestamps of one container sort as text; a line without one
 /// (a continuation) stays after the line before it.
 pub fn merge_by_time(stdout: &str, stderr: &str, tail: usize) -> String {
@@ -676,7 +932,7 @@ impl Docker {
             "json".into(),
         ];
         a.extend(names.iter().map(OsString::from));
-        let out = self.run(Path::new("."), &a)?;
+        let out = self.run(Path::new("."), &a, budget::QUICK)?;
         parse_stats(&String::from_utf8_lossy(&out.stdout)).map_err(|message| ComposeError::Parse {
             command: describe(&self.program, &a),
             message,
@@ -692,7 +948,7 @@ impl Docker {
             "--format".into(),
             "json".into(),
         ];
-        let out = self.run(Path::new("."), &a)?;
+        let out = self.run(Path::new("."), &a, budget::SLOW)?;
         parse_volumes(&String::from_utf8_lossy(&out.stdout)).map_err(|message| {
             ComposeError::Parse {
                 command: describe(&self.program, &a),
@@ -935,7 +1191,15 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let y = lane_overlay(&model, "shop-fix", "fix", 100, &["mail".to_string()]).unwrap();
+        let y = lane_overlay(
+            &model,
+            "shop-fix",
+            "fix",
+            100,
+            &["mail".to_string()],
+            &["edge".to_string()],
+        )
+        .unwrap();
         assert!(y.contains("\"db\":\n    ports: !override\n      - \"127.0.0.1:5532:5432\"\n    container_name: !reset null"), "{y}");
         assert!(
             y.contains("- \"5453:53/udp\"") && y.contains("- \"8080\""),
@@ -956,7 +1220,7 @@ mod tests {
             "{y}"
         );
         assert!(!y.contains("kept"), "external volumes stay: {y}");
-        let over = lane_overlay(&model, "shop-fix", "fix", 65000, &[]);
+        let over = lane_overlay(&model, "shop-fix", "fix", 65000, &[], &[]);
         assert!(over.is_err());
     }
 
@@ -967,11 +1231,150 @@ mod tests {
                 "cache":{}},"networks":{"default":{"name":"shop_default"}}}"#,
         )
         .unwrap();
-        let y = node_overlay(&model, "shop-ab12", "ab12", false).unwrap();
+        let y = node_overlay(&model, "shop-ab12", "ab12", &NodeOptions::default()).unwrap();
         assert!(y.contains("ports: !reset []"), "{y}");
         assert!(y.contains("container_name: !reset null"), "{y}");
         assert!(!y.contains("5432"), "{y}");
-        let y = node_overlay(&model, "shop-ab12", "ab12", true).unwrap();
+        let isolated = NodeOptions {
+            isolated: true,
+            ..NodeOptions::default()
+        };
+        let y = node_overlay(&model, "shop-ab12", "ab12", &isolated).unwrap();
         assert!(y.contains("internal: true"), "{y}");
+    }
+
+    #[test]
+    fn an_external_network_is_renamed_only_when_the_group_owns_it() {
+        let model = parse_config(
+            r#"{"services":{"web":{}},
+                "networks":{"edge":{"name":"edge","external":true},"proxy":{"name":"proxy","external":true}}}"#,
+        )
+        .unwrap();
+        let y = lane_overlay(&model, "shop-fix", "fix", 0, &[], &["edge".into()]).unwrap();
+        assert!(
+            y.contains(
+                "\"edge\":
+    name: \"edge-fix\""
+            ),
+            "{y}"
+        );
+        assert!(
+            !y.contains("proxy"),
+            "someone else's network stays as it is: {y}"
+        );
+    }
+
+    #[test]
+    fn an_isolated_node_overlay_marks_networks_not_services_named_alike() {
+        // A service named like a network: the old text search put
+        // `internal: true` under the service.
+        let model = parse_config(
+            r#"{"services":{"backend":{"build":{"context":"/src/api"}},"db":{}},
+                "networks":{"backend":{"name":"shop_backend"},"default":{"name":"shop-ab12_default"}}}"#,
+        )
+        .unwrap();
+        let o = NodeOptions {
+            isolated: true,
+            no_ipv6: true,
+            build_offline: true,
+            memory: Some(2 << 30),
+            cpus: Some(1.5),
+            pids: Some(512),
+            build_images: [("backend".to_string(), "devstack-build-x".to_string())].into(),
+            ..NodeOptions::default()
+        };
+        let y = node_overlay(&model, "shop-ab12", "ab12", &o).unwrap();
+        let services = &y[y.find("services:").unwrap()..y.find("networks:").unwrap()];
+        let networks = &y[y.find("networks:").unwrap()..];
+        assert!(!services.contains("internal"), "{y}");
+        assert!(
+            networks.contains(
+                "  \"backend\":
+    name: \"shop_backend-ab12\"
+    internal: true
+    enable_ipv6: false"
+            ),
+            "{y}"
+        );
+        assert!(
+            networks.contains(
+                "  \"default\":
+    internal: true"
+            ),
+            "{y}"
+        );
+        assert!(
+            services.contains("memory: 2147483648") && services.contains("cpus: \"1.50\""),
+            "{y}"
+        );
+        assert!(services.contains("pids: 512"), "{y}");
+        assert!(
+            services.contains(
+                "build:
+      network: none"
+            ),
+            "{y}"
+        );
+        assert!(services.contains("image: \"devstack-build-x\""), "{y}");
+    }
+
+    #[test]
+    fn compose_nulls_read_as_empty() {
+        let m = parse_config(
+            r#"{"services":{"db":{"environment":null,"ports":null,"profiles":null,"volumes":null,"cap_add":null}},"networks":null,"volumes":null}"#,
+        )
+        .unwrap();
+        assert!(m.services["db"].ports.is_empty());
+        let c = parse_ps(
+            r#"{"Service":"db","Name":"x","State":"running","Health":"","Publishers":null}"#,
+        )
+        .unwrap();
+        assert!(c[0].publishers.is_empty());
+    }
+
+    #[test]
+    fn a_port_bound_to_one_address_is_reached_there() {
+        let c = parse_ps(
+            r#"{"Service":"db","Name":"x","State":"running","Publishers":[{"URL":"10.0.0.7","TargetPort":5432,"PublishedPort":15432},{"URL":"::","TargetPort":80,"PublishedPort":8080},{"URL":"fd00::1","TargetPort":81,"PublishedPort":8081}]}"#,
+        )
+        .unwrap();
+        assert_eq!(c[0].published(5432).as_deref(), Some("10.0.0.7:15432"));
+        assert_eq!(c[0].published(80).as_deref(), Some("[::1]:8080"));
+        assert_eq!(c[0].published(81).as_deref(), Some("[fd00::1]:8081"));
+    }
+
+    #[test]
+    fn a_call_that_takes_too_long_is_ended() {
+        let mut cmd = if cfg!(windows) {
+            let mut c = Command::new("powershell");
+            c.args(["-NoProfile", "-Command", "Start-Sleep -Seconds 20"]);
+            c
+        } else {
+            let mut c = Command::new("sleep");
+            c.arg("20");
+            c
+        };
+        no_window(&mut cmd);
+        let t0 = std::time::Instant::now();
+        assert!(
+            output_within(cmd, Duration::from_millis(300))
+                .unwrap()
+                .is_none()
+        );
+        assert!(t0.elapsed() < Duration::from_secs(10));
+        let mut echo = if cfg!(windows) {
+            let mut c = Command::new("cmd");
+            c.args(["/C", "echo hi"]);
+            c
+        } else {
+            let mut c = Command::new("echo");
+            c.arg("hi");
+            c
+        };
+        no_window(&mut echo);
+        let out = output_within(echo, Duration::from_secs(20))
+            .unwrap()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&out.stdout).contains("hi"));
     }
 }

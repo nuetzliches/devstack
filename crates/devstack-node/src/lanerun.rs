@@ -208,7 +208,12 @@ impl LaneRun {
             let g = self.group(&stack, &name);
             let model = dc.config(&g)?;
             let isolated = self.network == crate::policy::Network::None;
-            let text = devstack_compose::node_overlay(&model, &g.project, &self.id, isolated)
+            let options = devstack_compose::NodeOptions {
+                own_networks: stack.compose[&name].networks.clone(),
+                isolated,
+                ..Default::default()
+            };
+            let text = devstack_compose::node_overlay(&model, &g.project, &self.id, &options)
                 .map_err(|e| RunError::Config(format!("compose group `{name}`: {e}")))?;
             std::fs::create_dir_all(overlay.parent().expect("has a parent"))
                 .map_err(|e| RunError::Io(overlay.clone(), e))?;
