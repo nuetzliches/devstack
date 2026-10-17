@@ -613,7 +613,7 @@ async fn blob(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
     UrlPath(hash): UrlPath<String>,
-    body: bytes::Bytes,
+    body: axum::body::Body,
 ) -> ApiResult<StatusCode> {
     let who = caller(&s, &peer).await?;
     // Only a member with a lease here may store anything.
@@ -626,49 +626,96 @@ async fn blob(
             "a blob is named by its BLAKE3 hash",
         ));
     }
-    if blake3::hash(&body).to_hex().as_str() != hash {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
-            "the content does not have that hash",
-        ));
-    }
     let dir = s.blobs(&who);
     let path = dir.join(&hash);
     if path.exists() {
         return Ok(StatusCode::NO_CONTENT);
     }
+    // Written to disk as it arrives (a blob may be hundreds of MiB), hashed
+    // on the way; it takes its name only once the hash matches.
+    tokio::fs::create_dir_all(&dir).await.map_err(internal)?;
+    let tmp = dir.join(format!("{hash}.{}.tmp", crate::coordinator::random_hex(6)));
+    let received = receive_blob(body, &tmp).await;
+    let fail = |e| {
+        let tmp = tmp.clone();
+        async move {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            Err(e)
+        }
+    };
+    let (got, size) = match received {
+        Ok(r) => r,
+        Err(e) => return fail(e).await,
+    };
+    if got != hash {
+        return fail(err(
+            StatusCode::BAD_REQUEST,
+            "the content does not have that hash",
+        ))
+        .await;
+    }
     // Room for it among this member's blobs: what its mirrors no longer
     // need goes first.
-    let size = body.len() as u64;
     if s.blob_use(&who) + size > MAX_MEMBER_BLOBS {
         let (s2, w) = (s.clone(), who.clone());
         tokio::task::spawn_blocking(move || s2.gc_blobs(&w))
             .await
             .map_err(internal)?;
         if s.blob_use(&who) + size > MAX_MEMBER_BLOBS {
-            return Err(err(
+            return fail(err(
                 StatusCode::INSUFFICIENT_STORAGE,
                 format!(
                     "your files on {} take {} MiB already, the most a member may store here",
                     s.name,
                     MAX_MEMBER_BLOBS >> 20
                 ),
-            ));
+            ))
+            .await;
         }
     }
-    let written = tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(&dir)?;
-        let tmp = dir.join(format!("{hash}.{}.tmp", crate::coordinator::random_hex(6)));
-        std::fs::write(&tmp, &body)?;
-        std::fs::rename(&tmp, &path).inspect_err(|_| {
-            let _ = std::fs::remove_file(&tmp);
-        })
-    })
-    .await
-    .map_err(internal)?;
-    written.map_err(internal)?;
+    if let Err(e) = tokio::fs::rename(&tmp, &path).await {
+        return fail(internal(e)).await;
+    }
     *s.blob_use.lock().unwrap().entry(who).or_insert(0) += size;
     Ok(StatusCode::CREATED)
+}
+
+/// Write an uploaded blob to `tmp` as it arrives, at most [`MAX_BLOB`]
+/// bytes; its BLAKE3 hash and size.
+async fn receive_blob(
+    body: axum::body::Body,
+    tmp: &Path,
+) -> Result<(String, u64), (StatusCode, String)> {
+    use http_body_util::BodyExt;
+    use tokio::io::AsyncWriteExt;
+    let mut body = http_body_util::Limited::new(body, MAX_BLOB);
+    let mut file = tokio::fs::File::create(tmp).await.map_err(internal)?;
+    let mut hasher = blake3::Hasher::new();
+    let mut size = 0u64;
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|e| {
+            if e.is::<http_body_util::LengthLimitError>() {
+                err(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    format!("a blob may have {} MiB at most", MAX_BLOB >> 20),
+                )
+            } else {
+                err(
+                    StatusCode::BAD_REQUEST,
+                    format!("the upload broke off: {e}"),
+                )
+            }
+        })?;
+        if let Ok(data) = frame.into_data() {
+            hasher.update(&data);
+            size += data.len() as u64;
+            file.write_all(&data).await.map_err(internal)?;
+        }
+    }
+    file.flush().await.map_err(internal)?;
+    // Closed now, not when tokio gets to it: Windows renames no open file.
+    drop(file.into_std().await);
+    Ok((hasher.finalize().to_hex().to_string(), size))
 }
 
 /// A mirror path from a requester, made safe: relative, no `..`, no drive or

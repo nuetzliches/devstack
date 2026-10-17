@@ -7,8 +7,7 @@
 
 use devstack_node::coordinator::{LeaseRequest, NodeRef};
 use devstack_node::member::Local;
-use devstack_node::nodeclient::Elsewhere;
-use devstack_node::nodeclient::NodeClient;
+use devstack_node::nodeclient::{Elsewhere, HashCache, NodeClient};
 use devstack_node::share::Amount;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -73,6 +72,9 @@ pub struct RemoteLane {
     dirty: Arc<std::sync::atomic::AtomicBool>,
     /// Watches the worktree while the lane runs.
     _watcher: Option<notify::RecommendedWatcher>,
+    /// The hashes the first sync found, for the syncs that follow (A-4):
+    /// an unchanged file is not read again.
+    hashes: Mutex<HashCache>,
 }
 
 /// devstack's per-user state, where this machine's memberships live.
@@ -263,16 +265,24 @@ impl RemoteLane {
         // Without a client the node cannot be told: the offer expires.
         let client = NodeClient::new(&local, offer.node.clone()).map_err(|e| e.to_string())?;
         let t0 = Instant::now();
+        let mut hashes = HashCache::default();
         let started = rt.block_on(async {
             client.admit(&offer).await?;
             step(2, &format!("sync: comparing {} files", list.len()));
             let s = client
-                .sync_from(&offer.id, worktree, &list, &elsewhere, &|n, of, bytes| {
-                    step(
-                        2,
-                        &format!("sync: {n} of {of} changed files sent ({} KiB)", bytes / 1024),
-                    );
-                })
+                .sync_cached(
+                    &offer.id,
+                    worktree,
+                    &list,
+                    &elsewhere,
+                    &mut hashes,
+                    &|n, of, bytes| {
+                        step(
+                            2,
+                            &format!("sync: {n} of {of} changed files sent ({} KiB)", bytes / 1024),
+                        );
+                    },
+                )
                 .await?;
             crate::diag::info(
                 "remote_lane_synced",
@@ -377,6 +387,7 @@ impl RemoteLane {
             gone: tokio::sync::watch::channel(false).0,
             dirty: dirty.clone(),
             _watcher: watcher,
+            hashes: Mutex::new(hashes),
         });
         if lane._watcher.is_none() {
             // No watcher: every tick counts as a change.
@@ -510,6 +521,7 @@ impl RemoteLane {
     /// sync sent is not known, and the listing is all it costs.
     async fn follow_sync(self: Arc<Self>, scratch: PathBuf) {
         let mut seen: Option<Fingerprint> = None;
+        let mut hashes = std::mem::take(&mut *self.hashes.lock().unwrap());
         let mut full = Instant::now() - FULL_SYNC_EVERY;
         loop {
             if !self.tick(SYNC_EVERY).await {
@@ -535,11 +547,12 @@ impl RemoteLane {
                     if seen.as_ref() != Some(&fp) {
                         match self
                             .client
-                            .sync_from(
+                            .sync_cached(
                                 &self.lease,
                                 &self.worktree,
                                 &list,
                                 &elsewhere,
+                                &mut hashes,
                                 &|_, _, _| {},
                             )
                             .await
