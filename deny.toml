@@ -34,7 +34,7 @@ unknown-registry = "deny"
 unknown-git = "deny"
 
 [advisories]
-# Not part of the CI job (`check licenses bans sources`): a new advisory for an
-# old dependency should not turn every push red. Run `cargo deny check
-# advisories` before a release.
+# `check advisories` is a warning in CI (a new advisory for an old dependency
+# should not turn every push red) and required in the release workflow: no
+# release ships a dependency with a known advisory.
 yanked = "warn"

@@ -39,11 +39,33 @@ const SKIP_DIRS: &[&str] = &[
     ".angular",
     ".vs",
     ".idea",
-    "packages",
     "vendor",
     ".next",
     "coverage",
 ];
+
+/// `packages/` of NuGet's `packages.config` era (restored packages, named
+/// `<Id>.<version>`), not the `packages/` of a JavaScript monorepo.
+fn is_nuget_packages(dir: &Path) -> bool {
+    if dir.join("repositories.config").is_file() {
+        return true;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    rd.flatten().any(|e| {
+        let n = e.file_name().to_string_lossy().to_string();
+        // `Newtonsoft.Json.13.0.1`: ends in a version.
+        let mut parts = n.rsplit('.');
+        e.path().is_dir()
+            && parts
+                .next()
+                .is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+            && parts
+                .next()
+                .is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
 
 /// Walk the repository a few levels deep, without generated directories.
 fn files(repo: &Path) -> Vec<PathBuf> {
@@ -57,7 +79,11 @@ fn files(repo: &Path) -> Vec<PathBuf> {
             let p = e.path();
             let name = e.file_name().to_string_lossy().to_string();
             if p.is_dir() {
-                if depth < 5 && !SKIP_DIRS.contains(&name.as_str()) && !name.starts_with('.') {
+                if depth < 5
+                    && !SKIP_DIRS.contains(&name.as_str())
+                    && !name.starts_with('.')
+                    && !(name == "packages" && is_nuget_packages(&p))
+                {
                     stack.push((p, depth + 1));
                 }
             } else {
@@ -76,8 +102,15 @@ fn rel(repo: &Path, p: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// `My.Api` -> `my-api`.
+/// `My.Api` -> `my-api`. A name without any ASCII letter or digit (`Ünü`,
+/// `日本`) becomes `app`: a stack file name must not be empty.
 fn kebab(s: &str) -> String {
+    let out = kebab_raw(s);
+    if out.is_empty() { "app".into() } else { out }
+}
+
+/// `kebab` that may be empty, for a caller with a fallback of its own.
+fn kebab_raw(s: &str) -> String {
     let mut out = String::new();
     for c in s.chars() {
         if c.is_ascii_alphanumeric() {
@@ -87,6 +120,32 @@ fn kebab(s: &str) -> String {
         }
     }
     out.trim_end_matches('-').to_string()
+}
+
+/// Every `from` that stands as a number of its own (not part of `50001` or
+/// `1.5000`) becomes `to`.
+fn replace_number(text: &str, from: u16, to: u16) -> String {
+    let from = from.to_string();
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < text.len() {
+        if text[i..].starts_with(&from) {
+            let end = i + from.len();
+            let before = i.checked_sub(1).map(|j| bytes[j]);
+            let after = bytes.get(end).copied();
+            let digit_or_dot = |b: Option<u8>| b.is_some_and(|b| b.is_ascii_digit() || b == b'.');
+            if !digit_or_dot(before) && !after.is_some_and(|b| b.is_ascii_digit()) {
+                out.push_str(&to.to_string());
+                i = end;
+                continue;
+            }
+        }
+        let c = text[i..].chars().next().expect("in bounds");
+        out.push(c);
+        i += c.len_utf8();
+    }
+    out
 }
 
 fn between<'a>(text: &'a str, open: &str, close: &str) -> Option<&'a str> {
@@ -127,13 +186,13 @@ fn compose_files(repo: &Path, all: &[PathBuf]) -> Vec<String> {
 
 /// The services of a Compose file, asked from Docker (no YAML parser here).
 fn compose_services(repo: &Path, file: &str) -> Option<Vec<String>> {
-    let out = std::process::Command::new("docker")
-        .args(["compose", "-f", file, "config", "--services"])
-        .current_dir(repo)
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
+    // A hanging Docker CLI must not hang `init` (nor the hub that runs it).
+    let out = crate::doctor::output_within(
+        std::process::Command::new("docker")
+            .args(["compose", "-f", file, "config", "--services"])
+            .current_dir(repo),
+        std::time::Duration::from_secs(30),
+    )?;
     out.status.success().then(|| {
         String::from_utf8_lossy(&out.stdout)
             .lines()
@@ -254,7 +313,7 @@ fn node(repo: &Path, pkg: &Path) -> Option<Svc> {
     let d = rel(repo, dir);
     let name = v["name"]
         .as_str()
-        .map(|n| kebab(n.rsplit('/').next().unwrap_or(n)))
+        .map(|n| kebab_raw(n.rsplit('/').next().unwrap_or(n)))
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| {
             if d.is_empty() {
@@ -457,8 +516,8 @@ fn java(repo: &Path, build_file: &Path) -> Option<Svc> {
     let d = rel(repo, dir);
     let name = between(&text, "<artifactId>", "</artifactId>")
         .filter(|_| maven)
-        .map(kebab)
-        .or_else(|| dir.file_name().map(|n| kebab(&n.to_string_lossy())))
+        .map(kebab_raw)
+        .or_else(|| dir.file_name().map(|n| kebab_raw(&n.to_string_lossy())))
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| "app".into());
     let actuator = text.contains("spring-boot-starter-actuator");
@@ -590,7 +649,7 @@ pub fn draft(repo: &Path) -> Result<Draft> {
             free += 1;
         }
         if free != port {
-            s.body = s.body.replace(&port.to_string(), &free.to_string());
+            s.body = replace_number(&s.body, port, free);
             s.body = s.body.replacen(
                 &format!("port   = {free}"),
                 &format!("port   = {free}   # TODO: moved from {port}, which another service uses"),
@@ -748,6 +807,39 @@ pub fn run(repo: &Path, print: bool, json: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_moved_port_changes_only_that_number() {
+        assert_eq!(
+            replace_number(
+                "port = 5000\nrun = \"x --urls http://localhost:5000 --id 50001 -v 1.5000\"",
+                5000,
+                5001
+            ),
+            "port = 5001\nrun = \"x --urls http://localhost:5001 --id 50001 -v 1.5000\""
+        );
+    }
+
+    #[test]
+    fn names_never_end_up_empty() {
+        assert_eq!(kebab("My.Api"), "my-api");
+        assert_eq!(kebab("日本"), "app");
+        assert_eq!(kebab_raw("日本"), "");
+    }
+
+    #[test]
+    fn a_monorepos_packages_are_searched_nugets_are_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        std::fs::create_dir_all(r.join("packages/web")).unwrap();
+        std::fs::write(r.join("packages/web/package.json"), "{}").unwrap();
+        assert!(files(r).iter().any(|p| p.ends_with("package.json")));
+        let nuget = r.join("legacy/packages");
+        std::fs::create_dir_all(nuget.join("Newtonsoft.Json.13.0.1")).unwrap();
+        std::fs::write(nuget.join("Newtonsoft.Json.13.0.1/x.csproj"), "").unwrap();
+        assert!(is_nuget_packages(&nuget));
+        assert!(!files(r).iter().any(|p| p.ends_with("x.csproj")));
+    }
 
     #[test]
     fn a_dotnet_and_a_node_project_become_services() {

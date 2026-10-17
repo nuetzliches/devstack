@@ -81,15 +81,65 @@ fn render(tpl: &str, stack: &Stack, stack_file: &Path) -> String {
         ("commands_table", commands_table(stack)),
         ("start_check", start_check(stack)),
     ];
-    let mut out = tpl.to_string();
-    for (k, v) in vars {
-        out = out.replace(&format!("{{{{devstack:{k}}}}}"), &v);
-    }
+    // The frontmatter is YAML: its values are double-quoted scalars, so what
+    // goes into them is escaped for that (a file name with `"` or `: `).
+    let (front, body) = split_frontmatter(tpl);
+    let fill = |text: &str, escape: fn(&str) -> String| {
+        let mut out = text.to_string();
+        for (k, v) in &vars {
+            out = out.replace(&format!("{{{{devstack:{k}}}}}"), &escape(v));
+        }
+        out
+    };
+    let mut out = fill(front, yaml_escape) + &fill(body, str::to_string);
     // An empty section leaves a gap of blank lines behind.
     while out.contains("\n\n\n") {
         out = out.replace("\n\n\n", "\n\n");
     }
     out
+}
+
+/// `---\n…\n---\n` and the rest; no frontmatter: an empty one.
+fn split_frontmatter(tpl: &str) -> (&str, &str) {
+    let Some(rest) = tpl.strip_prefix("---\n") else {
+        return ("", tpl);
+    };
+    match rest.find("\n---\n") {
+        Some(i) => tpl.split_at(4 + i + 5),
+        None => ("", tpl),
+    }
+}
+
+/// For the inside of a YAML double-quoted scalar.
+fn yaml_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "")
+}
+
+/// Text from the stack file inside a Markdown table cell: one line, no
+/// column break.
+fn cell(s: &str) -> String {
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('|', "\\|")
+}
+
+/// Text from the stack file as inline code, also when it holds backticks
+/// (a longer fence, CommonMark), in a table cell too.
+fn code(s: &str) -> String {
+    let s = cell(s);
+    let mut fence = String::from("`");
+    while s.contains(fence.as_str()) {
+        fence.push('`');
+    }
+    if fence.len() == 1 {
+        format!("`{s}`")
+    } else {
+        format!("{fence} {s} {fence}")
+    }
 }
 
 fn url(s: &Service) -> Option<String> {
@@ -131,7 +181,7 @@ fn services_table(stack: &Stack) -> String {
             url(s).unwrap_or_else(|| "-".into()),
             s.health
                 .as_ref()
-                .map_or_else(|| "-".into(), |h| format!("`{}`", h.http)),
+                .map_or_else(|| "-".into(), |h| code(&h.http)),
         );
     }
     if stack.services.is_empty() {
@@ -162,7 +212,7 @@ fn held_paths(stack: &Stack) -> String {
                     "`{name}` holds a candidate that changed {}",
                     p.hold_if_changed
                         .iter()
-                        .map(|g| format!("`{g}`"))
+                        .map(|g| code(g))
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -190,7 +240,7 @@ fn commands_table(stack: &Stack) -> String {
         let _ = writeln!(
             t,
             "| `{name}` | {} | {} |",
-            c.description.replace('|', "\\|"),
+            cell(&c.description),
             if c.confirm.is_some() { "yes" } else { "-" }
         );
     }
@@ -335,6 +385,61 @@ steps = [{ exec = "true" }]
                 "{name}: frontmatter first"
             );
         }
+    }
+
+    /// The value of a YAML double-quoted scalar, or why it is not one.
+    fn yaml_quoted(v: &str) -> Result<String, String> {
+        let inner = v
+            .strip_prefix('"')
+            .ok_or_else(|| format!("not quoted: {v}"))?;
+        let mut out = String::new();
+        let mut chars = inner.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => match chars.next() {
+                    Some('n') => out.push('\n'),
+                    Some(e @ ('\\' | '"')) => out.push(e),
+                    other => return Err(format!("bad escape {other:?}")),
+                },
+                '"' => {
+                    return if chars.as_str().is_empty() {
+                        Ok(out)
+                    } else {
+                        Err(format!("text after the closing quote: {v}"))
+                    };
+                }
+                c => out.push(c),
+            }
+        }
+        Err(format!("no closing quote: {v}"))
+    }
+
+    /// Strict YAML parsers refuse `: ` in a plain scalar; every frontmatter
+    /// value is a double-quoted one, also with an odd stack file name.
+    #[test]
+    fn the_frontmatter_is_strict_yaml() {
+        let odd = Path::new("we\"ird: x.toml");
+        for (name, content) in render_all(&stack(), odd) {
+            let (front, _) = split_frontmatter(&content);
+            assert!(!front.is_empty(), "{name}");
+            for line in front.lines().filter(|l| *l != "---") {
+                let (key, value) = line.split_once(": ").expect("key: value");
+                assert!(["name", "description"].contains(&key), "{name}: {line}");
+                if key == "description" {
+                    let text = yaml_quoted(value).unwrap_or_else(|e| panic!("{name}: {e}"));
+                    assert!(text.contains("we\"ird: x.toml"), "{name}: {text}");
+                } else {
+                    assert!(!value.contains(": "), "{name}: {line}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stack_file_text_stays_inside_its_cell() {
+        assert_eq!(cell("a | b\nc"), "a \\| b c");
+        assert_eq!(code("/health"), "`/health`");
+        assert_eq!(code("a`b"), "`` a`b ``");
     }
 
     #[test]

@@ -112,40 +112,23 @@ fn remove_dir(dir: &Path) {
     }
 }
 
-fn pid_alive(pid: u32) -> bool {
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
-        use windows_sys::Win32::System::Threading::{
-            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-        };
-        // SAFETY: plain Win32 calls on a handle we open and close here.
-        unsafe {
-            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-            if h.is_null() {
-                return false;
-            }
-            let mut code = 0u32;
-            let ok = GetExitCodeProcess(h, &mut code) != 0;
-            CloseHandle(h);
-            ok && code == STILL_ACTIVE as u32
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        // SAFETY: signal 0 only checks that the process exists.
-        unsafe { libc::kill(pid as i32, 0) == 0 }
-    }
-}
+use crate::client::pid_alive;
 
 #[cfg(windows)]
 fn remove_from_path(dir: &Path) -> Result<()> {
-    // The user's PATH as stored (REG_EXPAND_SZ kept as is): through .NET, which
-    // also tells running programs that the environment changed.
+    // The user's PATH as stored, unexpanded (`%USERPROFILE%\…` entries stay
+    // as they are) and written back with its registry type kept
+    // (REG_EXPAND_SZ stays REG_EXPAND_SZ); then a broadcast tells running
+    // programs (Explorer) that the environment changed. .NET's
+    // [Environment]::SetEnvironmentVariable would expand and flatten it.
     let script = format!(
-        "$d = '{}'; $p = [Environment]::GetEnvironmentVariable('Path','User'); \
-         if ($p) {{ $n = ($p -split ';' | Where-Object {{ $_ -and ($_.TrimEnd('\\') -ne $d.TrimEnd('\\')) }}) -join ';'; \
-         [Environment]::SetEnvironmentVariable('Path', $n, 'User') }}",
+        "$d = '{}'; $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true); \
+         if ($k) {{ $p = $k.GetValue('Path', '', 'DoNotExpandEnvironmentNames'); \
+         if ($p) {{ $kind = $k.GetValueKind('Path'); \
+         $n = ($p -split ';' | Where-Object {{ $_ -and ($_.TrimEnd('\\') -ne $d.TrimEnd('\\')) }}) -join ';'; \
+         if ($n -ne $p) {{ $k.SetValue('Path', $n, $kind); \
+         [Environment]::SetEnvironmentVariable('DEVSTACK_PATH_BROADCAST', '1', 'User'); \
+         [Environment]::SetEnvironmentVariable('DEVSTACK_PATH_BROADCAST', $null, 'User') }} }}; $k.Close() }}",
         dir.display().to_string().replace('\'', "''")
     );
     let s = std::process::Command::new("powershell")
@@ -171,23 +154,49 @@ fn remove_binary(exe: &Path) -> Result<()> {
     // A running .exe cannot be deleted, only renamed. A detached helper deletes
     // the directory once this process has exited.
     let dir = exe.parent().unwrap();
-    let mut cmd = std::process::Command::new("cmd");
-    cmd.args([
-        "/c",
-        &format!(
-            "ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{}\"",
-            dir.display()
-        ),
-    ])
-    .stdin(std::process::Stdio::null())
-    .stdout(std::process::Stdio::null())
-    .stderr(std::process::Stdio::null());
+    let mut cmd = remove_dir_later(dir, 3);
     devstack_proc::spawn_detached(&mut cmd)
         .map_err(|e| anyhow!("remove {}: {e}", dir.display()))?;
     Ok(())
 }
 
+/// `cmd /c ping … & rmdir /s /q "<dir>"`: waits about `seconds`, then removes
+/// `dir`. The command line is passed as it is (`raw_arg`): Rust's quoting of
+/// an argument escapes inner quotes as `\"`, which cmd.exe does not know, and
+/// `rmdir` then fails on a mangled path.
+#[cfg(windows)]
+fn remove_dir_later(dir: &Path, seconds: u32) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    let mut cmd = std::process::Command::new("cmd");
+    cmd.raw_arg(format!(
+        "/d /c ping -n {} 127.0.0.1 >nul & rmdir /s /q \"{}\"",
+        seconds.max(1),
+        dir.display()
+    ))
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null());
+    cmd
+}
+
 #[cfg(not(windows))]
 fn remove_binary(exe: &Path) -> Result<()> {
     std::fs::remove_file(exe).map_err(|e| anyhow!("remove {}: {e}", exe.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    /// The helper really removes the directory, also with spaces and
+    /// parentheses in its path (the quoting bug left it in place).
+    #[cfg(windows)]
+    #[test]
+    fn the_install_directory_is_removed_later() {
+        let base = tempfile::tempdir().unwrap();
+        let dir = base.path().join("Programs (x86) dev").join("devstack");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("devstack.exe"), b"x").unwrap();
+        let status = super::remove_dir_later(&dir, 1).status().unwrap();
+        assert!(status.success(), "{status}");
+        assert!(!dir.exists(), "{} is still there", dir.display());
+    }
 }

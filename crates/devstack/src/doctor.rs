@@ -7,6 +7,7 @@ use devstack_compose::engine::{self, Engine};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// Compose features stack files rely on: `!reset`, `!override` and
 /// `required: false` in overlays (plan O-9).
@@ -104,12 +105,9 @@ fn docker(needed: bool) -> Vec<Finding> {
             },
         )],
         Engine::Running { version } => {
-            let compose = Command::new("docker")
-                .args(["compose", "version", "--short"])
-                .stdin(Stdio::null())
-                .stderr(Stdio::null())
-                .output()
-                .ok()
+            let mut cmd = Command::new("docker");
+            cmd.args(["compose", "version", "--short"]);
+            let compose = output_within(&mut cmd, TOOL_TIMEOUT)
                 .filter(|o| o.status.success())
                 .map(|o| {
                     String::from_utf8_lossy(&o.stdout)
@@ -132,6 +130,33 @@ fn docker(needed: bool) -> Vec<Finding> {
                     )],
                     _ => vec![f(Level::Ok, format!("Docker {version}, Compose {c}"))],
                 },
+            }
+        }
+    }
+}
+
+/// How long a version query of another tool may take: a hanging Docker CLI
+/// must not hang `doctor` (and the MCP tool of the same name).
+const TOOL_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// `cmd`'s output, unless it takes longer than `limit` (then it is killed).
+/// For short outputs only: stdout is read once the process has exited.
+pub(crate) fn output_within(cmd: &mut Command, limit: Duration) -> Option<std::process::Output> {
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let t0 = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) if t0.elapsed() < limit => std::thread::sleep(Duration::from_millis(50)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
             }
         }
     }
@@ -218,16 +243,19 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
 }
 
 fn ports(stack: &devstack_config::Stack, stack_file: &Path) -> Vec<Finding> {
-    let running = crate::client::state_dir(stack_file)
-        .ok()
-        .and_then(|d| devstack_daemon::read_info(&d))
-        .is_some();
-    if running {
+    // Asked, not read from daemon.json: that file outlives a killed daemon.
+    let daemon = match crate::client::state_dir(stack_file) {
+        Ok(d) => crate::client::Client::probe(&d),
+        Err(e) => Err(e),
+    };
+    let daemon = match daemon {
+        Ok(d) => d,
+        Err(e) => return vec![f(Level::Fail, format!("daemon: {e:#}"))],
+    };
+    if let Some(c) = daemon {
         let mut out = vec![f(Level::Ok, "ports: the stack runs, its daemon holds them")];
         // Containers healthy inside Docker, but not reachable from here.
-        if let Ok(c) =
-            crate::client::need(&crate::client::state_dir(stack_file).unwrap_or_default())
-            && let Ok((200, body)) = c.call_raw("POST", "/v1/infra/check", None)
+        if let Ok((200, body)) = c.call_raw("POST", "/v1/infra/check", None)
             && let Ok(lost) = serde_json::from_str::<Vec<serde_json::Value>>(&body)
         {
             for l in lost {
@@ -281,11 +309,28 @@ fn release() -> Option<Finding> {
             Level::Ok,
             format!("devstack {current} is the latest release"),
         ),
-        Err(e) => f(
+        Err(e) => release_error(&e),
+    })
+}
+
+/// Why the release check failed. A certificate the system does not trust
+/// means a TLS-inspecting proxy that is not in the system's store, or a
+/// clock that is off: `devstack update` would fail the same way.
+fn release_error(e: &str) -> Finding {
+    let l = e.to_lowercase();
+    if l.contains("certificate") || l.contains("tls") || l.contains("unknownissuer") {
+        f(
+            Level::Warn,
+            format!(
+                "could not check for a newer release, TLS failed: {e}. devstack trusts the system's certificate store; a proxy that inspects TLS needs its root certificate there (and HTTPS_PROXY set if it is not transparent)"
+            ),
+        )
+    } else {
+        f(
             Level::Info,
             format!("could not check for a newer release: {e}"),
-        ),
-    })
+        )
+    }
 }
 
 fn hub() -> Finding {
@@ -357,12 +402,10 @@ fn dev_drive(stack_file: &Path) -> Option<Finding> {
     if !drive.ends_with(':') {
         return None;
     }
-    let out = Command::new("fsutil")
-        .args(["devdrv", "query", &drive])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
+    let out = output_within(
+        Command::new("fsutil").args(["devdrv", "query", &drive]),
+        TOOL_TIMEOUT,
+    )?;
     let text = String::from_utf8_lossy(&out.stdout).to_lowercase();
     // "This is a trusted developer volume." / "Dies ist ein vertrauenswürdiges Entwicklervolume."
     let trusted = out.status.success()
@@ -427,6 +470,40 @@ mod tests {
         assert_eq!(program("{artifact}/api").as_deref(), None);
         assert_eq!(program("./scripts/x.sh").as_deref(), None);
         assert_eq!(program("${NODE} x.js").as_deref(), None);
+    }
+
+    #[test]
+    fn a_tool_that_hangs_is_given_up_on() {
+        let mut cmd = if cfg!(windows) {
+            let mut c = Command::new("ping");
+            c.args(["-n", "30", "127.0.0.1"]);
+            c
+        } else {
+            let mut c = Command::new("sleep");
+            c.arg("30");
+            c
+        };
+        let t0 = Instant::now();
+        assert!(output_within(&mut cmd, Duration::from_millis(300)).is_none());
+        assert!(t0.elapsed() < Duration::from_secs(10));
+        let mut quick = if cfg!(windows) {
+            let mut c = Command::new("cmd");
+            c.args(["/c", "echo hi"]);
+            c
+        } else {
+            let mut c = Command::new("echo");
+            c.arg("hi");
+            c
+        };
+        let out = output_within(&mut quick, Duration::from_secs(10)).unwrap();
+        assert!(String::from_utf8_lossy(&out.stdout).contains("hi"));
+    }
+
+    #[test]
+    fn a_certificate_error_says_what_to_do() {
+        let x = release_error("invalid peer certificate: UnknownIssuer");
+        assert!(x.level == Level::Warn && x.text.contains("certificate store"));
+        assert!(release_error("timeout").level == Level::Info);
     }
 
     #[test]

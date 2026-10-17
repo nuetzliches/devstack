@@ -1,10 +1,12 @@
-//! Against a real Docker engine. Opt-in: `DEVSTACK_DOCKER_TESTS=1` (Linux
-//! containers required; CI runs it on Linux only).
+//! Against a real Docker engine. Opt-in (`#[ignore]`d): `DEVSTACK_DOCKER_TESTS=1`
+//! and `-- --include-ignored` (Linux containers required; CI runs it on Linux
+//! only).
 
 use devstack_compose::{Docker, Group};
 use std::time::Duration;
 
 #[test]
+#[ignore = "needs Docker with Linux containers: DEVSTACK_DOCKER_TESTS=1, --include-ignored"]
 fn up_ps_published_ports_and_parked_services() {
     if std::env::var("DEVSTACK_DOCKER_TESTS").as_deref() != Ok("1") {
         eprintln!("skipped: set DEVSTACK_DOCKER_TESTS=1");

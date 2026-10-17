@@ -30,7 +30,13 @@ const EXE: &str = if cfg!(windows) {
 pub fn run(check_only: bool, version: Option<&str>) -> Result<()> {
     let current = devstack_config::VERSION;
     let target = match version {
-        Some(v) => v.trim_start_matches('v').to_string(),
+        Some(v) => {
+            let v = v.strip_prefix('v').unwrap_or(v);
+            if !release::valid_version(v) {
+                bail!("`{v}` is no release version (e.g. 0.9.8)");
+            }
+            v.to_string()
+        }
         None => release::latest()
             .map_err(|e| anyhow!("cannot ask GitHub for the latest release: {e}"))?,
     };
@@ -50,6 +56,12 @@ pub fn run(check_only: bool, version: Option<&str>) -> Result<()> {
     if crate::integration::is_dev_build(&exe) {
         bail!(
             "this is a build from source ({}); update the installed copy, or rebuild",
+            exe.display()
+        );
+    }
+    if is_cargo_install(&exe) {
+        bail!(
+            "this devstack came from `cargo install` ({}); update it the same way, or install a release with the installer (it goes elsewhere)",
             exe.display()
         );
     }
@@ -112,6 +124,7 @@ fn install(version: &str, running: &Path) -> Result<PathBuf> {
 fn get(url: &str) -> Result<Vec<u8>> {
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(300)))
+        .tls_config(devstack_hub::release::system_tls())
         .build()
         .new_agent();
     let mut r = agent
@@ -175,10 +188,36 @@ fn unpack(archive: &[u8]) -> Result<Vec<u8>> {
     bail!("the archive holds no {EXE}")
 }
 
-/// Put `binary` at `target`. Windows: a running executable can be renamed but
-/// not overwritten, so the old one moves to `devstack.exe.old-<time>`; daemons
-/// started from it keep running, and leftovers of earlier updates go once
-/// nothing runs them. Elsewhere: written next to it and renamed over it,
+/// `cargo install` puts binaries into `$CARGO_HOME/bin` (`~/.cargo/bin`);
+/// replacing one with a release build would surprise its next `cargo install`.
+fn is_cargo_install(exe: &Path) -> bool {
+    let Some(dir) = exe.parent() else {
+        return false;
+    };
+    if let Some(home) = std::env::var_os("CARGO_HOME")
+        && dir == Path::new(&home).join("bin")
+    {
+        return true;
+    }
+    let mut parts = dir.components().rev();
+    parts.next().is_some_and(|c| c.as_os_str() == "bin")
+        && parts.next().is_some_and(|c| c.as_os_str() == ".cargo")
+}
+
+/// Write `binary` to `path` and make sure it is on disk before it is used.
+fn write_synced(path: &Path, binary: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(binary)?;
+    f.sync_all()
+}
+
+/// Put `binary` at `target`, never leaving a half-written file there: it is
+/// written (and synced) next to it first, then renamed into place. Windows: a
+/// running executable can be renamed but not overwritten, so the old one
+/// moves to `devstack.exe.old-<time>` first (back again if the second rename
+/// fails); daemons started from it keep running, and leftovers of earlier
+/// updates go once nothing runs them. Elsewhere one rename replaces it,
 /// which running processes do not notice.
 fn replace(target: &Path, binary: &[u8]) -> Result<()> {
     let dir = target
@@ -198,19 +237,26 @@ fn replace(target: &Path, binary: &[u8]) -> Result<()> {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
         let old = dir.join(format!("devstack.exe.old-{stamp}"));
-        let moved = target.is_file();
-        if moved {
-            std::fs::rename(target, &old)?;
+        let new = dir.join(format!("{EXE}.new"));
+        if let Err(e) = write_synced(&new, binary) {
+            let _ = std::fs::remove_file(&new);
+            bail!("write {}: {e}", new.display());
         }
-        if let Err(e) = std::fs::write(target, binary) {
+        let moved = target.is_file();
+        if moved && let Err(e) = std::fs::rename(target, &old) {
+            let _ = std::fs::remove_file(&new);
+            bail!("move {} aside: {e}", target.display());
+        }
+        if let Err(e) = std::fs::rename(&new, target) {
             if moved {
                 let _ = std::fs::rename(&old, target);
             }
-            bail!("write {}: {e}", target.display());
+            let _ = std::fs::remove_file(&new);
+            bail!("put {} in place: {e}", target.display());
         }
     } else {
         let tmp = dir.join(format!(".{EXE}.new"));
-        std::fs::write(&tmp, binary)?;
+        write_synced(&tmp, binary)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -252,5 +298,23 @@ mod tests {
         assert_eq!(std::fs::read(&t).unwrap(), b"new");
         replace(&t, b"newer").unwrap();
         assert_eq!(std::fs::read(&t).unwrap(), b"newer");
+        let left: Vec<String> = std::fs::read_dir(d.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".new"))
+            .collect();
+        assert!(left.is_empty(), "no half-written file stays: {left:?}");
+    }
+
+    #[test]
+    fn a_cargo_install_is_recognised() {
+        let home = if cfg!(windows) {
+            r"C:\Users\u\.cargo\bin\devstack.exe"
+        } else {
+            "/home/u/.cargo/bin/devstack"
+        };
+        assert!(is_cargo_install(Path::new(home)));
+        assert!(!is_cargo_install(Path::new("/home/u/.local/bin/devstack")));
     }
 }

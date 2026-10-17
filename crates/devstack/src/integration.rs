@@ -14,7 +14,8 @@
 //! open a terminal window.
 //!
 //! `devstack up` installs both once, unless the user removed them
-//! (`devstack hub uninstall` leaves a marker that says so).
+//! (`devstack hub uninstall` leaves a marker that says so) or opted out
+//! (`DEVSTACK_NO_HUB_INTEGRATION`; the installers turn that into the marker).
 
 use anyhow::{Result, anyhow};
 use std::path::{Path, PathBuf};
@@ -85,10 +86,18 @@ pub fn status() -> Status {
     }
 }
 
-/// From `devstack up`: install once, quietly. Not for a cargo build, and not
-/// again after the user uninstalled it.
+/// The user's opt-out (`DEVSTACK_NO_HUB_INTEGRATION`, also what the
+/// installers take): set and not `0`.
+pub fn opted_out() -> bool {
+    std::env::var_os("DEVSTACK_NO_HUB_INTEGRATION").is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+/// From `devstack up`: install once, quietly. Not for a cargo build, not
+/// while `DEVSTACK_NO_HUB_INTEGRATION` is set, and not again after the user
+/// uninstalled it (the installers' opt-out runs `devstack hub uninstall`,
+/// which leaves that marker).
 pub fn ensure_once() {
-    if marker().exists() {
+    if opted_out() || marker().exists() {
         return;
     }
     let Ok(exe) = exe() else { return };
@@ -126,6 +135,24 @@ pub fn status_text() -> String {
         yn(s.autostart),
         yn(s.link)
     )
+}
+
+/// `mimeapps.list` without devstack's `x-scheme-handler/devstack` entries
+/// (another handler the user chose for the scheme stays).
+#[cfg_attr(windows, allow(dead_code))]
+fn without_handler(text: &str) -> String {
+    let mut out: String = text
+        .lines()
+        .filter(|l| {
+            let l = l.trim();
+            !(l.starts_with("x-scheme-handler/devstack=") && l.contains("devstack-url.desktop"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
 }
 
 #[cfg(windows)]
@@ -278,6 +305,19 @@ mod imp {
 
     pub fn remove_link() -> Result<()> {
         let _ = std::fs::remove_file(link_file());
+        // `xdg-mime default` wrote the association into mimeapps.list; it
+        // would point at a file that is gone.
+        for list in [
+            config_dir().join("mimeapps.list"),
+            data_dir().join("applications/mimeapps.list"),
+        ] {
+            if let Ok(text) = std::fs::read_to_string(&list) {
+                let kept = super::without_handler(&text);
+                if kept != text {
+                    let _ = std::fs::write(&list, kept);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -315,6 +355,17 @@ mod tests {
             "/src/devstack/target/release/devstack"
         )));
         assert!(!is_dev_build(Path::new("/home/u/.local/bin/devstack")));
+    }
+
+    #[test]
+    fn the_scheme_handler_leaves_mimeapps_list() {
+        let text = "[Default Applications]\nx-scheme-handler/devstack=devstack-url.desktop\ntext/html=firefox.desktop\n[Added Associations]\nx-scheme-handler/devstack=devstack-url.desktop;\n";
+        assert_eq!(
+            without_handler(text),
+            "[Default Applications]\ntext/html=firefox.desktop\n[Added Associations]\n"
+        );
+        let other = "x-scheme-handler/devstack=mine.desktop\n";
+        assert_eq!(without_handler(other), other);
     }
 
     #[test]

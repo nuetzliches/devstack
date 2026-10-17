@@ -8,6 +8,7 @@
 //! Opt-in: it needs Docker and a static Linux build of devstack for the lane
 //! container (the release's kind), named by `DEVSTACK_LANE_BIN`:
 //!   DEVSTACK_INTEGRATION_NODE=1 DEVSTACK_LANE_BIN=<musl build>
+//! and `-- --include-ignored` (the test is `#[ignore]`d by default).
 
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
@@ -81,6 +82,7 @@ fn join(url: &str, fp: &str, coord: &Path, pool: &Path, name: &str) {
 }
 
 #[test]
+#[ignore = "needs Linux, Docker and a static build: DEVSTACK_INTEGRATION_NODE=1, DEVSTACK_LANE_BIN, --include-ignored"]
 fn a_lane_runs_on_a_node_of_the_pool() {
     if std::env::var("DEVSTACK_INTEGRATION_NODE").as_deref() != Ok("1") {
         eprintln!("skipped: set DEVSTACK_INTEGRATION_NODE=1 (Linux, Docker, DEVSTACK_LANE_BIN)");

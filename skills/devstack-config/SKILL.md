@@ -1,6 +1,6 @@
 ---
 name: devstack-config
-description: Edits this repository's devstack stack file ({{devstack:stack_file}}): adding or changing a service, a Compose group, a command or a group; watch paths, health checks, background workers, promotion holds, environment from Compose, placeholders. Validates every change with `devstack check` and knows that a running daemon does not reload the file. Use it whenever {{devstack:stack_file}} is created or touched, e.g. "add the worker to devstack", "devstack should restart X when Y changes", "add a seed command", "the service needs variable Z", "why does the candidate not switch", "set up devstack for this repo". For running the stack, use the skill `devstack`.
+description: "Edits this repository's devstack stack file ({{devstack:stack_file}}): adding or changing a service, a Compose group, a command or a group; watch paths, health checks, background workers, promotion holds, environment from Compose, placeholders. Validates every change with `devstack check` and knows that a running daemon does not reload the file. Use it whenever {{devstack:stack_file}} is created or touched, e.g. \"add the worker to devstack\", \"devstack should restart X when Y changes\", \"add a seed command\", \"the service needs variable Z\", \"why does the candidate not switch\", \"set up devstack for this repo\". For running the stack, use the skill `devstack`."
 ---
 
 <!-- {{devstack:marker}} -->

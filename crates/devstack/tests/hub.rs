@@ -122,6 +122,17 @@ fn pairing_cookie_and_checks() {
     }
     let (s, _, _) = get(p, "/stacks/abc/services/api", "");
     assert_eq!(s, 200, "SPA fallback");
+    // With the real dashboard embedded (CI builds ui/dist first): every
+    // asset the shell names is served, cached for good; the shell is not.
+    assert!(head.to_lowercase().contains("no-cache"), "{head}");
+    for asset in body
+        .split(['"', '\''])
+        .filter(|s| s.starts_with("/assets/"))
+    {
+        let (s, h, _) = get(p, asset, "");
+        assert_eq!(s, 200, "{asset}");
+        assert!(h.to_lowercase().contains("immutable"), "{asset}: {h}");
+    }
 
     // Not paired.
     let (s, _, body) = get(p, "/hub/session", "");

@@ -8,11 +8,37 @@ use std::time::Duration;
 
 pub const REPO: &str = "nuetzliches/devstack";
 
+/// TLS for requests to GitHub: the system's certificate store, as the
+/// installers use it (a TLS-inspecting proxy whose root the system trusts).
+pub fn system_tls() -> ureq::tls::TlsConfig {
+    ureq::tls::TlsConfig::builder()
+        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+        .build()
+}
+
+/// `0.4.0`, `1.2.3-rc.1`: what may go into a download URL.
+pub fn valid_version(v: &str) -> bool {
+    let mut parts = v.splitn(2, '-');
+    let core = parts.next().unwrap_or("");
+    let nums: Vec<&str> = core.split('.').collect();
+    nums.len() == 3
+        && nums
+            .iter()
+            .all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        && parts.next().is_none_or(|pre| {
+            !pre.is_empty()
+                && pre
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+        })
+}
+
 /// The latest released version (`0.4.0`), or why not.
 pub fn latest() -> Result<String, String> {
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(5)))
         .http_status_as_error(false)
+        .tls_config(system_tls())
         .build()
         .new_agent();
     let mut r = agent
@@ -29,10 +55,12 @@ pub fn latest() -> Result<String, String> {
     let v: serde_json::Value =
         serde_json::from_str(&r.body_mut().read_to_string().map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
-    v["tag_name"]
-        .as_str()
-        .map(|t| t.trim_start_matches('v').to_string())
-        .ok_or_else(|| "no tag_name in the answer".into())
+    let tag = v["tag_name"].as_str().ok_or("no tag_name in the answer")?;
+    let version = tag.strip_prefix('v').unwrap_or(tag);
+    if !valid_version(version) {
+        return Err(format!("the latest release has an unexpected tag `{tag}`"));
+    }
+    Ok(version.to_string())
 }
 
 /// `a` newer than `b` (plain `x.y.z`; anything unparsable is not newer).
@@ -59,5 +87,23 @@ mod tests {
         assert!(!newer("0.3.0", "0.3.0"));
         assert!(!newer("0.2.9", "0.3.0"));
         assert!(!newer("garbage", "0.3.0"));
+    }
+
+    #[test]
+    fn only_plain_versions_go_into_a_url() {
+        for ok in ["0.9.8", "10.0.1", "1.2.3-rc.1"] {
+            assert!(valid_version(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "0.9",
+            "0.9.8/../x",
+            "0.9.8?x",
+            "v0.9.8",
+            "1.2.3-",
+            "a.b.c",
+        ] {
+            assert!(!valid_version(bad), "{bad}");
+        }
     }
 }

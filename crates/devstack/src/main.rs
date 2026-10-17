@@ -521,6 +521,7 @@ enum SkillsAction {
         force: bool,
     },
     /// Do the installed skills match this devstack and this stack file?
+    /// Exits 1 when they do not.
     Check,
 }
 
@@ -683,9 +684,17 @@ fn main() -> Result<()> {
                 client::diag_log(&path, tail, grep.as_deref(), follow, json)
             } else if let Some(service) = service {
                 match grep.as_deref() {
+                    Some(g) if follow => {
+                        let c = client::need(&client::state_dir(&cli.file)?)?;
+                        client::follow_logs(&c, &service, tail, Some(g))
+                    }
                     Some(g) => client::logs_grep(&cli.file, Some(&service), g, tail),
                     None => client::logs(&cli.file, &service, tail, follow),
                 }
+            } else if follow {
+                Err(anyhow::anyhow!(
+                    "--follow follows one service: name it (or --daemon / --hub)"
+                ))
             } else if let Some(g) = grep.as_deref() {
                 client::logs_grep(&cli.file, None, g, tail)
             } else {
@@ -837,7 +846,11 @@ fn main() -> Result<()> {
             action: SkillsAction::Check,
         } => {
             match skills::outdated_note(&cli.file) {
-                Some(n) => println!("{n}"),
+                // Outdated is a failure, so a script or CI can check it.
+                Some(n) => {
+                    println!("{n}");
+                    std::process::exit(1);
+                }
                 None => println!("skills: up to date (or not installed in the default directory)"),
             }
             Ok(())
