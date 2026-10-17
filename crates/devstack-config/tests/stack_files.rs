@@ -291,3 +291,217 @@ fn lane_sync_globs_stay_inside_the_repository() {
     assert_eq!(sync.len(), 2, "{issues:?}");
     assert!(sync.iter().any(|i| i.contains("../secrets")), "{issues:?}");
 }
+
+fn has(issues: &[String], path: &str, text: &str) -> bool {
+    issues
+        .iter()
+        .any(|i| i.starts_with(path) && i.contains(text))
+}
+
+#[test]
+fn a_newer_schema_version_says_so_before_its_unknown_keys() {
+    let issues = invalid(&format!(
+        "{}\n[future]\nkey = 1\n",
+        MINIMAL.replace("version = 1", "version = 2")
+    ));
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert!(issues[0].contains("unsupported version 2"), "{issues:?}");
+}
+
+#[test]
+fn paths_of_compose_and_env_files_stay_inside_the_repository() {
+    let text = MINIMAL
+        .replace(
+            "files = [\"compose.yml\"]",
+            r#"files = ["../other/compose.yml", "/etc/c.yml", 'C:\c.yml']
+env_files = ['..\x\.env']"#,
+        )
+        .replace(
+            "name = \"t\"",
+            "name = \"t\"\nenv_files = [\"/home/me/.env\"]",
+        );
+    let issues = invalid(&text);
+    for p in [
+        "compose.app.files[0]",
+        "compose.app.files[1]",
+        "compose.app.files[2]",
+        "compose.app.env_files[0]",
+        "stack.env_files[0]",
+    ] {
+        assert!(has(&issues, p, "inside the repository"), "{p}: {issues:?}");
+    }
+    let issues = invalid(&format!(
+        "{MINIMAL}\n[lanes]\ndockerfile = \"/etc/Dockerfile\"\n"
+    ));
+    assert!(has(&issues, "lanes.dockerfile", "inside"), "{issues:?}");
+    let issues = invalid(&format!(
+        "{MINIMAL}{}",
+        r"
+[lanes]
+dockerfile = 'C:\Dockerfile'
+"
+    ));
+    assert!(has(&issues, "lanes.dockerfile", "inside"), "{issues:?}");
+}
+
+#[test]
+fn ports_and_the_port_step_are_bounded() {
+    let issues = invalid(&MINIMAL.replace("port = 5000", "port = 0"));
+    assert!(
+        has(&issues, "services.api.port", "1 to 65535"),
+        "{issues:?}"
+    );
+    let issues = invalid(&format!("{MINIMAL}\n[lanes]\nport_step = 20000\n"));
+    assert!(has(&issues, "lanes.port_step", "at most"), "{issues:?}");
+    let issues = invalid(&MINIMAL.replace("port = 5000", "port = 65500"));
+    assert!(has(&issues, "services.api.port", "port_step"), "{issues:?}");
+}
+
+#[test]
+fn windows_device_names_are_no_names() {
+    let issues = invalid(&MINIMAL.replace("[services.api]", "[services.con]"));
+    assert!(has(&issues, "services.con", "device name"), "{issues:?}");
+    let issues = invalid(&MINIMAL.replace("[compose.app]", "[compose.nul]"));
+    assert!(has(&issues, "compose.nul", "device name"), "{issues:?}");
+}
+
+#[test]
+fn compose_names_follow_compose() {
+    let issues = invalid(
+        &MINIMAL
+            .replace("project = \"t-dev\"", "project = \"-T dev\"")
+            .replace(
+                "services = [\"db\", \"queue\"]",
+                "services = [\"db.x\", \"-q\"]\nnetworks = [\"--net\"]",
+            ),
+    );
+    for p in [
+        "compose.app.project",
+        "compose.app.services[0]",
+        "compose.app.services[1]",
+        "compose.app.networks[0]",
+    ] {
+        assert!(
+            has(&issues, p, "starts with a letter or digit"),
+            "{p}: {issues:?}"
+        );
+    }
+}
+
+#[test]
+fn placeholders_need_a_value_where_they_are_used() {
+    let text = format!(
+        "{MINIMAL}\n[services.tool]\nkind = \"tool\"\nrun = \"x --port {{port}} {{artifact}}\"\n"
+    );
+    let issues = invalid(&text);
+    assert!(
+        has(
+            &issues,
+            "services.tool.run",
+            "`{port}`: the service has no `port`"
+        ),
+        "{issues:?}"
+    );
+    assert!(
+        has(&issues, "services.tool.run", "`{artifact}`"),
+        "{issues:?}"
+    );
+
+    let issues = invalid(&MINIMAL.replace(
+        "build = \"dotnet build\"",
+        "build = \"npm run build -- --base-href=/{lane}/\"",
+    ));
+    assert!(
+        has(&issues, "services.api.build", "not known to a build"),
+        "{issues:?}"
+    );
+    // `{repo}` and `${VAR}` are what a build takes.
+    from_str(
+        &MINIMAL.replace(
+            "build = \"dotnet build\"",
+            "build = \"dotnet build {repo}/x ${CONFIG:-Debug}\"",
+        ),
+        Path::new("t"),
+    )
+    .unwrap();
+
+    let issues = invalid(&MINIMAL.replace("port = 5000", "port = 5000\ncwd = \"{repo}/web\""));
+    assert!(
+        has(&issues, "services.api.cwd", "not expanded"),
+        "{issues:?}"
+    );
+
+    let issues = invalid(&format!(
+        "{MINIMAL}\n[commands.c]\ndescription = \"d\"\nsteps = [{{ exec = \"echo {{port}} {{compose.app.db.5432}}\" }}]\n"
+    ));
+    assert!(
+        has(
+            &issues,
+            "commands.c.steps[0].exec",
+            "`{port}`: is not available"
+        ),
+        "{issues:?}"
+    );
+    assert!(
+        has(
+            &issues,
+            "commands.c.steps[0].exec",
+            "`{compose.app.db.5432}`: is not available"
+        ),
+        "{issues:?}"
+    );
+}
+
+#[test]
+fn hot_reload_and_prepare_are_checked_like_the_rest() {
+    let text = MINIMAL.replace(
+        "port = 5000",
+        "port = 5000\nhot_reload = { run = \"dotnet watch {nope}\", cwd = \"{repo}\" }\nprepare = { run = \"npm ci --prefix ${DIR}\", cwd = \"{repo}\", inputs = [\"a/{b\"] }\nwatch = [\"src/[\"]\nrestart_on = [\"x/{\"]\npromote = { hold_if_changed = [\"m/[\"] }",
+    );
+    let issues = invalid(&text);
+    for (p, t) in [
+        ("services.api.hot_reload.run", "unknown placeholder"),
+        ("services.api.hot_reload.cwd", "not expanded"),
+        ("services.api.prepare.run", "not expanded"),
+        ("services.api.prepare.cwd", "not expanded"),
+        ("services.api.prepare.inputs", "a/{b"),
+        ("services.api.watch", "src/["),
+        ("services.api.restart_on", "x/{"),
+        ("services.api.promote.hold_if_changed", "m/["),
+    ] {
+        assert!(has(&issues, p, t), "{p}: {issues:?}");
+    }
+    let issues = invalid(&MINIMAL.replace(
+        "services = [\"db\", \"queue\"]",
+        "services = [\"db\", \"queue\"]\nrestart_on = { db = [\"init/[\"] }",
+    ));
+    assert!(
+        has(&issues, "compose.app.restart_on.db", "init/["),
+        "{issues:?}"
+    );
+}
+
+#[test]
+fn keys_of_another_step_kind_are_errors() {
+    let issues = invalid(&format!(
+        "{MINIMAL}\n[commands.c]\ndescription = \"d\"\nsteps = [{{ start = \"api\", cwd = \"x\" }}, {{ exec = \"x\", timeout = \"5s\", body = \"b\" }}]\n"
+    ));
+    assert!(
+        has(&issues, "commands.c.steps[0].cwd", "`exec`"),
+        "{issues:?}"
+    );
+    assert!(
+        has(&issues, "commands.c.steps[1].timeout", "`http`"),
+        "{issues:?}"
+    );
+    assert!(
+        has(&issues, "commands.c.steps[1].body", "`http`"),
+        "{issues:?}"
+    );
+}
+
+#[test]
+fn an_overlong_duration_is_an_error_not_a_wrap() {
+    assert!(devstack_config::model::parse_duration("99999999999999999h").is_err());
+    assert!(devstack_config::model::parse_duration("999999999999999999m").is_err());
+}

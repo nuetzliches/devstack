@@ -1,7 +1,8 @@
 //! Interpolation (plan §4.5): a closed set of `{…}` placeholders and `${VAR}` /
 //! `${VAR:-default}` environment references. Placeholders inside a default are
 //! resolved too (`"${AI_URL:-{service.ai-mock.url}/v1}"`), which is the plan's
-//! "`{…}` first, then `${…}`". `{{` and `}}` are literal braces.
+//! "`{…}` first, then `${…}`". `{{` and `}}` are literal braces, inside a
+//! default too (where a single `}` ends the default).
 
 use std::fmt;
 
@@ -105,7 +106,7 @@ pub enum Segment {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum InterpError {
     #[error(
-        "unknown placeholder `{{{0}}}` (allowed: repo, artifact, port, is_main, lane, lane_suffix, service.<name>.url, compose.<group>.<service>.<port>)"
+        "unknown placeholder `{{{0}}}` (allowed: repo, artifact, port, is_main, lane, lane_suffix, service.<name>.url, service.<name>.port, compose.<group>.<service>.<port> with an optional .host, .port or .address)"
     )]
     UnknownPlaceholder(String),
     #[error("unclosed `{0}`")]
@@ -142,6 +143,11 @@ fn parse_until(c: &[char], pos: &mut usize, in_default: bool) -> Result<Vec<Segm
         match c[*pos] {
             '{' if c.get(*pos + 1) == Some(&'{') => {
                 push_lit(&mut out, '{');
+                *pos += 2;
+            }
+            // Inside a default, `}}` is a literal brace too; a single one closes it.
+            '}' if in_default && c.get(*pos + 1) == Some(&'}') => {
+                push_lit(&mut out, '}');
                 *pos += 2;
             }
             '}' if in_default => {
@@ -363,6 +369,13 @@ mod tests {
     fn escapes() {
         assert_eq!(x("{{\"json\": 1}}").unwrap(), "{\"json\": 1}");
         assert_eq!(x("$HOME and $ alone").unwrap(), "$HOME and $ alone");
+    }
+
+    #[test]
+    fn a_default_can_hold_a_literal_brace() {
+        assert_eq!(x("${UNSET:-{{\"a\": 1}}}").unwrap(), "{\"a\": 1}");
+        assert_eq!(x("${SET:-x}}}").unwrap(), "value");
+        assert_eq!(x("${UNSET:-x}}}").unwrap(), "x}");
     }
 
     #[test]

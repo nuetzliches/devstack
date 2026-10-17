@@ -1,7 +1,7 @@
 //! Cross-reference checks that the deserialiser cannot do. All problems are
 //! collected and reported together, each with the path of the offending key.
 
-use crate::interpolate::{self, Placeholder};
+use crate::interpolate::{self, Placeholder, Segment};
 use crate::model::{Kind, Member, SCHEMA_VERSION, Stack, StepAction};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -17,6 +17,43 @@ impl fmt::Display for Issue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: {}", self.path, self.message)
     }
+}
+
+/// Where an interpolated string is used: which placeholders have a value there.
+#[derive(Clone, Copy)]
+enum Scope {
+    /// What starts a service: `run`, `env`, worker switches, `ensure_dirs`.
+    Service { port: bool, artifact: bool },
+    /// `build` and `output`: expanded by the builder in the snapshot, for an
+    /// artifact every lane shares, so `{repo}` and `${VAR}` only.
+    Build,
+    /// A command's steps.
+    Command,
+}
+
+/// Names Windows reserves for devices in every directory: a service called
+/// `con` could not have a log directory there.
+const WINDOWS_DEVICES: [&str; 22] = [
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
+/// Largest `[lanes] port_step`. Lane numbers grow from 1 and every lane's
+/// ports must stay below 65536; the daemon refuses a lane whose ports do not.
+pub const MAX_PORT_STEP: u16 = 10_000;
+
+/// A path relative to the repository that stays inside it, judged the same on
+/// every platform: no root (`/x`, `\x`), no drive or scheme (`C:`), no `..`.
+pub fn inside_repo(p: &str) -> bool {
+    !p.trim().is_empty()
+        && !p.starts_with(['/', '\\'])
+        && !p.contains(':')
+        && !p.split(['/', '\\']).any(|c| c == "..")
+}
+
+/// The message for a stack file of another schema version.
+pub fn unsupported_version(v: impl fmt::Display) -> String {
+    format!("unsupported version {v} (this devstack reads version {SCHEMA_VERSION})")
 }
 
 struct Check<'a> {
@@ -43,16 +80,109 @@ impl Check<'_> {
                 path,
                 format!("`{name}`: names use lowercase letters, digits and `-`"),
             );
+        } else if WINDOWS_DEVICES.contains(&name) {
+            self.err(
+                path,
+                format!("`{name}` is a device name on Windows and cannot name a directory"),
+            );
         }
     }
 
-    /// Syntax and references of every `{…}` placeholder in a string.
-    fn text(&mut self, path: &str, s: &str) {
+    /// A name Compose and Docker take, starting with a letter or digit (a
+    /// leading `-` would be read as a flag): a project in lowercase letters,
+    /// digits, `_` and `-`; a service in letters, digits, `_` and `-` (no `.`:
+    /// `compose.<group>.<service>` splits on it); a network may also have `.`.
+    fn compose_ident(&mut self, path: &str, what: &str, s: &str, lowercase: bool, dot: bool) {
+        let letter = |c: char| c.is_ascii_lowercase() || (!lowercase && c.is_ascii_uppercase());
+        let first_ok = s
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit() || letter(c));
+        let rest_ok = s
+            .chars()
+            .all(|c| c.is_ascii_digit() || letter(c) || c == '_' || c == '-' || (dot && c == '.'));
+        if !(first_ok && rest_ok) {
+            let chars = match (lowercase, dot) {
+                (true, _) => "lowercase letters, digits, `_` and `-`",
+                (false, true) => "letters, digits, `_`, `-` and `.`",
+                (false, false) => "letters, digits, `_` and `-`",
+            };
+            self.err(
+                path,
+                format!("`{s}`: a {what} name uses {chars} and starts with a letter or digit"),
+            );
+        }
+    }
+
+    /// A path relative to the repository that must stay inside it.
+    fn repo_path(&mut self, path: &str, p: &str) {
+        if !inside_repo(p) {
+            self.err(
+                path,
+                format!("`{p}` must be a path inside the repository, relative to it"),
+            );
+        }
+    }
+
+    /// A string devstack uses as written: a placeholder or `${VAR}` in it
+    /// would reach the shell or the file system verbatim.
+    fn literal(&mut self, path: &str, s: &str) {
+        let expands = interpolate::parse(s)
+            .is_ok_and(|segs| segs.iter().any(|x| !matches!(x, Segment::Literal(_))));
+        if expands {
+            self.err(
+                path,
+                format!(
+                    "`{s}`: placeholders and `${{VAR}}` are not expanded here; write the value itself"
+                ),
+            );
+        }
+    }
+
+    /// Glob patterns, compiled as the watcher compiles them.
+    fn globs(&mut self, path: &str, patterns: &[String]) {
+        for g in patterns {
+            if let Err(e) = globset::GlobBuilder::new(g).literal_separator(true).build() {
+                self.err(path, format!("`{g}`: {e}"));
+            }
+        }
+    }
+
+    /// Syntax and references of every `{…}` placeholder in a string, and
+    /// whether each has a value where the string is used.
+    fn text(&mut self, path: &str, s: &str, scope: Scope) {
         let segs = match interpolate::parse(s) {
             Ok(segs) => segs,
             Err(e) => return self.err(path, e.to_string()),
         };
         for p in interpolate::placeholders(&segs) {
+            let unavailable = match (scope, p) {
+                (Scope::Build, Placeholder::Repo) => None,
+                (Scope::Build, _) => Some(
+                    "is not known to a build: `build` and `output` take `{repo}` (the snapshot) and `${VAR}`, since every lane shares the artifact",
+                ),
+                (Scope::Service { port: false, .. }, Placeholder::Port) => {
+                    Some("the service has no `port`")
+                }
+                (
+                    Scope::Service {
+                        artifact: false, ..
+                    },
+                    Placeholder::Artifact,
+                ) => Some("only a service started from a build has an artifact"),
+                (
+                    Scope::Command,
+                    Placeholder::Port
+                    | Placeholder::Artifact
+                    | Placeholder::IsMain
+                    | Placeholder::ComposePort { .. },
+                ) => Some("is not available in a command"),
+                _ => None,
+            };
+            if let Some(why) = unavailable {
+                self.err(path, format!("`{p}`: {why}"));
+                continue;
+            }
             match p {
                 Placeholder::ServiceUrl(name) | Placeholder::ServicePort(name) => {
                     match self.stack.services.get(name) {
@@ -98,13 +228,7 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
     };
 
     if stack.version != SCHEMA_VERSION {
-        c.err(
-            "version",
-            format!(
-                "unsupported version {} (this devstack reads version {SCHEMA_VERSION})",
-                stack.version
-            ),
-        );
+        c.err("version", unsupported_version(stack.version));
     }
     if stack.stack.name.trim().is_empty() {
         c.err("stack.name", "must not be empty");
@@ -117,11 +241,20 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
             format!("`{r}` is not a version like `0.1.0`"),
         );
     }
+    for (i, f) in stack.stack.env_files.iter().enumerate() {
+        c.repo_path(&format!("stack.env_files[{i}]"), f);
+    }
 
-    if stack.lanes.port_step == 0 {
+    let step = stack.lanes.port_step;
+    if step == 0 {
         c.err(
             "lanes.port_step",
             "must be at least 1: every lane moves its ports by it",
+        );
+    } else if step > MAX_PORT_STEP {
+        c.err(
+            "lanes.port_step",
+            format!("must be at most {MAX_PORT_STEP}: lanes move their ports by multiples of it"),
         );
     }
 
@@ -134,10 +267,7 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         );
     }
     if let Some(df) = &stack.lanes.dockerfile
-        && (df.is_absolute()
-            || df
-                .components()
-                .any(|x| matches!(x, std::path::Component::ParentDir)))
+        && !inside_repo(&df.to_string_lossy())
     {
         c.err(
             "lanes.dockerfile",
@@ -146,8 +276,7 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
     }
 
     for g in &stack.lanes.sync {
-        if g.starts_with(['/', '\\']) || g.contains(':') || g.split(['/', '\\']).any(|p| p == "..")
-        {
+        if !inside_repo(g) {
             c.err(
                 "lanes.sync",
                 format!("`{g}` must be a path inside the repository, relative to it"),
@@ -164,23 +293,50 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         c.name(&p, g);
         if group.project.trim().is_empty() {
             c.err(format!("{p}.project"), "must not be empty");
-        } else if let Some(other) = projects.insert(group.project.clone(), g) {
-            c.err(
-                format!("{p}.project"),
-                format!(
-                    "project `{}` is also used by group `{other}`",
-                    group.project
-                ),
+        } else {
+            c.compose_ident(
+                &format!("{p}.project"),
+                "Compose project",
+                &group.project,
+                true,
+                false,
             );
+            if let Some(other) = projects.insert(group.project.clone(), g) {
+                c.err(
+                    format!("{p}.project"),
+                    format!(
+                        "project `{}` is also used by group `{other}`",
+                        group.project
+                    ),
+                );
+            }
         }
         if group.files.is_empty() {
             c.err(format!("{p}.files"), "needs at least one Compose file");
+        }
+        for (i, f) in group.files.iter().enumerate() {
+            c.repo_path(&format!("{p}.files[{i}]"), f);
+        }
+        for (i, f) in group.env_files.iter().enumerate() {
+            c.repo_path(&format!("{p}.env_files[{i}]"), f);
         }
         if group.services.is_empty() {
             c.err(
                 format!("{p}.services"),
                 "needs at least one service to start",
             );
+        }
+        for (i, svc) in group.services.iter().enumerate() {
+            c.compose_ident(
+                &format!("{p}.services[{i}]"),
+                "Compose service",
+                svc,
+                false,
+                false,
+            );
+        }
+        for (i, n) in group.networks.iter().enumerate() {
+            c.compose_ident(&format!("{p}.networks[{i}]"), "network", n, false, true);
         }
         for (i, a) in group.after.iter().enumerate() {
             if a == g {
@@ -197,13 +353,14 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                 );
             }
         }
-        for svc in group.restart_on.keys() {
+        for (svc, globs) in &group.restart_on {
             if !group.services.contains(svc) {
                 c.err(
                     format!("{p}.restart_on.{svc}"),
                     format!("`{svc}` is not in this group's `services`"),
                 );
             }
+            c.globs(&format!("{p}.restart_on.{svc}"), globs);
         }
         for (svc, url) in &group.urls {
             if !group.services.contains(svc) {
@@ -276,15 +433,38 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                 "hot-reload mode replaces a build: only for services with `build` (a dev server reloads itself)",
             );
         }
-        if svc
-            .prepare
-            .as_ref()
-            .is_some_and(|x| x.run.trim().is_empty())
-        {
-            c.err(
-                format!("{p}.prepare.run"),
-                "missing `run`: the command to run",
+        if let Some(h) = &svc.hot_reload {
+            if h.run.trim().is_empty() {
+                c.err(
+                    format!("{p}.hot_reload.run"),
+                    "missing `run`: the command to run",
+                );
+            }
+            // Runs from the source tree, without an artifact.
+            c.text(
+                &format!("{p}.hot_reload.run"),
+                &h.run,
+                Scope::Service {
+                    port: svc.port.is_some(),
+                    artifact: false,
+                },
             );
+            if let Some(d) = &h.cwd {
+                c.literal(&format!("{p}.hot_reload.cwd"), d);
+            }
+        }
+        if let Some(prep) = &svc.prepare {
+            if prep.run.trim().is_empty() {
+                c.err(
+                    format!("{p}.prepare.run"),
+                    "missing `run`: the command to run",
+                );
+            }
+            c.literal(&format!("{p}.prepare.run"), &prep.run);
+            if let Some(d) = &prep.cwd {
+                c.literal(&format!("{p}.prepare.cwd"), d);
+            }
+            c.globs(&format!("{p}.prepare.inputs"), &prep.inputs);
         }
         if svc.kind == Kind::Job && (svc.port.is_some() || svc.health.is_some()) {
             c.err(
@@ -307,10 +487,23 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
             c.err(format!("{p}.health"), "an HTTP health check needs `port`");
         }
         if let Some(port) = svc.port {
+            if port == 0 {
+                c.err(format!("{p}.port"), "must be a port from 1 to 65535");
+            } else if step <= MAX_PORT_STEP && u32::from(port) + u32::from(step) > 65535 {
+                c.err(
+                    format!("{p}.port"),
+                    format!("{port} plus `[lanes] port_step` ({step}) leaves no port for a lane"),
+                );
+            }
             ports
                 .entry(port)
                 .or_default()
                 .push((s.as_str(), svc.autostart));
+        }
+        c.globs(&format!("{p}.watch"), &svc.watch);
+        c.globs(&format!("{p}.restart_on"), &svc.restart_on);
+        if let Some(pr) = &svc.promote {
+            c.globs(&format!("{p}.promote.hold_if_changed"), &pr.hold_if_changed);
         }
         for (i, a) in svc.after.iter().enumerate() {
             let ap = format!("{p}.after[{i}]");
@@ -346,26 +539,30 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
             );
         }
         // Strings that are interpolated.
-        c.text(&format!("{p}.run"), &svc.run);
-        for (k, field) in [
-            ("build", &svc.build),
-            ("output", &svc.output),
-            ("cwd", &svc.cwd),
-        ] {
+        let scope = Scope::Service {
+            port: svc.port.is_some(),
+            artifact: svc.build.is_some(),
+        };
+        c.text(&format!("{p}.run"), &svc.run, scope);
+        for (k, field) in [("build", &svc.build), ("output", &svc.output)] {
             if let Some(v) = field {
-                c.text(&format!("{p}.{k}"), v);
+                c.text(&format!("{p}.{k}"), v, Scope::Build);
             }
         }
+        // A working directory is joined to the repository (or snapshot) as written.
+        if let Some(d) = &svc.cwd {
+            c.literal(&format!("{p}.cwd"), d);
+        }
         for (k, v) in &svc.env {
-            c.text(&format!("{p}.env.{k}"), v);
+            c.text(&format!("{p}.env.{k}"), v, scope);
         }
         if let Some(w) = &svc.workers {
             for (k, v) in &w.env {
-                c.text(&format!("{p}.workers.env.{k}"), v);
+                c.text(&format!("{p}.workers.env.{k}"), v, scope);
             }
         }
         for (i, d) in svc.ensure_dirs.iter().enumerate() {
-            c.text(&format!("{p}.ensure_dirs[{i}]"), d);
+            c.text(&format!("{p}.ensure_dirs[{i}]"), d, scope);
         }
     }
     // Two services on one port are fine only if at most one starts by itself
@@ -410,7 +607,28 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         }
         for (i, step) in cmd.steps.iter().enumerate() {
             let sp = format!("{p}.steps[{i}]");
-            match step.action() {
+            let action = step.action();
+            // Keys that belong to another action would be ignored silently.
+            let is_exec = matches!(action, Ok(StepAction::Exec { .. }));
+            let is_http = matches!(action, Ok(StepAction::Http { .. }));
+            if action.is_ok() {
+                if step.cwd.is_some() && !is_exec {
+                    c.err(format!("{sp}.cwd"), "`cwd` belongs to an `exec` step");
+                }
+                for (key, set) in [
+                    ("headers", !step.headers.is_empty()),
+                    ("body", step.body.is_some()),
+                    ("timeout", step.timeout.is_some()),
+                ] {
+                    if set && !is_http {
+                        c.err(
+                            format!("{sp}.{key}"),
+                            format!("`{key}` belongs to an `http` step"),
+                        );
+                    }
+                }
+            }
+            match action {
                 Err(set) if set.is_empty() => {
                     c.err(&sp, "needs one of exec, http, start, stop, restart, run")
                 }
@@ -419,9 +637,9 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                     format!("has several actions ({}); one per step", set.join(", ")),
                 ),
                 Ok(StepAction::Exec { command, cwd }) => {
-                    c.text(&format!("{sp}.exec"), command);
+                    c.text(&format!("{sp}.exec"), command, Scope::Command);
                     if let Some(d) = cwd {
-                        c.text(&format!("{sp}.cwd"), d);
+                        c.text(&format!("{sp}.cwd"), d, Scope::Command);
                     }
                 }
                 Ok(StepAction::Http { method, url }) => {
@@ -435,12 +653,12 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                             ),
                         );
                     }
-                    c.text(&format!("{sp}.http"), url);
+                    c.text(&format!("{sp}.http"), url, Scope::Command);
                     for (k, v) in &step.headers {
-                        c.text(&format!("{sp}.headers.{k}"), v);
+                        c.text(&format!("{sp}.headers.{k}"), v, Scope::Command);
                     }
                     if let Some(b) = &step.body {
-                        c.text(&format!("{sp}.body"), b);
+                        c.text(&format!("{sp}.body"), b, Scope::Command);
                     }
                 }
                 Ok(StepAction::Start(s) | StepAction::Stop(s) | StepAction::Restart(s)) => {

@@ -39,3 +39,13 @@ fn a_malformed_requirement_is_a_validation_error() {
     let err = from_str(&file("soon", ""), Path::new("devstack.toml")).unwrap_err();
     assert!(err.to_string().contains("stack.requires"), "{err}");
 }
+
+#[test]
+fn a_pre_release_comes_before_its_release() {
+    use devstack_config::version_order;
+    assert_eq!(version_triple("0.9.8-rc1"), Some((0, 9, 8)));
+    assert!(version_order("0.9.8-rc1") < version_order("0.9.8"));
+    assert!(version_order("0.9.8-rc1") > version_order("0.9.7"));
+    assert_eq!(version_order("1.0.0+build"), version_order("1.0.0"));
+    assert_eq!(version_order("1.0.0-"), None);
+}
