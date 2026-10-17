@@ -10,6 +10,18 @@
     Downloads anonymously from GitHub; falls back to `gh` when that fails and
     `gh` is installed and logged in (a private fork).
 
+    What the checksum proves: the archive is the one listed in the release's
+    SHA256SUMS, i.e. it was not damaged or swapped on the way. It does not
+    prove who built it, since both files come from the same release. When
+    `gh` is installed and logged in, the installer also checks the archive's
+    build provenance (`gh attestation verify`): that it was built by this
+    repository's release workflow. Releases before 0.9.9 have none.
+
+    The hub integration (start at logon, devstack:// link) is skipped with
+    -NoHubIntegration or DEVSTACK_NO_HUB_INTEGRATION=1 (the variable works
+    with `irm | iex`, which takes no parameters); the choice is kept, so
+    `devstack up` does not register them later either.
+
     A first install opens the dashboard at the end. An update moves a running
     dashboard hub onto the new binary; running stacks keep their daemon until
     they restart (`devstack down`, `devstack up`, or "Restart stack"). The
@@ -35,6 +47,10 @@ param(
     [switch]$NoOpen
 )
 $ErrorActionPreference = 'Stop'
+# `irm | iex` passes no parameters: the opt-out also comes as a variable.
+if ($env:DEVSTACK_NO_HUB_INTEGRATION -and $env:DEVSTACK_NO_HUB_INTEGRATION -ne '0') { $NoHubIntegration = $true }
+# The first release whose archives carry build provenance (attestations).
+$firstAttested = [version]'0.9.9'
 # Windows PowerShell 5.1 started from PowerShell 7 inherits 7's PSModulePath,
 # tries 7's modules and cannot load them: Get-FileHash and friends go missing
 # (#12). Keep 5.1 to its own module directories; below, .NET does what
@@ -134,13 +150,72 @@ function Get-LatestTag {
 }
 
 function Test-Hub {
+    # The hub's port, as devstack itself takes it.
+    $port = if ($env:DEVSTACK_HUB_PORT) { $env:DEVSTACK_HUB_PORT } else { '4250' }
     try {
-        $req = [Net.HttpWebRequest]::Create('http://127.0.0.1:4250/hub/ping')
+        $req = [Net.HttpWebRequest]::Create("http://127.0.0.1:$port/hub/ping")
         $req.Timeout = 2000
         $req.GetResponse().Dispose()
         return $true
     }
     catch { return $false }
+}
+
+# Build provenance (GitHub artifact attestation) of the archive, when `gh` is
+# installed and logged in: it proves the archive was built by this
+# repository's release workflow, which the checksum alone cannot.
+function Test-Provenance([string]$File) {
+    $gh = Get-Command gh -ErrorAction SilentlyContinue
+    if (-not $gh) { Note 'provenance not checked (no gh; https://cli.github.com)'; return }
+    & gh auth status *> $null
+    if ($LASTEXITCODE -ne 0) { Note 'provenance not checked (gh is not logged in)'; return }
+    if ($tag) {
+        $v = $null
+        if ([version]::TryParse(($tag.TrimStart('v') -split '-')[0], [ref]$v) -and $v -lt $firstAttested) {
+            Note "provenance not checked ($tag predates attestations)"
+            return
+        }
+    }
+    & gh attestation verify $File --repo $Repo *> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw "the build provenance of $asset does not verify (gh attestation verify $asset --repo $Repo)"
+    }
+    Note "built by $Repo's release workflow (attestation verified)"
+}
+
+# The user's PATH as stored: unexpanded, with its registry type kept
+# (REG_EXPAND_SZ stays REG_EXPAND_SZ); [Environment]::SetEnvironmentVariable
+# would flatten `%USERPROFILE%\...` entries.
+function Add-UserPath([string]$Entry) {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+    try {
+        $path = [string]$key.GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+        $norm = $Entry.TrimEnd('\')
+        $present = $path -split ';' | Where-Object { $_ -and ([Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') -eq $norm) }
+        if ($present) { return $false }
+        $kind = if ($path) { $key.GetValueKind('Path') } else { [Microsoft.Win32.RegistryValueKind]::ExpandString }
+        $key.SetValue('Path', (($path.TrimEnd(';') + ";$Entry").TrimStart(';')), $kind)
+    }
+    finally { $key.Close() }
+    # Tell running programs (Explorer, new terminals) that the environment changed.
+    [Environment]::SetEnvironmentVariable('DEVSTACK_PATH_BROADCAST', '1', 'User')
+    [Environment]::SetEnvironmentVariable('DEVSTACK_PATH_BROADCAST', $null, 'User')
+    return $true
+}
+
+# `devstack --version` of a binary a virus scanner may still hold: a few tries.
+function Get-InstalledVersion([string]$Exe) {
+    for ($i = 1; ; $i++) {
+        try {
+            $v = & $Exe --version
+            if ($LASTEXITCODE -eq 0 -and $v) { return $v }
+            throw "exit $LASTEXITCODE"
+        }
+        catch {
+            if ($i -ge 5) { throw "$Exe --version failed: $($_.Exception.Message)" }
+            Start-Sleep -Milliseconds (400 * $i)
+        }
+    }
 }
 
 Write-Host ''
@@ -185,7 +260,8 @@ try {
     if (-not $expected -or $actual -ne $expected.ToUpperInvariant()) {
         throw "checksum mismatch for $asset (expected $expected, got $actual)"
     }
-    Note 'SHA-256 matches'
+    Note 'SHA-256 matches (the archive is the one the release lists)'
+    Test-Provenance (Join-Path $tmp $asset)
 
     # 3. Install
     Step "Installing to $Dir"
@@ -195,21 +271,26 @@ try {
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     Get-ChildItem $Dir -Filter 'devstack.exe.old*' -ErrorAction SilentlyContinue |
         ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
-    if (Test-Path $target) {
-        # A running daemon holds the file: renaming works, overwriting does not.
-        Move-Item $target "$target.old-$([DateTime]::Now.ToString('yyyyMMddHHmmss'))" -Force
+    # Next to the target first, complete, then two renames: the target is
+    # never a half-written file, and a failed rename puts the old one back.
+    # A running daemon holds the old file: renaming works, overwriting does not.
+    $new = "$target.new"
+    Copy-Item (Join-Path $unpacked 'devstack.exe') $new -Force
+    $old = "$target.old-$([DateTime]::Now.ToString('yyyyMMddHHmmss'))"
+    $moved = Test-Path $target
+    if ($moved) { Move-Item $target $old -Force }
+    try { Move-Item $new $target -Force }
+    catch {
+        if ($moved) { Move-Item $old $target -Force -ErrorAction SilentlyContinue }
+        Remove-Item $new -Force -ErrorAction SilentlyContinue
+        throw
     }
-    Copy-Item (Join-Path $unpacked 'devstack.exe') $target
-    $installed = (& $target --version)
+    $installed = Get-InstalledVersion $target
     Note $installed
 
-    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    if (-not (($userPath -split ';') -contains $Dir)) {
-        [Environment]::SetEnvironmentVariable('Path', (($userPath.TrimEnd(';') + ";$Dir").TrimStart(';')), 'User')
-        Note 'added to your PATH'
-    }
+    if (Add-UserPath $Dir) { Note 'added to your PATH' }
     # This terminal too (`irm | iex` runs in it), not only new ones.
-    if (-not (($env:Path -split ';') -contains $Dir)) { $env:Path = $env:Path.TrimEnd(';') + ";$Dir" }
+    if (-not (($env:Path -split ';') | Where-Object { $_.TrimEnd('\') -eq $Dir.TrimEnd('\') })) { $env:Path = $env:Path.TrimEnd(';') + ";$Dir" }
 
     # 4. Dashboard
     Step 'Starting the dashboard'
@@ -218,6 +299,13 @@ try {
         # (devstack:// link). Both in the user's registry hive, no admin rights.
         & $target hub install | Out-Null
         if ($LASTEXITCODE -ne 0) { Write-Warning "could not register the hub with your session (devstack hub install)" }
+    }
+    else {
+        # The opt-out lasts: `hub uninstall` removes a registration an earlier
+        # install made and leaves the marker `devstack up` respects.
+        & $target hub uninstall | Out-Null
+        if ($LASTEXITCODE -eq 0) { Note 'no start at logon, no devstack:// link (devstack hub install adds them)' }
+        else { Write-Warning "could not record the opt-out (devstack hub uninstall)" }
     }
     if ($hubWasRunning) {
         # The hub runs the old binary: move it onto the new one.
