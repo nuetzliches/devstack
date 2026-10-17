@@ -244,7 +244,7 @@ pub fn watch_set(patterns: &[String]) -> Result<Option<globset::GlobSet>> {
 /// Owns the shared build job (ADR-0020) and the artifact store.
 pub struct Builder {
     pub layout: Layout,
-    job: BuildJob,
+    job: std::sync::Arc<BuildJob>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,6 +280,16 @@ pub struct Running {
 impl Builder {
     /// Removes publishes a previous instance left half done (ADR-0016).
     pub fn new(layout: Layout, opts: &devstack_proc::Options) -> Result<Self> {
+        Ok(Self::with_job(
+            layout,
+            std::sync::Arc::new(BuildJob::new(opts)?),
+        ))
+    }
+
+    /// [`Self::new`] on a build job that already exists: one per daemon
+    /// (ADR-0020), shared by the main tree's builder and every lane's, so a
+    /// lane that goes does not take the build servers of the others along.
+    pub fn with_job(layout: Layout, job: std::sync::Arc<BuildJob>) -> Self {
         // Only the owner of the store clears half-done publishes: in a shared
         // store a `.tmp-` may be another lane's publish in progress.
         let root = layout.artifacts_root.clone();
@@ -299,10 +309,12 @@ impl Builder {
                 }
             }
         }
-        Ok(Self {
-            layout,
-            job: BuildJob::new(opts)?,
-        })
+        Self { layout, job }
+    }
+
+    /// The build job this builder runs in, to share with another builder.
+    pub fn job(&self) -> std::sync::Arc<BuildJob> {
+        self.job.clone()
     }
 
     /// What the shared build job costs right now (plan §12, ADR-0020).
