@@ -95,6 +95,18 @@ Will live in: `crates/devstack-node` (`store`: role, audit log;
 `crates/devstack-hub` (`/hub/pool/*`, calling the coordinator with this
 machine's certificate), `ui/` (the pool area).
 
+*Paths as built, noted 2026-10-18.* All of the above:
+`crates/devstack-node/src/store.rs` (roles, `set_node`, the audit log
+`audit.jsonl`, `members.json` changed under a file lock),
+`crates/devstack-node/src/coordinator.rs` (`/v1/admin/*` including
+`/v1/admin/members/{id}/node`, the role check, the last-admin guard),
+`crates/devstack/src/poolcmd.rs`, `crates/devstack-hub/src/pool.rs`
+(`/hub/pool/*`), `ui/src/views/PoolView.vue` and `ui/src/stores/pool.ts`;
+tests in `crates/devstack-node/tests/pool.rs`. The node grant of the
+amendment is on the coordinator and its admin API only
+(`devstack node members node <id> on|off`); the hub has no route for it and
+the dashboard does not show it yet.
+
 ## What this ADR does not say
 
 - How a node pauses or a lease ends on the node itself: that is the lifecycle

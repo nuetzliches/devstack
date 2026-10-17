@@ -102,3 +102,13 @@ devstack restarts the container when they change.
   `-p` and `--no-deps`.
 - Stack file validation (planned): every group names its project and files;
   `devstack check` runs `docker compose config -q` for every group.
+
+*Paths as built, noted 2026-10-18.* `crates/devstack-compose/src/lib.rs`
+(`Group::base_args`: `-p <project>` on every call; `Docker::up` with
+`--no-deps` and the group's services; a time budget on every Docker call)
+and `engine.rs` (Docker Desktop and the engine's state);
+`crates/devstack-config/src/validate.rs` (every group names a project and
+its files, inside the repository); `devstack check --compose`
+(`crates/devstack/src/main.rs`, `Docker::validate`) runs `docker compose
+config -q` per group, plain `devstack check` does not call Docker. Tests:
+the unit tests of `devstack-compose` and `crates/devstack-compose/tests/docker.rs`.

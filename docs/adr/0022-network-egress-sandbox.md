@@ -303,6 +303,16 @@ Nothing yet; this ADR is an idea. When built it will live in:
   `NODE_USE_ENV_PROXY`, calls an external host and asserts the recorded,
   blocked attempt.
 
+*Noted 2026-10-18, against a name clash.* Nothing of this ADR is built.
+`crates/devstack-node/src/egress.rs` is not it: that module sets iptables
+rules per lane on a node of the pool, for the node's network mode
+(`internet`, `none`; [ADR-0033](0033-a-node-decides-what-runs-on-it.md)
+points 5 and 9). It confines a whole lane on someone else's machine by
+address range, sees no attempts and has no allow rules per service; this ADR
+is about native services on the developer's own machine. Should this ADR be
+built, a `devstack-egress` crate beside the node's `egress` module would read
+as one thing; one of them gets another name then.
+
 ## What this ADR does not say
 
 - It does not make devstack a security boundary against malicious code. Stage

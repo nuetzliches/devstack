@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-10-15), amended 2026-10-15 (the dashboard's streams come over WebSocket), amended 2026-10-18 (the pool area polls; cookie, sessions file and ping in detail)
 - **Date:** 2026-10-15
 - **Deciders:** project owner
-- **Related:** [ADR-0018](0018-dashboard-is-a-browser-page.md) (amended here), [ADR-0019](0019-control-api-security.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md)
+- **Related:** [ADR-0018](0018-dashboard-is-a-browser-page.md) (amended here), [ADR-0019](0019-control-api-security.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0006](0006-dashboard-vue-same-origin.md) (who serves the dashboard, replaced here)
 
 ## Context
 

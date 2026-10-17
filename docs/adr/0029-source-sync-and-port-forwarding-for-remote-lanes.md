@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-10-16); point 2 amended (2026-10-16)
 - **Date:** 2026-10-15
 - **Deciders:** project owner
-- **Related:** plan §3.2, §3.4, [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0011](0011-platform-windows-native-first.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0027](0027-trust-between-nodes.md)
+- **Related:** plan §3.2, §3.4, [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0011](0011-platform-windows-native-first.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0027](0027-trust-between-nodes.md), [ADR-0035](0035-lanes-can-be-shared-with-the-pool.md) (point 4 used there: forwards to others in the pool)
 
 ## Context
 
@@ -95,3 +95,19 @@ Will live in: the sync client in `crates/devstack-daemon` and its TCP forward
 (`tcpfwd.rs`) with a remote target, the
 mirror and connection handling in `crates/devstack-node`, path mapping next to
 today's snapshot mapping.
+
+*Paths as built, noted 2026-10-18.* `crates/devstack-daemon/src/remote.rs`
+(`files`: the snapshot's list plus `[lanes] sync`; `follow_sync`: the
+worktree is watched and a change synced within two seconds, everything
+compared every 30 s besides, every two seconds without a watcher;
+`forward_port` and `tunnel`: point 4; `forward`: point 5),
+`crates/devstack-daemon/src/api.rs` (`/v1/tunnel/{port}` in the lane daemon),
+`crates/devstack-daemon/src/lib.rs` (`display_root`, path mapping),
+`crates/devstack-node/src/node.rs` (mirror, blobs per member capped at 8
+GiB and hashed again as they are copied, the lane's API and tunnels),
+`crates/devstack-node/src/safefs.rs` (writes into the mirror never follow a
+link). Point 3 is built as separate requests over the pool's mutual TLS
+(one per sync step, API call and forwarded connection, an HTTP upgrade for
+streams and tunnels), not as one multiplexed connection. Lanes shared with
+others are forwarded the same way through the node
+([ADR-0035](0035-lanes-can-be-shared-with-the-pool.md)).

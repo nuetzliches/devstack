@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-10-16); points 1 and 3 replaced by [ADR-0031](0031-a-coordinator-places-lanes.md) (a coordinator places), the rest stands
 - **Date:** 2026-10-15
 - **Deciders:** project owner
-- **Related:** [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md), [ADR-0028](0028-lane-images.md), plan §12
+- **Related:** [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md), [ADR-0028](0028-lane-images.md), plan §12, [ADR-0033](0033-a-node-decides-what-runs-on-it.md) (point 4 detailed there: what a node admits)
 
 ## Context
 
@@ -80,3 +80,16 @@ warm incremental build at a fifth of a cold one).
 
 Will live in: `crates/devstack-node` (advertisement, admission, leases,
 eviction), the placement module of `crates/devstack-daemon`, CLI `--on`.
+
+*Paths as built, noted 2026-10-18.* Point 4, how a node admits, is
+detailed by [ADR-0033](0033-a-node-decides-what-runs-on-it.md) (who and what
+it admits) and placement by ADR-0031. Built: `crates/devstack-node/src/node.rs`
+(`admit`, `renew`, `release`: leases with a TTL of two minutes, renewed by
+the requester; admission against the node's caps, the lanes it runs and the
+ones still settling, each lane taken to need at least 0.25 CPU and 256 MiB),
+`crates/devstack-node/src/coordinator.rs` (placement, `/v1/leases`),
+`crates/devstack-daemon/src/remote.rs` (`follow_renew`), `devstack up --on`.
+The admission counts what lanes declare or are taken to need, not what they
+use, so "never over-commits" holds for declared needs. Not built: scoring by
+mirrors and image layers (point 3, `--on pool` takes the granted node with
+the most free memory) and reclaiming with a grace period (point 6).

@@ -1,6 +1,6 @@
 # ADR-0010: Promotion mechanism: restart on the fixed port or switch a reverse proxy
 
-- **Status:** Accepted: B (2026-10-15, measured, see "Comparison")
+- **Status:** Accepted (2026-10-15): option B, the reverse proxy, measured (see "Comparison")
 - **Date:** 2026-10-14
 - **Related:** [ADR-0003](0003-changes-flow-through-candidates.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md)
 
@@ -113,3 +113,14 @@ one still answers.
 
 Nothing yet. Phase 1 implements option A as the baseline, because option B
 needs it as its fallback anyway (condition 3).
+
+*Paths as built, noted 2026-10-18.* Option B since 0.2.0:
+`crates/devstack-daemon/src/proxy.rs` (the reverse proxy on a service's fixed
+port; `x-devstack-build` and `x-devstack-pending` on every answer; upstream
+connections pooled per port; drain with a deadline; `ProxyView` with
+upstream, connections and last error, conditions 2 and 4),
+`crates/devstack-daemon/src/supervisor.rs` (`ensure_proxy`, `switch_to`;
+health checks go to the instance's own port, condition 1; `proxy = false`
+restarts in place on the fixed port, condition 3), `tcpfwd.rs` (the TCP
+forward `promote --lane` uses for dev servers), and the integration test
+`edits_become_candidates` (no failed request across a switch).

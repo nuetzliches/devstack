@@ -180,3 +180,17 @@ node, `main_slot_check` giving the ports back when it is gone),
 `crates/devstack-daemon/src/remote.rs` (`set_main`, a lane counts as gone after
 a lease's life without renewal), `POST /v1/main-slot` in the lane daemon, and
 `crates/devstack/tests/remote_lane.rs`.
+
+*Paths as built, noted 2026-10-18.* The node side:
+`crates/devstack-node/src/node.rs` (the agent's API: admission, leases,
+mirrors, the lane's API and tunnels), `crates/devstack-node/src/lanerun.rs`
+(the lane container and its own Compose projects; the container gets
+`DEVSTACK_LISTEN`, `DEVSTACK_REMOTE_LANE`, `DEVSTACK_PORT_OFFSET`,
+`DEVSTACK_DISPLAY_ROOT` and `DEVSTACK_EXTERNAL_INFRA`, see
+[pool.md](../pool.md#reference)), `confine.rs` and `safefs.rs` (what a lane
+may ask of the node). The requester side: `crates/devstack-daemon/src/remote.rs`
+(lease, sync, renewal, forwards), `lanes.rs` (start, move, `take_main`),
+`external.rs` (the lane daemon reads its infrastructure from the file
+`DEVSTACK_EXTERNAL_INFRA` names). A service's `platforms` in the stack file
+leaves it out where it cannot run (`on_this_platform` in the supervisor);
+`devstack check` does not judge Windows-only components.

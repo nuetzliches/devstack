@@ -67,3 +67,9 @@ shared ports only), `crates/devstack-hub/src/shared.rs` (listing, opening a
 forward), `crates/devstack-node/tests/node.rs` (unshared, shared, a port not
 shared, unshared again), `ui/` (pool area and sidebar by node, the lane's
 share button). Not yet: `devstack open <lane> <service>` from the CLI.
+
+*Noted 2026-10-18.* `devstack open <lane> [<service>]` is built
+(`crates/devstack/src/main.rs`, through the hub's
+`/hub/pool/shared/{lease}/open`); it opens `http` and `https` addresses only,
+and the coordinator refuses to keep a shared service with another scheme
+(`crates/devstack-node/src/coordinator.rs`), as do the hub and the dashboard.

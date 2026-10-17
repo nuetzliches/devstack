@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-10-16), amended 2026-10-16 (one binary: `devstack node`)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
-- **Related:** [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md) (points 1 and 3 replaced here), [ADR-0027](0027-trust-between-nodes.md) (points 1 and 2 replaced here), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0015](0015-devstack-is-optional.md)
+- **Related:** [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md) (points 1 and 3 replaced here), [ADR-0027](0027-trust-between-nodes.md) (points 1 and 2 replaced here), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md) (point 2 extended there: admins in the dashboard, nodes granted)
 
 ## Context
 
@@ -93,3 +93,14 @@ and `crates/devstack/src/poolcmd.rs`; leases (`coordinator`: `/v1/leases`), the
 node's admission, mirrors and reports (`node`, `nodeclient`; `tests/node.rs`),
 the share switch (`share`, `crates/devstack-hub/src/share.rs`). Will live there
 too: placement and the remote client in `crates/devstack-daemon`.
+
+*Paths as built, noted 2026-10-18.* The remote client is
+`crates/devstack-daemon/src/remote.rs`; placement (point 4) is in
+`crates/devstack-node/src/coordinator.rs`: of the nodes an admin granted
+(ADR-0032 as amended) that are online, share, are not paused and admit the
+requester, the one with the most free memory. Joins are bounded (CSR size,
+ten per minute per address, 64 waiting). Point 2's revocation: a node
+refuses a member missing from the list it takes from the coordinator, and
+trusts its last list for at most an hour while the coordinator does not
+answer (`MEMBERS_VALID_FOR` in `node.rs`), so point 6 holds for an hour, then
+renewals of every member fail until the coordinator answers again.

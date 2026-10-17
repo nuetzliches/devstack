@@ -55,8 +55,11 @@ copies the full command from the dashboard's pool area):
 devstack join https://10.0.0.5:4260 --fingerprint <64 hex digits>
 ```
 
-It waits until an admin approves the request (Ctrl-C stops waiting; `devstack
-join` again picks it up). The dashboard's **Pool** area does the same with a
+It waits until an admin approves the request (Ctrl-C stops waiting, or
+`--no-wait` asks and returns; `devstack join` again picks it up). With
+`--name` the machine shows under another name than its host name, with
+`--telemetry` it agrees to send the pool telemetry ([below](#capacity-and-telemetry)).
+The dashboard's **Pool** area does the same with a
 form. `devstack pool` then lists the machines, what each offers, and which
 lanes run where.
 
@@ -121,11 +124,18 @@ devstack up --on pool             # the coordinator picks the granted node with 
 ```
 
 devstack leases the lane, syncs the worktree to the node (by content, only
-what changed, every 2 s from then on), starts it there and forwards its ports
-to your machine: `localhost:<port>` reaches it as if it ran locally, its
-containers' ports too. The dashboard shows where each lane runs, its start
-step by step, and offers **Start here / on a node / in the pool** for a lane
-that is not started.
+what changed: a change within two seconds of saving, and everything compared
+every 30 s besides), starts it there and forwards its ports to your machine:
+`localhost:<port>` reaches it as if it ran locally, its containers' ports too.
+The dashboard shows where each lane runs, its start step by step, and offers
+**Start here / on a node / in the pool** for a lane that is not started.
+
+**What goes to the node:** every file of the worktree git does not ignore,
+tracked or not (an untracked `.env` that git does not ignore goes too), and
+the ignored files `[lanes] sync` names, from the worktree or else the main
+tree. The node's owner can read them. Placing a lane on a node means trusting
+its owner with that; keep a lane local whose secrets must not leave your
+machine ([SECURITY.md](../SECURITY.md#the-pools-trust-model)).
 
 ```sh
 devstack lane list                      # RUNS ON: local, build-server, customer:gpu-box
@@ -143,8 +153,17 @@ reads an env file outside the lane's files; external volumes, volumes with
 `driver_opts`, external networks the stack file does not list under
 `[compose.<group>] networks`, network drivers other than `bridge`, and, on
 an `internet` or `none` node, subnets or IPv6 of its own. Compose files,
-env files, `extends` and `include` are read from the lane's files only.
-Every container of the lane gets the node's limits and a process limit.
+env files, `extends` and `include` are read from the lane's files only, and
+the sync never follows a link out of them. Every container of the lane gets
+the node's limits and a process limit; the lane container drops every
+capability. What a member uploads is kept per member, at most 8 GiB, and
+removed when its lease ends.
+
+This confines what a lane asks for, not the engine it runs on: the lanes of
+all members share the node's kernel and Docker engine, and a container escape
+is not contained. Running the pool's lanes on a machine trusts the members
+who place them that far; that is why an admin grants which machines are
+nodes.
 
 A lane on a node is disposable: its data comes from the seed jobs, and a
 move is a cold start. It runs without background workers unless it holds the
@@ -211,6 +230,12 @@ its own `policy.json`. An admin can
 also pause a node (no new lanes) and end a lease; every change is in the
 admin log.
 
+Removing a member (`devstack node members remove <id>`) revokes it: nodes
+take the member list from the coordinator and refuse who is not on it. While
+the coordinator does not answer, a node trusts its last list for at most an
+hour; after that it refuses every member, renewals included, until the
+coordinator is back.
+
 ## Several pools
 
 A machine can belong to several pools, a customer's beside the team's, each
@@ -252,6 +277,9 @@ devstack pool telemetry        # whether the pool collects, and what is sent
 ```
 
 Never sent: file contents, environment values, command lines, service output.
+Every text of a log line is cut to its first line before it leaves the
+machine (a failed job's reason keeps its process output in `daemon.log`
+only).
 
 ## Reference
 
@@ -262,4 +290,22 @@ Never sent: file contents, environment values, command lines, service output.
 | Coordinator | `DEVSTACK_COORDINATOR_DIR`; `members.json` (changed under `members.lock`), `audit.jsonl`, `telemetry.json` |
 | Node agent state (leases, mirrors, uploaded files per member, `policy.json`, `secret`) | `node/` beside its membership |
 | Ports | coordinator and node agent: as you choose (`--listen`); mutual TLS with the pool's CA |
+| Certificates | the pool's CA 20 years, the coordinator's server certificate 10, a member's 5; not renewed: when one expires, that member (for the CA, the pool) is set up again |
 | HTTP API | the hub's `/hub/pool...` routes in [dashboard-api.md](dashboard-api.md) |
+
+What the node agent sets in a lane container, for the `devstack` daemon in it
+(not for stack files; the daemon refuses `DEVSTACK_LISTEN` without
+`DEVSTACK_REMOTE_LANE`):
+
+| Variable | Meaning |
+|---|---|
+| `DEVSTACK_REMOTE_LANE` | the lane's name; marks the daemon as one in a lane container |
+| `DEVSTACK_LISTEN` | `0.0.0.0:7600`: the daemon's API on the lane's network, for the agent (token and `Host` checked) |
+| `DEVSTACK_PORT_OFFSET` | the lane's port offset on the requester; the lane runs on those ports in the container too |
+| `DEVSTACK_DISPLAY_ROOT` | where the requester has the lane's files, so paths in compiler messages and logs show as the developer's |
+| `DEVSTACK_EXTERNAL_INFRA` | the file (`/src/.devstack/external-infra.json`) in which the agent describes the lane's containers, which it started itself |
+
+On the node, `DEVSTACK_NODE_CONTAINER` (the agent's container name, when it
+runs in one) and `DEVSTACK_NODE_COMPOSE_IMAGE` (the image it reads Compose
+models in) are the agent's own; `DEVSTACK_LANE_BIN` names the static Linux
+`devstack` it mounts into lanes instead of its own binary (for tests).

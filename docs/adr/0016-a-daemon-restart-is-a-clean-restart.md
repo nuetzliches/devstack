@@ -81,3 +81,16 @@ only shares a number with a recorded group is spared (start-time check).
   groups, restore.
 - Spike (a): kill the daemon hard and assert that no process of the stack
   survives (Windows); same with cleanup on restart (Linux).
+
+*Paths as built, noted 2026-10-18.* `crates/devstack-daemon/src/lib.rs`
+(`serve`: `StateLock::acquire` from `crates/devstack-proc/src/lock.rs`),
+`Supervisor::new` (`devstack_proc::cleanup` of the recorded process groups
+and cgroups), `crates/devstack-daemon/src/state.rs` (what `state.json`
+keeps: main's builds, the promotion gate), and `restorable` /
+`follow_restore` in `crates/devstack-daemon/src/supervisor.rs`: the first
+start of a service after a daemon start runs the build last promoted to main
+without building (`restored` in the daemon log, since 0.10.0); what changed
+in the tree meanwhile becomes a candidate. Tests:
+`crates/devstack-proc/tests/ownership.rs` (`supervisor_death_ends_every_tree`)
+and `lifecycle` in `crates/devstack/tests/daemon_lifecycle.rs` (a daemon
+killed hard, then restored from the promoted build, not built).

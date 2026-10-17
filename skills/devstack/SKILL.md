@@ -57,7 +57,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack up` in a `git worktree` | starts that worktree's **lane** (every worktree is one) in the main tree's daemon: its own builds, ports moved by +100 (+200, ...), its own containers (a Compose project per lane, ports moved alike; `shared` services come from the main tree), no background workers (`--workers` turns them on; `--force` skips the memory check). Every command in the worktree then acts on the lane (`devstack lane list` shows all) |
 | `git worktree add <path> -b <branch>` | a new worktree is a lane at once, not started (devstack never creates or removes worktrees; use git or your tool). A lane runs from a copy of its worktree, so `git worktree remove` works while it runs and stops it. `devstack lane stop <name>` stops a lane and keeps the worktree |
 | `devstack promote --lane <name>` | the lane's services, dev servers included, answer on the main ports; ask the user first, `--lane main` gives them back. A lane on a node may take them only on a dedicated node (a server) |
-| `devstack up --on <node>` in a worktree | the lane runs on that machine of the pool (`pool`: the coordinator picks one, `<pool>:<node>` in another pool): build, services, its own containers; its ports are forwarded here as if it ran locally. Ask the user first: the worktree's files go to that machine |
+| `devstack up --on <node>` in a worktree | the lane runs on that machine of the pool (`pool`: the coordinator picks one, `<pool>:<node>` in another pool): build, services, its own containers; its ports are forwarded here as if it ran locally. Ask the user first: the worktree's files go to that machine, untracked env files git does not ignore included |
 | `devstack lane move <name> --to <node\|local>` | move a started lane: a cold start there that takes over once ready; its data comes from the seed jobs again |
 | `devstack lane share <name> --with <id\|tag\|*>` | let others in the pool see and open the lane's services (they do not control it); ask the user first. Without `--with`: nobody again |
 | `devstack pool` / `devstack pool shared` / `devstack open <lane> [service]` | the pools and their machines; lanes others share with you; open one of their services here |
@@ -146,6 +146,9 @@ Register it once (project `.mcp.json` or user configuration):
 | dashboard: "hub not reachable" | `devstack ui` (or the "Start hub" button once `devstack hub install` ran) |
 | this skill says it is outdated | `devstack skills install` refreshes it from the installed devstack and this stack file |
 | dashboard: "runs devstack X, Y is installed" | the stack still runs the old daemon: "Restart stack" there, or `devstack down` + `devstack up` |
+| a job `failed` after a long wait | jobs end after 30 minutes unless the stack file sets `timeout`; read its log, then ask the user before raising it (skill `devstack-config`) |
+| `devstack down` names services that did not stop | they still run: `devstack status`, then `devstack stop <service>`; ask before ending a process yourself |
+| `devstack up --on`: the node refuses the lane | the message names what the lane's Compose files ask that a node does not allow (privileged, host mounts, devices, ...) or that the pool has not granted that node; the lane can still run here (`devstack up`) |
 
 ## 7. Problems in devstack itself
 

@@ -86,3 +86,11 @@ asked for another format. When a change needs a converter is decided by
 
 - Stack file loader (planned): strict deserialisation, `version` check.
 - JSON Schema in `schema/` (planned), `devstack check`.
+
+*Paths as built, noted 2026-10-18.* `crates/devstack-config`: `load` /
+`from_str` in `lib.rs` (the `version` check first, then strict
+deserialisation), `model.rs` (`deny_unknown_fields` on every table),
+`validate.rs` (every rule `devstack check` reports, documented in
+[stack-file.md](../stack-file.md)). There is no `schema/` directory: the JSON
+Schema is generated from the model (`json_schema`, schemars) and printed by
+`devstack schema`.

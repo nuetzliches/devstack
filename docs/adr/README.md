@@ -13,7 +13,7 @@ An ADR records a constraint that
 3. is expensive to reverse (code, published contract, user workflow).
 
 Reasoning that fails this test goes into a comment at the decision site or the
-changelog.
+[changelog](../../CHANGELOG.md).
 
 ## Status values
 
@@ -24,22 +24,33 @@ changelog.
 | `Accepted, provisional` | Agreed for now, with a named point at which it is confirmed or superseded. Code builds on it; until that point it may change without a migration path. |
 | `Open` | A recorded question with the options laid out. **Nothing builds on either side** until it moves to `Proposed`/`Accepted`. |
 | `Superseded by ADR-NNNN` | Reversed. The file stays; its outcome is never edited. |
+| `Decided by ADR-NNNN` | An `Open` question that a later ADR answered. The file stays as the record of the options. |
 
 An ADR describes a decision at the moment it was taken. To change the outcome,
 write a new ADR and supersede the old one.
+
+A refinement that keeps the outcome (a detail found while building it, a
+point another ADR replaced) is an **amendment**: a dated paragraph
+(`*Amended YYYY-MM-DD.*`) or section (`## Addendum YYYY-MM-DD: …`) added to the
+file, the original text left as it was, and named in the status line and in
+the index below. A later ADR that replaces or details a point of an earlier one
+is linked from the earlier one too (its status or `Related` line).
 
 ## Numbering and format
 
 Four digits, monotonic, never reused. Copy [`0000-template.md`](0000-template.md),
 keep it to about a page. `Enforced by` lists every place the constraint lives;
-before code exists it names where it *will* live.
+before code exists it names where it *will* live. Once it is built, or the code
+moves, a dated note under `Enforced by` (`*Paths as built, noted
+YYYY-MM-DD.*`) names the real paths and what is not built; the original lines
+stay.
 
 ## Index
 
 | ADR | Title | Status |
 |---|---|---|
 | [0001](0001-development-is-adr-driven.md) | Development is ADR-driven | Accepted |
-| [0002](0002-processes-run-from-immutable-artifacts.md) | Processes run from immutable artifacts, never from the build output of the source tree | Accepted |
+| [0002](0002-processes-run-from-immutable-artifacts.md) | Processes run from immutable artifacts, never from the build output of the source tree | Accepted, amended (services without `build`; a build whose inputs changed meanwhile) |
 | [0003](0003-changes-flow-through-candidates.md) | Changes flow through candidates; the main slot only holds a stack that built and passed health | Accepted |
 | [0004](0004-infrastructure-is-delegated-to-compose.md) | Infrastructure comes from the project's existing Compose files plus a dev overlay | Accepted |
 | [0005](0005-rust-for-daemon-and-cli.md) | Rust for daemon and CLI | Accepted |
@@ -47,16 +58,16 @@ before code exists it names where it *will* live.
 | [0007](0007-one-http-api-is-the-control-surface.md) | One HTTP API is the control surface; CLI, MCP and dashboard are its clients | Accepted |
 | [0008](0008-background-workers-run-only-in-the-active-slot.md) | Background workers run only in the active slot | Accepted |
 | [0009](0009-the-daemon-owns-every-process-tree.md) | The daemon owns every process tree it starts | Accepted |
-| [0010](0010-promotion-mechanism.md) | Promotion mechanism: restart on the fixed port or switch a reverse proxy | Accepted: B (measured) |
+| [0010](0010-promotion-mechanism.md) | Promotion mechanism: restart on the fixed port or switch a reverse proxy | Accepted (option B, the reverse proxy; measured) |
 | [0011](0011-platform-windows-native-first.md) | Windows-native first; WSL is decided by measurement | Accepted |
 | [0012](0012-shared-infrastructure-between-lanes.md) | Which infrastructure may be shared between lanes | Decided by ADR-0030 |
-| [0013](0013-schema-changes-hold-promotion.md) | A build that changes schema inputs is not promoted automatically | Accepted |
+| [0013](0013-schema-changes-hold-promotion.md) | A build that changes schema inputs is not promoted automatically | Accepted, amended (how long a candidate stays held) |
 | [0014](0014-native-services-take-their-configuration-from-compose.md) | Native services take their configuration from the Compose service they replace | Accepted |
 | [0015](0015-devstack-is-optional.md) | devstack accelerates a stack, it is never required to run one | Accepted |
 | [0016](0016-a-daemon-restart-is-a-clean-restart.md) | A daemon restart is a clean restart from the last promoted artifacts | Accepted |
 | [0017](0017-stack-file-is-toml.md) | The stack file is TOML, without profiles in version 1 | Accepted |
-| [0018](0018-dashboard-is-a-browser-page.md) | The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper | Accepted |
-| [0019](0019-control-api-security.md) | The control API trusts the user's own processes, never a web page | Accepted, amended (own page for reads too) |
+| [0018](0018-dashboard-is-a-browser-page.md) | The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper | Accepted; who serves it amended by ADR-0021; the tray is not built |
+| [0019](0019-control-api-security.md) | The control API trusts the user's own processes, never a web page | Accepted, amended (own page for reads too; the hub proves itself; IPv4 loopback and `DEVSTACK_LISTEN`; the cookie is the hub's, no `token rotate`) |
 | [0020](0020-builds-share-one-long-lived-build-job.md) | Builds share one long-lived build job; a cancel ends only the cancelled build's tree | Accepted |
 | [0021](0021-a-hub-serves-the-dashboard.md) | A hub on a fixed port serves the dashboard for every stack | Accepted, amended (streams over WebSocket; the pool area polls) |
 | [0022](0022-network-egress-sandbox.md) | Outbound network calls of supervised services are visible and need an allow rule | Proposed |
@@ -65,7 +76,7 @@ before code exists it names where it *will* live.
 | [0025](0025-a-lane-can-run-on-another-node.md) | A lane can run on another node, as a Linux container with its own infrastructure | Accepted; point 10 (showing and moving a lane) amended |
 | [0026](0026-placement-by-the-requester-admission-by-the-node.md) | The requester places a lane; the node admits it, under a lease | Accepted; points 1, 3 replaced by ADR-0031 |
 | [0027](0027-trust-between-nodes.md) | Nodes and requesters trust each other by pinned keys, never by network location | Accepted; points 1, 2 replaced by ADR-0031; point 5 amended |
-| [0028](0028-lane-images.md) | A remote lane runs in a stack-provided toolchain image; the node supplies devstack | Accepted, amended |
+| [0028](0028-lane-images.md) | A remote lane runs in a stack-provided toolchain image; the node supplies devstack | Accepted, amended (a Dockerfile the node builds) |
 | [0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) | A remote lane works on a mirror of the requester's tree; ports and API come back over one connection | Accepted; point 2 amended (`[lanes] sync`) |
 | [0030](0030-each-lane-has-its-own-infrastructure.md) | Each lane has its own infrastructure | Accepted |
 | [0031](0031-a-coordinator-places-lanes.md) | A coordinator places lanes and admits members; nodes admit leases; data goes directly | Accepted, amended (one binary: `devstack node`) |

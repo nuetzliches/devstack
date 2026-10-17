@@ -42,3 +42,12 @@ workers, regardless of the mechanism chosen in
 
 - Supervisor (planned): environment composition per slot.
 - Stack file validation (planned): a service with `workers` must declare `env`.
+
+*Paths as built, noted 2026-10-18.* `crates/devstack-env/src/lib.rs`
+(`compose`: `workers.env` with `{is_main}` and `DEVSTACK_SLOT` per slot),
+`crates/devstack-daemon/src/supervisor.rs` (`running_without_workers`,
+`relaunch`, `set_lane_workers`, `running_worker_services`) and
+`crates/devstack-daemon/src/lanes.rs` (`take_main`: `promote --lane` moves the workers
+with the ports, stopping the main tree's services under their op locks
+first); `crates/devstack-config/src/validate.rs` (`workers.env` must not be
+empty).

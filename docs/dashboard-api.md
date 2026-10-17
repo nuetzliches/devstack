@@ -39,10 +39,10 @@ and `Referrer-Policy: no-referrer`. The dashboard has no inline script.
 
 | Method and path | Auth | Answer |
 |---|---|---|
-| `GET /`, `/assets/*`, `/manifest.webmanifest`, `/sw.js` | none | the app shell (works offline once cached) |
+| `GET /`, `/assets/*`, `/theme.js`, `/manifest.webmanifest`, `/sw.js`, the icons | none | the app shell (works offline once cached) |
 | `GET /auth?code=<code>` | none | sets the session cookie (one year, survives a hub restart), redirects to `/` |
-| `GET /hub/ping` | none | `{"devstack":true,"version":"0.9.7"}`; CORS for the landing page only (ADR-0021). With `?nonce=<16 to 128 characters>` also `"proof"`: hex of blake3 `keyed_hash(derive_key("devstack hub ping proof v1", token), nonce)`. The CLI asks with a fresh nonce and sends the token only to a hub whose proof matches |
-| `GET /hub/session` | cookie | `200 {"version": "0.9.7"}`, or `401` (not paired: show "run `devstack ui`") |
+| `GET /hub/ping` | none | `{"devstack":true,"version":"0.10.0"}`; CORS for the landing page only (ADR-0021). With `?nonce=<16 to 128 characters>` also `"proof"`: hex of blake3 `keyed_hash(derive_key("devstack hub ping proof v1", token), nonce)`. The CLI asks with a fresh nonce and sends the token only to a hub whose proof matches |
+| `GET /hub/session` | cookie | `200 {"version": "0.10.0"}`, or `401` (not paired: show "run `devstack ui`") |
 | `GET /hub/stacks` | cookie | `[StackEntry]` |
 | `GET /hub/ws?path=<stream>` | cookie + Origin | WebSocket that carries the server-sent event stream at `<stream>` (`/hub/events` or `/hub/stacks/{id}/api/v1/...`), one text message per event's `data`; how the dashboard reads every stream (a browser allows six HTTP/1.1 connections per host across all its tabs, WebSockets do not count; ADR-0021). The upstream is opened before the upgrade: `503` for a stack not running, `400` for another path. When the stream ends the socket closes |
 | `GET /hub/events` | cookie | SSE: `{"type":"stacks","stacks":[StackEntry]}` and `{"type":"docker","docker":DockerEngine}` and `{"type":"release","current","newer":string|null}` (a newer devstack; checked at start, every 12 h by the clock and when a dashboard connects and the last answer is over an hour old, unless `DEVSTACK_NO_UPDATE_CHECK`) and `{"type":"update","update":{"running":bool,"error":string|null,"installed":string|null,"finished":ms|null}}` (the dashboard's update; `finished` is when the last one ended, `installed` the version it installed, told by the hub it started), each first and on every change |
@@ -71,7 +71,7 @@ and `Referrer-Policy: no-referrer`. The dashboard has no inline script.
 | `POST /hub/pool/leases/{id}/end` | cookie + Origin | admins only: `202`; the node stops that lane at its next report (within about 15 s); its requester sees the lease over |
 | `POST /hub/pool/members/{id}/tags {"tags"}` | cookie + Origin | admins only: replace a member's tags (ADR-0033); the member's `PoolMember` |
 | `POST /hub/pool/members/{id}/node {"node"}` | cookie + Origin | admins only: let an approved member run the pool's lanes as a node (`true`), or take that back (`false`; the coordinator places no new lanes there); the member's `PoolMember` |
-| `POST /hub/pool/nodes/{id}/policy` (a `NodePolicy` or `null`) | cookie + Origin | admins only: what the node lets run on it, `{allow, repos, memory_headroom?, network: "lan"\|"internet"\|"none"}`; `null` lifts it |
+| `POST /hub/pool/nodes/{id}/policy` (a `NodePolicy` or `null`) | cookie + Origin | admins only: what the node lets run on it, `{allow, repos, memory_headroom?, max_cpus?, network: "lan"\|"internet"\|"none"}`; `null` lifts it |
 | `POST /hub/pool/join {"coordinator", "fingerprint", "name"?}` | cookie + Origin | ask a pool to admit this machine (`devstack join` without waiting); `GET /hub/pool` shows it pending until an admin approves. `coordinator` is `https://<host>[:<port>]` and nothing more (`400` otherwise). Errors of every `/hub/pool...` route pass on the coordinator's own `{"error"}` only, never the body of whatever else answered |
 | `POST /hub/pool/members/{id}/role {"role"}` | cookie + Origin | admins only: `member` or `admin`; `409 {"error"}` for the last admin. A member who is no admin gets `403` from all three |
 | `GET /hub/pool/share`, `PUT /hub/pool/share {enabled, max_cpus?, max_memory?}` | cookie (+ Origin for `PUT`) | this machine's share of the pool (ADR-0031 point 3), per pool: the switch, the caps, what is free and offered now, the last report (`ShareStatus`); `PUT` changes them and reports at once |
@@ -111,14 +111,14 @@ type PoolOverview = {
       gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean }[];
     };
   }[];
-  audit?: { at: number; by: string; action: 'approve' | 'reject' | 'remove' | 'role' | 'pause' | 'resume' | 'end' | 'tags' | 'policy' | 'node'; member: string; name: string; detail?: string }[]; // admins only, newest first
+  audit?: { at: number; by: string; action: 'approve' | 'reject' | 'remove' | 'role' | 'pause' | 'resume' | 'end' | 'tags' | 'policy' | 'node' | string; member: string; name: string; detail?: string }[]; // admins only, newest first
 };
 type PoolMember = {
   id: string; name: string; state: 'pending' | 'approved' | 'removed'; role: 'member' | 'admin'; requested_at: number;
   address?: string;           // admins only
   tags?: string[];            // ADR-0033
   policy?: NodePolicy;        // as a node
-  node?: true;                // an admin let it run the pool's lanes; absent: not
+  node?: true;                // an admin granted it to run the pool's lanes (`devstack node members node <id> on` or the dashboard; ADR-0032 as amended); absent: not granted
 };
 type NodePolicy = { allow?: string[]; repos?: string[]; memory_headroom?: number; max_cpus?: number; network?: 'lan' | 'internet' | 'none' };
 ```

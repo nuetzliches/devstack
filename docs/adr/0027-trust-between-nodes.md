@@ -79,3 +79,17 @@ contained), and only a member an admin granted is a node at all
 Will live in: `crates/devstack-node` (allowlist, quotas, mTLS listener, container
 confinement), the remote client in `crates/devstack-daemon` (peer list,
 pinning), the user documentation of remote lanes.
+
+*Paths as built, noted 2026-10-18* (points 1 and 2 as ADR-0031 replaced
+them): `crates/devstack-node/src/pki.rs` (the pool's CA, member and server
+certificates; lifetimes of 20, 5 and 10 years, no renewal),
+`crates/devstack-node/src/tls.rs` (mutual TLS with the pool's CA both ways,
+the identity taken from the verified certificate),
+`crates/devstack-node/src/node.rs` (admission by the member list from the
+coordinator, at most an hour old), `crates/devstack-node/src/policy.rs`
+(point 4 as a node's policy, ADR-0033; there are no quotas per requester),
+`crates/devstack-node/src/lanerun.rs`, `confine.rs` and `safefs.rs` (point 5
+as amended), `crates/devstack-node/src/nodeclient.rs` (the requester checks a
+node's certificate against the member id it placed on). The user
+documentation, point 6 both ways: [pool.md](../pool.md) and
+[SECURITY.md](../../SECURITY.md).
