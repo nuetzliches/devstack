@@ -18,20 +18,43 @@ fn rt() -> tokio::runtime::Runtime {
 /// A coordinator in `dir` on a free loopback port.
 fn coordinator(dir: &Path) -> (String, String) {
     let fp = coordinator::init(dir, &["127.0.0.1".into()]).unwrap();
+    let (url, stop) = coordinator_at(dir, 0);
+    std::mem::forget(stop);
+    (url, fp)
+}
+
+/// The coordinator in `dir`, served on `port` (0: a free one) until the
+/// returned stop is called.
+fn coordinator_at(dir: &Path, port: u16) -> (String, impl FnOnce()) {
     let rt = rt();
     let listener = rt
-        .block_on(tokio::net::TcpListener::bind(("127.0.0.1", 0)))
+        .block_on(tokio::net::TcpListener::bind(("127.0.0.1", port)))
         .unwrap();
     let url = format!(
         "https://127.0.0.1:{}",
         listener.local_addr().unwrap().port()
     );
     let dir = dir.to_path_buf();
-    std::thread::spawn(move || {
-        rt.block_on(coordinator::serve(&dir, listener, std::future::pending()))
-            .unwrap();
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let t = std::thread::spawn(move || {
+        rt.block_on(coordinator::serve(&dir, listener, async {
+            let _ = rx.await;
+        }))
+        .unwrap();
     });
-    (url, fp)
+    (url, move || {
+        let _ = tx.send(());
+        t.join().unwrap();
+    })
+}
+
+/// Wait until `f` holds, at most `secs`.
+fn wait_for(secs: u64, what: &str, mut f: impl FnMut() -> bool) {
+    let until = std::time::Instant::now() + Duration::from_secs(secs);
+    while !f() {
+        assert!(std::time::Instant::now() < until, "{what}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 /// A machine in `dir` that joined and was approved.
@@ -89,9 +112,42 @@ fn a_lane_is_leased_admitted_and_synced() {
             .unwrap();
     });
     let node_id = node_member.membership().unwrap().unwrap().id;
-    // Online once it has reported, with its API.
+    // Online once it has reported; its API is taken only once an admin
+    // granted it to run lanes (ADR-0032, addendum).
+    wait_for(10, "the node reports", || {
+        requester
+            .nodes()
+            .unwrap()
+            .iter()
+            .any(|n| n.id == node_id && n.online)
+    });
+    let ns = requester.nodes().unwrap();
+    let n = ns.iter().find(|n| n.id == node_id).unwrap();
+    assert!(n.report.as_ref().unwrap().api.is_none(), "not granted yet");
+    assert_eq!(n.kind, "machine");
+    let not_yet = requester.lease(&LeaseRequest {
+        node: "node-pc".into(),
+        repo: "shop".into(),
+        lane: "early".into(),
+        need: Amount::default(),
+    });
+    assert!(not_yet.unwrap_err().to_string().starts_with("409"));
+    assert!(
+        requester
+            .lease(&LeaseRequest {
+                node: "pool".into(),
+                repo: "shop".into(),
+                lane: "early".into(),
+                need: Amount::default(),
+            })
+            .is_err(),
+        "the pool places on granted nodes only"
+    );
+    Store::new(c.path())
+        .set_node(&node_id, true, SHELL)
+        .unwrap();
     let mut online = false;
-    for _ in 0..50 {
+    for _ in 0..150 {
         let ns = requester.nodes().unwrap();
         if ns.iter().any(|n| {
             n.id == node_id && n.online && n.report.as_ref().is_some_and(|r| r.api.is_some())
@@ -301,7 +357,9 @@ fn a_lane_is_leased_admitted_and_synced() {
 #[test]
 fn an_admin_pauses_a_node_and_ends_a_lease() {
     let c = tempfile::tempdir().unwrap();
-    let (url, fp) = coordinator(c.path());
+    let fp = coordinator::init(c.path(), &["127.0.0.1".into()]).unwrap();
+    let (url, stop) = coordinator_at(c.path(), 0);
+    let port: u16 = url.rsplit(':').next().unwrap().parse().unwrap();
     let (nd, rd) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let node_member = member(c.path(), &url, &fp, nd.path(), "node-pc");
     let admin = member(c.path(), &url, &fp, rd.path(), "admin-pc");
@@ -309,6 +367,8 @@ fn an_admin_pauses_a_node_and_ends_a_lease() {
     Store::new(c.path())
         .set_role(&admin_id, devstack_node::store::Role::Admin, SHELL)
         .unwrap();
+    let node_id = node_member.membership().unwrap().unwrap().id;
+    admin.admin_node(&node_id, true).unwrap();
 
     let rt_node = rt();
     let listener = rt_node
@@ -333,17 +393,13 @@ fn an_admin_pauses_a_node_and_ends_a_lease() {
             .block_on(node::serve(config, listener, std::future::pending()))
             .unwrap();
     });
-    let node_id = node_member.membership().unwrap().unwrap().id;
-    let until = std::time::Instant::now() + Duration::from_secs(10);
-    while !admin
-        .nodes()
-        .unwrap()
-        .iter()
-        .any(|n| n.id == node_id && n.online)
-    {
-        assert!(std::time::Instant::now() < until, "the node reports");
-        std::thread::sleep(Duration::from_millis(200));
-    }
+    wait_for(10, "the node reports", || {
+        admin
+            .nodes()
+            .unwrap()
+            .iter()
+            .any(|n| n.id == node_id && n.online)
+    });
     let ask = || {
         admin.lease(&LeaseRequest {
             node: "node-pc".into(),
@@ -407,7 +463,22 @@ fn an_admin_pauses_a_node_and_ends_a_lease() {
         std::thread::sleep(Duration::from_millis(500));
     }
 
+    // The coordinator restarts: it knows the lease again from the node's
+    // next report, and an admin can still end it.
+    stop();
+    let (_, stop) = coordinator_at(c.path(), port);
+    wait_for(30, "the coordinator knows the lease again", || {
+        admin
+            .leases()
+            .is_ok_and(|ls| ls.iter().any(|l| l.id == lease.id && l.state == "running"))
+    });
+
     admin.admin_end(&lease.id).unwrap();
+    // Another machine reports in the meantime (every hub does, without
+    // leases): the end still reaches the node that holds the lease.
+    admin
+        .report(&devstack_node::coordinator::Report::default())
+        .unwrap();
     let until = std::time::Instant::now() + Duration::from_secs(40);
     loop {
         match rt.block_on(client.renew(&lease.id)) {
@@ -429,4 +500,6 @@ fn an_admin_pauses_a_node_and_ends_a_lease() {
         .collect();
     assert_eq!(&log[..3], ["end", "resume", "pause"]);
     assert!(log.contains(&"policy".to_string()) && log.contains(&"tags".to_string()));
+    assert!(log.contains(&"node".to_string()));
+    stop();
 }

@@ -28,6 +28,27 @@ pub struct Pair {
 
 const CA_NAME: &str = "devstack pool CA";
 
+/// Write a private file (a key, a secret): on Unix readable by the owner
+/// only from the moment it exists, not after a `chmod`.
+pub fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        // A file that existed keeps its mode through `open`.
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        f.write_all(text.as_bytes())
+    }
+    #[cfg(not(unix))]
+    std::fs::write(path, text)
+}
+
 /// A new certificate authority for a pool.
 pub fn new_ca() -> Result<Pair> {
     let key = KeyPair::generate()?;

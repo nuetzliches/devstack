@@ -708,7 +708,8 @@ pub fn node_overlay(
             body.push("    pids_limit: !reset null".into());
             body.push("    deploy:\n      resources:\n        limits:".into());
             if let Some(m) = options.memory {
-                body.push(format!("          memory: {m}"));
+                // A string with its unit: Compose takes no bare number here.
+                body.push(format!("          memory: \"{m}b\""));
             }
             if let Some(c) = options.cpus {
                 body.push(format!("          cpus: {}", quote(&format!("{c:.2}"))));
@@ -1304,7 +1305,7 @@ mod tests {
             "{y}"
         );
         assert!(
-            services.contains("memory: 2147483648") && services.contains("cpus: \"1.50\""),
+            services.contains("memory: \"2147483648b\"") && services.contains("cpus: \"1.50\""),
             "{y}"
         );
         assert!(services.contains("pids: 512"), "{y}");

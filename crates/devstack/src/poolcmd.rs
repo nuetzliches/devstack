@@ -127,12 +127,12 @@ pub fn members_list(dir: Option<PathBuf>) -> Result<()> {
     }
     let now = devstack_node::store::now();
     println!(
-        "{:<18}{:<10}{:<8}{:<24}{:<18}ASKED",
-        "ID", "STATE", "ROLE", "NAME", "FROM"
+        "{:<18}{:<10}{:<8}{:<6}{:<24}{:<18}ASKED",
+        "ID", "STATE", "ROLE", "NODE", "NAME", "FROM"
     );
     for m in &ms {
         println!(
-            "{:<18}{:<10}{:<8}{:<24}{:<18}{}",
+            "{:<18}{:<10}{:<8}{:<6}{:<24}{:<18}{}",
             m.id,
             m.state.as_str(),
             if m.state == State::Approved {
@@ -140,6 +140,7 @@ pub fn members_list(dir: Option<PathBuf>) -> Result<()> {
             } else {
                 "-"
             },
+            if m.node { "yes" } else { "-" },
             m.name,
             m.address.as_deref().unwrap_or("-"),
             ago(now.saturating_sub(m.requested_at))
@@ -181,6 +182,28 @@ pub fn members_role(dir: Option<PathBuf>, member: &str, role: &str) -> Result<()
     let role: Role = role.parse().map_err(|e: String| anyhow!(e))?;
     let m = Store::new(&dir).set_role(member, role, SHELL)?;
     println!("{} ({}) is {} now", m.id, m.name, m.role.as_str());
+    Ok(())
+}
+
+/// `devstack node members node <id> on|off`: whether the pool runs lanes
+/// there (ADR-0032, addendum 2026-10-17).
+pub fn members_node(dir: Option<PathBuf>, member: &str, state: &str) -> Result<()> {
+    let dir = coordinator_dir(dir);
+    need_coordinator(&dir)?;
+    let on = match state {
+        "on" => true,
+        "off" => false,
+        o => bail!("`{o}`: on or off"),
+    };
+    let m = Store::new(&dir).set_node(member, on, SHELL)?;
+    if m.node {
+        println!(
+            "{} ({}) runs the pool's lanes once its node agent reports",
+            m.id, m.name
+        );
+    } else {
+        println!("{} ({}) runs no lanes for the pool", m.id, m.name);
+    }
     Ok(())
 }
 

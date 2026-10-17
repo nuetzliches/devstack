@@ -123,6 +123,11 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     }
     join(&url, &fp, coord.path(), node.path(), "ci-node");
     join(&url, &fp, coord.path(), me.path(), "ci-dev");
+    // Only a node an admin granted runs the pool's lanes.
+    run(
+        None,
+        &["node", "members", "node", "ci-node", "on", "--dir", &c],
+    );
 
     let nport = free_port();
     let _agent = Kill(

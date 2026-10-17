@@ -29,6 +29,20 @@ use std::time::Duration;
 
 /// A node that has not reported for this long is offline.
 pub const ONLINE_FOR: Duration = Duration::from_secs(45);
+/// The largest certificate request a joining machine sends (a P-256
+/// request is well under 1 KiB as PEM).
+const MAX_CSR: usize = 4096;
+/// Requests that may wait for an admin at once.
+const MAX_PENDING: usize = 64;
+/// Join requests one address may send per minute.
+const JOINS_PER_MINUTE: usize = 10;
+/// Leases a member may have offered and not yet admitted.
+const MAX_OFFERS: usize = 16;
+/// Telemetry bodies passed on at once; more are refused until they are.
+const TELEMETRY_IN_FLIGHT: usize = 8;
+/// Reports a node's history keeps as they came (an hour at one per 15 s,
+/// with room for a node that reports faster).
+const MAX_RAW: usize = 720;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoordError {
@@ -51,14 +65,7 @@ fn read(path: &Path) -> Result<String> {
 }
 
 fn write_private(path: &Path, text: &str) -> Result<()> {
-    std::fs::write(path, text).map_err(|e| CoordError::Io(path.into(), e))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| CoordError::Io(path.into(), e))?;
-    }
-    Ok(())
+    pki::write_private(path, text).map_err(|e| CoordError::Io(path.into(), e))
 }
 
 /// Create a coordinator in `dir`: a new CA and a server certificate for
@@ -250,7 +257,7 @@ impl History {
             }
         }
         self.raw.push_back(p);
-        while self.raw.front().is_some_and(|x| x.at + HOUR < p.at) {
+        while self.raw.front().is_some_and(|x| x.at + HOUR < p.at) || self.raw.len() > MAX_RAW {
             self.raw.pop_front();
         }
         while self.minutes.front().is_some_and(|x| x.at + DAY < p.at) {
@@ -298,6 +305,10 @@ pub struct LeaseReport {
     pub lane: String,
     /// Seconds until it expires unless renewed.
     pub expires_in: u64,
+    /// What it was admitted with: the coordinator knows the lease again
+    /// from it after a restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub need: Option<crate::share::Amount>,
 }
 
 /// `POST /v1/leases`: a requester asks for a lane on `node`.
@@ -376,8 +387,9 @@ impl Sharing {
 pub struct SharedService {
     pub name: String,
     pub port: u16,
-    /// `http` or `https`.
-    #[serde(default = "http")]
+    /// `http` or `https`; nothing else is taken (a member opens it with the
+    /// system's handler for the scheme).
+    #[serde(default = "http", deserialize_with = "web_scheme")]
     pub scheme: String,
     /// The port its owner reaches it on (the lane's port there): the one a
     /// member opening it gets too, if free, so links between its services
@@ -388,6 +400,17 @@ pub struct SharedService {
 
 fn http() -> String {
     "http".into()
+}
+
+/// A shared service's scheme: `http` or `https`, any case.
+fn web_scheme<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
+    let s = String::deserialize(d)?.to_ascii_lowercase();
+    match s.as_str() {
+        "http" | "https" => Ok(s),
+        _ => Err(serde::de::Error::custom(format!(
+            "a shared service is `http` or `https`, not `{s}`"
+        ))),
+    }
 }
 
 /// A lane shared with the caller, as `GET /v1/shared` lists it.
@@ -440,6 +463,10 @@ pub struct ReportAnswer {
     /// Leases an admin ended: the node stops their lanes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub end: Vec<String>,
+    /// Why the coordinator did not take the node's API (no admin granted
+    /// it to run lanes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
 }
 
 /// A member as `/v1/members` lists it (no request or certificate); the
@@ -459,6 +486,9 @@ pub struct MemberView {
     /// As a node: what it lets run on it (ADR-0033).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<crate::policy::NodePolicy>,
+    /// An admin granted it to run the pool's lanes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub node: bool,
 }
 
 impl From<&Member> for MemberView {
@@ -472,8 +502,15 @@ impl From<&Member> for MemberView {
             address: None,
             tags: m.tags.clone(),
             policy: m.policy.clone(),
+            node: m.node,
         }
     }
+}
+
+/// `POST /v1/admin/members/{id}/node`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NodeRequest {
+    pub node: bool,
 }
 
 /// `POST /v1/admin/members/{id}/tags`.
@@ -536,6 +573,10 @@ struct Inner {
     collector: Option<crate::telemetry::Collector>,
     /// The last failure passing telemetry on, and when it was logged.
     telemetry_error: Arc<Mutex<(Option<String>, Option<std::time::Instant>)>>,
+    /// Telemetry bodies being passed on now.
+    telemetry_slots: Arc<tokio::sync::Semaphore>,
+    /// Join requests by address, in the last minute.
+    joins: Mutex<HashMap<std::net::IpAddr, std::collections::VecDeque<std::time::Instant>>>,
 }
 
 use crate::tls::Peer;
@@ -619,6 +660,7 @@ fn router(shared: Shared) -> Router {
         .route("/v1/admin/nodes/{id}/resume", post(admin_resume))
         .route("/v1/admin/leases/{id}/end", post(admin_end))
         .route("/v1/admin/members/{id}/tags", post(admin_tags))
+        .route("/v1/admin/members/{id}/node", post(admin_node))
         .route("/v1/admin/nodes/{id}/policy", post(admin_policy))
         .with_state(shared)
 }
@@ -628,7 +670,38 @@ async fn join(
     Extension(peer): Extension<Peer>,
     Json(r): Json<JoinRequest>,
 ) -> ApiResult<Json<JoinAnswer>> {
+    // Anyone may ask: by address, a few times a minute; a request of
+    // reasonable size; a bounded number waiting.
+    {
+        let mut joins = s.joins.lock().unwrap();
+        joins.retain(|_, at| {
+            at.retain(|t| t.elapsed() < Duration::from_secs(60));
+            !at.is_empty()
+        });
+        let at = joins.entry(peer.addr.ip()).or_default();
+        if at.len() >= JOINS_PER_MINUTE {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many join requests from this address: wait a minute".into(),
+            ));
+        }
+        at.push_back(std::time::Instant::now());
+    }
+    if r.csr.len() > MAX_CSR {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "the certificate request is too large".into(),
+        ));
+    }
     let id = pki::member_id(&r.csr).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    if s.store.get(&id).map_err(internal)?.is_none()
+        && s.store.pending().map_err(internal)? >= MAX_PENDING
+    {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many requests wait for an admin already".into(),
+        ));
+    }
     let name: String = r
         .name
         .chars()
@@ -679,19 +752,73 @@ async fn members(
 async fn report(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
-    Json(r): Json<Report>,
+    Json(mut r): Json<Report>,
 ) -> ApiResult<Json<ReportAnswer>> {
     let m = member(&s, &peer)?;
+    // Only a node an admin granted is one: anyone else's API is not taken,
+    // so nothing is placed there (ADR-0032, addendum 2026-10-17).
+    let mut refused = None;
+    if r.api.is_some() && !m.node {
+        r.api = None;
+        refused = Some(format!(
+            "the pool does not run lanes on {} ({}): an admin grants it with `devstack node members node {} on`",
+            m.name, m.id, m.id
+        ));
+    }
     // What an admin ended and the node still holds: it is to stop them.
+    // Only this node's leases are its to settle; others wait for theirs.
     let end: Vec<String> = {
+        let leases = s.leases.lock().unwrap();
         let mut ending = s.ending.lock().unwrap();
-        ending.retain(|id| r.leases.iter().any(|l| &l.id == id));
+        ending.retain(|id| match leases.get(id) {
+            Some((l, _, _)) if l.node != m.id => true,
+            Some(_) => r.leases.iter().any(|x| &x.id == id),
+            None => false,
+        });
         r.leases
             .iter()
             .filter(|l| ending.contains(&l.id))
             .map(|l| l.id.clone())
             .collect()
     };
+    // Leases the coordinator does not know but the node holds (the
+    // coordinator restarted): known again, from what the node says.
+    let approved: std::collections::HashSet<String> = s
+        .store
+        .list()
+        .map_err(internal)?
+        .into_iter()
+        .filter(|x| x.state == State::Approved)
+        .map(|x| x.id)
+        .collect();
+    {
+        let mut leases = s.leases.lock().unwrap();
+        for x in &r.leases {
+            if !m.node || leases.contains_key(&x.id) || !approved.contains(&x.member) {
+                continue;
+            }
+            leases.insert(
+                x.id.clone(),
+                (
+                    Lease {
+                        id: x.id.clone(),
+                        node: m.id.clone(),
+                        member: x.member.clone(),
+                        repo: x.repo.clone(),
+                        lane: x.lane.clone(),
+                        need: x.need.unwrap_or_default(),
+                        state: "running".into(),
+                        created: store::now(),
+                        expires_in: Some(x.expires_in),
+                        shared: None,
+                    },
+                    // Admitted already: no node asks for it by token again.
+                    random_hex(24),
+                    std::time::Instant::now(),
+                ),
+            );
+        }
+    }
     {
         let mut leases = s.leases.lock().unwrap();
         // What the node holds is running; what it no longer holds is over.
@@ -719,7 +846,7 @@ async fn report(
         .lock()
         .unwrap()
         .insert(m.id, (std::time::Instant::now(), r));
-    Ok(Json(ReportAnswer { end }))
+    Ok(Json(ReportAnswer { end, refused }))
 }
 
 async fn nodes(
@@ -755,6 +882,21 @@ async fn lease_create(
     Json(mut r): Json<LeaseRequest>,
 ) -> ApiResult<Json<LeaseOffer>> {
     let me = member(&s, &peer)?;
+    // A lane needs at least the least, whatever it claims (ADR-0033 point 4).
+    r.need = crate::policy::floor_need(r.need);
+    let offered = s
+        .leases
+        .lock()
+        .unwrap()
+        .values()
+        .filter(|(l, _, at)| l.member == me.id && l.state == "offered" && at.elapsed() < OFFER_FOR)
+        .count();
+    if offered >= MAX_OFFERS {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            format!("{offered} leases of yours wait to be admitted already"),
+        ));
+    }
     let ms = s.store.list().map_err(internal)?;
     let pick = |f: &dyn Fn(&Member) -> bool| -> Vec<&Member> {
         ms.iter()
@@ -762,14 +904,14 @@ async fn lease_create(
             .collect()
     };
     // No node named (`pool`): the coordinator places the lane (ADR-0031
-    // point 4): of the nodes that are online, run lanes, share, are not
-    // paused and offer enough, the one with the most memory free, not the
-    // requester itself.
+    // point 4): of the nodes an admin granted that are online, run lanes,
+    // share, are not paused and offer enough, the one with the most memory
+    // free, not the requester itself.
     if r.node.is_empty() || r.node.eq_ignore_ascii_case("pool") {
         let reports = s.reports.lock().unwrap();
         let best = ms
             .iter()
-            .filter(|m| m.state == State::Approved && !m.paused && m.id != me.id)
+            .filter(|m| m.state == State::Approved && m.node && !m.paused && m.id != me.id)
             .filter(|m| {
                 m.policy
                     .as_ref()
@@ -830,6 +972,15 @@ async fn lease_create(
             return Err((
                 StatusCode::CONFLICT,
                 format!("{} is paused by an admin: it takes no new lanes", node.name),
+            ));
+        }
+        if !node.node {
+            return Err((
+                StatusCode::CONFLICT,
+                format!(
+                    "{} is not granted to run the pool's lanes (an admin: `devstack node members node {} on`)",
+                    node.name, node.id
+                ),
             ));
         }
         if let Some(p) = &node.policy
@@ -1053,10 +1204,15 @@ async fn telemetry_info(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
 ) -> ApiResult<Json<crate::telemetry::Info>> {
-    member(&s, &peer)?;
+    let m = member(&s, &peer)?;
     Ok(Json(crate::telemetry::Info {
         enabled: s.collector.is_some(),
-        last_error: s.telemetry_error.lock().unwrap().0.clone(),
+        // The collector's failures are the pool's admins' to see.
+        last_error: if m.role == Role::Admin {
+            s.telemetry_error.lock().unwrap().0.clone()
+        } else {
+            None
+        },
         collects: crate::telemetry::collects(),
     }))
 }
@@ -1081,6 +1237,12 @@ async fn telemetry_post(
     if kind != "logs" && kind != "metrics" {
         return Err((StatusCode::NOT_FOUND, format!("no telemetry `{kind}`")));
     }
+    let Ok(slot) = s.telemetry_slots.clone().try_acquire_owned() else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the coordinator passes on enough telemetry right now".into(),
+        ));
+    };
     let pool = names(&s.dir)
         .ok()
         .and_then(|n| n.first().cloned())
@@ -1095,6 +1257,7 @@ async fn telemetry_post(
     );
     let errors = s.telemetry_error.clone();
     tokio::task::spawn_blocking(move || {
+        let _slot = slot;
         // A panic in here would vanish with the task: catch it and say so.
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             collector.send(&kind, &body)
@@ -1127,11 +1290,29 @@ async fn telemetry_post(
     Ok(StatusCode::ACCEPTED)
 }
 
-fn random_hex(bytes: usize) -> String {
+/// `bytes` random bytes as hex.
+pub fn random_hex(bytes: usize) -> String {
     use rand::RngCore;
     let mut b = vec![0u8; bytes];
     rand::rng().fill_bytes(&mut b);
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Grant a member to run the pool's lanes, or take it back.
+async fn admin_node(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+    Json(n): Json<NodeRequest>,
+) -> ApiResult<Json<MemberView>> {
+    let (_, by) = admin(&s, &peer)?;
+    let m = s.store.set_node(&id, n.node, &by).map_err(store_err)?;
+    if !m.node
+        && let Some((_, r)) = s.reports.lock().unwrap().get_mut(&m.id)
+    {
+        r.api = None;
+    }
+    Ok(Json(MemberView::for_admin(&m)))
 }
 
 async fn admin_tags(
@@ -1276,6 +1457,8 @@ pub async fn serve(
         history: Mutex::new(HashMap::new()),
         collector: crate::telemetry::Collector::of(dir),
         telemetry_error: Arc::default(),
+        telemetry_slots: Arc::new(tokio::sync::Semaphore::new(TELEMETRY_IN_FLIGHT)),
+        joins: Mutex::new(HashMap::new()),
         ending: Mutex::new(std::collections::HashSet::new()),
         store: Store::new(dir),
         ca_pem,
@@ -1352,5 +1535,23 @@ mod history_tests {
         // Step 0: a's last (2) + b's (10); step 1: 4 + 20.
         assert_eq!((s[0].used_cpus, s[1].used_cpus), (12.0, 24.0));
         assert_eq!(s[0].total_cpus, 16.0);
+    }
+}
+
+#[cfg(test)]
+mod share_tests {
+    use super::*;
+
+    #[test]
+    fn a_shared_service_is_a_web_page_only() {
+        let ok: SharedService =
+            serde_json::from_str(r#"{"name":"web","port":5173,"scheme":"HTTPS"}"#).unwrap();
+        assert_eq!(ok.scheme, "https");
+        let default: SharedService = serde_json::from_str(r#"{"name":"web","port":1}"#).unwrap();
+        assert_eq!(default.scheme, "http");
+        for bad in ["ms-msdt", "search-ms", "file", "javascript", ""] {
+            let j = format!(r#"{{"name":"web","port":1,"scheme":"{bad}"}}"#);
+            assert!(serde_json::from_str::<SharedService>(&j).is_err(), "{bad}");
+        }
     }
 }

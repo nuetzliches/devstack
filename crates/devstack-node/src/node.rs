@@ -39,6 +39,14 @@ const EVERY: Duration = Duration::from_secs(15);
 const SETTLING: Duration = Duration::from_secs(180);
 /// The largest blob a requester may upload.
 const MAX_BLOB: usize = 512 << 20;
+/// What one member's blobs may take on this node, in all.
+const MAX_MEMBER_BLOBS: u64 = 8 << 30;
+/// The largest list of files (or hashes) one sync sends: about 250 000.
+const MAX_LIST: usize = 32 << 20;
+/// How long the node trusts its last list of members while the coordinator
+/// does not answer (ADR-0031 point 6): renewals go on, a member removed in
+/// the meantime is refused after this at the latest.
+const MEMBERS_VALID_FOR: Duration = Duration::from_secs(3600);
 
 pub struct NodeConfig {
     /// This machine's membership (`member::default_dir`); the node keeps its
@@ -140,8 +148,19 @@ struct Inner {
     /// The approved members, as the coordinator last listed them.
     /// With their tags, which this node's policy may ask for (ADR-0033).
     members: Mutex<(Option<Instant>, MemberTags)>,
-    /// What this node lets run on it, as the coordinator last said.
-    policy: Mutex<Option<crate::policy::NodePolicy>>,
+    /// What this node lets run on it, as the coordinator last said; `false`
+    /// until the coordinator said it once.
+    policy: Mutex<(bool, Option<crate::policy::NodePolicy>)>,
+    /// What the node's own configuration lets run on it (`policy.json` in
+    /// its state, ADR-0033 point 6), on top of the coordinator's.
+    local_policy: Option<crate::policy::NodePolicy>,
+    /// A secret of this node: names of images it builds for a member.
+    secret: String,
+    /// What each member's blobs take here, once counted.
+    blob_use: Mutex<HashMap<String, u64>>,
+    /// Whether the coordinator refused this node's API (not granted to run
+    /// lanes), said once.
+    refused: Mutex<Option<String>>,
     /// What the node offers now, before what its leases need.
     offer: Mutex<Amount>,
     /// A static Linux `devstack` the lane containers mount (ADR-0028 point
@@ -175,8 +194,59 @@ impl Inner {
         self.root.join("lanes")
     }
 
-    fn blobs(&self) -> PathBuf {
-        self.root.join("blobs")
+    /// A member's blobs: its own, so no member learns or gets another's
+    /// content by its hash.
+    fn blobs(&self, member: &str) -> PathBuf {
+        self.root.join("blobs").join(member)
+    }
+
+    /// The policies that hold here: the node's own and the coordinator's.
+    fn policies(&self) -> Vec<crate::policy::NodePolicy> {
+        let mut v: Vec<crate::policy::NodePolicy> = self.local_policy.iter().cloned().collect();
+        v.extend(self.policy.lock().unwrap().1.clone());
+        v
+    }
+
+    /// What `member`'s blobs take here (counted once, then kept up to date).
+    fn blob_use(&self, member: &str) -> u64 {
+        if let Some(u) = self.blob_use.lock().unwrap().get(member) {
+            return *u;
+        }
+        let used = dir_size(&self.blobs(member));
+        *self
+            .blob_use
+            .lock()
+            .unwrap()
+            .entry(member.to_string())
+            .or_insert(used)
+    }
+
+    /// Remove the blobs of `member` no mirror of its leases here was
+    /// written from; all of them when it holds none.
+    fn gc_blobs(&self, member: &str) {
+        let ids: Vec<String> = self
+            .leases
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|l| l.member == member)
+            .map(|l| l.id.clone())
+            .collect();
+        let keep: HashSet<String> = ids
+            .iter()
+            .flat_map(|id| manifest(&self.lanes().join(id)).into_values())
+            .collect();
+        let dir = self.blobs(member);
+        if ids.is_empty() {
+            let _ = std::fs::remove_dir_all(&dir);
+        } else if let Ok(rd) = std::fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                if !keep.contains(e.file_name().to_string_lossy().as_ref()) {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+        self.blob_use.lock().unwrap().remove(member);
     }
 
     fn save(&self, leases: &HashMap<String, NodeLease>) {
@@ -208,6 +278,8 @@ impl Inner {
     fn run(&self, l: &NodeLease) -> LaneRun {
         LaneRun {
             id: l.id.clone(),
+            member: l.member.clone(),
+            secret: self.secret.clone(),
             lane: l.lane.clone(),
             dir: self.lanes().join(&l.id),
             stack_file: l
@@ -233,6 +305,7 @@ impl Inner {
                 run.stop(s.container.as_deref());
             }
             let _ = std::fs::remove_dir_all(&run.dir);
+            s.gc_blobs(&l.member);
         });
     }
 }
@@ -248,12 +321,14 @@ async fn caller(s: &Shared, peer: &Peer) -> ApiResult<String> {
         let m = s.members.lock().unwrap();
         m.0.is_some_and(|at| at.elapsed() < Duration::from_secs(30)) && m.1.contains_key(&id)
     };
+    let mut asked = false;
     if !fresh {
         let s2 = s.clone();
         let listed = tokio::task::spawn_blocking(move || s2.local.members())
             .await
             .map_err(internal)?;
         if let Ok(list) = listed {
+            asked = true;
             let ids = list
                 .into_iter()
                 .filter(|m| m.state == crate::store::State::Approved)
@@ -262,7 +337,17 @@ async fn caller(s: &Shared, peer: &Peer) -> ApiResult<String> {
             *s.members.lock().unwrap() = (Some(Instant::now()), ids);
         }
     }
-    if s.members.lock().unwrap().1.contains_key(&id) {
+    let (at, known) = {
+        let m = s.members.lock().unwrap();
+        (m.0, m.1.contains_key(&id))
+    };
+    if known && !asked && at.is_none_or(|at| at.elapsed() > MEMBERS_VALID_FOR) {
+        return Err(err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the coordinator has not confirmed the pool's members for too long",
+        ));
+    }
+    if known {
         Ok(id)
     } else {
         Err(err(
@@ -289,8 +374,14 @@ fn router(s: Shared) -> Router {
         .route("/v1/leases", post(admit))
         .route("/v1/leases/{id}", delete(release))
         .route("/v1/leases/{id}/renew", post(renew))
-        .route("/v1/leases/{id}/sync/missing", post(missing))
-        .route("/v1/leases/{id}/sync/apply", post(apply))
+        .route(
+            "/v1/leases/{id}/sync/missing",
+            post(missing).layer(DefaultBodyLimit::max(MAX_LIST)),
+        )
+        .route(
+            "/v1/leases/{id}/sync/apply",
+            post(apply).layer(DefaultBodyLimit::max(MAX_LIST)),
+        )
         .route("/v1/leases/{id}/start", post(start))
         .route("/v1/leases/{id}/stop", post(stop))
         .route("/v1/leases/{id}/lane", get(lane_state))
@@ -334,6 +425,25 @@ async fn admit(
             ))
         };
     }
+    // Ids and tokens are the coordinator's hex: nothing else goes into its URL.
+    if !hex_id(&a.id) || !hex_id(&a.token) {
+        return Err(err(StatusCode::BAD_REQUEST, "not a lease of this pool"));
+    }
+    // What this node lets run on it: asked of the coordinator before the
+    // first lease, never assumed open.
+    if !s.policy.lock().unwrap().0 {
+        let s2 = s.clone();
+        let me = tokio::task::spawn_blocking(move || s2.local.me())
+            .await
+            .map_err(internal)?
+            .map_err(|e| {
+                err(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    format!("cannot ask the coordinator for this node's policy: {e}"),
+                )
+            })?;
+        *s.policy.lock().unwrap() = (true, me.policy);
+    }
     // The coordinator created it, for this node and this requester.
     let s2 = s.clone();
     let (id, token) = (a.id.clone(), a.token.clone());
@@ -365,12 +475,15 @@ async fn admit(
         .get(&who)
         .cloned()
         .unwrap_or_default();
-    if let Some(p) = s.policy.lock().unwrap().as_ref()
-        && let Err(why) = p.admits(&who, &tags, &lease.repo)
-    {
+    let policies = s.policies();
+    let all: Vec<&crate::policy::NodePolicy> = policies.iter().collect();
+    if let Err(why) = crate::policy::NodePolicy::admits_all(&all, &who, &tags, &lease.repo) {
         return Err(err(StatusCode::FORBIDDEN, format!("{}: {why}", s.name)));
     }
-    // The node admits against what it has now (ADR-0031 point 4).
+    // The node admits against what it has now (ADR-0031 point 4), and takes
+    // a lane to need at least the least.
+    let mut lease = lease;
+    lease.need = crate::policy::floor_need(lease.need);
     let free = s.available();
     if lease.need.cpus > free.cpus || lease.need.memory > free.memory {
         return Err(err(
@@ -411,7 +524,13 @@ async fn renew(
     let who = caller(&s, &peer).await?;
     lease_of(&s, &id, &who)?;
     let mut leases = s.leases.lock().unwrap();
-    let l = leases.get_mut(&id).expect("checked above");
+    // It may have ended since it was looked up.
+    let Some(l) = leases.get_mut(&id) else {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            format!("no lease `{id}` of yours here"),
+        ));
+    };
     l.expires = crate::store::now() + TTL.as_secs();
     let out = l.clone();
     s.save(&leases);
@@ -437,6 +556,27 @@ async fn release(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// A lease id or token as the coordinator makes them: lower-case hex.
+fn hex_id(v: &str) -> bool {
+    !v.is_empty()
+        && v.len() <= 128
+        && v.bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
+/// The bytes the files directly under `dir` take.
+fn dir_size(dir: &Path) -> u64 {
+    std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| e.metadata().ok())
+                .filter(|m| m.is_file())
+                .map(|m| m.len())
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
 fn valid_hash(h: &str) -> bool {
     h.len() == 64
         && h.bytes()
@@ -451,7 +591,7 @@ async fn missing(
 ) -> ApiResult<Json<Hashes>> {
     let who = caller(&s, &peer).await?;
     lease_of(&s, &id, &who)?;
-    let blobs = s.blobs();
+    let blobs = s.blobs(&who);
     let mut seen = HashSet::new();
     let hashes = h
         .hashes
@@ -484,15 +624,42 @@ async fn blob(
             "the content does not have that hash",
         ));
     }
-    let dir = s.blobs();
+    let dir = s.blobs(&who);
     let path = dir.join(&hash);
     if path.exists() {
         return Ok(StatusCode::NO_CONTENT);
     }
-    std::fs::create_dir_all(&dir).map_err(internal)?;
-    let tmp = dir.join(format!("{hash}.{}", crate::store::now()));
-    std::fs::write(&tmp, &body).map_err(internal)?;
-    std::fs::rename(&tmp, &path).map_err(internal)?;
+    // Room for it among this member's blobs: what its mirrors no longer
+    // need goes first.
+    let size = body.len() as u64;
+    if s.blob_use(&who) + size > MAX_MEMBER_BLOBS {
+        let (s2, w) = (s.clone(), who.clone());
+        tokio::task::spawn_blocking(move || s2.gc_blobs(&w))
+            .await
+            .map_err(internal)?;
+        if s.blob_use(&who) + size > MAX_MEMBER_BLOBS {
+            return Err(err(
+                StatusCode::INSUFFICIENT_STORAGE,
+                format!(
+                    "your files on {} take {} MiB already, the most a member may store here",
+                    s.name,
+                    MAX_MEMBER_BLOBS >> 20
+                ),
+            ));
+        }
+    }
+    let written = tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&dir)?;
+        let tmp = dir.join(format!("{hash}.{}.tmp", crate::coordinator::random_hex(6)));
+        std::fs::write(&tmp, &body)?;
+        std::fs::rename(&tmp, &path).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })
+    })
+    .await
+    .map_err(internal)?;
+    written.map_err(internal)?;
+    *s.blob_use.lock().unwrap().entry(who).or_insert(0) += size;
     Ok(StatusCode::CREATED)
 }
 
@@ -523,17 +690,35 @@ fn manifest(dir: &Path) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
+/// Is `rel` beneath `root` a plain file, reached without a link?
+fn plain_file(root: &Path, rel: &Path) -> bool {
+    let mut cur = root.to_path_buf();
+    let mut comps = rel.components().peekable();
+    while let Some(c) = comps.next() {
+        cur.push(c);
+        let Ok(m) = std::fs::symlink_metadata(&cur) else {
+            return false;
+        };
+        let last = comps.peek().is_none();
+        if m.file_type().is_symlink() || (last && !m.is_file()) || (!last && !m.is_dir()) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Make the mirror of lane `lane_dir` hold exactly `files`, from `blobs`.
+///
+/// The lane's own code writes into the mirror too, symlinks included: no
+/// path is followed through one ([`crate::safefs`]). Each blob's content is
+/// hashed again as it is copied, so a changed blob never lands.
 pub fn apply_files(
     blobs: &Path,
     lane_dir: &Path,
     files: &[FileEntry],
 ) -> Result<Applied, NodeError> {
-    let io = |p: &Path| {
-        let p = p.to_path_buf();
-        move |e| NodeError::Io(p, e)
-    };
     let src = lane_dir.join("src");
+    std::fs::create_dir_all(&src).map_err(|e| NodeError::Io(src.clone(), e))?;
     let mut have = manifest(lane_dir);
     let mut out = Applied::default();
     let mut wanted = HashSet::new();
@@ -544,36 +729,25 @@ pub fn apply_files(
             return Err(NodeError::Other(format!("`{}`: no hash", f.path)));
         }
         wanted.insert(f.path.clone());
-        let target = src.join(&rel);
-        if have.get(&f.path) == Some(&f.hash) && target.exists() {
+        if have.get(&f.path) == Some(&f.hash) && plain_file(&src, &rel) {
             continue;
         }
         let blob = blobs.join(&f.hash);
-        if !blob.exists() {
-            return Err(NodeError::Other(format!(
-                "`{}`: blob {} not uploaded",
-                f.path, f.hash
-            )));
-        }
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).map_err(io(parent))?;
-        }
-        let tmp = target.with_file_name(format!(
-            ".{}.devstack-tmp",
-            target
-                .file_name()
-                .map(|n| n.to_string_lossy())
-                .unwrap_or_default()
-        ));
-        std::fs::copy(&blob, &tmp).map_err(io(&tmp))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = if f.exec { 0o755 } else { 0o644 };
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))
-                .map_err(io(&tmp))?;
-        }
-        std::fs::rename(&tmp, &target).map_err(io(&target))?;
+        let mut from = std::fs::File::open(&blob)
+            .map_err(|_| NodeError::Other(format!("`{}`: blob {} not uploaded", f.path, f.hash)))?;
+        let mode = if f.exec { 0o755 } else { 0o644 };
+        crate::safefs::write_beneath(&src, &rel, mode, |to| {
+            let h = crate::safefs::copy_hashing(&mut from, to)?;
+            if h == f.hash {
+                Ok(())
+            } else {
+                Err(std::io::Error::other(format!(
+                    "blob {} does not have its hash",
+                    f.hash
+                )))
+            }
+        })
+        .map_err(|e| NodeError::Other(format!("`{}`: {e}", f.path)))?;
         have.insert(f.path.clone(), f.hash.clone());
         out.written += 1;
     }
@@ -584,21 +758,16 @@ pub fn apply_files(
         .collect();
     for p in gone {
         have.remove(&p);
-        if let Some(rel) = safe_path(&p) {
-            let target = src.join(rel);
-            if std::fs::remove_file(&target).is_ok() {
-                out.removed += 1;
-            }
-            // Directories left empty go too.
-            let mut dir = target.parent().map(Path::to_path_buf);
-            while let Some(d) = dir {
-                if d == src || std::fs::remove_dir(&d).is_err() {
-                    break;
-                }
-                dir = d.parent().map(Path::to_path_buf);
-            }
+        if let Some(rel) = safe_path(&p)
+            && crate::safefs::remove_beneath(&src, &rel).unwrap_or(false)
+        {
+            out.removed += 1;
         }
     }
+    let io = |p: &Path| {
+        let p = p.to_path_buf();
+        move |e| NodeError::Io(p, e)
+    };
     std::fs::write(
         lane_dir.join("manifest.json"),
         serde_json::to_vec(&have).expect("a manifest serialises"),
@@ -696,7 +865,9 @@ async fn start(
         let mut run = s2.run(&l);
         run.display_root = display_root;
         run.port_offset = port_offset;
-        if let Some(p) = s2.policy.lock().unwrap().as_ref() {
+        let policies = s2.policies();
+        let all: Vec<&crate::policy::NodePolicy> = policies.iter().collect();
+        if let Some(p) = crate::policy::NodePolicy::strictest(&all) {
             run.memory_limit = p.memory_limit(l.need.memory);
             run.cpu_limit = p.max_cpus.filter(|c| *c > 0.0);
             run.network = p.network;
@@ -910,13 +1081,24 @@ async fn pass(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     let (parts, body) = req.into_parts();
-    let tcp = match tokio::net::TcpStream::connect(&d.addr).await {
-        Ok(t) => {
+    let connect = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::net::TcpStream::connect(&d.addr),
+    );
+    let tcp = match connect.await {
+        Ok(Ok(t)) => {
             let _ = t.set_nodelay(true);
             t
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             return err(StatusCode::BAD_GATEWAY, format!("the lane's daemon: {e}")).into_response();
+        }
+        Err(_) => {
+            return err(
+                StatusCode::GATEWAY_TIMEOUT,
+                "the lane's daemon does not answer",
+            )
+            .into_response();
         }
     };
     let (mut send, conn) =
@@ -978,7 +1160,7 @@ async fn apply(
 ) -> ApiResult<Json<Applied>> {
     let who = caller(&s, &peer).await?;
     lease_of(&s, &id, &who)?;
-    let (blobs, lane) = (s.blobs(), s.lanes().join(&id));
+    let (blobs, lane) = (s.blobs(&who), s.lanes().join(&id));
     let r = tokio::task::spawn_blocking(move || apply_files(&blobs, &lane, &a.files))
         .await
         .map_err(internal)?;
@@ -1091,11 +1273,28 @@ async fn background(s: Shared) {
         if after.is_some() {
             before = after;
         }
+        // What the pool's lanes use here now, their infrastructure included
+        // (their containers carry the lease's id).
+        let ids: Vec<String> = s.leases.lock().unwrap().keys().cloned().collect();
+        let used = tokio::task::spawn_blocking(move || lanes_use(&ids))
+            .await
+            .unwrap_or_default();
         let offer = Settings {
             enabled: true,
             ..s.share.clone()
         }
         .offer(free);
+        // The caps hold for the lanes together: what they use already is
+        // not on offer again.
+        let offer = Amount {
+            cpus: s
+                .share
+                .max_cpus
+                .map_or(offer.cpus, |m| offer.cpus.min((m - used.cpus).max(0.0))),
+            memory: s.share.max_memory.map_or(offer.memory, |m| {
+                offer.memory.min(m.saturating_sub(used.memory))
+            }),
+        };
         *s.offer.lock().unwrap() = offer;
 
         let now = crate::store::now();
@@ -1122,10 +1321,6 @@ async fn background(s: Shared) {
             cpus: cores as f64,
             memory: devstack_proc::memory_total().unwrap_or(0),
         };
-        let ids: Vec<String> = s.leases.lock().unwrap().keys().cloned().collect();
-        let used = tokio::task::spawn_blocking(move || lanes_use(&ids))
-            .await
-            .unwrap_or_default();
         let gpus: Vec<crate::share::Gpu> = tokio::task::spawn_blocking(crate::share::gpus)
             .await
             .unwrap_or_default()
@@ -1182,6 +1377,7 @@ async fn background(s: Shared) {
                     repo: l.repo.clone(),
                     lane: l.lane.clone(),
                     expires_in: l.expires_in(),
+                    need: Some(l.need),
                 })
                 .collect(),
         };
@@ -1191,7 +1387,17 @@ async fn background(s: Shared) {
         // while the coordinator does not answer.
         let s3 = s.clone();
         if let Ok(Ok(me)) = tokio::task::spawn_blocking(move || s3.local.me()).await {
-            *s.policy.lock().unwrap() = me.policy;
+            *s.policy.lock().unwrap() = (true, me.policy);
+        }
+        // A node no admin granted (ADR-0032, addendum): said once.
+        if let Ok(Ok(a)) = &answer {
+            let mut refused = s.refused.lock().unwrap();
+            if a.refused != *refused {
+                if let Some(why) = &a.refused {
+                    eprintln!("node agent: {why}");
+                }
+                refused.clone_from(&a.refused);
+            }
         }
         // Leases an admin ended: their lanes stop like expired ones.
         if let Ok(Ok(a)) = answer
@@ -1251,7 +1457,10 @@ pub async fn serve(
     let bin = linux_binary(&root);
     // Rules of lanes that ended while the agent was down (ADR-0033 point 5).
     let held: Vec<String> = leases.keys().cloned().collect();
-    tokio::task::spawn_blocking(move || crate::egress::cleanup(&held));
+    let state = root.clone();
+    tokio::task::spawn_blocking(move || crate::egress::cleanup(&state, &held));
+    let local_policy = local_policy(&root)?;
+    let secret = node_secret(&root)?;
     let s = Arc::new(Inner {
         local,
         me: m.id,
@@ -1262,7 +1471,11 @@ pub async fn serve(
         dedicated: config.dedicated,
         leases: Mutex::new(leases),
         members: Mutex::new((None, HashMap::new())),
-        policy: Mutex::new(None),
+        policy: Mutex::new((false, None)),
+        local_policy,
+        secret,
+        blob_use: Mutex::new(HashMap::new()),
+        refused: Mutex::new(None),
         offer: Mutex::new(Amount::default()),
         bin,
         container: std::env::var("DEVSTACK_NODE_CONTAINER")
@@ -1275,6 +1488,33 @@ pub async fn serve(
     crate::tls::serve(tls, listener, router(s), stop).await;
     bg.abort();
     Ok(())
+}
+
+/// What the node's own configuration lets run on it: `policy.json` in its
+/// state (a [`crate::policy::NodePolicy`]), for a server deployed as code
+/// (ADR-0033 point 6). It holds on top of what an admin sets.
+fn local_policy(root: &Path) -> Result<Option<crate::policy::NodePolicy>, NodeError> {
+    let p = root.join("policy.json");
+    match std::fs::read(&p) {
+        Ok(b) => serde_json::from_slice(&b)
+            .map(Some)
+            .map_err(|e| NodeError::Other(format!("{}: {e}", p.display()))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(NodeError::Io(p, e)),
+    }
+}
+
+/// The node's secret (`secret` in its state), made once.
+fn node_secret(root: &Path) -> Result<String, NodeError> {
+    let p = root.join("secret");
+    if let Ok(s) = std::fs::read_to_string(&p)
+        && s.trim().len() >= 32
+    {
+        return Ok(s.trim().to_string());
+    }
+    let s = crate::coordinator::random_hex(32);
+    crate::pki::write_private(&p, &s).map_err(|e| NodeError::Other(e.to_string()))?;
+    Ok(s)
 }
 
 /// A copy of the agent's own binary that lane containers mount, when it is
@@ -1295,7 +1535,10 @@ fn linux_binary(root: &Path) -> Option<PathBuf> {
     let target = dir.join(format!("devstack-{}", env!("CARGO_PKG_VERSION")));
     std::fs::create_dir_all(&dir).ok()?;
     // Always fresh: one version number covers many builds from main.
-    let tmp = dir.join(".devstack.tmp");
+    let tmp = dir.join(format!(
+        ".devstack.{}.tmp",
+        crate::coordinator::random_hex(6)
+    ));
     std::fs::copy(&exe, &tmp).ok()?;
     std::fs::rename(&tmp, &target).ok()?;
     Some(target)
@@ -1356,5 +1599,56 @@ mod tests {
         assert!(!lane.join("src/x").exists(), "an emptied directory goes");
         let missing = "0".repeat(64);
         assert!(apply_files(&blobs, &lane, &[f("c.txt", &missing)]).is_err());
+        // A blob whose content changed since it was stored does not land.
+        let c = put("c");
+        std::fs::write(blobs.join(&c), "not c").unwrap();
+        let e = apply_files(&blobs, &lane, &[f("c.txt", &c)]).unwrap_err();
+        assert!(e.to_string().contains("does not have its hash"), "{e}");
+        assert!(!lane.join("src/c.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sync_never_writes_through_a_link_the_lane_made() {
+        let d = tempfile::tempdir().unwrap();
+        let (blobs, lane, bin) = (
+            d.path().join("blobs"),
+            d.path().join("lanes/x"),
+            d.path().join("bin"),
+        );
+        std::fs::create_dir_all(&blobs).unwrap();
+        std::fs::create_dir_all(lane.join("src")).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("devstack"), "the agent's").unwrap();
+        // The lane's code: `ln -s ../../../bin /src/evil`.
+        std::os::unix::fs::symlink("../../../bin", lane.join("src/evil")).unwrap();
+        let h = blake3::hash(b"attacker").to_hex().to_string();
+        std::fs::write(blobs.join(&h), "attacker").unwrap();
+        let entry = FileEntry {
+            path: "evil/devstack".into(),
+            hash: h,
+            exec: true,
+        };
+        apply_files(&blobs, &lane, &[entry]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(bin.join("devstack")).unwrap(),
+            "the agent's"
+        );
+        assert!(
+            !lane
+                .join("src/evil")
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn a_lease_id_is_hex() {
+        assert!(hex_id("0a1b2c"));
+        for bad in ["", "AB", "x?token=", "../a", "a/b"] {
+            assert!(!hex_id(bad), "{bad}");
+        }
     }
 }

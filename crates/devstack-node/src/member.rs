@@ -47,13 +47,7 @@ fn io(path: &Path) -> impl FnOnce(std::io::Error) -> MemberError + '_ {
 }
 
 fn write_private(path: &Path, text: &str) -> Result<()> {
-    std::fs::write(path, text).map_err(io(path))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(io(path))?;
-    }
-    Ok(())
+    pki::write_private(path, text).map_err(io(path))
 }
 
 /// Lower case, without the colons and spaces a fingerprint is often written
@@ -484,6 +478,15 @@ impl Local {
             &crate::coordinator::TagsRequest {
                 tags: tags.to_vec(),
             },
+        )
+    }
+
+    /// Grant a member to run the pool's lanes, or take it back (admins
+    /// only).
+    pub fn admin_node(&self, id: &str, node: bool) -> Result<MemberView> {
+        self.post(
+            &format!("/v1/admin/members/{id}/node"),
+            &crate::coordinator::NodeRequest { node },
         )
     }
 

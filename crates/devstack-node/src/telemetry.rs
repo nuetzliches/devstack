@@ -120,9 +120,37 @@ pub fn collects() -> Vec<String> {
     .collect()
 }
 
+/// Is `a` an attribute of the identity the coordinator sets?
+fn identity(a: &Value) -> bool {
+    let k = a["key"].as_str().unwrap_or("");
+    k.starts_with("devstack.member.") || k.starts_with("devstack.pool.")
+}
+
+/// Drop identity attributes wherever the body has attributes (records,
+/// data points, spans): only the resource's, set here, name the sender.
+fn strip_identity(v: &mut Value) {
+    match v {
+        Value::Object(o) => {
+            for (k, x) in o.iter_mut() {
+                if k == "attributes"
+                    && let Value::Array(a) = x
+                {
+                    a.retain(|a| !identity(a));
+                } else {
+                    strip_identity(x);
+                }
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(strip_identity),
+        _ => {}
+    }
+}
+
 /// Set the sender's identity on every resource of an OTLP/JSON body,
-/// overwriting what the body claims (`devstack.member.*`, `devstack.pool.*`).
+/// overwriting what the body claims (`devstack.member.*`, `devstack.pool.*`,
+/// on its resources, records, data points and spans).
 pub fn stamp(body: &mut Value, ours: &[(&str, String)]) {
+    strip_identity(body);
     for list in ["resourceLogs", "resourceMetrics", "resourceSpans"] {
         let Some(rs) = body.get_mut(list).and_then(Value::as_array_mut) else {
             continue;
@@ -270,6 +298,17 @@ mod tests {
             .collect();
         assert_eq!(ids, ["abc"]);
         assert!(a.iter().any(|x| x["key"] == "service.name"));
+        // A record that claims someone else does not keep the claim.
+        let mut b = json!({ "resourceLogs": [{ "resource": {}, "scopeLogs": [{ "logRecords": [
+            { "attributes": [
+                { "key": "devstack.member.name", "value": { "stringValue": "admin-pc" } },
+                { "key": "devstack.lane", "value": { "stringValue": "fix" } },
+            ]}
+        ]}]}]});
+        stamp(&mut b, &[("devstack.member.id", "abc".into())]);
+        let r = &b["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0]["attributes"];
+        assert_eq!(r.as_array().unwrap().len(), 1);
+        assert_eq!(r[0]["key"], "devstack.lane");
     }
 
     #[test]

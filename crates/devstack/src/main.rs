@@ -446,6 +446,9 @@ enum MembersAction {
     /// Change an approved member's role: `member` or `admin` (the last admin
     /// stays one).
     Role { member: String, role: String },
+    /// Grant a member to run the pool's lanes (`on`), or take it back
+    /// (`off`): only a granted node is placed on (ADR-0032, addendum).
+    Node { member: String, state: String },
     /// Set a member's tags (ADR-0033), replacing its tags: `team:backend`,
     /// `customer:acme`; none clears them.
     Tags { member: String, tags: Vec<String> },
@@ -746,6 +749,9 @@ fn main() -> Result<()> {
                 }
                 MembersAction::Role { member, role } => poolcmd::members_role(dir, &member, &role),
                 MembersAction::Tags { member, tags } => poolcmd::members_tags(dir, &member, &tags),
+                MembersAction::Node { member, state } => {
+                    poolcmd::members_node(dir, &member, &state)
+                }
                 MembersAction::Policy {
                     node,
                     allow,
