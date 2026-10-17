@@ -5,9 +5,16 @@
 //! The daemon there has no Docker: the agent describes the infrastructure to
 //! it in a file (`DEVSTACK_EXTERNAL_INFRA`, spike M0).
 //!
+//! The mirror is the requester's, and the lane's own code writes into it:
+//! everything the agent reads or writes there goes through [`crate::safefs`]
+//! (no symlink is followed), and what the Compose files ask of the node is
+//! checked first ([`crate::confine`]).
+//!
 //! Everything here calls the Docker CLI and blocks.
 
-use devstack_compose::{Docker, Group};
+use crate::policy::Network;
+use crate::safefs;
+use devstack_compose::{Docker, Group, Model, budget};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -16,6 +23,8 @@ use std::time::Duration;
 
 /// The port the lane's daemon listens on inside its container.
 pub const DAEMON_PORT: u16 = 7600;
+/// The most processes one container of a lane may run.
+pub const PIDS_LIMIT: u32 = 4096;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
@@ -35,6 +44,8 @@ pub type Result<T> = std::result::Result<T, RunError>;
 pub struct LaneRun {
     /// The lease id: names its Compose projects and its container.
     pub id: String,
+    /// The requester's member id: the images built for it are its own.
+    pub member: String,
     /// The lane's name, as its requester calls it.
     pub lane: String,
     /// `lanes/<id>` under the node's state.
@@ -46,12 +57,15 @@ pub struct LaneRun {
     /// The lane's port offset on the requester's machine
     /// (`DEVSTACK_PORT_OFFSET`): it runs on those ports here too.
     pub port_offset: u16,
-    /// The lane container's memory limit (ADR-0033), bytes.
+    /// The memory limit of each of its containers (ADR-0033), bytes.
     pub memory_limit: Option<u64>,
-    /// Its CPU limit, cores.
+    /// Their CPU limit, cores.
     pub cpu_limit: Option<f64>,
     /// What its networks reach beyond the lane (ADR-0033 point 5).
-    pub network: crate::policy::Network,
+    pub network: Network,
+    /// A secret of this node, so names of images built here cannot be
+    /// guessed by another lane (and used in its `FROM` or `image:`).
+    pub secret: String,
 }
 
 /// Where the lane's daemon is reached, and its token.
@@ -66,11 +80,18 @@ pub struct DaemonAddr {
     pub infra_ports: Vec<u16>,
 }
 
-fn docker(args: &[&str]) -> Result<String> {
-    let out = Command::new("docker")
-        .args(args)
-        .output()
-        .map_err(|e| RunError::Docker(format!("run docker: {e}")))?;
+fn docker_for(args: &[&str], within: Duration) -> Result<String> {
+    let mut cmd = Command::new("docker");
+    cmd.args(args);
+    let out = devstack_compose::output_within(cmd, within)
+        .map_err(|e| RunError::Docker(format!("run docker: {e}")))?
+        .ok_or_else(|| {
+            RunError::Docker(format!(
+                "docker {} did not finish within {} s",
+                args.first().copied().unwrap_or(""),
+                within.as_secs()
+            ))
+        })?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
@@ -80,6 +101,29 @@ fn docker(args: &[&str]) -> Result<String> {
             String::from_utf8_lossy(&out.stderr).trim()
         )))
     }
+}
+
+fn docker(args: &[&str]) -> Result<String> {
+    docker_for(args, budget::QUICK)
+}
+
+/// Pull `image` unless the node has it.
+fn ensure_image(image: &str) -> Result<()> {
+    if docker(&["image", "inspect", "--format", "{{.Id}}", image]).is_err() {
+        docker_for(&["pull", image], budget::PULL)?;
+    }
+    Ok(())
+}
+
+/// A name for something built for `member` that only this node can tell.
+fn secret_name(secret: &str, parts: &[&str]) -> String {
+    let mut h = blake3::Hasher::new();
+    h.update(secret.as_bytes());
+    for p in parts {
+        h.update(&[0]);
+        h.update(p.as_bytes());
+    }
+    h.finalize().to_hex()[..24].to_string()
 }
 
 /// Groups in the order they start (`after`).
@@ -107,17 +151,34 @@ fn order(stack: &devstack_config::Stack) -> Vec<String> {
     out
 }
 
+/// What the lane's daemon writes and the agent reads back: its token.
+const TOKEN: &str = ".devstack/xdg/devstack/token";
+
 impl LaneRun {
     pub fn src(&self) -> PathBuf {
         self.dir.join("src")
+    }
+
+    /// The node agent's own state (`node/`), two levels above the lane.
+    fn state(&self) -> PathBuf {
+        self.dir
+            .parent()
+            .and_then(Path::parent)
+            .map_or_else(|| self.dir.clone(), Path::to_path_buf)
     }
 
     fn container(&self) -> String {
         format!("devstack-lane-{}", self.id)
     }
 
+    /// The stack file, read without following a link the lane put there.
     fn stack(&self) -> Result<devstack_config::Stack> {
-        devstack_config::load(&self.src().join(&self.stack_file))
+        let rel = Path::new(&self.stack_file);
+        let text = safefs::read_beneath(&self.src(), rel, 1 << 20)
+            .map_err(|e| RunError::Config(format!("the stack file `{}`: {e}", self.stack_file)))?;
+        let text = String::from_utf8(text)
+            .map_err(|_| RunError::Config(format!("`{}` is not UTF-8", self.stack_file)))?;
+        devstack_config::from_str(&text, &self.src().join(rel))
             .map_err(|e| RunError::Config(e.to_string()))
     }
 
@@ -144,14 +205,35 @@ impl LaneRun {
         self.dir.join("compose").join(format!("{group}.yml"))
     }
 
+    /// The group's model as `docker compose config` reads it in a container
+    /// that sees the mirror only ([`crate::confine`]).
+    fn config(&self, g: &Group, flags: &[&str]) -> Result<Model> {
+        let image = crate::confine::config_image();
+        ensure_image(&image)?;
+        let args = crate::confine::config_args(g, &self.src(), &image, flags);
+        let mut cmd = Command::new("docker");
+        cmd.args(&args);
+        let out = devstack_compose::output_within(cmd, budget::QUICK)
+            .map_err(|e| RunError::Docker(format!("run docker: {e}")))?
+            .ok_or_else(|| RunError::Docker("`compose config` did not finish".into()))?;
+        if !out.status.success() {
+            return Err(RunError::Config(format!(
+                "compose group `{}`: {}",
+                g.name,
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        devstack_compose::parse_config(&String::from_utf8_lossy(&out.stdout))
+            .map_err(|e| RunError::Config(format!("compose group `{}`: {e}", g.name)))
+    }
+
     /// The image the lane runs in: the stack's `[lanes] image`, pulled if the
     /// node lacks it, or one built from its `[lanes] dockerfile` and kept by
-    /// the Dockerfile's content (ADR-0028).
+    /// the Dockerfile's content, for this member (ADR-0028). The build has
+    /// no network unless the node's is `lan`.
     fn image(&self, stack: &devstack_config::Stack) -> Result<String> {
         if let Some(img) = &stack.lanes.image {
-            if docker(&["image", "inspect", "--format", "{{.Id}}", img]).is_err() {
-                docker(&["pull", img])?;
-            }
+            ensure_image(img)?;
             return Ok(img.clone());
         }
         let Some(df) = &stack.lanes.dockerfile else {
@@ -160,27 +242,48 @@ impl LaneRun {
                     .into(),
             ));
         };
-        let base = self
-            .src()
-            .join(&self.stack_file)
+        let base_rel = Path::new(&self.stack_file)
             .parent()
             .map(Path::to_path_buf)
-            .unwrap_or_else(|| self.src());
-        let file = base.join(df);
-        let text = std::fs::read(&file).map_err(|e| RunError::Io(file.clone(), e))?;
-        let tag = format!("devstack-lane:{}", &blake3::hash(&text).to_hex()[..16]);
+            .unwrap_or_default();
+        let text = safefs::read_beneath(&self.src(), &base_rel.join(df), 1 << 20)
+            .map_err(|e| RunError::Config(format!("[lanes] dockerfile `{}`: {e}", df.display())))?;
+        let base = safefs::resolve_beneath(&self.src(), &self.src().join(&base_rel))
+            .map_err(RunError::Config)?;
+        let content = blake3::hash(&text).to_hex().to_string();
+        let tag = format!(
+            "devstack-lane:{}",
+            secret_name(&self.secret, &[&self.member, &content])
+        );
         if docker(&["image", "inspect", "--format", "{{.Id}}", &tag]).is_err() {
-            docker(&[
-                "build",
-                "-q",
-                "-t",
-                &tag,
-                "-f",
-                &file.to_string_lossy(),
-                &base.to_string_lossy(),
-            ])?;
+            // Docker reads the Dockerfile from a copy the lane cannot change.
+            let file = self.dir.join("lane.Dockerfile");
+            std::fs::write(&file, &text).map_err(|e| RunError::Io(file.clone(), e))?;
+            let file = file.to_string_lossy().into_owned();
+            let base = base.to_string_lossy().into_owned();
+            let mut a = vec!["build", "-q", "-t", &tag, "-f", &file];
+            if self.network != Network::Lan {
+                a.extend(["--network", "none"]);
+            }
+            a.push(&base);
+            docker_for(&a, budget::PULL)?;
         }
         Ok(tag)
+    }
+
+    /// Create `name`, a network of the lane's own, as the node's policy
+    /// wants it: internal for `none`, IPv4 only unless `lan`.
+    fn own_network_create(&self, name: &str) -> Result<()> {
+        let mut flags = vec!["--label", "devstack.lane=1"];
+        if self.network == Network::None {
+            flags.push("--internal");
+        }
+        if self.network != Network::Lan {
+            flags.push("--ipv6=false");
+        }
+        Docker::default()
+            .ensure_network(&self.dir, name, &flags)
+            .map_err(RunError::from)
     }
 
     /// Start the lane: infrastructure, its description for the daemon, the
@@ -194,48 +297,92 @@ impl LaneRun {
         agent: Option<&str>,
         phase: &dyn Fn(&str),
     ) -> Result<DaemonAddr> {
+        // Nothing of the lane runs while the agent reads its files.
+        let _ = docker(&["rm", "-f", &self.container()]);
         let stack = self.stack()?;
         phase("lane image: pulled or built once, then kept");
         let image = self.image(&stack)?;
         let dc = Docker::default();
-        let mut infra = BTreeMap::new();
-        let mut networks = Vec::new();
-        let mut infra_ports = Vec::new();
+        let src = self.src();
+
+        // Every group checked, its overlay written and its containers
+        // created; nothing runs yet, so the network rules go in first.
+        let mut groups: Vec<(String, Group, Model)> = Vec::new();
         for name in order(&stack) {
-            phase(&format!("infrastructure: {name}"));
+            phase(&format!("infrastructure: {name} (checked)"));
             let overlay = self.overlay(&name);
             let _ = std::fs::remove_file(&overlay);
             let g = self.group(&stack, &name);
-            let model = dc.config(&g)?;
-            let isolated = self.network == crate::policy::Network::None;
-            let text = devstack_compose::node_overlay(&model, &g.project, &self.id, isolated)
+            crate::confine::check_group(&g, &src).map_err(RunError::Config)?;
+            let own = &stack.compose[&name].networks;
+            let paths = self.config(&g, &["--no-env-resolution"])?;
+            crate::confine::check_model(&name, &paths, &src, self.network, own)
+                .map_err(RunError::Config)?;
+            let model = self.config(&g, &[])?;
+            let options = devstack_compose::NodeOptions {
+                own_networks: own.clone(),
+                isolated: self.network == Network::None,
+                no_ipv6: self.network != Network::Lan,
+                build_offline: self.network != Network::Lan,
+                memory: self.memory_limit,
+                cpus: self.cpu_limit,
+                pids: Some(PIDS_LIMIT),
+                build_images: model
+                    .services
+                    .iter()
+                    .filter(|(_, s)| s.build.is_some())
+                    .map(|(svc, _)| {
+                        (
+                            svc.clone(),
+                            format!(
+                                "devstack-build-{}",
+                                secret_name(&self.secret, &[&self.member, &g.project, svc])
+                            ),
+                        )
+                    })
+                    .collect(),
+            };
+            let text = devstack_compose::node_overlay(&model, &g.project, &self.id, &options)
                 .map_err(|e| RunError::Config(format!("compose group `{name}`: {e}")))?;
             std::fs::create_dir_all(overlay.parent().expect("has a parent"))
                 .map_err(|e| RunError::Io(overlay.clone(), e))?;
             std::fs::write(&overlay, text).map_err(|e| RunError::Io(overlay.clone(), e))?;
             let g = self.group(&stack, &name);
-            if self.network == crate::policy::Network::Internet {
-                // Its networks exist, nothing runs yet: the rules first.
-                dc.create(&g)?;
-                for n in project_networks(&g) {
-                    if !networks.contains(&n) {
-                        networks.push(n);
-                    }
-                }
-                crate::egress::apply(&self.id, &subnets(&networks)).map_err(RunError::Docker)?;
+            for n in &g.networks {
+                self.own_network_create(n)?;
             }
-            dc.up(&g, Duration::from_secs(300))?;
-            // Ports and environments as the stack file's Compose files have them
-            // (`model`, read before the overlay that publishes nothing): the lane
-            // container reaches every target port by the service's name.
-            let ps = dc.ps(&g)?;
-            // The networks the group's containers are on now, as Docker has
-            // them: a project with networks of its own has no `_default`.
-            for n in project_networks(&g) {
+            dc.create(&g)?;
+            groups.push((name, g, model));
+        }
+        let mut networks = Vec::new();
+        for (_, g, _) in &groups {
+            for n in project_networks(g) {
                 if !networks.contains(&n) {
                     networks.push(n);
                 }
             }
+        }
+        // A lane without infrastructure gets a network of its own: never
+        // Docker's default one, where the node's policy could not hold it.
+        if networks.is_empty() {
+            let own = self.own_network();
+            self.own_network_create(&own)?;
+            networks.push(own);
+        }
+        if self.network != Network::Lan {
+            crate::egress::apply(&self.state(), &self.id, &bridges(&networks), self.network)
+                .map_err(RunError::Docker)?;
+        }
+
+        let mut infra = BTreeMap::new();
+        let mut infra_ports = Vec::new();
+        for (name, g, model) in &groups {
+            phase(&format!("infrastructure: {name}"));
+            dc.up(g, Duration::from_secs(300))?;
+            // Ports and environments as the stack file's Compose files have them
+            // (`model`, read before the overlay that publishes nothing): the lane
+            // container reaches every target port by the service's name.
+            let ps = dc.ps(g)?;
             let services: BTreeMap<String, serde_json::Value> = model
                 .services
                 .iter()
@@ -276,39 +423,28 @@ impl LaneRun {
                 serde_json::json!({ "project": g.project, "services": services }),
             );
         }
-        let state = self.src().join(".devstack");
-        std::fs::create_dir_all(state.join("xdg")).map_err(|e| RunError::Io(state.clone(), e))?;
-        let file = state.join("external-infra.json");
-        std::fs::write(
-            &file,
-            serde_json::to_vec_pretty(&serde_json::json!({ "groups": infra }))
-                .expect("infra serialises"),
+        let io = |p: &str| {
+            let p = src.join(p);
+            move |e| RunError::Io(p, e)
+        };
+        let infra_json = serde_json::to_vec_pretty(&serde_json::json!({ "groups": infra }))
+            .expect("infra serialises");
+        safefs::write_beneath(
+            &src,
+            Path::new(".devstack/external-infra.json"),
+            0o644,
+            |f| std::io::Write::write_all(f, &infra_json),
         )
-        .map_err(|e| RunError::Io(file.clone(), e))?;
-
-        // A lane without infrastructure gets a network of its own: never
-        // Docker's default one, where the node's policy could not hold it.
-        if networks.is_empty() {
-            let own = self.own_network();
-            if docker(&["network", "inspect", &own]).is_err() {
-                let mut a = vec!["network", "create", "--label", "devstack.lane=1"];
-                if self.network == crate::policy::Network::None {
-                    a.push("--internal");
-                }
-                a.push(&own);
-                docker(&a)?;
-            }
-            networks.push(own);
-            if self.network == crate::policy::Network::Internet {
-                crate::egress::apply(&self.id, &subnets(&networks)).map_err(RunError::Docker)?;
-            }
-        }
+        .map_err(io(".devstack/external-infra.json"))?;
+        // The daemon's state directory, and no token of an earlier start.
+        safefs::write_beneath(&src, Path::new(".devstack/xdg/.keep"), 0o644, |_| Ok(()))
+            .map_err(io(".devstack/xdg"))?;
+        let _ = safefs::remove_beneath(&src, Path::new(TOKEN));
 
         let name = self.container();
         phase("lane container");
-        let _ = docker(&["rm", "-f", &name]);
-        let src = self.src().to_string_lossy().into_owned();
-        let mount_src = format!("{src}:/src");
+        let src_s = src.to_string_lossy().into_owned();
+        let mount_src = format!("{src_s}:/src");
         let mount_bin = format!("{}:/opt/devstack/devstack:ro", bin.display());
         let stack_in = format!("/src/{}", self.stack_file);
         let listen = format!("DEVSTACK_LISTEN=0.0.0.0:{DAEMON_PORT}");
@@ -328,6 +464,7 @@ impl LaneRun {
         let user = own_user();
         let memory = self.memory_limit.map(|m| format!("{m}b"));
         let cpus = self.cpu_limit.map(|c| format!("{c:.2}"));
+        let pids = PIDS_LIMIT.to_string();
         let mut args: Vec<&str> = vec![
             "run",
             "-d",
@@ -335,6 +472,13 @@ impl LaneRun {
             &name,
             "--label",
             &label,
+            // No privilege it could gain (ADR-0027 point 5).
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--pids-limit",
+            &pids,
             "-v",
             &mount_home,
             "-e",
@@ -455,18 +599,22 @@ impl LaneRun {
         })
     }
 
-    fn token_file(&self) -> PathBuf {
-        self.src().join(".devstack/xdg/devstack/token")
-    }
-
-    /// The token the lane's daemon created at its first start.
+    /// The token the lane's daemon created at its first start: read without
+    /// following a link (the agent sends it to the lane: a link to one of
+    /// the agent's own files would hand that file to the lane).
     fn wait_token(&self, within: Duration) -> Result<String> {
         let until = std::time::Instant::now() + within;
         loop {
-            if let Ok(t) = std::fs::read_to_string(self.token_file())
-                && !t.trim().is_empty()
-            {
-                return Ok(t.trim().to_string());
+            if let Ok(t) = safefs::read_beneath(&self.src(), Path::new(TOKEN), 512) {
+                let t = String::from_utf8_lossy(&t).trim().to_string();
+                if !t.is_empty() {
+                    if !valid_token(&t) {
+                        return Err(RunError::Docker(
+                            "the lane's daemon wrote a token that is none".into(),
+                        ));
+                    }
+                    return Ok(t);
+                }
             }
             if std::time::Instant::now() > until {
                 let logs = docker(&["logs", "--tail", "20", &self.container()]).unwrap_or_default();
@@ -504,11 +652,15 @@ impl LaneRun {
             let _ = docker(&["network", "disconnect", "-f", &own, me]);
         }
         let _ = docker(&["network", "rm", &own]);
-        crate::egress::remove(&self.id);
+        crate::egress::remove(&self.state(), &self.id);
         let Ok(stack) = self.stack() else { return };
         let dc = Docker::default();
         for name in order(&stack).into_iter().rev() {
             let g = self.group(&stack, &name);
+            // Compose reads the files again: only those inside the mirror.
+            if crate::confine::check_group(&g, &self.src()).is_err() {
+                continue;
+            }
             // The agent leaves the lane's networks first: Docker does not
             // remove a network something is still on.
             if let Some(me) = agent {
@@ -521,26 +673,49 @@ impl LaneRun {
     }
 }
 
-/// The subnets of Docker networks.
-fn subnets(networks: &[String]) -> Vec<String> {
-    let mut out = Vec::new();
+/// A daemon's token is hex (ADR-0019); anything else is not one.
+fn valid_token(t: &str) -> bool {
+    t.len() <= 256
+        && t.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Each network's IPv4 subnets with the bridge interface they are on.
+fn bridges(networks: &[String]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
     for n in networks {
         let text = docker(&[
             "network",
             "inspect",
             "-f",
-            "{{range .IPAM.Config}}{{.Subnet}} {{end}}",
+            "{{.Id}}|{{index .Options \"com.docker.network.bridge.name\"}}|{{range .IPAM.Config}}{{.Subnet}} {{end}}",
             n,
         ])
         .unwrap_or_default();
-        for s in text.split_whitespace() {
-            // IPv4 only: the rules are iptables'.
-            if s.contains('.') && !out.iter().any(|o| o == s) {
-                out.push(s.to_string());
-            }
-        }
+        out.extend(parse_bridges(&text));
     }
+    out.sort();
+    out.dedup();
     out
+}
+
+/// `<id>|<bridge name or empty>|<subnets>` as [`bridges`] asks for it:
+/// IPv4 subnets (the rules are iptables') and the bridge (Docker names one
+/// `br-<12 digits of the id>` unless the network names it).
+fn parse_bridges(text: &str) -> Vec<(String, String)> {
+    let mut parts = text.trim().splitn(3, '|');
+    let (Some(id), Some(name), Some(subnets)) = (parts.next(), parts.next(), parts.next()) else {
+        return Vec::new();
+    };
+    let bridge = match name.trim() {
+        "" | "<no value>" => format!("br-{}", id.get(..12).unwrap_or(id)),
+        n => n.to_string(),
+    };
+    subnets
+        .split_whitespace()
+        .filter(|s| s.contains('.'))
+        .map(|s| (s.to_string(), bridge.clone()))
+        .collect()
 }
 
 /// `uid:gid` of this process (Linux), for the lane container to run as.
@@ -575,4 +750,32 @@ fn project_networks(g: &Group) -> Vec<String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_network_is_known_by_its_bridge() {
+        let id = "0123456789abcdef0123";
+        assert_eq!(
+            parse_bridges(&format!("{id}||172.30.0.0/16 fd00::/64 ")),
+            [("172.30.0.0/16".to_string(), "br-0123456789ab".to_string())]
+        );
+        assert_eq!(
+            parse_bridges(&format!("{id}|lane0|10.9.0.0/24")),
+            [("10.9.0.0/24".to_string(), "lane0".to_string())]
+        );
+        assert!(parse_bridges("").is_empty());
+    }
+
+    #[test]
+    fn names_built_for_a_member_are_its_own() {
+        let a = secret_name("s1", &["m1", "shop-ab", "api"]);
+        assert_eq!(a.len(), 24);
+        assert_ne!(a, secret_name("s1", &["m2", "shop-ab", "api"]));
+        assert_ne!(a, secret_name("s2", &["m1", "shop-ab", "api"]));
+        assert!(valid_token("0123abcdef") && !valid_token("-----BEGIN PRIVATE KEY-----\nx"));
+    }
 }

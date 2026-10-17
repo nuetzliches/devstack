@@ -42,6 +42,10 @@ The first member you approve as admin (`devstack node members approve <id>
 --admin`, on the coordinator) administers the pool from the dashboard from
 then on.
 
+Anyone who reaches the coordinator's port may ask to join. It takes ten
+requests a minute per address, a request of normal size, and at most 64
+waiting for an admin at once.
+
 ## Join a pool
 
 On your machine, with the coordinator's address and fingerprint (an admin
@@ -68,13 +72,19 @@ asks for lanes but does not run them yet) and must have joined the pool:
 
 ```sh
 devstack join https://10.0.0.5:4260 --fingerprint <fp> --name build-server
+devstack node members node build-server on      # an admin, on the coordinator
 devstack node agent --listen 10.0.0.7:4261 --dedicated --max-cpus 12 --max-memory-gib 48
 ```
 
+A machine runs the pool's lanes only once an admin granted it (`devstack node
+members node <id> on`, or `off` to take it back): until then the coordinator
+ignores the API its agent reports, places nothing there, and the agent says
+why. A member that only shares from the dashboard is no node.
+
 - `--dedicated`: a server its owner never reclaims. The pool shows it as a
   server, and only a lane on such a node may take the main ports.
-- `--max-cpus`, `--max-memory-gib`: caps on what it offers; below them, half
-  of what is free right now.
+- `--max-cpus`, `--max-memory-gib`: caps on what its lanes take together;
+  below them, half of what is free right now.
 - `--api https://host:port`: where requesters reach it, when `--listen` is
   every address (`0.0.0.0:4261`).
 - `--pool <name>`: the pool it serves (one agent per pool, see [Several
@@ -83,6 +93,13 @@ devstack node agent --listen 10.0.0.7:4261 --dedicated --max-cpus 12 --max-memor
   path as on the host (Docker resolves the lanes' mounts there), and set
   `DEVSTACK_NODE_CONTAINER` to its container name: it joins each lane's
   network to reach the lane.
+- `policy.json` in its state (`node/` beside its membership): what this
+  node lets run on it, in the form of an admin's policy (below), for a
+  server deployed as code. It holds on top of the admin's: both must admit
+  a lane, the smaller limits and the stricter network win.
+- It reads each lane's Compose model in a throwaway `docker:cli` container
+  (`DEVSTACK_NODE_COMPOSE_IMAGE` names another image with `docker
+  compose`), pulled once.
 
 The stack must say what a lane runs in on Linux:
 
@@ -100,7 +117,7 @@ In a worktree:
 
 ```sh
 devstack up --on build-server     # that node
-devstack up --on pool             # the coordinator picks the node with the most free memory
+devstack up --on pool             # the coordinator picks the granted node with the most free memory
 ```
 
 devstack leases the lane, syncs the worktree to the node (by content, only
@@ -116,6 +133,18 @@ devstack lane move login-fix --to local # a cold start there, takes over once re
 devstack promote --lane login-fix       # it answers on the main ports (dedicated nodes only)
 devstack promote --lane main            # back to the main working tree
 ```
+
+What a lane's Compose files may ask of a node is less than on your machine:
+the node runs them on its own Docker engine. It refuses, naming each, a
+service that is privileged, adds capabilities or devices, shares a namespace
+of the host (`pid`, `ipc`, `network_mode: host`, ...), sets `userns_mode`,
+`cgroup_parent`, `security_opt` or `sysctls`, or mounts, builds from or
+reads an env file outside the lane's files; external volumes, volumes with
+`driver_opts`, external networks the stack file does not list under
+`[compose.<group>] networks`, network drivers other than `bridge`, and, on
+an `internet` or `none` node, subnets or IPv6 of its own. Compose files,
+env files, `extends` and `include` are read from the lane's files only.
+Every container of the lane gets the node's limits and a process limit.
 
 A lane on a node is disposable: its data comes from the seed jobs, and a
 move is a cold start. It runs without background workers unless it holds the
@@ -155,6 +184,7 @@ devstack node members approve <id> [--admin]
 devstack node members role <id> admin|member    # the last admin stays one
 devstack node members remove <id>
 devstack node members tags <id> team:backend customer:acme
+devstack node members node <id> on|off          # whether the pool runs lanes there
 devstack node members policy build-server --allow team:backend --repo shop \
     --memory-headroom 2 --max-cpus 8 --network internet
 ```
@@ -162,15 +192,22 @@ devstack node members policy build-server --allow team:backend --repo shop \
 A node's **policy** (ADR-0033): who may run lanes there (member ids or
 tags), which repositories (`[stack] name`; a guard against mistakes, not
 against a member who lies), a memory limit (the lane's expected need times
-the headroom, at least 2 GiB), a CPU limit per lane, and its network:
+the headroom, at least 2 GiB), a CPU limit per lane, both on every container
+of the lane, and its network:
 
 | `--network` | A lane there reaches |
 |---|---|
 | `lan` (default) | the internet and the local network |
-| `internet` | the internet, not the local network and not the node itself (iptables rules per lane) |
-| `none` | only its own containers |
+| `internet` | the internet, not the local network and not the node itself (iptables rules per lane, IPv4; the lane's networks have no IPv6) |
+| `none` | only its own containers (`internal` networks and the same rules) |
 
-The coordinator places by the policy and the node admits by it. An admin can
+On an `internet` or `none` node, the lane's images (`[lanes] dockerfile`,
+Compose `build`) are built without a network: `RUN` steps that download
+need a `lan` node, or a prebuilt `[lanes] image`.
+
+A lane is taken to need at least 0.25 CPU and 256 MiB, whatever it asks
+for. The coordinator places by the policy and the node admits by it, and by
+its own `policy.json`. An admin can
 also pause a node (no new lanes) and end a lease; every change is in the
 admin log.
 
@@ -222,7 +259,7 @@ Never sent: file contents, environment values, command lines, service output.
 |---|---|
 | Membership (key, certificate, coordinator) | devstack's per-user state, `pool/`; other pools in `pools/<name>/`; `DEVSTACK_POOL_DIR` overrides the default pool's |
 | Share settings, telemetry consent | `share.json`, `telemetry.json` beside the membership |
-| Coordinator | `DEVSTACK_COORDINATOR_DIR`; `members.json`, `audit.jsonl`, `telemetry.json` |
-| Node agent state (leases, mirrors) | `node/` beside its membership |
+| Coordinator | `DEVSTACK_COORDINATOR_DIR`; `members.json` (changed under `members.lock`), `audit.jsonl`, `telemetry.json` |
+| Node agent state (leases, mirrors, uploaded files per member, `policy.json`, `secret`) | `node/` beside its membership |
 | Ports | coordinator and node agent: as you choose (`--listen`); mutual TLS with the pool's CA |
 | HTTP API | the hub's `/hub/pool...` routes in [dashboard-api.md](dashboard-api.md) |

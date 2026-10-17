@@ -4,10 +4,32 @@
 //! reaches. Set by an admin, kept with the node's member record, enforced
 //! by the node when it admits a lease and by the coordinator when it places.
 
+use crate::share::Amount;
 use serde::{Deserialize, Serialize};
 
-/// What a lane container's network reaches beyond its own infrastructure.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// The least a lane is taken to need, whatever its requester says: a lease
+/// that claims nothing would otherwise fit every node (and its limits,
+/// derived from it, would be the smallest).
+pub const MIN_NEED: Amount = Amount {
+    cpus: 0.25,
+    memory: 256 << 20,
+};
+
+/// `need`, at least [`MIN_NEED`].
+pub fn floor_need(need: Amount) -> Amount {
+    Amount {
+        cpus: if need.cpus.is_finite() {
+            need.cpus.max(MIN_NEED.cpus)
+        } else {
+            MIN_NEED.cpus
+        },
+        memory: need.memory.max(MIN_NEED.memory),
+    }
+}
+
+/// What a lane container's network reaches beyond its own infrastructure,
+/// from the most to the least (`Ord`: the stricter is the greater).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Network {
     /// The internet and the node's local network (as a container has it).
@@ -69,6 +91,39 @@ impl NodePolicy {
         let h = self.memory_headroom?;
         Some(((need as f64 * h) as u64).max(2 << 30))
     }
+
+    /// One policy that holds what each of `all` holds (the node's own and
+    /// the coordinator's, ADR-0033 point 6): admitted only if every one
+    /// admits; the smaller limits, the stricter network.
+    pub fn admits_all(
+        all: &[&NodePolicy],
+        id: &str,
+        tags: &[String],
+        repo: &str,
+    ) -> Result<(), String> {
+        all.iter().try_for_each(|p| p.admits(id, tags, repo))
+    }
+
+    /// The limits of `all` together: the smallest of each, the stricter
+    /// network; `None` without any policy.
+    pub fn strictest(all: &[&NodePolicy]) -> Option<NodePolicy> {
+        let min = |a: Option<f64>, b: Option<f64>| match (a, b) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        all.iter().fold(None, |acc: Option<NodePolicy>, p| {
+            Some(match acc {
+                None => (*p).clone(),
+                Some(a) => NodePolicy {
+                    allow: Vec::new(),
+                    repos: Vec::new(),
+                    memory_headroom: min(a.memory_headroom, p.memory_headroom),
+                    max_cpus: min(a.max_cpus, p.max_cpus),
+                    network: a.network.max(p.network),
+                },
+            })
+        })
+    }
 }
 
 #[cfg(test)]
@@ -92,5 +147,49 @@ mod tests {
         assert!(p.admits("b2", &[], "crm").is_err());
         assert_eq!(p.memory_limit(512 << 20), Some(2 << 30));
         assert_eq!(p.memory_limit(4 << 30), Some(8 << 30));
+    }
+
+    #[test]
+    fn the_node_and_the_coordinator_both_hold() {
+        let node = NodePolicy {
+            allow: vec!["team:a".into()],
+            max_cpus: Some(4.0),
+            network: Network::Internet,
+            ..Default::default()
+        };
+        let coord = NodePolicy {
+            memory_headroom: Some(2.0),
+            max_cpus: Some(8.0),
+            ..Default::default()
+        };
+        assert!(NodePolicy::admits_all(&[&node, &coord], "x", &[], "shop").is_err());
+        assert!(NodePolicy::admits_all(&[&node, &coord], "x", &["team:a".into()], "shop").is_ok());
+        let s = NodePolicy::strictest(&[&node, &coord]).unwrap();
+        assert_eq!(
+            (s.max_cpus, s.memory_headroom, s.network),
+            (Some(4.0), Some(2.0), Network::Internet)
+        );
+        assert!(NodePolicy::strictest(&[]).is_none());
+        let none = NodePolicy {
+            network: Network::None,
+            ..Default::default()
+        };
+        assert_eq!(
+            NodePolicy::strictest(&[&node, &none]).unwrap().network,
+            Network::None
+        );
+        let n = floor_need(Amount {
+            cpus: 0.0,
+            memory: 0,
+        });
+        assert_eq!((n.cpus, n.memory), (0.25, 256 << 20));
+        assert_eq!(
+            floor_need(Amount {
+                cpus: 4.0,
+                memory: 8 << 30
+            })
+            .memory,
+            8 << 30
+        );
     }
 }

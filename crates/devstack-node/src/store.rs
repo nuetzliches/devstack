@@ -1,7 +1,9 @@
 //! The coordinator's members (ADR-0031 point 2), in `members.json` of its
 //! directory. The running coordinator and the administrator's
-//! `devstack node members approve` both change the file, so every change reads
-//! it first and writes it whole (write to a temporary file, then rename).
+//! `devstack node members approve` both change the file, two processes: every
+//! change holds a lock on `members.lock` (a file lock, Windows too), reads
+//! the file, and writes it whole (a temporary file of its own, then rename).
+//! Reading is cached for as long as the file is unchanged.
 //! Every change an administrator makes is appended to `audit.jsonl`
 //! (ADR-0032 point 5).
 
@@ -92,6 +94,11 @@ pub struct Member {
     /// As a node: what it lets run on it (ADR-0033).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<crate::policy::NodePolicy>,
+    /// An admin granted it to run the pool's lanes: only then does the
+    /// coordinator take its node API and place lanes on it (ADR-0032,
+    /// addendum 2026-10-17).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub node: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -133,8 +140,11 @@ pub const SHELL: &str = "shell on the coordinator";
 pub struct Store {
     path: PathBuf,
     audit: PathBuf,
-    /// Serialises the changes made by this process.
+    /// Serialises the changes made by this process (the file lock does
+    /// between processes).
     lock: Mutex<()>,
+    /// The members as last read, and the file's length and time then.
+    cache: Mutex<Option<(u64, std::time::SystemTime, Vec<Member>)>>,
 }
 
 pub fn now() -> u64 {
@@ -149,42 +159,92 @@ impl Store {
             path: dir.join("members.json"),
             audit: dir.join("audit.jsonl"),
             lock: Mutex::new(()),
+            cache: Mutex::new(None),
         }
     }
 
     pub fn list(&self) -> Result<Vec<Member>, StoreError> {
-        match std::fs::read(&self.path) {
-            Ok(b) => {
-                serde_json::from_slice(&b).map_err(|e| StoreError::Parse(self.path.clone(), e))
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(e) => Err(StoreError::Io(self.path.clone(), e)),
+        let meta = match std::fs::metadata(&self.path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(StoreError::Io(self.path.clone(), e)),
+        };
+        let stamp = (meta.len(), meta.modified().ok());
+        if let (len, Some(at)) = stamp
+            && let Some((l, t, ms)) = self.cache.lock().unwrap().as_ref()
+            && *l == len
+            && *t == at
+        {
+            return Ok(ms.clone());
         }
+        let ms: Vec<Member> = match std::fs::read(&self.path) {
+            Ok(b) => {
+                serde_json::from_slice(&b).map_err(|e| StoreError::Parse(self.path.clone(), e))?
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(StoreError::Io(self.path.clone(), e)),
+        };
+        if let (len, Some(at)) = stamp {
+            *self.cache.lock().unwrap() = Some((len, at, ms.clone()));
+        }
+        Ok(ms)
     }
 
     fn write(&self, members: &[Member]) -> Result<(), StoreError> {
-        let tmp = self.path.with_extension("json.tmp");
+        // A name of its own: two writers never share a temporary file.
+        let tmp = self.path.with_extension(format!(
+            "json.{}.{}.tmp",
+            std::process::id(),
+            crate::coordinator::random_hex(4)
+        ));
         let io = |e| StoreError::Io(self.path.clone(), e);
-        std::fs::write(
+        let written = std::fs::write(
             &tmp,
             serde_json::to_vec_pretty(members).expect("members serialise"),
         )
-        .map_err(io)?;
-        std::fs::rename(&tmp, &self.path).map_err(io)
+        .and_then(|_| std::fs::rename(&tmp, &self.path));
+        if written.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        *self.cache.lock().unwrap() = None;
+        written.map_err(io)
     }
 
-    /// Change the members under the lock, and write them if `f` says so.
+    /// Change the members under the lock (this process's and the file's,
+    /// for the other process), and write them if `f` says so.
     fn change<T>(
         &self,
         f: impl FnOnce(&mut Vec<Member>) -> Result<(T, bool), StoreError>,
     ) -> Result<T, StoreError> {
         let _g = self.lock.lock().unwrap_or_else(|p| p.into_inner());
+        let lock_path = self.path.with_extension("lock");
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .map_err(|e| StoreError::Io(lock_path.clone(), e))?;
+        lock.lock()
+            .map_err(|e| StoreError::Io(lock_path.clone(), e))?;
+        // Read under the lock, never from the cache: the other process may
+        // have written within the file time's resolution.
+        *self.cache.lock().unwrap() = None;
         let mut members = self.list()?;
         let (out, changed) = f(&mut members)?;
         if changed {
             self.write(&members)?;
         }
+        drop(lock);
         Ok(out)
+    }
+
+    /// How many requests wait for an admin.
+    pub fn pending(&self) -> Result<usize, StoreError> {
+        Ok(self
+            .list()?
+            .iter()
+            .filter(|m| m.state == State::Pending)
+            .count())
     }
 
     /// A request to join. The same key asks as the same member: a pending
@@ -223,6 +283,7 @@ impl Store {
                 paused: false,
                 tags: Vec::new(),
                 policy: None,
+                node: false,
             };
             ms.push(m.clone());
             Ok((m, true))
@@ -407,6 +468,34 @@ impl Store {
         Ok(m)
     }
 
+    /// Grant an approved member to run the pool's lanes, or take it back
+    /// (ADR-0032, addendum 2026-10-17).
+    pub fn set_node(&self, key: &str, node: bool, by: &str) -> Result<Member, StoreError> {
+        let (m, changed) = self.change(|ms| {
+            let i = Self::find(ms, key)?;
+            if node && ms[i].state != State::Approved {
+                return Err(StoreError::Refused(format!(
+                    "{} ({}) is {}: only an approved member runs lanes",
+                    ms[i].id,
+                    ms[i].name,
+                    ms[i].state.as_str()
+                )));
+            }
+            let changed = ms[i].node != node;
+            ms[i].node = node;
+            Ok(((ms[i].clone(), changed), changed))
+        })?;
+        if changed {
+            let detail = if node {
+                "may run lanes"
+            } else {
+                "runs no lanes"
+            };
+            self.log(by, "node", &m, Some(detail.into()))?;
+        }
+        Ok(m)
+    }
+
     /// Set a member's tags (ADR-0033): trimmed, sorted, without repeats.
     pub fn set_tags(&self, key: &str, tags: &[String], by: &str) -> Result<Member, StoreError> {
         let mut tags: Vec<String> = tags
@@ -566,5 +655,52 @@ mod tests {
 
         let log: Vec<String> = s.audit(10).unwrap().into_iter().map(|e| e.action).collect();
         assert_eq!(log, ["reject", "role", "role", "approve", "approve"]);
+    }
+
+    #[test]
+    fn an_admin_grants_a_node() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::new(dir.path());
+        let ca = pki::new_ca().unwrap();
+        let a = ask(&s, "a");
+        assert!(matches!(
+            s.set_node(&a, true, SHELL),
+            Err(StoreError::Refused(_))
+        ));
+        s.approve(&a, &ca, None, SHELL).unwrap();
+        assert!(s.set_node(&a, true, SHELL).unwrap().node);
+        assert!(s.get(&a).unwrap().unwrap().node);
+        assert!(!s.set_node(&a, false, SHELL).unwrap().node);
+        assert_eq!(s.audit(1).unwrap()[0].action, "node");
+    }
+
+    #[test]
+    fn two_stores_on_one_file_lose_no_change() {
+        // The coordinator and the CLI: two writers at once, each with its
+        // own store (and process-local lock).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let threads: Vec<_> = (0..4)
+            .map(|t| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let s = Store::new(&path);
+                    for i in 0..10 {
+                        let id = format!("{t:02}{i:02}");
+                        s.request(&id, &id, "csr", None).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(Store::new(&path).list().unwrap().len(), 40);
+        let leftovers = std::fs::read_dir(&path)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0);
     }
 }

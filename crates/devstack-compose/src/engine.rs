@@ -10,6 +10,7 @@
 //! | Linux | Docker Desktop for Linux | `systemctl --user start docker-desktop` |
 //! | Linux | Docker Engine (system service) | nothing: it needs root, so devstack names `sudo systemctl start docker` |
 
+use crate::no_window;
 use serde::Serialize;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -127,26 +128,36 @@ fn manual_hint() -> &'static str {
 }
 
 #[cfg(windows)]
-fn no_window(cmd: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-}
-
-#[cfg(not(windows))]
-fn no_window(_cmd: &mut Command) {}
-
-#[cfg(windows)]
 mod imp {
     use super::*;
     use std::path::PathBuf;
 
+    /// `Docker Desktop.exe`: where a machine-wide installation puts it,
+    /// beside the `docker` on PATH (`<install>\resources\bin\docker.exe`),
+    /// or where a per-user installation puts it.
     fn exe() -> Option<PathBuf> {
-        let base = std::env::var_os("ProgramFiles").map(PathBuf::from)?;
-        let p = base
-            .join("Docker")
-            .join("Docker")
-            .join("Docker Desktop.exe");
-        p.is_file().then_some(p)
+        let mut candidates = Vec::new();
+        if let Some(base) = std::env::var_os("ProgramFiles") {
+            candidates.push(PathBuf::from(base).join("Docker").join("Docker"));
+        }
+        if let Some(path) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&path) {
+                if dir.join("docker.exe").is_file()
+                    && let Some(install) = dir.parent().and_then(|r| r.parent())
+                {
+                    candidates.push(install.to_path_buf());
+                }
+            }
+        }
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            let programs = PathBuf::from(local).join("Programs");
+            candidates.push(programs.join("Docker").join("Docker"));
+            candidates.push(programs.join("DockerDesktop"));
+        }
+        candidates
+            .into_iter()
+            .map(|d| d.join("Docker Desktop.exe"))
+            .find(|p| p.is_file())
     }
 
     pub fn installed() -> bool {

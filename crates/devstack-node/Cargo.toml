@@ -32,6 +32,9 @@ tokio-rustls.workspace = true
 ureq.workspace = true
 x509-parser.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 

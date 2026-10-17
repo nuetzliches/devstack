@@ -1,6 +1,6 @@
 # ADR-0032: The pool is administered in the dashboard, by members with the admin role
 
-- **Status:** Accepted (2026-10-16)
+- **Status:** Accepted (2026-10-16), amended 2026-10-17 (admins grant which members are nodes)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0031](0031-a-coordinator-places-lanes.md) (point 2 extended here), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0019](0019-control-api-security.md), [ADR-0006](0006-dashboard-vue-same-origin.md)
@@ -45,6 +45,20 @@ who may change the pool.
 6. **Approving shows what is approved:** the requesting machine's name, its
    member id, when it asked and from which address, so an admin can tell a
    colleague's request from someone else's before accepting it.
+
+*Amended 2026-10-17.* **Admins grant which members run the pool's lanes.**
+Until now every member whose node agent reported an API was a node, and
+`--on pool` picked among them by what each said it had free: a member's
+laptop, or a machine taken over, could claim a terabyte and receive every
+placed lane with its worktree and its untracked environment files. The
+requester who asks for `pool` has not chosen whom to trust (ADR-0027
+point 6). So being a node is granted, like the admin role: an admin
+grants it (`devstack node members node <id> on`, or the admin API), and
+takes it back the same way; the change is in the admin log. The
+coordinator takes a node's API from its report only when the member is
+granted, places `--on pool` and named leases on granted members only, and
+says to a node agent that is not granted why. A member's share switch
+alone (the hub) never made it a node and still does not.
 
 ## Alternatives considered
 

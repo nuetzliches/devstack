@@ -925,6 +925,7 @@ impl Supervisor {
             &self.lane,
             self.port_offset,
             shared,
+            &self.stack.compose[group].networks,
         )
         .map_err(|e| format!("compose group `{group}`: {e}"))?;
         std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;

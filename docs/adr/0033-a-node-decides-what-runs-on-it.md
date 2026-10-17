@@ -1,6 +1,6 @@
 # ADR-0033: A node decides who runs lanes on it, and what a lane there may do
 
-- **Status:** Accepted (2026-10-16)
+- **Status:** Accepted (2026-10-16), amended 2026-10-17 (what a lane's Compose files may ask; limits on every container; the node's own policy)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md) (point 4: the node admits), [ADR-0027](0027-trust-between-nodes.md), [ADR-0031](0031-a-coordinator-places-lanes.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md)
@@ -54,6 +54,44 @@ certificate) and what the container it starts may do.
    shows it and places lanes accordingly. The node is the one that
    enforces it.
 
+*Amended 2026-10-17.* A lane's infrastructure runs on the node's own
+Docker engine, from Compose files the requester sends; a lane's own code
+writes into its mirror, links included. Without more, a Compose file was
+root on the node (`privileged`, `pid: host`, a bind mount of `/`), and a
+link in the mirror let the agent write outside it. So, on top of points 2
+to 5:
+
+7. **What a lane may ask of the node.** The agent reads a group's model with
+   `docker compose config` in a throwaway container that sees only the
+   lane's mirror, and refuses the lane if a service is privileged, adds
+   capabilities or devices, shares a namespace of the host (`pid`, `ipc`,
+   `uts`, `cgroup`, `network_mode`), sets `userns_mode`, `cgroup_parent`,
+   `security_opt`, `sysctls` or `volumes_from` a container, or mounts,
+   builds from or reads an env file at a path that does not resolve beneath
+   the mirror; or if the project uses an external volume, a volume with
+   `driver_opts`, an external network the stack file does not own, a
+   network driver other than `bridge`, or, on an `internet` or `none` node,
+   addresses or IPv6 of its own. The message names each.
+8. **Limits hold for every container of a lane**, its infrastructure
+   included (memory and CPU as point 4, and a process limit), and the lane
+   container drops every capability and cannot gain privileges. A lane is
+   taken to need at least 0.25 CPU and 256 MiB, whatever its requester
+   says; a node's caps hold for its lanes together.
+9. **Networks:** `none` gets the same firewall rules as `internet` and no
+   traffic out of the lane's bridges at all; a lane's networks have no
+   IPv6; images (the lane's and its Compose builds) are built without a
+   network unless the node's network is `lan`, and are named so that only
+   the node can tell the name, per member.
+10. **Point 6, on the node itself:** `policy.json` in the agent's state holds
+    on top of what an admin sets (both must admit; the smaller limits and
+    the stricter network hold). The agent asks the coordinator for the
+    node's policy before it admits its first lease, and never assumes none.
+
+This confines what a lane asks for, not the engine it runs on: the lane's
+containers still share the node's kernel and Docker engine with other
+lanes. A Docker engine per lane (rootless, or a VM per node) is the
+stronger step and is not taken here.
+
 ## Alternatives considered
 
 - **Trust every approved member (today).** Simple, and enough for a pool of
@@ -88,3 +126,10 @@ chains per lane, set from a helper container on the host's network before
 the lane's containers start), `crates/devstack-node/tests/node.rs` (a refused
 and an admitted lease), the pool area in `ui/`. Not yet: CPU limits per lane
 and placing by node tags (`--on pool:gpu`).
+
+Amendment 2026-10-17: `crates/devstack-node/src/confine.rs` (point 7, with
+its fixtures), `crates/devstack-node/src/safefs.rs` (no link followed in a
+mirror), `crates/devstack-compose/src/lib.rs` (`node_overlay`: limits, offline
+builds, image names, no IPv6), `crates/devstack-node/src/lanerun.rs`,
+`crates/devstack-node/src/egress.rs`, `crates/devstack-node/src/policy.rs`
+(`floor_need`, `strictest`).
