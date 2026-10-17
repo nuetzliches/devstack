@@ -25,6 +25,11 @@ static BUFFER: Mutex<Vec<Value>> = Mutex::new(Vec::new());
 type GaugeFn = Box<dyn Fn() -> Vec<Gauge> + Send + Sync>;
 static GAUGES: OnceLock<GaugeFn> = OnceLock::new();
 
+/// Whether a pool takes the diagnostic lines now.
+pub fn active() -> bool {
+    ACTIVE.load(Ordering::Relaxed)
+}
+
 /// Keep a diagnostic line for the next send (when a pool takes them).
 pub fn record(line: &serde_json::Map<String, Value>) {
     if !ACTIVE.load(Ordering::Relaxed) {
