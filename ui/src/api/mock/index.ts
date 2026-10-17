@@ -334,7 +334,7 @@ export class MockTransport implements Transport {
       send({ type: 'update', update: { running: true, error: null } });
       setTimeout(() => {
         hub.newer = null;
-        send({ type: 'update', update: { running: false, error: null } });
+        send({ type: 'update', update: { running: false, error: null, installed: '0.5.0', finished: Date.now() } });
         send({ type: 'release', current: '0.5.0', newer: null });
       }, 2500);
       return empty(202);

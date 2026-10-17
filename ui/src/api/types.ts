@@ -30,8 +30,23 @@ export type HubEvent =
   | { type: 'docker'; docker: DockerEngine }
   /** A newer release than the hub (`newer`), or none. */
   | { type: 'release'; current: string; newer: string | null }
-  /** The dashboard's update (`POST /hub/update`): running, or why the last one failed. Older hubs never send it. */
-  | { type: 'update'; update: { running: boolean; error: string | null } };
+  /** The dashboard's update (`POST /hub/update`): running, or how the last one ended. Older hubs never send it. */
+  | { type: 'update'; update: UpdateState };
+
+/**
+ * The dashboard's update. A successful one stops the hub that started it; the
+ * new hub reports `installed`. `finished` (ms) tells a fresh outcome from an
+ * old one; older hubs send neither.
+ */
+export interface UpdateState {
+  running: boolean;
+  /** Why the last update failed: the end of its output. */
+  error: string | null;
+  /** The version the last update installed. */
+  installed?: string | null;
+  /** When the last update ended (ms since the epoch). */
+  finished?: number | null;
+}
 
 // ---------------------------------------------------------------- daemon state
 

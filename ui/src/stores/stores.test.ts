@@ -72,6 +72,29 @@ describe('hub store', () => {
     fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [{ ...entry('shop', false), start_error: 'boom' }] });
     expect(hub.starting['shop']).toBeUndefined();
   });
+
+  it('tells the outcome of an update once, also from the hub it started (R-11)', async () => {
+    fake.on('/hub/session', ok({ version: '1.0.0' }));
+    const hub = useHub();
+    await hub.init();
+    const ui = useUi();
+    const send = (u: object) => fake.stream('/hub/events').handlers.onMessage({ type: 'update', update: u } as never);
+    const installed = { running: false, error: null, installed: '1.0.0', finished: Date.now() };
+    send(installed);
+    expect(ui.toasts.filter((x) => x.title === 'devstack 1.0.0 is installed')).toHaveLength(1);
+    // Another connect (a reload, a second tab): the same outcome, no new toast.
+    send(installed);
+    expect(ui.toasts.filter((x) => x.title === 'devstack 1.0.0 is installed')).toHaveLength(1);
+    // An old outcome the page did not see start is not news.
+    send({ running: false, error: 'boom', installed: null, finished: Date.now() - 3600_000 });
+    expect(ui.toasts.some((x) => x.title === 'The update failed')).toBe(false);
+    // One it saw start is.
+    send({ running: true, error: null, installed: null, finished: null });
+    expect(hub.updating).toBe(true);
+    send({ running: false, error: 'no network', installed: null, finished: Date.now() + 1 });
+    expect(hub.updating).toBe(false);
+    expect(ui.toasts.some((x) => x.title === 'The update failed' && x.message === 'no network')).toBe(true);
+  });
 });
 
 describe('stack store', () => {
