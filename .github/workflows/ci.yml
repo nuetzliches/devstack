@@ -219,6 +219,17 @@ jobs:
         run: shellcheck install.sh
       - name: install.sh syntax (dash)
         run: sh -n install.sh
+      # The landing page's Content-Security-Policy allows its one inline
+      # script by hash: an edit of the script needs the new hash.
+      - name: site script hash
+        shell: python
+        run: |
+          import base64, hashlib, re
+          s = open('site/index.html', encoding='utf-8', newline='').read()
+          script = re.search(r'<script>(.*?)</script>', s, re.S).group(1)
+          h = base64.b64encode(hashlib.sha256(script.encode('utf-8')).digest()).decode()
+          if f"script-src 'sha256-{h}'" not in s:
+              raise SystemExit(f"site/index.html: set script-src 'sha256-{h}' in its Content-Security-Policy")
 
   scripts-windows:
     needs: changes
