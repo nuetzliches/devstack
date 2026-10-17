@@ -459,7 +459,10 @@ mod tests {
             leader_start: 0,
             cgroup: None,
         };
-        assert_eq!(cleanup(std::slice::from_ref(&record)), vec![("x".to_string(), 0)]);
+        assert_eq!(
+            cleanup(std::slice::from_ref(&record)),
+            vec![("x".to_string(), 0)]
+        );
         assert!(child.try_wait().unwrap().is_none(), "still running");
         let known = Record {
             leader_start: start_time(pgid as i32).unwrap(),
