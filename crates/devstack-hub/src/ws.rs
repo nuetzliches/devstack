@@ -109,21 +109,38 @@ where
     let mut buf = BytesMut::new();
     let mut body = Box::pin(body);
     async_stream(move |tx| async move {
+        // How far `buf` is known to hold no event's end; a separator may
+        // straddle two chunks, so the next search starts 3 bytes before.
+        let mut scanned = 0usize;
         while let Some(Ok(chunk)) = body.next().await {
             buf.extend_from_slice(&chunk);
-            while let Some(end) = frame_end(&buf) {
-                let (len, sep) = end;
+            loop {
+                let from = scanned.saturating_sub(3);
+                let Some((len, sep)) = frame_end(&buf[from..]).map(|(l, s)| (l + from, s)) else {
+                    scanned = buf.len();
+                    break;
+                };
                 let frame = String::from_utf8_lossy(&buf[..len]).into_owned();
                 buf.advance(len + sep);
+                scanned = 0;
                 if let Some(data) = frame_data(&frame)
                     && tx.send(data).await.is_err()
                 {
                     return;
                 }
             }
+            // A stream that never ends an event would grow the buffer without
+            // end; no event of a daemon comes near this.
+            if buf.len() > MAX_EVENT {
+                return;
+            }
         }
     })
 }
+
+/// The longest event the bridge holds; a longer one ends the stream, and the
+/// dashboard reconnects (and starts with a snapshot).
+const MAX_EVENT: usize = 8 * 1024 * 1024;
 
 /// Where the first event in `buf` ends: its length and the blank line's.
 fn frame_end(buf: &[u8]) -> Option<(usize, usize)> {
@@ -172,5 +189,29 @@ mod tests {
         ];
         let got: Vec<String> = sse_data(tokio_stream::iter(chunks)).collect().await;
         assert_eq!(got, vec!["{\"a\":1}", "{\"b\":2}", "one\ntwo"]);
+    }
+
+    #[tokio::test]
+    async fn a_separator_split_across_chunks_still_ends_the_event() {
+        let chunks: Vec<Result<Bytes, std::convert::Infallible>> = vec![
+            Ok(Bytes::from_static(b"data: a\r\n\r")),
+            Ok(Bytes::from_static(b"\n")),
+            Ok(Bytes::from_static(b"data: b\n")),
+            Ok(Bytes::from_static(b"\n")),
+        ];
+        let got: Vec<String> = sse_data(tokio_stream::iter(chunks)).collect().await;
+        assert_eq!(got, vec!["a", "b"]);
+    }
+
+    #[tokio::test]
+    async fn an_event_that_never_ends_ends_the_stream() {
+        let big = vec![b'x'; MAX_EVENT + 1];
+        let chunks: Vec<Result<Bytes, std::convert::Infallible>> = vec![
+            Ok(Bytes::from_static(b"data: ")),
+            Ok(Bytes::from(big)),
+            Ok(Bytes::from_static(b"\n\ndata: later\n\n")),
+        ];
+        let got: Vec<String> = sse_data(tokio_stream::iter(chunks)).collect().await;
+        assert!(got.is_empty());
     }
 }

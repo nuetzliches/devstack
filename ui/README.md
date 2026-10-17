@@ -19,6 +19,7 @@ npm run build      # type check (vue-tsc) + production build into dist/ (embedde
 npm run build:mock # the same with the fake transport (VITE_MOCK=1 npm run build works too)
 npm run preview    # serve dist/
 npm run typecheck
+npm test           # unit tests (vitest): the stores against a fake transport, lib/
 ```
 
 With `npm run dev` the browser must be paired with the hub first: run
@@ -57,13 +58,27 @@ transport alone.
 
 ## How it talks to the hub
 
-- **No polling.** Live data comes only from Server-Sent Events: `/hub/events`
-  (stacks), `/hub/stacks/{id}/api/v1/events` (snapshot, then deltas), log and
-  run-log streams. A stream that fails reconnects with backoff (1 s doubling to
-  15 s). One-off fetches happen only in reaction to something: `/v1/stack`
-  after an `infra` event or a finished candidate (debounced 300 ms, for fields
-  events do not carry, such as pid and ports), usage history once per
-  connection, a command's runs when it is opened, the build log on request.
+- **No polling, but for the pool.** Live data comes from the hub's and the
+  daemons' event streams: `/hub/events` (stacks, Docker, release, update),
+  `/hub/stacks/{id}/api/v1/events` (snapshot, then deltas), log and run-log
+  streams. They are server-sent event streams, and the dashboard reads every
+  one over a WebSocket on the hub (`/hub/ws?path=<stream>`, one message per
+  event): a browser allows six HTTP/1.1 connections per host across all its
+  tabs, WebSockets do not count (ADR-0021). A stream that fails reconnects
+  with backoff (1 s doubling to 15 s). One-off fetches happen only in reaction
+  to something: `/v1/stack` after an `infra` event or a finished candidate
+  (debounced 300 ms, for fields events do not carry, such as pid and ports),
+  usage history once per connection, a command's runs when it is opened, the
+  build log on request. The exception is the pool (`stores/pool.ts`,
+  `CapacityChart.vue`): a coordinator has no stream, so the pool area reads
+  it every 10 s while shown, and the parts other pages show every 30 s
+  (ADR-0021, addendum 2026-10-18).
+- **Security.** The hub sends a Content-Security-Policy without inline script
+  (`script-src 'self'`), so `index.html` has none: the theme snippet that runs
+  before the first paint is `public/theme.js`. Links and windows the page
+  opens are http(s) only (`webUrl` in `lib/format.ts`).
+- **Lanes.** `paths.api(stack, path, lane)` names the lane a daemon path goes
+  to; the stack store's `apiLane` is the one shown (null: the main tree).
 - **Offline.** The last stack list and the last snapshot of every stack are
   kept in `localStorage` (`devstack.*`). Without the hub the page shows a
   banner ("devstack hub is not reachable — run `devstack ui`") and the last
@@ -80,14 +95,24 @@ transport alone.
 
 ```
 src/
-  api/          types.ts (the contract), transport.ts (interface, paths),
-                real.ts (fetch + EventSource), mock/ (fake hub: data, stack engine, timeline)
-  stores/       hub (session, stacks), stack (selected stack: view, events, usage, runs, actions), ui (theme, toasts, dialogs)
-  lib/          persist (last state), actions (409/428 handling), status (labels and tones), format, popover
-  components/   TopBar, StackSwitcher, PendingIndicator, ServiceRow, ContainerRow, CommandRow,
-                CandidatePanel, Diagnostics, LogView, Sparkline, Modal, GlobalDialogs, Toasts, icons/
-  views/        Overview, ServiceDetail, Infra, Commands, Usage, Events, StackLayout, Home, Unpaired
+  api/          types.ts (the contract), transport.ts (interface, paths), index.ts (picks the transport),
+                real.ts (fetch + WebSocket on /hub/ws), mock/ (fake hub: data, stack engine, pool, timeline)
+  stores/       hub (session, stacks, Docker, release, update), stack (selected stack and lane: view,
+                events, usage, runs, actions), pool (pools, nodes, sharing, shared lanes), ui (theme,
+                toasts, dialogs)
+  lib/          persist (last state), actions (409/428 handling), status (labels and tones), format
+                (numbers, times, webUrl), ansi (terminal colours), lanes, pins, sort, popover, tooltip,
+                app-update (new dashboard after a hub update)
+  components/   TopBar, Sidebar, StackSwitcher, StackHeader, PendingIndicator, CommandPalette,
+                ServiceRow, ContainerRow, CommandRow, CandidatePanel, BuildTimeline, BuildLogModal,
+                KeptLogsModal, Diagnostics, ErrorLine, LogView, RowUsage, Sparkline, CapacityChart,
+                LaneStart, ShareSwitch, AddStackDialog, ScanStacks, StatusPill, SortTh, Modal,
+                GlobalDialogs, Toasts, icons/
+  views/        Home, OverviewHome, Overview, ServiceDetail, ContainerDetail, Infra, Commands, Usage,
+                Events, Pool, StackLayout, Unpaired
   styles/       tokens.css (light/dark design tokens), base.css, components.css
+  test/         fake.ts (a transport for unit tests); the tests sit next to their code (*.test.ts)
+public/         icons and theme.js (the saved theme before the first paint)
 ```
 
 Theme: follows `prefers-color-scheme`; the top-bar button cycles system, light

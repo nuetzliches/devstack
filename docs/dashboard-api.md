@@ -5,29 +5,51 @@ dashboard talks to the hub only; the hub forwards `/hub/stacks/{id}/api/...` to
 that stack's daemon (`/v1/...`). All JSON uses `snake_case`; times are Unix
 milliseconds. Examples live in [`ui/mock/`](../ui/mock).
 
-**No polling.** Every live value arrives on an event stream (Server-Sent
-Events, one JSON object per `data:` line). On (re)connect a stream starts with a
-snapshot, so a client never needs a timer to stay current. A client may fetch a
-resource once in reaction to an event (e.g. the stack view after an `infra`
-event); it never fetches on a schedule.
+**No polling.** Every live value of the hub and the daemons arrives on an
+event stream. The streams are server-sent events (one JSON object per `data:`
+line), which the CLI reads as they are; the dashboard reads every one of them
+over the hub's WebSocket (`GET /hub/ws?path=<stream>`, one message per event,
+ADR-0021 as amended). On (re)connect a stream starts with a snapshot, so a
+client never needs a timer to stay current. A client may fetch a resource once
+in reaction to an event (e.g. the stack view after an `infra` event); it never
+fetches on a schedule. The one exception is the pool: a coordinator has no
+stream, so the pool area reads `/hub/pool...` every 10 s (30 s for the parts
+other pages show) while it is shown (ADR-0021, addendum 2026-10-18).
 
 ## Hub
 
 Origin `http://127.0.0.1:4250` (or `localhost:4250`).
 
+**Auth.** `cookie` means the session cookie *and* a request from the hub's own
+page: a `GET` names the hub's `Origin` or says `Sec-Fetch-Site: same-origin`
+(or `none`, the user's own navigation); `+ Origin` means the hub's own
+`Origin` is required, which a mutation and the WebSocket handshake always need.
+A browser that says `Sec-Fetch-Site: same-site` or `cross-site` is refused
+(`403`) whatever else it sends: a page on another loopback port is same-site
+with the hub and its requests carry the cookie (ADR-0019, addendum
+2026-10-18). Requests with `Authorization: Bearer <user token>` (the CLI) pass
+without either.
+
+**Headers.** Every answer carries `Content-Security-Policy` (`default-src
+'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'
+data:; connect-src 'self' ws://127.0.0.1:<port> ws://localhost:<port>;
+frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src
+'none'`, abridged), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`
+and `Referrer-Policy: no-referrer`. The dashboard has no inline script.
+
 | Method and path | Auth | Answer |
 |---|---|---|
 | `GET /`, `/assets/*`, `/manifest.webmanifest`, `/sw.js` | none | the app shell (works offline once cached) |
 | `GET /auth?code=<code>` | none | sets the session cookie (one year, survives a hub restart), redirects to `/` |
-| `GET /hub/ping` | none | `{"devstack":true,"version":"0.9.7"}`; CORS for the landing page only (ADR-0021) |
+| `GET /hub/ping` | none | `{"devstack":true,"version":"0.9.7"}`; CORS for the landing page only (ADR-0021). With `?nonce=<16 to 128 characters>` also `"proof"`: hex of blake3 `keyed_hash(derive_key("devstack hub ping proof v1", token), nonce)`. The CLI asks with a fresh nonce and sends the token only to a hub whose proof matches |
 | `GET /hub/session` | cookie | `200 {"version": "0.9.7"}`, or `401` (not paired: show "run `devstack ui`") |
 | `GET /hub/stacks` | cookie | `[StackEntry]` |
 | `GET /hub/ws?path=<stream>` | cookie + Origin | WebSocket that carries the server-sent event stream at `<stream>` (`/hub/events` or `/hub/stacks/{id}/api/v1/...`), one text message per event's `data`; how the dashboard reads every stream (a browser allows six HTTP/1.1 connections per host across all its tabs, WebSockets do not count; ADR-0021). The upstream is opened before the upgrade: `503` for a stack not running, `400` for another path. When the stream ends the socket closes |
 | `GET /hub/events` | cookie | SSE: `{"type":"stacks","stacks":[StackEntry]}` and `{"type":"docker","docker":DockerEngine}` and `{"type":"release","current","newer":string|null}` (a newer devstack; checked at start, every 12 h by the clock and when a dashboard connects and the last answer is over an hour old, unless `DEVSTACK_NO_UPDATE_CHECK`) and `{"type":"update","update":{"running":bool,"error":string|null}}` (the dashboard's update), each first and on every change |
 | `POST /hub/update` | cookie + Origin | `202`: `devstack update` in the background (output in `hub/update.log`); on success it restarts the hub on the new version, so the dashboard reconnects to it; on failure the `update` event carries the end of its output. `409` while one runs. Running stacks switch at their next restart |
-| `POST /hub/stacks/scan` | cookie + Origin | `{"path", "add"?, "depth"?}`: every repository with a `devstack.toml` below a folder (default three levels; a repository only at its root, linked worktrees skipped), `[{repo, id, name, error, registered, added}]`; with `add` the valid new ones are registered |
+| `POST /hub/stacks/scan` | cookie + Origin | `{"path", "add"?, "depth"?}`: every repository with a `devstack.toml` below a folder (default three levels, `depth` is clamped to 1 to 6; a repository only at its root, linked worktrees skipped), `[{repo, id, name, error, registered, added}]`; with `add` the valid new ones are registered |
 | `POST /hub/pick-folder` | cookie + Origin | the operating system's folder dialog, shown by the hub (Windows: Explorer picker, Linux: XDG portal): `{"path": "..."}`, `{"path": null}` when cancelled, `501` without a desktop, `409` while one is open |
-| `GET /hub/inspect?path=` | cookie | `{repo, is_dir, has_stack_file, valid, registered, id}` for an absolute folder path (the "Add a stack" dialog) |
+| `GET /hub/inspect?path=` | cookie | `{repo, is_dir, has_stack_file, valid, registered, id}` for an absolute folder path (the "Add a stack" dialog). `valid` is `null` without a stack file, `{"Ok":null}` when it loads, `{"Err":"<why>"}` when not; `registered` is the id or `null`. Every route that takes a `path` takes a local one only: `400` for a network path (`\\host\share`, `//host/share`; on Windows anything but a drive, `C:\` or `\\?\C:\`) |
 | `POST /hub/stacks/add {"path"}` | cookie + Origin | registers a folder that has a `devstack.toml`; `{id, name}` |
 | `POST /hub/stacks/init {"path"}` | cookie + Origin | writes a first draft (`devstack init`, never over an existing file) and registers it when it loads; `{file, services, compose_files, todos, id}` |
 | `GET /hub/docker` | cookie | `DockerEngine`: `{"state":"running","version"}`, `{"state":"stopped","starter":"Docker Desktop"\|null,"hint"}` or `{"state":"missing"}`; the hub looks every 10 s |
@@ -35,13 +57,13 @@ Origin `http://127.0.0.1:4250` (or `localhost:4250`).
 | `POST /hub/stacks/{id}/up` | cookie + Origin | `202`; the stack starts (daemon, infrastructure, autostart services) |
 | `POST /hub/stacks/{id}/down?infra=false` | cookie + Origin | `202`; services stop, the daemon exits |
 | `DELETE /hub/stacks/{id}` | cookie + Origin | `204`; forget a stack (it registers again when it starts) |
-| `ANY /hub/stacks/{id}/api/<path>` | cookie (+ Origin for non-GET) | the daemon's `/<path>`, streams passed through; `503 {"error":"stack not running"}` when its daemon is down |
+| `ANY /hub/stacks/{id}/api/<path>` | cookie (+ Origin for non-GET) | the daemon's `/<path>`, streams passed through; `503 {"error":"stack not running"}` when its daemon is down or does not take the connection within 5 s. The daemon's `Set-Cookie` and hop-by-hop headers are not passed on |
 | `GET /hub/pools` | cookie | the pools this machine belongs to or asked to join, the default one first: `[{name, joined, state?, coordinator?}]` ([ADR-0034](adr/0034-a-machine-can-belong-to-several-pools.md)). Every `/hub/pool...` route below takes `?pool=<name>`; without it, the default pool |
 | `GET /hub/pool/history?node=&range=1h\|24h` | cookie | a node's capacity over time, or the pool's without `node` ([ADR-0036](adr/0036-the-pool-shows-its-capacity-over-time.md)): `[{at, total_cpus, total_memory, offered_cpus, offered_memory, used_cpus, used_memory, gpus, gpus_offered, gpu_load, gpu_memory, gpu_memory_used}]`; the last hour as reported (every 15 s), or the last day by minute; kept by the coordinator in memory, since it started |
 | `GET /hub/pool/telemetry` | cookie | `{consent, collects, what}`: whether this machine agreed to send the pool telemetry, whether the pool collects it (its coordinator has a collector), and what is sent ([ADR-0037](adr/0037-telemetry-goes-to-the-pools-collector-with-consent.md)) |
 | `PUT /hub/pool/telemetry {"enabled"}` | cookie + Origin | agree to send it, or take it back; off until given, per pool |
 | `GET /hub/pool/shared` | cookie | the lanes others share with this machine ([ADR-0035](adr/0035-lanes-can-be-shared-with-the-pool.md)): `[{lease, repo, lane, owner, owner_name, node, services: [{name, port, scheme, here}]}]` |
-| `POST /hub/pool/shared/{lease}/open {"service"}` | cookie + Origin | a forward on this machine to that service, through its node (which checks the sharing at every connection): on the owner's port `here` if free, else another; `{url, port}`. It stays while the hub runs |
+| `POST /hub/pool/shared/{lease}/open {"service"}` | cookie + Origin | a forward on this machine to that service, through its node (which checks the sharing at every connection): on the owner's port `here` if free, else another; `{url, port}`. It stays while the hub runs. `502` for a service shared with a scheme other than `http` or `https` |
 | `GET /hub/pool` | cookie | `PoolOverview`: this machine's pool, read from the coordinator with its member certificate (ADR-0032); `{"joined":false}` in no pool; `502 {"error"}` when the coordinator does not answer |
 | `POST /hub/pool/members/{id}/approve {"role"?}` | cookie + Origin | admins only: approve a request, as `member` (default) or `admin`; the member's `PoolMember` |
 | `POST /hub/pool/members/{id}/remove` | cookie + Origin | admins only: remove a member or reject its request; `409 {"error"}` for the last admin |
@@ -49,7 +71,7 @@ Origin `http://127.0.0.1:4250` (or `localhost:4250`).
 | `POST /hub/pool/leases/{id}/end` | cookie + Origin | admins only: `202`; the node stops that lane at its next report (within about 15 s); its requester sees the lease over |
 | `POST /hub/pool/members/{id}/tags {"tags"}` | cookie + Origin | admins only: replace a member's tags (ADR-0033); the member's `PoolMember` |
 | `POST /hub/pool/nodes/{id}/policy` (a `NodePolicy` or `null`) | cookie + Origin | admins only: what the node lets run on it, `{allow, repos, memory_headroom?, network: "lan"\|"internet"\|"none"}`; `null` lifts it |
-| `POST /hub/pool/join {"coordinator", "fingerprint", "name"?}` | cookie + Origin | ask a pool to admit this machine (`devstack join` without waiting); `GET /hub/pool` shows it pending until an admin approves |
+| `POST /hub/pool/join {"coordinator", "fingerprint", "name"?}` | cookie + Origin | ask a pool to admit this machine (`devstack join` without waiting); `GET /hub/pool` shows it pending until an admin approves. `coordinator` is `https://<host>[:<port>]` and nothing more (`400` otherwise). Errors of every `/hub/pool...` route pass on the coordinator's own `{"error"}` only, never the body of whatever else answered |
 | `POST /hub/pool/members/{id}/role {"role"}` | cookie + Origin | admins only: `member` or `admin`; `409 {"error"}` for the last admin. A member who is no admin gets `403` from all three |
 | `GET /hub/pool/share`, `PUT /hub/pool/share {enabled, max_cpus?, max_memory?}` | cookie (+ Origin for `PUT`) | this machine's share of the pool (ADR-0031 point 3), per pool: the switch, the caps, what is free and offered now, the last report (`ShareStatus`); `PUT` changes them and reports at once |
 | `POST /hub/shutdown` | `Authorization: Bearer <user token>` | `202`; the hub exits (`devstack hub stop`) |

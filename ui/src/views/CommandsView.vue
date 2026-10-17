@@ -35,7 +35,7 @@ const runSort = useSort(
 );
 const runId = computed(() => (route.query.run ? Number(route.query.run) : (runs.value[0]?.id ?? null)));
 const activeRun = computed(() => runs.value.find((r) => r.id === runId.value) ?? null);
-const runLogPath = computed(() => (stack.id && stack.running && runId.value !== null ? paths.api(stack.id, v1.runLogStream(runId.value)) : null));
+const runLogPath = computed(() => (stack.id && stack.running && runId.value !== null ? paths.api(stack.id, v1.runLogStream(runId.value), stack.apiLane) : null));
 
 // Recent runs: once when a command is opened (and when the stream comes back); events keep them current.
 watch(

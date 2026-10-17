@@ -1,5 +1,6 @@
 // The one seam between the dashboard and the outside world. `real.ts` talks to
-// the hub over HTTP and Server-Sent Events; `mock/` fakes the hub in the
+// the hub over HTTP, and reads the event streams over its WebSocket
+// (`/hub/ws`); `mock/` fakes the hub in the
 // browser. Everything above this file is identical for both.
 
 /** State of one event stream subscription. */
@@ -73,17 +74,15 @@ export const paths = {
   poolJoin: '/hub/pool/join',
   poolTags: (id: string) => `/hub/pool/members/${enc(id)}/tags`,
   poolPolicy: (id: string) => `/hub/pool/nodes/${enc(id)}/policy`,
-  /** A daemon path; in a lane (plan §3.5) it goes to that lane's API. */
-  api: (stack: string, path: string) =>
-    `/hub/stacks/${enc(stack)}/api${lanePrefix && path.startsWith('/v1/') && !path.startsWith('/v1/lanes') ? lanePrefix : ''}${path}`,
+  /**
+   * A daemon path of `stack`. With a `lane` (plan §3.5) it goes to that
+   * lane's API, except the lane routes themselves, which the main tree's
+   * daemon answers; `null`: the main working tree. The caller names the
+   * lane: the stack store knows which one is shown (`useStack().apiLane`).
+   */
+  api: (stack: string, path: string, lane: string | null = null) =>
+    `/hub/stacks/${enc(stack)}/api${lane && path.startsWith('/v1/') && !path.startsWith('/v1/lanes') ? `/v1/lanes/${enc(lane)}` : ''}${path}`,
 };
-
-let lanePrefix = '';
-
-/** The lane every daemon path goes to (`null`: the main working tree). */
-export function setLane(name: string | null) {
-  lanePrefix = name ? `/v1/lanes/${enc(name)}` : '';
-}
 
 export const v1 = {
   stack: '/v1/stack',

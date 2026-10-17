@@ -63,7 +63,25 @@ export function useNow() {
   return nowRef;
 }
 
-/** Where a browser opens a service: the daemon's `url`, or plain http for daemons before 0.2.1. */
+/**
+ * Where a browser opens a service: the daemon's `url`, or plain http for
+ * daemons before 0.2.1 (and for a `url` that is no web address, see `webUrl`).
+ */
 export function serviceUrl(s: { url?: string | null; port: number | null }): string {
-  return s.url ?? `http://localhost:${s.port}`;
+  return webUrl(s.url) ?? `http://localhost:${s.port}`;
+}
+
+/**
+ * `url` when it is a web address (http or https), else `undefined`: a link
+ * or a window the dashboard opens never reaches another protocol handler
+ * (`javascript:`, `file:`, `ms-msdt:`) of this machine.
+ */
+export function webUrl(url: string | null | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    const u = new URL(url);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? url : undefined;
+  } catch {
+    return undefined;
+  }
 }

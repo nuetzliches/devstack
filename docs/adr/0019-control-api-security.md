@@ -1,6 +1,6 @@
 # ADR-0019: The control API trusts the user's own processes, never a web page
 
-- **Status:** Accepted (2026-10-14)
+- **Status:** Accepted (2026-10-14), amended 2026-10-18 (the own page for reads too; the hub proves itself to the CLI)
 - **Date:** 2026-10-14
 - **Deciders:** project owner
 - **Related:** [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0018](0018-dashboard-is-a-browser-page.md), plan §5
@@ -43,6 +43,29 @@ the dashboard served by the daemon itself.
 5. **No CORS headers are sent.** Nothing outside the daemon's origin is meant
    to call it from a browser.
 
+*Amended 2026-10-18, for the hub that holds the cookie now (ADR-0021).*
+`SameSite=Strict` is no boundary between loopback ports: browsers scope it by
+site (scheme and host), so a page on `http://127.0.0.1:3000`, say the app under
+development with a compromised dependency, is same-site with the hub, and its
+`<img>` and `fetch` requests carry the cookie. Point 4 therefore covers reads
+too: **every request with the cookie must come from the hub's own page.** A
+mutation and the WebSocket handshake name the hub's own `Origin`; a `GET`
+names it or says `Sec-Fetch-Site: same-origin` (or `none`, a navigation the
+user typed); a browser that says `same-site` or `cross-site` is refused
+whatever else it sends. Every current browser sends `Sec-Fetch-Site`. The hub
+also forbids framing and inline script (`Content-Security-Policy` with
+`frame-ancestors 'none'` and `script-src 'self'`, `X-Frame-Options: DENY`),
+so a paired dashboard cannot be laid under another page's clicks. And a path
+the browser hands the hub must be local: a network path would have the hub
+connect to that host as the user.
+
+The second concern of the context, other local users, is narrowed for the
+token's way out: the CLI sends the token only to a hub that proves it knows it
+(`GET /hub/ping?nonce=` answers a keyed hash of the nonce under a key derived
+from the token), so a program of another user that took the hub's port while
+it was down learns nothing. What stays: another local user who can read this
+user's profile, or run code as this user, is this user.
+
 ## Alternatives considered
 
 - **Loopback without credentials.** Common for local developer tools and the
@@ -65,3 +88,7 @@ the dashboard served by the daemon itself.
 - API middleware (planned): `Host` check, credential check, `Origin` check on
   mutating methods, in that order, for every route including static files.
 - `devstack ui` (planned): one-time code flow.
+- Since the amendment: `crates/devstack-hub/src/lib.rs` (`guard`,
+  `from_own_page`, `page_headers`, `stack_paths`, `who_answers`);
+  `crates/devstack/tests/hub.rs` (`pairing_cookie_and_checks`,
+  `the_token_goes_only_to_this_users_hub`).

@@ -9,6 +9,8 @@ import { api, paths, Unreachable } from '@/api';
 import type { NodePolicy, PoolEntry, PoolNode, PoolOverview, PoolRole, ShareSettings, SharedLane, ShareStatus } from '@/api/types';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
+import { webUrl } from '@/lib/format';
+import { useUi } from './ui';
 
 export const DEFAULT_POOL = 'default';
 
@@ -275,7 +277,11 @@ export const usePool = defineStore('pool', () => {
       body: { service },
       success: false,
     });
-    if (r.ok && r.body?.url) window.open(r.body.url, '_blank', 'noopener');
+    if (!r.ok || !r.body?.url) return;
+    // The scheme comes from the lane's owner: open web pages only.
+    const url = webUrl(r.body.url);
+    if (url) window.open(url, '_blank', 'noopener');
+    else useUi().toast('error', `Not opening ${service}`, `The lane shares it as ${r.body.url}; only http and https addresses are opened.`);
   }
 
   /** Joined any pool at all. */

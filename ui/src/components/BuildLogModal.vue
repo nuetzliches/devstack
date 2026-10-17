@@ -5,7 +5,7 @@ import Modal from './Modal.vue';
 import Diagnostics from './Diagnostics.vue';
 import Icon from './icons/Icon.vue';
 
-const props = defineProps<{ open: boolean; stackId: string; service: string }>();
+const props = defineProps<{ open: boolean; stackId: string; lane?: string | null; service: string }>();
 const emit = defineEmits<{ close: [] }>();
 
 const text = ref<string | null>(null);
@@ -17,7 +17,7 @@ async function load() {
   error.value = null;
   text.value = null;
   try {
-    const res = await api().request<string>('GET', paths.api(props.stackId, v1.buildLog(props.service)));
+    const res = await api().request<string>('GET', paths.api(props.stackId, v1.buildLog(props.service), props.lane ?? null));
     if (res.ok) text.value = typeof res.body === 'string' ? res.body : res.body ? JSON.stringify(res.body, null, 2) : '';
     else error.value = res.status === 503 ? 'The stack is not running.' : res.status === 404 ? 'There is no build log for this service yet.' : `HTTP ${res.status}`;
   } catch (e) {

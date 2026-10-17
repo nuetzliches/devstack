@@ -118,7 +118,20 @@ pub async fn open(
             format!("lane `{}` shares no service `{}`", lane.lane, b.service),
         );
     };
-    let url = |port: u16| format!("{}://localhost:{port}", svc.scheme);
+    // The scheme comes from the lane owner's daemon, through the
+    // coordinator: only a web page's. Anything else would reach a protocol
+    // handler of this machine (`ms-msdt:`, `search-ms:`) when opened.
+    let scheme = svc.scheme.to_ascii_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return error(
+            StatusCode::BAD_GATEWAY,
+            format!(
+                "lane `{}` shares `{}` with the scheme `{}`: only http and https are opened",
+                lane.lane, svc.name, svc.scheme
+            ),
+        );
+    }
+    let url = |port: u16| format!("{scheme}://localhost:{port}");
     let key = (key_dir, lease.clone(), svc.port);
     if let Some(port) = forwards().lock().unwrap().get(&key).copied() {
         return Json(json!({ "url": url(port), "port": port })).into_response();

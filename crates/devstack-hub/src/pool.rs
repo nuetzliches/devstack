@@ -84,12 +84,15 @@ fn error(e: &MemberError) -> Response {
     let (status, msg) = match e {
         // The coordinator's own answer, with its status: 403 for a member
         // who is no admin, 409 for the last admin, 404 for an unknown id.
+        // Only a coordinator's own error (`{"error"}`) is passed on: the body
+        // of anything else (a pasted address that is no coordinator) is not
+        // the page's to read.
         MemberError::Status(code, msg) => (
             StatusCode::from_u16(*code).unwrap_or(StatusCode::BAD_GATEWAY),
             serde_json::from_str::<Value>(msg)
                 .ok()
                 .and_then(|v| v["error"].as_str().map(str::to_string))
-                .unwrap_or_else(|| msg.clone()),
+                .unwrap_or_else(|| format!("the coordinator answered {code}")),
         ),
         MemberError::Http(e) => (
             StatusCode::BAD_GATEWAY,
@@ -314,6 +317,10 @@ pub async fn join(Query(q): Query<PoolQuery>, Json(b): Json<JoinBody>) -> Respon
         .or_else(|| std::env::var("COMPUTERNAME").ok())
         .or_else(|| std::env::var("HOSTNAME").ok())
         .unwrap_or_else(|| "member".into());
+    let coordinator = b.coordinator.trim().trim_end_matches('/');
+    if let Err(e) = coordinator_address(coordinator) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response();
+    }
     match blocking(&q, move |l| {
         l.join(b.coordinator.trim(), &b.fingerprint, name.trim())
     })
@@ -322,6 +329,23 @@ pub async fn join(Query(q): Query<PoolQuery>, Json(b): Json<JoinBody>) -> Respon
         Ok(m) => Json(json!({ "id": m.id, "name": m.name, "state": m.state })).into_response(),
         Err(e) => error(&e),
     }
+}
+
+/// A coordinator's address as `devstack join` prints it: `https://host[:port]`
+/// and nothing more. The hub asks it before the fingerprint has proved
+/// anything, so it takes no other scheme, path, query or user.
+fn coordinator_address(c: &str) -> Result<(), String> {
+    let what = || format!("`{c}`: a coordinator's address is https://<host>:<port>");
+    let rest = c
+        .get(..8)
+        .filter(|s| s.eq_ignore_ascii_case("https://"))
+        .map(|_| &c[8..])
+        .ok_or_else(what)?;
+    let ok = !rest.is_empty()
+        && rest
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | ':' | '[' | ']'));
+    if ok { Ok(()) } else { Err(what()) }
 }
 
 pub async fn role(
@@ -339,5 +363,21 @@ pub async fn role(
     match blocking(&q, move |l| l.admin_role(&id, role)).await {
         Ok(m) => Json(m).into_response(),
         Err(e) => error(&e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_coordinator_is_an_https_host_and_port() {
+        let ok = |c: &str| super::coordinator_address(c).is_ok();
+        assert!(ok("https://pool.example:4261"));
+        assert!(ok("HTTPS://10.0.0.5:4261"));
+        assert!(ok("https://[fd00::1]:4261"));
+        assert!(!ok("http://pool.example:4261"));
+        assert!(!ok("https://pool.example:4261/admin?x=1"));
+        assert!(!ok("https://user@pool.example"));
+        assert!(!ok("https://"));
+        assert!(!ok("pool.example:4261"));
     }
 }

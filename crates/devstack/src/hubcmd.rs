@@ -27,16 +27,20 @@ pub fn status_text() -> String {
 }
 
 fn running_text() -> String {
+    use devstack_hub::Listener;
     let port = devstack_hub::port();
-    match devstack_hub::read_info().filter(|_| devstack_hub::answers(port)) {
-        Some(i) => format!(
+    match (devstack_hub::who_answers(port), devstack_hub::read_info()) {
+        (Listener::Ours, Some(i)) => format!(
             "hub running: http://127.0.0.1:{} (pid {}, devstack {})",
             i.port, i.pid, i.version
         ),
-        None if devstack_hub::answers(port) => {
+        (Listener::Ours, None) => format!("hub running: http://127.0.0.1:{port}"),
+        (Listener::Foreign, _) => {
             format!("port {port} answers, but not as a devstack hub of this user")
         }
-        None => format!("hub not running (port {port}); `devstack ui` starts it"),
+        (Listener::Nothing, _) => {
+            format!("hub not running (port {port}); `devstack ui` starts it")
+        }
     }
 }
 
@@ -209,6 +213,7 @@ fn browser_program(name: &str) -> String {
 
 /// Open `url` in the browser `name` (`--browser`, `DEVSTACK_BROWSER`, `BROWSER`).
 fn open_in(name: &str, url: &str) -> Result<()> {
+    web_url(url)?;
     let program = browser_program(name);
     #[cfg(windows)]
     let mut cmd = {
@@ -237,7 +242,19 @@ fn open_in(name: &str, url: &str) -> Result<()> {
     Ok(())
 }
 
+/// Only web pages: what a browser opens is handed to the system's protocol
+/// handlers, and a scheme like `ms-msdt:` or `search-ms:` starts programs.
+fn web_url(url: &str) -> Result<()> {
+    let lower = url.trim_start().to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        Ok(())
+    } else {
+        bail!("not opening `{url}`: only http and https addresses are opened")
+    }
+}
+
 fn open_browser(url: &str) -> Result<()> {
+    web_url(url)?;
     #[cfg(windows)]
     let mut cmd = {
         use std::os::windows::process::CommandExt;
@@ -258,10 +275,17 @@ fn open_browser(url: &str) -> Result<()> {
 }
 
 pub fn stop() -> Result<()> {
+    use devstack_hub::Listener;
     let port = devstack_hub::port();
-    if !devstack_hub::answers(port) {
-        println!("hub not running");
-        return Ok(());
+    match devstack_hub::who_answers(port) {
+        Listener::Nothing => {
+            println!("hub not running");
+            return Ok(());
+        }
+        Listener::Foreign => {
+            bail!("port {port} answers, but not as your devstack hub; not sending it your token")
+        }
+        Listener::Ours => {}
     }
     let r = agent()
         .post(&format!("http://127.0.0.1:{port}/hub/shutdown"))
@@ -311,5 +335,16 @@ mod tests {
         assert_eq!(b(r"C:\Tools\vivaldi.exe"), r"C:\Tools\vivaldi.exe");
         assert_eq!(b("/opt/x/browser"), "/opt/x/browser");
         assert_eq!(b("vivaldi"), "vivaldi");
+    }
+
+    #[test]
+    fn only_web_addresses_are_opened() {
+        let ok = |u: &str| super::web_url(u).is_ok();
+        assert!(ok("http://localhost:4200"));
+        assert!(ok("HTTPS://localhost:4200/x"));
+        assert!(!ok("ms-msdt://localhost:1234"));
+        assert!(!ok("search-ms:query=x"));
+        assert!(!ok("file:///C:/Windows"));
+        assert!(!ok("javascript:alert(1)"));
     }
 }

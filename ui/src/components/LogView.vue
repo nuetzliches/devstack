@@ -57,6 +57,9 @@ function push(l: Omit<LogLine, 'id'>) {
   buffer.push({ ...l, id: nextId++ });
   if (paused.value) {
     pausedCount.value++;
+    // Paused for long on a busy service: keep no more than the view would
+    // show on resume.
+    if (buffer.length > props.maxLines * 1.25) buffer.splice(0, buffer.length - props.maxLines);
     return;
   }
   // batch bursts; a timer rather than rAF so background tabs keep up

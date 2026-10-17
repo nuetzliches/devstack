@@ -105,6 +105,21 @@ fn pairing_cookie_and_checks() {
     let (s, head, body) = get(p, "/", "");
     assert_eq!(s, 200);
     assert!(head.contains("text/html") && body.contains("<"), "{head}");
+    // H-2: never in a frame, no inline script, no sniffing, no referrer.
+    for h in [
+        "content-security-policy: default-src 'self'; script-src 'self';",
+        "frame-ancestors 'none'",
+        "x-frame-options: deny",
+        "x-content-type-options: nosniff",
+        "referrer-policy: no-referrer",
+    ] {
+        assert!(head.contains(h), "{h} missing: {head}");
+    }
+    // The dashboard itself has no inline script the policy would block.
+    for tag in body.split("<script").skip(1) {
+        let open = tag.split('>').next().unwrap_or("");
+        assert!(open.contains("src="), "inline script in index.html: {body}");
+    }
     let (s, _, _) = get(p, "/stacks/abc/services/api", "");
     assert_eq!(s, 200, "SPA fallback");
 
@@ -139,10 +154,35 @@ fn pairing_cookie_and_checks() {
     let (s, _, _) = get(p, &format!("/auth?code={code}"), "");
     assert_eq!(s, 401, "a code works once");
 
-    let with = format!("Cookie: {cookie}\r\n");
+    // H-1: the cookie alone is not enough, a page on another loopback port
+    // sends it too (same-site); the request must come from the hub's page.
+    let (s, _, _) = get(p, "/hub/session", &format!("Cookie: {cookie}\r\n"));
+    assert_eq!(s, 403, "no Sec-Fetch-Site, no Origin");
+    let (s, _, _) = get(
+        p,
+        "/hub/session",
+        &format!("Cookie: {cookie}\r\nSec-Fetch-Site: same-site\r\n"),
+    );
+    assert_eq!(s, 403, "another port of 127.0.0.1");
+    let (s, _, _) = get(
+        p,
+        "/hub/session",
+        &format!("Cookie: {cookie}\r\nOrigin: http://127.0.0.1:{p}\r\n"),
+    );
+    assert_eq!(s, 200, "own Origin");
+
+    let with = format!("Cookie: {cookie}\r\nSec-Fetch-Site: same-origin\r\n");
     let (s, _, body) = get(p, "/hub/session", &with);
     assert_eq!(s, 200, "{body}");
     assert!(body.contains("version"));
+    // Another server on a loopback port may set a cookie of the same name;
+    // the browser then sends both, and the real one still counts (H-9).
+    let (s, _, _) = get(
+        p,
+        "/hub/session",
+        &format!("Cookie: devstack_hub=junk; {cookie}\r\nSec-Fetch-Site: same-origin\r\n"),
+    );
+    assert_eq!(s, 200, "a second cookie of the same name");
 
     // Mutating with the cookie needs the hub's own Origin.
     let post = |origin: &str| {
@@ -236,7 +276,10 @@ fn paired_cookie(h: &Hub) -> String {
 fn stops_with_an_open_stream_and_keeps_the_pairing() {
     let mut h = start();
     let p = h.port;
-    let with = format!("Cookie: {}\r\n", paired_cookie(&h));
+    let with = format!(
+        "Cookie: {}\r\nSec-Fetch-Site: same-origin\r\n",
+        paired_cookie(&h)
+    );
 
     // A dashboard tab holds the stack stream open.
     let mut st = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
@@ -272,12 +315,19 @@ fn stops_with_an_open_stream_and_keeps_the_pairing() {
     assert_eq!(s, 200, "{body}");
     let (s, _, _) = get(p, "/hub/session", "Cookie: devstack_hub=forged\r\n");
     assert_eq!(s, 401);
-    let stored =
-        std::fs::read_to_string(h2.home.path().join("devstack/hub/hub-sessions.json")).unwrap();
-    assert!(
-        !stored.contains(with.trim_start_matches("Cookie: devstack_hub=").trim()),
-        "cookie stored in clear"
-    );
+    let sessions = h2.home.path().join("devstack/hub/hub-sessions.json");
+    let stored = std::fs::read_to_string(&sessions).unwrap();
+    let value = with
+        .trim_start_matches("Cookie: devstack_hub=")
+        .split("\r\n")
+        .next()
+        .unwrap();
+    assert!(!stored.contains(value), "cookie stored in clear");
+
+    // Deleting the file unpairs every browser at once, not at the next start.
+    std::fs::remove_file(&sessions).unwrap();
+    let (s, _, _) = get(p, "/hub/session", &with);
+    assert_eq!(s, 401, "still paired after the file was deleted");
 }
 
 #[test]
@@ -322,13 +372,82 @@ fn ping_is_public_but_tells_only_the_landing_page() {
         "Origin: https://nuetzliches.github.io\r\n",
     );
     assert_eq!(s, 401);
+
+    // With a nonce, a proof that the hub knows the token (never the token).
+    let (s, _, body) = get(p, "/hub/ping?nonce=0123456789abcdef0123", "");
+    assert_eq!(s, 200, "{body}");
+    let v: serde_json::Value = serde_json::from_str(body.trim()).unwrap();
+    let proof = v["proof"].as_str().expect("a proof");
+    assert_eq!(proof.len(), 64);
+    assert!(!body.contains(&token(&h)));
+}
+
+/// H-3: the CLI sends the token only to a hub that proves it knows it. A
+/// program of another user on the hub's port gets nothing.
+#[test]
+fn the_token_goes_only_to_this_users_hub() {
+    let h = start();
+    let cli = |port: u16, args: &[&str]| {
+        Command::new(BIN)
+            .args(args)
+            .env("DEVSTACK_HUB_PORT", port.to_string())
+            .env("LOCALAPPDATA", h.home.path())
+            .env("XDG_STATE_HOME", h.home.path())
+            .env("DEVSTACK_NO_UPDATE_CHECK", "1")
+            .output()
+            .unwrap()
+    };
+    let out = cli(h.port, &["hub", "status"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("hub running"), "{text}");
+
+    // A squatter that looks like a hub, and records what it is sent.
+    let squat = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = squat.local_addr().unwrap().port();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    {
+        let seen = seen.clone();
+        std::thread::spawn(move || {
+            for c in squat.incoming().flatten() {
+                let mut c = c;
+                c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                let mut buf = [0u8; 4096];
+                let n = c.read(&mut buf).unwrap_or(0);
+                seen.lock()
+                    .unwrap()
+                    .push_str(&String::from_utf8_lossy(&buf[..n]));
+                let body = r#"{"devstack":true,"version":"0.9.8","proof":"00"}"#;
+                let _ = write!(
+                    c,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+    }
+    let out = cli(port, &["hub", "stop"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("not as your devstack hub"), "{err}");
+    let out = cli(port, &["ui", "--print"]);
+    assert!(!out.status.success());
+    let seen = seen.lock().unwrap();
+    assert!(seen.contains("/hub/ping?nonce="), "{seen}");
+    assert!(!seen.contains(&token(&h)), "the token went to the squatter");
+    assert!(
+        !seen.to_ascii_lowercase().contains("authorization"),
+        "{seen}"
+    );
 }
 
 #[test]
 fn a_stack_is_added_or_drafted_from_the_dashboard() {
     let h = start();
     let p = h.port;
-    let with = format!("Cookie: {}\r\n", paired_cookie(&h));
+    let with = format!(
+        "Cookie: {}\r\nSec-Fetch-Site: same-origin\r\n",
+        paired_cookie(&h)
+    );
     let post = |path: &str, body: &str, origin: bool| {
         let o = if origin {
             format!("Origin: http://127.0.0.1:{p}\r\n")
@@ -403,6 +522,16 @@ fn a_stack_is_added_or_drafted_from_the_dashboard() {
     // Relative paths are refused.
     let (s, _, _) = get(p, "/hub/inspect?path=shop", &with);
     assert_eq!(s, 400);
+    // So are network paths: looking at one would connect to its host (H-1).
+    for unc in [r"\\attacker.example\x", "//attacker.example/x"] {
+        let (s, _, body) = get(p, &format!("/hub/inspect?path={}", enc(unc)), &with);
+        assert_eq!(s, 400, "{unc}: {body}");
+    }
+    // And a page on another loopback port, which the browser deems same-site,
+    // learns nothing (H-1).
+    let foreign = with.replace("same-origin", "same-site");
+    let (s, _, _) = get(p, &format!("/hub/inspect?path={}", enc(&dir)), &foreign);
+    assert_eq!(s, 403);
 }
 
 fn enc(s: &str) -> String {
@@ -546,7 +675,10 @@ Connection: close
 fn a_failed_start_is_reported() {
     let h = start();
     let p = h.port;
-    let with = format!("Cookie: {}\r\n", paired_cookie(&h));
+    let with = format!(
+        "Cookie: {}\r\nSec-Fetch-Site: same-origin\r\n",
+        paired_cookie(&h)
+    );
     let own = format!("Origin: http://127.0.0.1:{p}\r\n");
     let post = |path: &str, body: &str| {
         http(

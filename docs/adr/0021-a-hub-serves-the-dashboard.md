@@ -1,6 +1,6 @@
 # ADR-0021: A hub on a fixed port serves the dashboard for every stack
 
-- **Status:** Accepted (2026-10-15), amended 2026-10-15 (the dashboard's streams come over WebSocket)
+- **Status:** Accepted (2026-10-15), amended 2026-10-15 (the dashboard's streams come over WebSocket), amended 2026-10-18 (the pool area polls; cookie, sessions file and ping in detail)
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** [ADR-0018](0018-dashboard-is-a-browser-page.md) (amended here), [ADR-0019](0019-control-api-security.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md)
@@ -80,6 +80,35 @@ that, a restart click included, waited in the browser's queue without end
 while the window showed "Connecting…". Measured with eight windows: a request
 answered in 2 ms over WebSockets, and not within 8 s once each window held one
 `EventSource` as well. WebSockets do not count against that limit.
+
+*Amended 2026-10-18, after a review.* Four points in detail:
+
+- **Point 4, the pool area polls.** The pool's state lives in its
+  coordinator, which has no event stream; the hub reads it with this
+  machine's member certificate on request. The pool area reads
+  `/hub/pool...` every 10 s while it is shown, and the parts other pages show
+  (where a lane can start or move, the capacity chart) every 30 s. The hub
+  polling the coordinator in the dashboard's stead and pushing the result
+  over `/hub/events` would move the timer, not remove it. This is the one
+  exception to "no timers that ask for state"; it ends when the coordinator
+  gets a stream.
+- **Point 5, the session cookie is no boundary by itself.** `SameSite=Strict`
+  does not separate loopback ports, so every request with the cookie must
+  come from the hub's own page, reads included (ADR-0019 as amended), and the
+  hub forbids framing and inline script. Any cookie of the hub's name that is
+  a session counts: another server on a loopback port can set one of the same
+  name, and the browser then sends both.
+- **Point 5, deleting `hub-sessions.json` unpairs at once.** The hub reads
+  the file again when it changed, before it checks a cookie, so a deleted
+  file unpairs every browser with its next request, not at the next start. A
+  WebSocket already open stays until it reconnects. The file is written for
+  the user alone (`0600` on Unix).
+- **Point 6, the ping proves the hub to the CLI.** With `?nonce=` it also
+  answers a keyed hash of the nonce under a key derived from the user's
+  token. The CLI sends the token only to a hub that answers it right, since a
+  TCP answer on the port proves nothing on a machine several people use. The
+  landing page's view is unchanged: without a nonce the answer is name and
+  version.
 
 ADR-0018 stands otherwise: a browser page, no desktop wrapper, a tray later.
 The tray belongs to the hub, which is the long-lived process now.
