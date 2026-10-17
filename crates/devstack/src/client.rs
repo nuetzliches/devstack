@@ -10,6 +10,9 @@ pub struct Client {
     base: String,
     token: String,
     agent: ureq::Agent,
+    /// The daemon's version from `daemon.json` (empty: a daemon older than
+    /// the field).
+    version: String,
     /// `/v1/lanes/<name>` when the CLI runs in a lane's working tree: every
     /// call goes to that lane's API (plan §3.5).
     prefix: String,
@@ -63,11 +66,29 @@ pub fn main_tree_of(repo: &Path) -> Option<PathBuf> {
     Some(git.parent()?.to_path_buf())
 }
 
+/// How long a call that should answer at once may take (the liveness probe):
+/// a daemon that accepts and never answers is reported, not waited for.
+const PROBE: Duration = Duration::from_secs(10);
+
 impl Client {
     /// Connect to a running daemon of this stack, if there is one.
     pub fn connect(state_dir: &Path) -> Option<Self> {
-        let info = devstack_daemon::read_info(state_dir)?;
-        let token = devstack_daemon::token::load()?;
+        Self::probe(state_dir).ok().flatten()
+    }
+
+    /// `Ok(None)`: no daemon runs (no `daemon.json`, or its process is gone).
+    /// `Err`: one runs but does not answer (it hangs, or its port belongs to
+    /// a process that accepts and never answers).
+    pub fn probe(state_dir: &Path) -> Result<Option<Self>> {
+        let Some(info) = devstack_daemon::read_info(state_dir) else {
+            return Ok(None);
+        };
+        if !pid_alive(info.pid) {
+            return Ok(None); // a stale daemon.json: the daemon was killed
+        }
+        let Some(token) = devstack_daemon::token::load() else {
+            return Ok(None);
+        };
         // Long enough for a lane's first start on a node or its move, which
         // the daemon answers when done (it waits up to 30 minutes itself).
         let agent = ureq::Agent::config_builder()
@@ -79,12 +100,28 @@ impl Client {
             base: format!("http://127.0.0.1:{}", info.port),
             token,
             agent,
+            version: info.version,
             prefix: String::new(),
         };
-        c.get("/v1/stack").ok()?;
+        match c.call_timeout("GET", "/v1/stack", None, Some(PROBE)) {
+            Ok((s, _)) if s < 400 => {}
+            Ok((s, body)) => bail!(
+                "the daemon (pid {}, port {}) refused: {} (HTTP {s})",
+                info.pid,
+                info.port,
+                error_text(&body)
+            ),
+            Err(e) if is_refused(&e) => return Ok(None), // starting, or just gone
+            Err(e) => bail!(
+                "the daemon of this stack (pid {}, port {}) does not answer: {e:#}; \
+                 if it hangs, end that process and run `devstack up` again",
+                info.pid,
+                info.port
+            ),
+        }
         if let Some(wt) = worktree() {
             // The lane of this worktree, if it is started (`up` starts it).
-            let lanes: Vec<Value> = serde_json::from_str(&c.get("/v1/lanes").ok()?).ok()?;
+            let lanes: Vec<Value> = serde_json::from_str(&c.get("/v1/lanes")?)?;
             let me = devstack_proc::long_path(&wt.path);
             if let Some(l) = lanes.iter().find(|l| {
                 l["active"] != false
@@ -98,7 +135,7 @@ impl Client {
                 c.prefix = "/v1/lanes/-".into(); // not a lane yet: every call says so
             }
         }
-        Some(c)
+        Ok(Some(c))
     }
 
     /// The lane this client talks to, if any.
@@ -133,48 +170,104 @@ impl Client {
         Ok(name)
     }
 
-    fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<(u16, String)> {
+    /// The path a call goes to: in a lane's worktree, the lane's API.
+    fn route(&self, path: &str) -> Result<String> {
         if self.prefix == "/v1/lanes/-"
             && path.starts_with("/v1/")
             && !path.starts_with("/v1/lanes")
         {
             bail!("this worktree's lane is not started: run `devstack up` here");
         }
-        let path = if path.starts_with("/v1/") && !path.starts_with("/v1/lanes") {
-            format!("{}{path}", self.prefix)
-        } else {
-            path.to_string()
-        };
-        self.call_raw(method, &path, body)
+        Ok(
+            if path.starts_with("/v1/") && !path.starts_with("/v1/lanes") {
+                format!("{}{path}", self.prefix)
+            } else {
+                path.to_string()
+            },
+        )
+    }
+
+    fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<(u16, String)> {
+        self.call_raw(method, &self.route(path)?, body)
     }
 
     /// Without the lane prefix: the main daemon's own routes.
     pub fn call_raw(&self, method: &str, path: &str, body: Option<Value>) -> Result<(u16, String)> {
+        self.call_timeout(method, path, body, None)
+    }
+
+    /// One request; `timeout` replaces the agent's long one, `None` for
+    /// it, `Some(None)` for no timeout at all (a stream).
+    fn request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+        timeout: Option<Option<Duration>>,
+    ) -> Result<ureq::http::Response<ureq::Body>> {
         let req = ureq::http::Request::builder()
             .method(method)
             .uri(format!("{}{path}", self.base))
             .header("Authorization", format!("Bearer {}", self.token));
-        let resp = match body {
-            Some(b) => self.agent.run(
-                req.header("Content-Type", "application/json")
-                    .body(b.to_string())?,
-            ),
-            None => self.agent.run(req.body(())?),
+        let req = match body {
+            Some(b) => req
+                .header("Content-Type", "application/json")
+                .body(b.to_string())?,
+            None => req.body(String::new())?,
         };
-        let mut resp = resp.map_err(|e| anyhow!("daemon: {e}"))?;
+        let resp = match timeout {
+            Some(t) => {
+                let req = self.agent.configure_request(req).timeout_global(t).build();
+                self.agent.run(req)
+            }
+            None => self.agent.run(req),
+        };
+        resp.map_err(|e| anyhow!("daemon: {e}"))
+    }
+
+    /// A 404 without a body is a route the daemon does not have (an older
+    /// daemon): said here, for every method.
+    fn call_timeout(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+        timeout: Option<Duration>,
+    ) -> Result<(u16, String)> {
+        let mut resp = self.request(method, path, body, timeout.map(Some))?;
         let status = resp.status().as_u16();
-        Ok((status, resp.body_mut().read_to_string().unwrap_or_default()))
+        let text = resp.body_mut().read_to_string().unwrap_or_default();
+        if status == 404 && text.trim().is_empty() {
+            bail!("{}", self.no_route(path));
+        }
+        Ok((status, text))
+    }
+
+    /// Why the daemon has no route for `path`.
+    fn no_route(&self, path: &str) -> String {
+        no_route_text(path, &self.version)
+    }
+
+    /// Follow a server-sent event stream (no timeout) until `on_event`
+    /// returns false or the daemon ends it.
+    pub fn stream(&self, path: &str, on_event: impl FnMut(Value) -> bool) -> Result<()> {
+        let path = self.route(path)?;
+        let mut resp = self.request("GET", &path, None, Some(None))?;
+        let status = resp.status().as_u16();
+        if status >= 400 {
+            let body = resp.body_mut().read_to_string().unwrap_or_default();
+            if status == 404 && body.trim().is_empty() {
+                bail!("{}", self.no_route(&path));
+            }
+            bail!("{} (HTTP {status})", error_text(&body));
+        }
+        let reader = std::io::BufReader::new(resp.into_body().into_reader());
+        read_sse(reader, on_event)?;
+        Ok(())
     }
 
     pub fn get(&self, path: &str) -> Result<String> {
         let (status, body) = self.call("GET", path, None)?;
-        if status == 404 && body.trim().is_empty() {
-            // No route at all: a daemon older than this devstack.
-            bail!(
-                "the running daemon does not know `{}`; it is probably older than this devstack: restart the stack (`devstack down` + `devstack up`)",
-                path.split('?').next().unwrap_or(path)
-            );
-        }
         if status >= 400 {
             bail!("{} (HTTP {status})", error_text(&body));
         }
@@ -190,6 +283,94 @@ impl Client {
     }
 }
 
+fn no_route_text(path: &str, daemon_version: &str) -> String {
+    let route = path.split('?').next().unwrap_or(path);
+    let ours = devstack_config::VERSION;
+    match daemon_version {
+        "" => format!(
+            "the running daemon does not know `{route}`; it is older than this devstack ({ours}): restart the stack (`devstack down` + `devstack up`)"
+        ),
+        v if v != ours => format!(
+            "the running daemon is devstack {v}, this is {ours}, and it does not know `{route}`: restart the stack (`devstack down` + `devstack up`)"
+        ),
+        _ => format!("the daemon has no `{route}` (HTTP 404)"),
+    }
+}
+
+/// Server-sent events: the JSON of every `data:` event; comments (keep-alive)
+/// are skipped. Ends when the stream ends or `on_event` returns false.
+pub fn read_sse(
+    mut reader: impl std::io::BufRead,
+    mut on_event: impl FnMut(Value) -> bool,
+) -> std::io::Result<()> {
+    let mut data = String::new();
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            return Ok(());
+        }
+        let text = String::from_utf8_lossy(&line);
+        let text = text.trim_end_matches(['\r', '\n']);
+        if text.is_empty() {
+            if !data.is_empty() {
+                let event = serde_json::from_str::<Value>(&data);
+                data.clear();
+                if let Ok(v) = event
+                    && !on_event(v)
+                {
+                    return Ok(());
+                }
+            }
+        } else if let Some(d) = text.strip_prefix("data:") {
+            if !data.is_empty() {
+                data.push('\n');
+            }
+            data.push_str(d.strip_prefix(' ').unwrap_or(d));
+        }
+    }
+}
+
+/// Whether the process `pid` still runs.
+pub(crate) fn pid_alive(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{
+            CloseHandle, ERROR_ACCESS_DENIED, GetLastError, STILL_ACTIVE,
+        };
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        // SAFETY: plain Win32 calls on a handle we open and close here.
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() {
+                // Refused: it exists, but belongs to someone else.
+                return GetLastError() == ERROR_ACCESS_DENIED;
+            }
+            let mut code = 0u32;
+            let ok = GetExitCodeProcess(h, &mut code) != 0;
+            CloseHandle(h);
+            ok && code == STILL_ACTIVE as u32
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        // SAFETY: signal 0 only checks that the process exists.
+        unsafe {
+            libc::kill(pid as i32, 0) == 0
+                || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+        }
+    }
+}
+
+/// Nothing listens (yet): the connection was refused, unlike a daemon that
+/// accepted and did not answer.
+fn is_refused(e: &anyhow::Error) -> bool {
+    let t = format!("{e:#}").to_lowercase();
+    t.contains("refused") || t.contains("10061")
+}
+
 pub fn error_text(body: &str) -> String {
     serde_json::from_str::<Value>(body)
         .ok()
@@ -199,17 +380,32 @@ pub fn error_text(body: &str) -> String {
 
 /// Start the daemon in the background unless it runs; wait until it answers.
 pub fn ensure_daemon(stack_file: &Path, state_dir: &Path) -> Result<Client> {
-    if let Some(c) = Client::connect(state_dir) {
+    // A daemon that runs but does not answer is an error: a second one would
+    // only fail on its state lock.
+    if let Some(c) = Client::probe(state_dir)? {
         return Ok(c);
     }
     std::fs::create_dir_all(state_dir)?;
-    // stdout/stderr (a panic, say); the daemon's own diagnostic log is daemon.log.
-    let log = std::fs::File::create(state_dir.join("daemon.out"))?;
+    // stdout/stderr (a panic, say); the daemon's own diagnostic log is
+    // daemon.log. Appended: a second `up` at the same moment must not empty
+    // the file the first daemon writes to; started anew once it is large.
+    let out = state_dir.join("daemon.out");
+    let large = std::fs::metadata(&out).is_ok_and(|m| m.len() > 1024 * 1024);
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(!large)
+        .truncate(large)
+        .open(&out)?;
     let exe = std::env::current_exe()?;
+    let stack_file = std::path::absolute(stack_file)?;
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("daemon")
         .arg("-f")
-        .arg(std::path::absolute(stack_file)?)
+        .arg(&stack_file)
+        // Not the caller's directory: a daemon started from a worktree would
+        // hold it for its lifetime, and Windows refuses `git worktree remove`.
+        .current_dir(stack_file.parent().unwrap_or(state_dir))
         .stdin(std::process::Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
@@ -217,23 +413,53 @@ pub fn ensure_daemon(stack_file: &Path, state_dir: &Path) -> Result<Client> {
     // pipes (devstack_proc::spawn_detached).
     let mut child = devstack_proc::spawn_detached(&mut cmd).context("start the daemon")?;
     let t0 = Instant::now();
-    while t0.elapsed() < Duration::from_secs(20) {
+    let mut exited: Option<(Instant, std::process::ExitStatus)> = None;
+    let mut noted = false;
+    loop {
         if let Some(c) = Client::connect(state_dir) {
             return Ok(c);
         }
-        if let Ok(Some(status)) = child.try_wait() {
-            bail!(
-                "the daemon exited ({status}):\n{}",
-                daemon_report(state_dir)
+        match exited {
+            // Another `up` may have started a daemon at the same moment, and
+            // ours gave up on the state lock: give that one a few seconds.
+            // While that one's process lives, it is still starting.
+            Some((at, status))
+                if at.elapsed() > EXITED_GRACE
+                    && !devstack_daemon::read_info(state_dir)
+                        .is_some_and(|i| i.pid != child.id() && pid_alive(i.pid)) =>
+            {
+                bail!(
+                    "the daemon exited ({status}):\n{}",
+                    daemon_report(state_dir)
+                )
+            }
+            Some(_) => {}
+            None => {
+                if let Ok(Some(status)) = child.try_wait() {
+                    exited = Some((Instant::now(), status));
+                }
+            }
+        }
+        // It binds its port once it knows the state of the infrastructure,
+        // which a Docker engine that is just starting takes a while to tell.
+        if !noted && exited.is_none() && t0.elapsed() > Duration::from_secs(20) {
+            eprintln!(
+                "note: the daemon is still starting (a slow Docker engine?); waiting up to 2 minutes"
             );
+            noted = true;
+        }
+        if t0.elapsed() > Duration::from_secs(120) {
+            bail!(
+                "the daemon did not answer within 2 minutes; it may still come up (`devstack status` tells):\n{}",
+                daemon_report(state_dir)
+            )
         }
         std::thread::sleep(Duration::from_millis(200));
     }
-    bail!(
-        "the daemon did not answer within 20 s:\n{}",
-        daemon_report(state_dir)
-    )
 }
+
+/// How long `ensure_daemon` still looks for a daemon after its own exited.
+const EXITED_GRACE: Duration = Duration::from_secs(8);
 
 /// What a daemon that did not come up left behind: its output and the end of
 /// its diagnostic log.
@@ -284,7 +510,7 @@ pub fn daemon_file(stack_file: &Path) -> PathBuf {
 }
 
 pub fn need(state_dir: &Path) -> Result<Client> {
-    Client::connect(state_dir)
+    Client::probe(state_dir)?
         .ok_or_else(|| anyhow!("no daemon is running for this stack (start it with `devstack up`)"))
 }
 
@@ -439,9 +665,14 @@ pub fn up(stack_file: &Path, workers: bool, force: bool, on: Option<&str>) -> Re
     }
     // A lane on a node needs no Docker here: everything of it runs there.
     if on.is_none() {
-        ensure_engine(stack_file)?;
+        ensure_engine(stack_file, |l| println!("{l}"))?;
     }
     let mut c = ensure_daemon(&daemon_file(stack_file), &sd)?;
+    if c.lane().is_some_and(|l| l != "-") && on.is_none() && (workers || force) {
+        eprintln!(
+            "note: this worktree's lane is started already; --workers and --force apply when it starts (`devstack down` here first)"
+        );
+    }
     if let Some(wt) = worktree()
         && (on.is_some() || c.lane().is_none_or(|l| l == "-"))
     {
@@ -733,7 +964,7 @@ pub fn builds_text(list: &[Value]) -> String {
             let id = b["build"].as_str().unwrap_or("");
             let mut line = format!(
                 "{at}  {:<12}  {:<10}  {secs:>4} s{}",
-                &id[..id.len().min(12)],
+                short_id(id),
                 b["outcome"].as_str().unwrap_or(""),
                 if b["current"].as_bool() == Some(true) {
                     "  (running now)"
@@ -774,10 +1005,7 @@ pub fn log_files(stack_file: &Path, service: &str) -> Result<()> {
                     .to_string()
             })
             .unwrap_or_default();
-        let build = f["build"]
-            .as_str()
-            .map(|b| &b[..b.len().min(12)])
-            .unwrap_or("-");
+        let build = f["build"].as_str().map(short_id).unwrap_or("-");
         let port = f["port"]
             .as_u64()
             .map(|p| p.to_string())
@@ -795,6 +1023,11 @@ pub fn log_files(stack_file: &Path, service: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// The first 12 characters of a build id (never splits a character).
+fn short_id(id: &str) -> &str {
+    id.char_indices().nth(12).map_or(id, |(i, _)| &id[..i])
 }
 
 fn human_bytes(b: u64) -> String {
@@ -998,24 +1231,71 @@ pub fn for_terminal(text: &str) -> std::borrow::Cow<'_, str> {
 
 pub fn logs(stack_file: &Path, name: &str, tail: usize, follow: bool) -> Result<()> {
     let c = need(&state_dir(stack_file)?)?;
-    let mut shown = c.get(&format!("/v1/services/{name}/logs?tail={tail}"))?;
+    if follow {
+        return follow_logs(&c, name, tail, None);
+    }
+    let shown = c.get(&format!("/v1/services/{name}/logs?tail={tail}"))?;
     print!("{}", for_terminal(&shown));
     if !shown.is_empty() {
         println!();
     }
-    if !follow {
-        return Ok(());
-    }
-    loop {
-        std::thread::sleep(Duration::from_millis(700));
-        let now = c.get(&format!("/v1/services/{name}/logs?tail=100000"))?;
-        if now.len() > shown.len() && now.starts_with(&shown) {
-            print!("{}", for_terminal(&now[shown.len()..]));
-        } else if now != shown && !shown.ends_with(&now) {
-            println!("{}", for_terminal(&now)); // a new instance started
-        }
-        shown = now;
-    }
+    Ok(())
+}
+
+/// `devstack logs <name> --follow [--grep]`: the last `tail` lines, then
+/// every new one, from the daemon's log stream (a service's, or a Compose
+/// container's by its service name).
+pub fn follow_logs(c: &Client, name: &str, tail: usize, grep: Option<&str>) -> Result<()> {
+    let stack = c.stack()?;
+    let is_service = stack["services"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|s| s["name"] == name);
+    let group = stack["infra"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|g| {
+            g["containers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|k| k["service"] == name)
+        })
+        .and_then(|g| g["group"].as_str());
+    let path = match group {
+        Some(g) if !is_service => format!("/v1/infra/{g}/{name}/logs/stream?tail={tail}"),
+        _ => format!("/v1/services/{name}/logs/stream?tail={tail}"),
+    };
+    let needle = grep.map(str::to_lowercase);
+    use std::io::Write as _;
+    c.stream(&path, |ev| {
+        let mut out = std::io::stdout().lock();
+        let ok = match ev["type"].as_str() {
+            Some("line") => {
+                let text = ev["text"].as_str().unwrap_or("");
+                if needle
+                    .as_ref()
+                    .is_none_or(|g| text.to_lowercase().contains(g))
+                {
+                    writeln!(out, "{}", for_terminal(text)).is_ok()
+                } else {
+                    true
+                }
+            }
+            Some("instance") => writeln!(
+                out,
+                "--- another instance took over (build {})",
+                ev["build_id"].as_str().unwrap_or("-")
+            )
+            .is_ok(),
+            _ => true,
+        };
+        ok && out.flush().is_ok() // a closed pipe (`| head`) ends it
+    })?;
+    eprintln!("the daemon ended the log stream (stopped?)");
+    Ok(())
 }
 
 pub fn run_command(stack_file: &Path, name: &str, yes: bool) -> Result<()> {
@@ -1029,6 +1309,11 @@ pub fn run_command(stack_file: &Path, name: &str, yes: bool) -> Result<()> {
             .as_str()
             .unwrap_or("Continue?")
             .to_string();
+        // Nobody to answer (a script, an agent): say so instead of waiting.
+        use std::io::IsTerminal;
+        if !std::io::stdin().is_terminal() {
+            bail!("`{name}` asks for confirmation: \"{text}\"; run it with --yes to confirm");
+        }
         eprint!("{text} [y/N] ");
         let mut answer = String::new();
         std::io::stdin().read_line(&mut answer)?;
@@ -1068,6 +1353,10 @@ pub fn down(stack_file: &Path, infra: bool) -> Result<()> {
         println!("no daemon is running for this stack");
         return Ok(());
     };
+    if c.lane() == Some("-") {
+        println!("this worktree's lane is not started: nothing to stop");
+        return Ok(());
+    }
     if let Some(lane) = c.lane() {
         // A lane stops its own services; the daemon and the infrastructure
         // belong to the main working tree.
@@ -1100,8 +1389,9 @@ pub fn down(stack_file: &Path, infra: bool) -> Result<()> {
 
 /// A stack with Compose groups needs the Docker engine. Start Docker Desktop
 /// when it is installed and not running, instead of letting every compose call
-/// fail with a message about a pipe.
-fn ensure_engine(stack_file: &Path) -> Result<()> {
+/// fail with a message about a pipe. `progress` hears what it does (the CLI
+/// prints it, the MCP tool `up` returns it).
+pub fn ensure_engine(stack_file: &Path, mut progress: impl FnMut(&str)) -> Result<()> {
     use devstack_compose::engine::{self, Engine};
     let has_compose = devstack_config::load(stack_file)
         .map(|s| !s.compose.is_empty())
@@ -1122,12 +1412,61 @@ fn ensure_engine(stack_file: &Path) -> Result<()> {
             starter: Some(_), ..
         } => {
             let name = engine::start().map_err(|e| anyhow::anyhow!(e))?;
-            println!("Docker is not running; started {name}, waiting for it (up to 3 min) ...");
+            progress(&format!(
+                "Docker is not running; started {name}, waiting for it (up to 3 min) ..."
+            ));
             let version = engine::wait("docker", Duration::from_secs(180)).map_err(|e| {
                 anyhow::anyhow!("{e}; start {name} yourself and run `devstack up` again")
             })?;
-            println!("Docker {version} is ready.");
+            progress(&format!("Docker {version} is ready."));
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_sent_events_are_read_one_by_one() {
+        let stream = b": keep-alive\n\ndata: {\"type\":\"line\",\"text\":\"a\"}\n\n\
+data: {\"type\":\"instance\",\r\ndata: \"build_id\":\"x\"}\r\n\r\n\
+data: not json\n\n\
+data: {\"type\":\"line\",\"text\":\"b\"}\n\n\
+data: {\"type\":\"line\",\"text\":\"c\"}\n\n";
+        let mut seen = Vec::new();
+        read_sse(&stream[..], |v| {
+            seen.push(v);
+            seen.len() < 3
+        })
+        .unwrap();
+        assert_eq!(seen.len(), 3, "stops when told: {seen:?}");
+        assert_eq!(seen[0]["text"], "a");
+        assert_eq!(seen[1]["build_id"], "x", "multi-line data");
+        assert_eq!(seen[2]["text"], "b", "an unparsable event is skipped");
+    }
+
+    #[test]
+    fn short_ids_never_split_a_character() {
+        assert_eq!(short_id("0123456789abcdef"), "0123456789ab");
+        assert_eq!(short_id("abc"), "abc");
+        assert_eq!(short_id("ääääääääääääää"), "ääääääääääää");
+    }
+
+    #[test]
+    fn a_missing_route_names_the_daemon_version() {
+        assert!(no_route_text("/v1/x?y=1", "").contains("older than this devstack"));
+        assert!(no_route_text("/v1/x", "0.0.1").contains("is devstack 0.0.1"));
+        assert_eq!(
+            no_route_text("/v1/x", devstack_config::VERSION),
+            "the daemon has no `/v1/x` (HTTP 404)"
+        );
+    }
+
+    #[test]
+    fn this_process_is_alive() {
+        assert!(pid_alive(std::process::id()));
+        assert!(!pid_alive(u32::MAX - 1));
     }
 }

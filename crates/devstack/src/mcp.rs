@@ -32,16 +32,50 @@ on its lane (`lanes` lists them): `up` starts it here, or with `on` on a node of
 
 type Out = Arc<Mutex<std::io::Stdout>>;
 
+/// Tool calls that may run at once (each on its own thread); more are refused.
+const MAX_CALLS: usize = 16;
+
+static RUNNING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 pub fn serve(stack_file: &Path) -> Result<()> {
     let out: Out = Arc::new(Mutex::new(std::io::stdout()));
     let file = std::path::absolute(stack_file)?;
-    for line in std::io::stdin().lock().lines() {
-        let line = line?;
+    let mut input = std::io::stdin().lock();
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        if input.read_until(b'\n', &mut buf)? == 0 {
+            return Ok(()); // the client closed stdin: end of session
+        }
+        let Ok(line) = std::str::from_utf8(&buf) else {
+            send(
+                &out,
+                error(Value::Null, -32700, "parse error: the line is not UTF-8"),
+            );
+            continue;
+        };
         if line.trim().is_empty() {
             continue;
         }
-        match serde_json::from_str::<Value>(&line) {
-            Ok(Value::Array(batch)) => batch.into_iter().for_each(|m| handle(m, &file, &out)),
+        match serde_json::from_str::<Value>(line) {
+            Ok(Value::Array(batch)) if batch.is_empty() => send(
+                &out,
+                error(Value::Null, -32600, "invalid request: an empty batch"),
+            ),
+            // A batch is answered with one array, once every member is done
+            // (JSON-RPC 2.0); its tool calls run one after the other.
+            Ok(Value::Array(batch)) => {
+                let (file, out) = (file.clone(), out.clone());
+                std::thread::spawn(move || {
+                    let replies: Vec<Value> = batch
+                        .into_iter()
+                        .filter_map(|m| respond(m, &file))
+                        .collect();
+                    if !replies.is_empty() {
+                        send(&out, Value::Array(replies));
+                    }
+                });
+            }
             Ok(m) => handle(m, &file, &out),
             Err(e) => send(
                 &out,
@@ -49,7 +83,6 @@ pub fn serve(stack_file: &Path) -> Result<()> {
             ),
         }
     }
-    Ok(()) // the client closed stdin: end of session
 }
 
 fn send(out: &Out, msg: Value) {
@@ -66,66 +99,106 @@ fn error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
+/// One message on its own: a tool call runs on its own thread (builds and
+/// restarts take minutes; `ping` and other calls are answered meanwhile),
+/// everything else is answered at once.
 fn handle(m: Value, file: &Path, out: &Out) {
-    let id = m.get("id").cloned();
-    let Some(method) = m.get("method").and_then(Value::as_str) else {
-        return; // a response; this server sends no requests
-    };
-    let Some(id) = id else {
-        return; // a notification (initialized, cancelled, …)
-    };
+    use std::sync::atomic::Ordering;
+    let is_call =
+        m.get("method").and_then(Value::as_str) == Some("tools/call") && m.get("id").is_some();
+    if !is_call {
+        if let Some(r) = respond(m, file) {
+            send(out, r);
+        }
+        return;
+    }
+    if RUNNING.fetch_add(1, Ordering::SeqCst) >= MAX_CALLS {
+        RUNNING.fetch_sub(1, Ordering::SeqCst);
+        let id = m.get("id").cloned().unwrap_or(Value::Null);
+        send(
+            out,
+            error(
+                id,
+                -32000,
+                &format!("{MAX_CALLS} tool calls run already; call again when one is done"),
+            ),
+        );
+        return;
+    }
+    let (file, out) = (file.to_path_buf(), out.clone());
+    std::thread::spawn(move || {
+        let r = respond(m, &file);
+        RUNNING.fetch_sub(1, Ordering::SeqCst);
+        if let Some(r) = r {
+            send(&out, r);
+        }
+    });
+}
+
+/// The answer to one message, if it needs one.
+fn respond(m: Value, file: &Path) -> Option<Value> {
+    if !m.is_object() {
+        return Some(error(
+            Value::Null,
+            -32600,
+            "invalid request: not a JSON object",
+        ));
+    }
+    let method = m.get("method").and_then(Value::as_str)?; // a response: this server sends no requests
+    let id = m.get("id").cloned()?; // a notification (initialized, cancelled, …)
     let params = m.get("params").cloned().unwrap_or(Value::Null);
-    match method {
+    Some(match method {
         "initialize" => {
             let asked = params["protocolVersion"].as_str().unwrap_or("");
             let version = VERSIONS
                 .iter()
                 .find(|v| **v == asked)
                 .unwrap_or(&VERSIONS[0]);
-            send(
-                out,
-                reply(
-                    id,
-                    json!({
-                        "protocolVersion": version,
-                        "capabilities": { "tools": {} },
-                        "serverInfo": { "name": "devstack", "version": env!("CARGO_PKG_VERSION") },
-                        "instructions": INSTRUCTIONS,
-                    }),
-                ),
-            );
+            reply(
+                id,
+                json!({
+                    "protocolVersion": version,
+                    "capabilities": { "tools": {} },
+                    "serverInfo": { "name": "devstack", "version": env!("CARGO_PKG_VERSION") },
+                    "instructions": INSTRUCTIONS,
+                }),
+            )
         }
-        "ping" => send(out, reply(id, json!({}))),
-        "tools/list" => send(out, reply(id, json!({ "tools": tools() }))),
+        "ping" => reply(id, json!({})),
+        "tools/list" => reply(id, json!({ "tools": tools() })),
         "tools/call" => {
             let name = params["name"].as_str().unwrap_or("").to_string();
             if !tools().iter().any(|t| t["name"] == name) {
-                send(out, error(id, -32602, &format!("unknown tool `{name}`")));
-                return;
+                return Some(error(id, -32602, &format!("unknown tool `{name}`")));
             }
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
-            // Builds and restarts take minutes: each call on its own thread,
-            // so `ping` and other calls are answered meanwhile.
-            let (file, out) = (file.to_path_buf(), out.clone());
-            std::thread::spawn(move || {
-                let (text, is_error) = match call(&name, &args, &file) {
-                    Ok(t) => (t, false),
-                    Err(e) => (format!("{e:#}"), true),
-                };
-                send(
-                    &out,
-                    reply(
-                        id,
-                        json!({
-                            "content": [{ "type": "text", "text": text }],
-                            "isError": is_error,
-                        }),
+            // A panic in a tool is an error result, not a call left unanswered.
+            let outcome =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(&name, &args, file)));
+            let (text, is_error) = match outcome {
+                Ok(Ok(t)) => (t, false),
+                Ok(Err(e)) => (format!("{e:#}"), true),
+                Err(p) => (
+                    format!(
+                        "devstack failed inside `{name}`: {}",
+                        p.downcast_ref::<&str>()
+                            .map(|s| s.to_string())
+                            .or_else(|| p.downcast_ref::<String>().cloned())
+                            .unwrap_or_default()
                     ),
-                );
-            });
+                    true,
+                ),
+            };
+            reply(
+                id,
+                json!({
+                    "content": [{ "type": "text", "text": text }],
+                    "isError": is_error,
+                }),
+            )
         }
-        other => send(out, error(id, -32601, &format!("unknown method `{other}`"))),
-    }
+        other => error(id, -32601, &format!("unknown method `{other}`")),
+    })
 }
 
 fn tool(name: &str, description: &str, props: Value, required: &[&str], read_only: bool) -> Value {
@@ -369,25 +442,37 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
         "up" => {
             let timeout = Duration::from_secs(args["timeout_s"].as_u64().unwrap_or(600));
             let sd = client::state_dir(file)?;
-            let mut c = client::ensure_daemon(&client::daemon_file(file), &sd)?;
             let on = args["on"].as_str().filter(|o| !o.trim().is_empty());
             if on.is_some() && client::worktree().is_none() {
                 anyhow::bail!(
                     "`on` runs a worktree's lane on a node: this is the main working tree"
                 );
             }
+            // Like `devstack up`: start Docker Desktop if the stack needs it
+            // (a lane on a node needs no Docker here), and say so.
+            let mut notes = String::new();
+            if on.is_none() {
+                client::ensure_engine(file, |l| {
+                    notes.push_str(l);
+                    notes.push('\n');
+                })
+                .map_err(|e| anyhow::anyhow!("{notes}{e:#}"))?;
+            }
+            let mut c = client::ensure_daemon(&client::daemon_file(file), &sd)?;
             if let Some(wt) = client::worktree()
                 && (on.is_some() || c.lane().is_none_or(|l| l == "-"))
             {
                 c.join_lane(wt, false, false, on)?;
             }
             match client::start_and_wait(&c, file, Some(timeout), |_, _| {})? {
-                UpOutcome::Ready(stack) => Ok(format!("ready\n\n{}", client::status_text(&stack))),
+                UpOutcome::Ready(stack) => {
+                    Ok(format!("{notes}ready\n\n{}", client::status_text(&stack)))
+                }
                 UpOutcome::Failed { service, reason } => {
-                    anyhow::bail!("{service} failed:\n{reason}")
+                    anyhow::bail!("{notes}{service} failed:\n{reason}")
                 }
                 UpOutcome::TimedOut(stack) => anyhow::bail!(
-                    "still starting after {} s (it continues; check `status`)\n\n{}",
+                    "{notes}still starting after {} s (it continues; check `status`)\n\n{}",
                     timeout.as_secs(),
                     client::status_text(&stack)
                 ),
@@ -447,10 +532,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             })
         }
         "lane_move" | "lane_share" | "promote_lane" => {
-            let lane = args["lane"].as_str().unwrap_or_default();
-            if lane.is_empty() {
-                anyhow::bail!("name the lane");
-            }
+            let lane = name_arg(args, "lane")?;
             let (path, body) = match name {
                 "lane_move" => (
                     format!("/v1/lanes/{lane}/move"),
@@ -641,5 +723,29 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    /// The lane tools build `/v1/lanes/{lane}/…`: a lane like `wt/stop?`
+    /// would reach another route. Refused before any daemon is asked.
+    #[test]
+    fn lane_names_from_the_agent_stay_plain() {
+        let file = Path::new("no-such-dir/devstack.toml");
+        for tool in ["lane_move", "lane_share", "promote_lane"] {
+            for bad in ["wt/stop?", "wt/v1/down?", "../x", ""] {
+                let args = json!({ "lane": bad, "to": "local", "with": [] });
+                let e = call(tool, &args, file).unwrap_err().to_string();
+                assert!(e.contains("`lane`"), "{tool} {bad}: {e}");
+            }
+        }
+    }
+
+    #[test]
+    fn requests_that_are_no_object_are_refused() {
+        let file = Path::new("devstack.toml");
+        let r = respond(json!(42), file).unwrap();
+        assert_eq!(r["error"]["code"], -32600, "{r}");
+        assert!(respond(json!({ "method": "notifications/initialized" }), file).is_none());
+        let r = respond(json!({ "id": 1, "method": "ping" }), file).unwrap();
+        assert_eq!(r["result"], json!({}));
     }
 }

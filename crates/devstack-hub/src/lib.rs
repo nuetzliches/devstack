@@ -1689,6 +1689,9 @@ pub fn ensure_running() -> Result<u16, String> {
     let log = std::fs::File::create(&out).map_err(|e| format!("{}: {e}", out.display()))?;
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("hub")
+        // Not the caller's directory (a worktree, say): Windows refuses to
+        // remove a directory a running process has as its own.
+        .current_dir(state_dir())
         .stdin(std::process::Stdio::null())
         .stdout(log.try_clone().map_err(|e| e.to_string())?)
         .stderr(log);
