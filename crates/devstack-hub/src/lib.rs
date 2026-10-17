@@ -5,10 +5,11 @@
 //!
 //! Security per ADR-0019: loopback only, `Host` checked, the browser pairs
 //! with a one-time code (`POST /hub/pair` with the user's token, then
-//! `/auth?code=`) and holds an `HttpOnly; SameSite=Strict` cookie; mutating
-//! requests need the hub's own `Origin`; no CORS. The daemons keep their
-//! token-only API; the hub adds the token when it forwards. The dashboard's
-//! live streams come over WebSocket (`ws`), which needs the own `Origin` too.
+//! `/auth?code=`) and holds an `HttpOnly; SameSite=Strict` cookie; every
+//! request with it must come from the hub's own page (`guard`), mutations and
+//! the WebSocket (`ws`) with the hub's own `Origin`; no CORS; no framing, no
+//! inline script (`page_headers`). The daemons keep their token-only API; the
+//! hub adds the token when it forwards.
 
 use axum::Json;
 use axum::body::Body;

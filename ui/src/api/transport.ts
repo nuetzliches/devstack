@@ -1,5 +1,6 @@
 // The one seam between the dashboard and the outside world. `real.ts` talks to
-// the hub over HTTP and Server-Sent Events; `mock/` fakes the hub in the
+// the hub over HTTP, and reads the event streams over its WebSocket
+// (`/hub/ws`); `mock/` fakes the hub in the
 // browser. Everything above this file is identical for both.
 
 /** State of one event stream subscription. */
