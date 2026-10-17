@@ -44,9 +44,8 @@ fn symlink_err(rel: &Path) -> io::Error {
 
 /// A unique name for a file being written beside `name`.
 fn tmp_name(name: &std::ffi::OsStr) -> std::ffi::OsString {
-    use rand::RngCore;
     let mut b = [0u8; 6];
-    rand::rng().fill_bytes(&mut b);
+    rand::fill(&mut b[..]);
     let tag: String = b.iter().map(|x| format!("{x:02x}")).collect();
     let mut t = std::ffi::OsString::from(".");
     t.push(name);
