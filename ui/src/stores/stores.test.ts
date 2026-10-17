@@ -148,4 +148,19 @@ describe('pool store', () => {
     expect(opened).toEqual(['http://localhost:4200']);
     expect(useUi().toasts.some((x) => x.title.startsWith('Not opening'))).toBe(true);
   });
+
+  it('grants and takes back the node role of a member (N-4)', async () => {
+    const pool = usePool();
+    fake.on(/\/hub\/pool\/members\/m1\/node/, (_m, _p, body) => ok({ id: 'm1', name: 'build', state: 'approved', role: 'member', requested_at: 0, node: (body as { node: boolean }).node }));
+    await pool.setNode('m1', 'build', true);
+    await pool.setNode('m1', 'build', false);
+    const sent = fake.requests.filter((r) => r.path.startsWith('/hub/pool/members/m1/node'));
+    expect(sent.map((r) => [r.method, r.body])).toEqual([
+      ['POST', { node: true }],
+      ['POST', { node: false }],
+    ]);
+    const titles = useUi().toasts.map((x) => x.title);
+    expect(titles).toContain("build may run the pool's lanes");
+    expect(titles).toContain('build takes no new lanes of the pool');
+  });
 });

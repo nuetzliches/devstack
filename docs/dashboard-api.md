@@ -70,6 +70,7 @@ and `Referrer-Policy: no-referrer`. The dashboard has no inline script.
 | `POST /hub/pool/nodes/{id}/pause`, `.../resume` | cookie + Origin | admins only: a paused node takes no new lanes (the coordinator refuses leases on it); running ones stay |
 | `POST /hub/pool/leases/{id}/end` | cookie + Origin | admins only: `202`; the node stops that lane at its next report (within about 15 s); its requester sees the lease over |
 | `POST /hub/pool/members/{id}/tags {"tags"}` | cookie + Origin | admins only: replace a member's tags (ADR-0033); the member's `PoolMember` |
+| `POST /hub/pool/members/{id}/node {"node"}` | cookie + Origin | admins only: let an approved member run the pool's lanes as a node (`true`), or take that back (`false`; the coordinator places no new lanes there); the member's `PoolMember` |
 | `POST /hub/pool/nodes/{id}/policy` (a `NodePolicy` or `null`) | cookie + Origin | admins only: what the node lets run on it, `{allow, repos, memory_headroom?, network: "lan"\|"internet"\|"none"}`; `null` lifts it |
 | `POST /hub/pool/join {"coordinator", "fingerprint", "name"?}` | cookie + Origin | ask a pool to admit this machine (`devstack join` without waiting); `GET /hub/pool` shows it pending until an admin approves. `coordinator` is `https://<host>[:<port>]` and nothing more (`400` otherwise). Errors of every `/hub/pool...` route pass on the coordinator's own `{"error"}` only, never the body of whatever else answered |
 | `POST /hub/pool/members/{id}/role {"role"}` | cookie + Origin | admins only: `member` or `admin`; `409 {"error"}` for the last admin. A member who is no admin gets `403` from all three |
@@ -110,13 +111,14 @@ type PoolOverview = {
       gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean }[];
     };
   }[];
-  audit?: { at: number; by: string; action: 'approve' | 'reject' | 'remove' | 'role' | 'pause' | 'resume' | 'end' | 'tags' | 'policy'; member: string; name: string; detail?: string }[]; // admins only, newest first
+  audit?: { at: number; by: string; action: 'approve' | 'reject' | 'remove' | 'role' | 'pause' | 'resume' | 'end' | 'tags' | 'policy' | 'node'; member: string; name: string; detail?: string }[]; // admins only, newest first
 };
 type PoolMember = {
   id: string; name: string; state: 'pending' | 'approved' | 'removed'; role: 'member' | 'admin'; requested_at: number;
   address?: string;           // admins only
   tags?: string[];            // ADR-0033
   policy?: NodePolicy;        // as a node
+  node?: true;                // an admin let it run the pool's lanes; absent: not
 };
 type NodePolicy = { allow?: string[]; repos?: string[]; memory_headroom?: number; max_cpus?: number; network?: 'lan' | 'internet' | 'none' };
 ```

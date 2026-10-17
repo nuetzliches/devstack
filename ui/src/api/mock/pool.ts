@@ -40,7 +40,7 @@ export class MockPool {
     this.myRole = q.includes('poolmember') ? 'member' : 'admin';
     this.members = [
       { id: this.me, name: 'dev-pc', state: 'approved', role: this.myRole, requested_at: s - 86_400 * 3, address: '10.0.0.21', tags: ['team:backend'] },
-      { id: '9f8e7d6c5b4a3921', name: 'build-server', state: 'approved', role: this.myRole === 'admin' ? 'member' : 'admin', requested_at: s - 86_400 * 5, address: '10.0.0.14', policy: { allow: ['team:backend'], repos: [], memory_headroom: 2, network: 'none' } },
+      { id: '9f8e7d6c5b4a3921', name: 'build-server', state: 'approved', role: this.myRole === 'admin' ? 'member' : 'admin', requested_at: s - 86_400 * 5, address: '10.0.0.14', node: true, policy: { allow: ['team:backend'], repos: [], memory_headroom: 2, network: 'none' } },
       { id: '1122334455667788', name: 'laptop-anna', state: 'approved', role: 'member', requested_at: s - 86_400, address: '100.64.0.9' },
       { id: '5566778899aabbcc', name: 'laptop-ben', state: 'pending', role: 'member', requested_at: s - 240, address: '100.64.0.12' },
     ];
@@ -118,6 +118,18 @@ export class MockPool {
     m.tags = tags;
     this.log('tags' as PoolAuditEntry['action'], m, tags.join(', '));
     return { status: 200, body: m };
+  }
+
+  /** `POST /hub/pool/members/{id}/node`. */
+  grantNode(id: string, node: boolean): R {
+    if (this.myRole !== 'admin') return { status: 403, body: { error: 'only an admin of the pool may do this' } };
+    const m = this.members.find((x) => x.id === id);
+    if (!m) return { status: 404, body: { error: 'no member' } };
+    if (node && m.state !== 'approved') return { status: 409, body: { error: `${m.id} (${m.name}) is ${m.state}: only an approved member runs lanes` } };
+    if (Boolean(m.node) !== node) this.log('node', m, node ? 'may run lanes' : 'runs no lanes');
+    if (node) m.node = true;
+    else delete m.node;
+    return { status: 200, body: this.visible(m) };
   }
 
   policy(id: string, p: PoolMember['policy'] | null): R {

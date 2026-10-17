@@ -252,6 +252,8 @@ export type PoolMember = {
   tags?: string[];
   /** As a node: what it lets run on it (ADR-0033). */
   policy?: NodePolicy;
+  /** An admin granted it to run the pool's lanes (a node); absent: no. */
+  node?: boolean;
 };
 
 export type NodePolicy = {
@@ -305,7 +307,7 @@ export type PoolAuditEntry = {
   at: number;
   by: string;
   /** The coordinator's `String`: these today, others from a newer coordinator. */
-  action: 'approve' | 'reject' | 'remove' | 'role' | 'pause' | 'resume' | 'end' | 'tags' | 'policy' | (string & {});
+  action: 'approve' | 'reject' | 'remove' | 'role' | 'pause' | 'resume' | 'end' | 'tags' | 'policy' | 'node' | (string & {});
   member: string;
   name: string;
   detail?: string;

@@ -210,6 +210,20 @@ export const usePool = defineStore('pool', () => {
     if (r.ok) await load();
   }
 
+  /**
+   * Let a member run the pool's lanes (a node), or take that back: the
+   * coordinator places no new lanes there then (as for a paused node).
+   */
+  async function setNode(id: string, name: string, node: boolean) {
+    const r = await act({
+      label: node ? `Let ${name} run lanes` : `No more lanes on ${name}`,
+      path: at(paths.poolNode(id)),
+      body: { node },
+      success: node ? `${name} may run the pool's lanes` : `${name} takes no new lanes of the pool`,
+    });
+    if (r.ok) await load();
+  }
+
   /** `null` lifts the node's policy: every member may run any lane there. */
   async function setPolicy(id: string, name: string, policy: NodePolicy | null) {
     const r = await act({
@@ -316,6 +330,7 @@ export const usePool = defineStore('pool', () => {
     endLease,
     join,
     setTags,
+    setNode,
     setPolicy,
   };
 });
