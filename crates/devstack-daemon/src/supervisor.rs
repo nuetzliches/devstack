@@ -1583,7 +1583,7 @@ impl Supervisor {
             let infra = self.infra.lock().unwrap();
             devstack_env::compose(name, svc, &ctx, &infra.envs, true).map_err(|e| e.to_string())?
         };
-        let lookup = |k: &str| ctx.vars.get(k).cloned();
+        let lookup = |k: &str| ctx.var(k);
         let command = devstack_config::interpolate::expand(&svc.run, &ctx, &lookup)
             .map_err(|e| format!("run: {e}"))?;
         for d in &svc.ensure_dirs {
@@ -1747,6 +1747,8 @@ impl Supervisor {
             // What runs in the main tree only keeps its workers: no lane takes them over.
             is_main: is_main
                 && (self.owns_main() || !svc.lanes || self.lane_workers.load(Ordering::SeqCst)),
+            // The slot, not the workers: a lane's main instance is no candidate.
+            candidate: !is_main,
             lane: self.lane.clone(),
             published: infra.published.clone(),
             pending: infra.pending.clone(),
