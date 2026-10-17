@@ -44,15 +44,26 @@ irm https://github.com/nuetzliches/devstack/releases/latest/download/install.ps1
 curl -fsSL https://github.com/nuetzliches/devstack/releases/latest/download/install.sh | sh
 ```
 
-The scripts check the download against the release's `SHA256SUMS`. The
+The scripts and `devstack update` check the download against the release's
+`SHA256SUMS`: that proves the archive is the one the release lists (not
+damaged or swapped on the way), not who built it, since both come from the
+same release. Each release also carries a build provenance attestation; with
+the [GitHub CLI](https://cli.github.com) installed and logged in, the scripts
+verify it (`gh attestation verify <archive> --repo nuetzliches/devstack`):
+built by this repository's release workflow (releases from 0.9.9 on). The
 [landing page](https://nuetzliches.github.io/devstack/) tells whether your
 machine is ready. `devstack update` (or the dashboard) installs a newer
 release; `devstack self uninstall` removes devstack again. From source: `cargo
-install --git https://github.com/nuetzliches/devstack devstack`.
+install --git https://github.com/nuetzliches/devstack devstack` (without the
+dashboard: it needs `npm ci && npm run build` in `ui/` before the build;
+`devstack update` leaves such a binary alone).
 
 The installer registers the dashboard **hub** to start at logon and a
-`devstack://` link the dashboard uses to start it (`-NoHubIntegration` /
-`DEVSTACK_NO_HUB_INTEGRATION=1` skip that).
+`devstack://` link the dashboard uses to start it. To skip both, set
+`DEVSTACK_NO_HUB_INTEGRATION=1` before the install command (Windows also
+takes `-NoHubIntegration` when the script is run as a file); the choice is
+kept, so `devstack up` does not register them later either. `devstack hub
+install` adds them, `devstack hub uninstall` removes them again.
 
 ## Start
 
@@ -191,7 +202,7 @@ dashboard ─────┘    one per repo,   └── services: main slot (f
 | `DEVSTACK_BROWSER` | the browser `devstack ui` pairs (`chrome`, `edge`, `firefox`, a path) |
 | `DEVSTACK_HUB_PORT` | the hub's port (default 4250) |
 | `DEVSTACK_NO_HUB` | `devstack up` does not start the dashboard hub |
-| `DEVSTACK_NO_HUB_INTEGRATION` | the installer registers no hub at logon and no `devstack://` link |
+| `DEVSTACK_NO_HUB_INTEGRATION` | the installer registers no hub at logon and no `devstack://` link (and records that); `devstack up` registers neither while it is set |
 | `DEVSTACK_NO_UPDATE_CHECK` | no check for a newer release |
 | `DEVSTACK_OTLP_ENDPOINT` | devstack's own diagnostic log also to this OTLP/HTTP collector |
 | `DEVSTACK_HUB_PING_ORIGINS` | more origins (comma-separated) that may ask whether a hub runs, for a copy of the landing page |

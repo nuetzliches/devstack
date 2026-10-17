@@ -48,7 +48,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | --- | --- |
 | `devstack up` | Docker check, infrastructure, jobs, every autostart service; starts the dashboard hub. First run takes minutes (images, builds), later ones well under a minute |
 | `devstack status` | state per service and container; `-> not yet active: …` means the latest change is not running yet |
-| `devstack logs <service> --follow` | console output (`-n 500` for more history) |
+| `devstack logs <service> --follow` | console output, then every new line (`-n 500` for more history, `--grep X` for matching lines only) |
 | `devstack logs --grep <text>` | matching lines of every service's log ("where did this error come from"); with a service only its log |
 | `devstack logs <service> --since 2h` | every instance of that time, not only the current one: what a crashed or replaced instance printed (`--build <id>`: that build's log and its instances; `--list`, `--log <file>`) |
 | `devstack logs <container>` | a Compose container's output by its service name (`docker compose logs`, timestamped; `--grep`, `--since 30m`) |
@@ -130,7 +130,8 @@ Register it once (project `.mcp.json` or user configuration):
 | --- | --- |
 | anything does not start, before guessing | `devstack doctor` (MCP `doctor`): what this machine lacks for this stack, one line each, with the fix |
 | something happened and nothing says why (a restart, a switch, a stop) | `devstack logs --daemon --grep <service>` (MCP `diagnostics`): service and candidate states with reasons, every request that changed something, daemon start and stop; it works with the daemon stopped |
-| `devstack up`: Docker is not running | `up` starts Docker Desktop and waits; with Docker Engine as a Linux service it names `sudo systemctl start docker` for the user |
+| `devstack up`: Docker is not running | `up` (CLI and MCP) starts Docker Desktop and waits; with Docker Engine as a Linux service it names `sudo systemctl start docker` for the user |
+| "the daemon of this stack (pid …) does not answer" | it hangs: `devstack logs --daemon -n 50` says what it did last; end that process (ask the user first), then `devstack up` |
 | a port is taken | another process (often a second copy of the stack, an IDE run, a leftover process) holds it; find it (`Get-NetTCPConnection -LocalPort <p>` / `ss -ltnp`) and ask before ending it |
 | `failed` candidate | the old build keeps running; `devstack status` shows the reason, the build log is in `.devstack/logs/<service>/build-<id>.log` |
 | `held` candidate | waits for `devstack promote <service>` after the user agreed |
