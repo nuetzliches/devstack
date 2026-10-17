@@ -38,6 +38,8 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   change becomes a candidate that replaces the running instance once healthy.
   Dev servers (`kind = "devserver"`) reload themselves and get `restart_on`
   only for files their hot reload ignores (`tsconfig.json`, `angular.json`).
+  A pattern that names only file types (`src/**/*.cs`) misses a folder that is
+  moved into place; `src/Api/**` sees it.
 - **Health should mean ready.** devstack switches traffic to a candidate when
   `health` answers 2xx. Point it at a readiness endpoint that checks what the
   service needs (its database), not at a bare liveness probe; the timeout covers
