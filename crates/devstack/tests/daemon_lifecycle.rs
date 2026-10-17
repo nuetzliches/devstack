@@ -3,10 +3,12 @@
 //! temporary directory with free ports, its own Compose project name and its
 //! own token directory, so tests neither touch the repository nor each other.
 //!
-//! Opt-in, because they need the .NET 10 SDK (and Docker for the Compose
-//! variant):
+//! Most are opt-in, because they need the .NET 10 SDK (and Docker for the
+//! Compose variant): `#[ignore]`d, so `cargo test` lists them as ignored;
+//! `cargo test -p devstack --test daemon_lifecycle -- --include-ignored` with
 //!   DEVSTACK_INTEGRATION=1          services-only variant (any OS)
 //!   DEVSTACK_INTEGRATION_COMPOSE=1  also the variant with a Compose group (Linux containers)
+//! runs them (without its variable, an included one returns at once).
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -893,6 +895,7 @@ fn lifecycle(with_compose: bool) {
 }
 
 #[test]
+#[ignore = "needs the .NET 10 SDK: DEVSTACK_INTEGRATION=1, --include-ignored"]
 fn lifecycle_services_only() {
     if !enabled("DEVSTACK_INTEGRATION") {
         eprintln!("skipped: set DEVSTACK_INTEGRATION=1 (needs the .NET 10 SDK)");
@@ -902,12 +905,105 @@ fn lifecycle_services_only() {
 }
 
 #[test]
+#[ignore = "needs the .NET 10 SDK and Docker: DEVSTACK_INTEGRATION_COMPOSE=1, --include-ignored"]
 fn lifecycle_with_compose() {
     if !enabled("DEVSTACK_INTEGRATION_COMPOSE") {
         eprintln!("skipped: set DEVSTACK_INTEGRATION_COMPOSE=1 (needs the .NET 10 SDK and Docker)");
         return;
     }
     lifecycle(true);
+}
+
+/// The launcher, with a stack that needs neither .NET nor Docker: the daemon
+/// does not keep the caller's directory (C-2: Windows refuses `git worktree
+/// remove` of a directory a process has as its own), two `up` at once both
+/// succeed (C-5), a stale `daemon.json` is no running daemon and a port that
+/// accepts but never answers is reported instead of waited for (C-4).
+#[test]
+fn the_launcher_starts_one_daemon_from_anywhere() {
+    let repo = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let file = repo.path().join("devstack.toml");
+    std::fs::write(&file, "version = 1\n[stack]\nname = \"launcher\"\n").unwrap();
+    let cwd = elsewhere.path().join("caller");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let run = |args: &[&str]| {
+        Command::new(BIN)
+            .args(args)
+            .arg("-f")
+            .arg(&file)
+            .current_dir(&cwd)
+            .env("LOCALAPPDATA", home.path())
+            .env("XDG_STATE_HOME", home.path())
+            .env("DEVSTACK_NO_HUB", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let done = |c: std::process::Child| {
+        let o = c.wait_with_output().unwrap();
+        (
+            o.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            ),
+        )
+    };
+    // Two at the same moment: one daemon, and both report success.
+    let (a, b) = (run(&["up"]), run(&["up"]));
+    let (a, b) = (done(a), done(b));
+    assert!(a.0, "first up: {}", a.1);
+    assert!(b.0, "second up: {}", b.1);
+    // The daemon that lost the state lock gives up within 5 s; a `down`
+    // before that would hand it the lock.
+    std::thread::sleep(Duration::from_secs(6));
+    let state = repo.path().join(".devstack");
+    #[cfg(target_os = "linux")]
+    let info: Value =
+        serde_json::from_str(&std::fs::read_to_string(state.join("daemon.json")).unwrap()).unwrap();
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        std::fs::read_link(format!("/proc/{}/cwd", info["pid"])).unwrap(),
+        repo.path().canonicalize().unwrap(),
+        "the daemon runs in the repository"
+    );
+    // The caller's directory can go while the daemon runs.
+    std::fs::remove_dir_all(&cwd).expect("the daemon holds the caller's directory");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let (ok, out) = done(run(&["down"]));
+    assert!(ok, "down: {out}");
+
+    // A daemon.json whose process is gone: no daemon, said at once.
+    let dead = serde_json::json!({ "pid": u32::MAX - 1, "port": free_port(), "started": 0, "version": "0" });
+    std::fs::write(state.join("daemon.json"), dead.to_string()).unwrap();
+    let t0 = Instant::now();
+    let (ok, out) = done(run(&["status"]));
+    assert!(!ok && out.contains("no daemon is running"), "{out}");
+    assert!(t0.elapsed() < Duration::from_secs(10));
+
+    // A live process on a port that accepts and never answers.
+    let silent = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = silent.local_addr().unwrap().port();
+    let held = std::thread::spawn(move || {
+        let mut kept = Vec::new();
+        for c in silent.incoming().take(4).flatten() {
+            kept.push(c); // never answered
+        }
+        std::thread::sleep(Duration::from_secs(30));
+    });
+    let alive = serde_json::json!({ "pid": std::process::id(), "port": port, "started": 0, "version": "0" });
+    std::fs::write(state.join("daemon.json"), alive.to_string()).unwrap();
+    let t0 = Instant::now();
+    let (ok, out) = done(run(&["status"]));
+    assert!(!ok && out.contains("does not answer"), "{out}");
+    assert!(t0.elapsed() < Duration::from_secs(40), "{:?}", t0.elapsed());
+    let _ = std::fs::remove_file(state.join("daemon.json"));
+    drop(held);
 }
 
 /// Without a daemon the MCP tools say so instead of starting anything; only
@@ -942,6 +1038,7 @@ fn mcp_without_a_daemon() {
 /// Phase 2 (ADR-0003, ADR-0010, ADR-0013): saved edits become candidates on
 /// their own and are swapped in behind the proxy, without a single `restart`.
 #[test]
+#[ignore = "needs the .NET 10 SDK: DEVSTACK_INTEGRATION=1, --include-ignored"]
 fn edits_become_candidates() {
     if !enabled("DEVSTACK_INTEGRATION") {
         eprintln!("skipped: set DEVSTACK_INTEGRATION=1 (needs the .NET 10 SDK)");
@@ -1263,6 +1360,7 @@ fn get_on(port: u16, path: &str) -> Option<String> {
 }
 
 #[test]
+#[ignore = "needs the .NET 10 SDK: DEVSTACK_INTEGRATION=1, --include-ignored"]
 fn a_worktree_runs_as_a_lane() {
     if !enabled("DEVSTACK_INTEGRATION") {
         eprintln!("skipped: set DEVSTACK_INTEGRATION=1 (needs the .NET 10 SDK)");
@@ -1623,6 +1721,7 @@ fn started_at(container: &str) -> String {
 /// tree leaves the lane's alone; `lane stop` and removing the worktree take
 /// the lane's containers away.
 #[test]
+#[ignore = "needs the .NET 10 SDK and Docker: DEVSTACK_INTEGRATION_COMPOSE=1, --include-ignored"]
 fn a_lane_has_its_own_containers() {
     if !enabled("DEVSTACK_INTEGRATION_COMPOSE") {
         eprintln!("skipped: set DEVSTACK_INTEGRATION_COMPOSE=1 (needs the .NET 10 SDK and Docker)");
