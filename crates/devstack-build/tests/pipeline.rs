@@ -272,3 +272,171 @@ fn a_half_published_artifact_is_removed_on_start() {
     let _b = Builder::new(layout, &Default::default()).unwrap();
     assert!(!tmp.exists());
 }
+
+/// F-28: where a build runs and what prepares it are part of how it is built.
+#[test]
+fn build_id_covers_cwd_and_prepare() {
+    let r = repo();
+    let state = tempfile::tempdir().unwrap();
+    let mut snap = Snapshot::open(r.path(), &state.path().join("lane")).unwrap();
+    snap.sync().unwrap();
+    let id =
+        |extra: &str| build_id(&snap.manifest, &service(&format!("{OK_BUILD}{extra}"))).unwrap();
+    let base = id("watch = [\"src/**\"]\n");
+    let ids = [
+        id("watch = [\"src/**\"]\ncwd = \"src\"\n"),
+        id("watch = [\"src/**\"]\ncwd = \"src/feature\"\n"),
+        id("watch = [\"src/**\"]\nprepare = { run = \"npm ci\" }\n"),
+        id("watch = [\"src/**\"]\nprepare = { run = \"npm install\" }\n"),
+        id("watch = [\"src/**\"]\nprepare = { run = \"npm ci\", cwd = \"src\" }\n"),
+        id("watch = [\"src/**\"]\nprepare = { run = \"npm ci\", inputs = [\"docs.md\"] }\n"),
+    ];
+    let mut all: Vec<&String> = ids.iter().collect();
+    all.push(&base);
+    all.sort();
+    all.dedup();
+    assert_eq!(all.len(), 7, "every variant has its own id: {ids:?} {base}");
+
+    // The content of `prepare.inputs` counts, though `watch` does not match it.
+    let with_inputs =
+        "watch = [\"src/**\"]\nprepare = { run = \"npm ci\", inputs = [\"docs.md\"] }\n";
+    let before = id(with_inputs);
+    fs::write(r.path().join("docs.md"), "new lockfile").unwrap();
+    snap.sync().unwrap();
+    let after = build_id(
+        &snap.manifest,
+        &service(&format!("{OK_BUILD}{with_inputs}")),
+    )
+    .unwrap();
+    assert_ne!(before, after);
+}
+
+/// F-27: removals come before copies, and a path may change its type.
+#[test]
+fn snapshot_follows_renames_and_type_changes() {
+    let r = repo();
+    let state = tempfile::tempdir().unwrap();
+    let mut snap = Snapshot::open(r.path(), &state.path().join("lane")).unwrap();
+    fs::write(r.path().join("Foo.cs"), "foo").unwrap();
+    fs::write(r.path().join("node"), "a file").unwrap();
+    fs::create_dir_all(r.path().join("tree/sub")).unwrap();
+    fs::write(r.path().join("tree/sub/x"), "x").unwrap();
+    snap.sync().unwrap();
+
+    // Case-only rename, file -> directory, directory -> file.
+    fs::rename(r.path().join("Foo.cs"), r.path().join("foo.cs")).unwrap();
+    fs::remove_file(r.path().join("node")).unwrap();
+    fs::create_dir_all(r.path().join("node")).unwrap();
+    fs::write(r.path().join("node/inner"), "inner").unwrap();
+    fs::remove_dir_all(r.path().join("tree/sub")).unwrap();
+    fs::write(r.path().join("tree/sub"), "now a file").unwrap();
+    snap.sync().unwrap();
+
+    assert_eq!(fs::read_to_string(snap.dir.join("foo.cs")).unwrap(), "foo");
+    assert!(snap.manifest.files.contains_key("foo.cs"));
+    assert!(!snap.manifest.files.contains_key("Foo.cs"));
+    assert_eq!(
+        fs::read_to_string(snap.dir.join("node/inner")).unwrap(),
+        "inner"
+    );
+    assert_eq!(
+        fs::read_to_string(snap.dir.join("tree/sub")).unwrap(),
+        "now a file"
+    );
+    // And the next sync has nothing to do.
+    assert_eq!(snap.sync().unwrap().copied, 0);
+}
+
+/// F-29: a checked-out submodule's files are in the snapshot.
+#[test]
+fn snapshot_includes_checked_out_submodules() {
+    let sub = tempfile::tempdir().unwrap();
+    git(sub.path(), &["init", "-q"]);
+    fs::write(sub.path().join("lib.txt"), "lib").unwrap();
+    git(sub.path(), &["add", "lib.txt"]);
+    git(
+        sub.path(),
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+            "-qm",
+            "lib",
+        ],
+    );
+    let r = repo();
+    git(
+        r.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            &sub.path().to_string_lossy(),
+            "vendor/lib",
+        ],
+    );
+    let state = tempfile::tempdir().unwrap();
+    let mut snap = Snapshot::open(r.path(), &state.path().join("lane")).unwrap();
+    let files = snap.list().unwrap();
+    assert!(
+        files.contains(&"vendor/lib/lib.txt".to_string()),
+        "{files:?}"
+    );
+    assert!(!files.contains(&"vendor/lib".to_string()), "{files:?}");
+    snap.sync().unwrap();
+    assert_eq!(
+        fs::read_to_string(snap.dir.join("vendor/lib/lib.txt")).unwrap(),
+        "lib"
+    );
+}
+
+/// F-1: `build` and `output` are expanded like the rest of the stack file,
+/// the same on every platform: `{repo}` is the snapshot, `${VAR}` comes from
+/// the environment, `{{`/`}}` are braces.
+#[test]
+fn build_and_output_are_interpolated() {
+    let r = repo();
+    let state = tempfile::tempdir().unwrap();
+    let layout = Layout::new(state.path());
+    let mut snap = Snapshot::open(r.path(), &layout.lane("main")).unwrap();
+    snap.sync().unwrap();
+    let builder = Builder::new(layout.clone(), &Default::default()).unwrap();
+    #[cfg(windows)]
+    let cmd = "if not exist {repo}\\\\o2 mkdir {repo}\\\\o2 && echo ${DEVSTACK_TEST_UNSET:-fallback} > {repo}\\\\o2\\\\v.txt";
+    #[cfg(not(windows))]
+    let cmd = "mkdir -p {repo}/o2 && echo ${DEVSTACK_TEST_UNSET:-fallback} > {repo}/o2/v.txt";
+    let svc = service(&format!(
+        "build = \"{cmd}\"\noutput = \"{{repo}}/o2\"\nrun = \"x\"\n"
+    ));
+    let mut run = builder.start("main", &snap, "s", &svc).unwrap();
+    let out = builder.wait(&mut run).unwrap();
+    let Outcome::Published { dir, .. } = out else {
+        panic!("{out:?}")
+    };
+    assert_eq!(
+        fs::read_to_string(dir.join("v.txt")).unwrap().trim(),
+        "fallback"
+    );
+}
+
+/// F-31: std turns long absolute paths into `\\?\` paths itself, so a
+/// snapshot deeper than 260 characters copies on Windows as anywhere.
+#[test]
+fn deep_paths_copy() {
+    let r = tempfile::tempdir().unwrap(); // no git: git itself needs core.longpaths
+    let deep: String = (0..12)
+        .map(|i| format!("directory-level-{i:02}/"))
+        .collect();
+    fs::create_dir_all(r.path().join(&deep)).unwrap();
+    fs::write(r.path().join(format!("{deep}leaf.txt")), "leaf").unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut snap = Snapshot::open(r.path(), &state.path().join("lane")).unwrap();
+    snap.sync().unwrap();
+    let copy = snap.dir.join(format!("{deep}leaf.txt"));
+    assert!(copy.to_string_lossy().len() > 260);
+    assert_eq!(fs::read_to_string(copy).unwrap(), "leaf");
+}

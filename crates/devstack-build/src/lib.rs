@@ -15,6 +15,7 @@
 
 pub mod snapshot;
 
+use devstack_config::interpolate::{self, Placeholder, Resolve};
 use devstack_config::model::Service;
 use devstack_proc::{Build, BuildJob};
 use serde::{Deserialize, Serialize};
@@ -154,9 +155,10 @@ pub fn is_build_file(path: &str) -> bool {
 /// The build id: a hash over the service's inputs (ADR-0002). Inputs are the
 /// files matched by `watch` (all files when it is empty) with their content
 /// hashes; the build-system files ([`BUILD_FILES`]) in the directory of a
-/// watched file or above it; and the build command and output path, so
-/// changing how a service is built also yields a new id. Ignored files are
-/// not in the snapshot and count for nothing.
+/// watched file or above it, and the files of `prepare.inputs`; and the build
+/// command, output path, working directory and `prepare` (command, directory,
+/// inputs), so changing how a service is built also yields a new id. Ignored
+/// files are not in the snapshot and count for nothing.
 pub fn build_id(manifest: &Manifest, svc: &Service) -> Result<String> {
     let set = watch_set(&svc.watch)?;
     // Directories that hold a watched file: a build file applies to them if it
@@ -177,16 +179,35 @@ pub fn build_id(manifest: &Manifest, svc: &Service) -> Result<String> {
                 .iter()
                 .any(|d| *d == dir || d.strip_prefix(dir).is_some_and(|r| r.starts_with('/')))
     };
+    let prepare = svc.prepare.as_ref();
+    // What `prepare` installs from (a lockfile) shapes the build as well.
+    let prepared = watch_set(prepare.map_or(&[][..], |p| p.inputs.as_slice()))?;
     let mut h = blake3::Hasher::new();
-    h.update(b"devstack build id v2\0");
-    h.update(svc.build.as_deref().unwrap_or("").as_bytes());
-    h.update(b"\0");
-    h.update(svc.output.as_deref().unwrap_or("").as_bytes());
-    h.update(b"\0");
+    h.update(b"devstack build id v3\0");
+    let inputs = prepare.map(|p| p.inputs.join("\n"));
+    for part in [
+        svc.build.as_deref(),
+        svc.output.as_deref(),
+        svc.cwd.as_deref(),
+        prepare.map(|p| p.run.as_str()),
+        prepare.and_then(|p| p.cwd.as_deref()),
+        inputs.as_deref(),
+    ] {
+        // A tag before each part: `None` and `Some("")` differ.
+        match part {
+            None => h.update(b"-"),
+            Some(v) => h.update(b"+").update(v.as_bytes()),
+        };
+        h.update(b"\0");
+    }
     for (path, e) in &manifest.files {
         let counts = match &set {
             None => true,
-            Some(s) => s.is_match(path) || (is_build_file(path) && applies(path)),
+            Some(s) => {
+                s.is_match(path)
+                    || (is_build_file(path) && applies(path))
+                    || prepared.as_ref().is_some_and(|p| p.is_match(path))
+            }
         };
         if counts {
             h.update(path.as_bytes());
@@ -329,7 +350,8 @@ impl Builder {
             None => snap.dir.clone(),
         };
         // In a build, `{repo}` is the snapshot: that is where the build runs.
-        let command = expand_repo(command, &snap.dir);
+        let command = expand(command, &snap.dir)?;
+        let output = snap.dir.join(expand(output, &snap.dir)?);
         let spec = devstack_proc::Spec {
             name: format!("build-{service}"),
             command,
@@ -345,7 +367,7 @@ impl Builder {
             lane: lane.into(),
             log,
             build,
-            output: snap.dir.join(expand_repo(output, &snap.dir)),
+            output,
             started: Instant::now(),
         })
     }
@@ -474,8 +496,22 @@ impl Builder {
     }
 }
 
-fn expand_repo(s: &str, repo: &Path) -> String {
-    s.replace("{repo}", &repo.to_string_lossy())
+/// `build` or `output` as the stack file's interpolation reads them
+/// (validation allows `{repo}` and `${VAR}` there): `{repo}` is the snapshot,
+/// `${VAR}` comes from the daemon's environment, `{{`/`}}` are braces. The
+/// same on every platform, before the shell sees the line.
+fn expand(s: &str, snapshot: &Path) -> Result<String> {
+    struct Snap<'a>(&'a Path);
+    impl Resolve for Snap<'_> {
+        fn resolve(&self, p: &Placeholder) -> std::result::Result<String, String> {
+            match p {
+                Placeholder::Repo => Ok(self.0.to_string_lossy().into_owned()),
+                other => Err(format!("`{other}` is not known to a build")),
+            }
+        }
+    }
+    interpolate::expand(s, &Snap(snapshot), &|k| std::env::var(k).ok())
+        .map_err(|e| BuildError::Other(format!("`{s}`: {e}")))
 }
 
 fn copy_dir(from: &Path, to: &Path) -> Result<()> {
