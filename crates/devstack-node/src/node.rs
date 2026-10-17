@@ -174,6 +174,11 @@ struct Inner {
     daemons: Mutex<HashMap<String, DaemonAddr>>,
     /// Lanes starting now, or whose start failed: the phase, or the error.
     starting: Mutex<HashMap<String, Result<String, String>>>,
+    /// A lease came or went: the next report is due now, not in `EVERY`.
+    /// The coordinator admits a lease against the node's last report; one
+    /// that still counts a released lease refuses a lane the node has room
+    /// for.
+    changed: tokio::sync::Notify,
 }
 
 type Shared = Arc<Inner>;
@@ -298,6 +303,8 @@ impl Inner {
     /// thread, Docker takes its time.
     fn drop_lease(self: &Arc<Self>, l: NodeLease) {
         self.daemons.lock().unwrap().remove(&l.id);
+        // What it needed is on offer again: the coordinator hears it now.
+        self.changed.notify_one();
         let s = self.clone();
         std::thread::spawn(move || {
             let run = s.run(&l);
@@ -513,6 +520,7 @@ async fn admit(
     let mut leases = s.leases.lock().unwrap();
     leases.insert(l.id.clone(), l.clone());
     s.save(&leases);
+    s.changed.notify_one();
     Ok((StatusCode::CREATED, Json(l)))
 }
 
@@ -1251,28 +1259,47 @@ fn lanes_use(ids: &[String]) -> Amount {
     }
 }
 
-/// Measure, let expired leases go, and report, every `EVERY`.
+/// The shortest interval idle CPU is measured over: a round a lease change
+/// brought forward keeps the last reading rather than take a noisy one.
+const CPU_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Until the next round: `wait`, or less when a lease came or went.
+async fn next_round(wait: Duration, changed: &tokio::sync::Notify) {
+    tokio::select! {
+        () = tokio::time::sleep(wait) => {}
+        () = changed.notified() => {}
+    }
+}
+
+/// Measure, let expired leases go, and report, every `EVERY`, and at once
+/// when a lease came or went.
 async fn background(s: Shared) {
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
     let mut before = devstack_proc::cpu_times();
+    let mut measured = Instant::now();
+    let mut free_cpus = 0.0;
     let mut wait = Duration::from_secs(2);
     // Whether the pool collects telemetry, and when that was asked (ADR-0037).
     let mut collects: Option<(Instant, bool)> = None;
     let mut sent = Instant::now() - Duration::from_secs(60);
     loop {
-        tokio::time::sleep(wait).await;
+        next_round(wait, &s.changed).await;
         wait = EVERY;
-        let after = devstack_proc::cpu_times();
-        let free = Amount {
-            cpus: match (before, after) {
+        if measured.elapsed() >= CPU_INTERVAL {
+            let after = devstack_proc::cpu_times();
+            free_cpus = match (before, after) {
                 (Some(b), Some(a)) => idle_cpus(b, a, cores),
                 _ => 0.0,
-            },
+            };
+            if after.is_some() {
+                before = after;
+                measured = Instant::now();
+            }
+        }
+        let free = Amount {
+            cpus: free_cpus,
             memory: devstack_proc::memory_available().unwrap_or(0),
         };
-        if after.is_some() {
-            before = after;
-        }
         // What the pool's lanes use here now, their infrastructure included
         // (their containers carry the lease's id).
         let ids: Vec<String> = s.leases.lock().unwrap().keys().cloned().collect();
@@ -1483,6 +1510,7 @@ pub async fn serve(
             .filter(|c| !c.trim().is_empty()),
         daemons: Mutex::new(HashMap::new()),
         starting: Mutex::new(HashMap::new()),
+        changed: tokio::sync::Notify::new(),
     });
     let bg = tokio::spawn(background(s.clone()));
     crate::tls::serve(tls, listener, router(s), stop).await;
@@ -1641,6 +1669,48 @@ mod tests {
                 .unwrap()
                 .file_type()
                 .is_symlink()
+        );
+    }
+
+    /// A released lease reaches the coordinator with the next report: that
+    /// one is due at once, not at the end of `EVERY`, or the coordinator
+    /// refuses a lane against an offer that still counts the gone lease.
+    #[tokio::test]
+    async fn a_lease_change_brings_the_report_forward() {
+        let changed = tokio::sync::Notify::new();
+        // A change while the round runs is not lost: the next one is at once.
+        changed.notify_one();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            next_round(Duration::from_secs(3600), &changed),
+        )
+        .await
+        .expect("a change made earlier brings the round forward");
+        // A change while it waits.
+        let t0 = Instant::now();
+        let (_, ()) = tokio::join!(
+            async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                changed.notify_one();
+            },
+            async {
+                tokio::time::timeout(
+                    Duration::from_secs(5),
+                    next_round(Duration::from_secs(3600), &changed),
+                )
+                .await
+                .expect("a change brings the round forward");
+            }
+        );
+        assert!(t0.elapsed() < Duration::from_secs(5));
+        // Without one it waits its time.
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                next_round(Duration::from_secs(3600), &changed),
+            )
+            .await
+            .is_err()
         );
     }
 
