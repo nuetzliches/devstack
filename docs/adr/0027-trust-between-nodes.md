@@ -1,6 +1,6 @@
 # ADR-0027: Nodes and requesters trust each other by pinned keys, never by network location
 
-- **Status:** Accepted (2026-10-16); points 1 and 2 replaced by [ADR-0031](0031-a-coordinator-places-lanes.md) (certificates from the coordinator instead of pinned pairs), the rest stands
+- **Status:** Accepted (2026-10-16); points 1 and 2 replaced by [ADR-0031](0031-a-coordinator-places-lanes.md) (certificates from the coordinator instead of pinned pairs), the rest stands; point 5 amended 2026-10-17
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** [ADR-0019](0019-control-api-security.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md)
@@ -40,6 +40,17 @@ on it as its only check.
    untracked environment files with development secrets, is copied to the node
    (ADR-0029). The owner of the node can read it. Placing a lane on a node means
    trusting its owner with that; the docs say so.
+
+*Amended 2026-10-17.* Point 5 held for the lane container, not for the
+lane's infrastructure, which the node's Docker engine runs from the
+requester's Compose files. Both are confined now as
+[ADR-0033](0033-a-node-decides-what-runs-on-it.md) amended says (points 7
+to 9): no privilege, no host namespace, no mount outside the lane's mirror,
+limits on every container; the lane container also drops every capability.
+Point 6 gains a second direction: a node trusts the members it runs lanes
+for with its kernel and its Docker engine (a container escape is not
+contained), and only a member an admin granted is a node at all
+([ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md) amended).
 
 ## Alternatives considered
 
