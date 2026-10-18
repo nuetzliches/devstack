@@ -80,7 +80,14 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   `""` for none) in the Compose group where that is wrong.
 - **Paths** are relative to the repository root; use `{repo}` where a process
   needs an absolute one. Generated directories (`bin`, `obj`, `node_modules`,
-  `target`, `.git`, `.devstack`) never count as changes.
+  `target`, `.git`, `.devstack`) never count as changes. Compose files, env
+  files and `[lanes] dockerfile` must stay inside the repository (no absolute
+  path, no `..`).
+- **Placeholders only where they have a value**: `{port}` needs `port`,
+  `{artifact}` needs `build`; `build` and `output` know only `{repo}` and
+  `${VAR}`; `cwd` and `prepare` take none. `devstack check` names each.
+- **Jobs end**: a `kind = "job"` counts as failed after 30 minutes unless it
+  sets `timeout = "…"`; give a long seed or migration one.
 - **Commands with side effects** (deleting data, resetting state) get a
   `confirm` text. Steps run in order; one action per step.
 - **Secrets** do not belong in the stack file. Use `${VAR}` and an env file that

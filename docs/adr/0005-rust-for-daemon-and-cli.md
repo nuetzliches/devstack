@@ -37,3 +37,9 @@ implementation.
 ## Enforced by
 
 - `Cargo.toml` workspace (to be created in phase 1).
+
+*Paths as built, noted 2026-10-18.* The workspace `Cargo.toml` (edition 2024,
+`members = ["crates/*"]`) with nine crates under `crates/`; one binary,
+`devstack` (`crates/devstack`), is CLI, daemon, hub, MCP server, coordinator
+and node agent. CI checks `cargo fmt` and `cargo clippy -D warnings` and runs
+`cargo test` on Windows and Linux (`.github/workflows/ci.yml`).

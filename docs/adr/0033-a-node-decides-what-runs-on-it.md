@@ -133,3 +133,9 @@ mirror), `crates/devstack-compose/src/lib.rs` (`node_overlay`: limits, offline
 builds, image names, no IPv6), `crates/devstack-node/src/lanerun.rs`,
 `crates/devstack-node/src/egress.rs`, `crates/devstack-node/src/policy.rs`
 (`floor_need`, `strictest`).
+
+*Noted 2026-10-18.* The "Not yet" above is half out of date: CPU limits per
+lane are built (`max_cpus` in a policy, `--max-cpus` on `devstack node
+members policy`, `--cpus` on every container of the lane in `lanerun.rs`).
+Placing by node tags (`--on pool:gpu`) is not. `egress.rs` is this ADR's
+point 5, not [ADR-0022](0022-network-egress-sandbox.md), which is unbuilt.

@@ -175,6 +175,30 @@ They are filled in from the stack file; `devstack status` says when they are
 out of date. A command with a confirmation text in the stack file runs only
 when the agent passes `confirm: true`, which it may only do after you agreed.
 
+## Commands
+
+Every command and flag: `devstack --help`, `devstack <command> --help`.
+
+| Command | What it does |
+|---|---|
+| `devstack init`, `check [--compose]`, `schema` | write a first stack file; validate it (with `--compose` every Compose group on its own too); print its JSON Schema |
+| `devstack doctor` | what this machine lacks for this stack, with the fix; exits 1 when something fails |
+| `devstack up [--on <node>\|pool] [--workers] [--force]`, `down [--infra]`, `status` | start (in a worktree: its lane, here or on a node), stop, show the stack |
+| `devstack start\|stop\|restart [--rebuild] <service\|group>`, `promote`, `rollback`, `hot-reload` | one service or group |
+| `devstack build <service> [--lane <lane>]` | sync the snapshot and build an artifact, without starting it |
+| `devstack builds <service>`, `logs`, `top`, `env <service> [--export dotenv]` | what ran, what it printed, what it uses, what it gets |
+| `devstack run <command>` | a command of the stack file |
+| `devstack lane list\|stop\|move\|share` | the lanes (worktrees), see above |
+| `devstack ui [--browser <name\|path>] [--print]` | open and pair the dashboard; the browser is `--browser`, else `DEVSTACK_BROWSER`, else `BROWSER`, else the system's default |
+| `devstack hub [status\|stop\|start\|install\|uninstall]` | the hub that serves the dashboard: without an action in the foreground; `stop` leaves the stacks running; `install` registers it at logon and the `devstack://` link (`--no-autostart`: the link only), `uninstall` removes both, and `devstack up` then leaves them alone |
+| `devstack skills install [--dir] [--force]`, `skills check` | write the agent skills; check that they match this devstack and stack file (exits 1 when not) |
+| `devstack mcp` | the MCP server (above) |
+| `devstack join <url> --fingerprint <fp> [--name] [--pool] [--telemetry] [--no-wait]` | ask a pool to admit this machine ([pool.md](docs/pool.md#join-a-pool)) |
+| `devstack pool [shared\|telemetry on\|off]`, `open <lane> [<service>]` | the pool as this machine sees it; lanes others share with you |
+| `devstack node init\|serve\|fingerprint\|agent` | run a pool's coordinator or a node agent ([pool.md](docs/pool.md)) |
+| `devstack node members [approve\|remove\|role\|tags\|node\|policy]` | administer a pool on its coordinator; `node <id> on\|off` grants a member to run the pool's lanes |
+| `devstack update [--check] [--version <v>]`, `self uninstall` | install a newer release (or only say whether one exists) and move the hub onto it; remove devstack for this user |
+
 ## Why
 
 Most local orchestrators run a service straight out of the working tree's
@@ -217,6 +241,8 @@ dashboard ─────┘    one per repo,   └── services: main slot (f
 | [docs/dashboard-api.md](docs/dashboard-api.md) | the hub's and the daemon's HTTP API |
 | [docs/plan.md](docs/plan.md) | architecture, phases, what is open |
 | [docs/adr/](docs/adr/README.md) | the decision log |
+| [CHANGELOG.md](CHANGELOG.md) | what changed in each release |
+| [SECURITY.md](SECURITY.md) | what devstack exposes, what leaves the machine, the pool's trust model, reporting a vulnerability |
 
 ## Contributing
 

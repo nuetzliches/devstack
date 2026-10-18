@@ -37,3 +37,11 @@ from third-party origins.
 ## Enforced by
 
 - `ui/` (planned), embedding in the daemon crate (planned).
+
+*Paths as built, noted 2026-10-18.* `ui/` (Vue 3, Vite, TypeScript; `npm
+test` runs its unit tests). The bundle is embedded into the hub, not the
+daemon (ADR-0021): `crates/devstack-hub/build.rs` copies `ui/dist` (a placeholder page without
+a build) and
+`include_dir!` in `crates/devstack-hub/src/lib.rs` (`UI`, `asset`) serves it
+from the hub's origin, with a `Content-Security-Policy` that allows scripts
+and connections from that origin only (`page_headers`).

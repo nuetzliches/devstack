@@ -120,3 +120,10 @@ the Dev Drive question when performance mode can be verified.
 Regardless of the outcome: `AGENTS.md` requires every feature to work on native
 Windows, and CI (planned) builds and tests on `windows-latest` and
 `ubuntu-latest`.
+
+*Paths as built, noted 2026-10-18.* `.github/workflows/ci.yml` runs clippy,
+the tests and the integration test (`crates/devstack/tests/daemon_lifecycle.rs`)
+on `windows-latest` and `ubuntu-latest`; Compose variants and the pool's
+node run on Linux only (a node needs Linux containers, see
+[pool.md](../pool.md)). Platform code lives in `crates/devstack-proc`
+(`windows.rs`, `unix.rs`).

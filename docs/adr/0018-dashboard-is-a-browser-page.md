@@ -1,6 +1,6 @@
 # ADR-0018: The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper
 
-- **Status:** Accepted (2026-10-14)
+- **Status:** Accepted (2026-10-14); who serves the dashboard amended by [ADR-0021](0021-a-hub-serves-the-dashboard.md) (the hub); the tray is not built yet
 - **Date:** 2026-10-14
 - **Deciders:** project owner
 - **Related:** [ADR-0006](0006-dashboard-vue-same-origin.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md), plan §6
@@ -70,3 +70,12 @@ security ADR planned for phase 1.
 - Daemon (planned): serves the dashboard, owns the tray (`tray-icon` crate or
   equivalent), `--no-tray`.
 - `ui/` (planned): generated API client only; no other backend.
+
+*Paths as built, noted 2026-10-18.* The hub serves the dashboard, not the
+daemon ([ADR-0021](0021-a-hub-serves-the-dashboard.md)): `crates/devstack-hub`,
+opened by `devstack ui` (`crates/devstack/src/hubcmd.rs`). The dashboard's
+client is hand-written, not generated (`ui/src/api/`: `types.ts`,
+`transport.ts`, `real.ts`; no OpenAPI document exists, the contract is
+[dashboard-api.md](../dashboard-api.md)), and its live state comes over the
+hub's WebSocket. Point 2 is not built: there is no tray, no notification and
+no `--no-tray` yet (plan §13).

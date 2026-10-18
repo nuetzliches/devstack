@@ -1,6 +1,6 @@
 # ADR-0002: Processes run from immutable artifacts, never from the build output of the source tree
 
-- **Status:** Accepted (2026-10-14)
+- **Status:** Accepted (2026-10-14), amended 2026-10-18 (services without `build`; a build whose inputs changed meanwhile is discarded)
 - **Date:** 2026-10-14
 - **Deciders:** project owner
 - **Related:** [problem statement, root cause A](../problem-statement.md#root-cause-a-building-and-running-share-one-output-directory), [plan §3.2](../plan.md#32-change--candidate--main)
@@ -80,6 +80,19 @@ because each new output path invalidates the build's incremental state:
   `{artifact}` as their only output path.
 - Supervisor (planned): refuses to start a service whose working directory is
   not inside `.devstack/artifacts/`, except `kind = "devserver"`.
+
+*Paths as built, noted 2026-10-18.* The crate is `crates/devstack-build`
+(not `devstack-builder`). A build runs in the tree's snapshot
+(`snapshot.rs`) and `Builder::publish` copies its `output` into
+`.devstack/artifacts/<service>/<id>/` through a temporary directory and a
+rename, so an artifact is complete or absent; the build command does not get
+`{artifact}`, the run command does. The supervisor
+(`crates/devstack-daemon/src/supervisor/`: `launch`, `build_locked`,
+`discard_artifact`, `prune_artifacts`) starts a service with `build` from its
+artifact directory only (see the addendum for services without `build`).
+Retention is a constant (the newest five per service plus everything a tree
+runs or may roll back to), not a setting. Tests:
+`crates/devstack-build/tests/pipeline.rs`.
 
 ## What this ADR does not say
 

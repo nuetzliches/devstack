@@ -60,3 +60,12 @@ Losing devstack loses those, not the stack.
   (`docker compose config -q`), or when the `container-app` profile is missing
   for a parked service.
 - ADR-0014 (export path), ADR-0008 (plain configuration keys).
+
+*Paths as built, noted 2026-10-18.* `devstack check --compose`
+(`crates/devstack/src/main.rs`, `Docker::validate` in
+`crates/devstack-compose`) fails when a Compose group does not validate on
+its own. The export path is `devstack env <service> --export dotenv`
+(`crates/devstack/src/envcmd.rs`, `to_dotenv` in `crates/devstack-env`,
+Compose's dialect, tested to read back exactly). Not built: failing `check`
+when an environment cannot be exported, and the check for a missing
+`container-app` profile.

@@ -82,3 +82,13 @@ diagnostic lines, durations by event as histograms, lanes and services
 running), `crates/devstack-node/src/node.rs` (a node's capacity, with the
 coordinator's setting alone), `devstack join --telemetry`, `devstack pool
 telemetry on|off`, the pool area in `ui/`, `crates/devstack-node/tests/telemetry.rs`.
+
+*Noted 2026-10-18.* Point 4's "never service output" did not hold until
+0.10.0: a failed job's or build's reason carried the end of its output. Now
+`outbound` in `crates/devstack-daemon/src/diag.rs` cuts every text of a line
+that leaves the machine (to a pool's collector or to
+`DEVSTACK_OTLP_ENDPOINT`) to its first line; `daemon.log` keeps all. The
+coordinator strips identity attributes a member sets on records and data
+points too, not only on the resource (`strip_identity` in
+`crates/devstack-node/src/telemetry.rs`), and passes collector errors to
+admins only.

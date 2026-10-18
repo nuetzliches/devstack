@@ -68,3 +68,14 @@ belongs to the node and the requester and must match their protocol.
 Will live in: `crates/devstack-config` (`[lanes] image`, with a frozen compat
 file), `crates/devstack-node` (pull, mount of `devstackd`), `devstack
 init` (Dockerfile template), the release workflow (static Linux build).
+
+*Paths as built, noted 2026-10-18.* `crates/devstack-config/src/model.rs`
+(`[lanes] image`, `dockerfile`, `sync`; frozen file
+`crates/devstack-config/tests/compat/v1-0.9.0-remote.toml`),
+`crates/devstack-node/src/lanerun.rs` (`image`: pull, or build from the
+mirror without following a link, offline unless the node's network is `lan`),
+`crates/devstack-node/src/node.rs` (`linux_binary`: the agent's own static
+build, a copy per version, mounted read-only; `DEVSTACK_LANE_BIN` names
+another one for tests), `.github/workflows/release.yml`
+(`x86_64-unknown-linux-musl`). Not built: a Dockerfile template in `devstack
+init` and placement by present layers (point 4).

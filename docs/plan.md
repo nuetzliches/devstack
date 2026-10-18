@@ -1,7 +1,7 @@
 # devstack: plan
 
-- **Status:** Active: phases 0 to 2 done (0.4.0), phase 3 done (lanes per worktree 0.7.0, each with its own infrastructure since 0.8.0, ADR-0030), phase 4 under way; the pool since 0.9.0: lanes on other machines, moved, shared, given the main ports; node policies, several pools, capacity over time, telemetry with consent (ADR-0025 to ADR-0037, 0.9.0 to 0.9.7; [pool.md](pool.md), §7.4, backlog §13)
-- **Date:** 2026-10-14, status updated 2026-10-17
+- **Status:** Active: phases 0 to 2 done (0.4.0), phase 3 done (lanes per worktree 0.7.0, each with its own infrastructure since 0.8.0, ADR-0030), phase 4 under way; the pool since 0.9.0: lanes on other machines, moved, shared, given the main ports; node policies, several pools, capacity over time, telemetry with consent (ADR-0025 to ADR-0037, 0.9.0 to 0.9.8; [pool.md](pool.md), §7.4, backlog §13); 0.10.0 (unreleased) carries the fixes of the review of 0.9.8: lanes confined on a node, nodes granted by an admin, the promotion gate and restore of ADR-0013/0016 as written, the hub's origin rules ([CHANGELOG](../CHANGELOG.md))
+- **Date:** 2026-10-14, status updated 2026-10-18
 - **Inputs:** [problem-statement.md](problem-statement.md), [ADR index](adr/README.md)
 
 This document is the planning artefact. Decisions it relies on are recorded as
@@ -38,6 +38,15 @@ build on either.
                  (infra plane)    <lane>/src (snap)  <svc>/<build-id>/
 ```
 
+**Status 2026-10-18:** the diagram is the plan of phase 1. As built, the
+daemon serves no dashboard: a **hub** (one per user, `127.0.0.1:4250`, part
+of the same binary) serves it for every stack, forwards
+`/hub/stacks/{id}/api/...` to each daemon with the token, and carries the
+daemons' event streams to the browser over one WebSocket
+([ADR-0021](adr/0021-a-hub-serves-the-dashboard.md)). The daemon's own API
+still streams server-sent events, which the CLI reads directly. Lanes, their
+infrastructure and the pool are in §3.5 and [pool.md](pool.md).
+
 ### 2.1 Planes
 
 | Plane | Owner | Lifetime | Decision |
@@ -56,7 +65,8 @@ build on either.
 - **MCP server:** `devstack mcp` (stdio), a client of the same API. Tools map
   one-to-one onto API endpoints ([ADR-0007](adr/0007-one-http-api-is-the-control-surface.md)).
 - **Dashboard:** Vue 3 SPA served by the daemon from the same origin
-  ([ADR-0006](adr/0006-dashboard-vue-same-origin.md)).
+  ([ADR-0006](adr/0006-dashboard-vue-same-origin.md)); as built, served by
+  the hub for every stack ([ADR-0021](adr/0021-a-hub-serves-the-dashboard.md)).
 
 ## 3. Core flows
 
@@ -212,7 +222,7 @@ only what the stack file marks `shared` ([ADR-0030](adr/0030-each-lane-has-its-o
 `promote --lane` forwards the fixed ports of the proxied services and moves
 the workers.
 
-**Built (0.9.0 to 0.9.7, [ADR-0025](adr/0025-a-lane-can-run-on-another-node.md) to
+**Built (0.9.0 to 0.9.8, confined in 0.10.0, [ADR-0025](adr/0025-a-lane-can-run-on-another-node.md) to
 [ADR-0037](adr/0037-telemetry-goes-to-the-pools-collector-with-consent.md)):** a
 lane runs on another machine of a pool (`devstack up --on <node>`), its ports
 forwarded here; it moves, is shared with others in the pool, and on a
@@ -648,7 +658,7 @@ with ports moved by its offset, fixed-name networks and volumes renamed, only
 their worktrees in a sidebar, gives containers pages, and installs updates
 with a click; `devstack ui --browser` pairs the browser you develop in.
 
-**0.9.0 to 0.9.7: the pool** ([pool.md](pool.md)). A coordinator admits members
+**0.9.0 to 0.9.8: the pool** ([pool.md](pool.md)). A coordinator admits members
 with mutual TLS and places lanes; node agents run them in Linux containers
 with their own infrastructure (ADR-0025 to ADR-0031). `devstack up --on` syncs a
 worktree to a node by content and forwards its ports here, its containers'
@@ -660,7 +670,25 @@ shared with others in the pool (ADR-0035), the pool shows its capacity, GPUs
 included, over time (ADR-0036), and sends telemetry to its collector only
 with the member's consent (ADR-0037). A lane on a dedicated node takes the
 main ports (0.9.7, ADR-0025 point 4). Tested end to end in CI: a coordinator,
-a node agent and a lane in Docker (`tests/remote_lane.rs`).
+a node agent and a lane in Docker (`tests/remote_lane.rs`). 0.9.8 made the
+coordinator say when it cannot pass telemetry on.
+
+**0.10.0 (unreleased): the review of 0.9.8.** A review of the whole
+repository (2026-10-17) found the pool's boundaries weaker than its ADRs
+said and two core promises not kept; the fixes are this release, detailed
+in the [changelog](../CHANGELOG.md). A node confines what a lane asks of it
+(the Compose model checked, the mirror never followed out of, limits on
+every container, offline builds on `internet`/`none` nodes) and only nodes
+an admin granted run the pool's lanes (ADR-0027, ADR-0032, ADR-0033
+amended). A held candidate keeps later ones held (ADR-0013), a daemon
+restart starts the last promoted builds without building (ADR-0016), one
+build job serves a daemon and its lanes (ADR-0020), and commands of a lane
+run in its copy (ADR-0024). The hub requires its own page for every request
+with the cookie, forbids framing and sends the token only to a hub that
+proves it knows it (ADR-0019, ADR-0021 amended). The stack file rejects
+more (paths outside the repository, placeholders without a value), jobs
+time out, `env --export dotenv` reads back, and releases carry a build
+provenance attestation. The UI got unit tests (`npm test`).
 
 **Not covered by an automated test:** a machine reboot, a Docker Desktop
 restart, the `devstack://` link opened from a browser, an IDE terminal closing.
@@ -669,9 +697,9 @@ restart, the `devstack://` link opened from a browser, an IDE terminal closing.
 
 | # | Question | Where it is tracked |
 |---|---|---|
-| O-1 | Stack file format: TOML, provisional | [ADR-0017](adr/0017-stack-file-is-toml.md), reviewed at the end of phase 1 |
+| O-1 | Stack file format: TOML, provisional | Resolved: TOML, confirmed 2026-10-15 after the reference stack ran end to end ([ADR-0017](adr/0017-stack-file-is-toml.md)); compatibility by [ADR-0023](adr/0023-stack-file-compatibility.md) |
 | O-2 | Promotion mechanism: restart on fixed port vs. reverse proxy | [ADR-0010](adr/0010-promotion-mechanism.md): resolved, proxy (B), measured |
-| O-3 | Windows-native vs. WSL | [ADR-0011](adr/0011-platform-windows-native-first.md) |
+| O-3 | Windows-native vs. WSL | Resolved: Windows-native first, WSL only through Docker Desktop for containers, measured ([ADR-0011](adr/0011-platform-windows-native-first.md), accepted) |
 | O-4 | Which infrastructure may be shared between lanes | Resolved: each lane its own, `shared` marks the exceptions ([ADR-0030](adr/0030-each-lane-has-its-own-infrastructure.md)) |
 | O-5 | Licence | Resolved: MIT OR Apache-2.0; the repository is public since 2026-10-15 |
 | O-6 | Default daemon port | Resolved: the daemon takes a free port and writes it to `.devstack/daemon.json`; the hub has a fixed one (4250, `DEVSTACK_HUB_PORT`) |
@@ -709,6 +737,21 @@ Rules: no test talks to the network beyond the container registry; platform
 tests assert on the outside (process liveness, files, exit codes), like the
 spikes, not on internal state.
 
+**As built:** `cargo test --workspace` runs everything that needs neither
+the .NET SDK nor Docker nor a node. The rest is `#[ignore]`d with the
+reason, so `cargo test` lists it as ignored; it runs with `-- --include-ignored`
+and its variable set (an included test whose variable is not set returns at
+once). CI sets them where the job has what they need.
+
+| Variable | Tests | Needs |
+|---|---|---|
+| `DEVSTACK_INTEGRATION=1` | `crates/devstack/tests/daemon_lifecycle.rs`: the fixture stack end to end (candidates, promotion, restore after a hard kill, lanes, a hanging job) | the .NET 10 SDK |
+| `DEVSTACK_INTEGRATION_COMPOSE=1` | the same file's Compose variants (`lifecycle_with_compose`, `a_lane_has_its_own_containers`) | the .NET 10 SDK and Docker with Linux containers |
+| `DEVSTACK_DOCKER_TESTS=1` | `crates/devstack-compose/tests/docker.rs` against a real engine | Docker with Linux containers |
+| `DEVSTACK_INTEGRATION_NODE=1` with `DEVSTACK_LANE_BIN=<static build>` | `crates/devstack/tests/remote_lane.rs`: a coordinator, a node agent and a lane in Docker | Linux, Docker, a static `x86_64-unknown-linux-musl` build of `devstack` |
+
+The dashboard has its own unit tests (`npm test` in `ui/`, vitest).
+
 ## 11. Logs and diagnostics
 
 Replaces what the previous orchestrator's console-log view and its MCP tools
@@ -716,12 +759,13 @@ provided, with the build id as the organising key.
 
 - **Capture:** stdout and stderr of every process into a ring buffer per
   process instance (default 10 000 lines) and a file per instance under
-  `.devstack/logs/<service>/<build-id>-<slot>.log`, rotated by size, kept for
-  the last N artifacts (ADR-0002 retention).
-- **Query:** `GET /v1/services/{name}/logs?slot=&build=&since=&grep=&tail=`;
+  `.devstack/logs/<service>/`, rotated by size, kept for the last N artifacts
+  (ADR-0002 retention).
+- **Query:** `GET /v1/services/{name}/logs?build=&since=&grep=&tail=`;
   the same parameters in `devstack logs` and the MCP tool. A search over all
   services at once (`/v1/logs?grep=`) answers "where did this error come from".
-- **Stream:** log lines on the SSE stream for the dashboard and `devstack logs -f`.
+- **Stream:** log lines on a server-sent event stream per service
+  (`/v1/services/{name}/logs/stream`) for the dashboard and `devstack logs -f`.
 - **Daemon log:** structured (JSON lines) under `.devstack/daemon.log`, every
   decision with its reason: build superseded, candidate held and why, promotion,
   escalation to kill, port owner found.

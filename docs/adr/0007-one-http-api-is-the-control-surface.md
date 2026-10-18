@@ -36,3 +36,13 @@ for mutating requests and checks `Origin`.
 
 - API module of the daemon (planned); CLI and MCP crates depend only on a
   generated or hand-written API client.
+
+*Paths as built, noted 2026-10-18.* `crates/devstack-daemon/src/api.rs`
+(`router`, every `/v1` route behind one `guard`); the hand-written client
+`crates/devstack/src/client.rs`, which the CLI and the MCP server
+(`crates/devstack/src/mcp.rs`) share; the dashboard reaches the same routes
+through the hub (`/hub/stacks/{id}/api/...`, ADR-0021). There is no OpenAPI
+description: the contract is [`docs/dashboard-api.md`](../dashboard-api.md).
+Not every MCP tool is one endpoint: `up` also starts the daemon and Docker,
+`doctor` and `diagnostics` read the machine and the daemon log, as the CLI
+does.

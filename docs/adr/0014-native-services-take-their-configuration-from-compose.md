@@ -106,3 +106,14 @@ when it describes a deployment, and then link it with `inherit = false`.
   without devstack.
 - `devstack check` (planned): every native service's environment must be
   exportable (ADR-0015).
+
+*Paths as built, noted 2026-10-18.* `crates/devstack-env/src/lib.rs`
+(`compose`: steps 1 to 4, `DEVSTACK_BUILD_ID`, `DEVSTACK_LANE` and
+`DEVSTACK_SLOT` included; `drift`: the reference-only check; `to_dotenv` and
+`parse_env_file`: Compose's dotenv dialect both ways, so an export reads back
+exactly), `crates/devstack-compose/src/lib.rs` (`Docker::config`, every
+profile enabled), `Supervisor::env_of` in the daemon and `GET
+/v1/services/{name}/env`, `devstack env` (`crates/devstack/src/envcmd.rs`,
+with or without a daemon), `devstack check --compose` (the variables a
+reference-only link neither sets nor ignores). Not built: a `devstack check`
+that fails when an environment cannot be exported.

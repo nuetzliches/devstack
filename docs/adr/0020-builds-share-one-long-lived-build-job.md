@@ -71,3 +71,13 @@ prevented.
 
 - Builder (planned, phase 1 WP5): one build job, cancel by tree from the root.
 - `devstack-proc` (planned): a shared job and a tree-kill for its members.
+
+*Paths as built, noted 2026-10-18.* `crates/devstack-proc/src/builds.rs`
+(`BuildJob`: one job object or cgroup, cancel by the tree below a build's
+root, build servers spared), `crates/devstack-build/src/lib.rs` (`Builder`
+owns the job; `Builder::with_job` and `Builder::job` let a lane's builder
+share the main tree's), `Supervisor::new` / `new_lane` in
+`crates/devstack-daemon/src/supervisor/`: one build job per daemon for the
+main tree and every lane (since 0.10.0; before, one per supervisor). Test:
+`crates/devstack-proc/tests/builds.rs`
+(`cancel_ends_the_build_tree_but_not_the_build_servers`).

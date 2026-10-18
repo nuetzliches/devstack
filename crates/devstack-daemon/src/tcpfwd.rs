@@ -63,7 +63,7 @@ pub fn start(port: u16, target: u16, rt: &tokio::runtime::Handle) -> std::io::Re
 }
 
 /// Listen on `port` (127.0.0.1) and forward every connection to `addr`
-/// (`croniq:4000`): in a lane on a node, its containers are on the lane's
+/// (`scheduler:4000`): in a lane on a node, its containers are on the lane's
 /// network, and this puts each on the loopback port it has on the
 /// developer's machine, so the services see the same addresses there as
 /// here (ADR-0029 point 4).

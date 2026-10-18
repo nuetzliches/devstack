@@ -1,6 +1,6 @@
 # ADR-0019: The control API trusts the user's own processes, never a web page
 
-- **Status:** Accepted (2026-10-14), amended 2026-10-18 (the own page for reads too; the hub proves itself to the CLI)
+- **Status:** Accepted (2026-10-14), amended 2026-10-18 (the own page for reads too; the hub proves itself to the CLI; IPv4 loopback and `DEVSTACK_LISTEN`; the cookie is the hub's, no `devstack token rotate`)
 - **Date:** 2026-10-14
 - **Deciders:** project owner
 - **Related:** [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0018](0018-dashboard-is-a-browser-page.md), plan §5
@@ -107,3 +107,33 @@ user's profile, or run code as this user, is this user.
    agent); anywhere else the daemon refuses to start with an error. In the
    lane container the API is then reachable from every container on the
    lane's network, protected by its token and the `Host` check alone.
+
+## Addendum 2026-10-18: the cookie is the hub's; there is no `token rotate`
+
+1. **Point 2's cookie flow runs in the hub, not in the daemon**
+   ([ADR-0021](0021-a-hub-serves-the-dashboard.md)). `devstack ui` sends the
+   token to the hub (`POST /hub/pair`, only to a hub that proved it knows the
+   token, see the amendment above), gets a one-time code (single use, 60
+   seconds) and opens `http://127.0.0.1:<hub port>/auth?code=…`; the hub sets
+   `HttpOnly; SameSite=Strict; Path=/` with a lifetime of a year and keeps a
+   hash of it in `hub-sessions.json` (0600; deleting the file unpairs every
+   browser with its next request). A daemon has no cookie, no `/auth` and
+   no static files: every request to it carries the token, including the
+   ones the hub forwards for the dashboard. Its `Host`, token and `Origin`
+   checks (points 3 and 4) are as decided. The context's "dashboard served
+   by the daemon itself" and the cookie of point 2 read as the hub's.
+2. **`devstack token rotate` (Consequences) does not exist.** To replace
+   the token: stop every stack's daemon (`devstack down` in each repository)
+   and the hub (`devstack hub stop`), delete the token file
+   (`%LOCALAPPDATA%\devstack\token`, `$XDG_STATE_HOME/devstack/token`, by
+   default `~/.local/state/devstack/token`), then start again; the first
+   daemon or hub creates a new one, readable by this user only. Paired
+   browsers stay paired (their cookie is not derived from the token); delete
+   `hub/hub-sessions.json` beside the token file to unpair them too.
+
+*Paths as built:* `crates/devstack-daemon/src/api.rs` (`guard`: `Host`,
+token in constant time, `Origin` on every method but `GET`, for every route
+and the fallback; no CORS headers), `crates/devstack-daemon/src/token.rs`
+(`load_or_create`: created 0600, never in a shared temporary directory),
+`crates/devstack-daemon/src/lib.rs` (`listen_addr`), `crates/devstack-hub/src/lib.rs`
+(`pair`, `auth`, `guard`), `crates/devstack/src/hubcmd.rs` (`devstack ui`).
