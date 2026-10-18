@@ -137,7 +137,7 @@ sees a change.
 `crates/devstack-daemon/src/lanes.rs` (lanes from `git worktree list`,
 `Lanes::follow`, port ranges, the main-slot hand-over), `Supervisor::new_lane`,
 `run_root`, `copy_ready`, `copy_changed` and the shared `main_owner` in
-`crates/devstack-daemon/src/supervisor.rs`, the lane branch of `watch.rs`,
+`crates/devstack-daemon/src/supervisor/`, the lane branch of `watch.rs`,
 `prepare` in `crates/devstack-config`, `/v1/lanes` in `api.rs`, worktree
 detection in `crates/devstack/src/client.rs`, the stack switcher in
 `ui/src/components/StackSwitcher.vue`, the integration test
