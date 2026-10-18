@@ -7,7 +7,7 @@ Releases before 0.10.0 are summarised in [plan.md §7.4](docs/plan.md#74-phase-2
 and listed with their assets on the
 [releases page](https://github.com/nuetzliches/devstack/releases).
 
-## [0.10.0] - unreleased
+## [0.10.0] - 2026-10-18
 
 The fixes of a review of the whole repository at 0.9.8 (2026-10-17): the
 pool's boundaries, two core promises (ADR-0013, ADR-0016) and the hub's
@@ -191,4 +191,4 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[0.10.0]: https://github.com/nuetzliches/devstack/compare/v0.9.8...HEAD
+[0.10.0]: https://github.com/nuetzliches/devstack/compare/v0.9.8...v0.10.0

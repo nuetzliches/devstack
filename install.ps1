@@ -15,7 +15,7 @@
     prove who built it, since both files come from the same release. When
     `gh` is installed and logged in, the installer also checks the archive's
     build provenance (`gh attestation verify`): that it was built by this
-    repository's release workflow. Releases before 0.9.9 have none.
+    repository's release workflow. Releases before 0.10.0 have none.
 
     The hub integration (start at logon, devstack:// link) is skipped with
     -NoHubIntegration or DEVSTACK_NO_HUB_INTEGRATION=1 (the variable works
@@ -50,7 +50,7 @@ $ErrorActionPreference = 'Stop'
 # `irm | iex` passes no parameters: the opt-out also comes as a variable.
 if ($env:DEVSTACK_NO_HUB_INTEGRATION -and $env:DEVSTACK_NO_HUB_INTEGRATION -ne '0') { $NoHubIntegration = $true }
 # The first release whose archives carry build provenance (attestations).
-$firstAttested = [version]'0.9.9'
+$firstAttested = [version]'0.10.0'
 # Windows PowerShell 5.1 started from PowerShell 7 inherits 7's PSModulePath,
 # tries 7's modules and cannot load them: Get-FileHash and friends go missing
 # (#12). Keep 5.1 to its own module directories; below, .NET does what

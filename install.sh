@@ -11,7 +11,7 @@
 # is the archive the release lists, not damaged or swapped on the way. That
 # does not prove who built it (both files come from the same release); with a
 # logged-in `gh`, `gh attestation verify` also checks the build provenance:
-# built by this repository's release workflow (releases from 0.9.9 on).
+# built by this repository's release workflow (releases from 0.10.0 on).
 #
 # Replacing the binary under a running daemon is fine on Linux; restart the
 # daemon (`devstack down`, `devstack up`) to use the new one. A running hub is
@@ -27,7 +27,7 @@ main() {
   repo=nuetzliches/devstack
   version=""
   dir="${HOME}/.local/bin"
-  first_attested=0.9.9
+  first_attested=0.10.0
   while [ $# -gt 0 ]; do
     case "$1" in
       --version) version="${2#v}"; shift 2 ;;
@@ -135,7 +135,7 @@ hub_answers() {
   curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$1/hub/ping" 2>/dev/null
 }
 
-# `older 0.9.8 0.9.9`: true when the first version is lower.
+# `older 0.9.8 0.10.0`: true when the first version is lower.
 older() {
   [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "${1%%-*}" "${2%%-*}" | sort -V | head -n1)" = "${1%%-*}" ]
 }

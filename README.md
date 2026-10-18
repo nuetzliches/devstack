@@ -50,7 +50,7 @@ damaged or swapped on the way), not who built it, since both come from the
 same release. Each release also carries a build provenance attestation; with
 the [GitHub CLI](https://cli.github.com) installed and logged in, the scripts
 verify it (`gh attestation verify <archive> --repo nuetzliches/devstack`):
-built by this repository's release workflow (releases from 0.9.9 on). The
+built by this repository's release workflow (releases from 0.10.0 on). The
 [landing page](https://nuetzliches.github.io/devstack/) tells whether your
 machine is ready. `devstack update` (or the dashboard) installs a newer
 release; `devstack self uninstall` removes devstack again. From source: `cargo
