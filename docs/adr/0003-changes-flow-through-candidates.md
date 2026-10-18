@@ -54,7 +54,7 @@ production build.
 - Supervisor (planned): promotion is the only path into main.
 
 *Paths as built, noted 2026-10-18.* `crates/devstack-daemon/src/watch.rs`
-(watcher, debounce), `crates/devstack-daemon/src/supervisor.rs` (`changed`,
+(watcher, debounce), `crates/devstack-daemon/src/supervisor/` (`changed`,
 `pipeline`, `candidate_inner`: one candidate per service, a newer change
 cancels the running build; `switch_to`, `promote`, `rollback`),
 `Builder::cancel` in `crates/devstack-build`, the tree-kill in

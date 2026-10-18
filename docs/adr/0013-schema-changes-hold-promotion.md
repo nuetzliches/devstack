@@ -41,7 +41,7 @@ held candidates prominently.
 
 - Promotion gate in the supervisor (planned); stack file validation (planned).
 
-*Paths as built, noted 2026-10-18.* `crates/devstack-daemon/src/supervisor.rs`
+*Paths as built, noted 2026-10-18.* `crates/devstack-daemon/src/supervisor/`
 (`hold_reason`, `hold`, `release_held`, `save_held`, `promote`),
 `crates/devstack-daemon/src/state.rs` (`held`: the gate in `state.json`),
 `crates/devstack-config/src/validate.rs` (`promote.hold_if_changed` globs

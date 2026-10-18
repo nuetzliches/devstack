@@ -119,7 +119,7 @@ needs it as its fallback anyway (condition 3).
 port; `x-devstack-build` and `x-devstack-pending` on every answer; upstream
 connections pooled per port; drain with a deadline; `ProxyView` with
 upstream, connections and last error, conditions 2 and 4),
-`crates/devstack-daemon/src/supervisor.rs` (`ensure_proxy`, `switch_to`;
+`crates/devstack-daemon/src/supervisor/` (`ensure_proxy`, `switch_to`;
 health checks go to the instance's own port, condition 1; `proxy = false`
 restarts in place on the fixed port, condition 3), `tcpfwd.rs` (the TCP
 forward `promote --lane` uses for dev servers), and the integration test

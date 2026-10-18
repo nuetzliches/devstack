@@ -87,7 +87,7 @@ only shares a number with a recorded group is spared (start-time check).
 `Supervisor::new` (`devstack_proc::cleanup` of the recorded process groups
 and cgroups), `crates/devstack-daemon/src/state.rs` (what `state.json`
 keeps: main's builds, the promotion gate), and `restorable` /
-`follow_restore` in `crates/devstack-daemon/src/supervisor.rs`: the first
+`follow_restore` in `crates/devstack-daemon/src/supervisor/`: the first
 start of a service after a daemon start runs the build last promoted to main
 without building (`restored` in the daemon log, since 0.10.0); what changed
 in the tree meanwhile becomes a candidate. Tests:

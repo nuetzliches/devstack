@@ -77,7 +77,7 @@ prevented.
 root, build servers spared), `crates/devstack-build/src/lib.rs` (`Builder`
 owns the job; `Builder::with_job` and `Builder::job` let a lane's builder
 share the main tree's), `Supervisor::new` / `new_lane` in
-`crates/devstack-daemon/src/supervisor.rs`: one build job per daemon for the
+`crates/devstack-daemon/src/supervisor/`: one build job per daemon for the
 main tree and every lane (since 0.10.0; before, one per supervisor). Test:
 `crates/devstack-proc/tests/builds.rs`
 (`cancel_ends_the_build_tree_but_not_the_build_servers`).

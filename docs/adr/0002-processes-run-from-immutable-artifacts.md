@@ -87,7 +87,7 @@ because each new output path invalidates the build's incremental state:
 `.devstack/artifacts/<service>/<id>/` through a temporary directory and a
 rename, so an artifact is complete or absent; the build command does not get
 `{artifact}`, the run command does. The supervisor
-(`crates/devstack-daemon/src/supervisor.rs`: `launch`, `build_locked`,
+(`crates/devstack-daemon/src/supervisor/`: `launch`, `build_locked`,
 `discard_artifact`, `prune_artifacts`) starts a service with `build` from its
 artifact directory only (see the addendum for services without `build`).
 Retention is a constant (the newest five per service plus everything a tree
