@@ -7,6 +7,16 @@ Releases before 0.10.0 are summarised in [plan.md §7.4](docs/plan.md#74-phase-2
 and listed with their assets on the
 [releases page](https://github.com/nuetzliches/devstack/releases).
 
+## [0.10.1] - 2026-10-18
+
+### Fixed
+
+- A command may use `{compose.<group>.<service>.<port>}` (with `.host`,
+  `.port`, `.address`): it resolves to the published address as it does for
+  services. 0.10.0 refused stack files with such a command, so a running
+  stack would not restart on 0.10.0; before, the command failed only when it
+  ran.
+
 ## [0.10.0] - 2026-10-18
 
 The fixes of a review of the whole repository at 0.9.8 (2026-10-17): the
@@ -191,4 +201,5 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
+[0.10.1]: https://github.com/nuetzliches/devstack/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/nuetzliches/devstack/compare/v0.9.8...v0.10.0

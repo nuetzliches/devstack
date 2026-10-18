@@ -470,12 +470,8 @@ fn placeholders_need_a_value_where_they_are_used() {
         "{issues:?}"
     );
     assert!(
-        has(
-            &issues,
-            "commands.c.steps[0].exec",
-            "`{compose.app.db.5432}`: is not available"
-        ),
-        "{issues:?}"
+        !issues.iter().any(|i| i.contains("{compose.app.db.5432}")),
+        "a command may use a Compose service's address: {issues:?}"
     );
 }
 

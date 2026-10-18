@@ -8,6 +8,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 impl Supervisor {
+    /// The published address of every Compose port, `(group, service,
+    /// container port) -> host:port`, as last seen (`{compose.…}`).
+    pub(crate) fn published_ports(&self) -> BTreeMap<(String, String, u16), String> {
+        self.infra.lock().unwrap().published.clone()
+    }
+
     /// A Compose group as this supervisor runs it. In a lane (ADR-0030): its
     /// own project `<project>-<lane>`, its own external networks
     /// `<name>-<lane>`, the overlay written by [`Self::write_lane_overlay`]

@@ -86,10 +86,12 @@ impl Runs {
     }
 }
 
-/// Placeholders a command may use: repository and service URLs.
+/// Placeholders a command may use: repository, service URLs and the
+/// published addresses of Compose services.
 struct CommandContext {
     repo: PathBuf,
     urls: BTreeMap<String, String>,
+    published: BTreeMap<(String, String, u16), String>,
     lane: String,
 }
 
@@ -110,6 +112,16 @@ impl Resolve for CommandContext {
                 .and_then(|u| u.rsplit(':').next())
                 .map(str::to_string)
                 .ok_or_else(|| format!("service `{s}` has no port")),
+            Placeholder::ComposePort {
+                group,
+                service,
+                port,
+                part,
+            } => self
+                .published
+                .get(&(group.clone(), service.clone(), *port))
+                .map(|a| part.of(a))
+                .ok_or_else(|| format!("port {port} of `{group}/{service}` is not published")),
             other => Err(format!("`{other}` is not available in a command")),
         }
     }
@@ -222,6 +234,7 @@ fn execute(
     let ctx = CommandContext {
         repo: root.clone(),
         urls,
+        published: sup.published_ports(),
         lane: sup.lane.clone(),
     };
     let vars = devstack_env::variables(&sup.stack, None, &sup.repo);
