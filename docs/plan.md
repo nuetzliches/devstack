@@ -1,6 +1,6 @@
 # devstack: plan
 
-- **Status:** Active: phases 0 to 2 done (0.4.0), phase 3 done (lanes per worktree 0.7.0, each with its own infrastructure since 0.8.0, ADR-0030), phase 4 under way; the pool since 0.9.0: lanes on other machines, moved, shared, given the main ports; node policies, several pools, capacity over time, telemetry with consent (ADR-0025 to ADR-0037, 0.9.0 to 0.9.8; [pool.md](pool.md), §7.4, backlog §13); 0.10.0 (unreleased) carries the fixes of the review of 0.9.8: lanes confined on a node, nodes granted by an admin, the promotion gate and restore of ADR-0013/0016 as written, the hub's origin rules ([CHANGELOG](../CHANGELOG.md))
+- **Status:** Active: phases 0 to 2 done (0.4.0), phase 3 done (lanes per worktree 0.7.0, each with its own infrastructure since 0.8.0, ADR-0030), phase 4 under way; the pool since 0.9.0: lanes on other machines, moved, shared, given the main ports; node policies, several pools, capacity over time, telemetry with consent (ADR-0025 to ADR-0037, 0.9.0 to 0.9.8; [pool.md](pool.md), §7.4, backlog §13); 0.10.0 (2026-10-18) carries the fixes of the review of 0.9.8: lanes confined on a node, nodes granted by an admin, the promotion gate and restore of ADR-0013/0016 as written, the hub's origin rules ([CHANGELOG](../CHANGELOG.md))
 - **Date:** 2026-10-14, status updated 2026-10-18
 - **Inputs:** [problem-statement.md](problem-statement.md), [ADR index](adr/README.md)
 
@@ -673,7 +673,7 @@ main ports (0.9.7, ADR-0025 point 4). Tested end to end in CI: a coordinator,
 a node agent and a lane in Docker (`tests/remote_lane.rs`). 0.9.8 made the
 coordinator say when it cannot pass telemetry on.
 
-**0.10.0 (unreleased): the review of 0.9.8.** A review of the whole
+**0.10.0 (2026-10-18): the review of 0.9.8.** A review of the whole
 repository (2026-10-17) found the pool's boundaries weaker than its ADRs
 said and two core promises not kept; the fixes are this release, detailed
 in the [changelog](../CHANGELOG.md). A node confines what a lane asks of it

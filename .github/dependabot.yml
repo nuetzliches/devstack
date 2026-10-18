@@ -1,6 +1,6 @@
 # Updates for the pinned actions, the Rust dependencies and the dashboard's
 # npm packages: one pull request per ecosystem and week for minor and patch
-# versions, one per major version. Security updates come as they appear.
+# versions (actions: majors too), one per major version otherwise. Security updates come as they appear.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -8,8 +8,9 @@ updates:
     schedule:
       interval: weekly
     groups:
+      # Actions change rarely in a way that needs work here: majors too.
       actions:
-        update-types: [minor, patch]
+        update-types: [major, minor, patch]
 
   - package-ecosystem: cargo
     directory: /
