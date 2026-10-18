@@ -91,7 +91,7 @@ they are no longer needed to separate data.
 
 `lane_overlay` in `crates/devstack-compose` (with its unit test),
 `compose_group` / `write_lane_overlay` / `is_shared` in
-`crates/devstack-daemon/src/supervisor.rs`, `remove_infra` and the port ranges
+`crates/devstack-daemon/src/supervisor/infra.rs`, `remove_infra` and the port ranges
 in `crates/devstack-daemon/src/lanes.rs`, `memory_fits` in `api.rs`,
 `memory_available` in `crates/devstack-proc`, `shared` in `crates/devstack-config`
 (validated against `services`), the integration test

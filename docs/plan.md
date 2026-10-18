@@ -123,7 +123,7 @@ references).
    again without a build. Retention: last N artifacts per service (default 5).
 
 **Status 0.2.0:** steps 1-8 are implemented (`crates/devstack-daemon`:
-`watch.rs`, the candidate pipeline and `replace` in `supervisor.rs`, `proxy.rs`),
+`watch.rs`, the candidate pipeline and `replace` in `supervisor/`, `proxy.rs`),
 with option B of ADR-0010; `restart` takes the same path. Phase 2 additionally
 brought the hub and the dashboard (ADR-0021).
 
