@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 mod buildcmd;
 mod client;
+mod dispatch;
 mod doctor;
 mod envcmd;
 mod hubcmd;
@@ -546,356 +547,235 @@ fn repo_of(file: &Path) -> Result<PathBuf> {
     Ok(abs.parent().map(Path::to_path_buf).unwrap_or(abs))
 }
 
+/// Every command goes to the area that handles it ([`dispatch`]).
 fn main() -> Result<()> {
-    let cli = Cli::parse();
-    match cli.cmd {
-        Cmd::Check { compose } => {
-            let stack = load(&cli.file);
-            println!(
-                "{}: ok ({} compose group(s), {} service(s), {} command(s))",
-                cli.file.display(),
-                stack.compose.len(),
-                stack.services.len(),
-                stack.commands.len()
-            );
-            if let Ok(text) = std::fs::read_to_string(&cli.file) {
-                for w in devstack_config::compat::warnings(&text) {
-                    println!("warning: {w}");
-                }
-            }
-            if compose {
-                let repo = repo_of(&cli.file)?;
-                let docker = devstack_compose::Docker::default();
-                let mut failed = false;
-                for (name, g) in &stack.compose {
-                    let group = devstack_compose::Group::from_config(name, g, &repo);
-                    match docker.validate(&group) {
-                        Ok(()) => println!("compose.{name}: ok"),
-                        Err(e) => {
-                            failed = true;
-                            eprintln!("compose.{name}: {e}");
-                        }
-                    }
-                }
-                if failed {
-                    std::process::exit(1);
-                }
-                // Reference-only links (ADR-0014): what the deployment sets that
-                // the stack file neither sets nor ignores. A notice, not an error.
-                for (name, svc) in &stack.services {
-                    let Some(r) = svc.compose.as_ref().filter(|r| !r.inherit) else {
-                        continue;
-                    };
-                    let group = devstack_compose::Group::from_config(
-                        &r.group,
-                        &stack.compose[&r.group],
-                        &repo,
-                    );
-                    let model = docker.config(&group)?;
-                    let Some(m) = model.services.get(&r.service) else {
-                        eprintln!(
-                            "services.{name}: compose.{}.{} not found",
-                            r.group, r.service
-                        );
-                        std::process::exit(1);
-                    };
-                    let drift = devstack_env::drift(svc, m.environment.keys().map(String::as_str));
-                    if drift.is_empty() {
-                        println!(
-                            "services.{name}: no drift against compose.{}.{}",
-                            r.group, r.service
-                        );
-                    } else {
-                        println!(
-                            "services.{name}: {} variable(s) of compose.{}.{} neither set nor ignored here:",
-                            drift.len(),
-                            r.group,
-                            r.service
-                        );
-                        for k in drift {
-                            println!("  {k}");
-                        }
-                    }
-                }
-            }
-            Ok(())
+    let Cli { file, cmd } = Cli::parse();
+    match cmd {
+        cmd @ (Cmd::Check { .. }
+        | Cmd::Build { .. }
+        | Cmd::Up { .. }
+        | Cmd::Down { .. }
+        | Cmd::Status
+        | Cmd::Env { .. }
+        | Cmd::Schema
+        | Cmd::Doctor
+        | Cmd::Init { .. }
+        | Cmd::Mcp) => dispatch::stack::run(&file, cmd),
+        cmd @ (Cmd::Start { .. }
+        | Cmd::Stop { .. }
+        | Cmd::Restart { .. }
+        | Cmd::HotReload { .. }
+        | Cmd::Promote { .. }
+        | Cmd::Rollback { .. }
+        | Cmd::Logs { .. }
+        | Cmd::Builds { .. }
+        | Cmd::Top { .. }
+        | Cmd::Run { .. }) => dispatch::services::run(&file, cmd),
+        Cmd::Lane { action } => dispatch::lane::run(&file, action),
+        cmd @ (Cmd::Node { .. } | Cmd::Join { .. } | Cmd::Pool { .. } | Cmd::Open { .. }) => {
+            dispatch::pool::run(&file, cmd)
         }
-        Cmd::Up { workers, force, on } => client::up(&cli.file, workers, force, on.as_deref()),
-        Cmd::Down { infra } => client::down(&cli.file, infra),
-        Cmd::Status => {
-            let c = client::need(&client::state_dir(&cli.file)?)?;
-            client::print_status_for(&c.stack()?, &cli.file);
-            Ok(())
+        cmd @ (Cmd::Ui { .. } | Cmd::Hub { .. } | Cmd::OpenUrl { .. }) => dispatch::hub::run(cmd),
+        cmd @ (Cmd::Update { .. } | Cmd::Myself { .. }) => dispatch::myself::run(cmd),
+        Cmd::Skills { action } => dispatch::skills::run(&file, action),
+        cmd @ (Cmd::Daemon | Cmd::ServeStatic { .. } | Cmd::Shim { .. }) => {
+            dispatch::internal::run(&file, cmd)
         }
-        Cmd::Start { service } => client::service_action(&cli.file, &service, "start"),
-        Cmd::Stop { service } => client::service_action(&cli.file, &service, "stop"),
-        Cmd::Restart { service, rebuild } => client::service_action(
-            &cli.file,
-            &service,
-            if rebuild { "rebuild" } else { "restart" },
-        ),
-        Cmd::HotReload { service, state } => {
-            client::service_action(&cli.file, &service, &format!("hot-reload-{state}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! The command line's surface, pinned: these parse as they did before,
+    //! and what clap refuses stays refused.
+
+    use super::*;
+    use clap::CommandFactory;
+    use clap::error::ErrorKind;
+
+    fn parse(args: &[&str]) -> Cli {
+        Cli::try_parse_from(std::iter::once("devstack").chain(args.iter().copied()))
+            .unwrap_or_else(|e| panic!("{args:?}: {e}"))
+    }
+
+    fn refused(args: &[&str]) -> ErrorKind {
+        match Cli::try_parse_from(std::iter::once("devstack").chain(args.iter().copied())) {
+            Ok(_) => panic!("{args:?} parsed"),
+            Err(e) => e.kind(),
         }
-        Cmd::Promote { service, lane } => match lane {
-            Some(l) => client::promote_lane(&cli.file, &l),
-            None => client::service_action(&cli.file, &service.unwrap_or_default(), "promote"),
-        },
-        Cmd::Lane { action } => match action {
-            LaneAction::List => client::lane_list(&cli.file),
-            LaneAction::Stop { name } => client::lane_stop(&cli.file, &name),
-            LaneAction::Move { name, to } => client::lane_move(&cli.file, &name, &to),
-            LaneAction::Share { name, with } => client::lane_share(&cli.file, &name, &with),
-        },
-        Cmd::Rollback { service } => client::service_action(&cli.file, &service, "rollback"),
-        Cmd::Logs {
+    }
+
+    #[test]
+    fn the_definition_is_consistent() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn the_stack_file_defaults_and_is_global() {
+        assert_eq!(parse(&["status"]).file, PathBuf::from("devstack.toml"));
+        let cli = parse(&["restart", "api", "-f", "other.toml", "--rebuild"]);
+        assert_eq!(cli.file, PathBuf::from("other.toml"));
+        assert!(matches!(
+            cli.cmd,
+            Cmd::Restart { service, rebuild: true } if service == "api"
+        ));
+    }
+
+    #[test]
+    fn up_takes_its_lane_options() {
+        let Cmd::Up { workers, force, on } = parse(&["up", "--workers", "--on", "pool"]).cmd else {
+            panic!("not up");
+        };
+        assert!(workers && !force);
+        assert_eq!(on.as_deref(), Some("pool"));
+    }
+
+    #[test]
+    fn promote_takes_a_service_or_a_lane() {
+        assert!(matches!(
+            parse(&["promote", "api"]).cmd,
+            Cmd::Promote { service: Some(s), lane: None } if s == "api"
+        ));
+        assert!(matches!(
+            parse(&["promote", "--lane", "main"]).cmd,
+            Cmd::Promote { service: None, lane: Some(l) } if l == "main"
+        ));
+        assert_eq!(refused(&["promote"]), ErrorKind::MissingRequiredArgument);
+        assert_eq!(
+            refused(&["promote", "api", "--lane", "x"]),
+            ErrorKind::ArgumentConflict
+        );
+    }
+
+    #[test]
+    fn hot_reload_is_on_or_off() {
+        assert!(matches!(
+            parse(&["hot-reload", "web", "on"]).cmd,
+            Cmd::HotReload { service, state } if service == "web" && state == "on"
+        ));
+        assert_eq!(
+            refused(&["hot-reload", "web", "maybe"]),
+            ErrorKind::InvalidValue
+        );
+    }
+
+    #[test]
+    fn logs_options_and_their_conflicts() {
+        let Cmd::Logs {
             service,
             tail,
             follow,
-            daemon,
-            hub,
             grep,
-            build,
-            since,
-            list,
-            log,
-            json,
-        } => {
-            if list {
-                client::log_files(&cli.file, service.as_deref().unwrap_or_default())
-            } else if build.is_some() || since.is_some() || log.is_some() {
-                client::logs_kept(
-                    &cli.file,
-                    service.as_deref(),
-                    client::LogFilter {
-                        tail,
-                        grep: grep.as_deref(),
-                        build: build.as_deref(),
-                        since: since.as_deref(),
-                        file: log.as_deref(),
-                    },
-                )
-            } else if daemon || hub {
-                let path = if hub {
-                    devstack_hub::log_path()
-                } else {
-                    client::state_dir(&cli.file)?.join("daemon.log")
-                };
-                client::diag_log(&path, tail, grep.as_deref(), follow, json)
-            } else if let Some(service) = service {
-                match grep.as_deref() {
-                    Some(g) if follow => {
-                        let c = client::need(&client::state_dir(&cli.file)?)?;
-                        client::follow_logs(&c, &service, tail, Some(g))
-                    }
-                    Some(g) => client::logs_grep(&cli.file, Some(&service), g, tail),
-                    None => client::logs(&cli.file, &service, tail, follow),
-                }
-            } else if follow {
-                Err(anyhow::anyhow!(
-                    "--follow follows one service: name it (or --daemon / --hub)"
-                ))
-            } else if let Some(g) = grep.as_deref() {
-                client::logs_grep(&cli.file, None, g, tail)
-            } else {
-                Err(anyhow::anyhow!(
-                    "name a service, search all of them with --grep, or --daemon / --hub for devstack's own log"
-                ))
+            ..
+        } = parse(&["logs", "api", "-n", "50", "--follow", "--grep", "error"]).cmd
+        else {
+            panic!("not logs");
+        };
+        assert_eq!(service.as_deref(), Some("api"));
+        assert_eq!(tail, 50);
+        assert!(follow);
+        assert_eq!(grep.as_deref(), Some("error"));
+        assert!(matches!(parse(&["logs"]).cmd, Cmd::Logs { tail: 200, .. }));
+        assert_eq!(
+            refused(&["logs", "--list"]),
+            ErrorKind::MissingRequiredArgument
+        );
+        assert_eq!(
+            refused(&["logs", "--daemon", "--hub"]),
+            ErrorKind::ArgumentConflict
+        );
+        assert_eq!(
+            refused(&["logs", "api", "--build", "abc", "--follow"]),
+            ErrorKind::ArgumentConflict
+        );
+    }
+
+    #[test]
+    fn lane_pool_and_node_subcommands() {
+        assert!(matches!(
+            parse(&["lane", "move", "feature", "--to", "local"]).cmd,
+            Cmd::Lane { action: LaneAction::Move { name, to } } if name == "feature" && to == "local"
+        ));
+        assert!(matches!(
+            parse(&["lane", "share", "feature", "--with", "team:qa", "--with", "*"]).cmd,
+            Cmd::Lane { action: LaneAction::Share { with, .. } } if with == ["team:qa", "*"]
+        ));
+        assert!(matches!(
+            parse(&["pool", "--pool", "team", "telemetry", "on"]).cmd,
+            Cmd::Pool { pool: Some(p), action: Some(PoolAction::Telemetry { state: Some(s) }) }
+                if p == "team" && s == "on"
+        ));
+        // `--dir` of `node members` is global to its actions.
+        assert!(matches!(
+            parse(&["node", "members", "approve", "m1", "--admin", "--dir", "coord"]).cmd,
+            Cmd::Node { action: NodeAction::Members {
+                action: Some(MembersAction::Approve { member, admin: true }),
+                dir: Some(d),
+            } } if member == "m1" && d == Path::new("coord")
+        ));
+        assert_eq!(
+            refused(&["node", "init"]),
+            ErrorKind::MissingRequiredArgument
+        );
+        let Cmd::Join { pool, no_wait, .. } =
+            parse(&["join", "https://coord:7443", "--fingerprint", "ab"]).cmd
+        else {
+            panic!("not join");
+        };
+        assert_eq!(pool, "default");
+        assert!(!no_wait);
+    }
+
+    #[test]
+    fn hub_self_skills_and_env() {
+        assert!(matches!(parse(&["hub"]).cmd, Cmd::Hub { action: None }));
+        assert!(matches!(
+            parse(&["hub", "install", "--no-autostart"]).cmd,
+            Cmd::Hub {
+                action: Some(HubAction::Install { no_autostart: true })
             }
-        }
-        Cmd::Mcp => mcp::serve(&cli.file),
-        Cmd::Ui { print, browser } => hubcmd::ui(print, browser.as_deref()),
-        Cmd::Hub { action: None } => devstack_hub::serve().map_err(|e| anyhow::anyhow!(e)),
-        Cmd::Hub {
-            action: Some(HubAction::Status),
-        } => {
-            println!("{}", hubcmd::status_text());
-            Ok(())
-        }
-        Cmd::Hub {
-            action: Some(HubAction::Stop),
-        } => hubcmd::stop(),
-        Cmd::Hub {
-            action: Some(HubAction::Start),
-        } => {
-            let port = devstack_hub::ensure_running().map_err(|e| anyhow::anyhow!(e))?;
-            println!("hub running: http://127.0.0.1:{port}");
-            Ok(())
-        }
-        Cmd::Hub {
-            action: Some(HubAction::Install { no_autostart }),
-        } => {
-            integration::install(!no_autostart)?;
-            println!("{}", integration::status_text());
-            Ok(())
-        }
-        Cmd::Hub {
-            action: Some(HubAction::Uninstall),
-        } => {
-            integration::uninstall()?;
-            println!("{}", integration::status_text());
-            Ok(())
-        }
-        Cmd::Node { action } => match action {
-            NodeAction::Init { addresses, dir } => poolcmd::init(dir, &addresses),
-            NodeAction::Serve { listen, dir } => poolcmd::serve(dir, &listen),
-            NodeAction::Fingerprint { dir } => poolcmd::print_fingerprint(dir),
-            NodeAction::RunLane { on, lane, keep } => {
-                poolcmd::run_lane(&cli.file, &on, &lane, keep)
+        ));
+        assert!(matches!(
+            parse(&["self", "uninstall", "--yes"]).cmd,
+            Cmd::Myself {
+                action: SelfAction::Uninstall { yes: true }
             }
-            NodeAction::Agent {
-                listen,
-                api,
-                max_cpus,
-                max_memory_gib,
-                dedicated,
-                pool,
-            } => poolcmd::agent(&pool, &listen, api, max_cpus, max_memory_gib, dedicated),
-            NodeAction::Members { action, dir } => match action.unwrap_or(MembersAction::List) {
-                MembersAction::List => poolcmd::members_list(dir),
-                MembersAction::Approve { member, admin } => {
-                    poolcmd::members_approve(dir, &member, admin)
-                }
-                MembersAction::Role { member, role } => poolcmd::members_role(dir, &member, &role),
-                MembersAction::Tags { member, tags } => poolcmd::members_tags(dir, &member, &tags),
-                MembersAction::Node { member, state } => {
-                    poolcmd::members_node(dir, &member, &state)
-                }
-                MembersAction::Policy {
-                    node,
-                    allow,
-                    repo,
-                    memory_headroom,
-                    max_cpus,
-                    network,
-                    clear,
-                } => poolcmd::members_policy(
-                    dir,
-                    &node,
-                    allow,
-                    repo,
-                    (memory_headroom, max_cpus),
-                    network,
-                    clear,
-                ),
-                MembersAction::Remove { member } => poolcmd::members_remove(dir, &member),
-            },
-        },
-        Cmd::Join {
-            coordinator,
-            fingerprint,
-            name,
-            no_wait,
-            pool,
-            telemetry,
-        } => {
-            if telemetry {
-                poolcmd::telemetry(&pool, Some("on"))?;
+        ));
+        assert!(matches!(
+            parse(&["skills", "check"]).cmd,
+            Cmd::Skills {
+                action: SkillsAction::Check
             }
-            poolcmd::join(&pool, &coordinator, &fingerprint, name.as_deref(), !no_wait)
-        }
-        Cmd::Pool { pool, action } => match action {
-            None => poolcmd::pool(pool.as_deref()),
-            Some(PoolAction::Shared) => hubcmd::shared(pool.as_deref()),
-            Some(PoolAction::Telemetry { state }) => poolcmd::telemetry(
-                pool.as_deref()
-                    .unwrap_or(devstack_node::member::DEFAULT_POOL),
-                state.as_deref(),
-            ),
-        },
-        Cmd::OpenUrl { url } => integration::open_url(&url),
-        Cmd::Open {
-            lane,
-            service,
-            pool,
-        } => hubcmd::open_shared(&lane, service.as_deref(), pool.as_deref()),
-        Cmd::Init { dir, print, json } => {
-            let repo = match dir {
-                Some(d) => d,
-                None => std::env::current_dir()?,
-            };
-            init::run(&repo, print, json)
-        }
-        Cmd::Update { check, version } => update::run(check, version.as_deref()),
-        Cmd::Doctor => {
-            if !doctor::print(&doctor::run(&cli.file)) {
-                std::process::exit(1);
+        ));
+        assert!(matches!(
+            parse(&["env", "api", "--export", "dotenv", "--out", "api.env"]).cmd,
+            Cmd::Env {
+                export: Some(ExportFormat::Dotenv),
+                out: Some(_),
+                ..
             }
-            Ok(())
-        }
-        Cmd::Myself {
-            action: SelfAction::Uninstall { yes },
-        } => selfcmd::uninstall(yes),
-        Cmd::Skills {
-            action: SkillsAction::Install { dir, force },
-        } => {
-            let stack = load(&cli.file);
-            for o in skills::install(&stack, &cli.file, dir.as_deref(), force)? {
-                match o {
-                    skills::Outcome::Written(p) => println!("written    {}", p.display()),
-                    skills::Outcome::Unchanged(p) => println!("up to date {}", p.display()),
-                    skills::Outcome::Kept(p) => println!(
-                        "kept       {} (written by the project, not by devstack; --force replaces it)",
-                        p.display()
-                    ),
-                }
+        ));
+        assert_eq!(refused(&["nosuch"]), ErrorKind::InvalidSubcommand);
+    }
+
+    #[test]
+    fn hidden_commands_still_parse() {
+        assert!(matches!(
+            parse(&["serve-static", "dist", "--port", "8080", "--no-spa"]).cmd,
+            Cmd::ServeStatic {
+                port: 8080,
+                no_spa: true,
+                ..
             }
-            Ok(())
-        }
-        Cmd::Skills {
-            action: SkillsAction::Check,
-        } => {
-            match skills::outdated_note(&cli.file) {
-                // Outdated is a failure, so a script or CI can check it.
-                Some(n) => {
-                    println!("{n}");
-                    std::process::exit(1);
-                }
-                None => println!("skills: up to date (or not installed in the default directory)"),
-            }
-            Ok(())
-        }
-        Cmd::ServeStatic { dir, port, no_spa } => {
-            devstack_daemon::staticsrv::serve(dir, port, !no_spa).map_err(|e| anyhow::anyhow!(e))
-        }
-        Cmd::Builds { service, limit } => client::builds(&cli.file, &service, limit),
-        Cmd::Top { watch } => topcmd::run(&cli.file, watch),
-        Cmd::Run { command, yes } => client::run_command(&cli.file, &command, yes),
-        Cmd::Daemon => devstack_daemon::serve(&cli.file).map_err(|e| anyhow::anyhow!(e)),
-        Cmd::Build { service, lane } => {
-            let stack = load(&cli.file);
-            buildcmd::run(&stack, &repo_of(&cli.file)?, &service, &lane)
-        }
-        Cmd::Env {
-            service,
-            export,
-            out,
-        } => {
-            let stack = load(&cli.file);
-            envcmd::run(
-                &stack,
-                &repo_of(&cli.file)?,
-                &cli.file,
-                &service,
-                export.is_some(),
-                out.as_deref(),
-            )
-        }
-        Cmd::Shim { args } => {
-            #[cfg(unix)]
-            devstack_proc::shim_main(&args);
-            #[cfg(not(unix))]
-            {
-                let _ = args;
-                anyhow::bail!("the shim is only used on Linux")
-            }
-        }
-        Cmd::Schema => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&devstack_config::json_schema())?
-            );
-            Ok(())
-        }
+        ));
+        assert!(matches!(
+            parse(&["shim", "run", "--flag", "-x"]).cmd,
+            Cmd::Shim { args } if args == ["run", "--flag", "-x"]
+        ));
+        assert!(matches!(parse(&["daemon"]).cmd, Cmd::Daemon));
+        assert!(matches!(
+            parse(&["open-url", "devstack://hub/start"]).cmd,
+            Cmd::OpenUrl { .. }
+        ));
     }
 }
