@@ -132,7 +132,10 @@ before are refused now, and a pool needs its nodes granted.
 ### Added
 
 - `timeout` for jobs; `POST /v1/runs/{id}/cancel`; `StackView.watcher_error`.
-- `devstack node members node <id> on|off`.
+- `devstack node members node <id> on|off`, and the same grant in the
+  dashboard's member list (`POST /hub/pool/members/{id}/node`).
+- The outcome of an update started from the dashboard is reported by the new
+  hub (installed version, or the failure with the end of `hub/update.log`).
 - Unit tests for the dashboard (`npm test` in `ui/`, vitest).
 - [SECURITY.md](SECURITY.md) describes the pool's listeners, what leaves the
   machine and the pool's trust model; this changelog.
@@ -172,6 +175,18 @@ before are refused now, and a pool needs its nodes granted.
 - `devstack self uninstall` removes the install directory on Windows;
   `devstack update` and `install.ps1` replace the binary without a
   half-written file; the PATH entry keeps its registry type.
+- The file watcher judges an event by its path before it opens anything, and
+  on Windows no longer lists new directories: `pnpm install` failed with
+  `EBUSY` in about one run in four while a daemon watched the repository.
+  A folder moved into the tree on Windows is reported as itself; its files
+  count when they change.
+- A daemon that lost the start race against another daemon for the same
+  stack ends at once instead of running beside it.
+- A lane on a node re-hashes only files whose size or modification time
+  changed, and uploads stream; the node writes them to disk as they arrive.
+- Publishing an artifact on Windows waits out a scanner holding one of its
+  files instead of failing the candidate.
+- Dependencies: `toml` 1, `rand` 0.10, `windows-sys` 0.61.
 - Dashboard: an unknown candidate state no longer breaks every service row;
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.

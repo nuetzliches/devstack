@@ -103,9 +103,9 @@ machine's certificate), `ui/` (the pool area).
 `crates/devstack/src/poolcmd.rs`, `crates/devstack-hub/src/pool.rs`
 (`/hub/pool/*`), `ui/src/views/PoolView.vue` and `ui/src/stores/pool.ts`;
 tests in `crates/devstack-node/tests/pool.rs`. The node grant of the
-amendment is on the coordinator and its admin API only
-(`devstack node members node <id> on|off`); the hub has no route for it and
-the dashboard does not show it yet.
+amendment: `/v1/admin/members/{id}/node` on the coordinator,
+`devstack node members node <id> on|off`, `POST /hub/pool/members/{id}/node`
+and the "Allow lanes" toggle of the member list in the dashboard.
 
 ## What this ADR does not say
 
