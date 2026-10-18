@@ -2,7 +2,8 @@
 
 use super::{InfraCache, Supervisor, topo};
 use crate::state::{ContainerView, EventBody, InfraView};
-use devstack_compose::Group;
+use devstack_compose::{Container, Group};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -139,6 +140,39 @@ impl Supervisor {
         }
     }
 
+    /// A container as `compose ps` reports it, as the view shows it (nothing
+    /// marked unreachable); its published addresses go into `published`.
+    fn container_view(
+        &self,
+        group: &str,
+        c: Container,
+        published: &mut BTreeMap<(String, String, u16), String>,
+    ) -> ContainerView {
+        let mut ports = Vec::new();
+        for p in &c.publishers {
+            if let Some(addr) = c.published(p.target_port) {
+                published.insert(
+                    (group.to_string(), c.service.clone(), p.target_port),
+                    addr.clone(),
+                );
+                let s = format!("{}->{addr}", p.target_port);
+                if !ports.contains(&s) {
+                    ports.push(s);
+                }
+            }
+        }
+        ContainerView {
+            service: c.service.clone(),
+            name: c.name,
+            exit_code: c.exit_code,
+            state: c.state,
+            health: c.health,
+            urls: self.container_urls(group, &c.service, &ports),
+            ports,
+            unreachable: Vec::new(),
+        }
+    }
+
     /// Re-read only the containers' states (`compose ps`, no `config`): cheap
     /// enough to run every few seconds, so a container that stopped or turned
     /// unhealthy shows as such. Every change is an event.
@@ -160,19 +194,7 @@ impl Supervisor {
                 };
                 let mut next = Vec::new();
                 for c in containers {
-                    let mut ports = Vec::new();
-                    for p in &c.publishers {
-                        if let Some(addr) = c.published(p.target_port) {
-                            cache.published.insert(
-                                (g.clone(), c.service.clone(), p.target_port),
-                                addr.clone(),
-                            );
-                            let s = format!("{}->{addr}", p.target_port);
-                            if !ports.contains(&s) {
-                                ports.push(s);
-                            }
-                        }
-                    }
+                    let mut c = self.container_view(&g, c, &mut cache.published);
                     let state = |s: &str, h: &str| {
                         if h.is_empty() {
                             s.to_string()
@@ -192,25 +214,15 @@ impl Supervisor {
                     // The last verdict of `check_forwards` stays until the
                     // container stops (a restart repairs a lost forward).
                     let up = c.state == "running";
-                    let unreachable = if up {
-                        view.containers
+                    if up {
+                        c.unreachable = view
+                            .containers
                             .iter()
                             .find(|o| o.service == c.service)
                             .map(|o| o.unreachable.clone())
-                            .unwrap_or_default()
-                    } else {
-                        Vec::new()
-                    };
-                    next.push(ContainerView {
-                        service: c.service.clone(),
-                        name: c.name,
-                        exit_code: c.exit_code,
-                        state: c.state,
-                        health: c.health,
-                        urls: self.container_urls(&g, &c.service, &ports),
-                        ports,
-                        unreachable,
-                    });
+                            .unwrap_or_default();
+                    }
+                    next.push(c);
                 }
                 for gone in view
                     .containers
@@ -267,29 +279,8 @@ impl Supervisor {
             match self.docker.ps(&group) {
                 Ok(containers) => {
                     for c in containers {
-                        let mut ports = Vec::new();
-                        for p in &c.publishers {
-                            if let Some(addr) = c.published(p.target_port) {
-                                cache.published.insert(
-                                    (g.clone(), c.service.clone(), p.target_port),
-                                    addr.clone(),
-                                );
-                                let s = format!("{}->{addr}", p.target_port);
-                                if !ports.contains(&s) {
-                                    ports.push(s);
-                                }
-                            }
-                        }
-                        view.containers.push(ContainerView {
-                            service: c.service.clone(),
-                            name: c.name,
-                            exit_code: c.exit_code,
-                            state: c.state,
-                            health: c.health,
-                            urls: self.container_urls(&g, &c.service, &ports),
-                            ports,
-                            unreachable: Vec::new(),
-                        });
+                        let c = self.container_view(&g, c, &mut cache.published);
+                        view.containers.push(c);
                     }
                 }
                 Err(e) => view.error = Some(e.to_string()),

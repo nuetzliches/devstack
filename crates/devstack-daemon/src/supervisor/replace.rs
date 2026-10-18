@@ -64,9 +64,24 @@ The running instance was left as it was."
                 }
             }
         }
-        // Jobs this service comes after run again first (a schema migrator for a
-        // migration that came with the change); their build is cached when
-        // nothing changed. A failing job leaves the running instance alone.
+        self.rerun_after_jobs(&svc)?;
+        let running = self.slots.lock().unwrap()[name].main.is_some();
+        if svc.proxied() && running {
+            self.replace(name, &svc, artifact)?;
+        } else {
+            self.set_candidate(name, None);
+            self.stop(name)?;
+            self.start_with(name, artifact)?;
+        }
+        // A build of the tree as it is now is main: a held candidate is older.
+        self.release_held(name, None);
+        Ok(())
+    }
+
+    /// Jobs `svc` comes after run again first (a schema migrator for a
+    /// migration that came with the change); their build is cached when
+    /// nothing changed. A failing job leaves the running instance alone.
+    pub(super) fn rerun_after_jobs(self: &Arc<Self>, svc: &Service) -> Result<(), String> {
         for dep in &svc.after {
             if self
                 .stack
@@ -79,16 +94,6 @@ The running instance was left as it was."
                 })?;
             }
         }
-        let running = self.slots.lock().unwrap()[name].main.is_some();
-        if svc.proxied() && running {
-            self.replace(name, &svc, artifact)?;
-        } else {
-            self.set_candidate(name, None);
-            self.stop(name)?;
-            self.start_with(name, artifact)?;
-        }
-        // A build of the tree as it is now is main: a held candidate is older.
-        self.release_held(name, None);
         Ok(())
     }
 

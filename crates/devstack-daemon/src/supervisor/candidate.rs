@@ -2,7 +2,7 @@
 
 use super::{DEBOUNCE, Held, RESCAN, SUPERSEDED, Supervisor, first_lines};
 use crate::state::Candidate;
-use devstack_config::model::{Kind, Service};
+use devstack_config::model::Service;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -240,18 +240,7 @@ impl Supervisor {
         svc: &Service,
         artifact: (String, PathBuf),
     ) -> Result<(), String> {
-        for dep in &svc.after {
-            if self
-                .stack
-                .services
-                .get(dep)
-                .is_some_and(|d| d.kind == Kind::Job)
-            {
-                self.restart(dep).map_err(|e| {
-                    format!("`{dep}` failed:\n{e}\nThe running instance was left as it was.")
-                })?;
-            }
-        }
+        self.rerun_after_jobs(svc)?;
         if svc.proxied() && self.slots.lock().unwrap()[name].main.is_some() {
             return self.replace(name, svc, Some(artifact));
         }

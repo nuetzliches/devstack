@@ -731,11 +731,12 @@ const JOB_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// rescan): what changed is not known.
 pub(crate) const RESCAN: &str = "(rescan)";
 
-/// Logs kept per service: the newest starts and builds (plan §11).
+/// Logs kept per service: the newest starts (plan §11).
 pub const KEEP_RUN_LOGS: usize = 20;
+/// Logs kept per service: the newest builds, and the newest `prepare`s (plan §11).
+pub const KEEP_BUILD_LOGS: usize = 10;
 /// Artifacts kept per service beyond the pinned ones (ADR-0002 retention).
 pub const KEEP_ARTIFACTS: usize = 5;
-pub const KEEP_BUILD_LOGS: usize = 10;
 
 /// Quiet period after the last change before a candidate is built (plan §3.2).
 const DEBOUNCE: Duration = Duration::from_secs(2);
