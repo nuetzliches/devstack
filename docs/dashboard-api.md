@@ -45,8 +45,8 @@ and `Referrer-Policy: no-referrer`. The dashboard has no inline script.
 | `GET /hub/session` | cookie | `200 {"version": "0.9.7"}`, or `401` (not paired: show "run `devstack ui`") |
 | `GET /hub/stacks` | cookie | `[StackEntry]` |
 | `GET /hub/ws?path=<stream>` | cookie + Origin | WebSocket that carries the server-sent event stream at `<stream>` (`/hub/events` or `/hub/stacks/{id}/api/v1/...`), one text message per event's `data`; how the dashboard reads every stream (a browser allows six HTTP/1.1 connections per host across all its tabs, WebSockets do not count; ADR-0021). The upstream is opened before the upgrade: `503` for a stack not running, `400` for another path. When the stream ends the socket closes |
-| `GET /hub/events` | cookie | SSE: `{"type":"stacks","stacks":[StackEntry]}` and `{"type":"docker","docker":DockerEngine}` and `{"type":"release","current","newer":string|null}` (a newer devstack; checked at start, every 12 h by the clock and when a dashboard connects and the last answer is over an hour old, unless `DEVSTACK_NO_UPDATE_CHECK`) and `{"type":"update","update":{"running":bool,"error":string|null}}` (the dashboard's update), each first and on every change |
-| `POST /hub/update` | cookie + Origin | `202`: `devstack update` in the background (output in `hub/update.log`); on success it restarts the hub on the new version, so the dashboard reconnects to it; on failure the `update` event carries the end of its output. `409` while one runs. Running stacks switch at their next restart |
+| `GET /hub/events` | cookie | SSE: `{"type":"stacks","stacks":[StackEntry]}` and `{"type":"docker","docker":DockerEngine}` and `{"type":"release","current","newer":string|null}` (a newer devstack; checked at start, every 12 h by the clock and when a dashboard connects and the last answer is over an hour old, unless `DEVSTACK_NO_UPDATE_CHECK`) and `{"type":"update","update":{"running":bool,"error":string|null,"installed":string|null,"finished":ms|null}}` (the dashboard's update; `finished` is when the last one ended, `installed` the version it installed, told by the hub it started), each first and on every change |
+| `POST /hub/update` | cookie + Origin | `202`: `devstack update` in the background (output in `hub/update.log`); on success it restarts the hub on the new version, so the dashboard reconnects to it, and the new hub's `update` event names the installed version (the old hub leaves `hub/update.json` for it; a hub that starts on the old version while the updater runs waits for it and reports a failure); on failure the `update` event carries the end of its output. `409` while one runs (checked and claimed in one step). Running stacks switch at their next restart |
 | `POST /hub/stacks/scan` | cookie + Origin | `{"path", "add"?, "depth"?}`: every repository with a `devstack.toml` below a folder (default three levels, `depth` is clamped to 1 to 6; a repository only at its root, linked worktrees skipped), `[{repo, id, name, error, registered, added}]`; with `add` the valid new ones are registered |
 | `POST /hub/pick-folder` | cookie + Origin | the operating system's folder dialog, shown by the hub (Windows: Explorer picker, Linux: XDG portal): `{"path": "..."}`, `{"path": null}` when cancelled, `501` without a desktop, `409` while one is open |
 | `GET /hub/inspect?path=` | cookie | `{repo, is_dir, has_stack_file, valid, registered, id}` for an absolute folder path (the "Add a stack" dialog). `valid` is `null` without a stack file, `{"Ok":null}` when it loads, `{"Err":"<why>"}` when not; `registered` is the id or `null`. Every route that takes a `path` takes a local one only: `400` for a network path (`\\host\share`, `//host/share`; on Windows anything but a drive, `C:\` or `\\?\C:\`) |
@@ -70,6 +70,7 @@ and `Referrer-Policy: no-referrer`. The dashboard has no inline script.
 | `POST /hub/pool/nodes/{id}/pause`, `.../resume` | cookie + Origin | admins only: a paused node takes no new lanes (the coordinator refuses leases on it); running ones stay |
 | `POST /hub/pool/leases/{id}/end` | cookie + Origin | admins only: `202`; the node stops that lane at its next report (within about 15 s); its requester sees the lease over |
 | `POST /hub/pool/members/{id}/tags {"tags"}` | cookie + Origin | admins only: replace a member's tags (ADR-0033); the member's `PoolMember` |
+| `POST /hub/pool/members/{id}/node {"node"}` | cookie + Origin | admins only: let an approved member run the pool's lanes as a node (`true`), or take that back (`false`; the coordinator places no new lanes there); the member's `PoolMember` |
 | `POST /hub/pool/nodes/{id}/policy` (a `NodePolicy` or `null`) | cookie + Origin | admins only: what the node lets run on it, `{allow, repos, memory_headroom?, network: "lan"\|"internet"\|"none"}`; `null` lifts it |
 | `POST /hub/pool/join {"coordinator", "fingerprint", "name"?}` | cookie + Origin | ask a pool to admit this machine (`devstack join` without waiting); `GET /hub/pool` shows it pending until an admin approves. `coordinator` is `https://<host>[:<port>]` and nothing more (`400` otherwise). Errors of every `/hub/pool...` route pass on the coordinator's own `{"error"}` only, never the body of whatever else answered |
 | `POST /hub/pool/members/{id}/role {"role"}` | cookie + Origin | admins only: `member` or `admin`; `409 {"error"}` for the last admin. A member who is no admin gets `403` from all three |
@@ -110,13 +111,14 @@ type PoolOverview = {
       gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean }[];
     };
   }[];
-  audit?: { at: number; by: string; action: 'approve' | 'reject' | 'remove' | 'role' | 'pause' | 'resume' | 'end' | 'tags' | 'policy'; member: string; name: string; detail?: string }[]; // admins only, newest first
+  audit?: { at: number; by: string; action: 'approve' | 'reject' | 'remove' | 'role' | 'pause' | 'resume' | 'end' | 'tags' | 'policy' | 'node'; member: string; name: string; detail?: string }[]; // admins only, newest first
 };
 type PoolMember = {
   id: string; name: string; state: 'pending' | 'approved' | 'removed'; role: 'member' | 'admin'; requested_at: number;
   address?: string;           // admins only
   tags?: string[];            // ADR-0033
   policy?: NodePolicy;        // as a node
+  node?: true;                // an admin let it run the pool's lanes; absent: not
 };
 type NodePolicy = { allow?: string[]; repos?: string[]; memory_headroom?: number; max_cpus?: number; network?: 'lan' | 'internet' | 'none' };
 ```

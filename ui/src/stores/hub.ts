@@ -1,13 +1,18 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, paths, Unreachable, type StreamState, type Subscription } from '@/api';
-import type { DockerEngine, HubEvent, HubSession, StackEntry } from '@/api/types';
+import type { DockerEngine, HubEvent, HubSession, StackEntry, UpdateState } from '@/api/types';
 import { act } from '@/lib/actions';
 import { checkForAppUpdate } from '@/lib/app-update';
 import { persist } from '@/lib/persist';
 import { useUi } from '@/stores/ui';
 
 export type SessionStatus = 'loading' | 'ok' | 'unpaired' | 'unreachable';
+
+/** localStorage: when the last update outcome this browser showed ended. */
+const UPDATE_SEEN = 'updateSeen';
+/** An update outcome older than this is not news to a page that did not start it. */
+const UPDATE_FRESH_MS = 10 * 60 * 1000;
 
 /** The hub: session, the list of stacks, and whether we can reach it at all. */
 export const useHub = defineStore('hub', () => {
@@ -32,6 +37,30 @@ export const useHub = defineStore('hub', () => {
   let checking: Promise<void> | null = null;
 
   const reachable = computed(() => status.value === 'ok' && stream.value === 'open');
+
+  /**
+   * The outcome of an update, once: from the hub that ran it (it failed or
+   * there was nothing to install), or from the hub it started (it installed
+   * a version). Every tab and every reload sees the same outcome again; only
+   * one that ended in the last few minutes, and that this browser has not
+   * shown yet, makes a toast.
+   */
+  function onUpdate(u: UpdateState) {
+    const was = updating.value;
+    updating.value = u.running;
+    if (u.running) return;
+    const at = u.finished ?? null;
+    if (at === null) {
+      // An older hub: no time, so only an update this page saw start.
+      if (was && u.error) useUi().toast('error', 'The update failed', u.error, 15000);
+      return;
+    }
+    if (persist.get<number>(UPDATE_SEEN) === at) return;
+    if (!was && Date.now() - at > UPDATE_FRESH_MS) return;
+    persist.set(UPDATE_SEEN, at);
+    if (u.error) useUi().toast('error', 'The update failed', u.error, 15000);
+    else if (u.installed) useUi().toast('success', `devstack ${u.installed} is installed`, 'Running stacks switch at their next restart.');
+  }
 
   function save() {
     persist.saveHub({ stacks: stacks.value, version: version.value, at: lastContact.value ?? Date.now() });
@@ -67,9 +96,7 @@ export const useHub = defineStore('hub', () => {
           return;
         }
         if (ev.type === 'update') {
-          const failed = updating.value && !ev.update.running && ev.update.error;
-          updating.value = ev.update.running;
-          if (failed) useUi().toast('error', 'The update failed', ev.update.error ?? '', 15000);
+          onUpdate(ev.update);
           return;
         }
         if (ev.type === 'docker') {

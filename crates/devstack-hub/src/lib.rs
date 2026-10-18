@@ -353,7 +353,7 @@ pub fn serve() -> Result<(), String> {
             engine: engine_rx,
             newer: newer_rx,
             release_poke,
-            update: watch::channel(UpdateState::default()).0,
+            update: initial_update_state(&dir),
             start_errors,
             engine_fast_until,
             shutdown: shutdown.clone(),
@@ -429,6 +429,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/pool/nodes/{id}/resume", post(pool::resume))
         .route("/hub/pool/leases/{id}/end", post(pool::end))
         .route("/hub/pool/members/{id}/tags", post(pool::tags))
+        .route("/hub/pool/members/{id}/node", post(pool::node))
         .route("/hub/pools", get(pool::pools))
         .route("/hub/pool/history", get(pool::history))
         .route(
@@ -868,12 +869,127 @@ struct UpdateState {
     running: bool,
     /// Why the last one failed: the end of its output.
     error: Option<String>,
+    /// The version the last update installed. A successful update stops the
+    /// hub that started it; the new hub says so (see `PendingUpdate`).
+    installed: Option<String>,
+    /// When the last update ended (ms since the epoch), so a dashboard that
+    /// connects later can tell a fresh outcome from an old one.
+    finished: Option<u64>,
+}
+
+impl UpdateState {
+    fn ended(error: Option<String>, installed: Option<String>) -> Self {
+        Self {
+            running: false,
+            error,
+            installed,
+            finished: Some(u64::try_from(now_ms()).unwrap_or(u64::MAX)),
+        }
+    }
+}
+
+/// `hub/update.json`: an update the dashboard started. A successful update
+/// stops the hub that started it, so that hub never learns the outcome; the
+/// hub that starts next reads this file and reports it.
+#[derive(Debug, Serialize, Deserialize)]
+struct PendingUpdate {
+    /// The version of the hub that started it.
+    from: String,
+    /// The updater (`devstack update`).
+    pid: u32,
+    /// When it started (ms since the epoch).
+    started: u64,
+}
+
+const PENDING_UPDATE: &str = "update.json";
+
+/// An update file older than this is a leftover, not an update.
+const PENDING_UPDATE_MAX_AGE_MS: u64 = 3600 * 1000;
+
+/// The last lines of the update log: why an update failed.
+fn update_log_tail(log: &std::path::Path) -> String {
+    let text = std::fs::read_to_string(log).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().collect();
+    lines[lines.len().saturating_sub(10)..].join("\n")
+}
+
+/// The outcome of an update a previous hub started, if there is one: read
+/// (and removed) at start. `alive` tells whether the updater still runs; if
+/// it does, its pid comes back with a `running` state and the caller watches
+/// it (and removes the file once it ends).
+fn pending_update(
+    dir: &std::path::Path,
+    version: &str,
+    now: u64,
+    alive: impl Fn(u32) -> bool,
+) -> Option<(UpdateState, Option<u32>)> {
+    let path = dir.join(PENDING_UPDATE);
+    let text = std::fs::read_to_string(&path).ok()?;
+    let p = serde_json::from_str::<PendingUpdate>(&text)
+        .ok()
+        .filter(|p| now.saturating_sub(p.started) < PENDING_UPDATE_MAX_AGE_MS);
+    let Some(p) = p else {
+        let _ = std::fs::remove_file(&path);
+        return None;
+    };
+    if p.from != version {
+        let _ = std::fs::remove_file(&path);
+        return Some((UpdateState::ended(None, Some(version.into())), None));
+    }
+    if alive(p.pid) {
+        // Still at work: this hub was started meanwhile, by the old binary.
+        let state = UpdateState {
+            running: true,
+            ..UpdateState::default()
+        };
+        return Some((state, Some(p.pid)));
+    }
+    let _ = std::fs::remove_file(&path);
+    Some((update_failed(&dir.join("update.log")), None))
+}
+
+/// An update ended and this hub still runs the version it started from.
+fn update_failed(log: &std::path::Path) -> UpdateState {
+    let tail = update_log_tail(log);
+    let error = if tail.trim().is_empty() {
+        "the update ended without installing a new version".to_string()
+    } else {
+        tail
+    };
+    UpdateState::ended(Some(error), None)
+}
+
+/// The update state a starting hub reports: idle, or the outcome of the
+/// update the hub before it started (see `PendingUpdate`).
+fn initial_update_state(dir: &std::path::Path) -> watch::Sender<UpdateState> {
+    let now = u64::try_from(now_ms()).unwrap_or(u64::MAX);
+    let Some((state, running)) = pending_update(dir, VERSION, now, devstack_proc::pid_alive) else {
+        return watch::channel(UpdateState::default()).0;
+    };
+    if state.installed.is_some() {
+        diag::info("update_done", serde_json::json!({ "installed": VERSION }));
+    }
+    let tx = watch::channel(state).0;
+    if let Some(pid) = running {
+        let tx = tx.clone();
+        let dir = dir.to_path_buf();
+        std::thread::spawn(move || {
+            while devstack_proc::pid_alive(pid) {
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            // A successful update would have stopped this hub.
+            let _ = std::fs::remove_file(dir.join(PENDING_UPDATE));
+            tx.send_replace(update_failed(&dir.join("update.log")));
+        });
+    }
+    tx
 }
 
 /// `POST /hub/update`: `devstack update` in the background, as if typed in a
 /// terminal. On success it stops this hub and starts the new one, so the
-/// dashboard reconnects to the new version; running stacks keep theirs until
-/// they restart. On failure the hub stream says why. Output goes to
+/// dashboard reconnects to the new version, and the new hub reports what was
+/// installed (`hub/update.json`); running stacks keep theirs until they
+/// restart. On failure the hub stream says why. Output goes to
 /// `hub/update.log`.
 async fn update(State(s): State<AppState>) -> Response {
     // Check and set in one step: a double click starts one updater.
@@ -883,7 +999,7 @@ async fn update(State(s): State<AppState>) -> Response {
         } else {
             *u = UpdateState {
                 running: true,
-                error: None,
+                ..UpdateState::default()
             };
             true
         }
@@ -891,9 +1007,11 @@ async fn update(State(s): State<AppState>) -> Response {
     if !claimed {
         return err(StatusCode::CONFLICT, "an update is running");
     }
-    let log = state_dir().join("update.log");
+    let dir = state_dir();
+    let log = dir.join("update.log");
     let spawned = tokio::task::spawn_blocking({
         let log = log.clone();
+        let dir = dir.clone();
         move || {
             let exe = std::env::current_exe().map_err(|_| "cannot find devstack".to_string())?;
             let out = std::fs::File::create(&log).map_err(|e| e.to_string())?;
@@ -906,7 +1024,20 @@ async fn update(State(s): State<AppState>) -> Response {
                 .stdout(out)
                 .stderr(out2);
             no_window(&mut cmd);
-            cmd.spawn().map_err(|e| e.to_string())
+            let child = cmd.spawn().map_err(|e| e.to_string())?;
+            let pending = PendingUpdate {
+                from: VERSION.into(),
+                pid: child.id(),
+                started: u64::try_from(now_ms()).unwrap_or(u64::MAX),
+            };
+            if let Err(e) = std::fs::write(
+                dir.join(PENDING_UPDATE),
+                serde_json::to_vec(&pending).unwrap_or_default(),
+            ) {
+                // The update still runs; only its success goes unreported.
+                diag::warn("update_file", serde_json::json!({ "error": e.to_string() }));
+            }
+            Ok::<_, String>(child)
         }
     })
     .await
@@ -914,10 +1045,8 @@ async fn update(State(s): State<AppState>) -> Response {
     let mut child = match spawned {
         Ok(c) => c,
         Err(e) => {
-            s.update.send_replace(UpdateState {
-                running: false,
-                error: Some(e.clone()),
-            });
+            s.update
+                .send_replace(UpdateState::ended(Some(e.clone()), None));
             return err(StatusCode::INTERNAL_SERVER_ERROR, e);
         }
     };
@@ -925,18 +1054,14 @@ async fn update(State(s): State<AppState>) -> Response {
     let tx = s.update.clone();
     std::thread::spawn(move || {
         let ok = child.wait().is_ok_and(|st| st.success());
-        let error = (!ok).then(|| {
-            let text = std::fs::read_to_string(&log).unwrap_or_default();
-            let lines: Vec<&str> = text.lines().collect();
-            lines[lines.len().saturating_sub(10)..].join("\n")
-        });
+        // Still here: the update did not stop this hub (it failed, or there
+        // was nothing to install), so this hub reports it, not the next one.
+        let _ = std::fs::remove_file(dir.join(PENDING_UPDATE));
+        let error = (!ok).then(|| update_log_tail(&log));
         if let Some(e) = &error {
             diag::warn("update_failed", serde_json::json!({ "output": e }));
         }
-        tx.send_replace(UpdateState {
-            running: false,
-            error,
-        });
+        tx.send_replace(UpdateState::ended(error, None));
     });
     StatusCode::ACCEPTED.into_response()
 }
@@ -1973,5 +2098,69 @@ mod guard_tests {
         strip_hop_by_hop(&mut h);
         assert_eq!(h.len(), 1, "{h:?}");
         assert!(h.contains_key("content-type"));
+    }
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::*;
+
+    fn write_pending(dir: &std::path::Path, from: &str, started: u64) {
+        let p = PendingUpdate {
+            from: from.into(),
+            pid: 4242,
+            started,
+        };
+        std::fs::write(dir.join(PENDING_UPDATE), serde_json::to_vec(&p).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_next_hub_reports_what_an_update_installed() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(pending_update(d.path(), "1.0.0", 1000, |_| false).is_none());
+        write_pending(d.path(), "0.9.8", 1000);
+        let (state, watch) = pending_update(d.path(), "1.0.0", 2000, |_| true).unwrap();
+        assert_eq!(state.installed.as_deref(), Some("1.0.0"));
+        assert!(!state.running && state.error.is_none() && state.finished.is_some());
+        assert!(watch.is_none());
+        assert!(!d.path().join(PENDING_UPDATE).exists(), "reported once");
+    }
+
+    #[test]
+    fn the_same_version_after_an_update_is_a_failure() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join("update.log"),
+            "installing\nerror: no network\n",
+        )
+        .unwrap();
+        write_pending(d.path(), "0.9.8", 1000);
+        // The updater still runs: wait for it.
+        let (state, watch) = pending_update(d.path(), "0.9.8", 2000, |_| true).unwrap();
+        assert!(state.running);
+        assert_eq!(watch, Some(4242));
+        assert!(d.path().join(PENDING_UPDATE).exists());
+        // It ended: the log says why.
+        let (state, _) = pending_update(d.path(), "0.9.8", 2000, |_| false).unwrap();
+        assert!(!state.running);
+        assert!(state.error.unwrap().contains("no network"));
+        assert!(!d.path().join(PENDING_UPDATE).exists());
+    }
+
+    #[test]
+    fn an_old_or_broken_update_file_is_ignored() {
+        let d = tempfile::tempdir().unwrap();
+        write_pending(d.path(), "0.9.8", 1000);
+        let late = 1000 + PENDING_UPDATE_MAX_AGE_MS;
+        assert!(pending_update(d.path(), "1.0.0", late, |_| true).is_none());
+        assert!(!d.path().join(PENDING_UPDATE).exists());
+        std::fs::write(d.path().join(PENDING_UPDATE), "{").unwrap();
+        assert!(pending_update(d.path(), "1.0.0", 1000, |_| true).is_none());
+        assert!(!d.path().join(PENDING_UPDATE).exists());
+    }
+
+    #[test]
+    fn this_process_is_alive() {
+        assert!(devstack_proc::pid_alive(std::process::id()));
     }
 }

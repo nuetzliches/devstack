@@ -298,6 +298,11 @@ export class MockTransport implements Transport {
       const r = hub.pool.tags(decodeURIComponent(pt[1]), (body as { tags?: string[] } | undefined)?.tags ?? []);
       return json(r.status, r.body);
     }
+    const pg = /^\/hub\/pool\/members\/([^/]+)\/node$/.exec(p);
+    if (pg && method === 'POST') {
+      const r = hub.pool.grantNode(decodeURIComponent(pg[1]), (body as { node?: boolean } | undefined)?.node === true);
+      return json(r.status, r.body);
+    }
     const pp = /^\/hub\/pool\/nodes\/([^/]+)\/policy$/.exec(p);
     if (pp && method === 'POST') {
       const r = hub.pool.policy(decodeURIComponent(pp[1]), body as never);
@@ -334,7 +339,7 @@ export class MockTransport implements Transport {
       send({ type: 'update', update: { running: true, error: null } });
       setTimeout(() => {
         hub.newer = null;
-        send({ type: 'update', update: { running: false, error: null } });
+        send({ type: 'update', update: { running: false, error: null, installed: '0.5.0', finished: Date.now() } });
         send({ type: 'release', current: '0.5.0', newer: null });
       }, 2500);
       return empty(202);

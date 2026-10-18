@@ -73,6 +73,7 @@ export const paths = {
   poolEnd: (lease: string) => `/hub/pool/leases/${enc(lease)}/end`,
   poolJoin: '/hub/pool/join',
   poolTags: (id: string) => `/hub/pool/members/${enc(id)}/tags`,
+  poolNode: (id: string) => `/hub/pool/members/${enc(id)}/node`,
   poolPolicy: (id: string) => `/hub/pool/nodes/${enc(id)}/policy`,
   /**
    * A daemon path of `stack`. With a `lane` (plan §3.5) it goes to that

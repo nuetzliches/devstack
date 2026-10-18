@@ -460,7 +460,7 @@ impl Builder {
             serde_json::to_vec_pretty(&meta).expect("meta serialises"),
         )
         .map_err(|e| BuildError::io("write artifact meta", e))?;
-        match fs::rename(&tmp, &fin) {
+        match rename_dir(&tmp, &fin) {
             Ok(()) => Ok(fin),
             Err(_) if fin.exists() => {
                 let _ = fs::remove_dir_all(&tmp); // published concurrently with the same id
@@ -524,6 +524,29 @@ fn expand(s: &str, snapshot: &Path) -> Result<String> {
     }
     interpolate::expand(s, &Snap(snapshot), &|k| std::env::var(k).ok())
         .map_err(|e| BuildError::Other(format!("`{s}`: {e}")))
+}
+
+/// Rename a directory that was just written. On Windows a directory cannot
+/// be renamed while any file in it is open, and a virus scanner or the search
+/// indexer opens freshly written files for a moment: "Access is denied" or a
+/// sharing violation then passes within a few seconds.
+fn rename_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    let until = Instant::now() + Duration::from_secs(10);
+    let mut pause = Duration::from_millis(20);
+    loop {
+        match fs::rename(from, to) {
+            Err(e) if cfg!(windows) && transient(&e) && !to.exists() && Instant::now() < until => {
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(Duration::from_millis(500));
+            }
+            other => return other,
+        }
+    }
+}
+
+/// `ERROR_ACCESS_DENIED` (5) or `ERROR_SHARING_VIOLATION` (32).
+fn transient(e: &std::io::Error) -> bool {
+    matches!(e.raw_os_error(), Some(5 | 32))
 }
 
 fn copy_dir(from: &Path, to: &Path) -> Result<()> {

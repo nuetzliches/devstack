@@ -7,8 +7,9 @@
 //! - `POST /hub/pool/members/{id}/approve` `{role?}`, `.../remove`,
 //!   `.../role` `{role}`, `POST /hub/pool/nodes/{id}/pause|resume`,
 //!   `POST /hub/pool/leases/{id}/end`, `POST /hub/pool/members/{id}/tags`
-//!   `{tags}`, `POST /hub/pool/nodes/{id}/policy` (a policy or `null`): an
-//!   admin's changes, passed on as they are
+//!   `{tags}`, `POST /hub/pool/members/{id}/node` `{node}`,
+//!   `POST /hub/pool/nodes/{id}/policy` (a policy or `null`): an admin's
+//!   changes, passed on as they are
 //! - `POST /hub/pool/join` `{coordinator, fingerprint, name?}`: ask to join a
 //!   pool (`devstack join` without waiting)
 //! - `GET /hub/pools`: the pools this machine belongs to (ADR-0034)
@@ -211,6 +212,19 @@ pub async fn tags(
     Json(t): Json<devstack_node::coordinator::TagsRequest>,
 ) -> Response {
     match blocking(&q, move |l| l.admin_tags(&id, &t.tags)).await {
+        Ok(m) => Json(m).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+/// `POST /hub/pool/members/{id}/node` `{node}`: let a member run the
+/// pool's lanes as a node, or take that back.
+pub async fn node(
+    Path(id): Path<String>,
+    Query(q): Query<PoolQuery>,
+    Json(b): Json<devstack_node::coordinator::NodeRequest>,
+) -> Response {
+    match blocking(&q, move |l| l.admin_node(&id, b.node)).await {
         Ok(m) => Json(m).into_response(),
         Err(e) => error(&e),
     }

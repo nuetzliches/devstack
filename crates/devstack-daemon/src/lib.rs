@@ -92,6 +92,10 @@ pub struct DaemonInfo {
     pub started: u128,
     #[serde(default)]
     pub version: String,
+    /// It was told to stop and stops its services now; the file goes when
+    /// it is done. A daemon starting meanwhile waits for it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stopping: bool,
 }
 
 pub fn info_path(state_dir: &Path) -> PathBuf {
@@ -128,6 +132,51 @@ const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 /// runs then dies with the daemon (ADR-0009); a second Ctrl-C ends the wait.
 const SHUTDOWN_STOP: std::time::Duration = std::time::Duration::from_secs(90);
 
+/// How long a starting daemon waits for the state lock of an instance that
+/// is on its way out.
+const STATE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The state lock: one daemon per stack (ADR-0016).
+///
+/// An instance that is stopping (`devstack down` + `up`; its `daemon.json`
+/// says `stopping`), or that just died and is still being torn down (a
+/// process killed hard), holds the lock a moment longer: wait for it, at
+/// most `wait`. But not for one that serves: when `daemon.json` names a live
+/// process other than `own_pid` that is not stopping, this one lost a race
+/// (two `devstack up` at once) and ends at once, also when that shows only
+/// during the wait. Otherwise it would take the lock over should the other
+/// stop within the wait, and run although nobody asked for it.
+fn acquire_state_lock(
+    state_dir: &Path,
+    wait: std::time::Duration,
+    own_pid: u32,
+    alive: impl Fn(u32) -> bool,
+) -> Result<devstack_proc::StateLock, String> {
+    let t0 = std::time::Instant::now();
+    loop {
+        match devstack_proc::StateLock::acquire(state_dir) {
+            Ok(l) => return Ok(l),
+            Err(devstack_proc::LockError::Held(path)) => {
+                if let Some(info) = read_info(state_dir)
+                    && info.pid != own_pid
+                    && !info.stopping
+                    && alive(info.pid)
+                {
+                    return Err(format!(
+                        "a daemon for this stack runs already (pid {}, port {})",
+                        info.pid, info.port
+                    ));
+                }
+                if t0.elapsed() >= wait {
+                    return Err(devstack_proc::LockError::Held(path).to_string());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
+
 /// Run the daemon in the foreground until it is told to shut down. Services
 /// are stopped on the way out; infrastructure stays up (ADR-0004).
 pub fn serve(stack_file: &Path) -> Result<(), String> {
@@ -137,20 +186,12 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     // One spelling of the repository everywhere (compiler messages use the long one).
     let repo = devstack_proc::long_path(&repo);
     let state_dir = repo.join(".devstack");
-    // A previous instance that just died may still be closing its handles (a
-    // process killed hard is torn down asynchronously): wait a moment for it.
-    let t0 = std::time::Instant::now();
-    let _lock = loop {
-        match devstack_proc::StateLock::acquire(&state_dir) {
-            Ok(l) => break l,
-            Err(devstack_proc::LockError::Held(_))
-                if t0.elapsed() < std::time::Duration::from_secs(5) =>
-            {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            Err(e) => return Err(e.to_string()),
-        }
-    };
+    let _lock = acquire_state_lock(
+        &state_dir,
+        STATE_LOCK_WAIT,
+        std::process::id(),
+        devstack_proc::pid_alive,
+    )?;
     // Only the lock holder writes the diagnostic log (plan §11).
     diag::init(state_dir.join("daemon.log"));
     // Read after the log is open: a stack file this devstack cannot run (one
@@ -216,6 +257,7 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
             port,
             started: state::now_ms(),
             version: devstack_config::VERSION.into(),
+            stopping: false,
         };
         std::fs::write(
             info_path(&state_dir),
@@ -291,12 +333,18 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
             lanes: Some(lanes.clone()),
         });
         let (stopping_tx, stopping_rx) = tokio::sync::oneshot::channel::<()>();
+        let stopping_info = (info_path(&state_dir), info.clone());
         let stop = async move {
             let why = tokio::select! {
                 _ = shutdown.notified() => "shutdown requested",
                 _ = tokio::signal::ctrl_c() => "ctrl-c",
             };
             diag::info("daemon_stopping", serde_json::json!({ "reason": why }));
+            // A daemon started now (`down` + `up`) waits for this one instead
+            // of taking it for one that serves (`acquire_state_lock`).
+            let (path, mut info) = stopping_info;
+            info.stopping = true;
+            let _ = std::fs::write(&path, serde_json::to_vec_pretty(&info).unwrap_or_default());
             let _ = stopping_tx.send(());
         };
         // Small writes go out at once: a tunnel to a lane's port is this API
@@ -360,5 +408,69 @@ mod tests {
             Ok(Some("0.0.0.0:7600".parse().unwrap()))
         );
         assert!(super::listen_addr_from(Some("nope"), true).is_err());
+    }
+
+    fn write_info(dir: &std::path::Path, pid: u32) {
+        write_info_as(dir, pid, false);
+    }
+
+    fn write_info_as(dir: &std::path::Path, pid: u32, stopping: bool) {
+        let info = super::DaemonInfo {
+            pid,
+            port: 7000,
+            started: 0,
+            version: String::new(),
+            stopping,
+        };
+        std::fs::write(super::info_path(dir), serde_json::to_vec(&info).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_daemon_that_lost_the_race_does_not_wait_to_take_over() {
+        use std::time::{Duration, Instant};
+        let d = tempfile::tempdir().unwrap();
+        let wait = Duration::from_secs(3);
+        let first = devstack_proc::StateLock::acquire(d.path()).unwrap();
+        // The other one serves: give up at once, even though it may stop
+        // within the wait.
+        write_info(d.path(), 4242);
+        let t0 = Instant::now();
+        let e = super::acquire_state_lock(d.path(), wait, 1, |p| p == 4242).unwrap_err();
+        assert!(e.contains("runs already"), "{e}");
+        assert!(t0.elapsed() < wait);
+        // A `daemon.json` of a dead process says nothing: wait, then give up.
+        let t0 = Instant::now();
+        let e = super::acquire_state_lock(d.path(), Duration::from_millis(300), 1, |_| false)
+            .unwrap_err();
+        assert!(!e.contains("runs already"), "{e}");
+        assert!(t0.elapsed() >= Duration::from_millis(300));
+        // One on its way out (`daemon.json` says so, then goes): wait for it.
+        write_info_as(d.path(), 4242, true);
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(first);
+        });
+        super::acquire_state_lock(d.path(), wait, 1, |_| true).unwrap();
+        t.join().unwrap();
+    }
+
+    #[test]
+    fn a_daemon_that_shows_up_during_the_wait_ends_it() {
+        use std::time::{Duration, Instant};
+        let d = tempfile::tempdir().unwrap();
+        let wait = Duration::from_secs(5);
+        let first = devstack_proc::StateLock::acquire(d.path()).unwrap();
+        // The holder is still starting; it serves after a moment.
+        let dir = d.path().to_path_buf();
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            write_info(&dir, 4242);
+        });
+        let t0 = Instant::now();
+        let e = super::acquire_state_lock(d.path(), wait, 1, |p| p == 4242).unwrap_err();
+        assert!(e.contains("runs already"), "{e}");
+        assert!(t0.elapsed() < wait);
+        t.join().unwrap();
+        drop(first);
     }
 }

@@ -72,6 +72,29 @@ describe('hub store', () => {
     fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [{ ...entry('shop', false), start_error: 'boom' }] });
     expect(hub.starting['shop']).toBeUndefined();
   });
+
+  it('tells the outcome of an update once, also from the hub it started (R-11)', async () => {
+    fake.on('/hub/session', ok({ version: '1.0.0' }));
+    const hub = useHub();
+    await hub.init();
+    const ui = useUi();
+    const send = (u: object) => fake.stream('/hub/events').handlers.onMessage({ type: 'update', update: u } as never);
+    const installed = { running: false, error: null, installed: '1.0.0', finished: Date.now() };
+    send(installed);
+    expect(ui.toasts.filter((x) => x.title === 'devstack 1.0.0 is installed')).toHaveLength(1);
+    // Another connect (a reload, a second tab): the same outcome, no new toast.
+    send(installed);
+    expect(ui.toasts.filter((x) => x.title === 'devstack 1.0.0 is installed')).toHaveLength(1);
+    // An old outcome the page did not see start is not news.
+    send({ running: false, error: 'boom', installed: null, finished: Date.now() - 3600_000 });
+    expect(ui.toasts.some((x) => x.title === 'The update failed')).toBe(false);
+    // One it saw start is.
+    send({ running: true, error: null, installed: null, finished: null });
+    expect(hub.updating).toBe(true);
+    send({ running: false, error: 'no network', installed: null, finished: Date.now() + 1 });
+    expect(hub.updating).toBe(false);
+    expect(ui.toasts.some((x) => x.title === 'The update failed' && x.message === 'no network')).toBe(true);
+  });
 });
 
 describe('stack store', () => {
@@ -124,5 +147,20 @@ describe('pool store', () => {
     await pool.openShared('default', 'bad', 'web');
     expect(opened).toEqual(['http://localhost:4200']);
     expect(useUi().toasts.some((x) => x.title.startsWith('Not opening'))).toBe(true);
+  });
+
+  it('grants and takes back the node role of a member (N-4)', async () => {
+    const pool = usePool();
+    fake.on(/\/hub\/pool\/members\/m1\/node/, (_m, _p, body) => ok({ id: 'm1', name: 'build', state: 'approved', role: 'member', requested_at: 0, node: (body as { node: boolean }).node }));
+    await pool.setNode('m1', 'build', true);
+    await pool.setNode('m1', 'build', false);
+    const sent = fake.requests.filter((r) => r.path.startsWith('/hub/pool/members/m1/node'));
+    expect(sent.map((r) => [r.method, r.body])).toEqual([
+      ['POST', { node: true }],
+      ['POST', { node: false }],
+    ]);
+    const titles = useUi().toasts.map((x) => x.title);
+    expect(titles).toContain("build may run the pool's lanes");
+    expect(titles).toContain('build takes no new lanes of the pool');
   });
 });

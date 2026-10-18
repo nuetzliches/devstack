@@ -46,6 +46,7 @@ const actionText: Record<string, string> = {
   end: 'ended a lane on',
   tags: 'changed the tags of',
   policy: 'changed the policy of',
+  node: 'changed whether lanes run on',
 };
 
 // Joining a pool from here, as `devstack join` does; another one beside
@@ -542,6 +543,7 @@ function policyText(id: string) {
               <td>
                 <strong>{{ m.name }}</strong> <span v-if="isMe(m.id)" class="pill sm outline">this machine</span>
                 <span class="pill sm" :class="kindOf(m.id) === 'server' ? 'accent' : 'outline'" :title="kindTitle[kindOf(m.id)]">{{ kindText[kindOf(m.id)] }}</span>
+                <span v-if="m.node" class="pill sm accent" title="An admin let it run the pool's lanes" data-testid="pool-node-granted">runs lanes</span>
                 <span v-for="t in m.tags ?? []" :key="t" class="pill sm info" data-testid="pool-tag">{{ t }}</span>
                 <form v-if="editTags === m.id" class="tags-form" @submit.prevent="saveTags(m)">
                   <input v-model="tagsText" class="input" placeholder="team:backend, customer:acme" data-testid="pool-tags-input" />
@@ -555,6 +557,15 @@ function policyText(id: string) {
               <td v-if="pool.isAdmin" class="actions">
                 <button type="button" class="btn btn-sm" title="Tags for nodes' policies (ADR-0033)" data-testid="pool-tags" @click="startTags(m)">
                   Tags
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :title="m.node ? 'The coordinator places no new lanes on it' : 'Let it run the pool\'s lanes as a node'"
+                  data-testid="pool-node"
+                  @click="pool.setNode(m.id, m.name, !m.node)"
+                >
+                  {{ m.node ? 'No lanes' : 'Allow lanes' }}
                 </button>
                 <button
                   v-if="m.role === 'member'"

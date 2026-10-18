@@ -56,6 +56,38 @@ pub(crate) fn os(what: impl Into<String>) -> ProcError {
     }
 }
 
+/// Is a process with this id running? For processes devstack did not start
+/// itself (no handle to wait on); a reused id answers yes.
+pub fn pid_alive(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        // SAFETY: plain Win32 calls on a handle opened and closed here.
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() {
+                return false;
+            }
+            let mut code = 0u32;
+            let ok = GetExitCodeProcess(h, &mut code) != 0;
+            CloseHandle(h);
+            ok && code == STILL_ACTIVE as u32
+        }
+    }
+    #[cfg(unix)]
+    {
+        let Ok(pid) = i32::try_from(pid) else {
+            return false;
+        };
+        // SAFETY: signal 0 only checks that the process exists.
+        let sent = unsafe { libc::kill(pid, 0) } == 0;
+        sent || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+}
+
 /// What a process tree costs right now (plan §12). Callers derive CPU load
 /// from two samples of `cpu_us`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]

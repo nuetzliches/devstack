@@ -15,7 +15,7 @@ devstack-proc.workspace = true
 bytes.workspace = true
 devstack-compose.workspace = true
 devstack-config.workspace = true
-http-body-util.workspace = true
+http-body-util = { workspace = true, features = ["channel"] }
 rand.workspace = true
 hyper.workspace = true
 hyper-util = { workspace = true, features = ["service"] }
@@ -27,7 +27,7 @@ serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["fs"] }
 tokio-rustls.workspace = true
 ureq.workspace = true
 x509-parser.workspace = true

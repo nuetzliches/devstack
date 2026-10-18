@@ -1292,9 +1292,8 @@ async fn telemetry_post(
 
 /// `bytes` random bytes as hex.
 pub fn random_hex(bytes: usize) -> String {
-    use rand::RngCore;
     let mut b = vec![0u8; bytes];
-    rand::rng().fill_bytes(&mut b);
+    rand::fill(&mut b[..]);
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
