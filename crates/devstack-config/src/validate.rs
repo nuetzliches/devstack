@@ -172,10 +172,7 @@ impl Check<'_> {
                 ) => Some("only a service started from a build has an artifact"),
                 (
                     Scope::Command,
-                    Placeholder::Port
-                    | Placeholder::Artifact
-                    | Placeholder::IsMain
-                    | Placeholder::ComposePort { .. },
+                    Placeholder::Port | Placeholder::Artifact | Placeholder::IsMain,
                 ) => Some("is not available in a command"),
                 _ => None,
             };

@@ -439,8 +439,9 @@ service of kind `job`). A key of another action (`cwd` on an `http` step,
 (`POST /v1/runs/{id}/cancel`). `exec` runs in the repository, `cwd` relative
 to it; in a lane in the lane's copy, never in its worktree, and `{repo}` is
 that copy. Steps may use `{repo}`, `{lane}`, `{lane_suffix}`,
-`{service.<name>.url}`, `{service.<name>.port}` and `${VAR}`; `{port}`,
-`{artifact}`, `{is_main}` and `{compose.…}` have no value in a command.
+`{service.<name>.url}`, `{service.<name>.port}`, `{compose.…}` (the
+published address of a Compose service's port, as for services) and
+`${VAR}`; `{port}`, `{artifact}` and `{is_main}` have no value in a command.
 Commands run with
 `devstack run <name>`, from the dashboard and through MCP (`run_command`). A
 command with `confirm` runs from MCP only with `confirm: true`, which an agent
@@ -484,5 +485,5 @@ Where they have a value: `{port}` only in a service with a `port`,
 `{artifact}` only in a service with `build` (not in `hot_reload.run`),
 `{service.<name>.…}` only for a service with a `port`, `{compose.…}` only
 for a service its group starts. `build` and `output` take `{repo}` only;
-commands no `{port}`, `{artifact}`, `{is_main}` or `{compose.…}`; `cwd`,
+commands no `{port}`, `{artifact}` or `{is_main}`; `cwd`,
 `prepare.run`, `prepare.cwd` and `hot_reload.cwd` none at all.
