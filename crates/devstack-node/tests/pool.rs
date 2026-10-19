@@ -155,3 +155,136 @@ fn an_admin_manages_the_pool_over_the_api() {
         ]
     );
 }
+
+/// Each party says which devstack it runs (ADR-0031, amended 2026-10-19):
+/// the coordinator passes a node's on, refuses a node with another pool
+/// protocol, places on a node that does not say, and tells whoever opens a
+/// shared lane what its node and owner run.
+#[test]
+fn the_pool_knows_which_devstack_each_party_runs() {
+    use devstack_node::coordinator::{LeaseReport, LeaseRequest, SharedService, Sharing};
+    use devstack_node::share::Amount;
+    use devstack_node::version::{PROTOCOL, Release};
+
+    let coord = tempfile::tempdir().unwrap();
+    let (url, fp) = start(coord.path());
+    let store = Store::new(coord.path());
+    let ca = coordinator::ca(coord.path()).unwrap();
+    let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let [node, owner, viewer] = [0, 1, 2].map(|i| Local::new(dirs[i].path()));
+    let mut ids = Vec::new();
+    for (l, name) in [
+        (&node, "build-box"),
+        (&owner, "owner-pc"),
+        (&viewer, "viewer-pc"),
+    ] {
+        let m = l.join(&url, &fp, name).unwrap();
+        store.approve(&m.id, &ca, None, SHELL).unwrap();
+        l.refresh().unwrap();
+        ids.push(m.id);
+    }
+    store.set_node(&ids[0], true, SHELL).unwrap();
+
+    let node_report = |devstack: Option<Release>, leases: Vec<LeaseReport>| {
+        node.report(&Report {
+            sharing: true,
+            cpus: 4.0,
+            memory: 8 << 30,
+            api: Some("https://127.0.0.1:1".into()),
+            devstack,
+            leases,
+            ..Report::default()
+        })
+        .unwrap()
+    };
+    let ask = |node: &str, devstack: Option<Release>| {
+        owner.lease(&LeaseRequest {
+            node: node.into(),
+            repo: "shop".into(),
+            lane: "fix".into(),
+            need: Amount {
+                cpus: 0.5,
+                memory: 1 << 30,
+            },
+            devstack,
+        })
+    };
+    let newer = Release {
+        version: "99.0.0".into(),
+        protocol: PROTOCOL + 1,
+    };
+
+    // The coordinator says what it runs in its answers.
+    let answer = node_report(Some(newer.clone()), Vec::new());
+    assert_eq!(answer.coordinator, Some(Release::this()));
+
+    // Another protocol: refused by name, not placed by the pool.
+    let e = ask("build-box", Some(Release::this()))
+        .unwrap_err()
+        .to_string();
+    assert!(e.starts_with("409"), "{e}");
+    assert!(
+        e.contains("99.0.0") && e.contains(&Release::this().version),
+        "both releases named: {e}"
+    );
+    let e = ask("pool", Some(Release::this())).unwrap_err().to_string();
+    assert!(e.starts_with("409"), "{e}");
+    // A requester that does not say is placed: it is older, and warns.
+    let offer = ask("build-box", None).unwrap();
+    assert_eq!(offer.node.devstack, Some(newer));
+
+    // A node that does not say (older) is placed, and known as unknown.
+    node_report(None, Vec::new());
+    let offer = ask("pool", Some(Release::this())).unwrap();
+    assert_eq!(offer.node.devstack, None);
+    assert_eq!(offer.coordinator, Some(Release::this()));
+
+    // The same release: passed on.
+    node_report(Some(Release::this()), Vec::new());
+    let offer = ask("build-box", Some(Release::this())).unwrap();
+    assert_eq!(offer.node.devstack, Some(Release::this()));
+    let nodes = viewer.nodes().unwrap();
+    let n = nodes.iter().find(|n| n.id == ids[0]).unwrap();
+    assert_eq!(
+        n.report.as_ref().unwrap().devstack,
+        Some(Release::this()),
+        "the pool area shows each node's release"
+    );
+
+    // Shared: whoever opens it sees the node's and the owner's release.
+    owner
+        .report(&Report {
+            devstack: Some(Release::this()),
+            ..Report::default()
+        })
+        .unwrap();
+    node_report(
+        Some(Release::this()),
+        vec![LeaseReport {
+            id: offer.id.clone(),
+            member: ids[1].clone(),
+            repo: "shop".into(),
+            lane: "fix".into(),
+            expires_in: 100,
+            need: None,
+        }],
+    );
+    owner
+        .share_lease(
+            &offer.id,
+            Some(&Sharing {
+                with: vec!["*".into()],
+                services: vec![SharedService {
+                    name: "web".into(),
+                    port: 8080,
+                    scheme: "http".into(),
+                    here: 8180,
+                }],
+            }),
+        )
+        .unwrap();
+    let shared = viewer.shared().unwrap();
+    let l = shared.iter().find(|l| l.lease == offer.id).unwrap();
+    assert_eq!(l.node.devstack, Some(Release::this()));
+    assert_eq!(l.owner_devstack, Some(Release::this()));
+}

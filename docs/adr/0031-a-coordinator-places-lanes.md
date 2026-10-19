@@ -1,6 +1,6 @@
 # ADR-0031: A coordinator places lanes and admits members; nodes admit leases; data goes directly
 
-- **Status:** Accepted (2026-10-16), amended 2026-10-16 (one binary: `devstack node`)
+- **Status:** Accepted (2026-10-16), amended 2026-10-16 (one binary: `devstack node`), amended 2026-10-19 (point 8: which devstack each party runs)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md) (points 1 and 3 replaced here), [ADR-0027](0027-trust-between-nodes.md) (points 1 and 2 replaced here), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md) (point 2 extended there: admins in the dashboard, nodes granted)
@@ -64,6 +64,36 @@ bottleneck of every lane.
    when the coordinator is back. New placements and new members wait.
 7. **The dashboard shows the pool:** members online, what each shares and
    uses, which lane runs where, and the share switch of this machine.
+
+8. *Amended 2026-10-19.* **Each party says which devstack it
+   runs.** Members are updated one by one, so a pool runs several releases
+   at once, and a change in what a field means is invisible across them: a
+   member on 0.10 opened a lane on a node still on 0.9.8, the owner shared
+   the stack's ports (ADR-0025 point 4 as built in 0.10.0), the lane daemon
+   on the node served the lane's, and every connection failed with a
+   message about a port, not about versions. So:
+   - Every party reports its version and a **pool protocol**, an integer
+     bumped by a change that makes two releases misread each other; releases
+     with the same number work together. A node and a member say it in their
+     reports and a node in `GET /v1/node`; the coordinator in its answers
+     (a report's, a lease offer) and passes a node's on wherever it names
+     one (a lease offer, a shared lane, with the shared lane's owner's too).
+     The dashboard's pool area shows each node's and the coordinator's.
+   - **Another protocol is refused:** the coordinator places a lane only on
+     a node with the requester's protocol, refuses one named with another,
+     and the requester refuses such a node itself too (a coordinator that
+     does not check).
+   - **Another version, or none, is a warning:** a peer older than this
+     amendment does not say, and is placed; the requester logs it
+     (`pool_version_mismatch`) and shows it with the lane (CLI and
+     dashboard), a member opening a shared lane gets it with the forward,
+     and a failed tunnel's message names both releases.
+
+   A number rather than comparing versions: releases on either side of a
+   minor version usually work together, and the one change that broke them
+   was not visible in the version at all. The number lives in
+   `crates/devstack-node/src/version.rs` (`PROTOCOL`, with what each value
+   means) and is documented in [pool.md](../pool.md#versions-in-a-pool).
 
 ## Alternatives considered
 

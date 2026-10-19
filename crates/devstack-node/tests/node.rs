@@ -130,6 +130,7 @@ fn a_lane_is_leased_admitted_and_synced() {
         repo: "shop".into(),
         lane: "early".into(),
         need: Amount::default(),
+        devstack: None,
     });
     assert!(not_yet.unwrap_err().to_string().starts_with("409"));
     assert!(
@@ -139,6 +140,7 @@ fn a_lane_is_leased_admitted_and_synced() {
                 repo: "shop".into(),
                 lane: "early".into(),
                 need: Amount::default(),
+                devstack: None,
             })
             .is_err(),
         "the pool places on granted nodes only"
@@ -168,6 +170,7 @@ fn a_lane_is_leased_admitted_and_synced() {
             cpus: 64.0,
             memory: 1 << 40,
         },
+        devstack: None,
     });
     assert!(too_much.unwrap_err().to_string().starts_with("409"));
 
@@ -182,6 +185,7 @@ fn a_lane_is_leased_admitted_and_synced() {
                 cpus: 0.1,
                 memory: 64 << 20,
             },
+            devstack: None,
         })
         .unwrap();
     assert_eq!(placed.node.id, node_id, "the coordinator picks the node");
@@ -195,13 +199,19 @@ fn a_lane_is_leased_admitted_and_synced() {
                 cpus: 0.1,
                 memory: 64 << 20,
             },
+            devstack: None,
         })
         .unwrap();
     assert_eq!(offer.node.api, api);
+    // The node says which devstack it runs; the coordinator passes it on.
+    let this = Some(devstack_node::version::Release::this());
+    assert_eq!(offer.node.devstack, this);
+    assert_eq!(offer.coordinator, this);
     let rt = rt();
     let client = NodeClient::new(&requester, offer.node.clone()).unwrap();
     let lease = rt.block_on(client.admit(&offer)).unwrap();
     assert_eq!(lease.lane, "login-fix");
+    assert_eq!(rt.block_on(client.node()).unwrap().devstack, this);
 
     // Another member cannot take the lease over, renew or sync it.
     let theirs = NodeClient::new(&other, offer.node.clone()).unwrap();
@@ -409,6 +419,7 @@ fn an_admin_pauses_a_node_and_ends_a_lease() {
                 cpus: 0.1,
                 memory: 64 << 20,
             },
+            devstack: None,
         })
     };
 

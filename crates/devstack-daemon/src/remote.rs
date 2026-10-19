@@ -9,6 +9,7 @@ use devstack_node::coordinator::{LeaseRequest, NodeRef};
 use devstack_node::member::Local;
 use devstack_node::nodeclient::{Elsewhere, HashCache, NodeClient};
 use devstack_node::share::Amount;
+use devstack_node::version::{self, Compat, Release};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -46,6 +47,9 @@ pub struct RemoteLane {
     pub pool: String,
     pub node: NodeRef,
     pub lease: String,
+    /// The node or the coordinator runs another devstack than this
+    /// machine, or does not say which: shown with the lane while it runs.
+    pub warning: Option<String>,
     worktree: PathBuf,
     /// Where `[lanes] sync` files come from when the worktree has none.
     main: PathBuf,
@@ -241,12 +245,20 @@ pub struct Leased {
     elsewhere: Elsewhere,
     /// When the coordinator granted the lease.
     t0: Instant,
+    /// The node or the coordinator runs another devstack than this
+    /// machine, or does not say which (ADR-0031 point 8).
+    warning: Option<String>,
 }
 
 impl Leased {
     /// The node's name.
     pub fn node(&self) -> &str {
         &self.offer.node.name
+    }
+
+    /// Whether the node or the coordinator runs another devstack.
+    pub fn warning(&self) -> Option<&str> {
+        self.warning.as_deref()
     }
 }
 
@@ -283,8 +295,23 @@ impl RemoteLane {
                 repo: spec.repo.into(),
                 lane: spec.name.into(),
                 need: spec.need,
+                devstack: Some(Release::this()),
             })
             .map_err(|e| format!("lease on `{}`: {e}", spec.on))?;
+        // Another pool protocol misreads this machine (a newer coordinator
+        // refused it already): refused here, before anything is admitted.
+        // Another release, or one that does not say, is a warning
+        // (ADR-0031 point 8).
+        let warning = release_warning(&offer).map_err(|e| format!("lane `{}`: {e}", spec.name))?;
+        if let Some(w) = &warning {
+            crate::diag::warn(
+                "pool_version_mismatch",
+                serde_json::json!({ "lane": spec.name, "node": offer.node.name, "warning": w,
+                    "version": devstack_node::version::VERSION,
+                    "node_version": offer.node.devstack.as_ref().map(|r| r.version.clone()),
+                    "coordinator_version": offer.coordinator.as_ref().map(|r| r.version.clone()) }),
+            );
+        }
         // Without a client the node cannot be told: the offer expires.
         let client = NodeClient::new(&local, offer.node.clone()).map_err(|e| e.to_string())?;
         let t0 = Instant::now();
@@ -305,6 +332,7 @@ impl RemoteLane {
             list,
             elsewhere,
             t0,
+            warning,
         })
     }
 
@@ -337,6 +365,7 @@ impl RemoteLane {
             list,
             elsewhere,
             t0,
+            warning,
         } = leased;
         let mut hashes = HashCache::default();
         let started = rt.block_on(async {
@@ -452,6 +481,7 @@ impl RemoteLane {
             pool,
             node: offer.node,
             lease: offer.id,
+            warning,
             worktree: worktree.to_path_buf(),
             main: main.to_path_buf(),
             extra: extra.to_vec(),
@@ -929,7 +959,19 @@ impl RemoteLane {
             .await
             .map_err(|e| e.to_string())?;
         if res.status() != axum::http::StatusCode::SWITCHING_PROTOCOLS {
-            return Err(format!("the node answered {}", res.status()));
+            use http_body_util::BodyExt;
+            let status = res.status();
+            let body = res
+                .into_body()
+                .collect()
+                .await
+                .map(|b| String::from_utf8_lossy(&b.to_bytes()).trim().to_string())
+                .unwrap_or_default();
+            return Err(tunnel_error(
+                &format!("the node answered {status}"),
+                &body,
+                &self.node,
+            ));
         }
         let up = hyper::upgrade::on(&mut res)
             .await
@@ -966,6 +1008,49 @@ impl RemoteLane {
             serde_json::json!({ "lane": self.name, "node": self.node.name, "lease": self.lease }),
         );
     }
+}
+
+/// What a lease offer says of the node's and the coordinator's devstack:
+/// `Err` for a node with another pool protocol, a warning for another
+/// release or one that does not say.
+fn release_warning(
+    offer: &devstack_node::coordinator::LeaseOffer,
+) -> Result<Option<String>, String> {
+    let node = format!("the node {}", offer.node.name);
+    if version::compat(offer.node.devstack.as_ref()) == Compat::Incompatible {
+        return Err(version::note(&node, offer.node.devstack.as_ref()).unwrap_or_default());
+    }
+    let mut notes = Vec::new();
+    if offer.coordinator.is_none() {
+        // An older coordinator passes on no node's release either.
+        notes.push(format!(
+            "the pool's coordinator runs {}, so the node's is not known either; \
+             if the lane fails there, compare `devstack --version` on both",
+            version::describe(None)
+        ));
+    } else {
+        notes.extend(version::note(&node, offer.node.devstack.as_ref()));
+        notes.extend(version::note("the coordinator", offer.coordinator.as_ref()));
+    }
+    Ok((!notes.is_empty()).then(|| notes.join("; ")))
+}
+
+/// A tunnel the node or the lane did not open: what it said, and the
+/// releases when they differ (an older lane daemon may serve other ports).
+pub fn tunnel_error(what: &str, body: &str, node: &NodeRef) -> String {
+    let said = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v["error"].as_str().map(str::to_string))
+        .unwrap_or_else(|| body.lines().next().unwrap_or("").to_string());
+    let mut out = what.to_string();
+    if !said.is_empty() {
+        out.push_str(": ");
+        out.push_str(&said);
+    }
+    if let Some(n) = version::note(&format!("the node {}", node.name), node.devstack.as_ref()) {
+        out.push_str(&format!(" ({n})"));
+    }
+    out
 }
 
 /// How many of `expected` are ready in a stack view.
@@ -1007,6 +1092,82 @@ pub fn readiness(view: &serde_json::Value, expected: &[String]) -> Option<Result
 
 #[cfg(test)]
 mod tests {
+    use super::{NodeRef, Release, release_warning, tunnel_error, version};
+
+    fn offer(
+        node: Option<Release>,
+        coordinator: Option<Release>,
+    ) -> devstack_node::coordinator::LeaseOffer {
+        devstack_node::coordinator::LeaseOffer {
+            id: "l".into(),
+            token: "t".into(),
+            node: NodeRef {
+                id: "n".into(),
+                name: "build-box".into(),
+                api: "https://x:1".into(),
+                devstack: node,
+            },
+            coordinator,
+        }
+    }
+
+    #[test]
+    fn a_node_of_another_release_is_warned_about_or_refused() {
+        let this = Release::this();
+        let older = Release {
+            version: "0.0.1".into(),
+            ..this.clone()
+        };
+        let other_protocol = Release {
+            protocol: this.protocol + 1,
+            ..older.clone()
+        };
+        assert_eq!(
+            release_warning(&offer(Some(this.clone()), Some(this.clone()))),
+            Ok(None)
+        );
+        let w = release_warning(&offer(Some(older), Some(this.clone())))
+            .unwrap()
+            .unwrap();
+        assert!(
+            w.contains("build-box") && w.contains("0.0.1") && w.contains(version::VERSION),
+            "{w}"
+        );
+        let w = release_warning(&offer(None, Some(this.clone())))
+            .unwrap()
+            .unwrap();
+        assert!(w.contains("does not say"), "{w}");
+        let w = release_warning(&offer(None, None)).unwrap().unwrap();
+        assert!(w.contains("coordinator"), "{w}");
+        let e = release_warning(&offer(Some(other_protocol), Some(this))).unwrap_err();
+        assert!(e.contains("do not work together"), "{e}");
+    }
+
+    #[test]
+    fn a_failed_tunnel_names_both_releases_when_they_differ() {
+        let body = r#"{"error":"port 8091 is no service's or container's port in this stack"}"#;
+        let node = offer(
+            Some(Release {
+                version: "0.0.1".into(),
+                protocol: version::PROTOCOL,
+            }),
+            None,
+        )
+        .node;
+        let e = tunnel_error("the node answered 403 Forbidden", body, &node);
+        assert!(e.contains("port 8091 is no service's"), "{e}");
+        assert!(e.contains("0.0.1") && e.contains(version::VERSION), "{e}");
+        let same = NodeRef {
+            devstack: Some(Release::this()),
+            ..node
+        };
+        let e = tunnel_error("the node answered 403 Forbidden", body, &same);
+        assert!(
+            !e.contains(version::VERSION),
+            "the same release is not named: {e}"
+        );
+    }
+
     #[test]
     fn glob_base_is_the_part_before_wildcards() {
         assert_eq!(super::glob_base("app/certs/*.pem"), "app/certs");

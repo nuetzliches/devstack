@@ -382,7 +382,13 @@ async fn tunnel(State(s): State<AppState>, Path(port): Path<u16>, mut req: Reque
     {
         return err(
             StatusCode::FORBIDDEN,
-            format!("port {port} is no service's or container's port in this stack"),
+            // The release names what the ports mean (a lane on a node
+            // serves its stack's ports since 0.10.0): a requester or a member
+            // of another release sees the difference.
+            format!(
+                "port {port} is no service's or container's port in this stack (devstack {} here)",
+                env!("CARGO_PKG_VERSION")
+            ),
         );
     }
     let wants = req

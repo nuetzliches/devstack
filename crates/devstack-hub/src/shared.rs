@@ -6,7 +6,9 @@
 //! - `GET /hub/pool/shared`: the lanes shared with this machine
 //! - `POST /hub/pool/shared/{lease}/open` `{service}`: a forward to that
 //!   service, on the port its owner has it on if that is free here, else
-//!   another one: `{url, port}`. It stays while the hub runs.
+//!   another one: `{url, port, warning?}`. It stays while the hub runs.
+//!   `warning`: the node, or the lane's owner, runs another devstack than
+//!   this machine, or does not say which (ADR-0031, amended 2026-10-19).
 //!
 //! Both take `?pool=<name>` (ADR-0034).
 
@@ -16,7 +18,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use devstack_node::coordinator::SharedLane;
 use devstack_node::member::Local;
-use devstack_node::nodeclient::NodeClient;
+use devstack_node::nodeclient::{ClientError, NodeClient};
+use devstack_node::version::{self, Compat};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
@@ -132,9 +135,17 @@ pub async fn open(
         );
     }
     let url = |port: u16| format!("{scheme}://localhost:{port}");
+    let warning = release_warning(&lane);
+    let answer = |port: u16| {
+        let mut v = json!({ "url": url(port), "port": port });
+        if let Some(w) = &warning {
+            v["warning"] = json!(w);
+        }
+        Json(v).into_response()
+    };
     let key = (key_dir, lease.clone(), svc.port);
     if let Some(port) = forwards().lock().unwrap().get(&key).copied() {
-        return Json(json!({ "url": url(port), "port": port })).into_response();
+        return answer(port);
     }
     let client = match NodeClient::new(&local, lane.node.clone()) {
         Ok(c) => Arc::new(c),
@@ -152,23 +163,40 @@ pub async fn open(
     let port = listener.local_addr().map_or(0, |a| a.port());
     forwards().lock().unwrap().insert(key.clone(), port);
     let there = svc.port;
+    let node = lane.node.clone();
     tokio::spawn(async move {
         loop {
             let Ok((mut tcp, _)) = listener.accept().await else {
                 break;
             };
             let _ = tcp.set_nodelay(true);
-            let (client, lease) = (client.clone(), lease.clone());
+            let (client, lease, node) = (client.clone(), lease.clone(), node.clone());
             tokio::spawn(async move {
                 match client.open_shared(&lease, there).await {
                     Ok(up) => {
                         let mut up = hyper_util::rt::TokioIo::new(up);
                         let _ = tokio::io::copy_bidirectional(&mut up, &mut tcp).await;
                     }
-                    Err(e) => devstack_daemon::diag::warn(
-                        "shared_lane_tunnel",
-                        json!({ "lease": lease, "port": there, "error": e.to_string() }),
-                    ),
+                    Err(e) => {
+                        let error = match &e {
+                            ClientError::Status(code, body) => {
+                                devstack_daemon::remote::tunnel_error(
+                                    &format!("the node answered {code}"),
+                                    body,
+                                    &node,
+                                )
+                            }
+                            other => {
+                                devstack_daemon::remote::tunnel_error(&other.to_string(), "", &node)
+                            }
+                        };
+                        devstack_daemon::diag::warn(
+                            "shared_lane_tunnel",
+                            json!({ "lease": lease, "port": there, "error": error,
+                                "version": version::VERSION,
+                                "node_version": node.devstack.as_ref().map(|r| r.version.clone()) }),
+                        );
+                    }
                 }
             });
         }
@@ -178,5 +206,78 @@ pub async fn open(
         "shared_lane_opened",
         json!({ "lane": lane.lane, "owner": lane.owner_name, "service": svc.name, "port": port }),
     );
-    Json(json!({ "url": url(port), "port": port })).into_response()
+    if let Some(w) = &warning {
+        devstack_daemon::diag::warn(
+            "pool_version_mismatch",
+            json!({ "lane": lane.lane, "node": lane.node.name, "warning": w,
+                "version": version::VERSION,
+                "node_version": lane.node.devstack.as_ref().map(|r| r.version.clone()),
+                "owner_version": lane.owner_devstack.as_ref().map(|r| r.version.clone()) }),
+        );
+    }
+    answer(port)
+}
+
+/// What to tell a member opening `lane` about the releases involved: its
+/// node's against this machine's, and its owner's against its node's (an
+/// owner newer than the node shares ports the node's lane daemon does not
+/// serve). `None` when all is the same.
+fn release_warning(lane: &SharedLane) -> Option<String> {
+    let node = format!("the node {}", lane.node.name);
+    let mut notes: Vec<String> = version::note(&node, lane.node.devstack.as_ref())
+        .into_iter()
+        .collect();
+    if let (Some(owner), Some(on)) = (&lane.owner_devstack, &lane.node.devstack)
+        && version::compat_with(Some(owner), on) == Compat::Incompatible
+    {
+        notes.push(format!(
+            "{} shares the lane from {owner}, {node} runs {on}: they do not work together",
+            lane.owner_name
+        ));
+    }
+    (!notes.is_empty()).then(|| notes.join("; "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use devstack_node::coordinator::NodeRef;
+    use devstack_node::version::Release;
+
+    fn lane(node: Option<Release>, owner: Option<Release>) -> SharedLane {
+        SharedLane {
+            lease: "l".into(),
+            repo: "shop".into(),
+            lane: "fix".into(),
+            owner: "o".into(),
+            owner_name: "owner-pc".into(),
+            node: NodeRef {
+                id: "n".into(),
+                name: "build-box".into(),
+                api: "https://x:1".into(),
+                devstack: node,
+            },
+            services: Vec::new(),
+            owner_devstack: owner,
+        }
+    }
+
+    #[test]
+    fn opening_a_lane_warns_about_other_releases() {
+        let this = Release::this();
+        assert_eq!(
+            release_warning(&lane(Some(this.clone()), Some(this.clone()))),
+            None
+        );
+        let w = release_warning(&lane(None, Some(this.clone()))).unwrap();
+        assert!(w.contains("build-box") && w.contains("does not say"), "{w}");
+        // The owner newer than the node (finding A1): both named.
+        let old = Release {
+            version: "0.0.1".into(),
+            protocol: this.protocol + 1,
+        };
+        let w = release_warning(&lane(Some(old), Some(this.clone()))).unwrap();
+        assert!(w.contains("owner-pc shares the lane from"), "{w}");
+        assert!(w.contains("0.0.1") && w.contains(&this.version), "{w}");
+    }
 }

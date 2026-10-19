@@ -463,7 +463,19 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 && (on.is_some() || c.lane().is_none_or(|l| l == "-"))
             {
                 // A start on a node is followed within the same timeout.
-                c.join_lane(wt, false, false, on, Some(timeout), |_| {})?;
+                let name = c.join_lane(wt, false, false, on, Some(timeout), |_| {})?;
+                // Its node runs another devstack (ADR-0031 point 8): said
+                // with the outcome.
+                if on.is_some()
+                    && let Some(w) = c
+                        .call_raw("GET", "/v1/lanes", None)
+                        .ok()
+                        .and_then(|(_, body)| serde_json::from_str::<Vec<Value>>(&body).ok())
+                        .and_then(|ls| ls.into_iter().find(|l| l["name"] == name.as_str()))
+                        .and_then(|l| l["node_warning"].as_str().map(str::to_string))
+                {
+                    notes.push_str(&format!("warning: {w}\n"));
+                }
             }
             match client::start_and_wait(&c, file, Some(timeout), |_, _| {})? {
                 UpOutcome::Ready(stack) => {

@@ -104,6 +104,8 @@ export type LaneView = {
   shared_with?: string[];
   /** What went wrong with it on its node lately (a sync, a renewal). */
   node_error?: string;
+  /** Its node or the pool's coordinator runs another devstack than this machine, or does not say which. */
+  node_warning?: string;
   /** A start on a node or a move under way (step of steps), or one that failed lately. */
   moving?: LaneMove;
 };
@@ -286,6 +288,8 @@ export type PoolNode = {
     total?: PoolAmount;
     used?: PoolAmount;
     gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean }[];
+    /** The devstack it runs; absent from a release before version reporting. */
+    devstack?: PoolRelease;
   };
   /** Paused by an admin: no new lanes. */
   paused?: boolean;
@@ -328,6 +332,9 @@ export type PoolOverview = {
   audit?: PoolAuditEntry[];
 };
 
+/** Which devstack a party of the pool runs; `protocol` changes when releases no longer work together. */
+export type PoolRelease = { version: string; protocol: number };
+
 /** CPU cores and memory (bytes). */
 export type PoolAmount = { cpus: number; memory: number };
 export type ShareSettings = { enabled: boolean; max_cpus?: number; max_memory?: number };
@@ -342,6 +349,8 @@ export type ShareStatus = {
   /** Unix ms of the last report that reached the coordinator. */
   reported_at: number | null;
   error: string | null;
+  /** The devstack the coordinator runs, from its answer to the last report; absent from an older one. */
+  coordinator?: PoolRelease;
 };
 
 /** A pool this machine belongs to or asked to join (ADR-0034), `GET /hub/pools`. */
@@ -362,8 +371,10 @@ export type SharedLane = {
   lane: string;
   owner: string;
   owner_name: string;
-  node: { id: string; name: string; api: string };
+  node: { id: string; name: string; api: string; devstack?: PoolRelease };
   services: SharedService[];
+  /** The owner's devstack, from its last report. */
+  owner_devstack?: PoolRelease;
 };
 
 /** A node's or the pool's capacity at one moment (ADR-0036), `GET /hub/pool/history`. */

@@ -78,6 +78,10 @@ pub struct LaneView {
     /// What went wrong with a lane on a node lately (a sync, a renewal).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_error: Option<String>,
+    /// The node or the coordinator runs another devstack than this machine,
+    /// or does not say which (ADR-0031, amended 2026-10-19).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_warning: Option<String>,
     /// A start on a node or a move under way, or one that failed lately.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub moving: Option<LaneMove>,
@@ -102,6 +106,11 @@ pub struct LaneMove {
     /// Unix ms when it failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failed_at: Option<u128>,
+    /// The node or the coordinator runs another devstack (ADR-0031 point
+    /// 8), known from the lease on: shown as the lane's `node_warning`
+    /// until the lane runs there and says it itself.
+    #[serde(skip)]
+    pub warning: Option<String>,
 }
 
 /// What [`Lanes::activate_remote`] did with a lane: named.
@@ -858,6 +867,9 @@ impl Lanes {
                     pool: on_node.map(|r| r.pool.clone()),
                     shared_with: self.share_of(&k.entry.name),
                     node_error: node_state.and_then(|st| st.error),
+                    node_warning: on_node
+                        .and_then(|r| r.warning.clone())
+                        .or_else(|| moves.get(&k.entry.name).and_then(|m| m.warning.clone())),
                     moving: moves.get(&k.entry.name).cloned(),
                 }
             })
@@ -1265,6 +1277,7 @@ impl Lanes {
                 since,
                 error: None,
                 failed_at: None,
+                warning: None,
             },
         );
         self.announce();
@@ -1400,6 +1413,14 @@ impl Lanes {
                 return Err(e);
             }
         };
+        // Another devstack there: said with the lane while it starts, so
+        // the clients following the start after the 202 see it.
+        if let Some(w) = leased.warning() {
+            if let Some(m) = self.moves.lock().unwrap().get_mut(&name) {
+                m.warning = Some(w.to_string());
+            }
+            self.announce();
+        }
         let lanes = self.clone();
         let (lane, to) = (name.clone(), on.to_string());
         let spawned = std::thread::Builder::new()

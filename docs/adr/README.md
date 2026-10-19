@@ -79,7 +79,7 @@ stay.
 | [0028](0028-lane-images.md) | A remote lane runs in a stack-provided toolchain image; the node supplies devstack | Accepted, amended (a Dockerfile the node builds) |
 | [0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) | A remote lane works on a mirror of the requester's tree; ports and API come back over one connection | Accepted; point 2 amended (`[lanes] sync`) |
 | [0030](0030-each-lane-has-its-own-infrastructure.md) | Each lane has its own infrastructure | Accepted |
-| [0031](0031-a-coordinator-places-lanes.md) | A coordinator places lanes and admits members; nodes admit leases; data goes directly | Accepted, amended (one binary: `devstack node`) |
+| [0031](0031-a-coordinator-places-lanes.md) | A coordinator places lanes and admits members; nodes admit leases; data goes directly | Accepted, amended (one binary: `devstack node`), amended 2026-10-19 (versions in the pool) |
 | [0032](0032-the-pool-is-administered-in-the-dashboard.md) | The pool is administered in the dashboard, by members with the admin role | Accepted, amended (admins grant nodes) |
 | [0033](0033-a-node-decides-what-runs-on-it.md) | A node decides who runs lanes on it, and what a lane there may do | Accepted, amended (what Compose files may ask; limits; the node's own policy) |
 | [0034](0034-a-machine-can-belong-to-several-pools.md) | A machine can belong to several pools; pools do not trust each other | Accepted |

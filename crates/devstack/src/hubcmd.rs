@@ -146,6 +146,9 @@ pub fn open_shared(lane: &str, service: Option<&str>, pool: Option<&str>) -> Res
         l["owner_name"].as_str().unwrap_or(""),
         l["node"]["name"].as_str().unwrap_or("")
     );
+    if let Some(w) = a["warning"].as_str() {
+        eprintln!("warning: {w}");
+    }
     let _ = open_browser(url);
     Ok(())
 }

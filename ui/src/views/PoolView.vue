@@ -10,8 +10,9 @@ import { usePool } from '@/stores/pool';
 import Icon from '@/components/icons/Icon.vue';
 import ShareSwitch from '@/components/ShareSwitch.vue';
 import CapacityChart from '@/components/CapacityChart.vue';
-import type { PoolLease, PoolMember } from '@/api/types';
+import type { PoolLease, PoolMember, PoolRelease } from '@/api/types';
 import { useUi } from '@/stores/ui';
+import { useHub } from '@/stores/hub';
 
 const pool = usePool();
 const stop = pool.watch(10_000);
@@ -96,6 +97,22 @@ async function copyJoin() {
 const leases = computed(() => o.value?.leases ?? []);
 const nameOf = (id: string) => (o.value?.members ?? []).find((m) => m.id === id)?.name ?? nodes.value.find((n) => n.id === id)?.name ?? id;
 const lanesOn = (node: string) => leases.value.filter((l) => l.node === node).length;
+// Which devstack a node or the coordinator runs, beside this machine's (the
+// hub's): another protocol does not work together, another version may
+// behave differently (ADR-0031, amended 2026-10-19).
+const hub = useHub();
+function releaseClass(r: PoolRelease | undefined, reported: boolean) {
+  if (!r) return reported ? 'warn' : 'outline';
+  if (hub.version && r.version !== hub.version) return 'warn';
+  return 'outline';
+}
+function releaseTitle(r: PoolRelease | undefined, what: string) {
+  const here = hub.version ? `this machine runs ${hub.version}` : '';
+  if (!r) return `${what} does not say which devstack it runs: an older one. ${here}`.trim();
+  const same = !hub.version || r.version === hub.version;
+  return `${what} runs devstack ${r.version} (pool protocol ${r.protocol})${same ? '' : `; ${here}`}`;
+}
+
 const kindOf = (id: string) => nodes.value.find((n) => n.id === id)?.kind ?? 'unknown';
 const kindText: Record<string, string> = { server: 'server', node: 'node', machine: 'developer machine', unknown: 'not seen yet' };
 const kindTitle: Record<string, string> = {
@@ -263,7 +280,16 @@ function policyText(id: string) {
         <template v-else-if="me">
           <dl class="facts">
             <dt>Coordinator</dt>
-            <dd><code>{{ me.coordinator }}</code></dd>
+            <dd>
+              <code>{{ me.coordinator }}</code>
+              <span
+                v-if="pool.share?.reported_at"
+                class="pill sm"
+                :class="releaseClass(pool.share.coordinator, true)"
+                :title="releaseTitle(pool.share.coordinator, 'The coordinator')"
+                data-testid="pool-coordinator-version"
+              >{{ pool.share.coordinator?.version ?? 'older' }}</span>
+            </dd>
             <dt>This machine</dt>
             <dd>{{ me.name }} <span class="faint mono">{{ me.id }}</span></dd>
           </dl>
@@ -415,7 +441,7 @@ function policyText(id: string) {
       <div class="card-body flush table-wrap">
         <table class="table">
           <thead>
-            <tr><th>Machine</th><th>State</th><th>Shares</th><th>Lanes</th><th>Last report</th><th v-if="pool.isAdmin" /></tr>
+            <tr><th>Machine</th><th>State</th><th>devstack</th><th>Shares</th><th>Lanes</th><th>Last report</th><th v-if="pool.isAdmin" /></tr>
           </thead>
           <tbody>
             <template v-for="n in nodes" :key="n.id">
@@ -437,6 +463,12 @@ function policyText(id: string) {
               <td>
                 <span class="pill sm" :class="n.online ? 'ok' : 'outline'">{{ n.online ? 'online' : 'offline' }}</span>
                 <span v-if="n.paused" class="pill sm warn" title="Paused by an admin: no new lanes, running ones stay">paused</span>
+              </td>
+              <td class="tabular" data-testid="pool-node-version">
+                <span v-if="n.report" class="pill sm" :class="releaseClass(n.report.devstack, true)" :title="releaseTitle(n.report.devstack, n.name)">
+                  {{ n.report.devstack?.version ?? 'older' }}
+                </span>
+                <span v-else class="faint">–</span>
               </td>
               <td class="tabular">
                 <template v-if="n.report?.sharing">{{ n.report.cpus.toFixed(1) }} CPU · {{ bytes(n.report.memory) }}</template>
@@ -468,10 +500,10 @@ function policyText(id: string) {
               </td>
             </tr>
               <tr v-if="openNode === n.id" class="history-row">
-                <td :colspan="pool.isAdmin ? 6 : 5"><CapacityChart :pool="pool.current" :node="n.id" /></td>
+                <td :colspan="pool.isAdmin ? 7 : 6"><CapacityChart :pool="pool.current" :node="n.id" /></td>
               </tr>
               <tr v-if="n.report?.api && (pool.isAdmin || memberOf(n.id)?.policy)" class="policy-row">
-                <td :colspan="pool.isAdmin ? 6 : 5" class="faint small">
+                <td :colspan="pool.isAdmin ? 7 : 6" class="faint small">
                   <template v-if="editPolicy !== n.id">Runs lanes of: {{ policyText(n.id) }}</template>
                   <form v-else class="policy-form" data-testid="pool-policy-form" @submit.prevent="savePolicy(n.id, n.name)">
                     <label><span>Who (member ids or tags)</span><input v-model="pol.allow" class="input" placeholder="everyone" /></label>
