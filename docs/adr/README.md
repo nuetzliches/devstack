@@ -89,3 +89,4 @@ stay.
 | [0038](0038-a-lanes-data-outlives-its-lease.md) | A lane's mirror and data outlive its lease on a node, for a while, and can be pruned | Accepted |
 | [0039](0039-an-admin-can-update-a-server-node.md) | An admin can have a server node update its devstack, from the dashboard | Accepted |
 | [0040](0040-a-shared-lane-can-be-watched-like-ones-own.md) | A shared lane can be shared for viewing, and is then shown as one's own lane is | Accepted |
+| [0041](0041-a-profile-says-how-a-lane-runs-for-a-purpose.md) | A profile says how a lane (or the main tree) runs for a purpose, chosen when it starts | Proposed |
