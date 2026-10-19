@@ -21,6 +21,15 @@ and listed with their assets on the
   `.parcel-cache`) never count, with or without a `.gitignore`.
   `restart_on` still sees ignored files.
 
+- The dashboard offered stop, start and restart for every container of a
+  Compose group's project, the routes knew only the services in the group's
+  `services`: a container of the project the group does not start (started by
+  hand, of a profile, left from an earlier stack file) showed a stop button
+  that answered `404`. The routes now accept every container the view shows:
+  such a container (`managed: false`) can be stopped, `start` and `restart`
+  answer `409` with the reason, and the dashboard disables them with that
+  reason as tooltip. A `404` names why.
+
 ## [0.10.1] - 2026-10-18
 
 ### Fixed

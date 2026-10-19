@@ -167,7 +167,8 @@ type ProxyView = { port: number; upstream: number | null; build: string | null; 
 type InfraView = { group: string; project: string; containers: ContainerView[]; error: string | null };
 type ContainerView = { service: string; name: string; state: string; health: string; exit_code: number; ports: string[];
   urls: string[];                        // see below
-  unreachable: string[] };               // published ports Docker no longer forwards                      // dashboard links: the group's `urls` entry, or http://localhost:<port> per published port
+  unreachable: string[];                 // published ports Docker no longer forwards
+  managed: boolean };                    // the group starts it (in its `services`); false: another container of the project
 type GroupView = { name: string; label: string; order: number | null; members: string[] };
   // members: "<service>", "compose.<group>.<service>", "command.<name>"
 type CommandView = { name: string; description: string; confirm: string | null; requires: string[] };
@@ -268,7 +269,7 @@ type UsageReport = {
 | `GET /v1/tunnel/{port}` with `Upgrade: devstack-tcp` | a raw TCP connection to that port of the lane (ADR-0029 point 4): how a lane on a node reaches its requester's forwards; the node agent passes it through |
 | `POST /v1/services/{name}/start` \| `stop` \| `restart` \| `rebuild` \| `promote` \| `rollback` | `200 StackView`, or `409 {"error": "..."}` (e.g. compiler errors; the running instance stays). `rebuild` is `restart` that builds even when an artifact for the same inputs exists (`devstack restart --rebuild`; the build gets the id `<inputs>-<n>`). A `stop` ends a start in progress (a build, a health wait, a job) at once. For a name that is no service but a group, `start`/`stop`/`restart` act on the group. `hot-reload-on` / `hot-reload-off` switch a service with `hot_reload` in the stack file into and out of hot-reload mode (`ServiceView.hot_reload`, `hot_reload_available`) |
 | `POST /v1/groups/{name}/start` \| `stop` \| `restart` | every member service of the group: start in member order, stop in reverse, restart (build) at the same time; `restart` also restarts container members, commands are left out. `200 StackView`, or `409` naming each member that failed (the others ran) |
-| `POST /v1/infra/{group}/{service}/{start\|stop\|restart}` | `204`; one container (in a lane its own; a `shared` one: `409`). The dashboard shows each container on a page of its own (`/s/<stack>/infra/<group>/<service>`) with its log |
+| `POST /v1/infra/{group}/{service}/{start\|stop\|restart}` | `204`; one container (in a lane its own; a `shared` one: `409`). `{service}` is the Compose service name, as `ContainerView.service` gives it, never the container name (`container_name:`). The routes accept every container the view shows: one the group does not start (`managed: false`: started by hand, of a profile, left from an earlier stack file) can be stopped (`docker stop` by its name), `start` and `restart` answer `409` with the reason; a service that is neither in `services` nor a container of the project: `404` with the reason; another action: `400`. The dashboard shows each container on a page of its own (`/s/<stack>/infra/<group>/<service>`) with its log |
 | `POST /v1/commands/{name}` with `{"confirm": false}` | `202 {"run": 7}`, or `428 {"confirm": "text"}` (ask the user, then send `confirm: true`), `409 {"error"}` (a required service is not ready) |
 | `GET /v1/commands/{name}/runs` | `[Run]` |
 | `GET /v1/runs/{id}` | `Run` = `{ id, command, started, finished: number|null, status, error: string|null, log }` |

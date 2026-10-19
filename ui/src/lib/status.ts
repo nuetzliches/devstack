@@ -114,6 +114,13 @@ export function containerLook(c: ContainerView): StatusLook {
   return { label: cap(state || 'unknown'), tone: 'neutral', busy: false, detail: null };
 }
 
+/** Why the daemon refuses `start` and `restart` of a container, or null when it does not. */
+export function containerRefuses(c: ContainerView | null): string | null {
+  // Older daemons omit `managed`: every container they show is the group's.
+  if (!c || c.managed !== false) return null;
+  return `${c.name} belongs to the Compose project, but the group does not start it (not in its \`services\` in the stack file): devstack can stop it, not start or restart it.`;
+}
+
 export function containerBucket(c: ContainerView): 'healthy' | 'starting' | 'failed' | 'idle' {
   const t = containerLook(c).tone;
   return t === 'ok' ? 'healthy' : t === 'accent' ? 'starting' : t === 'danger' || t === 'warn' ? 'failed' : 'idle';

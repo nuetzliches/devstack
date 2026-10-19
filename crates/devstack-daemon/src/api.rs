@@ -4,7 +4,7 @@
 
 use crate::commands::{self, RunError, Runs};
 use crate::logfiles;
-use crate::supervisor::Supervisor;
+use crate::supervisor::{ContainerTarget, Supervisor};
 use axum::Json;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, Method, StatusCode, header};
@@ -1236,17 +1236,8 @@ async fn infra_logs(
     Path((group, service)): Path<(String, String)>,
     Query(q): Query<LogQuery>,
 ) -> Response {
-    let known = s
-        .sup
-        .stack
-        .compose
-        .get(&group)
-        .is_some_and(|g| g.services.contains(&service));
-    if !known {
-        return err(
-            StatusCode::NOT_FOUND,
-            format!("no compose service `{group}.{service}`"),
-        );
+    if let Err(e) = infra_target(&s, &group, &service) {
+        return err(StatusCode::NOT_FOUND, e);
     }
     container_logs(&s, group, service, &q).await
 }
@@ -1260,17 +1251,8 @@ async fn infra_log_stream(
     Path((group, service)): Path<(String, String)>,
     Query(q): Query<StreamQuery>,
 ) -> Response {
-    let known = s
-        .sup
-        .stack
-        .compose
-        .get(&group)
-        .is_some_and(|g| g.services.contains(&service));
-    if !known {
-        return err(
-            StatusCode::NOT_FOUND,
-            format!("no compose service `{group}.{service}`"),
-        );
+    if let Err(e) = infra_target(&s, &group, &service) {
+        return err(StatusCode::NOT_FOUND, e);
     }
     let tail = q.tail.unwrap_or(500).min(5000);
     let mut child = match s.sup.follow_container_logs(&group, &service, tail) {
@@ -1348,26 +1330,54 @@ async fn container_logs(s: &AppState, group: String, service: String, q: &LogQue
     }
 }
 
+/// What a `/v1/infra/{group}/{service}/…` route names: a container of the
+/// view, keyed by its Compose service name. `404` with the reason otherwise.
+fn infra_target(s: &AppState, group: &str, service: &str) -> Result<ContainerTarget, String> {
+    match s.sup.container_target(group, service) {
+        None => Err(format!("no compose group `{group}`")),
+        Some(ContainerTarget::Unknown) => Err(format!(
+            "no compose service `{group}.{service}`: compose group `{group}` does not start it and its project has no container of that service (a container is named by its Compose service, not its container name)"
+        )),
+        Some(t) => Ok(t),
+    }
+}
+
 /// `POST /v1/infra/{group}/{service}/{start|stop|restart}`: one container.
+/// One the group does not start (`managed: false` in the view) can be
+/// stopped only: `409` for `start` and `restart`.
 async fn container_action(
     State(s): State<AppState>,
     Path((group, service, action)): Path<(String, String, String)>,
 ) -> Response {
-    let known = s
-        .sup
-        .stack
-        .compose
-        .get(&group)
-        .is_some_and(|g| g.services.contains(&service));
-    if !known {
+    if !matches!(action.as_str(), "start" | "stop" | "restart") {
         return err(
-            StatusCode::NOT_FOUND,
-            format!("no compose service `{group}.{service}`"),
+            StatusCode::BAD_REQUEST,
+            format!("unknown action `{action}`: start, stop or restart"),
         );
     }
+    let target = match infra_target(&s, &group, &service) {
+        Ok(t) => t,
+        Err(e) => return err(StatusCode::NOT_FOUND, e),
+    };
     let sup = s.sup.clone();
-    match tokio::task::spawn_blocking(move || sup.container_action(&group, &service, &action)).await
-    {
+    let res = match target {
+        ContainerTarget::Unmanaged { name } if action == "stop" => {
+            tokio::task::spawn_blocking(move || sup.stop_unmanaged(&group, &service, &name)).await
+        }
+        ContainerTarget::Unmanaged { name } => {
+            return err(
+                StatusCode::CONFLICT,
+                format!(
+                    "`{service}` (container `{name}`) belongs to the Compose project, but compose group `{group}` does not start it (it is not in its `services`): devstack can stop it, not {action} it. Add it to `services` to manage it"
+                ),
+            );
+        }
+        _ => {
+            tokio::task::spawn_blocking(move || sup.container_action(&group, &service, &action))
+                .await
+        }
+    };
+    match res {
         Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
         Ok(Err(e)) => err(StatusCode::CONFLICT, e),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),

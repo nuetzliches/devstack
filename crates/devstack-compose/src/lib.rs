@@ -579,6 +579,19 @@ impl Docker {
         self.run(&g.dir, &a, budget::STOP).map(|_| ())
     }
 
+    /// Stop a container by its name (`docker stop`), whether or not the
+    /// loaded Compose model knows its service.
+    pub fn stop_container(&self, dir: &Path, name: &str) -> Result<()> {
+        let a: Vec<OsString> = vec![
+            "stop".into(),
+            "--timeout".into(),
+            "10".into(),
+            "--".into(),
+            name.into(),
+        ];
+        self.run(dir, &a, budget::STOP).map(|_| ())
+    }
+
     /// The last `tail` lines of a container's output, each starting with its
     /// RFC 3339 timestamp; `since` as Docker takes it (`30m`, a timestamp).
     /// Docker hands stdout and stderr back separately; the timestamps put

@@ -155,6 +155,8 @@ export type ContainerView = {
   ports: string[];
   /** Links for the dashboard (stack file `urls`, or http://localhost:<port> per published port). Older daemons omit it. */
   urls?: string[];
+  /** The group starts it (in its `services`); false: another container of the project, which can only be stopped. Older daemons omit it. */
+  managed?: boolean;
 };
 
 export type InfraView = { group: string; project: string; containers: ContainerView[]; error: string | null };

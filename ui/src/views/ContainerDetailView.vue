@@ -4,7 +4,7 @@
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { bytes, percent, webUrl } from '@/lib/format';
-import { containerLook } from '@/lib/status';
+import { containerLook, containerRefuses } from '@/lib/status';
 import { useStack } from '@/stores/stack';
 import StatusPill from '@/components/StatusPill.vue';
 import LogView from '@/components/LogView.vue';
@@ -22,6 +22,8 @@ const container = computed(() => infra.value?.containers.find((c) => c.service =
 const look = computed(() => (container.value ? containerLook(container.value) : null));
 const busy = computed(() => stack.busy[`ctr:${group.value}/${service.value}`]);
 const running = computed(() => container.value?.state === 'running' || container.value?.state === 'restarting');
+/** Not one the group starts: the daemon stops it, but refuses start and restart. */
+const refuses = computed(() => containerRefuses(container.value));
 
 const series = computed(() => stack.history.get(`ctr:${group.value}/${service.value}`) ?? []);
 const cpuValues = computed(() => series.value.map((p) => p.cpu));
@@ -69,10 +71,10 @@ const kv = computed(() => {
         </div>
       </div>
       <div class="btn-group">
-        <button v-if="!running" type="button" class="btn btn-primary" :disabled="!!busy || stack.stale" data-testid="action-container-start" @click="stack.containerAction(group, service, 'start')">
+        <button v-if="!running" type="button" class="btn btn-primary" :disabled="!!busy || stack.stale || !!refuses" :title="refuses ?? undefined" data-testid="action-container-start" @click="stack.containerAction(group, service, 'start')">
           <span v-if="busy === 'start'" class="spinner" /><Icon v-else name="play" /> Start
         </button>
-        <button v-if="running" type="button" class="btn" :disabled="!!busy || stack.stale" data-testid="action-container-restart" @click="stack.containerAction(group, service, 'restart')">
+        <button v-if="running" type="button" class="btn" :disabled="!!busy || stack.stale || !!refuses" :title="refuses ?? undefined" data-testid="action-container-restart" @click="stack.containerAction(group, service, 'restart')">
           <span v-if="busy === 'restart'" class="spinner" /><Icon v-else name="restart" /> Restart
         </button>
         <button v-if="running" type="button" class="btn btn-stop" :disabled="!!busy || stack.stale" data-testid="action-container-stop" @click="stack.containerAction(group, service, 'stop')">
@@ -80,6 +82,11 @@ const kv = computed(() => {
         </button>
       </div>
     </header>
+
+    <div v-if="refuses" class="banner info" data-testid="container-unmanaged">
+      <Icon name="alert" :size="18" />
+      <span class="grow">{{ refuses }}</span>
+    </div>
 
     <div v-if="container?.unreachable?.length" class="banner warn">
       <Icon name="alert" :size="18" />
