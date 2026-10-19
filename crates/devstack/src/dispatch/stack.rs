@@ -9,7 +9,7 @@ pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
     match cmd {
         Cmd::Check { compose } => check(file, compose),
         Cmd::Up { workers, force, on } => client::up(file, workers, force, on.as_deref()),
-        Cmd::Down { infra } => client::down(file, infra),
+        Cmd::Down { infra, all } => client::down(file, infra, all),
         Cmd::Status => {
             let c = client::need(&client::state_dir(file)?)?;
             client::print_status_for(&c.stack()?, file);

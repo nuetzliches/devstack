@@ -55,6 +55,21 @@ and listed with their assets on the
 
 ### Fixed
 
+- **Stopping the main working tree no longer stops its lanes**
+  ([ADR-0024](docs/adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md)).
+  `devstack down` in the main tree, and "Stop stack" in the dashboard, shut
+  the daemon down and with it every lane: a lane on a node lost its lease,
+  one serving the main ports lost them without a word, and the next start
+  began each lane cold. While a lane runs, they now stop the main tree's
+  services only; the daemon and the infrastructure the lanes share stay,
+  and a lane serving the main ports keeps them. `devstack down --all` (hub:
+  `POST /hub/stacks/{id}/down?all=true`) stops everything as before. The
+  main tree's `POST /v1/down` answers `200 {"lanes": [...]}` then and skips
+  `infra`; `POST /v1/shutdown?unless_lanes=true` refuses with `409`. A
+  service stopped in the main tree while a lane serves the main ports no
+  longer takes its port from the lane, and a daemon that stops no longer
+  takes the main slot back for services it stops anyway. The dashboard
+  offers "Start stack" for a main tree whose daemon stayed for its lanes.
 - **A Compose port is no longer taken for a lost forward while the server
   inside starts** ([#98](https://github.com/nuetzliches/devstack/issues/98)).
   Docker Desktop's proxy accepts a connection and closes it until something

@@ -436,6 +436,7 @@ export class MockTransport implements Transport {
     if (p === '/v1/stack' && method === 'GET') return view();
     if (p === '/v1/usage' && method === 'GET') return json(200, s.usageWithHistory());
     if (p === '/v1/up' && method === 'POST') return empty(202);
+    if (p === '/v1/down' && method === 'POST') return empty(204);
 
     if (/^\/v1\/infra\/[^/]+\/[^/]+\/logs$/.test(p)) {
       const t = new Date().toISOString();
