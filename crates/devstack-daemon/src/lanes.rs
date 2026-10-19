@@ -234,7 +234,35 @@ pub fn lane_stack(
             );
         }
     }
+    for g in s.compose.values_mut() {
+        for url in g.urls.values_mut() {
+            *url = lane_url(url, offset);
+        }
+    }
     Ok(s)
+}
+
+/// A link of `[compose.<group>] urls` as a lane reaches it: a port on this
+/// machine (`localhost`, `127.0.0.1`, `[::1]`) moves by the lane's offset, as
+/// every port of the lane does; another host, or a URL without a port,
+/// stays as it is written (#101).
+fn lane_url(url: &str, offset: u16) -> String {
+    let moved = || {
+        let (scheme, rest) = url.split_once("://")?;
+        let (authority, path) = rest
+            .find(['/', '?', '#'])
+            .map_or((rest, ""), |i| rest.split_at(i));
+        let (host, port) = authority.rsplit_once(':')?;
+        if !matches!(host, "localhost" | "127.0.0.1" | "[::1]") {
+            return None;
+        }
+        let port = port.parse::<u16>().ok()?.checked_add(offset)?;
+        Some(format!("{scheme}://{host}:{port}{path}"))
+    };
+    if offset == 0 {
+        return url.to_string();
+    }
+    moved().unwrap_or_else(|| url.to_string())
 }
 
 fn ports(stack: &devstack_config::Stack) -> Vec<u16> {
@@ -1792,6 +1820,39 @@ impl Lanes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_lanes_links_move_with_its_ports() {
+        assert_eq!(
+            lane_url("http://localhost:8090", 200),
+            "http://localhost:8290"
+        );
+        assert_eq!(
+            lane_url("https://127.0.0.1:5100/ui?x=1", 100),
+            "https://127.0.0.1:5200/ui?x=1"
+        );
+        assert_eq!(
+            lane_url("http://[::1]:3000#top", 100),
+            "http://[::1]:3100#top"
+        );
+        // The main tree, another host, no port: as written.
+        assert_eq!(
+            lane_url("http://localhost:8090", 0),
+            "http://localhost:8090"
+        );
+        assert_eq!(
+            lane_url("http://docs.example.com:8090/x", 100),
+            "http://docs.example.com:8090/x"
+        );
+        assert_eq!(
+            lane_url("https://localhost/ui", 100),
+            "https://localhost/ui"
+        );
+        assert_eq!(
+            lane_url("http://localhost:65500", 100),
+            "http://localhost:65500"
+        );
+    }
 
     #[test]
     fn names_and_ports() {

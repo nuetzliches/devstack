@@ -55,6 +55,11 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A lane's `[compose.<group>] urls` links follow its ports**
+  ([#101](https://github.com/nuetzliches/devstack/issues/101), comment).
+  In a lane, a link to a port on this machine (`localhost`, `127.0.0.1`)
+  pointed at the main tree's port; it moves by the lane's offset now, with
+  its path, as every port of the lane does. Another host stays as written.
 - **A lane on a node is checked for what it starts, not for the whole
   Compose file** ([ADR-0033](docs/adr/0033-a-node-decides-what-runs-on-it.md)
   point 7). A group that names its `services` was refused for a service it
