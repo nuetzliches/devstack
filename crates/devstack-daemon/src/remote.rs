@@ -82,7 +82,7 @@ pub struct RemoteLane {
 }
 
 /// devstack's per-user state, where this machine's memberships live.
-fn state_dir() -> PathBuf {
+pub(crate) fn state_dir() -> PathBuf {
     crate::token::token_path()
         .parent()
         .expect("token path has a parent")
@@ -90,6 +90,62 @@ fn state_dir() -> PathBuf {
 }
 
 /// This machine's membership of `pool`, in devstack's per-user state.
+/// A node a lane ran on (ADR-0038 point 4): the lane's kept data there
+/// goes when the lane ends for good or is reset.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RanOn {
+    pub pool: String,
+    pub node: devstack_node::coordinator::NodeRef,
+}
+
+const RAN_ON: &str = "nodes.json";
+
+/// The nodes the lane whose state is `state` (`lane-<name>/`) ran on.
+pub fn ran_on(state: &Path) -> Vec<RanOn> {
+    std::fs::read(state.join(RAN_ON))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+/// Note that the lane ran on `node` of `pool`.
+fn note_ran_on(state: &Path, pool: &str, node: &devstack_node::coordinator::NodeRef) {
+    let mut all = ran_on(state);
+    all.retain(|r| !(r.pool == pool && r.node.id == node.id));
+    all.push(RanOn {
+        pool: pool.to_string(),
+        node: node.clone(),
+    });
+    let _ = std::fs::create_dir_all(state);
+    let _ = std::fs::write(
+        state.join(RAN_ON),
+        serde_json::to_vec_pretty(&all).unwrap_or_default(),
+    );
+}
+
+/// Remove lane `lane` of `repo`'s kept data on `on` (`DELETE /v1/slots`).
+pub fn purge_slot(
+    rt: &tokio::runtime::Handle,
+    on: &RanOn,
+    repo: &str,
+    lane: &str,
+) -> Result<(), String> {
+    let client =
+        NodeClient::new(&local_member(&on.pool), on.node.clone()).map_err(|e| e.to_string())?;
+    rt.block_on(client.purge_slot(repo, lane))
+        .map_err(|e| e.to_string())
+}
+
+/// This member's kept lanes on `node` of `pool` (`GET /v1/slots`).
+pub fn slots_on(
+    rt: &tokio::runtime::Handle,
+    pool: &str,
+    node: devstack_node::coordinator::NodeRef,
+) -> Result<Vec<devstack_node::node::SlotView>, String> {
+    let client = NodeClient::new(&local_member(pool), node).map_err(|e| e.to_string())?;
+    rt.block_on(client.slots()).map_err(|e| e.to_string())
+}
+
 pub fn local_member(pool: &str) -> Local {
     Local::new(&devstack_node::member::pool_dir(&state_dir(), pool))
 }
@@ -318,6 +374,10 @@ impl RemoteLane {
         if let Err(e) = rt.block_on(client.admit(&offer)) {
             let _ = rt.block_on(client.release(&offer.id));
             return Err(format!("lane `{}` on {}: {e}", spec.name, offer.node.name));
+        }
+        // It keeps data there from now on (ADR-0038).
+        if let Some(state) = spec.scratch.parent() {
+            note_ran_on(state, &pool, &offer.node);
         }
         phase_over(
             spec.name,

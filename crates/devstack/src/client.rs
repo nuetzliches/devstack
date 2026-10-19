@@ -1438,6 +1438,62 @@ pub fn lanes_note(c: &Client) -> Option<String> {
     ))
 }
 
+/// What `lane reset` and `lane prune` found and did, one line each.
+fn print_pruned(list: &[Value], dry_run: bool) {
+    for p in list {
+        let size = p["bytes"]
+            .as_u64()
+            .map(|b| format!(", {} MiB", b >> 20))
+            .unwrap_or_default();
+        let done = match (p["removed"].as_bool(), p["error"].as_str()) {
+            (_, Some(e)) => format!("not removed: {e}"),
+            (Some(true), _) => "removed".to_string(),
+            _ if dry_run => "would go".to_string(),
+            _ => "kept".to_string(),
+        };
+        println!(
+            "{:<24} {:<20} {}{size}: {done}",
+            p["lane"].as_str().unwrap_or(""),
+            p["place"].as_str().unwrap_or(""),
+            p["why"].as_str().unwrap_or("")
+        );
+    }
+}
+
+pub fn lane_reset(stack_file: &Path, name: &str) -> Result<()> {
+    let c = main_client(stack_file)?;
+    let (status, body) = c.call_raw("POST", &format!("/v1/lanes/{name}/reset"), None)?;
+    if status >= 400 {
+        bail!("{}", error_text(&body));
+    }
+    let list: Vec<Value> = serde_json::from_str(&body)?;
+    print_pruned(&list, false);
+    println!("lane `{name}` starts fresh next time; its worktree and builds stay");
+    Ok(())
+}
+
+pub fn lane_prune(stack_file: &Path, older_than: Option<&str>, dry_run: bool) -> Result<()> {
+    let c = main_client(stack_file)?;
+    let (status, body) = c.call_raw(
+        "POST",
+        "/v1/lanes/prune",
+        Some(serde_json::json!({ "older_than": older_than, "dry_run": dry_run })),
+    )?;
+    if status >= 400 {
+        bail!("{}", error_text(&body));
+    }
+    let list: Vec<Value> = serde_json::from_str(&body)?;
+    if list.is_empty() {
+        println!("nothing to prune: every lane's data belongs to a worktree");
+        return Ok(());
+    }
+    print_pruned(&list, dry_run);
+    if dry_run {
+        println!("(dry run: nothing removed; without --dry-run these go)");
+    }
+    Ok(())
+}
+
 pub fn promote_lane(stack_file: &Path, lane: &str) -> Result<()> {
     let c = main_client(stack_file)?;
     let (status, body) = c.call_raw("POST", &format!("/v1/lanes/{lane}/main"), None)?;
