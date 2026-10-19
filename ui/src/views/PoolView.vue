@@ -468,6 +468,15 @@ function policyText(id: string) {
                 <span v-if="n.report" class="pill sm" :class="releaseClass(n.report.devstack, true)" :title="releaseTitle(n.report.devstack, n.name)">
                   {{ n.report.devstack?.version ?? 'older' }}
                 </span>
+                <span
+                  v-if="n.report?.update && n.report.update.state !== 'done'"
+                  class="pill sm"
+                  :class="['failed', 'refused'].includes(n.report.update.state) ? 'danger' : 'info'"
+                  :title="n.report.update.error ?? `update to ${n.report.update.target ?? 'the latest release'}`"
+                  data-testid="pool-node-update"
+                >
+                  {{ n.report.update.state === 'draining' ? 'updating: waits for its lanes' : n.report.update.state === 'installing' ? 'updating…' : n.report.update.state === 'restarting' ? 'restarting…' : `update ${n.report.update.state}` }}
+                </span>
                 <span v-else class="faint">–</span>
               </td>
               <td class="tabular">
@@ -504,6 +513,27 @@ function policyText(id: string) {
                   @click="pool.setPaused(n.id, n.name, !n.paused)"
                 >
                   <Icon :name="n.paused ? 'play' : 'pause'" :size="13" /> {{ n.paused ? 'Resume' : 'Pause' }}
+                </button>
+                <button
+                  v-if="n.kind === 'server' && n.online"
+                  type="button"
+                  class="btn btn-xs"
+                  :class="{ 'btn-primary': hub.newer || releaseClass(n.report?.devstack, true) === 'warn' }"
+                  title="Have this server install the latest devstack once its lanes have ended (ADR-0039)"
+                  data-testid="pool-update"
+                  @click="pool.updateNode(n.id, n.name)"
+                >
+                  <Icon name="download" :size="13" /> Update
+                </button>
+                <button
+                  v-if="n.online && n.report?.kept?.lanes"
+                  type="button"
+                  class="btn btn-xs"
+                  :title="`Remove the ${n.report.kept.lanes} stopped lane(s) it keeps (${bytes(n.report.kept.bytes)})`"
+                  data-testid="pool-prune"
+                  @click="pool.pruneNode(n.id, n.name)"
+                >
+                  <Icon name="trash" :size="13" /> Prune
                 </button>
               </td>
             </tr>

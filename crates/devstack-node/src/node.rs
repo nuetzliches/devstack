@@ -69,7 +69,15 @@ pub struct NodeConfig {
     pub share: Settings,
     /// A server its owner never reclaims (ADR-0026).
     pub dedicated: bool,
+    /// How it installs a release an admin ordered (ADR-0039): the binary it
+    /// is to run then, `None` when it runs that release already. Without
+    /// one, an order is refused.
+    pub on_update: Option<UpdateFn>,
 }
+
+/// See [`NodeConfig::on_update`].
+pub type UpdateFn =
+    Arc<dyn Fn(&crate::coordinator::UpdateOrder) -> Result<Option<PathBuf>, String> + Send + Sync>;
 
 /// A lease the node admitted.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -191,6 +199,12 @@ struct Inner {
     api: String,
     share: Settings,
     dedicated: bool,
+    /// [`NodeConfig::on_update`].
+    on_update: Option<UpdateFn>,
+    /// The update an admin ordered, as it goes (ADR-0039).
+    update: Mutex<Option<crate::coordinator::UpdateReport>>,
+    /// Updating: no new lane is admitted.
+    draining: std::sync::atomic::AtomicBool,
     leases: Mutex<HashMap<String, NodeLease>>,
     /// The approved members, as the coordinator last listed them.
     /// With their tags, which this node's policy may ask for (ADR-0033).
@@ -478,6 +492,73 @@ impl Inner {
                         .args(["rm", "-f", "--", name])
                         .output();
                 }
+            }
+        }
+    }
+
+    fn update_state(&self, at: u64, state: &str, target: Option<String>, error: Option<String>) {
+        *self.update.lock().unwrap() = Some(crate::coordinator::UpdateReport {
+            at,
+            state: state.into(),
+            target,
+            error,
+        });
+        self.changed.notify_one();
+    }
+
+    /// Carry out an update an admin ordered (ADR-0039): refused by this
+    /// node's own policy or in a container; else, by default, once its lanes
+    /// have ended (no new one admitted meanwhile), the release installed and
+    /// the agent started again on it.
+    fn carry_out(self: Arc<Self>, order: crate::coordinator::UpdateOrder) {
+        let at = order.at;
+        let target = order.version.clone();
+        let refuse = |why: &str| self.update_state(at, "refused", target.clone(), Some(why.into()));
+        if self
+            .local_policy
+            .as_ref()
+            .is_some_and(|p| p.remote_update == Some(false))
+        {
+            return refuse(
+                "this node's own policy refuses remote updates (`remote_update = false`)",
+            );
+        }
+        if self.container.is_some() {
+            return refuse("the agent runs in a container: update its image");
+        }
+        let Some(install) = self.on_update.clone() else {
+            return refuse("this agent cannot update itself");
+        };
+        eprintln!(
+            "node agent: {} orders an update to {}",
+            order.by,
+            target.as_deref().unwrap_or("the latest release")
+        );
+        if order.drain {
+            self.draining
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            self.update_state(at, "draining", target.clone(), None);
+            while !self.leases.lock().unwrap().is_empty() {
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        }
+        self.update_state(at, "installing", target.clone(), None);
+        match install(&order) {
+            Ok(None) => {
+                self.draining
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                self.update_state(at, "done", target, None);
+            }
+            Err(e) => {
+                self.draining
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                eprintln!("node agent: the update failed: {e}");
+                self.update_state(at, "failed", target, Some(e));
+            }
+            Ok(Some(binary)) => {
+                self.update_state(at, "restarting", target, None);
+                eprintln!("node agent: starting again on {}", binary.display());
+                restart_on(&binary);
             }
         }
     }
@@ -869,6 +950,15 @@ async fn admit(
                 "the lease belongs to someone else",
             ))
         };
+    }
+    if s.draining.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!(
+                "{} is updating its devstack: no new lanes until it is back",
+                s.name
+            ),
+        ));
     }
     // Ids and tokens are the coordinator's hex: nothing else goes into its URL.
     if !hex_id(&a.id) || !hex_id(&a.token) {
@@ -2374,6 +2464,7 @@ async fn background(s: Shared) {
             dedicated: s.dedicated,
             devstack: Some(crate::version::Release::this()),
             kept: *s.kept_use.lock().unwrap(),
+            update: s.update.lock().unwrap().clone(),
             leases: s
                 .leases
                 .lock()
@@ -2415,6 +2506,32 @@ async fn background(s: Shared) {
                 *known = Some(a.coordinator.clone());
             }
         }
+        // An update an admin ordered (ADR-0039), once per order.
+        if let Ok(Ok(a)) = &answer
+            && let Some(order) = a.update.clone()
+        {
+            let new = s
+                .update
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_none_or(|u| u.at != order.at);
+            if new {
+                let s2 = s.clone();
+                std::thread::spawn(move || s2.carry_out(order));
+            }
+        }
+        // An admin asked for the stopped lanes kept here to go (ADR-0038).
+        if let Ok(Ok(a)) = &answer
+            && a.prune
+        {
+            let s2 = s.clone();
+            std::thread::spawn(move || {
+                for (slot, info) in s2.kept() {
+                    s2.purge_slot(&slot, &info, "an admin of the pool asked");
+                }
+            });
+        }
         // Leases an admin ended: their lanes stop like expired ones.
         if let Ok(Ok(a)) = answer
             && !a.end.is_empty()
@@ -2431,6 +2548,25 @@ async fn background(s: Shared) {
                 s.drop_lease(l);
             }
         }
+    }
+}
+
+/// The agent again, on `binary`, with the arguments it was started with. On
+/// Unix in place of this process (a supervisor sees the same process go on);
+/// elsewhere a new process, and this one ends.
+fn restart_on(binary: &Path) -> ! {
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let e = std::process::Command::new(binary).args(&args).exec();
+        eprintln!("node agent: cannot start {}: {e}", binary.display());
+        std::process::exit(75);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = std::process::Command::new(binary).args(&args).spawn();
+        std::process::exit(0);
     }
 }
 
@@ -2485,6 +2621,9 @@ pub async fn serve(
         api: config.api,
         share: config.share,
         dedicated: config.dedicated,
+        on_update: config.on_update.clone(),
+        update: Mutex::new(None),
+        draining: std::sync::atomic::AtomicBool::new(false),
         leases: Mutex::new(leases),
         members: Mutex::new((None, HashMap::new())),
         policy: Mutex::new((false, None)),

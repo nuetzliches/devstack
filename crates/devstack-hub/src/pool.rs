@@ -307,6 +307,27 @@ pub async fn history(Query(h): Query<HistoryQuery>) -> Response {
     }
 }
 
+/// `POST /hub/pool/nodes/{id}/update` `{version?, drain?, downgrade?}`
+/// (ADR-0039).
+pub async fn update(
+    Path(id): Path<String>,
+    Query(q): Query<PoolQuery>,
+    Json(b): Json<devstack_node::coordinator::UpdateRequest>,
+) -> Response {
+    match blocking(&q, move |l| l.admin_update(&id, &b)).await {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+/// `POST /hub/pool/nodes/{id}/prune` (ADR-0038).
+pub async fn prune(Path(id): Path<String>, Query(q): Query<PoolQuery>) -> Response {
+    match blocking(&q, move |l| l.admin_prune(&id)).await {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(e) => error(&e),
+    }
+}
+
 pub async fn end(Path(id): Path<String>, Query(q): Query<PoolQuery>) -> Response {
     match blocking(&q, move |l| l.admin_end(&id)).await {
         Ok(()) => StatusCode::ACCEPTED.into_response(),

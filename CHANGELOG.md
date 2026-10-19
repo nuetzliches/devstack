@@ -11,6 +11,17 @@ and listed with their assets on the
 
 ### Added
 
+- **An admin updates a server's devstack from the dashboard**
+  ([ADR-0039](docs/adr/0039-an-admin-can-update-a-server-node.md)).
+  "Update" in the pool area, for a node of the kind server that is online:
+  at its next report the node takes no new lane, waits until its lanes
+  have ended, installs the latest release (checked against its
+  `SHA256SUMS`) and starts its agent again on it; the version column says
+  how it goes. The node's own `policy.json` can refuse it (`remote_update:
+  false`), a node in a container refuses, and an older release needs
+  `downgrade`. `devstack node agent ... --print-unit` prints a systemd unit
+  that brings the agent back whatever happens. "Prune" removes the stopped
+  lanes a node keeps (ADR-0038). Every order is in the audit log.
 - **"Discard data" for a stopped lane in the dashboard** (ADR-0038): its
   containers and volumes go, here and on the nodes it ran on, so its next
   start is fresh (`devstack lane reset`).

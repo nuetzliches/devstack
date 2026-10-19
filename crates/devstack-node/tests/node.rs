@@ -97,6 +97,7 @@ fn a_lane_is_leased_admitted_and_synced() {
         listener.local_addr().unwrap().port()
     );
     let config = NodeConfig {
+        on_update: None,
         dir: nd.path().to_path_buf(),
         api: api.clone(),
         share: Settings {
@@ -501,7 +502,17 @@ fn an_admin_pauses_a_node_and_ends_a_lease() {
         "https://127.0.0.1:{}",
         listener.local_addr().unwrap().port()
     );
+    // What an update an admin orders asks of the agent (ADR-0039): here it
+    // runs that release already.
+    let ordered = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = ordered.clone();
     let config = NodeConfig {
+        on_update: Some(std::sync::Arc::new(
+            move |o: &devstack_node::coordinator::UpdateOrder| {
+                seen.lock().unwrap().push(o.version.clone());
+                Ok(None)
+            },
+        )),
         dir: nd.path().to_path_buf(),
         api,
         share: Settings {
@@ -625,5 +636,43 @@ fn an_admin_pauses_a_node_and_ends_a_lease() {
     assert_eq!(&log[..3], ["end", "resume", "pause"]);
     assert!(log.contains(&"policy".to_string()) && log.contains(&"tags".to_string()));
     assert!(log.contains(&"node".to_string()));
+
+    // An admin has the server update its devstack (ADR-0039): ordered at
+    // its next report, carried out, and over once it says so. Not for a
+    // machine that is no node.
+    use devstack_node::coordinator::UpdateRequest;
+    let req = UpdateRequest {
+        version: Some("0.99.0".into()),
+        ..Default::default()
+    };
+    assert!(admin.admin_update(&admin_id, &req).is_err(), "no node");
+    let bad = UpdateRequest {
+        version: Some("latest; rm".into()),
+        ..Default::default()
+    };
+    assert!(admin.admin_update(&node_id, &bad).is_err(), "no release");
+    admin.admin_update(&node_id, &req).unwrap();
+    wait_for(40, "the node carries the update out", || {
+        admin.nodes().unwrap().iter().any(|n| {
+            n.id == node_id
+                && n.report
+                    .as_ref()
+                    .and_then(|r| r.update.as_ref())
+                    .is_some_and(|u| u.state == "done")
+        })
+    });
+    assert_eq!(
+        *ordered.lock().unwrap(),
+        [Some("0.99.0".to_string())],
+        "once"
+    );
+    admin.admin_prune(&node_id).unwrap();
+    let log: Vec<String> = admin
+        .admin_audit()
+        .unwrap()
+        .into_iter()
+        .map(|e| e.action)
+        .collect();
+    assert_eq!(&log[..2], ["prune", "update"]);
     stop();
 }

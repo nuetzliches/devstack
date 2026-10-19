@@ -189,6 +189,32 @@ export const usePool = defineStore('pool', () => {
     if (r.ok) await load();
   }
 
+  /** Have a server update its devstack (ADR-0039): it waits until its lanes have ended. */
+  async function updateNode(id: string, name: string) {
+    const r = await act({
+      label: `Update devstack on ${name}`,
+      path: at(paths.poolUpdate(id)),
+      body: { drain: true },
+      confirmText: `${name} takes no new lanes, waits until the ones it runs have ended, installs the latest devstack release (checked against its checksums) and starts its agent again. Its own policy may refuse it.`,
+      confirmLabel: 'Update it',
+      danger: false,
+      success: `${name} updates at its next report`,
+    });
+    if (r.ok) setTimeout(() => void load(), 1500);
+  }
+
+  /** Have a node remove the stopped lanes it keeps (ADR-0038). */
+  async function pruneNode(id: string, name: string) {
+    const r = await act({
+      label: `Remove the kept lanes on ${name}`,
+      path: at(paths.poolPrune(id)),
+      confirmText: `The stopped lanes ${name} keeps for their next start go: their mirrors, builds and data. Their next start there is a fresh one. Running lanes stay.`,
+      confirmLabel: 'Remove them',
+      success: `${name} removes its kept lanes at its next report`,
+    });
+    if (r.ok) setTimeout(() => void load(), 1500);
+  }
+
   async function endLease(id: string, what: string) {
     const r = await act({
       label: `End ${what}`,
@@ -329,6 +355,8 @@ export const usePool = defineStore('pool', () => {
     setRole,
     setShare,
     setPaused,
+    updateNode,
+    pruneNode,
     endLease,
     join,
     setTags,

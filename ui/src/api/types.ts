@@ -290,6 +290,8 @@ export type PoolNode = {
     gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean }[];
     /** Stopped lanes it keeps for their next start (ADR-0038); older nodes omit it. */
     kept?: { lanes: number; bytes: number };
+    /** How the last update an admin ordered goes (ADR-0039). */
+    update?: { at: number; state: 'draining' | 'installing' | 'restarting' | 'done' | 'refused' | 'failed' | (string & {}); target?: string; error?: string };
     /** The devstack it runs; absent from a release before version reporting. */
     devstack?: PoolRelease;
   };

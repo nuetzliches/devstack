@@ -549,10 +549,73 @@ pub fn agent(
             api,
             share,
             dedicated,
+            on_update: Some(std::sync::Arc::new(crate::update::for_node)),
         },
         addr,
     )?;
     Ok(())
+}
+
+/// A systemd unit that runs `devstack node agent` with these arguments, as
+/// the user who prints it, and starts it again whenever it ends: after an
+/// update an admin ordered the agent runs the new release (ADR-0039).
+pub fn agent_unit(
+    pool: &str,
+    listen: &str,
+    api: Option<&str>,
+    max_cpus: Option<f64>,
+    max_memory_gib: Option<f64>,
+    dedicated: bool,
+) -> Result<String> {
+    let exe = std::env::current_exe()?;
+    let mut args = vec![
+        "node".to_string(),
+        "agent".into(),
+        "--listen".into(),
+        listen.into(),
+        "--pool".into(),
+        pool.into(),
+    ];
+    if let Some(a) = api {
+        args.extend(["--api".into(), a.into()]);
+    }
+    if let Some(c) = max_cpus {
+        args.extend(["--max-cpus".into(), c.to_string()]);
+    }
+    if let Some(m) = max_memory_gib {
+        args.extend(["--max-memory-gib".into(), m.to_string()]);
+    }
+    if dedicated {
+        args.push("--dedicated".into());
+    }
+    let user = std::env::var("USER").unwrap_or_else(|_| "root".into());
+    let home = std::env::var("HOME").unwrap_or_default();
+    let name = if pool == devstack_node::member::DEFAULT_POOL {
+        "devstack-node".to_string()
+    } else {
+        format!("devstack-node-{pool}")
+    };
+    Ok(format!(
+        "# /etc/systemd/system/{name}.service
+# sudo systemctl daemon-reload && sudo systemctl enable --now {name}
+[Unit]
+Description=devstack node agent (pool {pool})
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User={user}
+Environment=HOME={home}
+ExecStart={exe} {args}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+",
+        exe = exe.display(),
+        args = args.join(" ")
+    ))
 }
 
 /// `devstack node run-lane`: a lane on a node, driven from here without the

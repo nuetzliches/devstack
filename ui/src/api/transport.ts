@@ -72,6 +72,8 @@ export const paths = {
   poolRole: (id: string) => `/hub/pool/members/${enc(id)}/role`,
   poolPause: (id: string, paused: boolean) => `/hub/pool/nodes/${enc(id)}/${paused ? 'pause' : 'resume'}`,
   poolEnd: (lease: string) => `/hub/pool/leases/${enc(lease)}/end`,
+  poolUpdate: (id: string) => `/hub/pool/nodes/${enc(id)}/update`,
+  poolPrune: (id: string) => `/hub/pool/nodes/${enc(id)}/prune`,
   poolJoin: '/hub/pool/join',
   poolTags: (id: string) => `/hub/pool/members/${enc(id)}/tags`,
   poolNode: (id: string) => `/hub/pool/members/${enc(id)}/node`,
