@@ -72,7 +72,7 @@ function isActive(name: string) {
 </script>
 
 <template>
-  <div>
+  <div :class="{ 'read-only': stack.readOnly }">
     <StackHeader />
     <nav class="subnav" aria-label="Stack views">
       <div class="subnav-inner">
@@ -256,5 +256,17 @@ function isActive(name: string) {
   white-space: pre-wrap;
   max-height: 14em;
   overflow: auto;
+}
+</style>
+
+<style>
+/* Someone else's lane (ADR-0040): what would change it is not offered. */
+.read-only [data-testid^="action-"]:not([data-testid="action-build-log"]):not([data-testid="action-kept-logs"]):not([data-testid="action-candidate-console"]):not([data-testid="action-pin"]),
+.read-only [data-testid="group-start"],
+.read-only [data-testid="group-stop"],
+.read-only [data-testid="group-restart"],
+.read-only [data-testid="command-run"],
+.read-only [data-testid="container-unreachable"] {
+  display: none !important;
 }
 </style>

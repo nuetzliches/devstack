@@ -121,6 +121,28 @@ describe('stack store', () => {
     expect(lane.closed).toBe(true);
   });
 
+  it('a lane shared to view is read through its node, and changes nothing (ADR-0040)', async () => {
+    fake.on('/hub/session', ok({ version: '0.9.8' }));
+    fake.on('/hub/pools', ok([{ name: 'default', joined: true, state: 'approved', coordinator: 'https://c' }]));
+    fake.on('/hub/pool/shared', ok([{ lease: 'ab12', repo: 'crm', lane: 'fix', owner: 'o', owner_name: 'anna', node: { id: 'n', name: 'build', api: 'https://n' }, services: [], view: true }]));
+    const hub = useHub();
+    await hub.init();
+    fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [] });
+    const pool = usePool();
+    await pool.load();
+    const stack = useStack();
+    stack.select('shared~default~ab12');
+    await vi.waitFor(() => expect(stack.running).toBe(true));
+    expect(stack.readOnly).toBe(true);
+    expect(stack.entry?.name).toBe('crm · fix');
+    // Its stream goes to the hub's read route for the lane, the pool kept.
+    const s = fake.stream('/hub/pool/shared/ab12/api/v1/events?pool=default');
+    expect(s.closed).toBe(false);
+    await stack.serviceAction('api', 'restart');
+    expect(fake.requests.some((r) => r.path.includes('/restart'))).toBe(false);
+    expect(useUi().toasts.some((x) => x.title === 'Read only')).toBe(true);
+  });
+
   it('a lane removed while shown gives way to the main tree', async () => {
     const stack = await shownStack();
     const feat = { name: 'feat', path: '/src/feat', number: 1, active: true, port_offset: 100, owns_main: false, running: 2, services: 3 };

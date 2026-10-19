@@ -11,6 +11,11 @@ and listed with their assets on the
 
 ### Added
 
+- **A lane shared with you to view looks like your own** (ADR-0040). Under
+  "Shared with you" it is a row like your lanes; it opens the same pages
+  (overview, services and containers with their logs, infrastructure,
+  commands' runs, events, usage), live, read through its node, with its
+  owner and node named and nothing that would change it.
 - **A shared lane can be shared to view** ([ADR-0040](docs/adr/0040-a-shared-lane-can-be-watched-like-ones-own.md)).
   `devstack lane share <lane> --view <member|tag|*>` (API: `view` beside
   `with`; MCP `lane_share` with `view`) lets them read the lane as its

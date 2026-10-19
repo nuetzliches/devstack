@@ -100,6 +100,14 @@ function seedRuns(shop: MockStack, crm: MockStack): void {
 }
 
 /** The scripted timeline of the "shop" stack: a change that goes live, a superseded build, a failed build, a held one. */
+/** A lane shared to view (ADR-0040) reads like the mock's crm stack. */
+function viewedAs(path: string): string {
+  const m = /^\/hub\/pool\/shared\/[^/]+\/api(\/[^?]*)(\?.*)?$/.exec(path);
+  if (!m) return path;
+  const q = (m[2] ?? '').replace(/[?&]pool=[^&]*/, '').replace(/^&/, '?');
+  return `/hub/stacks/crm-81c0d2/api${m[1]}${q}`;
+}
+
 async function shopScript(s: MockStack): Promise<void> {
   for (;;) {
     try {
@@ -197,7 +205,7 @@ export class MockTransport implements Transport {
   async request<T = unknown>(method: string, path: string, body?: unknown): Promise<Response<T>> {
     await sleep(80 + Math.random() * 120);
     if (this.hub.hubDown) throw new Unreachable('mock: hub is down');
-    return (await this.route(method.toUpperCase(), path, body as Record<string, unknown> | undefined)) as Response<T>;
+    return (await this.route(method.toUpperCase(), viewedAs(path), body as Record<string, unknown> | undefined)) as Response<T>;
   }
 
   private async route(method: string, path: string, body?: Record<string, unknown>): Promise<Response> {
@@ -256,6 +264,7 @@ export class MockTransport implements Transport {
                   { name: 'api', port: 5000, scheme: 'http', here: 5100 },
                   { name: 'web', port: 4200, scheme: 'https', here: 4300 },
                 ],
+                view: true,
               },
             ],
       );
@@ -615,7 +624,7 @@ export class MockTransport implements Transport {
       handlers.onState?.('connecting');
       timer = setTimeout(() => {
         if (closed) return;
-        route = hub.hubDown ? null : this.attach(path, listener);
+        route = hub.hubDown ? null : this.attach(viewedAs(path), listener);
         if (!route) return fail();
         attempt = 0;
         handlers.onState?.('open');

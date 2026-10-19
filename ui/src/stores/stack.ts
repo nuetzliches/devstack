@@ -1,11 +1,12 @@
 import { defineStore } from 'pinia';
 import { computed, ref, shallowRef, triggerRef, watch } from 'vue';
-import { api, paths, v1, type GroupAction, type ServiceAction, type StreamState, type Subscription } from '@/api';
+import { api, paths, sharedRef, v1, type GroupAction, type ServiceAction, type StreamState, type Subscription } from '@/api';
 import type { LaneView, Point, Run, ServiceView, StackEvent, StackView, UsageReport } from '@/api/types';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
 import { useHub } from './hub';
+import { usePool } from './pool';
 import { useUi } from './ui';
 
 const MAX_EVENTS = 500;
@@ -42,7 +43,20 @@ export const useStack = defineStore('stack', () => {
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let usageFetched = false;
 
-  const entry = computed(() => hub.entry(id.value));
+  /** A lane someone shares with this machine to view (ADR-0040): shown as one's own, read only. */
+  const shared = computed(() => sharedRef(id.value));
+  const sharedLane = computed(() => {
+    const r = shared.value;
+    return r ? (usePool().shared.find((l) => l.pool === r.pool && l.lease === r.lease) ?? null) : null;
+  });
+  /** Someone else's lane: nothing here changes it. */
+  const readOnly = computed(() => !!shared.value);
+  const entry = computed(() => {
+    const own = hub.entry(id.value);
+    const l = sharedLane.value;
+    if (own || !l || !id.value) return own;
+    return { id: id.value, name: `${l.repo} · ${l.lane}`, file: '', repo: l.repo, running: !!l.view, daemon: null, last_seen: null };
+  });
   const running = computed(() => !!entry.value?.running);
   /** The view shown is not live: hub away, stack down, or not connected yet. */
   const stale = computed(() => !live.value);
@@ -70,7 +84,7 @@ export const useStack = defineStore('stack', () => {
 
   async function loadLanes() {
     const sid = id.value;
-    if (!sid || !running.value) return;
+    if (!sid || !running.value || readOnly.value) return;
     try {
       const res = await api().request<LaneView[]>('GET', daemonPath(sid, v1.lanes));
       if (sid === id.value && res.ok && Array.isArray(res.body)) setLanes(res.body);
@@ -498,7 +512,16 @@ export const useStack = defineStore('stack', () => {
     else if (ev.status === 'succeeded') ui.toast('success', `${ev.command} #${ev.run} succeeded`);
   }
 
+  /** An action on someone else's lane: said, and not sent (the node refuses it anyway). */
+  function refuseReadOnly(): boolean {
+    if (!readOnly.value) return false;
+    const l = sharedLane.value;
+    useUi().toast('info', 'Read only', `This lane is ${l ? `${l.owner_name}'s` : "someone else's"}: you view it, its owner runs it.`);
+    return true;
+  }
+
   async function runCommand(name: string): Promise<number | null> {
+    if (refuseReadOnly()) return null;
     if (!id.value) return null;
     const cmd = view.value?.commands.find((c) => c.name === name);
     const res = await act<{ run: number }>({
@@ -519,6 +542,7 @@ export const useStack = defineStore('stack', () => {
   const actionLabels: Record<ServiceAction, string> = { start: 'Start', stop: 'Stop', restart: 'Restart', rebuild: 'Rebuild', promote: 'Promote', rollback: 'Roll back', 'hot-reload-on': 'Hot reload on for', 'hot-reload-off': 'Hot reload off for' };
 
   async function serviceAction(name: string, action: ServiceAction) {
+    if (refuseReadOnly()) return;
     if (!id.value) return;
     const key = `svc:${name}`;
     if (busy.value[key]) return;
@@ -538,6 +562,7 @@ export const useStack = defineStore('stack', () => {
 
   /** start / stop / restart every member of a group (plan §6). */
   async function groupAction(group: string, label: string, action: GroupAction) {
+    if (refuseReadOnly()) return;
     if (!id.value) return;
     const key = `grp:${group}`;
     if (busy.value[key]) return;
@@ -557,6 +582,7 @@ export const useStack = defineStore('stack', () => {
 
   /** Start, stop or restart one container of the stack shown (a lane: its own). */
   async function containerAction(group: string, service: string, action: 'start' | 'stop' | 'restart') {
+    if (refuseReadOnly()) return;
     if (!id.value) return;
     const key = `ctr:${group}/${service}`;
     busy.value[key] = action;
@@ -573,6 +599,7 @@ export const useStack = defineStore('stack', () => {
   }
 
   async function startStack() {
+    if (refuseReadOnly()) return;
     if (!id.value) return;
     const stackId = id.value;
     if (running.value) {
@@ -587,6 +614,7 @@ export const useStack = defineStore('stack', () => {
 
   /** Down, wait until the daemon is gone, up: picks up a changed stack file. */
   async function restartStack() {
+    if (refuseReadOnly()) return;
     if (!id.value) return;
     const stackId = id.value;
     const name = entry.value?.name ?? 'stack';
@@ -653,6 +681,7 @@ export const useStack = defineStore('stack', () => {
   }
 
   async function stopStack() {
+    if (refuseReadOnly()) return;
     if (!id.value) return;
     const name = entry.value?.name ?? 'stack';
     const kept = runningLanes.value;
@@ -686,6 +715,8 @@ export const useStack = defineStore('stack', () => {
     stale,
     entry,
     running,
+    readOnly,
+    sharedLane,
     runningLanes,
     mainIdle,
     events,
