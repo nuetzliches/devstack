@@ -30,6 +30,21 @@ and listed with their assets on the
   answer `409` with the reason, and the dashboard disables them with that
   reason as tooltip. A `404` names why.
 
+- A request through the hub to a stack that is stopping or restarting is a
+  `503` with `Retry-After` and a message that says so, not a `502`. A `down`
+  from the dashboard let the daemon take new requests for as long as its
+  services took to stop, then cut what it held 2 s after: a request in
+  between (a new lane, say) ended as `502`. Now the daemon stops taking
+  requests as soon as it is told to stop; the hub looks at `daemon.json` for
+  every request, sends one that certainly never reached the daemon (and a
+  `GET`) again to the daemon that replaced it, and answers `503` for one that
+  was cut. The dashboard shows that message instead of "stack not running".
+- `up` right after `down` (from the dashboard or the CLI) waits for the old
+  daemon to be gone instead of attaching to it as it stops, or starting one
+  that gives up on the state lock after 5 s.
+- The hub no longer takes a stack for running when its `daemon.json` was
+  left by a killed daemon and another process now has that port.
+
 ## [0.10.1] - 2026-10-18
 
 ### Fixed
@@ -224,5 +239,6 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.10.1...HEAD
 [0.10.1]: https://github.com/nuetzliches/devstack/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/nuetzliches/devstack/compare/v0.9.8...v0.10.0

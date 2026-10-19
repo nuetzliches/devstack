@@ -54,10 +54,10 @@ and `Referrer-Policy: no-referrer`. The dashboard has no inline script.
 | `POST /hub/stacks/init {"path"}` | cookie + Origin | writes a first draft (`devstack init`, never over an existing file) and registers it when it loads; `{file, services, compose_files, todos, id}` |
 | `GET /hub/docker` | cookie | `DockerEngine`: `{"state":"running","version"}`, `{"state":"stopped","starter":"Docker Desktop"\|null,"hint"}` or `{"state":"missing"}`; the hub looks every 10 s |
 | `POST /hub/docker/start` | cookie + Origin | `202 {"started":"Docker Desktop"}`, `200` when it already runs, `409 {"error"}` where devstack cannot start it (Docker Engine as a system service on Linux needs root) |
-| `POST /hub/stacks/{id}/up` | cookie + Origin | `202`; the stack starts (daemon, infrastructure, autostart services) |
-| `POST /hub/stacks/{id}/down?infra=false` | cookie + Origin | `202`; services stop, the daemon exits |
+| `POST /hub/stacks/{id}/up` | cookie + Origin | `202`; the stack starts (daemon, infrastructure, autostart services). Right after a `down` from the hub, the start waits until the old daemon is gone (at most 2 minutes) |
+| `POST /hub/stacks/{id}/down?infra=false` | cookie + Origin | `202`; the daemon is told to shut down: from then on it takes no requests, stops its services and lanes, and exits (with `infra=true` it first stops the containers too, `POST /v1/down?infra=true`) |
 | `DELETE /hub/stacks/{id}` | cookie + Origin | `204`; forget a stack (it registers again when it starts) |
-| `ANY /hub/stacks/{id}/api/<path>` | cookie (+ Origin for non-GET) | the daemon's `/<path>`, streams passed through; `503 {"error":"stack not running"}` when its daemon is down or does not take the connection within 5 s. The daemon's `Set-Cookie` and hop-by-hop headers are not passed on |
+| `ANY /hub/stacks/{id}/api/<path>` | cookie (+ Origin for non-GET) | the daemon's `/<path>`, streams passed through; the daemon is the one its `daemon.json` names at that moment. `503 {"error":"stack not running…"}` when it is down or does not take the connection within 5 s; `503` with `Retry-After: 2` and an `error` that says so when the stack is starting, stopping or restarting (see below). The daemon's `Set-Cookie` and hop-by-hop headers are not passed on |
 | `GET /hub/pools` | cookie | the pools this machine belongs to or asked to join, the default one first: `[{name, joined, state?, coordinator?}]` ([ADR-0034](adr/0034-a-machine-can-belong-to-several-pools.md)). Every `/hub/pool...` route below takes `?pool=<name>`; without it, the default pool |
 | `GET /hub/pool/history?node=&range=1h\|24h` | cookie | a node's capacity over time, or the pool's without `node` ([ADR-0036](adr/0036-the-pool-shows-its-capacity-over-time.md)): `[{at, total_cpus, total_memory, offered_cpus, offered_memory, used_cpus, used_memory, gpus, gpus_offered, gpu_load, gpu_memory, gpu_memory_used}]`; the last hour as reported (every 15 s), or the last day by minute; kept by the coordinator in memory, since it started |
 | `GET /hub/pool/telemetry` | cookie | `{consent, collects, what}`: whether this machine agreed to send the pool telemetry, whether the pool collects it (its coordinator has a collector), and what is sent ([ADR-0037](adr/0037-telemetry-goes-to-the-pools-collector-with-consent.md)) |
@@ -122,6 +122,29 @@ type PoolMember = {
 };
 type NodePolicy = { allow?: string[]; repos?: string[]; memory_headroom?: number; max_cpus?: number; network?: 'lan' | 'internet' | 'none' };
 ```
+
+### A stack that starts, stops or restarts
+
+A daemon can go between the moment the hub looks for it and the request:
+it was told to stop, closes its port, and gives the requests it holds 2 s
+before it cuts them. The hub reads the stack's `daemon.json` for every
+forwarded request (not the stack list of up to a second ago), then:
+
+- A request that certainly never reached the daemon (no connection, or
+  hyper handed it back unsent), and a `GET`, `HEAD` or `OPTIONS` without a
+  body, is sent again for up to 3 s, to the daemon `daemon.json` names then.
+- A request the daemon took and cut, when that daemon is no longer the one
+  `daemon.json` names (it stops, or is gone or replaced), is a `503` with
+  `Retry-After: 2`; its `error` says that the request may have been carried
+  out in part. The hub never sends a request with a body again once it went
+  out.
+- `503` with `Retry-After: 2` too while the hub's own `up` runs and no daemon
+  answers yet (`"stack is starting…"`), and from the hub's `down` until that
+  daemon is gone (`"stack is stopping or restarting…"`).
+- `502` only for a daemon that still serves and broke the exchange.
+
+The dashboard shows the `error` of such a `503`; for `"stack not running"`
+it asks to start the stack.
 
 ## Daemon (through the hub)
 

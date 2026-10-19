@@ -66,7 +66,10 @@ export async function act<T = unknown>(opts: ActOptions<T>): Promise<ActResult<T
     if (res.status === 409) {
       ui.showProblem({ title: `${opts.label} was refused`, message: msg, hint: opts.conflictHint });
     } else if (res.status === 503) {
-      ui.toast('warning', `${opts.label}: stack not running`, 'Start the stack first.');
+      // "stack not running", or the hub's word that it is starting, stopping
+      // or restarting (with Retry-After): then try again in a moment.
+      if (msg.startsWith('stack not running')) ui.toast('warning', `${opts.label}: stack not running`, 'Start the stack first.');
+      else ui.toast('warning', `${opts.label}: try again in a moment`, msg);
     } else if (res.status === 401) {
       ui.toast('error', `${opts.label}: not paired`, 'Run `devstack ui` in the project.');
     } else {

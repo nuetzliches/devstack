@@ -103,6 +103,19 @@ pub struct StackEntry {
 /// Start failures by stack id, from `stack_up` to `scan`.
 type StartErrors = Arc<Mutex<HashMap<String, String>>>;
 
+/// A start or a stop the hub was asked for and that is not over yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    /// `devstack up` runs (`stack_up`).
+    Starting,
+    /// `stack_down`: the daemon stops its services, then exits.
+    Stopping,
+}
+
+/// Starts and stops under way, by stack id: a start waits for a stop, and
+/// a request for a stack in between is told it is starting or stopping.
+type Phases = Arc<Mutex<HashMap<String, Phase>>>;
+
 #[derive(Clone)]
 struct AppState {
     port: u16,
@@ -122,6 +135,7 @@ struct AppState {
     update: watch::Sender<UpdateState>,
     /// Why a start from the dashboard failed, by stack id (#11).
     start_errors: StartErrors,
+    phases: Phases,
     /// Until when (ms) to look at the engine every 2 s: after a start request.
     engine_fast_until: Arc<std::sync::atomic::AtomicU64>,
     shutdown: Arc<tokio::sync::Notify>,
@@ -146,12 +160,16 @@ fn scan(last_seen: &mut HashMap<String, u128>, errors: &StartErrors) -> Vec<Stac
         .into_iter()
         .map(|e| {
             let state = e.repo.join(".devstack");
+            // A `daemon.json` left by a killed daemon names a port another
+            // process may have now; one that is stopping takes no requests.
             let daemon = devstack_daemon::read_info(&state).filter(|i| {
-                std::net::TcpStream::connect_timeout(
-                    &std::net::SocketAddr::from(([127, 0, 0, 1], i.port)),
-                    Duration::from_millis(200),
-                )
-                .is_ok()
+                !i.stopping
+                    && devstack_proc::pid_alive(i.pid)
+                    && std::net::TcpStream::connect_timeout(
+                        &std::net::SocketAddr::from(([127, 0, 0, 1], i.port)),
+                        Duration::from_millis(200),
+                    )
+                    .is_ok()
             });
             if daemon.is_some() {
                 last_seen.insert(e.id.clone(), now_ms());
@@ -355,6 +373,7 @@ pub fn serve() -> Result<(), String> {
             release_poke,
             update: initial_update_state(&dir),
             start_errors,
+            phases: Phases::default(),
             engine_fast_until,
             shutdown: shutdown.clone(),
         };
@@ -1492,15 +1511,60 @@ async fn stack_up(State(s): State<AppState>, Path(id): Path<String>) -> Response
     let Ok(exe) = std::env::current_exe() else {
         return err(StatusCode::INTERNAL_SERVER_ERROR, "cannot find devstack");
     };
+    s.start_errors.lock().unwrap().remove(&id);
+    let stopping = s.phases.lock().unwrap().get(&id) == Some(&Phase::Stopping);
+    if !stopping {
+        s.phases.lock().unwrap().insert(id.clone(), Phase::Starting);
+        return match start_up(&s, &id, &exe, &e) {
+            Ok(()) => StatusCode::ACCEPTED.into_response(),
+            Err(msg) => {
+                end_phase(&s.phases, &id, Phase::Starting);
+                err(StatusCode::INTERNAL_SERVER_ERROR, msg)
+            }
+        };
+    }
+    // `down`, then `up` at once: the daemon on its way out would take this
+    // `up` for its own and exit under it, or the new one would give up on
+    // the state lock while the old one stops its services. Start once the
+    // old one is gone.
+    tokio::spawn(async move {
+        let t0 = Instant::now();
+        while s.phases.lock().unwrap().get(&id) == Some(&Phase::Stopping)
+            && t0.elapsed() < STOP_WAIT
+        {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        s.phases.lock().unwrap().insert(id.clone(), Phase::Starting);
+        if let Err(msg) = start_up(&s, &id, &exe, &e) {
+            end_phase(&s.phases, &id, Phase::Starting);
+            s.start_errors.lock().unwrap().insert(id, msg);
+        }
+    });
+    StatusCode::ACCEPTED.into_response()
+}
+
+/// How long a start waits for a stop under way, and a stop for its daemon
+/// to exit (the daemon gives its services 90 s, ADR-0009).
+const STOP_WAIT: Duration = Duration::from_secs(120);
+
+/// Forget `phase` of stack `id`, unless another one took its place.
+fn end_phase(phases: &Phases, id: &str, phase: Phase) {
+    let mut p = phases.lock().unwrap();
+    if p.get(id) == Some(&phase) {
+        p.remove(id);
+    }
+}
+
+/// Run `devstack up` for stack `e` in the background; the stack is
+/// `Starting` until it ends.
+fn start_up(s: &AppState, id: &str, exe: &std::path::Path, e: &StackEntry) -> Result<(), String> {
     // What `up` says goes to a file: when it fails before the daemon runs
     // (a stack file that needs a newer devstack, a port taken), its last
     // lines are what the dashboard shows instead of "Starting…" (#11).
-    s.start_errors.lock().unwrap().remove(&id);
     let log = state_dir().join(format!("up-{id}.log"));
-    let (out, out2) = match std::fs::File::create(&log).and_then(|f| Ok((f.try_clone()?, f))) {
-        Ok(f) => f,
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    };
+    let (out, out2) = std::fs::File::create(&log)
+        .and_then(|f| Ok((f.try_clone()?, f)))
+        .map_err(|e| e.to_string())?;
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("up")
         .arg("-f")
@@ -1511,14 +1575,15 @@ async fn stack_up(State(s): State<AppState>, Path(id): Path<String>) -> Response
         .stdout(out)
         .stderr(out2);
     no_window(&mut cmd);
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    };
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
     let errors = s.start_errors.clone();
+    let phases = s.phases.clone();
     let repo = e.repo.clone();
+    let id = id.to_string();
     std::thread::spawn(move || {
-        if child.wait().is_ok_and(|st| st.success()) {
+        let ok = child.wait().is_ok_and(|st| st.success());
+        end_phase(&phases, &id, Phase::Starting);
+        if ok {
             return;
         }
         // `up` also fails when a service does; only a stack whose daemon
@@ -1547,7 +1612,7 @@ async fn stack_up(State(s): State<AppState>, Path(id): Path<String>) -> Response
         );
         errors.lock().unwrap().insert(id, tail);
     });
-    StatusCode::ACCEPTED.into_response()
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -1561,19 +1626,40 @@ async fn stack_down(
     Path(id): Path<String>,
     Query(q): Query<DownQuery>,
 ) -> Response {
-    let Some(port) = entry(&s, &id).and_then(|e| e.daemon).map(|d| d.port) else {
+    let Some(e) = entry(&s, &id) else {
         return err(StatusCode::SERVICE_UNAVAILABLE, "stack not running");
     };
-    let token = s.token.clone();
+    let Some(daemon) = e.daemon else {
+        return err(StatusCode::SERVICE_UNAVAILABLE, "stack not running");
+    };
+    {
+        let mut phases = s.phases.lock().unwrap();
+        if phases.get(&id) == Some(&Phase::Stopping) {
+            return StatusCode::ACCEPTED.into_response(); // under way already
+        }
+        phases.insert(id.clone(), Phase::Stopping);
+    }
+    let (token, phases, port) = (s.token.clone(), s.phases.clone(), daemon.port);
+    let state = e.repo.join(".devstack");
     tokio::spawn(async move {
-        let _ = daemon_request(
-            port,
-            &token,
-            Method::POST,
-            &format!("/v1/down?infra={}", q.infra),
-        )
-        .await;
-        let _ = daemon_request(port, &token, Method::POST, "/v1/shutdown").await;
+        // Without the infrastructure, the daemon's own shutdown stops the
+        // services: it says `stopping` and stops taking connections at once,
+        // so nothing (an `up`, a forwarded request) takes it for a daemon
+        // that serves while its services stop.
+        if q.infra {
+            let _ = daemon_request(port, &token, Method::POST, "/v1/down?infra=true").await;
+        }
+        let told = daemon_request(port, &token, Method::POST, "/v1/shutdown").await;
+        // Over when that daemon is gone: its `daemon.json` goes last.
+        let t0 = Instant::now();
+        while told.is_ok()
+            && t0.elapsed() < STOP_WAIT
+            && devstack_daemon::read_info(&state)
+                .is_some_and(|i| i.pid == daemon.pid && devstack_proc::pid_alive(i.pid))
+        {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        end_phase(&phases, &id, Phase::Stopping);
     });
     StatusCode::ACCEPTED.into_response()
 }
@@ -1591,6 +1677,12 @@ const DAEMON_CONNECT: Duration = Duration::from_secs(5);
 /// A forwarded request has no such limit: the browser decides, and the
 /// forward ends when it goes away.
 const DAEMON_CALL: Duration = Duration::from_secs(300);
+/// How long a request that never reached a daemon is sent again, to the
+/// daemon `daemon.json` names then (one that replaced the first).
+const RESEND_WINDOW: Duration = Duration::from_secs(3);
+/// What a `503` for a stack that is starting, stopping or restarting asks
+/// the client to wait (`Retry-After`).
+const RETRY_AFTER_S: u64 = 2;
 
 async fn connect_daemon(port: u16) -> Result<tokio::net::TcpStream, String> {
     match tokio::time::timeout(
@@ -1643,9 +1735,6 @@ async fn forward(
     Path((id, rest)): Path<(String, String)>,
     req: Request,
 ) -> Response {
-    let Some(port) = entry(&s, &id).and_then(|e| e.daemon).map(|d| d.port) else {
-        return err(StatusCode::SERVICE_UNAVAILABLE, "stack not running");
-    };
     let query = req
         .uri()
         .query()
@@ -1661,14 +1750,11 @@ async fn forward(
     parts.headers.remove(header::ORIGIN);
     parts.headers.remove(header::REFERER);
     parts.headers.insert(
-        header::HOST,
-        HeaderValue::from_str(&format!("127.0.0.1:{port}")).unwrap(),
-    );
-    parts.headers.insert(
         header::AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {}", s.token)).unwrap(),
     );
-    match daemon_send(port, hyper::Request::from_parts(parts, body)).await {
+    let req = hyper::Request::from_parts(parts, body);
+    match daemon_send(|| daemon_now(&s, &id), req).await {
         Ok(resp) => {
             let (mut parts, body) = resp.into_parts();
             // The hub's origin is the browser's; a daemon sets no cookie on it.
@@ -1676,7 +1762,7 @@ async fn forward(
             strip_hop_by_hop(&mut parts.headers);
             Response::from_parts(parts, Body::new(body))
         }
-        Err((status, msg)) => err(status, msg),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -1708,8 +1794,111 @@ fn strip_hop_by_hop(h: &mut HeaderMap) {
     h.remove("keep-alive");
 }
 
-/// Why the hub could not reach a daemon: the status and message to answer with.
-type DaemonError = (StatusCode, String);
+/// A stack's daemon as its `daemon.json` says now. Not the scan of up to a
+/// second ago: between a `down` and an `up` that names a daemon that is
+/// gone, or one that is stopping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DaemonNow {
+    Serves {
+        pid: u32,
+        port: u16,
+        started: u128,
+    },
+    /// It was told to stop (`daemon.json` says `stopping`) and takes no
+    /// more connections.
+    Stopping,
+    /// No `daemon.json`, or its process is gone; `Starting` while the hub
+    /// runs `devstack up` for it.
+    Absent {
+        starting: bool,
+    },
+}
+
+fn daemon_now(s: &AppState, id: &str) -> DaemonNow {
+    let Some(e) = entry(s, id) else {
+        return DaemonNow::Absent { starting: false };
+    };
+    let phase = s.phases.lock().unwrap().get(id).copied();
+    match daemon_in(&e.repo.join(".devstack")) {
+        DaemonNow::Absent { .. } if phase == Some(Phase::Stopping) => DaemonNow::Stopping,
+        DaemonNow::Absent { .. } => DaemonNow::Absent {
+            starting: phase == Some(Phase::Starting),
+        },
+        d => d,
+    }
+}
+
+fn daemon_in(state_dir: &std::path::Path) -> DaemonNow {
+    match devstack_daemon::read_info(state_dir) {
+        Some(i) if !devstack_proc::pid_alive(i.pid) => DaemonNow::Absent { starting: false },
+        Some(i) if i.stopping => DaemonNow::Stopping,
+        Some(i) => DaemonNow::Serves {
+            pid: i.pid,
+            port: i.port,
+            started: i.started,
+        },
+        None => DaemonNow::Absent { starting: false },
+    }
+}
+
+/// Why the hub could not reach a daemon: the answer it gives instead.
+#[derive(Debug)]
+struct DaemonError {
+    status: StatusCode,
+    msg: String,
+    /// `Retry-After` (seconds): the stack is starting, stopping or restarting.
+    retry_after: Option<u64>,
+}
+
+impl DaemonError {
+    fn new(status: StatusCode, msg: impl Into<String>) -> Self {
+        Self {
+            status,
+            msg: msg.into(),
+            retry_after: None,
+        }
+    }
+
+    /// `503` for a daemon that is not there (`now`), with what it does.
+    fn unavailable(now: DaemonNow, why: Option<String>) -> Self {
+        let (msg, retry) = match now {
+            DaemonNow::Absent { starting: false } => ("stack not running".to_string(), false),
+            DaemonNow::Absent { starting: true } => (
+                "stack is starting: its daemon does not answer yet; try again in a moment".into(),
+                true,
+            ),
+            DaemonNow::Stopping => (
+                "stack is stopping or restarting: its daemon takes no more requests; \
+                 try again once it is up"
+                    .into(),
+                true,
+            ),
+            DaemonNow::Serves { .. } => (
+                "stack is restarting: its daemon changed while the hub reached it; \
+                 try again in a moment"
+                    .into(),
+                true,
+            ),
+        };
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            msg: match why {
+                Some(why) => format!("{msg} ({why})"),
+                None => msg,
+            },
+            retry_after: retry.then_some(RETRY_AFTER_S),
+        }
+    }
+
+    fn into_response(self) -> Response {
+        let mut r = err(self.status, self.msg);
+        if let Some(s) = self.retry_after {
+            r.headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from(s));
+        }
+        r
+    }
+}
 
 /// `GET <path>` on the daemon of stack `id`, with the token (the `ws` bridge).
 async fn daemon_get(
@@ -1717,36 +1906,111 @@ async fn daemon_get(
     id: &str,
     path: &str,
 ) -> Result<hyper::Response<hyper::body::Incoming>, DaemonError> {
-    let Some(port) = entry(s, id).and_then(|e| e.daemon).map(|d| d.port) else {
-        return Err((StatusCode::SERVICE_UNAVAILABLE, "stack not running".into()));
-    };
     let req = hyper::Request::get(path)
-        .header(header::HOST, format!("127.0.0.1:{port}"))
         .header(header::AUTHORIZATION, format!("Bearer {}", s.token))
         .header(header::ACCEPT, "text/event-stream")
         .body(Body::empty())
-        .map_err(|_| (StatusCode::BAD_REQUEST, "bad path".to_string()))?;
-    daemon_send(port, req).await
+        .map_err(|_| DaemonError::new(StatusCode::BAD_REQUEST, "bad path"))?;
+    daemon_send(|| daemon_now(s, id), req).await
 }
 
+/// Send `req` to the daemon `resolve` names, with its Host.
+///
+/// A daemon can go between the look at `daemon.json` and the request: it
+/// was told to stop (`down`, a restart) and closes its port, and what it
+/// had not taken yet is cut. A request that certainly never reached it
+/// (no connection; hyper hands it back unsent; or one without a body that
+/// is safe to repeat) is sent again for a moment, to the daemon
+/// `daemon.json` names then. Otherwise, when the daemon is no longer the
+/// one the request went to, the answer is `503` with `Retry-After` and
+/// what the stack does; only a daemon that still serves and broke the
+/// exchange is a `502`.
 async fn daemon_send(
-    port: u16,
-    req: hyper::Request<Body>,
+    resolve: impl Fn() -> DaemonNow,
+    mut req: hyper::Request<Body>,
 ) -> Result<hyper::Response<hyper::body::Incoming>, DaemonError> {
-    let stream = connect_daemon(port).await.map_err(|e| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            format!("stack not running: {e}"),
-        )
-    })?;
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
-    tokio::spawn(conn);
-    sender
-        .send_request(req)
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))
+    use hyper::body::Body as _;
+    let t0 = Instant::now();
+    // GET, HEAD, OPTIONS without a body: safe to repeat whatever happened.
+    let repeatable = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS)
+        && req.body().size_hint().exact() == Some(0);
+    let again = |req: &hyper::Request<Body>| {
+        let mut r = hyper::Request::new(Body::empty());
+        *r.method_mut() = req.method().clone();
+        *r.uri_mut() = req.uri().clone();
+        *r.headers_mut() = req.headers().clone();
+        r
+    };
+    loop {
+        let now = resolve();
+        let DaemonNow::Serves { port, .. } = now else {
+            return Err(DaemonError::unavailable(now, None));
+        };
+        req.headers_mut().insert(
+            header::HOST,
+            HeaderValue::from_str(&format!("127.0.0.1:{port}")).unwrap(),
+        );
+        let in_window = || t0.elapsed() < RESEND_WINDOW;
+        let stream = match connect_daemon(port).await {
+            Ok(s) => s,
+            Err(e) => {
+                // Nothing was sent. A daemon that replaced this one is
+                // worth another try; otherwise it is not running.
+                let then = resolve();
+                if then != now && in_window() {
+                    continue;
+                }
+                return Err(match then {
+                    DaemonNow::Serves { .. } if then == now => {
+                        DaemonError::unavailable(DaemonNow::Absent { starting: false }, Some(e))
+                    }
+                    then => DaemonError::unavailable(then, Some(e)),
+                });
+            }
+        };
+        let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+            .await
+            .map_err(|e| DaemonError::new(StatusCode::BAD_GATEWAY, e.to_string()))?;
+        tokio::spawn(conn);
+        let copy = repeatable.then(|| again(&req));
+        match sender.try_send_request(req).await {
+            Ok(resp) => return Ok(resp),
+            Err(mut e) => {
+                let then = resolve();
+                let unsent = e.take_message();
+                let sent = unsent.is_none();
+                let error = e.into_error().to_string();
+                diag::warn(
+                    "daemon_send_failed",
+                    serde_json::json!({
+                        "error": error,
+                        "sent": sent,
+                        "daemon_changed": then != now,
+                    }),
+                );
+                if in_window()
+                    && let Some(r) = unsent.or(copy)
+                {
+                    req = r;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+                if then == now {
+                    return Err(DaemonError::new(StatusCode::BAD_GATEWAY, error));
+                }
+                // A daemon told to stop gives the requests it holds a moment,
+                // then cuts them: this one may have been carried out in part.
+                let why = if sent {
+                    format!(
+                        "the daemon closed the connection before it answered, the request may have been carried out in part: {error}"
+                    )
+                } else {
+                    error
+                };
+                return Err(DaemonError::unavailable(then, Some(why)));
+            }
+        }
+    }
 }
 
 /// The embedded dashboard; unknown paths get `index.html` (client-side routes).
@@ -2162,5 +2426,217 @@ mod update_tests {
     #[test]
     fn this_process_is_alive() {
         assert!(devstack_proc::pid_alive(std::process::id()));
+    }
+}
+
+/// Forwarding to a daemon that stops, restarts or moves (finding A2: a
+/// request one second after `down` + `up` ended as `502`).
+#[cfg(test)]
+mod daemon_send_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Takes connections, reads what comes, closes them unanswered: a
+    /// daemon told to stop, cutting what it had not served.
+    async fn cutting() -> u16 {
+        let l = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut c, _)) = l.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = tokio::time::timeout(Duration::from_millis(500), c.read(&mut buf)).await;
+            }
+        });
+        port
+    }
+
+    /// Answers every request with `200 ok`; counts them.
+    async fn answering() -> (u16, Arc<AtomicUsize>) {
+        let l = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = l.local_addr().unwrap().port();
+        let n = Arc::new(AtomicUsize::new(0));
+        let count = n.clone();
+        tokio::spawn(async move {
+            while let Ok((mut c, _)) = l.accept().await {
+                let count = count.clone();
+                tokio::spawn(async move {
+                    let mut got = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match c.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(k) => got.extend_from_slice(&buf[..k]),
+                        }
+                    }
+                    count.fetch_add(1, Ordering::SeqCst);
+                    let _ = c
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok",
+                        )
+                        .await;
+                });
+            }
+        });
+        (port, n)
+    }
+
+    /// A port nothing listens on.
+    fn closed() -> u16 {
+        std::net::TcpListener::bind(("127.0.0.1", 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    fn serves(port: u16) -> DaemonNow {
+        DaemonNow::Serves {
+            pid: 1,
+            port,
+            started: u128::from(port),
+        }
+    }
+
+    /// What `daemon.json` says, one look after the other; the last stays.
+    fn looks(seq: Vec<DaemonNow>) -> impl Fn() -> DaemonNow {
+        let seq = Mutex::new(std::collections::VecDeque::from(seq));
+        move || {
+            let mut s = seq.lock().unwrap();
+            if s.len() > 1 {
+                s.pop_front().unwrap()
+            } else {
+                s[0]
+            }
+        }
+    }
+
+    fn post() -> hyper::Request<Body> {
+        hyper::Request::post("/v1/lanes")
+            .body(Body::from(r#"{"path":"x"}"#))
+            .unwrap()
+    }
+
+    fn get() -> hyper::Request<Body> {
+        hyper::Request::get("/v1/stack")
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_daemon_that_stops_under_a_request_is_a_503_to_retry() {
+        let port = cutting().await;
+        let e = daemon_send(looks(vec![serves(port), DaemonNow::Stopping]), post())
+            .await
+            .unwrap_err();
+        assert_eq!(e.status, StatusCode::SERVICE_UNAVAILABLE, "{}", e.msg);
+        assert_eq!(e.retry_after, Some(RETRY_AFTER_S));
+        assert!(e.msg.contains("stopping"), "{}", e.msg);
+        let r = e.into_response();
+        assert_eq!(r.headers()[header::RETRY_AFTER], "2");
+    }
+
+    #[tokio::test]
+    async fn a_post_that_may_have_reached_a_replaced_daemon_is_not_sent_again() {
+        let (new, n) = answering().await;
+        let old = cutting().await;
+        let e = daemon_send(looks(vec![serves(old), serves(new)]), post())
+            .await
+            .unwrap_err();
+        assert_eq!(e.status, StatusCode::SERVICE_UNAVAILABLE, "{}", e.msg);
+        assert!(e.msg.contains("restarting"), "{}", e.msg);
+        assert_eq!(e.retry_after, Some(RETRY_AFTER_S));
+        assert_eq!(n.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_get_goes_to_the_daemon_that_replaced_the_one_that_cut_it() {
+        let (new, n) = answering().await;
+        let old = cutting().await;
+        let r = daemon_send(looks(vec![serves(old), serves(new)]), get())
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(n.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_post_that_found_no_daemon_goes_to_the_one_named_next() {
+        // Not connected: certainly not delivered, safe to send again.
+        let (new, n) = answering().await;
+        let r = daemon_send(looks(vec![serves(closed()), serves(new)]), post())
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(n.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_daemon_that_serves_and_breaks_the_exchange_is_a_502() {
+        let port = cutting().await;
+        let e = daemon_send(looks(vec![serves(port)]), post())
+            .await
+            .unwrap_err();
+        assert_eq!(e.status, StatusCode::BAD_GATEWAY, "{}", e.msg);
+        assert_eq!(e.retry_after, None);
+    }
+
+    #[tokio::test]
+    async fn no_daemon_is_a_503_and_a_start_under_way_says_so() {
+        let e = daemon_send(looks(vec![serves(closed())]), post())
+            .await
+            .unwrap_err();
+        assert_eq!(e.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(e.msg.starts_with("stack not running"), "{}", e.msg);
+        assert_eq!(e.retry_after, None);
+        let e = daemon_send(looks(vec![DaemonNow::Absent { starting: false }]), get())
+            .await
+            .unwrap_err();
+        assert_eq!(e.msg, "stack not running");
+        let e = daemon_send(looks(vec![DaemonNow::Absent { starting: true }]), get())
+            .await
+            .unwrap_err();
+        assert_eq!(e.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(e.msg.contains("starting"), "{}", e.msg);
+        assert_eq!(e.retry_after, Some(RETRY_AFTER_S));
+    }
+
+    #[test]
+    fn daemon_json_says_whether_a_daemon_serves() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(daemon_in(d.path()), DaemonNow::Absent { starting: false });
+        let write = |pid: u32, stopping: bool| {
+            let info = devstack_daemon::DaemonInfo {
+                pid,
+                port: 7000,
+                started: 5,
+                version: String::new(),
+                stopping,
+            };
+            std::fs::write(
+                devstack_daemon::info_path(d.path()),
+                serde_json::to_vec(&info).unwrap(),
+            )
+            .unwrap();
+        };
+        let me = std::process::id();
+        write(me, false);
+        assert_eq!(
+            daemon_in(d.path()),
+            DaemonNow::Serves {
+                pid: me,
+                port: 7000,
+                started: 5
+            }
+        );
+        write(me, true);
+        assert_eq!(daemon_in(d.path()), DaemonNow::Stopping);
+        // Left behind by a daemon that was killed: its port says nothing.
+        write(u32::MAX - 1, false);
+        assert_eq!(daemon_in(d.path()), DaemonNow::Absent { starting: false });
     }
 }

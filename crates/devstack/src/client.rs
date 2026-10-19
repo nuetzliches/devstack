@@ -86,6 +86,9 @@ impl Client {
         if !pid_alive(info.pid) {
             return Ok(None); // a stale daemon.json: the daemon was killed
         }
+        if info.stopping {
+            return Ok(None); // on its way out: `ensure_daemon` waits for it
+        }
         let Some(token) = devstack_daemon::token::load() else {
             return Ok(None);
         };
@@ -385,6 +388,7 @@ pub fn ensure_daemon(stack_file: &Path, state_dir: &Path) -> Result<Client> {
     if let Some(c) = Client::probe(state_dir)? {
         return Ok(c);
     }
+    wait_for_stopping(state_dir);
     std::fs::create_dir_all(state_dir)?;
     // stdout/stderr (a panic, say); the daemon's own diagnostic log is
     // daemon.log. Appended: a second `up` at the same moment must not empty
@@ -453,6 +457,24 @@ pub fn ensure_daemon(stack_file: &Path, state_dir: &Path) -> Result<Client> {
                 "the daemon did not answer within 2 minutes; it may still come up (`devstack status` tells):\n{}",
                 daemon_report(state_dir)
             )
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// A daemon on its way out (`down`, then `up` at once) holds the state lock
+/// until its services stopped, longer than a new one waits for it: wait
+/// here, up to as long as it gives its services, instead of starting one
+/// that gives up.
+fn wait_for_stopping(state_dir: &Path) {
+    let stopping =
+        || devstack_daemon::read_info(state_dir).is_some_and(|i| i.stopping && pid_alive(i.pid));
+    let t0 = Instant::now();
+    let mut noted = false;
+    while stopping() && t0.elapsed() < Duration::from_secs(120) {
+        if !noted && t0.elapsed() > Duration::from_secs(2) {
+            eprintln!("note: the previous daemon of this stack is still stopping; waiting for it");
+            noted = true;
         }
         std::thread::sleep(Duration::from_millis(200));
     }

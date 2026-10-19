@@ -742,3 +742,81 @@ fn a_failed_start_is_reported() {
         std::thread::sleep(Duration::from_millis(300));
     }
 }
+
+/// A2: `down`, then `up` at once, from the dashboard. The stack runs again,
+/// with a new daemon that stays; a request in between is answered, or told
+/// that the stack is stopping or starting (`503`), never a `502`.
+#[test]
+fn down_then_up_at_once_runs_again() {
+    let h = start();
+    let p = h.port;
+    let with = format!(
+        "Cookie: {}\r\nSec-Fetch-Site: same-origin\r\n",
+        paired_cookie(&h)
+    );
+    let own = format!("Origin: http://127.0.0.1:{p}\r\n");
+    let post = |path: &str, body: &str| {
+        http(
+            p,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\n{with}{own}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+    };
+    let repo = h.home.path().join("again");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(
+        repo.join("devstack.toml"),
+        "version = 1\n[stack]\nname = \"again\"\n",
+    )
+    .unwrap();
+    let dir = serde_json::to_string(&repo.to_string_lossy()).unwrap();
+    let (s, _, body) = post("/hub/stacks/add", &format!("{{\"path\":{dir}}}"));
+    assert_eq!(s, 200, "{body}");
+    let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let daemon_pid = || -> Option<u64> {
+        let (_, _, list) = get(p, "/hub/stacks", &with);
+        serde_json::from_str::<serde_json::Value>(&list)
+            .ok()?
+            .as_array()?
+            .iter()
+            .find(|e| e["id"] == id.as_str())?["daemon"]["pid"]
+            .as_u64()
+    };
+    let wait_for = |what: &str, cond: &dyn Fn() -> bool| {
+        let t0 = Instant::now();
+        while !cond() {
+            assert!(t0.elapsed() < Duration::from_secs(60), "{what}");
+            let (s, head, body) = get(p, &format!("/hub/stacks/{id}/api/v1/stack"), &with);
+            assert!(s == 200 || s == 503, "{s} {head} {body}");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    let (s, _, body) = post(&format!("/hub/stacks/{id}/up"), "");
+    assert_eq!(s, 202, "{body}");
+    wait_for("first start", &|| daemon_pid().is_some());
+    let first = daemon_pid().unwrap();
+
+    let (s, _, body) = post(&format!("/hub/stacks/{id}/down"), "");
+    assert_eq!(s, 202, "{body}");
+    let (s, _, body) = post(&format!("/hub/stacks/{id}/up"), "");
+    assert_eq!(s, 202, "{body}");
+    wait_for("the restart", &|| daemon_pid().is_some_and(|d| d != first));
+    let second = daemon_pid().unwrap();
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(daemon_pid(), Some(second), "the new daemon stays");
+    let (s, _, body) = get(p, &format!("/hub/stacks/{id}/api/v1/stack"), &with);
+    assert_eq!(s, 200, "{body}");
+
+    let (s, _, body) = post(&format!("/hub/stacks/{id}/down"), "");
+    assert_eq!(s, 202, "{body}");
+    let state = repo.join(".devstack").join("daemon.json");
+    let t0 = Instant::now();
+    while state.exists() && t0.elapsed() < Duration::from_secs(30) {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
