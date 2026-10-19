@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **A shared lane on a node opens** ([ADR-0035](docs/adr/0035-lanes-can-be-shared-with-the-pool.md)).
+  Its owner told the pool the main tree's port of each service, but a lane
+  on a node listens on its lane ports there, as it does on the owner's
+  machine; every connection was refused with `port … is no service's or
+  container's port in this stack`. The owner sends the lane's ports now
+  (the change reaches the pool with its next renewal, once the owner's
+  daemon runs this release).
+
 ## [0.11.0] - 2026-10-19
 
 ### Added

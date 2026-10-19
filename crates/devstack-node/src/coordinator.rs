@@ -488,7 +488,8 @@ impl Sharing {
     }
 }
 
-/// A service of a shared lane: its port on the node (the stack's port).
+/// A service of a shared lane: its port on the node (the lane's port, the
+/// stack's moved by the lane's offset).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SharedService {
     pub name: String,

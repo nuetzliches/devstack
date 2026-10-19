@@ -325,6 +325,39 @@ fn lane_url(url: &str, offset: u16) -> String {
     moved().unwrap_or_else(|| url.to_string())
 }
 
+/// The services a lane shares, with its ports moved by `offset`: a lane on
+/// a node listens on its lane ports there as it does here (see `ports`
+/// where it starts), the same port on both ends. Web addresses only: what
+/// a colleague's browser or `devstack open` hands to the OS is never
+/// another protocol's handler.
+fn shared_services(
+    stack: &devstack_config::Stack,
+    offset: u16,
+    lane: &str,
+) -> Vec<devstack_node::coordinator::SharedService> {
+    stack
+        .services
+        .iter()
+        .filter_map(|(name, s)| {
+            let port = s.port?;
+            if !matches!(s.scheme(), "http" | "https") {
+                crate::diag::warn(
+                    "share_scheme_refused",
+                    serde_json::json!({ "lane": lane, "service": name, "scheme": s.scheme() }),
+                );
+                return None;
+            }
+            let port = port.checked_add(offset)?;
+            Some(devstack_node::coordinator::SharedService {
+                name: name.clone(),
+                port,
+                scheme: s.scheme().into(),
+                here: port,
+            })
+        })
+        .collect()
+}
+
 fn ports(stack: &devstack_config::Stack) -> Vec<u16> {
     stack.services.values().filter_map(|s| s.port).collect()
 }
@@ -1859,30 +1892,7 @@ impl Lanes {
             return None;
         }
         let offset = lane_offset(entry.number, self.main.stack.lanes.port_step)?;
-        let services = self
-            .main
-            .stack
-            .services
-            .iter()
-            .filter_map(|(name, s)| {
-                let port = s.port?;
-                // What a colleague's browser or `devstack open` hands to the
-                // OS: a web address, never another protocol's handler.
-                if !matches!(s.scheme(), "http" | "https") {
-                    crate::diag::warn(
-                        "share_scheme_refused",
-                        serde_json::json!({ "lane": entry.name, "service": name, "scheme": s.scheme() }),
-                    );
-                    return None;
-                }
-                Some(devstack_node::coordinator::SharedService {
-                    name: name.clone(),
-                    port,
-                    scheme: s.scheme().into(),
-                    here: port.checked_add(offset)?,
-                })
-            })
-            .collect();
+        let services = shared_services(&self.main.stack, offset, &entry.name);
         Some(devstack_node::coordinator::Sharing {
             with,
             services,
@@ -2251,6 +2261,23 @@ mod tests {
         assert_eq!(l.services["api"].port, Some(5200));
         assert_eq!(l.services["job"].port, None);
         assert!(lane_stack(&stack, 65000).is_err());
+    }
+
+    #[test]
+    fn a_shared_lane_names_its_lane_ports() {
+        let stack = devstack_config::from_str(
+            "version = 1\n[stack]\nname = \"t\"\n[services.web]\nrun = \"x\"\nport = 8091\n[services.job]\nkind = \"job\"\nrun = \"y\"\n",
+            Path::new("t.toml"),
+        )
+        .unwrap();
+        // On a node the lane listens where it does here: its lane ports.
+        let s = shared_services(&stack, 200, "fix");
+        assert_eq!(s.len(), 1, "{s:?}");
+        assert_eq!(
+            (s[0].name.as_str(), s[0].port, s[0].here),
+            ("web", 8291, 8291)
+        );
+        assert!(shared_services(&stack, 65000, "fix").is_empty());
     }
 
     #[test]
