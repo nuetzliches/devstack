@@ -11,6 +11,18 @@ and listed with their assets on the
 
 ### Added
 
+- **`devstack lane reset` and `devstack lane prune`**
+  ([ADR-0038](docs/adr/0038-a-lanes-data-outlives-its-lease.md)). `reset
+  <lane>` throws a stopped lane's data away, here and on the nodes it ran
+  on, so its next start is fresh. `prune [--older-than 7d] [--dry-run]`
+  removes what lanes whose worktree is gone left behind: on this machine
+  their Compose projects (only those whose files are in this repository's
+  lane state), on the pool's nodes this machine's kept lanes of the
+  repository, and with `--older-than` those not used for that long. A lane
+  whose worktree is removed takes its kept data on the nodes it ran on
+  along (`lane_data_removed`); a node that does not answer keeps it until
+  its retention ends. API: `POST /v1/lanes/{lane}/reset`, `POST
+  /v1/lanes/prune`.
 - **Kept lanes are shown** (ADR-0038). A node reports what its stopped
   lanes take (`Report.kept`), and the pool area shows it per node. A lane
   that starts from data a node kept says so with its age (`devstack up

@@ -427,7 +427,11 @@ in the snapshot: `prepare` installs what is missing.
 - `devstack lane list`; `devstack lane start <name>` starts a lane from
   anywhere in the repository, as `devstack up` in its worktree does;
   `devstack lane stop <name>` stops a lane (its builds stay, the worktree
-  too).
+  too); `devstack lane reset <name>` throws a stopped lane's data away (its
+  containers and volumes, here and on the nodes it ran on), so it starts
+  fresh; `devstack lane prune [--older-than 7d] [--dry-run]` removes what
+  lanes whose worktree is gone left behind, here and on the pool's nodes
+  (ADR-0038).
 
 ## `[commands.<name>]`: operations
 

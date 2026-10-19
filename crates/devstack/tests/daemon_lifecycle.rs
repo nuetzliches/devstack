@@ -1976,12 +1976,23 @@ fn a_lane_has_its_own_containers() {
     assert!(st.status.success());
     assert_eq!(started_at(&db.1), before, "the lane's db was restarted too");
 
+    // A lane that runs is not reset (ADR-0038).
+    let refused = s.cli(&["lane", "reset", &lane], None);
+    assert!(!refused.status.success(), "reset while it runs");
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("lane stop"));
+
     // `lane stop` gives the containers back; a removed worktree takes the rest.
     s.ok(&["lane", "stop", &lane]);
     assert!(
         compose_ps(&lane_project).is_empty(),
         "containers after lane stop"
     );
+    // Stopped, it is reset: it starts fresh next time. Nothing is left
+    // behind by a lane whose worktree is gone.
+    let reset = s.ok(&["lane", "reset", &lane]);
+    assert!(reset.contains("starts fresh"), "{reset}");
+    let prune = s.ok(&["lane", "prune", "--dry-run"]);
+    assert!(prune.contains("nothing to prune"), "{prune}");
     git(
         s.dir.path(),
         &["worktree", "remove", "--force", wt.to_str().unwrap()],
