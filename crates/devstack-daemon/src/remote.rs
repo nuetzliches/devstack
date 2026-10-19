@@ -342,7 +342,9 @@ impl RemoteLane {
                         ev.need_rescan()
                             || ev.paths.iter().any(|p| {
                                 p.strip_prefix(&root).is_ok_and(|r| {
-                                    !crate::watch::ignored(&r.to_string_lossy().replace('\\', "/"))
+                                    !crate::watch::in_generated(
+                                        &r.to_string_lossy().replace('\\', "/"),
+                                    )
                                 })
                             })
                     }
