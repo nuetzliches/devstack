@@ -78,7 +78,10 @@ shared    = ["mailbox"]                                  # lanes use the main tr
 The dashboard links every published port of a container to
 `http://localhost:<port>`, as Docker Desktop does. `urls` sets the link of a
 service where that is wrong: HTTPS, a path, or `""` for no link (a database,
-SMB). Keys must be in `services`.
+SMB). Keys must be in `services`. In a lane, a `urls` port on this machine
+(`localhost`, `127.0.0.1`) moves by the lane's offset like every other port
+of the lane (`http://localhost:5100/ui` is `http://localhost:5200/ui` in the
+first lane); another host stays as it is written.
 
 - Keep dev-only changes (published ports on `127.0.0.1`, volumes, profiles) in
   the overlay, not in the deployment files.
