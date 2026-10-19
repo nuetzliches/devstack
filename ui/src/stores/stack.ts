@@ -4,6 +4,7 @@ import { api, paths, v1, type GroupAction, type ServiceAction, type StreamState,
 import type { LaneView, Point, Run, ServiceView, StackEvent, StackView, UsageReport } from '@/api/types';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
+import { statusBucket } from '@/lib/status';
 import { useHub } from './hub';
 import { useUi } from './ui';
 
@@ -90,6 +91,13 @@ export const useStack = defineStore('stack', () => {
     // The shown lane started, or stopped: its own stream, or the main tree's.
     if (lane.value && id.value && wasActive !== laneActive(lane.value)) reset(id.value);
   }
+
+  /** The lanes that run: they keep the daemon when the main tree stops (ADR-0024). */
+  const runningLanes = computed(() => (lanesOf.value === id.value ? lanes.value.filter((l) => l.active !== false).map((l) => l.name) : []));
+  /** The main tree is shown and nothing of it runs, while its daemon stays for the lanes. */
+  const mainIdle = computed(
+    () => running.value && lane.value === null && live.value && services.value.length > 0 && services.value.every((s) => statusBucket(s.status) === 'idle'),
+  );
 
   /** A lane that is started; one not started has no API of its own. */
   function laneActive(name: string) {
@@ -554,6 +562,11 @@ export const useStack = defineStore('stack', () => {
   async function startStack() {
     if (!id.value) return;
     const stackId = id.value;
+    if (running.value) {
+      // The daemon stayed for its lanes: the main tree starts in it.
+      await act({ label: `Start ${entry.value?.name ?? 'stack'}`, path: paths.api(stackId, v1.up), success: 'Starting the main working tree…' });
+      return;
+    }
     hub.starting[stackId] = true;
     const res = await act({ label: `Start ${entry.value?.name ?? 'stack'}`, path: paths.up(stackId), success: 'Starting the stack…' });
     if (!res.ok) delete hub.starting[stackId];
@@ -564,9 +577,12 @@ export const useStack = defineStore('stack', () => {
     if (!id.value) return;
     const stackId = id.value;
     const name = entry.value?.name ?? 'stack';
+    const kept = runningLanes.value;
     const ok = await ui.confirm({
       title: `Restart ${name}`,
-      text: 'All services stop and start again, with the installed devstack and the current stack file. Containers keep running unless the file changes them.',
+      text: kept.length
+        ? `The main working tree's services stop and start again. ${laneList(kept)} keep running, and with them the daemon: the installed devstack and a changed stack file take effect once no lane runs.`
+        : 'All services stop and start again, with the installed devstack and the current stack file. Containers keep running unless the file changes them.',
       confirmLabel: 'Restart stack',
       danger: false,
     });
@@ -583,6 +599,13 @@ export const useStack = defineStore('stack', () => {
           ui.toast('error', `${name} would not start again`, `${why} It keeps running.`, 15000);
           return;
         }
+      }
+      if (kept.length) {
+        // The daemon stays for its lanes: down and up in it.
+        const down = await act({ label: `Stop ${name}`, path: paths.api(stackId, v1.down), success: false });
+        if (!down.ok) return;
+        await act({ label: `Start ${name}`, path: paths.api(stackId, v1.up), success: 'Starting the main working tree again…' });
+        return;
       }
       const down = await act({ label: `Stop ${name}`, path: paths.down(stackId, false), success: false });
       if (!down.ok) return;
@@ -619,9 +642,12 @@ export const useStack = defineStore('stack', () => {
   async function stopStack() {
     if (!id.value) return;
     const name = entry.value?.name ?? 'stack';
+    const kept = runningLanes.value;
     const ok = await ui.confirm({
       title: `Stop ${name}`,
-      text: 'All services of this stack stop and its daemon exits. Infrastructure containers keep running.',
+      text: kept.length
+        ? `The main working tree's services stop. ${laneList(kept)} keep running, and with them the daemon. Infrastructure containers keep running.`
+        : 'All services of this stack stop and its daemon exits. Infrastructure containers keep running.',
       confirmLabel: 'Stop stack',
       danger: true,
     });
@@ -634,6 +660,10 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
+  function laneList(names: string[]) {
+    return names.length === 1 ? `Lane ${names[0]} and its ports` : `Lanes ${names.join(', ')} and their ports`;
+  }
+
   return {
     id,
     view,
@@ -643,6 +673,8 @@ export const useStack = defineStore('stack', () => {
     stale,
     entry,
     running,
+    runningLanes,
+    mainIdle,
     events,
     usage,
     history,

@@ -41,6 +41,8 @@ struct Instance {
     log: PathBuf,
     /// Its cleanup record's name (ADR-0016), `<service>@<port>`.
     record: String,
+    /// When it was spawned: how long it ran, when it exits by itself.
+    started: Instant,
 }
 
 pub(crate) struct Slot {
@@ -59,6 +61,9 @@ pub(crate) struct Slot {
     spawned: Option<Instant>,
     /// Processes spawned for it in this daemon's life.
     starts: u32,
+    /// Times in a row it exited by itself and was started again; back to 0
+    /// once an instance ran for [`lifecycle::STABLE`].
+    exits: u32,
 }
 
 /// A built candidate a promotion gate holds (ADR-0013). The gate stays until
@@ -164,6 +169,9 @@ pub struct Supervisor {
     lane_pins: Mutex<Option<LanePins>>,
     /// Set when a lane is removed: its sampler threads end.
     closed: std::sync::atomic::AtomicBool,
+    /// Per Compose service: since when it is ready, whether its forwards
+    /// were probed since, when it was last restarted for a lost one (#98).
+    forward_checks: Mutex<BTreeMap<(String, String), infra::ForwardCheck>>,
 }
 
 /// The artifact ids of a service the lanes run or may go back to.
@@ -354,6 +362,7 @@ impl Supervisor {
                     in_flight: None,
                     spawned: None,
                     starts: 0,
+                    exits: 0,
                 },
             );
             op_locks.insert(name.clone(), Mutex::new(()));
@@ -425,6 +434,7 @@ impl Supervisor {
             forwards: Mutex::new(BTreeMap::new()),
             lane_pins: Mutex::new(None),
             closed: std::sync::atomic::AtomicBool::new(false),
+            forward_checks: Mutex::new(BTreeMap::new()),
             lane,
         }))
     }

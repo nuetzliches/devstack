@@ -1,6 +1,6 @@
 # ADR-0032: The pool is administered in the dashboard, by members with the admin role
 
-- **Status:** Accepted (2026-10-16), amended 2026-10-17 (admins grant which members are nodes)
+- **Status:** Accepted (2026-10-16), amended 2026-10-17 (admins grant which members are nodes); extended by [ADR-0039](0039-an-admin-can-update-a-server-node.md) (2026-10-19: an admin can have a server update its devstack)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0031](0031-a-coordinator-places-lanes.md) (point 2 extended here), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0019](0019-control-api-security.md), [ADR-0006](0006-dashboard-vue-same-origin.md)

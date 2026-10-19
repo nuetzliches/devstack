@@ -7,6 +7,7 @@ use std::path::Path;
 pub(crate) fn run(file: &Path, action: LaneAction) -> Result<()> {
     match action {
         LaneAction::List => client::lane_list(file),
+        LaneAction::Start { name, on } => client::lane_start(file, &name, on.as_deref()),
         LaneAction::Stop { name } => client::lane_stop(file, &name),
         LaneAction::Move { name, to } => client::lane_move(file, &name, &to),
         LaneAction::Share { name, with } => client::lane_share(file, &name, &with),

@@ -125,7 +125,10 @@ impl Supervisor {
         forced: bool,
     ) -> Result<Option<(String, PathBuf)>, String> {
         let mut snap = self.snapshot.lock().unwrap();
-        snap.sync().map_err(|e| e.to_string())?;
+        let stats = snap.sync().map_err(|e| e.to_string())?;
+        if self.runs_from_copy() {
+            self.log_sync(&format!("build of {name}"), &stats);
+        }
         let base = build_id(&snap.manifest, svc).map_err(|e| e.to_string())?;
         let mut id = base.clone();
         // `--rebuild`: the same inputs once more, under `<id>-<n>`; the artifact

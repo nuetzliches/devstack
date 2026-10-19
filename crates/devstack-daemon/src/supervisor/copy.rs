@@ -144,12 +144,33 @@ impl Supervisor {
         if !self.runs_from_copy() {
             return Ok(());
         }
-        self.snapshot
+        let stats = self
+            .snapshot
             .lock()
             .unwrap()
             .sync()
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        self.log_sync("command", &stats);
+        Ok(())
+    }
+
+    /// What a sync of the lane's copy changed under what runs from it: a
+    /// dev server that ends right after one says why (#103).
+    pub(super) fn log_sync(&self, why: &str, s: &devstack_build::snapshot::SyncStats) {
+        if s.copied + s.removed == 0 {
+            return;
+        }
+        crate::diag::info(
+            "copy_synced",
+            serde_json::json!({
+                "lane": self.lane,
+                "why": why,
+                "copied": s.copied,
+                "removed": s.removed,
+                "files": s.files,
+                "ms": s.elapsed.as_millis() as u64,
+            }),
+        );
     }
 
     /// Something changed in a lane's worktree: bring the copy its dev servers
@@ -166,11 +187,16 @@ impl Supervisor {
                 .unwrap()
                 .values()
                 .any(|slot| slot.main.as_ref().is_some_and(|i| i.build_id.is_none()));
-            if from_copy && let Err(e) = s.snapshot.lock().unwrap().sync() {
-                crate::diag::warn(
+            if !from_copy {
+                return;
+            }
+            let synced = s.snapshot.lock().unwrap().sync();
+            match synced {
+                Ok(stats) => s.log_sync("change", &stats),
+                Err(e) => crate::diag::warn(
                     "copy_not_synced",
                     serde_json::json!({ "lane": s.lane, "error": e.to_string() }),
-                );
+                ),
             }
         });
     }

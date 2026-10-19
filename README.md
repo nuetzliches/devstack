@@ -121,7 +121,7 @@ devstack run reset                 # a command of the stack file (a database res
 devstack top --watch               # CPU, memory, disk per service, container, group and lane
 devstack env api                   # what a service gets, with origins
 devstack logs --daemon             # devstack's own decisions with their reasons
-devstack down [--infra]
+devstack down [--infra] [--all]    # running lanes keep the daemon; --all stops them too
 ```
 
 ## Lanes: every worktree, side by side
@@ -129,6 +129,7 @@ devstack down [--infra]
 ```sh
 git worktree add ../shop-login -b login-fix     # a worktree is a lane at once
 cd ../shop-login && devstack up                 # its own builds, ports +100, its own containers
+devstack lane start login-fix                   # the same, from the main tree
 devstack lane list                              # every lane, where it runs, who has the main ports
 devstack promote --lane login-fix               # it answers on the main ports; --lane main gives them back
 devstack lane stop login-fix
