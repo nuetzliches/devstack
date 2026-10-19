@@ -273,7 +273,9 @@ fn a_lane_is_leased_admitted_and_synced() {
         (s1.files, s1.uploaded, s1.written, s1.removed),
         (3, 3, 3, 0)
     );
-    let mirror = nd.path().join("node/lanes").join(&lease.id).join("src");
+    // The lane's place is its slot (ADR-0038), named by the node.
+    let slot = lease.slot.clone().expect("a slot");
+    let mirror = nd.path().join("node/slots").join(&slot).join("src");
     assert_eq!(
         std::fs::read_to_string(mirror.join("src/Api/Program.cs")).unwrap(),
         "// api\n"
@@ -365,19 +367,54 @@ fn a_lane_is_leased_admitted_and_synced() {
         Err(ClientError::Status(403, _))
     ));
 
+    // One lease at a time per lane: its data is one.
+    let twice = requester
+        .lease(&LeaseRequest {
+            node: "node-pc".into(),
+            repo: "shop".into(),
+            lane: "login-fix".into(),
+            need: Amount {
+                cpus: 0.1,
+                memory: 64 << 20,
+            },
+            devstack: None,
+        })
+        .unwrap();
+    assert!(matches!(
+        rt.block_on(client.admit(&twice)),
+        Err(ClientError::Status(409, _))
+    ));
+    let slots = rt.block_on(client.slots()).unwrap();
+    assert_eq!(slots.len(), 1);
+    assert!(slots[0].active && slots[0].lane == "login-fix");
+    assert!(
+        rt.block_on(theirs.slots()).unwrap().is_empty(),
+        "nobody else's"
+    );
+    assert!(matches!(
+        rt.block_on(client.purge_slot("shop", "login-fix")),
+        Err(ClientError::Status(409, _))
+    ));
+
+    // The end of the lease keeps its slot: the mirror stays.
     rt.block_on(client.release(&lease.id)).unwrap();
-    // The node clears a lane off the request's thread (Docker takes its time).
     let until = std::time::Instant::now() + Duration::from_secs(10);
-    while mirror.exists() && std::time::Instant::now() < until {
+    while rt
+        .block_on(client.slots())
+        .unwrap()
+        .first()
+        .is_some_and(|s| s.active)
+        && std::time::Instant::now() < until
+    {
         std::thread::sleep(Duration::from_millis(100));
     }
     assert!(
-        !mirror.exists(),
-        "a released lease takes its mirror with it"
+        mirror.join("src/Api/Program.cs").is_file(),
+        "kept for the next lease"
     );
 
-    // Its blobs stay: the same lane leased again sends nothing that did not
-    // change (#99), and its mirror is written from them.
+    // The same lane leased again sends and writes nothing that did not
+    // change (#99, ADR-0038).
     let again = requester
         .lease(&LeaseRequest {
             node: "node-pc".into(),
@@ -391,11 +428,18 @@ fn a_lane_is_leased_admitted_and_synced() {
         })
         .unwrap();
     let lease2 = rt.block_on(client.admit(&again)).unwrap();
+    assert_eq!(lease2.slot.as_deref(), Some(slot.as_str()));
     let s4 = rt
         .block_on(client.sync(&lease2.id, tree.path(), &files(tree.path())))
         .unwrap();
-    assert_eq!((s4.files, s4.uploaded, s4.written), (2, 0, 2), "{s4:?}");
+    assert_eq!((s4.files, s4.uploaded, s4.written), (2, 0, 0), "{s4:?}");
     rt.block_on(client.release(&lease2.id)).unwrap();
+
+    // Its owner throws it away: the slot and its mirror go (once the end
+    // of the lease is through).
+    rt.block_on(client.purge_slot("shop", "login-fix")).unwrap();
+    assert!(rt.block_on(client.slots()).unwrap().is_empty());
+    assert!(!mirror.exists(), "purged with its slot");
 }
 
 /// An admin pauses a node (no new lanes) and ends a lease; the node drops

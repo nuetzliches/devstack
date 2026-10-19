@@ -260,6 +260,7 @@ pub fn members_policy(
                 memory_headroom,
                 max_cpus,
                 network,
+                ..NodePolicy::default()
             }),
             SHELL,
         )?

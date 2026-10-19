@@ -43,8 +43,15 @@ const MAX_BLOB: usize = 512 << 20;
 const MAX_MEMBER_BLOBS: u64 = 8 << 30;
 /// A blob this young is never collected: a lease uploading has not applied it.
 const BLOB_YOUNG: Duration = Duration::from_secs(600);
-/// How often the node looks for members the coordinator no longer lists.
+/// How often the node looks for members the coordinator no longer lists,
+/// and for kept lanes past their time.
 const PURGE_EVERY: Duration = Duration::from_secs(600);
+/// How long a stopped lane's slot stays, unless the node's policy says
+/// (ADR-0038 point 3).
+const KEEP_DEDICATED: Duration = Duration::from_secs(7 * 24 * 3600);
+const KEEP_OTHER: Duration = Duration::from_secs(24 * 3600);
+/// What one member's kept lanes may take here, unless the policy says.
+const KEEP_GIB: u64 = 20;
 /// The largest list of files (or hashes) one sync sends: about 250 000.
 const MAX_LIST: usize = 32 << 20;
 /// How long the node trusts its last list of members while the coordinator
@@ -80,6 +87,34 @@ pub struct NodeLease {
     /// The stack file the lane runs, relative to its root, once started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stack_file: Option<String>,
+    /// Its slot (ADR-0038): where its mirror and data are, kept for the next
+    /// lease of the same lane. `None`: admitted by an older agent, under
+    /// `lanes/<id>`, removed with the lease.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
+}
+
+/// What a slot keeps about itself (`slots/<slot>/slot.json`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlotInfo {
+    pub member: String,
+    pub repo: String,
+    pub lane: String,
+    /// When a lease last ended there, or began (Unix seconds).
+    pub used: u64,
+}
+
+/// `GET /v1/slots`: one of the caller's kept lanes here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlotView {
+    pub repo: String,
+    pub lane: String,
+    pub used: u64,
+    /// What its directory takes (the mirror, builds, caches), bytes;
+    /// volumes not counted.
+    pub bytes: u64,
+    /// A lease runs there now.
+    pub active: bool,
 }
 
 impl NodeLease {
@@ -166,6 +201,11 @@ struct Inner {
     secret: String,
     /// What each member's blobs take here, once counted.
     blob_use: Mutex<HashMap<String, u64>>,
+    /// Slots a lease's end is taking down, or a purge is removing: a new
+    /// lease of the lane waits for it (ADR-0038 point 1).
+    slot_busy: Mutex<HashSet<String>>,
+    /// Slots being removed: no lease is admitted to one until it is gone.
+    slot_purging: Mutex<HashSet<String>>,
     /// Whether the coordinator refused this node's API (not granted to run
     /// lanes), said once.
     refused: Mutex<Option<String>>,
@@ -226,6 +266,208 @@ impl Inner {
         v
     }
 
+    fn slots(&self) -> PathBuf {
+        self.root.join("slots")
+    }
+
+    /// The slot of `member`'s lane `lane` of `repo` (ADR-0038 point 1): a
+    /// name only this node can tell, so the same lane finds its data again
+    /// and nobody else's.
+    fn slot_name(&self, member: &str, repo: &str, lane: &str) -> String {
+        crate::lanerun::secret_name(&self.secret, &["slot", member, repo, lane])
+    }
+
+    /// Where lease `l` keeps its mirror: its slot, or `lanes/<id>` for one
+    /// an older agent admitted.
+    fn dir_of(&self, l: &NodeLease) -> PathBuf {
+        match &l.slot {
+            Some(slot) => self.slots().join(slot),
+            None => self.lanes().join(&l.id),
+        }
+    }
+
+    /// The slots kept here, with what they say about themselves.
+    fn kept(&self) -> Vec<(String, SlotInfo)> {
+        let Ok(rd) = std::fs::read_dir(self.slots()) else {
+            return Vec::new();
+        };
+        rd.flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let text = std::fs::read(e.path().join("slot.json")).ok()?;
+                Some((name, serde_json::from_slice(&text).ok()?))
+            })
+            .collect()
+    }
+
+    fn note_slot(&self, slot: &str, info: &SlotInfo) {
+        let dir = self.slots().join(slot);
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(
+            dir.join("slot.json"),
+            serde_json::to_vec_pretty(info).unwrap_or_default(),
+        );
+    }
+
+    /// A lane kept in `slot`, run as nothing: to remove it.
+    fn slot_run(&self, slot: &str, info: &SlotInfo) -> LaneRun {
+        let mut run = self.run(&NodeLease {
+            id: slot.to_string(),
+            member: info.member.clone(),
+            repo: info.repo.clone(),
+            lane: info.lane.clone(),
+            need: Amount::default(),
+            expires: 0,
+            admitted: 0,
+            stack_file: None,
+            slot: Some(slot.to_string()),
+        });
+        // Its stack file, wherever it was: the default unless one is there.
+        if let Some(f) = ["devstack.toml"]
+            .iter()
+            .find(|f| run.src().join(f).is_file())
+        {
+            run.stack_file = (*f).to_string();
+        }
+        run
+    }
+
+    /// Remove slot `slot` and what it holds, unless a lease uses it.
+    fn purge_slot(&self, slot: &str, info: &SlotInfo, why: &str) -> bool {
+        {
+            // Under the leases' lock: a lease of the lane admitted meanwhile
+            // would get a directory that is being removed (`admit` checks).
+            let leases = self.leases.lock().unwrap();
+            if leases.values().any(|l| l.slot.as_deref() == Some(slot)) {
+                return false;
+            }
+            let mut busy = self.slot_busy.lock().unwrap();
+            if !busy.insert(slot.to_string()) {
+                return false;
+            }
+            self.slot_purging.lock().unwrap().insert(slot.to_string());
+        }
+        eprintln!(
+            "lane `{}` of {} ({}): its kept data goes: {why}",
+            info.lane, info.member, info.repo
+        );
+        self.slot_run(slot, info).purge(self.container.as_deref());
+        self.slot_purging.lock().unwrap().remove(slot);
+        self.slot_busy.lock().unwrap().remove(slot);
+        true
+    }
+
+    fn in_use(&self, slot: &str) -> bool {
+        self.leases
+            .lock()
+            .unwrap()
+            .values()
+            .any(|l| l.slot.as_deref() == Some(slot))
+    }
+
+    /// How long a stopped lane stays here, and what a member's kept lanes
+    /// may take (ADR-0038 point 3).
+    fn keep(&self) -> (Duration, u64) {
+        let policies = self.policies();
+        let all: Vec<&crate::policy::NodePolicy> = policies.iter().collect();
+        let p = crate::policy::NodePolicy::strictest(&all);
+        let hours = p.as_ref().and_then(|p| p.keep_lanes_hours);
+        let gib = p.as_ref().and_then(|p| p.keep_lanes_gib);
+        (
+            hours.map_or(
+                if self.dedicated {
+                    KEEP_DEDICATED
+                } else {
+                    KEEP_OTHER
+                },
+                |h| Duration::from_secs(h * 3600),
+            ),
+            gib.unwrap_or(KEEP_GIB) << 30,
+        )
+    }
+
+    /// Kept lanes past their time go, and the least recently used of a
+    /// member over its room (ADR-0038 point 3).
+    fn sweep_slots(&self) {
+        let (keep_for, room) = self.keep();
+        let now = crate::store::now();
+        let mut by_member: HashMap<String, Vec<(String, SlotInfo, u64)>> = HashMap::new();
+        for (slot, info) in self.kept() {
+            if self.in_use(&slot) {
+                continue;
+            }
+            if now.saturating_sub(info.used) >= keep_for.as_secs() {
+                self.purge_slot(&slot, &info, "kept for as long as this node keeps lanes");
+                continue;
+            }
+            let bytes = tree_size(&self.slots().join(&slot));
+            by_member
+                .entry(info.member.clone())
+                .or_default()
+                .push((slot, info, bytes));
+        }
+        for (_, mut slots) in by_member {
+            let mut total: u64 = slots.iter().map(|s| s.2).sum();
+            // The least recently used first.
+            slots.sort_by_key(|s| s.1.used);
+            for (slot, info, bytes) in slots {
+                if total <= room {
+                    break;
+                }
+                if self.purge_slot(
+                    &slot,
+                    &info,
+                    "the member's kept lanes take more than this node keeps",
+                ) {
+                    total = total.saturating_sub(bytes);
+                }
+            }
+        }
+    }
+
+    /// Left over by an agent that stopped between a lease's end and its
+    /// cleanup: lane directories, slots without what they say about
+    /// themselves, and lane containers no lease has.
+    fn sweep_orphans(&self) {
+        let leases: HashSet<String> = self.leases.lock().unwrap().keys().cloned().collect();
+        if let Ok(rd) = std::fs::read_dir(self.lanes()) {
+            for e in rd.flatten() {
+                let id = e.file_name().to_string_lossy().into_owned();
+                if !leases.contains(&id) {
+                    let _ = std::fs::remove_dir_all(e.path());
+                }
+            }
+        }
+        if let Ok(rd) = std::fs::read_dir(self.slots()) {
+            for e in rd.flatten() {
+                if !e.path().join("slot.json").is_file() {
+                    let _ = std::fs::remove_dir_all(e.path());
+                }
+            }
+        }
+        let out = std::process::Command::new("docker")
+            .args([
+                "ps",
+                "-a",
+                "--filter",
+                "label=devstack.lease",
+                "--format",
+                "{{.Label \"devstack.lease\"}}\t{{.Names}}",
+            ])
+            .output();
+        if let Ok(out) = out {
+            for l in String::from_utf8_lossy(&out.stdout).lines() {
+                if let Some((id, name)) = l.split_once('\t')
+                    && !leases.contains(id)
+                {
+                    let _ = std::process::Command::new("docker")
+                        .args(["rm", "-f", "--", name])
+                        .output();
+                }
+            }
+        }
+    }
+
     /// What `member`'s blobs take here (counted once, then kept up to date).
     fn blob_use(&self, member: &str) -> u64 {
         if let Some(u) = self.blob_use.lock().unwrap().get(member) {
@@ -247,17 +489,23 @@ impl Inner {
     /// [`BLOB_YOUNG`] stay too: a new lease's, uploaded and not yet applied,
     /// are in no manifest yet.
     fn gc_blobs(&self, member: &str) {
-        let ids: Vec<String> = self
+        let mut dirs: Vec<PathBuf> = self
             .leases
             .lock()
             .unwrap()
             .values()
             .filter(|l| l.member == member)
-            .map(|l| l.id.clone())
+            .map(|l| self.dir_of(l))
             .collect();
-        let keep: HashSet<String> = ids
+        dirs.extend(
+            self.kept()
+                .into_iter()
+                .filter(|(_, i)| i.member == member)
+                .map(|(slot, _)| self.slots().join(slot)),
+        );
+        let keep: HashSet<String> = dirs
             .iter()
-            .flat_map(|id| manifest(&self.lanes().join(id)).into_values())
+            .flat_map(|d| manifest(d).into_values())
             .collect();
         let dir = self.blobs(member);
         if let Ok(rd) = std::fs::read_dir(&dir) {
@@ -296,6 +544,11 @@ impl Inner {
             .values()
             .map(|l| l.member.clone())
             .collect();
+        for (slot, info) in self.kept() {
+            if !approved.contains(&info.member) {
+                self.purge_slot(&slot, &info, "the pool no longer lists its member");
+            }
+        }
         let Ok(rd) = std::fs::read_dir(self.root.join("blobs")) else {
             return;
         };
@@ -337,10 +590,11 @@ impl Inner {
     fn run(&self, l: &NodeLease) -> LaneRun {
         LaneRun {
             id: l.id.clone(),
+            slot: l.slot.clone().unwrap_or_else(|| l.id.clone()),
             member: l.member.clone(),
             secret: self.secret.clone(),
             lane: l.lane.clone(),
-            dir: self.lanes().join(&l.id),
+            dir: self.dir_of(l),
             stack_file: l
                 .stack_file
                 .clone()
@@ -371,20 +625,50 @@ impl Inner {
         }
     }
 
-    /// A lease is over: its lane stops, its mirror goes. Off the caller's
-    /// thread, Docker takes its time.
+    /// A lease is over: its lane stops. Its slot stays, with the mirror,
+    /// the builds and the volumes, for the next lease of the same lane
+    /// (ADR-0038), unless its stack file says `keep_data = false`; a lease
+    /// of an older agent takes its directory along. Off the caller's
+    /// thread, Docker takes its time; the slot is busy until it is done.
     fn drop_lease(self: &Arc<Self>, l: NodeLease) {
         self.daemons.lock().unwrap().remove(&l.id);
         self.phase_times.lock().unwrap().remove(&l.id);
         // What it needed is on offer again: the coordinator hears it now.
         self.changed.notify_one();
+        if let Some(slot) = &l.slot {
+            self.slot_busy.lock().unwrap().insert(slot.clone());
+        }
         let s = self.clone();
         std::thread::spawn(move || {
             let run = s.run(&l);
-            if l.stack_file.is_some() {
-                run.stop(s.container.as_deref());
+            match &l.slot {
+                Some(slot) => {
+                    let keep = l.stack_file.is_none() || run.keeps_data();
+                    if keep {
+                        if l.stack_file.is_some() {
+                            run.stop(s.container.as_deref());
+                        }
+                        s.note_slot(
+                            slot,
+                            &SlotInfo {
+                                member: l.member.clone(),
+                                repo: l.repo.clone(),
+                                lane: l.lane.clone(),
+                                used: crate::store::now(),
+                            },
+                        );
+                    } else {
+                        run.purge(s.container.as_deref());
+                    }
+                    s.slot_busy.lock().unwrap().remove(slot);
+                }
+                None => {
+                    if l.stack_file.is_some() {
+                        run.purge(s.container.as_deref());
+                    }
+                    let _ = std::fs::remove_dir_all(&run.dir);
+                }
             }
-            let _ = std::fs::remove_dir_all(&run.dir);
             // Its blobs stay: the same lane started again sends only what
             // changed (#99); they go under pressure, or with the member.
         });
@@ -468,11 +752,75 @@ fn router(s: Shared) -> Router {
         .route("/v1/leases/{id}/lane", get(lane_state))
         .route("/v1/leases/{id}/api/{*rest}", any(proxy))
         .route("/v1/leases/{id}/shared/{port}", get(shared_tunnel))
+        .route("/v1/slots", get(slots_list).delete(slots_purge))
         .route(
             "/v1/blobs/{hash}",
             put(blob).layer(DefaultBodyLimit::max(MAX_BLOB)),
         )
         .with_state(s)
+}
+
+/// `GET /v1/slots`: the caller's lanes kept here (ADR-0038 point 5).
+async fn slots_list(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+) -> ApiResult<Json<Vec<SlotView>>> {
+    let who = caller(&s, &peer).await?;
+    let s2 = s.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        s2.kept()
+            .into_iter()
+            .filter(|(_, i)| i.member == who)
+            .map(|(slot, i)| SlotView {
+                active: s2.in_use(&slot),
+                bytes: tree_size(&s2.slots().join(&slot)),
+                repo: i.repo,
+                lane: i.lane,
+                used: i.used,
+            })
+            .collect()
+    })
+    .await
+    .map_err(internal)?;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+struct SlotQuery {
+    repo: String,
+    lane: String,
+}
+
+/// `DELETE /v1/slots?repo=&lane=`: throw the caller's kept lane away (its
+/// worktree is gone, or it is to start fresh). `204`, also when there is
+/// none; `409` while a lease runs there.
+async fn slots_purge(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    axum::extract::Query(q): axum::extract::Query<SlotQuery>,
+) -> ApiResult<StatusCode> {
+    let who = caller(&s, &peer).await?;
+    let slot = s.slot_name(&who, &q.repo, &q.lane);
+    if s.in_use(&slot) {
+        return Err(err(
+            StatusCode::CONFLICT,
+            format!("lane `{}` runs here: stop it first", q.lane),
+        ));
+    }
+    let s2 = s.clone();
+    tokio::task::spawn_blocking(move || {
+        // The end of its last lease may still be taking it down.
+        let until = Instant::now() + Duration::from_secs(120);
+        while s2.slot_busy.lock().unwrap().contains(&slot) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        if let Some((_, info)) = s2.kept().into_iter().find(|(name, _)| *name == slot) {
+            s2.purge_slot(&slot, &info, "its owner asked");
+        }
+    })
+    .await
+    .map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn node(
@@ -581,6 +929,7 @@ async fn admit(
         ));
     }
     let now = crate::store::now();
+    let slot = s.slot_name(&who, &lease.repo, &lease.lane);
     let l = NodeLease {
         id: lease.id,
         member: who,
@@ -590,9 +939,38 @@ async fn admit(
         expires: now + TTL.as_secs(),
         admitted: now,
         stack_file: None,
+        slot: Some(slot.clone()),
     };
-    std::fs::create_dir_all(s.lanes().join(&l.id).join("src")).map_err(internal)?;
     let mut leases = s.leases.lock().unwrap();
+    if s.slot_purging.lock().unwrap().contains(&slot) {
+        return Err(err(
+            StatusCode::CONFLICT,
+            format!(
+                "lane `{}`'s kept data is being removed here: try again in a moment",
+                l.lane
+            ),
+        ));
+    }
+    // One lease at a time per lane: its data is one.
+    if let Some(other) = leases.values().find(|x| x.slot.as_deref() == Some(&slot)) {
+        return Err(err(
+            StatusCode::CONFLICT,
+            format!(
+                "lane `{}` of `{}` runs here already (lease {}): stop it first",
+                l.lane, l.repo, other.id
+            ),
+        ));
+    }
+    std::fs::create_dir_all(s.dir_of(&l).join("src")).map_err(internal)?;
+    s.note_slot(
+        &slot,
+        &SlotInfo {
+            member: l.member.clone(),
+            repo: l.repo.clone(),
+            lane: l.lane.clone(),
+            used: now,
+        },
+    );
     leases.insert(l.id.clone(), l.clone());
     s.save(&leases);
     s.changed.notify_one();
@@ -645,6 +1023,25 @@ fn hex_id(v: &str) -> bool {
         && v.len() <= 128
         && v.bytes()
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
+/// The bytes the files under `dir` take, all the way down (no link followed).
+fn tree_size(dir: &Path) -> u64 {
+    let mut total = 0;
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            match e.file_type() {
+                Ok(t) if t.is_dir() => todo.push(e.path()),
+                Ok(t) if t.is_file() => total += e.metadata().map_or(0, |m| m.len()),
+                _ => {}
+            }
+        }
+    }
+    total
 }
 
 /// The bytes the files directly under `dir` take.
@@ -993,6 +1390,28 @@ async fn start(
         }
         s.save(&leases);
     }
+    // The lane's last lease may still be taking its containers down.
+    if let Some(slot) = l.slot.clone() {
+        let s2 = s.clone();
+        let free = tokio::task::spawn_blocking(move || {
+            let until = Instant::now() + Duration::from_secs(120);
+            while s2.slot_busy.lock().unwrap().contains(&slot) {
+                if Instant::now() > until {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            true
+        })
+        .await
+        .map_err(internal)?;
+        if !free {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "the lane's last run is still being taken down here",
+            ));
+        }
+    }
     // A first start pulls or builds the lane image and the infrastructure's
     // images: minutes. It runs on, and `GET .../lane` says how far it got.
     if matches!(s.starting.lock().unwrap().get(&id), Some(Ok(_))) {
@@ -1259,7 +1678,7 @@ async fn infra(
     let q: InfraQuery = axum::extract::Query::try_from_uri(uri)
         .map(|q| q.0)
         .unwrap_or_default();
-    let dir = s.lanes().join(&l.id);
+    let dir = s.dir_of(l);
     let (group, service) = match &route {
         InfraRoute::Logs { group, service }
         | InfraRoute::Stream { group, service }
@@ -1557,8 +1976,8 @@ async fn apply(
     Json(a): Json<Apply>,
 ) -> ApiResult<Json<Applied>> {
     let who = caller(&s, &peer).await?;
-    lease_of(&s, &id, &who)?;
-    let (blobs, lane) = (s.blobs(&who), s.lanes().join(&id));
+    let l = lease_of(&s, &id, &who)?;
+    let (blobs, lane) = (s.blobs(&who), s.dir_of(&l));
     let r = tokio::task::spawn_blocking(move || apply_files(&blobs, &lane, &a.files))
         .await
         .map_err(internal)?;
@@ -1677,9 +2096,17 @@ async fn background(s: Shared) {
         next_round(wait, &s.changed).await;
         wait = EVERY;
         if purged.is_none_or(|t| t.elapsed() >= PURGE_EVERY) {
+            let first = purged.is_none();
             purged = Some(Instant::now());
             let s2 = s.clone();
-            let _ = tokio::task::spawn_blocking(move || s2.purge_gone_members()).await;
+            let _ = tokio::task::spawn_blocking(move || {
+                if first {
+                    s2.sweep_orphans();
+                }
+                s2.purge_gone_members();
+                s2.sweep_slots();
+            })
+            .await;
         }
         if measured.elapsed() >= CPU_INTERVAL {
             let after = devstack_proc::cpu_times();
@@ -1698,7 +2125,15 @@ async fn background(s: Shared) {
         };
         // What the pool's lanes use here now, their infrastructure included
         // (their containers carry the lease's id).
-        let ids: Vec<String> = s.leases.lock().unwrap().keys().cloned().collect();
+        // The lane containers carry the lease's id, their infrastructure its
+        // slot's (ADR-0038).
+        let ids: Vec<String> = s
+            .leases
+            .lock()
+            .unwrap()
+            .values()
+            .flat_map(|l| std::iter::once(l.id.clone()).chain(l.slot.clone()))
+            .collect();
         let used = tokio::task::spawn_blocking(move || lanes_use(&ids))
             .await
             .unwrap_or_default();
@@ -1907,6 +2342,8 @@ pub async fn serve(
         local_policy,
         secret,
         blob_use: Mutex::new(HashMap::new()),
+        slot_busy: Mutex::new(HashSet::new()),
+        slot_purging: Mutex::new(HashSet::new()),
         refused: Mutex::new(None),
         coordinator: Mutex::new(None),
         offer: Mutex::new(Amount::default()),
@@ -1931,7 +2368,10 @@ pub async fn serve(
                 let Some(s) = weak.upgrade() else { return };
                 let ids: Vec<String> = s.daemons.lock().unwrap().keys().cloned().collect();
                 for id in ids {
-                    let dir = s.lanes().join(&id);
+                    let Some(l) = s.leases.lock().unwrap().get(&id).cloned() else {
+                        continue;
+                    };
+                    let dir = s.dir_of(&l);
                     if let Err(e) = crate::laneinfra::refresh(&dir, &dir.join("src")) {
                         eprintln!("lane {id}: its containers: {e}");
                     }

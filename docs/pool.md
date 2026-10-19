@@ -100,7 +100,9 @@ why. A member that only shares from the dashboard is no node.
 - `policy.json` in its state (`node/` beside its membership): what this
   node lets run on it, in the form of an admin's policy (below), for a
   server deployed as code. It holds on top of the admin's: both must admit
-  a lane, the smaller limits and the stricter network win.
+  a lane, the smaller limits and the stricter network win. Beyond an
+  admin's fields it takes `keep_lanes_hours` and `keep_lanes_gib`: how long
+  and how much of stopped lanes it keeps (ADR-0038).
 - It reads each lane's Compose model in a throwaway `docker:cli` container
   (`DEVSTACK_NODE_COMPOSE_IMAGE` names another image with `docker
   compose`), pulled once.
@@ -174,8 +176,17 @@ is not contained. Running the pool's lanes on a machine trusts the members
 who place them that far; that is why an admin grants which machines are
 nodes.
 
-A lane on a node is disposable: its data comes from the seed jobs, and a
-move is a cold start. It runs without background workers unless it holds the
+A lane on a node keeps its data there when it stops
+([ADR-0038](adr/0038-a-lanes-data-outlives-its-lease.md)): its mirror, its
+builds, its toolchain caches and its containers' volumes stay in a slot of
+that node, for the member, repository and lane, so the next start of the
+lane there syncs only what changed, builds warm and finds its databases.
+The node keeps a stopped lane a week if it is dedicated, a day otherwise
+(`keep_lanes_hours` in its policy), and at most 20 GiB of one member's kept
+lanes (`keep_lanes_gib`; the least recently used goes first); it removes
+them at once when the pool no longer lists the member. A stack with `[lanes]
+keep_data = false` keeps nothing. A move to another node is a cold start
+there: data never moves between nodes. It runs without background workers unless it holds the
 main ports. When its lease ends (an admin ends it, the node goes away for
 longer than a lease lives), the main working tree takes the main ports back
 by itself.

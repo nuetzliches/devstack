@@ -42,8 +42,12 @@ pub type Result<T> = std::result::Result<T, RunError>;
 
 /// One lane on this node.
 pub struct LaneRun {
-    /// The lease id: names its Compose projects and its container.
+    /// The lease id: names its container, its own network, its egress rules.
     pub id: String,
+    /// Its slot (ADR-0038): names its Compose projects, their networks and
+    /// volumes, which the next lease of the same lane finds again. A lease
+    /// from an older agent has its id here.
+    pub slot: String,
     /// The requester's member id: the images built for it are its own.
     pub member: String,
     /// The lane's name, as its requester calls it.
@@ -116,7 +120,7 @@ fn ensure_image(image: &str) -> Result<()> {
 }
 
 /// A name for something built for `member` that only this node can tell.
-fn secret_name(secret: &str, parts: &[&str]) -> String {
+pub(crate) fn secret_name(secret: &str, parts: &[&str]) -> String {
     let mut h = blake3::Hasher::new();
     h.update(secret.as_bytes());
     for p in parts {
@@ -188,11 +192,11 @@ impl LaneRun {
     fn group(&self, stack: &devstack_config::Stack, name: &str) -> Group {
         let cfg = &stack.compose[name];
         let mut g = Group::from_config(name, cfg, &self.src());
-        g.project = format!("{}-{}", cfg.project, self.id);
+        g.project = format!("{}-{}", cfg.project, self.slot);
         g.networks = cfg
             .networks
             .iter()
-            .map(|n| format!("{n}-{}", self.id))
+            .map(|n| format!("{n}-{}", self.slot))
             .collect();
         let overlay = self.overlay(name);
         if overlay.is_file() {
@@ -342,7 +346,7 @@ impl LaneRun {
                     })
                     .collect(),
             };
-            let text = devstack_compose::node_overlay(&model, &g.project, &self.id, &options)
+            let text = devstack_compose::node_overlay(&model, &g.project, &self.slot, &options)
                 .map_err(|e| RunError::Config(format!("compose group `{name}`: {e}")))?;
             std::fs::create_dir_all(overlay.parent().expect("has a parent"))
                 .map_err(|e| RunError::Io(overlay.clone(), e))?;
@@ -657,9 +661,26 @@ impl LaneRun {
         format!("devstack-lane-{}", self.id)
     }
 
-    /// Stop the lane: its container and its Compose projects, volumes
-    /// included (a remote lane is disposable, ADR-0025 point 5).
+    /// Stop the lane: its container and its Compose projects' containers.
+    /// Their volumes and the mirror stay for the next start (ADR-0038).
     pub fn stop(&self, agent: Option<&str>) {
+        self.take_down(agent, false);
+    }
+
+    /// Stop the lane and remove what it keeps: its Compose projects'
+    /// volumes and its directory (the mirror, its builds, its caches).
+    pub fn purge(&self, agent: Option<&str>) {
+        self.take_down(agent, true);
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+
+    /// Whether its stack file asks to keep its data (`[lanes] keep_data`);
+    /// a file that does not read keeps it.
+    pub fn keeps_data(&self) -> bool {
+        self.stack().map_or(true, |s| s.lanes.keep_data)
+    }
+
+    fn take_down(&self, agent: Option<&str>, volumes: bool) {
         let _ = docker(&["rm", "-f", &self.container()]);
         let own = self.own_network();
         if let Some(me) = agent {
@@ -682,7 +703,7 @@ impl LaneRun {
                     let _ = docker(&["network", "disconnect", "-f", &n, me]);
                 }
             }
-            let _ = dc.remove(&g);
+            let _ = if volumes { dc.remove(&g) } else { dc.down(&g) };
         }
     }
 }
