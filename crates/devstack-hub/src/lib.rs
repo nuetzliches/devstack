@@ -1619,6 +1619,9 @@ fn start_up(s: &AppState, id: &str, exe: &std::path::Path, e: &StackEntry) -> Re
 struct DownQuery {
     #[serde(default)]
     infra: bool,
+    /// Its lanes, too: the daemon exits even while lanes run.
+    #[serde(default)]
+    all: bool,
 }
 
 async fn stack_down(
@@ -1646,13 +1649,33 @@ async fn stack_down(
         // services: it says `stopping` and stops taking connections at once,
         // so nothing (an `up`, a forwarded request) takes it for a daemon
         // that serves while its services stop.
-        if q.infra {
-            let _ = daemon_request(port, &token, Method::POST, "/v1/down?infra=true").await;
-        }
-        let told = daemon_request(port, &token, Method::POST, "/v1/shutdown").await;
+        //
+        // Lanes that still run keep their daemon (ADR-0024) and the
+        // infrastructure they share (ADR-0030): then only the main tree's
+        // services stop (`200` from `down`, `409` from `shutdown`). A daemon
+        // from before this does not know `unless_lanes` and exits.
+        let shutdown = || daemon_request(port, &token, Method::POST, "/v1/shutdown");
+        let exits = if q.infra {
+            let path = "/v1/down?infra=true";
+            let kept = daemon_request(port, &token, Method::POST, path).await == Ok(200);
+            (q.all || !kept) && shutdown().await.is_ok()
+        } else {
+            let path = if q.all {
+                "/v1/shutdown"
+            } else {
+                "/v1/shutdown?unless_lanes=true"
+            };
+            match daemon_request(port, &token, Method::POST, path).await {
+                Ok(409) => {
+                    let _ = daemon_request(port, &token, Method::POST, "/v1/down").await;
+                    false
+                }
+                r => r.is_ok(),
+            }
+        };
         // Over when that daemon is gone: its `daemon.json` goes last.
         let t0 = Instant::now();
-        while told.is_ok()
+        while exits
             && t0.elapsed() < STOP_WAIT
             && devstack_daemon::read_info(&state)
                 .is_some_and(|i| i.pid == daemon.pid && devstack_proc::pid_alive(i.pid))
