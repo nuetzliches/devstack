@@ -15,6 +15,10 @@ use std::path::{Path, PathBuf};
 pub struct ExternalInfra {
     #[serde(default)]
     pub groups: BTreeMap<String, ExternalGroup>,
+    /// When the agent last wrote states and load (ms since the epoch); an
+    /// agent from before #101 writes the file once, without it.
+    #[serde(default)]
+    pub at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -42,6 +46,12 @@ pub struct ExternalService {
     pub state: String,
     #[serde(default)]
     pub health: String,
+    /// What its container uses, as the agent measured it at `at`: percent
+    /// of one core, bytes.
+    #[serde(default)]
+    pub cpu: Option<f64>,
+    #[serde(default)]
+    pub memory: Option<u64>,
 }
 
 /// The file `DEVSTACK_EXTERNAL_INFRA` names, if it is set.
@@ -71,5 +81,19 @@ mod tests {
         assert_eq!(g.services["db"].ports[&5432], "db:5432");
         assert_eq!(g.services["api"].state, "");
         assert_eq!(g.services["api"].environment["X"], None);
+        assert_eq!(
+            (x.at, g.services["db"].cpu),
+            (None, None),
+            "an older agent's file"
+        );
+        let y: super::ExternalInfra = serde_json::from_str(
+            r#"{"at":1760000000000,"groups":{"app":{"services":{"db":{"state":"running","cpu":12.5,"memory":1048576}}}}}"#,
+        )
+        .unwrap();
+        let db = &y.groups["app"].services["db"];
+        assert_eq!(
+            (y.at, db.cpu, db.memory),
+            (Some(1_760_000_000_000), Some(12.5), Some(1 << 20))
+        );
     }
 }

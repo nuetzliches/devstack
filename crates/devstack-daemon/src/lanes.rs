@@ -205,6 +205,9 @@ pub struct Lanes {
     /// Lanes whose worktree git still lists but whose directory is not
     /// there, since when ([`MISSING_GRACE`]).
     missing: Mutex<BTreeMap<String, std::time::Instant>>,
+    /// The daemon is stopping ([`Lanes::down_all`]): the main tree takes no
+    /// main slot back and starts nothing for it.
+    closing: std::sync::atomic::AtomicBool,
 }
 
 /// `Feature/Agent 12` -> `feature-agent-12`; `main` is the main working tree's.
@@ -412,6 +415,7 @@ impl Lanes {
             handover: Mutex::new(Handover::default()),
             syncing: Mutex::new(()),
             missing: Mutex::new(BTreeMap::new()),
+            closing: std::sync::atomic::AtomicBool::new(false),
         });
         let remembered: Vec<LaneEntry> = match std::fs::read(me.file()) {
             Ok(b) => serde_json::from_slice(&b).unwrap_or_else(|e| {
@@ -624,6 +628,9 @@ impl Lanes {
     /// over, its node not answering): the main tree takes them back
     /// (ADR-0025 point 4).
     fn main_slot_check(&self) {
+        if self.closing.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         let Some(owner) = self.main.served_by() else {
             return;
         };
@@ -1263,8 +1270,19 @@ impl Lanes {
         }
     }
 
+    /// The lanes started, or starting, here and on nodes: while there is
+    /// one, the main tree's `down` keeps the daemon they live in (ADR-0024).
+    pub fn active(&self) -> Vec<String> {
+        let mut names: BTreeSet<String> = self.map.lock().unwrap().keys().cloned().collect();
+        names.extend(self.remote.lock().unwrap().keys().cloned());
+        names.extend(self.pending.lock().unwrap().iter().cloned());
+        names.into_iter().collect()
+    }
+
     /// Stop every lane's services (the daemon is stopping).
     pub fn down_all(&self) {
+        self.closing
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let lanes: Vec<Arc<Lane>> = self.map.lock().unwrap().values().cloned().collect();
         for l in lanes {
             l.sup.down(false);

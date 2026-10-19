@@ -423,8 +423,10 @@ in the snapshot: `prepare` installs what is missing.
   fixed port is the main tree's).
 - `devstack promote --lane <name>` lets a lane's services answer on the main
   ports (dev servers through a TCP forward); `--lane main` gives them back.
-- `devstack lane list`; `devstack lane stop <name>` stops a lane (its
-  builds stay, the worktree too).
+- `devstack lane list`; `devstack lane start <name>` starts a lane from
+  anywhere in the repository, as `devstack up` in its worktree does;
+  `devstack lane stop <name>` stops a lane (its builds stay, the worktree
+  too).
 
 ## `[commands.<name>]`: operations
 
