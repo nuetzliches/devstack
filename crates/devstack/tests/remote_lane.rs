@@ -277,6 +277,25 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     let body = http_get(port, "/health");
     assert!(body.contains("ok"), "GET /health on {port}: {body}");
 
+    // The lane's containers, which its daemon cannot reach (no Docker in the
+    // lane container): their output and what they use come from the node
+    // (#101).
+    let logs = cli(&wt, &["logs", "db", "-n", "20"]);
+    assert!(logs.contains("db ready"), "{logs}");
+    let until = Instant::now() + Duration::from_secs(60);
+    loop {
+        let top = cli(&wt, &["top"]);
+        let db = top.lines().find(|l| l.trim_start().starts_with("app/db"));
+        if db.is_some_and(|l| l.contains("iB")) {
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "no load measured for app/db:\n{top}"
+        );
+        std::thread::sleep(Duration::from_secs(3));
+    }
+
     // The main slot to the lane on the node: the fixed port answers from
     // there, and comes back to the main tree (ADR-0025 point 4).
     cli(&main, &["promote", "--lane", "wt"]);

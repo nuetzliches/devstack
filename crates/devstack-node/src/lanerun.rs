@@ -445,6 +445,11 @@ impl LaneRun {
             |f| std::io::Write::write_all(f, &infra_json),
         )
         .map_err(io(".devstack/external-infra.json"))?;
+        // The agent's own copy, beside the mirror where the lane cannot
+        // write: the projects it started, and what it refreshes the
+        // daemon's file from (`laneinfra`).
+        std::fs::write(self.dir.join(crate::laneinfra::AGENT_FILE), &infra_json)
+            .map_err(|e| RunError::Io(self.dir.join(crate::laneinfra::AGENT_FILE), e))?;
         // The daemon's state directory, and no token of an earlier start.
         safefs::write_beneath(&src, Path::new(".devstack/xdg/.keep"), 0o644, |_| Ok(()))
             .map_err(io(".devstack/xdg"))?;

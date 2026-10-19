@@ -4,6 +4,7 @@
 pub mod confine;
 pub mod coordinator;
 pub mod egress;
+pub mod laneinfra;
 pub mod lanerun;
 pub mod member;
 pub mod node;
