@@ -181,7 +181,7 @@ function pick(l: LaneView | null) {
           <Icon name="stop" :size="14" /> Stop worktree
         </button>
         <template v-if="!current">
-          <button v-if="!stack.running" type="button" class="btn btn-primary btn-sm" :disabled="starting || !stack.entry" data-testid="action-stack-start" @click="stack.startStack()">
+          <button v-if="!stack.running || stack.mainIdle" type="button" class="btn btn-primary btn-sm" :disabled="starting || !stack.entry" data-testid="action-stack-start" @click="stack.startStack()">
             <span v-if="starting" class="spinner" /><Icon v-else name="play" :size="14" /> Start stack
           </button>
           <button v-else type="button" class="btn btn-sm btn-stop" :disabled="!!stack.busy.stack" data-testid="action-stack-stop" @click="stack.stopStack()">

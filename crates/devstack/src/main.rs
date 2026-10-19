@@ -63,9 +63,14 @@ enum Cmd {
         on: Option<String>,
     },
     /// Stop the services and the daemon; `--infra` also removes the containers.
+    /// In the main working tree, lanes that still run keep the daemon and the
+    /// infrastructure: then only the main tree's services stop.
     Down {
         #[arg(long)]
         infra: bool,
+        /// The lanes too: the daemon exits even while lanes run.
+        #[arg(long)]
+        all: bool,
     },
     /// State of services and infrastructure.
     Status,

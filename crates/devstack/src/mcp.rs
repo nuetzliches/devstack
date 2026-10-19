@@ -494,8 +494,14 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
         "down" => {
             let infra = args["infra"].as_bool().unwrap_or(false);
             let (status, body) = connect(file)?.post(&format!("/v1/down?infra={infra}"), None)?;
+            let lanes = client::running_lanes(status, &body);
             checked(status, body)?;
-            Ok(if infra {
+            Ok(if !lanes.is_empty() {
+                format!(
+                    "services stopped; infrastructure keeps running, lanes use it: {}",
+                    lanes.join(", ")
+                )
+            } else if infra {
                 "services stopped, infrastructure removed".into()
             } else {
                 "services stopped; infrastructure keeps running".into()

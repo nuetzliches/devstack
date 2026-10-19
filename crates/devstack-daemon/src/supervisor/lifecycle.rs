@@ -685,7 +685,10 @@ impl Supervisor {
             slot.view.instance_port = None;
             slot.main.take()
         };
-        if let Some(p) = self.proxy(name) {
+        // While a lane serves the main ports, the main port is the lane's:
+        // a stop in the main tree leaves its forward alone (nothing of the
+        // main tree runs behind it then, `main_ports_elsewhere`).
+        if let Some(p) = self.proxy(name).filter(|_| self.served_by().is_none()) {
             p.set_upstream(None);
             p.set_waiting(Waiting::Refuse(format!(
                 "`{name}` is stopped (devstack start {name})"
