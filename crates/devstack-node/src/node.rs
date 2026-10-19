@@ -1162,12 +1162,20 @@ async fn proxy(
         .headers()
         .contains_key(hyper::header::UPGRADE)
         .then(|| hyper::upgrade::on(&mut req));
-    let target = async {
+    let lease = async {
         let who = caller(&s, &peer).await?;
-        let l = lease_of(&s, &id, &who)?;
-        daemon_of(&s, l).await
+        lease_of(&s, &id, &who)
     };
-    let d = match target.await {
+    let l = match lease.await {
+        Ok(l) => l,
+        Err(e) => return e.into_response(),
+    };
+    // The lane's containers are the node's to reach: its daemon has no
+    // Docker (#101).
+    if let Some(route) = InfraRoute::parse(req.method(), &rest) {
+        return infra(&s, &l, route, req.uri()).await;
+    }
+    let d = match daemon_of(&s, l).await {
         Ok(d) => d,
         Err(e) => return e.into_response(),
     };
@@ -1177,6 +1185,231 @@ async fn proxy(
         .map(|q| format!("?{q}"))
         .unwrap_or_default();
     pass(d, format!("/{rest}{query}"), upgrade_in, req).await
+}
+
+/// What of the lane daemon's `/v1/infra/{group}/{service}/…` the node answers
+/// itself: a container's output, once or followed, and its start, stop and
+/// restart.
+#[derive(Debug, PartialEq, Eq)]
+enum InfraRoute {
+    Logs {
+        group: String,
+        service: String,
+    },
+    Stream {
+        group: String,
+        service: String,
+    },
+    Act {
+        group: String,
+        service: String,
+        action: String,
+    },
+}
+
+impl InfraRoute {
+    fn parse(method: &hyper::Method, rest: &str) -> Option<Self> {
+        let parts: Vec<&str> = rest.strip_prefix("v1/infra/")?.split('/').collect();
+        let plain = |p: &str| {
+            p.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric())
+                && p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+        };
+        if parts.len() < 3 || !plain(parts[0]) || !plain(parts[1]) {
+            return None;
+        }
+        let (group, service) = (parts[0].to_string(), parts[1].to_string());
+        match (method, &parts[2..]) {
+            (&hyper::Method::GET, ["logs"]) => Some(Self::Logs { group, service }),
+            (&hyper::Method::GET, ["logs", "stream"]) => Some(Self::Stream { group, service }),
+            (&hyper::Method::POST, [a]) if matches!(*a, "start" | "stop" | "restart") => {
+                Some(Self::Act {
+                    group,
+                    service,
+                    action: a.to_string(),
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct InfraQuery {
+    tail: Option<usize>,
+    grep: Option<String>,
+    since: Option<String>,
+}
+
+/// An error as the lane's daemon would answer it.
+fn infra_err(status: StatusCode, msg: impl Into<String>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
+}
+
+/// Answer an [`InfraRoute`] of lease `l`, for its owner (checked before),
+/// on the containers of the projects the agent started for it.
+async fn infra(
+    s: &Shared,
+    l: &NodeLease,
+    route: InfraRoute,
+    uri: &hyper::Uri,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let q: InfraQuery = axum::extract::Query::try_from_uri(uri)
+        .map(|q| q.0)
+        .unwrap_or_default();
+    let dir = s.lanes().join(&l.id);
+    let (group, service) = match &route {
+        InfraRoute::Logs { group, service }
+        | InfraRoute::Stream { group, service }
+        | InfraRoute::Act { group, service, .. } => (group.clone(), service.clone()),
+    };
+    let found = {
+        let dir = dir.clone();
+        tokio::task::spawn_blocking(move || crate::laneinfra::find(&dir, &group, &service)).await
+    };
+    let c = match found {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => return infra_err(StatusCode::NOT_FOUND, e),
+        Err(e) => return infra_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    match route {
+        InfraRoute::Logs { .. } => {
+            let tail = q.tail.unwrap_or(200).min(20_000);
+            let needle = q.grep.filter(|g| !g.is_empty()).map(|g| g.to_lowercase());
+            // With a filter, Docker hands over more and the filter keeps the last `tail`.
+            let fetch = if needle.is_some() { 20_000 } else { tail };
+            let since = q.since.filter(|v| !v.is_empty());
+            let name = c.name.clone();
+            let out = tokio::task::spawn_blocking(move || {
+                crate::laneinfra::logs(&name, fetch, since.as_deref())
+            })
+            .await;
+            match out {
+                Ok(Ok(text)) => {
+                    let mut lines: Vec<&str> = text
+                        .lines()
+                        .rev()
+                        .filter(|l| needle.as_ref().is_none_or(|g| l.to_lowercase().contains(g)))
+                        .take(tail)
+                        .collect();
+                    lines.reverse();
+                    (
+                        [(hyper::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                        lines.join("\n"),
+                    )
+                        .into_response()
+                }
+                Ok(Err(e)) => infra_err(StatusCode::BAD_GATEWAY, e),
+                Err(e) => infra_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            }
+        }
+        InfraRoute::Stream { .. } => {
+            let tail = q.tail.unwrap_or(500).min(5000);
+            match crate::laneinfra::follow(&c.name, tail) {
+                Ok(child) => sse_lines(child),
+                Err(e) => infra_err(StatusCode::BAD_GATEWAY, e),
+            }
+        }
+        InfraRoute::Act { action, .. } => {
+            let name = c.name.clone();
+            let done = tokio::task::spawn_blocking(move || {
+                let r = crate::laneinfra::act(&name, &action);
+                // The new state, for the lane's dashboard at once.
+                let _ = crate::laneinfra::refresh(&dir, &dir.join("src"));
+                r
+            })
+            .await;
+            match done {
+                Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+                Ok(Err(e)) => infra_err(StatusCode::CONFLICT, e),
+                Err(e) => infra_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            }
+        }
+    }
+}
+
+/// A followed container's output as the lane's daemon streams it: one SSE
+/// event `{"type":"line","text"}` per line, until the reader goes away or
+/// the output ends.
+fn sse_lines(mut child: std::process::Child) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let (tx, body) = http_body_util::channel::Channel::<bytes::Bytes, std::io::Error>::new(64);
+    let tx = Arc::new(tokio::sync::Mutex::new(tx));
+    let rt = tokio::runtime::Handle::current();
+    let mut readers = Vec::new();
+    for pipe in [
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let (tx, rt) = (tx.clone(), rt.clone());
+        readers.push(std::thread::spawn(move || {
+            use std::io::BufRead;
+            for l in std::io::BufReader::new(pipe).lines() {
+                let Ok(l) = l else { return };
+                let event = format!(
+                    "data: {}\n\n",
+                    serde_json::json!({ "type": "line", "text": l })
+                );
+                let sent = rt
+                    .block_on(async { tx.lock().await.send_data(bytes::Bytes::from(event)).await });
+                if sent.is_err() {
+                    return; // the reader is gone
+                }
+            }
+        }));
+    }
+    // A reader gone or the output over: the follower ends. A container
+    // that says nothing would keep a gone reader's follower running: a
+    // comment every few seconds finds out, and keeps proxies from closing
+    // the stream.
+    let child = Arc::new(Mutex::new(child));
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let (child, done) = (child.clone(), done.clone());
+        std::thread::spawn(move || {
+            while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_secs(5));
+                let alive = rt.block_on(async {
+                    tx.lock()
+                        .await
+                        .send_data(bytes::Bytes::from_static(b": ping\n\n"))
+                        .await
+                });
+                if alive.is_err() {
+                    let _ = child.lock().unwrap().kill();
+                    return;
+                }
+            }
+        });
+    }
+    std::thread::spawn(move || {
+        for r in readers {
+            let _ = r.join();
+        }
+        done.store(true, std::sync::atomic::Ordering::SeqCst);
+        let mut c = child.lock().unwrap();
+        let _ = c.kill();
+        let _ = c.wait();
+    });
+    (
+        [
+            (hyper::header::CONTENT_TYPE, "text/event-stream"),
+            (hyper::header::CACHE_CONTROL, "no-cache"),
+        ],
+        axum::body::Body::new(body),
+    )
+        .into_response()
 }
 
 /// `GET /v1/leases/{id}/shared/{port}` with `Upgrade`: a tunnel to a port of
@@ -1687,6 +1920,24 @@ pub async fn serve(
         changed: tokio::sync::Notify::new(),
     });
     let bg = tokio::spawn(background(s.clone()));
+    // The containers of the running lanes: their states and load into each
+    // lane's file, so its dashboard shows them (#101).
+    let weak = Arc::downgrade(&s);
+    let _ = std::thread::Builder::new()
+        .name("lane-infra".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(crate::laneinfra::EVERY);
+                let Some(s) = weak.upgrade() else { return };
+                let ids: Vec<String> = s.daemons.lock().unwrap().keys().cloned().collect();
+                for id in ids {
+                    let dir = s.lanes().join(&id);
+                    if let Err(e) = crate::laneinfra::refresh(&dir, &dir.join("src")) {
+                        eprintln!("lane {id}: its containers: {e}");
+                    }
+                }
+            }
+        });
     crate::tls::serve(tls, listener, router(s), stop).await;
     bg.abort();
     Ok(())
@@ -1760,6 +2011,40 @@ pub fn serve_blocking(config: NodeConfig, listen: std::net::SocketAddr) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_node_answers_a_lanes_container_routes_only() {
+        use hyper::Method;
+        let r = |m: &Method, p: &str| InfraRoute::parse(m, p);
+        assert_eq!(
+            r(&Method::GET, "v1/infra/app/db/logs"),
+            Some(InfraRoute::Logs {
+                group: "app".into(),
+                service: "db".into()
+            })
+        );
+        assert!(matches!(
+            r(&Method::GET, "v1/infra/app/db/logs/stream"),
+            Some(InfraRoute::Stream { .. })
+        ));
+        assert!(matches!(
+            r(&Method::POST, "v1/infra/app/db/restart"),
+            Some(InfraRoute::Act { action, .. }) if action == "restart"
+        ));
+        // Everything else goes to the lane's daemon, a name that is no plain
+        // name included.
+        for (m, p) in [
+            (Method::GET, "v1/infra/app/db/restart"),
+            (Method::POST, "v1/infra/app/db/logs"),
+            (Method::POST, "v1/infra/app/db/remove"),
+            (Method::GET, "v1/infra/app/../logs"),
+            (Method::GET, "v1/infra/app/db"),
+            (Method::POST, "v1/infra/check"),
+            (Method::GET, "v1/stack"),
+        ] {
+            assert_eq!(r(&m, p), None, "{m} {p}");
+        }
+    }
 
     #[test]
     fn a_path_from_a_requester_stays_in_the_mirror() {

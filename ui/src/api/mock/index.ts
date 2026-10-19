@@ -333,6 +333,7 @@ export class MockTransport implements Transport {
         { repo: `${root}\\legacy`, id: 'l222', name: null, error: 'devstack.toml: unknown field `biuld`', registered: false, added: false },
       ]);
     }
+    if (p === '/hub/update/check' && method === 'POST') return json(200, { current: '0.2.0', newer: hub.newer });
     if (p === '/hub/update' && method === 'POST') {
       // As if installed: the hub would restart on the new version.
       const send = (ev: HubEvent) => hub.hubSubs.forEach((l) => l.send(ev));
@@ -436,6 +437,7 @@ export class MockTransport implements Transport {
     if (p === '/v1/stack' && method === 'GET') return view();
     if (p === '/v1/usage' && method === 'GET') return json(200, s.usageWithHistory());
     if (p === '/v1/up' && method === 'POST') return empty(202);
+    if (p === '/v1/down' && method === 'POST') return empty(204);
 
     if (/^\/v1\/infra\/[^/]+\/[^/]+\/logs$/.test(p)) {
       const t = new Date().toISOString();

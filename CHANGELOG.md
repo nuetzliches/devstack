@@ -11,6 +11,18 @@ and listed with their assets on the
 
 ### Added
 
+- **Check for updates in the dashboard.** The version in the top bar opens
+  a popover with the hub's and the shown stack's devstack, a "Check for
+  updates" button (`POST /hub/update/check`: the hub asks GitHub now instead
+  of at its next 12-hour look) and, when there is one, the update to install.
+- **Lanes can be started from the main tree**
+  ([#103](https://github.com/nuetzliches/devstack/issues/103)). `devstack
+  lane start <lane> [--on <node>]` and the MCP tools `lane_start` and
+  `lane_stop` start and stop another worktree's lane from wherever they run,
+  so an agent in the main tree can run another branch or commit in
+  isolation instead of building a separate environment. `devstack status`
+  (and the MCP `status`) in the main tree names the lanes in one line. The
+  `devstack` skill has the recipe "run a commit beside the main stack".
 - **The pool knows which devstack each party runs**
   ([ADR-0031](docs/adr/0031-a-coordinator-places-lanes.md) point 8;
   [pool.md](docs/pool.md#versions-in-a-pool)). Nodes and members
@@ -26,6 +38,14 @@ and listed with their assets on the
 
 ### Changed
 
+- **Dashboard sidebar.** Every worktree of a running stack is listed (no
+  more "N not started" fold), the main working tree as its own row first,
+  and each tree's state is a dot, as a stack's is (the counts and the place
+  are in its tooltip). A stack has a menu (its "…" button, or a right
+  click): open, start, stop, copy its path, and remove it from the
+  dashboard (`DELETE /hub/stacks/{id}`; nothing on disk changes). "Add a
+  stack" is the "+" next to "Stacks". The top bar shows the hub's
+  connection only; whether the shown tree is live is in its header.
 - **API: `POST /v1/lanes` with `on` answers `202` once the lane is leased**
   (was `201` when it ran, after minutes on a first start), and syncs and
   starts it on the node in the background; the lane's `moving` shows the
@@ -55,6 +75,66 @@ and listed with their assets on the
 
 ### Fixed
 
+- **Stopping the main working tree no longer stops its lanes**
+  ([ADR-0024](docs/adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md)).
+  `devstack down` in the main tree, and "Stop stack" in the dashboard, shut
+  the daemon down and with it every lane: a lane on a node lost its lease,
+  one serving the main ports lost them without a word, and the next start
+  began each lane cold. While a lane runs, they now stop the main tree's
+  services only; the daemon and the infrastructure the lanes share stay,
+  and a lane serving the main ports keeps them. `devstack down --all` (hub:
+  `POST /hub/stacks/{id}/down?all=true`) stops everything as before. The
+  main tree's `POST /v1/down` answers `200 {"lanes": [...]}` then and skips
+  `infra`; `POST /v1/shutdown?unless_lanes=true` refuses with `409`. A
+  service stopped in the main tree while a lane serves the main ports no
+  longer takes its port from the lane, and a daemon that stops no longer
+  takes the main slot back for services it stops anyway. The dashboard
+  offers "Start stack" for a main tree whose daemon stayed for its lanes.
+- **A Compose port is no longer taken for a lost forward while the server
+  inside starts** ([#98](https://github.com/nuetzliches/devstack/issues/98)).
+  Docker Desktop's proxy accepts a connection and closes it until something
+  listens inside, which looked like a lost port forward: `status` warned
+  about ports that worked, and a database still starting could be
+  restarted. A container is judged once it has been ready (running, healthy
+  if it has a check) for 20 s, a port is lost only when three probes a
+  second apart say so, and one found lost is probed again every few seconds
+  until it answers ("reachable from this machine again"). A restart from
+  devstack, or a change of the container's state, clears the verdict, so
+  `status` no longer shows one from before a restart. devstack restarts a
+  container for a lost forward only when it has been ready for 20 s, and at
+  most once in 10 minutes.
+- **A lane on a node shows its containers' output and load, and they can be
+  restarted** ([#101](https://github.com/nuetzliches/devstack/issues/101)).
+  The lane's daemon has no Docker (ADR-0025 point 2), so its container log
+  console failed (with a `docker:cli` lane image: `tcp://docker:2375`),
+  its containers showed `0 B / 0%`, and start, stop and restart were
+  refused. The node's agent now answers those routes itself, for the lane's
+  owner and on the containers of the projects it started for the lease
+  only (by their Compose labels, no Compose file of the mirror read), and
+  writes the containers' states, health and load into the lane's file every
+  5 s; the lane's daemon reports them as a local lane's (`top`, the
+  dashboard), and says when a container's state changes. A node with an
+  older devstack says it is too old instead of a Docker error. A lane
+  started before the node was updated shows its containers once it is
+  started again.
+- **A lane's `[compose.<group>] urls` links follow its ports**
+  ([#101](https://github.com/nuetzliches/devstack/issues/101), comment).
+  In a lane, a link to a port on this machine (`localhost`, `127.0.0.1`)
+  pointed at the main tree's port; it moves by the lane's offset now, with
+  its path, as every port of the lane does. Another host stays as written.
+- **A long-running service that exits by itself is started again**
+  ([#103](https://github.com/nuetzliches/devstack/issues/103), comment). A
+  lane's dev server exited with code 0 a minute after it was healthy, and
+  nothing brought it back: tests against the lane found its port closed. A
+  `service`, `devserver` or `static` that exits without a stop, restart or
+  switch asking for it now starts again from the same build, after 1, 2,
+  4, … s (at most a minute); after five such exits in a row it is
+  `failed` with the reason, and an instance that ran for five minutes
+  starts the count again. A `tool` stays exited (it may have been closed on
+  purpose). `daemon.log` says why: `service_exited` (exit code, how long it
+  ran, what of its process tree still ran), `service_restarting`,
+  `service_given_up`; and `copy_synced` says what a sync changed in a
+  lane's copy under what runs from it.
 - **A lane on a node started again uploads only what changed**
   ([#99](https://github.com/nuetzliches/devstack/issues/99),
   [ADR-0038](docs/adr/0038-a-lanes-data-outlives-its-lease.md), first step).

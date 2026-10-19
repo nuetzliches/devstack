@@ -223,6 +223,21 @@ fn a_lane_is_leased_admitted_and_synced() {
         rt.block_on(theirs.renew(&lease.id)),
         Err(ClientError::Status(404, _))
     ));
+    // Nor reach its containers, which the node answers for (#101); for its
+    // owner a lane not started has none yet.
+    let infra = |c: &NodeClient| {
+        let req = hyper::Request::get("/v1/infra/app/db/logs?tail=5")
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .unwrap();
+        rt.block_on(c.forward(&lease.id, req))
+            .map(|r| r.status().as_u16())
+            .unwrap_or_else(|e| match e {
+                ClientError::Status(s, _) => s,
+                e => panic!("{e}"),
+            })
+    };
+    assert_eq!(infra(&theirs), 404);
+    assert_eq!(infra(&client), 404);
 
     // A node is known by its key: a client that expects another member at
     // that address does not talk to it.

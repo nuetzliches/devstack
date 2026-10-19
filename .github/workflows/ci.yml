@@ -178,6 +178,16 @@ jobs:
         with:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ hashFiles('examples/fixture-stack/**/*.csproj') }}
+      # The .NET CLI's first run (its sentinel, NuGet's migrations) once,
+      # before the tests start many builds at the same time: run at once,
+      # the migrations race for their shared-memory directory and a build
+      # fails (`mkdirat … .dotnet/shm/session…: ENOENT`). In a copy, so the
+      # fixture the tests copy has no build output.
+      - name: prime the .NET CLI
+        shell: bash
+        run: |
+          cp -r examples/fixture-stack/src/Api "$RUNNER_TEMP/prime-api"
+          dotnet build "$RUNNER_TEMP/prime-api/Api.csproj" -nologo -v q
       - name: daemon lifecycle
         shell: bash
         run: cargo test -p devstack --test daemon_lifecycle -- --include-ignored --nocapture ${{ matrix.skip }}

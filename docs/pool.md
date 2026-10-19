@@ -356,7 +356,7 @@ What the node agent sets in a lane container, for the `devstack` daemon in it
 | `DEVSTACK_LISTEN` | `0.0.0.0:7600`: the daemon's API on the lane's network, for the agent (token and `Host` checked) |
 | `DEVSTACK_PORT_OFFSET` | the lane's port offset on the requester; the lane runs on those ports in the container too |
 | `DEVSTACK_DISPLAY_ROOT` | where the requester has the lane's files, so paths in compiler messages and logs show as the developer's |
-| `DEVSTACK_EXTERNAL_INFRA` | the file (`/src/.devstack/external-infra.json`) in which the agent describes the lane's containers, which it started itself |
+| `DEVSTACK_EXTERNAL_INFRA` | the file (`/src/.devstack/external-infra.json`) in which the agent describes the lane's containers, which it started itself; it writes their states, health and load (`cpu`, `memory`, `at`) into it every 5 s, and answers the lane's container routes (`/v1/infra/{group}/{service}/logs`, `logs/stream`, `start`/`stop`/`restart`) itself, for the lane's owner, since the lane has no Docker |
 
 On the node, `DEVSTACK_NODE_CONTAINER` (the agent's container name, when it
 runs in one) and `DEVSTACK_NODE_COMPOSE_IMAGE` (the image it reads Compose

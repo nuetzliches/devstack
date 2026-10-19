@@ -367,7 +367,8 @@ impl Drop for Stack {
             // The daemon's own account is the only evidence once the temp dir is gone.
             eprintln!("--- daemon.log ---\n{}\n--- end ---", self.daemon_log());
         }
-        let _ = self.cli(&["down", "--infra"], None);
+        // `--all`: a lane a test started must not keep the daemon.
+        let _ = self.cli(&["down", "--infra", "--all"], None);
     }
 }
 
@@ -1345,6 +1346,70 @@ steps = [{{ exec = "{hang}", timeout = "1s" }}]
     s.ok(&["down"]);
 }
 
+/// A long-running service that exits by itself, with any code, is started
+/// again after a backoff, five times in a row at most; a tool stays exited
+/// (#103: a lane's dev server exited with 0 and nothing brought it back).
+#[test]
+fn a_service_that_exits_by_itself_comes_back() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    let brief = if cfg!(windows) {
+        "ping -n 3 127.0.0.1 >NUL"
+    } else {
+        "sleep 2"
+    };
+    std::fs::write(
+        s.file(),
+        format!(
+            r#"version = 1
+[stack]
+name = "brief"
+[services.dev]
+kind = "devserver"
+run = "{brief}"
+[services.ui]
+kind = "tool"
+run = "{brief}"
+"#
+        ),
+    )
+    .unwrap();
+    s.ok(&["up"]);
+    let state = |name: &str| {
+        s.service_view(name)["status"]["state"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    };
+    let log = || s.daemon_log();
+    assert!(
+        wait_for(
+            || log().contains("\"service_restarting\"") && state("dev") == "running",
+            Duration::from_secs(30)
+        ),
+        "the dev server came back\n{}",
+        s.diag()
+    );
+    assert!(log().contains("\"service_exited\""), "{}", log());
+    assert!(
+        wait_for(|| state("ui") == "exited", Duration::from_secs(15)),
+        "a tool stays exited: {}",
+        state("ui")
+    );
+    // It keeps exiting: after five starts in a row devstack gives up.
+    assert!(
+        wait_for(|| state("dev") == "failed", Duration::from_secs(120)),
+        "{}",
+        s.diag()
+    );
+    let reason = s.service_view("dev")["status"]["reason"].to_string();
+    assert!(reason.contains("5 times in a row"), "{reason}");
+    s.ok(&["down"]);
+}
+
 /// GET on a port of this machine, the body.
 fn get_on(port: u16, path: &str) -> Option<String> {
     ureq::Agent::config_builder()
@@ -1573,6 +1638,24 @@ fn a_worktree_runs_as_a_lane() {
         wait_for(|| lane_info()["workers"] == true, Duration::from_secs(60)),
         "the lane runs the workers now"
     );
+    // `down` in the main tree stops the main tree only: the lane that serves
+    // the main ports keeps them, and the daemon it lives in stays (ADR-0024).
+    let daemon = s.daemon_pid();
+    let out = s.ok(&["down"]);
+    assert!(
+        out.contains("lanes keep running") && out.contains(&lane),
+        "{out}"
+    );
+    assert!(
+        s.api("/info").is_some_and(|i| i.contains(&lane_build)),
+        "the main port still serves the lane\n{}",
+        s.diag()
+    );
+    assert!(
+        get_on(web_port, "/").is_some_and(|b| b.contains("lane site")),
+        "the dev server's forward stays"
+    );
+    assert_eq!(s.daemon_pid(), daemon, "the daemon stays");
     s.ok(&["promote", "--lane", "main"]);
     assert!(
         wait_for(
@@ -1600,6 +1683,22 @@ fn a_worktree_runs_as_a_lane() {
         "what was stopped before stays stopped\n{}",
         s.ok(&["status"])
     );
+    // `down` and `up` in the main tree leave a running lane alone.
+    let out = s.ok(&["down"]);
+    assert!(out.contains("lanes keep running"), "{out}");
+    assert!(
+        wait_for(|| s.api("/health").is_none(), Duration::from_secs(30)),
+        "the main tree stopped"
+    );
+    let lane_pid = lane_info()["pid"].clone();
+    s.cli(&["up"], None); // `broken` fails, the rest runs
+    assert!(
+        wait_for(|| s.api("/health").is_some(), Duration::from_secs(120)),
+        "the main tree runs again\n{}",
+        s.diag()
+    );
+    assert_eq!(s.daemon_pid(), daemon, "in the same daemon");
+    assert_eq!(lane_info()["pid"], lane_pid, "the lane ran on, untouched");
 
     // 5. The lane runs from a copy of its worktree: `prepare` ran there, an
     //    edit reaches its dev server within moments, and nothing runs in the
@@ -1668,7 +1767,39 @@ fn a_worktree_runs_as_a_lane() {
     );
     assert!(s.ok(&["lane", "list"]).contains(&extra_name));
 
-    s.ok(&["down"]);
+    // 7. The main tree names its lanes, and starts and stops one without
+    //    going to its worktree (#103).
+    let status = s.ok(&["status"]);
+    assert!(
+        status.contains("lanes: 1 worktree(s), 0 started"),
+        "{status}"
+    );
+    let out = s.cli(&["lane", "start", &extra_name], None); // `broken` fails, the rest runs
+    let started = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        started.contains(&format!("lane `{extra_name}` started")),
+        "{started}"
+    );
+    let row = |name: &str| {
+        s.ok(&["lane", "list"])
+            .lines()
+            .find(|l| l.starts_with(name))
+            .unwrap_or_default()
+            .to_string()
+    };
+    assert!(
+        !row(&extra_name).contains("stopped"),
+        "{}",
+        row(&extra_name)
+    );
+    assert!(
+        s.ok(&["status"])
+            .contains(&format!("1 started ({extra_name})"))
+    );
+    s.ok(&["lane", "stop", &extra_name]);
+    assert!(row(&extra_name).contains("stopped"), "{}", row(&extra_name));
+
+    s.ok(&["down", "--all"]);
     for dir in [&wt, &extra] {
         let _ = Command::new("git")
             .args(["worktree", "remove", "--force"])
