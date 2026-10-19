@@ -73,3 +73,12 @@ share button). Not yet: `devstack open <lane> <service>` from the CLI.
 `/hub/pool/shared/{lease}/open`); it opens `http` and `https` addresses only,
 and the coordinator refuses to keep a shared service with another scheme
 (`crates/devstack-node/src/coordinator.rs`), as do the hub and the dashboard.
+
+*Noted 2026-10-19.* A shared lane names its lane ports (the stack's moved
+by the lane's offset): on a node it listens on those, as it does on its
+owner's machine; until 0.11.1 the main tree's ports went out and every
+connection was refused. Besides its services with a `port`, it shares the
+Compose containers its owner's dashboard links as a web page: a `urls`
+entry with `http`/`https`, or a published port without an entry (`""`
+keeps one out); not a group's `shared` containers, which are the main
+tree's (`shared_services` in `crates/devstack-daemon/src/lanes.rs`).

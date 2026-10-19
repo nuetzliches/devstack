@@ -330,12 +330,20 @@ fn lane_url(url: &str, offset: u16) -> String {
 /// where it starts), the same port on both ends. Web addresses only: what
 /// a colleague's browser or `devstack open` hands to the OS is never
 /// another protocol's handler.
+///
+/// Its Compose containers too, those the dashboard links as a web page
+/// (`[compose.<group>] urls`, or `http://localhost:<port>` per published
+/// port without an entry; `""` keeps one out): `published` holds the main
+/// tree's host ports, `(group, service, container port) -> host:port`, and
+/// the lane publishes them moved by its offset. Not the group's `shared`
+/// containers: those are the main tree's, not the lane's.
 fn shared_services(
     stack: &devstack_config::Stack,
     offset: u16,
     lane: &str,
+    published: &BTreeMap<(String, String, u16), String>,
 ) -> Vec<devstack_node::coordinator::SharedService> {
-    stack
+    let mut out: Vec<devstack_node::coordinator::SharedService> = stack
         .services
         .iter()
         .filter_map(|(name, s)| {
@@ -355,7 +363,64 @@ fn shared_services(
                 here: port,
             })
         })
-        .collect()
+        .collect();
+    for ((group, service, _), addr) in published {
+        let Some(g) = stack.compose.get(group) else {
+            continue;
+        };
+        if (!g.services.is_empty() && !g.services.contains(service)) || g.shared.contains(service) {
+            continue;
+        }
+        let Some(host) = addr.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()) else {
+            continue;
+        };
+        let (scheme, port) = match g.urls.get(service) {
+            Some(u) if u.is_empty() => continue,
+            // The entry's port when it names one on this machine; else the
+            // published one (a link elsewhere is not the lane's).
+            Some(u) => match url_port(u) {
+                Some((scheme, p)) if p == host => (scheme, p),
+                Some(_) => continue,
+                None => continue,
+            },
+            None => ("http", host),
+        };
+        let Some(port) = port.checked_add(offset) else {
+            continue;
+        };
+        if out.iter().any(|s| s.port == port) {
+            continue;
+        }
+        let name = if out.iter().any(|s| &s.name == service) {
+            format!("{group}.{service}")
+        } else {
+            service.clone()
+        };
+        out.push(devstack_node::coordinator::SharedService {
+            name,
+            port,
+            scheme: scheme.into(),
+            here: port,
+        });
+    }
+    out
+}
+
+/// `http`/`https` and the port of a link on this machine
+/// (`http://localhost:5100/ui`); `None` for anything else.
+fn url_port(url: &str) -> Option<(&'static str, u16)> {
+    let (scheme, rest) = url.split_once("://")?;
+    let scheme = match scheme.to_ascii_lowercase().as_str() {
+        "http" => "http",
+        "https" => "https",
+        _ => return None,
+    };
+    let authority = rest.find(['/', '?', '#']).map_or(rest, |i| &rest[..i]);
+    let (host, port) = authority.rsplit_once(':')?;
+    if !matches!(host, "localhost" | "127.0.0.1" | "[::1]") {
+        return None;
+    }
+    Some((scheme, port.parse().ok()?))
 }
 
 fn ports(stack: &devstack_config::Stack) -> Vec<u16> {
@@ -1892,7 +1957,12 @@ impl Lanes {
             return None;
         }
         let offset = lane_offset(entry.number, self.main.stack.lanes.port_step)?;
-        let services = shared_services(&self.main.stack, offset, &entry.name);
+        let services = shared_services(
+            &self.main.stack,
+            offset,
+            &entry.name,
+            &self.main.published_ports(),
+        );
         Some(devstack_node::coordinator::Sharing {
             with,
             services,
@@ -2271,13 +2341,63 @@ mod tests {
         )
         .unwrap();
         // On a node the lane listens where it does here: its lane ports.
-        let s = shared_services(&stack, 200, "fix");
+        let s = shared_services(&stack, 200, "fix", &BTreeMap::new());
         assert_eq!(s.len(), 1, "{s:?}");
         assert_eq!(
             (s[0].name.as_str(), s[0].port, s[0].here),
             ("web", 8291, 8291)
         );
-        assert!(shared_services(&stack, 65000, "fix").is_empty());
+        assert!(shared_services(&stack, 65000, "fix", &BTreeMap::new()).is_empty());
+    }
+
+    #[test]
+    fn a_shared_lane_names_its_web_containers() {
+        let stack = devstack_config::from_str(
+            r#"version = 1
+[stack]
+name = "t"
+[compose.app]
+project = "t"
+files = ["compose.yml"]
+services = ["map", "db", "admin", "mail", "two"]
+shared = ["mail"]
+urls = { db = "", admin = "https://localhost:9443/ui", two = "http://localhost:7001" }
+[services.map]
+run = "x"
+port = 8080
+"#,
+            Path::new("t.toml"),
+        )
+        .unwrap();
+        let published: BTreeMap<(String, String, u16), String> = [
+            ("map", 80, "127.0.0.1:8081"),    // no entry: a web page, as linked
+            ("db", 5432, "127.0.0.1:5432"),   // `""`: no link, not shared
+            ("admin", 443, "0.0.0.0:9443"),   // its entry's scheme
+            ("mail", 8025, "127.0.0.1:8025"), // the main tree's (`shared`)
+            ("other", 80, "127.0.0.1:8090"),  // not started by the lane
+            ("two", 7000, "127.0.0.1:7000"),  // not the port its link names
+            ("two", 7001, "127.0.0.1:7001"),
+        ]
+        .into_iter()
+        .map(|(s, t, a)| (("app".to_string(), s.to_string(), t), a.to_string()))
+        .collect();
+        let s = shared_services(&stack, 200, "fix", &published);
+        let got: Vec<(&str, u16, &str)> = s
+            .iter()
+            .map(|s| (s.name.as_str(), s.port, s.scheme.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("map", 8280, "http"),
+                ("admin", 9643, "https"),
+                // A container named like a service of the stack file.
+                ("app.map", 8281, "http"),
+                ("two", 7201, "http"),
+            ],
+            "{s:?}"
+        );
+        assert!(s.iter().all(|s| s.here == s.port));
     }
 
     #[test]

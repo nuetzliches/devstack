@@ -147,7 +147,7 @@ function pick(l: LaneView | null) {
           >
             <Icon name="globe" :size="13" /> {{ shareLabel }}
           </button>
-          <div v-if="shareOpen" class="menu" role="menu">
+          <div v-if="shareOpen" class="menu menu-right share-menu" role="menu" data-testid="lane-share-menu">
             <button type="button" class="opt" role="menuitem" data-testid="lane-share-none" @click="share([])">
               <span>Nobody</span><span class="faint small">only you</span>
             </button>
@@ -286,6 +286,11 @@ function pick(l: LaneView | null) {
 .share-tags .input {
   flex: 1;
   min-width: 160px;
+}
+/* Right-aligned to its button, it opens to the left: the button sits at the
+   header's right end. Wide enough for the tags form. */
+.share-menu {
+  min-width: 300px;
 }
 .share-note {
   padding: 0 8px 6px;

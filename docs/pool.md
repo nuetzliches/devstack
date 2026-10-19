@@ -209,7 +209,11 @@ devstack pool shared
 devstack open login-fix web                     # a forward on your machine, then the browser
 ```
 
-They reach its services, nothing else: no logs, no restart, no stop. The node
+They reach its services, nothing else: no logs, no restart, no stop. Its
+services are those with a `port` and the Compose containers the dashboard
+links as a web page (a `urls` entry with `http`/`https`, or a published port
+without an entry); `urls = { db = "" }` in `[compose.<group>]` keeps a
+container out, a database, say. The node
 checks every connection against the coordinator, so unsharing holds from the
 next one.
 
