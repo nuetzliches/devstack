@@ -1,6 +1,6 @@
 # ADR-0039: An admin can have a server node update its devstack, from the dashboard
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-19)
 - **Date:** 2026-10-19
 - **Deciders:** project owner
 - **Related:** [ADR-0031](0031-a-coordinator-places-lanes.md) (point 8: versions in a pool), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md) (extended here), [ADR-0033](0033-a-node-decides-what-runs-on-it.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md) (point 4: dedicated nodes), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md)
