@@ -86,3 +86,4 @@ stay.
 | [0035](0035-lanes-can-be-shared-with-the-pool.md) | The pool sees the lanes its members share, and can use them | Accepted |
 | [0036](0036-the-pool-shows-its-capacity-over-time.md) | The pool shows its capacity, GPUs included, and how it changed | Accepted |
 | [0037](0037-telemetry-goes-to-the-pools-collector-with-consent.md) | Telemetry goes to the pool's collector, if the pool has one and the member agrees | Accepted |
+| [0038](0038-a-lanes-data-outlives-its-lease.md) | A lane's mirror and data outlive its lease on a node, for a while, and can be pruned | Proposed |
