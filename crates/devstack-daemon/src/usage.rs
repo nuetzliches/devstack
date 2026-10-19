@@ -255,6 +255,7 @@ impl Sampler {
         // The container states themselves, so `status` and the dashboard see a
         // stopped or unhealthy container (they were read only at up/down before).
         sup.refresh_containers();
+        sup.recheck_forwards();
         let mut running = BTreeMap::new();
         for g in sup.view().infra {
             for c in g.containers {
@@ -263,9 +264,12 @@ impl Sampler {
                 }
             }
         }
+        if let Some(file) = sup.external_infra() {
+            return self.sample_external(&file);
+        }
         let names: Vec<String> = running.keys().cloned().collect();
-        if names.is_empty() || sup.external_infra().is_some() {
-            return; // no Docker here: the node measures its containers
+        if names.is_empty() {
+            return;
         }
         let stats = sup.docker().stats(&names);
         let mut inner = self.inner.lock().unwrap();
@@ -285,6 +289,39 @@ impl Sampler {
                 }
             }
             Err(e) => inner.docker_error = Some(e.to_string()),
+        }
+        for (key, s) in inner.series.iter_mut() {
+            if key.starts_with("container:") && !seen.contains(key) {
+                s.idle();
+            }
+        }
+    }
+
+    /// A lane on a node has no Docker: the node's agent measures its
+    /// containers and writes what each uses into the file that describes
+    /// them (#101). A measurement older than a few of its rounds is none.
+    fn sample_external(&self, file: &std::path::Path) {
+        const FRESH_MS: u64 = 20_000;
+        let ext = crate::external::read(file).unwrap_or_default();
+        let now = crate::state::now_ms() as u64;
+        let fresh = ext.at.is_some_and(|at| now.saturating_sub(at) < FRESH_MS);
+        let mut inner = self.inner.lock().unwrap();
+        let mut seen = Vec::new();
+        if fresh {
+            for (group, g) in &ext.groups {
+                for (service, s) in &g.services {
+                    if let (true, Some(cpu), Some(memory)) = (s.state == "running", s.cpu, s.memory)
+                    {
+                        let key = container_key(group, service);
+                        inner
+                            .series
+                            .entry(key.clone())
+                            .or_default()
+                            .push(Load { cpu, memory });
+                        seen.push(key);
+                    }
+                }
+            }
         }
         for (key, s) in inner.series.iter_mut() {
             if key.starts_with("container:") && !seen.contains(key) {
