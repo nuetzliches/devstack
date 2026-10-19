@@ -283,6 +283,30 @@ impl NodeClient {
         Ok(tls::send(self.config.clone(), &self.node.api, &self.node.id, req).await?)
     }
 
+    /// A read of a lane someone lets this machine view (ADR-0040), answered
+    /// as it arrives; `req`'s URI is the daemon's path (`/v1/stack`). The
+    /// node checks that it may.
+    pub async fn view<B>(
+        &self,
+        lease: &str,
+        mut req: hyper::Request<B>,
+    ) -> Result<hyper::Response<hyper::body::Incoming>>
+    where
+        B: hyper::body::Body + Send + 'static,
+        B::Data: Send,
+        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        let path = req
+            .uri()
+            .path_and_query()
+            .map_or("/", |p| p.as_str())
+            .to_string();
+        *req.uri_mut() = format!("/v1/leases/{lease}/view{path}")
+            .parse()
+            .map_err(|e| ClientError::Other(format!("{path}: {e}")))?;
+        Ok(tls::send(self.config.clone(), &self.node.api, &self.node.id, req).await?)
+    }
+
     /// A connection to `port` of a lane someone shares with this machine
     /// (ADR-0035); the node checks the sharing.
     pub async fn open_shared(&self, lease: &str, port: u16) -> Result<hyper::upgrade::Upgraded> {

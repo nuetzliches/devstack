@@ -61,7 +61,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack promote --lane <name>` | the lane's services, dev servers included, answer on the main ports; ask the user first, `--lane main` gives them back. A lane on a node may take them only on a dedicated node (a server) |
 | `devstack up --on <node>` in a worktree | the lane runs on that machine of the pool (`pool`: the coordinator picks one, `<pool>:<node>` in another pool): build, services, its own containers; its ports are forwarded here as if it ran locally. Ask the user first: the worktree's files go to that machine, untracked env files git does not ignore included |
 | `devstack lane move <name> --to <node\|local>` | move a started lane: a cold start there that takes over once ready; its data comes from the seed jobs again |
-| `devstack lane share <name> --with <id\|tag\|*>` | let others in the pool see and open the lane's services (they do not control it); ask the user first. Without `--with`: nobody again |
+| `devstack lane share <name> --with <id\|tag\|*> [--view <id\|tag\|*>]` | let others in the pool see and open the lane's services (they do not control it); `--view`: they may also view its state and logs, read only. Ask the user first. Without `--with` and `--view`: nobody again |
 | `devstack pool` / `devstack pool shared` / `devstack open <lane> [service]` | the pools and their machines; lanes others share with you; open one of their services here |
 | `devstack logs --daemon` | devstack's own log: every decision with its reason (`--grep <service>`, `--hub` for the dashboard hub) |
 | `devstack restart <service>` | rebuild now; the running instance stays until the new one is healthy |

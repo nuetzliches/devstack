@@ -213,6 +213,14 @@ They reach its services, nothing else: no logs, no restart, no stop. The node
 checks every connection against the coordinator, so unsharing holds from the
 next one.
 
+To let them **view** it as well ([ADR-0040](adr/0040-a-shared-lane-can-be-watched-like-ones-own.md)),
+share it with `--view` (`devstack lane share login-fix --view team:qa`, or
+"may also view it" in the dashboard): they see its state, its services' and
+containers' logs, its events, its command runs and its usage, read only, never
+its environment, and change nothing. Logs show what the services print: share
+to view only where that is fine. The node asks the coordinator at least every
+5 seconds whether a viewer still may.
+
 ## Administer
 
 Admins do this in the dashboard's pool area, or on the coordinator:

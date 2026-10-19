@@ -280,6 +280,7 @@ fn the_pool_knows_which_devstack_each_party_runs() {
                     scheme: "http".into(),
                     here: 8180,
                 }],
+                view: Vec::new(),
             }),
         )
         .unwrap();

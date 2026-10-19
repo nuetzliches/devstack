@@ -326,6 +326,7 @@ fn a_lane_is_leased_admitted_and_synced() {
             scheme: "http".into(),
             here: 5273,
         }],
+        view: Vec::new(),
     };
     assert!(
         other.share_lease(&lease.id, Some(&sharing)).is_err(),
@@ -360,6 +361,36 @@ fn a_lane_is_leased_admitted_and_synced() {
         rt.block_on(theirs.open_shared(&lease.id, 5173)),
         Err(ClientError::Status(409, _))
     ));
+    // Shared to use, not to view (ADR-0040): its state stays its owner's.
+    let read = |c: &NodeClient, path: &str| {
+        let req = hyper::Request::get(path)
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .unwrap();
+        rt.block_on(c.view(&lease.id, req))
+            .map(|r| r.status().as_u16())
+            .unwrap_or_else(|e| match e {
+                ClientError::Status(s, _) => s,
+                e => panic!("{e}"),
+            })
+    };
+    assert!(!seen[0].view);
+    assert_eq!(read(&theirs, "/v1/stack"), 403);
+    requester
+        .share_lease(
+            &lease.id,
+            Some(&Sharing {
+                view: vec!["*".into()],
+                ..sharing.clone()
+            }),
+        )
+        .unwrap();
+    assert!(other.shared().unwrap()[0].view, "listed as viewable");
+    // Past the check, the lane that never started answers that it does not
+    // run; a change, or a path that is not for reading, stays refused.
+    std::thread::sleep(Duration::from_secs(6)); // the node's last word, 5 s
+    assert_eq!(read(&theirs, "/v1/stack"), 409);
+    assert_eq!(read(&theirs, "/v1/services/api/env"), 403);
+    assert_eq!(read(&theirs, "/v1/infra/app/db/restart"), 403);
     requester.share_lease(&lease.id, None).unwrap();
     assert!(other.shared().unwrap().is_empty());
     assert!(matches!(

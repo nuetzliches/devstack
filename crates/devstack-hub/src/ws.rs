@@ -61,6 +61,37 @@ pub(crate) async fn ws(
             return (status, body).into_response();
         }
         Box::pin(sse_data(resp.into_body().into_data_stream()))
+    } else if let Some((lease, rest)) = q
+        .path
+        .strip_prefix("/hub/pool/shared/")
+        .and_then(|r| r.split_once("/api/"))
+    {
+        // A lane shared with this machine to view (ADR-0040), through its node.
+        let (rest, query) = rest
+            .split_once('?')
+            .map_or((rest, None), |(r, q)| (r, Some(q)));
+        let pool = query.and_then(|q| {
+            q.split('&')
+                .find_map(|kv| kv.strip_prefix("pool="))
+                .map(str::to_string)
+        });
+        let pq = crate::shared::PoolQuery { pool };
+        let path = format!("/{rest}{}", crate::shared::without_pool(query));
+        let resp = match crate::shared::view_get(&pq, lease, &path).await {
+            Ok(r) => r,
+            Err(r) => return r,
+        };
+        if resp.status() != StatusCode::OK {
+            let status = resp.status();
+            let body = resp
+                .into_body()
+                .collect()
+                .await
+                .map(|b| String::from_utf8_lossy(&b.to_bytes()).into_owned())
+                .unwrap_or_default();
+            return (status, body).into_response();
+        }
+        Box::pin(sse_data(resp.into_body().into_data_stream()))
     } else {
         return err(StatusCode::BAD_REQUEST, "no stream at that path");
     };

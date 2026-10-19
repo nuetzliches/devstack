@@ -210,6 +210,9 @@ struct Inner {
     slot_busy: Mutex<HashSet<String>>,
     /// Slots being removed: no lease is admitted to one until it is gone.
     slot_purging: Mutex<HashSet<String>>,
+    /// Whether a member may view a lease (ADR-0040), as the coordinator said
+    /// lately: asked again after [`VIEW_FRESH`].
+    views_ok: Mutex<HashMap<(String, String), (Instant, bool)>>,
     /// What the stopped lanes kept here take, as the last sweep counted.
     kept_use: Mutex<Option<crate::coordinator::Kept>>,
     /// Whether the coordinator refused this node's API (not granted to run
@@ -763,6 +766,7 @@ fn router(s: Shared) -> Router {
         .route("/v1/leases/{id}/lane", get(lane_state))
         .route("/v1/leases/{id}/api/{*rest}", any(proxy))
         .route("/v1/leases/{id}/shared/{port}", get(shared_tunnel))
+        .route("/v1/leases/{id}/view/{*rest}", get(view))
         .route("/v1/slots", get(slots_list).delete(slots_purge))
         .route(
             "/v1/blobs/{hash}",
@@ -1849,6 +1853,132 @@ fn sse_lines(mut child: std::process::Child) -> axum::response::Response {
         .into_response()
 }
 
+/// How long the node trusts the coordinator's word that someone may view a
+/// lane (ADR-0040): unsharing holds within this.
+const VIEW_FRESH: Duration = Duration::from_secs(5);
+
+/// What of the lane daemon's API a viewer reads (ADR-0040 point 2): its
+/// state and events, its services' logs and builds, its commands' runs,
+/// its usage. Nothing that changes it, nor its environment.
+fn viewable(rest: &str) -> bool {
+    let p: Vec<&str> = rest.split('/').collect();
+    let name = |s: &str| {
+        s.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric())
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    };
+    match p.as_slice() {
+        ["v1", "stack" | "events" | "usage" | "logs"] => true,
+        ["v1", "services", s, "logs" | "builds" | "build-log"] => name(s),
+        ["v1", "services", s, "logs", "stream" | "files"] => name(s),
+        ["v1", "commands", c, "runs"] => name(c),
+        ["v1", "runs", id] | ["v1", "runs", id, "log"] => id.bytes().all(|b| b.is_ascii_digit()),
+        ["v1", "runs", id, "log", "stream"] => id.bytes().all(|b| b.is_ascii_digit()),
+        _ => false,
+    }
+}
+
+/// May `who` view lease `l` (ADR-0040)? Its owner may; anyone else as the
+/// coordinator says, asked at most every [`VIEW_FRESH`].
+async fn may_view(s: &Shared, l: &NodeLease, who: &str) -> ApiResult<()> {
+    if l.member == who {
+        return Ok(());
+    }
+    let key = (l.id.clone(), who.to_string());
+    let known = s
+        .views_ok
+        .lock()
+        .unwrap()
+        .get(&key)
+        .filter(|(at, _)| at.elapsed() < VIEW_FRESH)
+        .map(|(_, ok)| *ok);
+    let ok = match known {
+        Some(ok) => ok,
+        None => {
+            let s2 = s.clone();
+            let lease = l.id.clone();
+            let sharing = tokio::task::spawn_blocking(move || s2.local.lease_shared(&lease))
+                .await
+                .map_err(internal)?
+                .map_err(|e| err(StatusCode::BAD_GATEWAY, format!("the coordinator: {e}")))?;
+            let tags = s
+                .members
+                .lock()
+                .unwrap()
+                .1
+                .get(who)
+                .cloned()
+                .unwrap_or_default();
+            let ok = sharing.is_some_and(|sh| sh.admits_view(who, &tags));
+            s.views_ok.lock().unwrap().insert(key, (Instant::now(), ok));
+            ok
+        }
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(err(
+            StatusCode::FORBIDDEN,
+            "that lane is not shared with you to view",
+        ))
+    }
+}
+
+/// `GET /v1/leases/{id}/view/{*rest}`: a lane's daemon API, read only
+/// (ADR-0040), for its owner and those it lets view it: [`viewable`] paths,
+/// streams included, and the container logs the node answers itself.
+async fn view(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath((id, rest)): UrlPath<(String, String)>,
+    req: axum::extract::Request,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if req.headers().contains_key(hyper::header::UPGRADE) {
+        return err(StatusCode::FORBIDDEN, "no tunnel for viewers").into_response();
+    }
+    let lease = async {
+        let who = caller(&s, &peer).await?;
+        let l = s
+            .leases
+            .lock()
+            .unwrap()
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("no lane `{id}` here")))?;
+        may_view(&s, &l, &who).await?;
+        Ok::<_, (StatusCode, String)>(l)
+    };
+    let l = match lease.await {
+        Ok(l) => l,
+        Err(e) => return e.into_response(),
+    };
+    match InfraRoute::parse(&hyper::Method::GET, &rest) {
+        Some(InfraRoute::Act { .. }) => {
+            return err(StatusCode::FORBIDDEN, "viewers do not change a lane").into_response();
+        }
+        Some(route) => return infra(&s, &l, route, req.uri()).await,
+        None => {}
+    }
+    if !viewable(&rest) {
+        return err(
+            StatusCode::FORBIDDEN,
+            "not for viewers: a lane's state, logs, events and usage only",
+        )
+        .into_response();
+    }
+    let d = match daemon_of(&s, l).await {
+        Ok(d) => d,
+        Err(e) => return e.into_response(),
+    };
+    let query = req
+        .uri()
+        .query()
+        .map(|q| format!("?{q}"))
+        .unwrap_or_default();
+    pass(d, format!("/{rest}{query}"), None, req).await
+}
+
 /// `GET /v1/leases/{id}/shared/{port}` with `Upgrade`: a tunnel to a port of
 /// a lane its owner shares (ADR-0035 point 3), for a member it is shared
 /// with. Asked of the coordinator at every connection: unsharing, or
@@ -2364,6 +2494,7 @@ pub async fn serve(
         slot_busy: Mutex::new(HashSet::new()),
         slot_purging: Mutex::new(HashSet::new()),
         kept_use: Mutex::new(None),
+        views_ok: Mutex::new(HashMap::new()),
         refused: Mutex::new(None),
         coordinator: Mutex::new(None),
         offer: Mutex::new(Amount::default()),
@@ -2471,6 +2602,37 @@ pub fn serve_blocking(config: NodeConfig, listen: std::net::SocketAddr) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_viewer_reads_a_lane_and_changes_nothing() {
+        for p in [
+            "v1/stack",
+            "v1/events",
+            "v1/usage",
+            "v1/logs",
+            "v1/services/api/logs",
+            "v1/services/api/logs/stream",
+            "v1/services/api/builds",
+            "v1/commands/seed/runs",
+            "v1/runs/12/log/stream",
+        ] {
+            assert!(viewable(p), "{p}");
+        }
+        for p in [
+            "v1/up",
+            "v1/down",
+            "v1/services/api/restart",
+            "v1/services/api/env",
+            "v1/commands/seed",
+            "v1/lanes",
+            "v1/tunnel/5000",
+            "v1/services/../logs",
+            "v1/runs/x/log",
+            "v1/stack/stream",
+        ] {
+            assert!(!viewable(p), "{p}");
+        }
+    }
 
     #[test]
     fn the_node_answers_a_lanes_container_routes_only() {

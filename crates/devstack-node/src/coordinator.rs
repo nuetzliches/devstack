@@ -399,14 +399,26 @@ pub struct Sharing {
     pub with: Vec<String>,
     /// What they may open.
     pub services: Vec<SharedService>,
+    /// Who may also view it (ADR-0040): its state, logs, events, usage,
+    /// read only. Viewing includes using. Absent from an older owner.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub view: Vec<String>,
+}
+
+fn listed(list: &[String], id: &str, tags: &[String]) -> bool {
+    list.iter()
+        .any(|w| w == "*" || w == id || tags.iter().any(|t| t == w))
 }
 
 impl Sharing {
     /// May the member `id` with `tags` use it?
     pub fn admits(&self, id: &str, tags: &[String]) -> bool {
-        self.with
-            .iter()
-            .any(|w| w == "*" || w == id || tags.iter().any(|t| t == w))
+        listed(&self.with, id, tags) || listed(&self.view, id, tags)
+    }
+
+    /// May the member `id` with `tags` view it (ADR-0040)?
+    pub fn admits_view(&self, id: &str, tags: &[String]) -> bool {
+        listed(&self.view, id, tags)
     }
 }
 
@@ -456,6 +468,9 @@ pub struct SharedLane {
     /// (`crate::version::PROTOCOL`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_devstack: Option<Release>,
+    /// The caller may view it as well (ADR-0040).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub view: bool,
 }
 
 /// A member as the pool shows it.
@@ -1228,6 +1243,7 @@ async fn shared_list(
                 },
                 services: sh.services.clone(),
                 owner_devstack: reports.get(&l.member).and_then(|(_, r)| r.devstack.clone()),
+                view: sh.admits_view(&me.id, &me.tags),
             })
         })
         .collect();
