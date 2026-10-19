@@ -161,8 +161,12 @@ admin tool, a reverse proxy) that the lane never starts. Compose files,
 env files, `extends` and `include` are read from the lane's files only, and
 the sync never follows a link out of them. Every container of the lane gets
 the node's limits and a process limit; the lane container drops every
-capability. What a member uploads is kept per member, at most 8 GiB, and
-removed when its lease ends.
+capability. What a member uploads is kept per member, at most 8 GiB: the
+end of a lease keeps it, so the same lane started again sends only what
+changed ([ADR-0038](adr/0038-a-lanes-data-outlives-its-lease.md)). The
+node removes what no lease of the member needs once the 8 GiB would be
+exceeded (never what was uploaded in the last ten minutes), and all of a
+member's files once the coordinator no longer lists the member.
 
 This confines what a lane asks for, not the engine it runs on: the lanes of
 all members share the node's kernel and Docker engine, and a container escape
