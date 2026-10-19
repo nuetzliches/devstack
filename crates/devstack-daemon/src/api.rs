@@ -70,6 +70,8 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/tunnel/{port}", get(tunnel))
         .route("/v1/lanes", get(lanes_list).post(lanes_start))
         .route("/v1/lanes/{lane}/stop", post(lanes_stop))
+        .route("/v1/lanes/{lane}/reset", post(lanes_reset))
+        .route("/v1/lanes/prune", post(lanes_prune))
         .route("/v1/lanes/{lane}/move", post(lanes_move))
         .route("/v1/lanes/{lane}/share", post(lanes_share))
         .route("/v1/main-slot", post(main_slot))
@@ -482,6 +484,50 @@ async fn lanes_stop(State(s): State<AppState>, Path(lane): Path<String>) -> Resp
     match tokio::task::spawn_blocking(move || lanes.stop(&lane).map(|()| lanes.list())).await {
         Ok(Ok(v)) => Json(v).into_response(),
         Ok(Err(e)) => err(StatusCode::CONFLICT, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `POST /v1/lanes/{lane}/reset`: throw a stopped lane's data away, here and
+/// on the nodes it ran on (ADR-0038); `[Pruned]`.
+async fn lanes_reset(State(s): State<AppState>, Path(lane): Path<String>) -> Response {
+    let lanes = match lanes_of(&s) {
+        Ok(l) => l.clone(),
+        Err(r) => return r,
+    };
+    match tokio::task::spawn_blocking(move || lanes.reset(&lane)).await {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err(StatusCode::CONFLICT, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct Prune {
+    /// Also kept lanes on nodes not used for this long (`7d`, `36h`).
+    #[serde(default)]
+    older_than: Option<String>,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+/// `POST /v1/lanes/prune` with `{"older_than"?, "dry_run"?}`: what this
+/// repository's lanes leave behind (ADR-0038 point 5); `[Pruned]`.
+async fn lanes_prune(State(s): State<AppState>, body: Option<Json<Prune>>) -> Response {
+    let lanes = match lanes_of(&s) {
+        Ok(l) => l.clone(),
+        Err(r) => return r,
+    };
+    let p = body.map(|b| b.0).unwrap_or_default();
+    let older_than = match p.older_than.as_deref().filter(|v| !v.is_empty()) {
+        Some(v) => match devstack_config::model::parse_duration(v) {
+            Ok(d) => Some(d),
+            Err(e) => return err(StatusCode::BAD_REQUEST, format!("older_than: {e}")),
+        },
+        None => None,
+    };
+    match tokio::task::spawn_blocking(move || lanes.prune(older_than, p.dry_run)).await {
+        Ok(v) => Json(v).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }

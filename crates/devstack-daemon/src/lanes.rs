@@ -210,6 +210,52 @@ pub struct Lanes {
     closing: std::sync::atomic::AtomicBool,
 }
 
+/// What `prune` or `reset` found, and did.
+#[derive(Debug, Clone, Serialize)]
+pub struct Pruned {
+    /// `this machine`, or the node (`<pool>:<node>` beyond the default pool).
+    pub place: String,
+    pub lane: String,
+    /// What its kept directory takes on a node (volumes not counted).
+    pub bytes: Option<u64>,
+    pub why: String,
+    pub removed: bool,
+    pub error: Option<String>,
+}
+
+/// Every Compose project on this machine's engine, running or not, with
+/// its Compose files (as `docker compose ls` lists them, comma-separated).
+fn compose_projects() -> Vec<(String, String)> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Project {
+        name: String,
+        #[serde(default)]
+        config_files: String,
+    }
+    let out = std::process::Command::new("docker")
+        .args(["compose", "ls", "-a", "--format", "json"])
+        .output();
+    out.ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| serde_json::from_slice::<Vec<Project>>(&o.stdout).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| (p.name, p.config_files))
+        .collect()
+}
+
+/// `path` among Compose's comma-separated `files`, spelled either way.
+fn among(files: &str, path: &Path) -> bool {
+    let norm = |s: &str| {
+        let s = s.replace('\\', "/");
+        if cfg!(windows) { s.to_lowercase() } else { s }
+    };
+    // Under it, not beside it: `lane-fix` is not `lane-fixed`.
+    let want = format!("{}/", norm(&path.to_string_lossy()).trim_end_matches('/'));
+    files.split(',').any(|f| norm(f.trim()).starts_with(&want))
+}
+
 /// `Feature/Agent 12` -> `feature-agent-12`; `main` is the main working tree's.
 pub fn lane_name(s: &str) -> String {
     let mut out = String::new();
@@ -702,6 +748,26 @@ impl Lanes {
         }
         self.missing.lock().unwrap().remove(name);
         self.remove_infra(name);
+        // Its kept data on the nodes it ran on goes too (ADR-0038 point 4);
+        // a node that does not answer keeps it until its retention ends.
+        let ran = crate::remote::ran_on(&self.state_dir(name));
+        if !ran.is_empty() {
+            let (rt, repo, lane) = (
+                self.rt.clone(),
+                self.main.stack.stack.name.clone(),
+                name.to_string(),
+            );
+            std::thread::spawn(move || {
+                for on in ran {
+                    let r = crate::remote::purge_slot(&rt, &on, &repo, &lane);
+                    crate::diag::info(
+                        "lane_data_removed",
+                        serde_json::json!({ "lane": lane, "node": on.node.name,
+                            "error": r.err() }),
+                    );
+                }
+            });
+        }
         {
             let mut known = self.known.lock().unwrap();
             if known.remove(name).is_some() {
@@ -714,6 +780,166 @@ impl Lanes {
             serde_json::json!({ "lane": name, "why": why }),
         );
         self.announce();
+    }
+
+    /// Throw the data of lane `name` away, here and on the nodes it ran on
+    /// (ADR-0038 point 5): its containers and volumes; its next start is a
+    /// fresh one, seeded again. Not while it runs.
+    pub fn reset(&self, name: &str) -> Result<Vec<Pruned>, String> {
+        if !self.known.lock().unwrap().contains_key(name) {
+            return Err(format!("no lane `{name}` (see `devstack lane list`)"));
+        }
+        if self.map.lock().unwrap().contains_key(name) || self.remote(name).is_some() {
+            return Err(format!(
+                "lane `{name}` runs: `devstack lane stop {name}` first"
+            ));
+        }
+        self.remove_infra(name);
+        let mut out = vec![Pruned {
+            place: "this machine".into(),
+            lane: name.to_string(),
+            bytes: None,
+            why: "reset".into(),
+            removed: true,
+            error: None,
+        }];
+        let repo = self.main.stack.stack.name.clone();
+        for on in crate::remote::ran_on(&self.state_dir(name)) {
+            let r = crate::remote::purge_slot(&self.rt, &on, &repo, name);
+            out.push(Pruned {
+                place: on.node.name.clone(),
+                lane: name.to_string(),
+                bytes: None,
+                why: "reset".into(),
+                removed: r.is_ok(),
+                error: r.err(),
+            });
+        }
+        crate::diag::info("lane_reset", serde_json::json!({ "lane": name }));
+        Ok(out)
+    }
+
+    /// What this repository's lanes leave behind that no lane needs any
+    /// more (ADR-0038 point 5): on this machine, the Compose projects of
+    /// lanes that are gone; on the nodes of every pool, this member's kept
+    /// lanes of this repository that are gone, or (with `older_than`) not
+    /// used for that long. With `dry_run` only said.
+    pub fn prune(&self, older_than: Option<std::time::Duration>, dry_run: bool) -> Vec<Pruned> {
+        let known: BTreeSet<String> = self.known.lock().unwrap().keys().cloned().collect();
+        let mut out = Vec::new();
+        // This machine: `<project>-<lane>` of a lane no worktree has.
+        let projects = compose_projects();
+        for (g, cfg) in &self.main.stack.compose {
+            let prefix = format!("{}-", cfg.project);
+            for (p, files) in &projects {
+                let Some(lane) = p.strip_prefix(&prefix) else {
+                    continue;
+                };
+                if lane.is_empty() || known.contains(lane) {
+                    continue;
+                }
+                // Only a lane of this repository: its overlay is in this
+                // repository's lane state. Another repository's project of
+                // the same prefix is not touched.
+                if !among(files, &self.state_dir(lane)) {
+                    continue;
+                }
+                // Another group's project that starts the same (`app` and
+                // `app-tools`) is not a lane's.
+                if self.main.stack.compose.values().any(|c| c.project == *p) {
+                    continue;
+                }
+                let mut removed = false;
+                let mut error = None;
+                if !dry_run {
+                    let group = devstack_compose::Group {
+                        name: g.clone(),
+                        project: p.clone(),
+                        files: Vec::new(),
+                        env_files: Vec::new(),
+                        networks: cfg.networks.iter().map(|n| format!("{n}-{lane}")).collect(),
+                        services: Vec::new(),
+                        dir: self.main.repo.clone(),
+                    };
+                    match devstack_compose::Docker::default().remove(&group) {
+                        Ok(()) => removed = true,
+                        Err(e) => error = Some(e.to_string()),
+                    }
+                }
+                out.push(Pruned {
+                    place: "this machine".into(),
+                    lane: lane.to_string(),
+                    bytes: None,
+                    why: format!("its worktree is gone (compose project `{p}`)"),
+                    removed,
+                    error,
+                });
+            }
+        }
+        // The nodes of every pool this machine is in.
+        let repo = self.main.stack.stack.name.clone();
+        let now = crate::state::now_ms() as u64 / 1000;
+        for (pool, _) in devstack_node::member::pools(&crate::remote::state_dir()) {
+            let local = crate::remote::local_member(&pool);
+            let Ok(nodes) = local.nodes() else { continue };
+            for n in nodes {
+                let Some(api) = n.report.as_ref().and_then(|r| r.api.clone()) else {
+                    continue;
+                };
+                if !n.online {
+                    continue;
+                }
+                let node = devstack_node::coordinator::NodeRef {
+                    id: n.id.clone(),
+                    name: n.name.clone(),
+                    api,
+                    devstack: None,
+                };
+                let Ok(slots) = crate::remote::slots_on(&self.rt, &pool, node.clone()) else {
+                    continue;
+                };
+                for s in slots.into_iter().filter(|s| s.repo == repo && !s.active) {
+                    let why = if !known.contains(&s.lane) {
+                        "its worktree is gone".to_string()
+                    } else if older_than.is_some_and(|o| now.saturating_sub(s.used) >= o.as_secs())
+                    {
+                        format!("not used for {} h", now.saturating_sub(s.used) / 3600)
+                    } else {
+                        continue;
+                    };
+                    let mut removed = false;
+                    let mut error = None;
+                    if !dry_run {
+                        let on = crate::remote::RanOn {
+                            pool: pool.clone(),
+                            node: node.clone(),
+                        };
+                        match crate::remote::purge_slot(&self.rt, &on, &repo, &s.lane) {
+                            Ok(()) => removed = true,
+                            Err(e) => error = Some(e),
+                        }
+                    }
+                    out.push(Pruned {
+                        place: if pool == devstack_node::member::DEFAULT_POOL {
+                            n.name.clone()
+                        } else {
+                            format!("{pool}:{}", n.name)
+                        },
+                        lane: s.lane,
+                        bytes: Some(s.bytes),
+                        why,
+                        removed,
+                        error,
+                    });
+                }
+            }
+        }
+        crate::diag::info(
+            "lanes_pruned",
+            serde_json::json!({ "dry_run": dry_run, "found": out.len(),
+                "removed": out.iter().filter(|p| p.removed).count() }),
+        );
+        out
     }
 
     /// Stop and remove the containers of lane `name` here, keeping their
@@ -1838,6 +2064,25 @@ impl Lanes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_project_is_a_lanes_only_with_its_overlay_in_this_repository() {
+        let state = Path::new("D:/work/shop/.devstack/lane-fix");
+        let files = r"D:\work\shop\.devstack\lane-fix\compose\app.yml,D:/other.yml";
+        assert!(among(files, state), "spelled with backslashes");
+        assert!(among(
+            "D:/work/shop/.devstack/lane-fix/compose/app.yml",
+            state
+        ));
+        assert!(
+            !among("D:/work/admin/compose.yml", state),
+            "another repository's"
+        );
+        assert!(
+            !among("D:/work/shop/.devstack/lane-fixed/compose/app.yml", state),
+            "another lane's"
+        );
+    }
 
     #[test]
     fn a_lanes_links_move_with_its_ports() {

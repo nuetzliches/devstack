@@ -349,6 +349,22 @@ enum LaneAction {
     /// builds stay). The worktree is git's: devstack never creates or removes
     /// one.
     Stop { name: String },
+    /// Throw a stopped lane's data away (ADR-0038): its containers and
+    /// volumes here and on the nodes it ran on. Its next start is a fresh
+    /// one, seeded again; its worktree and builds stay.
+    Reset { name: String },
+    /// Remove what this repository's lanes leave behind: on this machine
+    /// the containers and volumes of lanes whose worktree is gone, on the
+    /// pool's nodes this machine's kept lanes of this repository that are
+    /// gone, or not used for `--older-than` (ADR-0038).
+    Prune {
+        /// Also kept lanes on nodes not used for this long (`7d`, `36h`).
+        #[arg(long, value_name = "AGE")]
+        older_than: Option<String>,
+        /// Only say what would go.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Move a started lane to another node of the pool, or back to this
     /// machine (ADR-0025): a cold start there (its data comes from the seed
     /// jobs again), which takes over once it is ready.
