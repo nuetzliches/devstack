@@ -367,6 +367,7 @@ image      = "registry.example/shop-lane:1"   # a Linux image with the stack's t
 dockerfile = "dev/lane.Dockerfile"            # or one the node builds from the lane's source
 sync       = ["web/certs/*.pem"]              # ignored files such a lane needs all the same
 share      = ["team:qa"]                      # whom such a lane is shared with by default (`*`: everyone); none: nobody
+keep_data  = true                             # such a lane keeps its data on its node for its next start there (ADR-0038)
 ```
 
 `port_step` is 1-10000. `dockerfile` and `sync` stay inside the repository

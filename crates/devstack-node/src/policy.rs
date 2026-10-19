@@ -61,6 +61,15 @@ pub struct NodePolicy {
     pub max_cpus: Option<f64>,
     #[serde(default)]
     pub network: Network,
+    /// How long a stopped lane's mirror and data stay here for its next
+    /// start (ADR-0038 point 3), hours; `0`: not at all. Default: a week on
+    /// a dedicated node, a day on another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_lanes_hours: Option<u64>,
+    /// What the kept lanes of one member may take here, GiB (their mirrors;
+    /// the least recently used goes first). Default 20.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_lanes_gib: Option<u64>,
 }
 
 impl NodePolicy {
@@ -111,6 +120,10 @@ impl NodePolicy {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
+        let lower = |a: Option<u64>, b: Option<u64>| match (a, b) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         all.iter().fold(None, |acc: Option<NodePolicy>, p| {
             Some(match acc {
                 None => (*p).clone(),
@@ -120,6 +133,8 @@ impl NodePolicy {
                     memory_headroom: min(a.memory_headroom, p.memory_headroom),
                     max_cpus: min(a.max_cpus, p.max_cpus),
                     network: a.network.max(p.network),
+                    keep_lanes_hours: lower(a.keep_lanes_hours, p.keep_lanes_hours),
+                    keep_lanes_gib: lower(a.keep_lanes_gib, p.keep_lanes_gib),
                 },
             })
         })
@@ -140,6 +155,7 @@ mod tests {
             max_cpus: None,
             memory_headroom: Some(2.0),
             network: Network::None,
+            ..NodePolicy::default()
         };
         assert!(p.admits("a1", &["team:backend".into()], "shop").is_ok());
         assert!(p.admits("b2", &[], "Shop").is_ok());

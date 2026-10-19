@@ -11,6 +11,18 @@ and listed with their assets on the
 
 ### Added
 
+- **A lane on a node keeps its data for its next start there**
+  ([ADR-0038](docs/adr/0038-a-lanes-data-outlives-its-lease.md)). The end
+  of a lease no longer removes the lane's mirror, builds, toolchain caches
+  and volumes: they stay in a slot of the node for that member, repository
+  and lane, and the next lease of the lane finds them (a sync of only what
+  changed, a warm build, its databases). One lease at a time per lane. The
+  node keeps a stopped lane a week if dedicated, a day otherwise, at most
+  20 GiB per member (`keep_lanes_hours`, `keep_lanes_gib` in its policy),
+  removes the kept lanes of a member the pool no longer lists, and on start
+  what an earlier agent left behind. `GET /v1/slots` and `DELETE
+  /v1/slots?repo=&lane=` on the node list and remove a member's own.
+  `[lanes] keep_data = false` keeps nothing.
 - **Check for updates in the dashboard.** The version in the top bar opens
   a popover with the hub's and the shown stack's devstack, a "Check for
   updates" button (`POST /hub/update/check`: the hub asks GitHub now instead

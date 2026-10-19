@@ -67,6 +67,12 @@ pub struct Lanes {
     /// none (the default): nobody.
     #[serde(default)]
     pub share: Vec<String>,
+    /// Whether a lane on a node keeps its data (its volumes, its mirror,
+    /// its builds) when it stops, for the next start there (ADR-0038).
+    /// `false`: every start there is a fresh one. The node decides how long
+    /// it keeps them.
+    #[serde(default = "yes")]
+    pub keep_data: bool,
 }
 
 impl Default for Lanes {
@@ -77,6 +83,7 @@ impl Default for Lanes {
             dockerfile: None,
             sync: Vec::new(),
             share: Vec::new(),
+            keep_data: true,
         }
     }
 }

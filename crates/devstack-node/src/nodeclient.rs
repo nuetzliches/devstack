@@ -129,6 +129,33 @@ impl NodeClient {
             .map(|_| ())
     }
 
+    /// This member's lanes the node keeps (ADR-0038).
+    pub async fn slots(&self) -> Result<Vec<crate::node::SlotView>> {
+        self.json("GET", "/v1/slots", None::<&()>).await
+    }
+
+    /// Throw this member's kept lane `lane` of `repo` away on the node.
+    pub async fn purge_slot(&self, repo: &str, lane: &str) -> Result<()> {
+        let q = |v: &str| {
+            v.bytes()
+                .map(|b| {
+                    if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+                        (b as char).to_string()
+                    } else {
+                        format!("%{b:02X}")
+                    }
+                })
+                .collect::<String>()
+        };
+        self.call(
+            "DELETE",
+            &format!("/v1/slots?repo={}&lane={}", q(repo), q(lane)),
+            None,
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// Start the lane from its mirror (infrastructure, lane container,
     /// daemon); `stack_file` relative to the lane's root.
     ///
