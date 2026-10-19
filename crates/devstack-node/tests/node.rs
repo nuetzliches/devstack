@@ -429,6 +429,8 @@ fn a_lane_is_leased_admitted_and_synced() {
         .unwrap();
     let lease2 = rt.block_on(client.admit(&again)).unwrap();
     assert_eq!(lease2.slot.as_deref(), Some(slot.as_str()));
+    assert!(lease.kept.is_none(), "the first lease starts fresh");
+    assert!(lease2.kept.is_some(), "the next says what it starts from");
     let s4 = rt
         .block_on(client.sync(&lease2.id, tree.path(), &files(tree.path())))
         .unwrap();

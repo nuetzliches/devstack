@@ -23,6 +23,11 @@ and listed with their assets on the
   along (`lane_data_removed`); a node that does not answer keeps it until
   its retention ends. API: `POST /v1/lanes/{lane}/reset`, `POST
   /v1/lanes/prune`.
+- **Kept lanes are shown** (ADR-0038). A node reports what its stopped
+  lanes take (`Report.kept`), and the pool area shows it per node. A lane
+  that starts from data a node kept says so with its age (`devstack up
+  --on`, `remote_lane_kept` in `daemon.log`), since it may be from another
+  branch; `devstack lane reset` starts fresh.
 - **A lane on a node keeps its data for its next start there**
   ([ADR-0038](docs/adr/0038-a-lanes-data-outlives-its-lease.md)). The end
   of a lease no longer removes the lane's mirror, builds, toolchain caches

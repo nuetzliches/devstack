@@ -92,6 +92,10 @@ pub struct NodeLease {
     /// `lanes/<id>`, removed with the lease.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot: Option<String>,
+    /// The lane starts from what an earlier lease kept there, last used then
+    /// (Unix seconds); `None`: a fresh start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<u64>,
 }
 
 /// What a slot keeps about itself (`slots/<slot>/slot.json`).
@@ -206,6 +210,8 @@ struct Inner {
     slot_busy: Mutex<HashSet<String>>,
     /// Slots being removed: no lease is admitted to one until it is gone.
     slot_purging: Mutex<HashSet<String>>,
+    /// What the stopped lanes kept here take, as the last sweep counted.
+    kept_use: Mutex<Option<crate::coordinator::Kept>>,
     /// Whether the coordinator refused this node's API (not granted to run
     /// lanes), said once.
     refused: Mutex<Option<String>>,
@@ -321,6 +327,7 @@ impl Inner {
             admitted: 0,
             stack_file: None,
             slot: Some(slot.to_string()),
+            kept: None,
         });
         // Its stack file, wherever it was: the default unless one is there.
         if let Some(f) = ["devstack.toml"]
@@ -406,6 +413,10 @@ impl Inner {
                 .or_default()
                 .push((slot, info, bytes));
         }
+        *self.kept_use.lock().unwrap() = Some(crate::coordinator::Kept {
+            lanes: by_member.values().map(Vec::len).sum(),
+            bytes: by_member.values().flatten().map(|s| s.2).sum(),
+        });
         for (_, mut slots) in by_member {
             let mut total: u64 = slots.iter().map(|s| s.2).sum();
             // The least recently used first.
@@ -930,6 +941,12 @@ async fn admit(
     }
     let now = crate::store::now();
     let slot = s.slot_name(&who, &lease.repo, &lease.lane);
+    // What an earlier lease of the lane kept here, and since when.
+    let kept = std::fs::read(s.slots().join(&slot).join("slot.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<SlotInfo>(&b).ok())
+        .filter(|_| s.slots().join(&slot).join("manifest.json").is_file())
+        .map(|i| i.used);
     let l = NodeLease {
         id: lease.id,
         member: who,
@@ -940,6 +957,7 @@ async fn admit(
         admitted: now,
         stack_file: None,
         slot: Some(slot.clone()),
+        kept,
     };
     let mut leases = s.leases.lock().unwrap();
     if s.slot_purging.lock().unwrap().contains(&slot) {
@@ -2225,6 +2243,7 @@ async fn background(s: Shared) {
             api: Some(s.api.clone()),
             dedicated: s.dedicated,
             devstack: Some(crate::version::Release::this()),
+            kept: *s.kept_use.lock().unwrap(),
             leases: s
                 .leases
                 .lock()
@@ -2344,6 +2363,7 @@ pub async fn serve(
         blob_use: Mutex::new(HashMap::new()),
         slot_busy: Mutex::new(HashSet::new()),
         slot_purging: Mutex::new(HashSet::new()),
+        kept_use: Mutex::new(None),
         refused: Mutex::new(None),
         coordinator: Mutex::new(None),
         offer: Mutex::new(Amount::default()),
