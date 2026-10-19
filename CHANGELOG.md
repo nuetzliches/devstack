@@ -9,6 +9,8 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-19
+
 ### Fixed
 
 - **A shared lane on a node opens** ([ADR-0035](docs/adr/0035-lanes-can-be-shared-with-the-pool.md)).
@@ -24,6 +26,8 @@ and listed with their assets on the
   owner's dashboard links as a web page (a `urls` entry with `http`/`https`,
   or a published port without an entry), on the lane's ports; `urls = { db =
   "" }` keeps one out, a group's `shared` containers stay the main tree's.
+- Dashboard: a lane's share menu opens to the left of its button, inside the
+  window (it ran off the screen's right edge).
 
 ## [0.11.0] - 2026-10-19
 
@@ -505,7 +509,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/nuetzliches/devstack/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/nuetzliches/devstack/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/nuetzliches/devstack/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/nuetzliches/devstack/compare/v0.9.8...v0.10.0
