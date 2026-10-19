@@ -20,3 +20,6 @@ spikes/build-cancel/scenarios/*.local.json
 spikes/build-cancel/results-run.log
 examples/**/bin/
 examples/**/obj/
+
+# Pool telemetry exports (scripts/telemetry/fetch.py): downstream data.
+/.telemetry/
