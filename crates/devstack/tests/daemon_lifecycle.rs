@@ -1703,6 +1703,38 @@ fn a_worktree_runs_as_a_lane() {
     );
     assert!(s.ok(&["lane", "list"]).contains(&extra_name));
 
+    // 7. The main tree names its lanes, and starts and stops one without
+    //    going to its worktree (#103).
+    let status = s.ok(&["status"]);
+    assert!(
+        status.contains("lanes: 1 worktree(s), 0 started"),
+        "{status}"
+    );
+    let out = s.cli(&["lane", "start", &extra_name], None); // `broken` fails, the rest runs
+    let started = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        started.contains(&format!("lane `{extra_name}` started")),
+        "{started}"
+    );
+    let row = |name: &str| {
+        s.ok(&["lane", "list"])
+            .lines()
+            .find(|l| l.starts_with(name))
+            .unwrap_or_default()
+            .to_string()
+    };
+    assert!(
+        !row(&extra_name).contains("stopped"),
+        "{}",
+        row(&extra_name)
+    );
+    assert!(
+        s.ok(&["status"])
+            .contains(&format!("1 started ({extra_name})"))
+    );
+    s.ok(&["lane", "stop", &extra_name]);
+    assert!(row(&extra_name).contains("stopped"), "{}", row(&extra_name));
+
     s.ok(&["down", "--all"]);
     for dir in [&wt, &extra] {
         let _ = Command::new("git")

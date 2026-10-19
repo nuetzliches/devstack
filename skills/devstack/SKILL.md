@@ -56,6 +56,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack hot-reload <service> on\|off` | for a debugging session: the toolchain's watcher (e.g. `dotnet watch`) from the source tree instead of builds and candidates; needs `hot_reload` in the stack file. Switch it off again afterwards |
 | `devstack up` in a `git worktree` | starts that worktree's **lane** (every worktree is one) in the main tree's daemon: its own builds, ports moved by +100 (+200, ...), its own containers (a Compose project per lane, ports moved alike; `shared` services come from the main tree), no background workers (`--workers` turns them on; `--force` skips the memory check). Every command in the worktree then acts on the lane (`devstack lane list` shows all) |
 | `git worktree add <path> -b <branch>` | a new worktree is a lane at once, not started (devstack never creates or removes worktrees; use git or your tool). A lane runs from a copy of its worktree, so `git worktree remove` works while it runs and stops it. `devstack lane stop <name>` stops a lane and keeps the worktree |
+| `devstack lane start <name> [--on <node>]` | start a lane from the main tree (or anywhere in the repository), as `devstack up` in its worktree does; `status` in the main tree lists the lanes in one line. **To run another branch or commit beside the main stack** (an end-to-end run against a given commit, a review): `git worktree add <dir> <commit>`, `devstack lane start <name>` (its ports are the main ports plus its offset, `devstack lane list`), test against those, `devstack lane stop <name>`, `git worktree remove <dir>`. A worktree another tool or script created is a lane too: starting it gives its own ports, containers and database without building a separate environment |
 | `devstack promote --lane <name>` | the lane's services, dev servers included, answer on the main ports; ask the user first, `--lane main` gives them back. A lane on a node may take them only on a dedicated node (a server) |
 | `devstack up --on <node>` in a worktree | the lane runs on that machine of the pool (`pool`: the coordinator picks one, `<pool>:<node>` in another pool): build, services, its own containers; its ports are forwarded here as if it ran locally. Ask the user first: the worktree's files go to that machine, untracked env files git does not ignore included |
 | `devstack lane move <name> --to <node\|local>` | move a started lane: a cold start there that takes over once ready; its data comes from the seed jobs again |
@@ -119,8 +120,10 @@ port tell within a second, and they are the evidence to quote.
 `devstack mcp` is an MCP server (stdio) with `status`, `up` (`on` for a lane on a
 node), `down`, `start_service`, `stop_service`, `restart_service`,
 `promote_service`, `rollback_service`, `hot_reload`, `logs`, `builds`,
-`diagnostics`, `doctor`, `run_command`, `usage`, `lanes`, `lane_move`,
-`lane_share`, `promote_lane`, `hub_status`, `hub_start`.
+`diagnostics`, `doctor`, `run_command`, `usage`, `lanes`, `lane_start`,
+`lane_stop`, `lane_move`, `lane_share`, `promote_lane`, `hub_status`,
+`hub_start`. `lane_start` and `lane_stop` work from the main tree too: an
+agent there runs another worktree's lane without moving to it.
 Register it once (project `.mcp.json` or user configuration):
 
 ```json

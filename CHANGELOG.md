@@ -15,6 +15,14 @@ and listed with their assets on the
   a popover with the hub's and the shown stack's devstack, a "Check for
   updates" button (`POST /hub/update/check`: the hub asks GitHub now instead
   of at its next 12-hour look) and, when there is one, the update to install.
+- **Lanes can be started from the main tree**
+  ([#103](https://github.com/nuetzliches/devstack/issues/103)). `devstack
+  lane start <lane> [--on <node>]` and the MCP tools `lane_start` and
+  `lane_stop` start and stop another worktree's lane from wherever they run,
+  so an agent in the main tree can run another branch or commit in
+  isolation instead of building a separate environment. `devstack status`
+  (and the MCP `status`) in the main tree names the lanes in one line. The
+  `devstack` skill has the recipe "run a commit beside the main stack".
 - **The pool knows which devstack each party runs**
   ([ADR-0031](docs/adr/0031-a-coordinator-places-lanes.md) point 8;
   [pool.md](docs/pool.md#versions-in-a-pool)). Nodes and members
