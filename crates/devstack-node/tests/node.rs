@@ -375,6 +375,27 @@ fn a_lane_is_leased_admitted_and_synced() {
         !mirror.exists(),
         "a released lease takes its mirror with it"
     );
+
+    // Its blobs stay: the same lane leased again sends nothing that did not
+    // change (#99), and its mirror is written from them.
+    let again = requester
+        .lease(&LeaseRequest {
+            node: "node-pc".into(),
+            repo: "shop".into(),
+            lane: "login-fix".into(),
+            need: Amount {
+                cpus: 0.1,
+                memory: 64 << 20,
+            },
+            devstack: None,
+        })
+        .unwrap();
+    let lease2 = rt.block_on(client.admit(&again)).unwrap();
+    let s4 = rt
+        .block_on(client.sync(&lease2.id, tree.path(), &files(tree.path())))
+        .unwrap();
+    assert_eq!((s4.files, s4.uploaded, s4.written), (2, 0, 2), "{s4:?}");
+    rt.block_on(client.release(&lease2.id)).unwrap();
 }
 
 /// An admin pauses a node (no new lanes) and ends a lease; the node drops

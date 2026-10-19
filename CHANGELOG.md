@@ -135,6 +135,16 @@ and listed with their assets on the
   ran, what of its process tree still ran), `service_restarting`,
   `service_given_up`; and `copy_synced` says what a sync changed in a
   lane's copy under what runs from it.
+- **A lane on a node started again uploads only what changed**
+  ([#99](https://github.com/nuetzliches/devstack/issues/99),
+  [ADR-0038](docs/adr/0038-a-lanes-data-outlives-its-lease.md), first step).
+  The end of a lease removed all of the member's uploaded files on the node,
+  so stopping a lane and starting it again sent every file once more. They
+  stay now, at most 8 GiB per member: what no lease needs goes once that
+  would be exceeded (never what was uploaded in the last ten minutes, which
+  also closes a race in which a new lease's uploads could be removed before
+  it applied them), and all of a member's files go once the coordinator no
+  longer lists the member.
 - **A lane on a node is checked for what it starts, not for the whole
   Compose file** ([ADR-0033](docs/adr/0033-a-node-decides-what-runs-on-it.md)
   point 7). A group that names its `services` was refused for a service it

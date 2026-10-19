@@ -41,6 +41,10 @@ const SETTLING: Duration = Duration::from_secs(180);
 const MAX_BLOB: usize = 512 << 20;
 /// What one member's blobs may take on this node, in all.
 const MAX_MEMBER_BLOBS: u64 = 8 << 30;
+/// A blob this young is never collected: a lease uploading has not applied it.
+const BLOB_YOUNG: Duration = Duration::from_secs(600);
+/// How often the node looks for members the coordinator no longer lists.
+const PURGE_EVERY: Duration = Duration::from_secs(600);
 /// The largest list of files (or hashes) one sync sends: about 250 000.
 const MAX_LIST: usize = 32 << 20;
 /// How long the node trusts its last list of members while the coordinator
@@ -236,8 +240,12 @@ impl Inner {
             .or_insert(used)
     }
 
-    /// Remove the blobs of `member` no mirror of its leases here was
-    /// written from; all of them when it holds none.
+    /// Under pressure only ([`MAX_MEMBER_BLOBS`]): remove the blobs of
+    /// `member` no mirror of its leases here was written from. A lease that
+    /// ended keeps its blobs, so the same lane started again sends only what
+    /// changed (ADR-0029 point 2, ADR-0038). Blobs younger than
+    /// [`BLOB_YOUNG`] stay too: a new lease's, uploaded and not yet applied,
+    /// are in no manifest yet.
     fn gc_blobs(&self, member: &str) {
         let ids: Vec<String> = self
             .leases
@@ -252,16 +260,52 @@ impl Inner {
             .flat_map(|id| manifest(&self.lanes().join(id)).into_values())
             .collect();
         let dir = self.blobs(member);
-        if ids.is_empty() {
-            let _ = std::fs::remove_dir_all(&dir);
-        } else if let Ok(rd) = std::fs::read_dir(&dir) {
+        if let Ok(rd) = std::fs::read_dir(&dir) {
             for e in rd.flatten() {
-                if !keep.contains(e.file_name().to_string_lossy().as_ref()) {
+                let young = e
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .is_none_or(|age| age < BLOB_YOUNG);
+                if !young && !keep.contains(e.file_name().to_string_lossy().as_ref()) {
                     let _ = std::fs::remove_file(e.path());
                 }
             }
         }
         self.blob_use.lock().unwrap().remove(member);
+    }
+
+    /// What members the coordinator no longer lists left here goes: their
+    /// blobs, the content of their files (ADR-0029 Consequences, ADR-0038
+    /// point 3). Only on an answer: a coordinator that does not answer
+    /// purges nothing.
+    fn purge_gone_members(&self) {
+        let Ok(list) = self.local.members() else {
+            return;
+        };
+        let approved: HashSet<String> = list
+            .into_iter()
+            .filter(|m| m.state == crate::store::State::Approved)
+            .map(|m| m.id)
+            .collect();
+        let holding: HashSet<String> = self
+            .leases
+            .lock()
+            .unwrap()
+            .values()
+            .map(|l| l.member.clone())
+            .collect();
+        let Ok(rd) = std::fs::read_dir(self.root.join("blobs")) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let member = e.file_name().to_string_lossy().into_owned();
+            if !approved.contains(&member) && !holding.contains(&member) {
+                let _ = std::fs::remove_dir_all(e.path());
+                self.blob_use.lock().unwrap().remove(&member);
+            }
+        }
     }
 
     fn save(&self, leases: &HashMap<String, NodeLease>) {
@@ -341,7 +385,8 @@ impl Inner {
                 run.stop(s.container.as_deref());
             }
             let _ = std::fs::remove_dir_all(&run.dir);
-            s.gc_blobs(&l.member);
+            // Its blobs stay: the same lane started again sends only what
+            // changed (#99); they go under pressure, or with the member.
         });
     }
 }
@@ -1627,9 +1672,15 @@ async fn background(s: Shared) {
     // Whether the pool collects telemetry, and when that was asked (ADR-0037).
     let mut collects: Option<(Instant, bool)> = None;
     let mut sent = Instant::now() - Duration::from_secs(60);
+    let mut purged: Option<Instant> = None;
     loop {
         next_round(wait, &s.changed).await;
         wait = EVERY;
+        if purged.is_none_or(|t| t.elapsed() >= PURGE_EVERY) {
+            purged = Some(Instant::now());
+            let s2 = s.clone();
+            let _ = tokio::task::spawn_blocking(move || s2.purge_gone_members()).await;
+        }
         if measured.elapsed() >= CPU_INTERVAL {
             let after = devstack_proc::cpu_times();
             free_cpus = match (before, after) {
