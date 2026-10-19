@@ -1,6 +1,6 @@
 # ADR-0040: A shared lane can be shared for viewing, and is then shown as one's own lane is
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-19)
 - **Date:** 2026-10-19
 - **Deciders:** project owner
 - **Related:** [ADR-0035](0035-lanes-can-be-shared-with-the-pool.md) (point 4 extended here), [ADR-0025](0025-a-lane-can-run-on-another-node.md) (point 6: a lane's API through its requester), [ADR-0027](0027-trust-between-nodes.md), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md), [ADR-0033](0033-a-node-decides-what-runs-on-it.md) (tags)
