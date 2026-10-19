@@ -48,7 +48,7 @@ pub(crate) async fn ws(
     {
         let resp = match crate::daemon_get(&s, id, &format!("/{rest}")).await {
             Ok(r) => r,
-            Err((status, msg)) => return err(status, msg),
+            Err(e) => return e.into_response(),
         };
         if resp.status() != StatusCode::OK {
             let status = resp.status();
