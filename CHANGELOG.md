@@ -12,8 +12,8 @@ and listed with their assets on the
 ### Added
 
 - **The pool knows which devstack each party runs**
-  ([ADR-0031](docs/adr/0031-a-coordinator-places-lanes.md) point 8,
-  proposed; [pool.md](docs/pool.md#versions-in-a-pool)). Nodes and members
+  ([ADR-0031](docs/adr/0031-a-coordinator-places-lanes.md) point 8;
+  [pool.md](docs/pool.md#versions-in-a-pool)). Nodes and members
   report their version and a pool protocol number, the coordinator answers
   with its own and passes a node's on with a lease offer and a shared lane.
   The coordinator places no lane on a node with another protocol and names

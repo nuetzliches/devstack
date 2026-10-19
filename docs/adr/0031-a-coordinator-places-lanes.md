@@ -1,6 +1,6 @@
 # ADR-0031: A coordinator places lanes and admits members; nodes admit leases; data goes directly
 
-- **Status:** Accepted (2026-10-16), amended 2026-10-16 (one binary: `devstack node`); amendment of 2026-10-19 (point 8: which devstack each party runs) proposed
+- **Status:** Accepted (2026-10-16), amended 2026-10-16 (one binary: `devstack node`), amended 2026-10-19 (point 8: which devstack each party runs)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md) (points 1 and 3 replaced here), [ADR-0027](0027-trust-between-nodes.md) (points 1 and 2 replaced here), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md) (point 2 extended there: admins in the dashboard, nodes granted)
@@ -65,7 +65,7 @@ bottleneck of every lane.
 7. **The dashboard shows the pool:** members online, what each shares and
    uses, which lane runs where, and the share switch of this machine.
 
-8. *Amended 2026-10-19, proposed.* **Each party says which devstack it
+8. *Amended 2026-10-19.* **Each party says which devstack it
    runs.** Members are updated one by one, so a pool runs several releases
    at once, and a change in what a field means is invisible across them: a
    member on 0.10 opened a lane on a node still on 0.9.8, the owner shared
