@@ -156,6 +156,72 @@ pub struct Report {
     /// counted; absent from an older node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept: Option<Kept>,
+    /// How the last update an admin ordered goes (ADR-0039).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<UpdateReport>,
+}
+
+/// An admin's order that a server update its devstack (ADR-0039).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateOrder {
+    /// A release (`0.11.0`); `None`: the latest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Take no new lane and wait until its lanes have ended (the default).
+    #[serde(default = "drain_default")]
+    pub drain: bool,
+    /// An older release than it runs, on purpose.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub downgrade: bool,
+    /// The admin's member id.
+    pub by: String,
+    /// When it was ordered (Unix seconds): tells one order from the next.
+    pub at: u64,
+}
+
+fn drain_default() -> bool {
+    true
+}
+
+/// `POST /v1/admin/nodes/{id}/update`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UpdateRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// `false`: update at once, ending the lanes it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain: Option<bool>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub downgrade: bool,
+}
+
+/// What a node says of the update it was ordered (ADR-0039).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateReport {
+    /// The order's `at`.
+    pub at: u64,
+    /// `draining`, `installing`, `restarting`, `done`, `refused`, `failed`.
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl UpdateReport {
+    /// Over: the order can go.
+    pub fn over(&self) -> bool {
+        matches!(self.state.as_str(), "done" | "refused" | "failed")
+    }
+}
+
+/// A release version as the releases name them: `0.11.0`.
+pub fn valid_version(v: &str) -> bool {
+    let parts: Vec<&str> = v.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// What a node keeps of stopped lanes (ADR-0038 point 3).
@@ -526,6 +592,13 @@ pub struct ReportAnswer {
     /// The coordinator's devstack; absent from an older one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coordinator: Option<Release>,
+    /// An update an admin ordered (ADR-0039), until the node says it is over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<UpdateOrder>,
+    /// An admin asked the node to remove the stopped lanes it keeps
+    /// (ADR-0038 point 5).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub prune: bool,
 }
 
 /// A member as `/v1/members` lists it (no request or certificate); the
@@ -621,6 +694,10 @@ struct Inner {
     dir: PathBuf,
     /// Leases an admin ended, until their node no longer holds them.
     ending: Mutex<std::collections::HashSet<String>>,
+    /// Updates admins ordered, by node (ADR-0039).
+    updates: Mutex<HashMap<String, UpdateOrder>>,
+    /// Nodes an admin asked to remove their kept lanes (ADR-0038).
+    prunes: Mutex<std::collections::HashSet<String>>,
     /// Leases by id, with their token and when they were offered.
     leases: Mutex<HashMap<String, (Lease, String, std::time::Instant)>>,
     store: Store,
@@ -718,6 +795,8 @@ fn router(shared: Shared) -> Router {
         .route("/v1/admin/nodes/{id}/pause", post(admin_pause))
         .route("/v1/admin/nodes/{id}/resume", post(admin_resume))
         .route("/v1/admin/leases/{id}/end", post(admin_end))
+        .route("/v1/admin/nodes/{id}/update", post(admin_update))
+        .route("/v1/admin/nodes/{id}/prune", post(admin_prune))
         .route("/v1/admin/members/{id}/tags", post(admin_tags))
         .route("/v1/admin/members/{id}/node", post(admin_node))
         .route("/v1/admin/nodes/{id}/policy", post(admin_policy))
@@ -895,6 +974,22 @@ async fn report(
             }
         });
     }
+    // An update an admin ordered goes to the node until the node says it is
+    // over, or runs the release it was to run.
+    let update = {
+        let mut updates = s.updates.lock().unwrap();
+        let over = updates.get(&m.id).is_some_and(|o| {
+            r.update.as_ref().is_some_and(|u| u.at == o.at && u.over())
+                || o.version
+                    .as_ref()
+                    .is_some_and(|v| r.devstack.as_ref().is_some_and(|d| &d.version == v))
+        });
+        if over {
+            updates.remove(&m.id);
+        }
+        updates.get(&m.id).cloned()
+    };
+    let prune = s.prunes.lock().unwrap().remove(&m.id);
     s.history
         .lock()
         .unwrap()
@@ -909,6 +1004,8 @@ async fn report(
         end,
         refused,
         coordinator: Some(Release::this()),
+        update,
+        prune,
     }))
 }
 
@@ -1466,6 +1563,97 @@ async fn admin_end(
     Ok(StatusCode::ACCEPTED)
 }
 
+/// A node an admin may order: granted, online, and (for an update) a
+/// server.
+fn orderable(s: &Inner, id: &str, server: bool) -> ApiResult<Member> {
+    let m = s
+        .store
+        .list()
+        .map_err(internal)?
+        .into_iter()
+        .find(|m| m.id == id && m.state == State::Approved)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("no member `{id}`")))?;
+    let reports = s.reports.lock().unwrap();
+    let report = reports.get(id);
+    if !m.node || report.is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(60)) {
+        return Err((
+            StatusCode::CONFLICT,
+            format!("{} is no node of the pool that is online", m.name),
+        ));
+    }
+    if server && kind_of(report.map(|(_, r)| r)) != "server" {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "{} is no server: a developer's machine is updated by its owner (`devstack update`)",
+                m.name
+            ),
+        ));
+    }
+    Ok(m)
+}
+
+/// `POST /v1/admin/nodes/{id}/update` (ADR-0039): a server updates its
+/// devstack at its next report; it may refuse (its own policy, a container).
+async fn admin_update(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+    Json(q): Json<UpdateRequest>,
+) -> ApiResult<StatusCode> {
+    let (_, by) = admin(&s, &peer)?;
+    if let Some(v) = &q.version
+        && !valid_version(v)
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("`{v}` is no release version"),
+        ));
+    }
+    let m = orderable(&s, &id, true)?;
+    let order = UpdateOrder {
+        version: q.version.clone(),
+        drain: q.drain.unwrap_or(true),
+        downgrade: q.downgrade,
+        by: by.clone(),
+        at: store::now(),
+    };
+    s.updates.lock().unwrap().insert(m.id.clone(), order);
+    s.store
+        .record(
+            &by,
+            "update",
+            &m.id,
+            Some(format!(
+                "to {}{}",
+                q.version.as_deref().unwrap_or("the latest release"),
+                if q.drain == Some(false) {
+                    ", at once"
+                } else {
+                    ""
+                }
+            )),
+        )
+        .map_err(store_err)?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// `POST /v1/admin/nodes/{id}/prune` (ADR-0038 point 5): the node removes
+/// the stopped lanes it keeps, at its next report.
+async fn admin_prune(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<StatusCode> {
+    let (_, by) = admin(&s, &peer)?;
+    let m = orderable(&s, &id, false)?;
+    s.prunes.lock().unwrap().insert(m.id.clone());
+    s.store
+        .record(&by, "prune", &m.id, Some("its kept lanes".into()))
+        .map_err(store_err)?;
+    Ok(StatusCode::ACCEPTED)
+}
+
 async fn admin_members(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
@@ -1541,6 +1729,8 @@ pub async fn serve(
         telemetry_slots: Arc::new(tokio::sync::Semaphore::new(TELEMETRY_IN_FLIGHT)),
         joins: Mutex::new(HashMap::new()),
         ending: Mutex::new(std::collections::HashSet::new()),
+        updates: Mutex::new(HashMap::new()),
+        prunes: Mutex::new(std::collections::HashSet::new()),
         store: Store::new(dir),
         ca_pem,
         reports: Mutex::new(HashMap::new()),

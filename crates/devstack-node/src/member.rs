@@ -500,6 +500,19 @@ impl Local {
     }
 
     /// End a lease (admins only): its node stops the lane.
+    /// Have server `id` update its devstack (admins only, ADR-0039).
+    pub fn admin_update(&self, id: &str, req: &crate::coordinator::UpdateRequest) -> Result<()> {
+        self.post::<serde_json::Value>(&format!("/v1/admin/nodes/{id}/update"), req)?;
+        Ok(())
+    }
+
+    /// Have node `id` remove the stopped lanes it keeps (admins only,
+    /// ADR-0038).
+    pub fn admin_prune(&self, id: &str) -> Result<()> {
+        self.post::<serde_json::Value>(&format!("/v1/admin/nodes/{id}/prune"), &())?;
+        Ok(())
+    }
+
     pub fn admin_end(&self, lease: &str) -> Result<()> {
         self.post::<serde_json::Value>(&format!("/v1/admin/leases/{lease}/end"), &())?;
         Ok(())

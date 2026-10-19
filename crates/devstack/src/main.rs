@@ -451,6 +451,11 @@ enum NodeAction {
         /// The pool it runs lanes for (ADR-0034); one agent per pool.
         #[arg(long, default_value = "default")]
         pool: String,
+        /// Print a systemd unit that runs this agent with these arguments
+        /// and starts it again whenever it ends (an update an admin ordered
+        /// included, ADR-0039), instead of running it.
+        #[arg(long)]
+        print_unit: bool,
     },
     /// The CA's fingerprint, which a member passes to `devstack join`.
     Fingerprint {

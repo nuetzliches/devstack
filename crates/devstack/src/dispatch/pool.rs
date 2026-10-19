@@ -53,6 +53,29 @@ fn node(file: &Path, action: NodeAction) -> Result<()> {
             max_memory_gib,
             dedicated,
             pool,
+            print_unit: true,
+        } => {
+            print!(
+                "{}",
+                poolcmd::agent_unit(
+                    &pool,
+                    &listen,
+                    api.as_deref(),
+                    max_cpus,
+                    max_memory_gib,
+                    dedicated
+                )?
+            );
+            Ok(())
+        }
+        NodeAction::Agent {
+            listen,
+            api,
+            max_cpus,
+            max_memory_gib,
+            dedicated,
+            pool,
+            print_unit: false,
         } => poolcmd::agent(&pool, &listen, api, max_cpus, max_memory_gib, dedicated),
         NodeAction::Members { action, dir } => match action.unwrap_or(MembersAction::List) {
             MembersAction::List => poolcmd::members_list(dir),

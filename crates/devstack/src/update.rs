@@ -93,6 +93,49 @@ pub fn run(check_only: bool, version: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// An update an admin of the pool ordered this node's agent (ADR-0039): the
+/// release (the latest unless named) downloaded, checked against its
+/// `SHA256SUMS` and put in place, as `devstack update` does, without the
+/// hub. The binary the agent is to run now, or `None` when it runs that
+/// release already. An older release only when the order says `downgrade`.
+pub fn for_node(
+    order: &devstack_node::coordinator::UpdateOrder,
+) -> Result<Option<PathBuf>, String> {
+    let current = devstack_config::VERSION;
+    let target = match &order.version {
+        Some(v) => v.strip_prefix('v').unwrap_or(v).to_string(),
+        None => release::latest()
+            .map_err(|e| format!("cannot ask GitHub for the latest release: {e}"))?,
+    };
+    if !release::valid_version(&target) {
+        return Err(format!("`{target}` is no release version"));
+    }
+    if target == current {
+        return Ok(None);
+    }
+    if !release::newer(&target, current) && !order.downgrade {
+        return Err(format!(
+            "{target} is older than the {current} this node runs: an admin orders a downgrade explicitly"
+        ));
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    if crate::integration::is_dev_build(&exe) {
+        return Err(format!(
+            "this agent is a build from source ({})",
+            exe.display()
+        ));
+    }
+    if is_cargo_install(&exe) {
+        return Err(format!(
+            "this agent came from `cargo install` ({})",
+            exe.display()
+        ));
+    }
+    install(&target, &exe)
+        .map(Some)
+        .map_err(|e| format!("{e:#}"))
+}
+
 /// Download, check and put release `version` in place; returns the path of
 /// the new binary: where the installers put devstack, or `running` if it
 /// lives elsewhere.

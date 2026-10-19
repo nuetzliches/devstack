@@ -189,6 +189,7 @@ fn report(
             dedicated: false,
             devstack: Some(devstack_node::version::Release::this()),
             kept: None,
+            update: None,
             leases: Vec::new(),
             total: Some(total),
             used: None,

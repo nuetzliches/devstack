@@ -88,6 +88,19 @@ the answer to the node's report every 15 seconds, which already carries
 
 ## Enforced by
 
+*Paths as built, noted 2026-10-19:* the order and the checks in
+`crates/devstack-node/src/coordinator.rs` (`admin_update`, `orderable`,
+`ReportAnswer.update`, `Report.update`); the node's part in
+`crates/devstack-node/src/node.rs` (`carry_out`, `restart_on`, admission
+refused while draining) with `NodeConfig::on_update`; the release in
+`crates/devstack/src/update.rs` (`for_node`); `remote_update` in
+`crates/devstack-node/src/policy.rs`, read from the node's own policy only;
+the hub's `POST /hub/pool/nodes/{id}/update`; the button and the state in
+`ui/src/views/PoolView.vue`. The unit is printed, not installed: `devstack
+node agent ... --print-unit` (installing it needs root). Not built: the CLI
+for an admin (`devstack node members update`), which needs the running
+coordinator rather than its store.
+
 Where it will live:
 
 - `crates/devstack-node/src/coordinator.rs`: the admin route, the checks, the

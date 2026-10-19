@@ -353,6 +353,21 @@ another release, and a connection that fails names both versions.
 When in doubt, update the node and the coordinator first: `devstack
 --version` on each says what it runs.
 
+**An admin updates a server from the dashboard**
+([ADR-0039](adr/0039-an-admin-can-update-a-server-node.md)): "Update" on a
+node of the kind server, online. The order reaches the node with the answer
+to its next report (the coordinator never calls a node). The node takes no
+new lane, waits until the lanes it runs have ended, installs the latest
+release (from GitHub, checked against its `SHA256SUMS`, as `devstack
+update` does) and starts its agent again on it; the version column says how
+far it got, or why it failed. A node refuses when its own `policy.json` says
+`"remote_update": false`, when its agent runs in a container (update its
+image), and an older release than it runs unless the order says
+`downgrade`. Run a server's agent under systemd so it comes back whatever
+happens: `devstack node agent ... --print-unit` prints the unit for the
+same arguments. "Prune" on a node removes the stopped lanes it keeps
+(ADR-0038).
+
 ## Reference
 
 | What | Where |
