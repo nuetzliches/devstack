@@ -7,6 +7,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+/// In a lane on a node, its agent answers for the containers (#101); one
+/// that passes such a request on to the lane is older than that.
+const NODE_TOO_OLD: &str = "the node runs this lane's containers, and its devstack is too old to show their output: update devstack on the node";
+
 impl Supervisor {
     /// The published address of every Compose port, `(group, service,
     /// container port) -> host:port`, as last seen (`{compose.…}`).
@@ -329,6 +333,9 @@ impl Supervisor {
         service: &str,
         tail: usize,
     ) -> Result<std::process::Child, String> {
+        if self.external_infra().is_some() {
+            return Err(NODE_TOO_OLD.into());
+        }
         let g = if self.is_shared(group, service) {
             Group::from_config(group, &self.stack.compose[group], &self.repo)
         } else {
@@ -347,6 +354,9 @@ impl Supervisor {
         tail: usize,
         since: Option<&str>,
     ) -> Result<String, String> {
+        if self.external_infra().is_some() {
+            return Err(NODE_TOO_OLD.into());
+        }
         self.docker
             .logs(&self.compose_group(group), service, tail, since)
             .map_err(|e| e.to_string())
@@ -825,7 +835,41 @@ impl Supervisor {
             }
             cache.views.push(view);
         }
+        // What changed since the last read, as `refresh_containers` tells it
+        // (the agent writes the file anew every few seconds).
+        let changes: Vec<(String, String)> = {
+            let before = self.infra.lock().unwrap();
+            let shown = |c: &ContainerView| {
+                if c.health.is_empty() {
+                    c.state.clone()
+                } else {
+                    format!("{} ({})", c.state, c.health)
+                }
+            };
+            let mut out = Vec::new();
+            for v in &cache.views {
+                let old = before.views.iter().find(|o| o.group == v.group);
+                let Some(old) = old else { continue }; // the first read
+                for c in &v.containers {
+                    let was = old.containers.iter().find(|o| o.service == c.service);
+                    if was.map(shown) != Some(shown(c)) {
+                        out.push((v.group.clone(), format!("{}: {}", c.service, shown(c))));
+                    }
+                }
+                for gone in old
+                    .containers
+                    .iter()
+                    .filter(|o| !v.containers.iter().any(|c| c.service == o.service))
+                {
+                    out.push((v.group.clone(), format!("{}: removed", gone.service)));
+                }
+            }
+            out
+        };
         *self.infra.lock().unwrap() = cache;
+        for (group, message) in changes {
+            self.emit(EventBody::Infra { group, message });
+        }
     }
 }
 

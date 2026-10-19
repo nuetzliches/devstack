@@ -103,6 +103,20 @@ and listed with their assets on the
   `status` no longer shows one from before a restart. devstack restarts a
   container for a lost forward only when it has been ready for 20 s, and at
   most once in 10 minutes.
+- **A lane on a node shows its containers' output and load, and they can be
+  restarted** ([#101](https://github.com/nuetzliches/devstack/issues/101)).
+  The lane's daemon has no Docker (ADR-0025 point 2), so its container log
+  console failed (with a `docker:cli` lane image: `tcp://docker:2375`),
+  its containers showed `0 B / 0%`, and start, stop and restart were
+  refused. The node's agent now answers those routes itself, for the lane's
+  owner and on the containers of the projects it started for the lease
+  only (by their Compose labels, no Compose file of the mirror read), and
+  writes the containers' states, health and load into the lane's file every
+  5 s; the lane's daemon reports them as a local lane's (`top`, the
+  dashboard), and says when a container's state changes. A node with an
+  older devstack says it is too old instead of a Docker error. A lane
+  started before the node was updated shows its containers once it is
+  started again.
 - **A lane on a node is checked for what it starts, not for the whole
   Compose file** ([ADR-0033](docs/adr/0033-a-node-decides-what-runs-on-it.md)
   point 7). A group that names its `services` was refused for a service it

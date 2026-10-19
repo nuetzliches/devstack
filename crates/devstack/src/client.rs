@@ -968,7 +968,7 @@ pub fn logs_grep(stack_file: &Path, service: Option<&str>, grep: &str, tail: usi
     let c = need(&state_dir(stack_file)?)?;
     let q = enc(grep);
     let text = match service {
-        Some(s) => c.get(&format!("/v1/services/{s}/logs?tail={tail}&grep={q}"))?,
+        Some(s) => c.get(&logs_path(&c, s, &format!("tail={tail}&grep={q}"))?)?,
         None => c.get(&format!("/v1/logs?tail={tail}&grep={q}"))?,
     };
     if text.is_empty() {
@@ -1010,6 +1010,10 @@ impl LogFilter<'_> {
 pub fn logs_kept(stack_file: &Path, service: Option<&str>, f: LogFilter) -> Result<()> {
     let c = need(&state_dir(stack_file)?)?;
     let text = match service {
+        // A container's logs know no builds and no kept files.
+        Some(s) if f.build.is_none() && f.file.is_none() => {
+            c.get(&logs_path(&c, s, &f.query())?)?
+        }
         Some(s) => c.get(&format!("/v1/services/{s}/logs?{}", f.query()))?,
         None if f.grep.is_some() && f.build.is_none() && f.file.is_none() => {
             c.get(&format!("/v1/logs?{}", f.query()))?
@@ -1478,7 +1482,7 @@ pub fn logs(stack_file: &Path, name: &str, tail: usize, follow: bool) -> Result<
     if follow {
         return follow_logs(&c, name, tail, None);
     }
-    let shown = c.get(&format!("/v1/services/{name}/logs?tail={tail}"))?;
+    let shown = c.get(&logs_path(&c, name, &format!("tail={tail}"))?)?;
     print!("{}", for_terminal(&shown));
     if !shown.is_empty() {
         println!();
@@ -1486,17 +1490,20 @@ pub fn logs(stack_file: &Path, name: &str, tail: usize, follow: bool) -> Result<
     Ok(())
 }
 
-/// `devstack logs <name> --follow [--grep]`: the last `tail` lines, then
-/// every new one, from the daemon's log stream (a service's, or a Compose
-/// container's by its service name).
-pub fn follow_logs(c: &Client, name: &str, tail: usize, grep: Option<&str>) -> Result<()> {
+/// The Compose group of `name` when it names a container and no service:
+/// its logs come from `/v1/infra/{group}/{name}/…`, which a lane's node
+/// answers for a lane there (its daemon has no Docker, #101).
+pub fn container_group(c: &Client, name: &str) -> Result<Option<String>> {
     let stack = c.stack()?;
     let is_service = stack["services"]
         .as_array()
         .into_iter()
         .flatten()
         .any(|s| s["name"] == name);
-    let group = stack["infra"]
+    if is_service {
+        return Ok(None);
+    }
+    Ok(stack["infra"]
         .as_array()
         .into_iter()
         .flatten()
@@ -1507,10 +1514,26 @@ pub fn follow_logs(c: &Client, name: &str, tail: usize, grep: Option<&str>) -> R
                 .flatten()
                 .any(|k| k["service"] == name)
         })
-        .and_then(|g| g["group"].as_str());
-    let path = match group {
-        Some(g) if !is_service => format!("/v1/infra/{g}/{name}/logs/stream?tail={tail}"),
-        _ => format!("/v1/services/{name}/logs/stream?tail={tail}"),
+        .and_then(|g| g["group"].as_str())
+        .map(str::to_string))
+}
+
+/// The path of `name`'s logs with `query` (`tail`, `grep`, `since`): a
+/// container's, or a service's.
+pub fn logs_path(c: &Client, name: &str, query: &str) -> Result<String> {
+    Ok(match container_group(c, name)? {
+        Some(g) => format!("/v1/infra/{g}/{name}/logs?{query}"),
+        None => format!("/v1/services/{name}/logs?{query}"),
+    })
+}
+
+/// `devstack logs <name> --follow [--grep]`: the last `tail` lines, then
+/// every new one, from the daemon's log stream (a service's, or a Compose
+/// container's by its service name).
+pub fn follow_logs(c: &Client, name: &str, tail: usize, grep: Option<&str>) -> Result<()> {
+    let path = match container_group(c, name)? {
+        Some(g) => format!("/v1/infra/{g}/{name}/logs/stream?tail={tail}"),
+        None => format!("/v1/services/{name}/logs/stream?tail={tail}"),
     };
     let needle = grep.map(str::to_lowercase);
     use std::io::Write as _;
