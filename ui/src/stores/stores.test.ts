@@ -121,6 +121,22 @@ describe('stack store', () => {
     expect(lane.closed).toBe(true);
   });
 
+  it('a lane removed while shown gives way to the main tree', async () => {
+    const stack = await shownStack();
+    const feat = { name: 'feat', path: '/src/feat', number: 1, active: true, port_offset: 100, owns_main: false, running: 2, services: 3 };
+    fake.stream('/hub/stacks/shop/api/v1/events').handlers.onMessage({ type: 'lanes', lanes: [feat] });
+    stack.selectLane('feat');
+    const own = fake.stream('/hub/stacks/shop/api/v1/lanes/feat/v1/events');
+    // Its worktree is removed: its own stream breaks, and the main tree no
+    // longer lists it (the main tree's stream, which says so, is not followed).
+    fake.on('/hub/stacks/shop/api/v1/lanes', ok([]));
+    own.handlers.onState?.('error');
+    await vi.waitFor(() => expect(stack.lane).toBeNull());
+    expect(stack.apiLane).toBeNull();
+    expect(own.closed).toBe(true);
+    expect(useUi().toasts.some((x) => x.title === 'Lane feat is gone')).toBe(true);
+  });
+
   it('a lane not started is shown from the main tree', async () => {
     const stack = await shownStack();
     fake.stream('/hub/stacks/shop/api/v1/events').handlers.onMessage({

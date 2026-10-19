@@ -79,13 +79,23 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
+  /** At most every few seconds: a stream that keeps failing asks once a round. */
+  let laneCheckedAt = 0;
+  function checkLaneGone() {
+    if (Date.now() - laneCheckedAt < 5000) return;
+    laneCheckedAt = Date.now();
+    void loadLanes();
+  }
+
   /** The lanes now; the one shown is gone (its worktree was removed): back to the main tree. */
   function setLanes(next: LaneView[]) {
     const wasActive = lane.value ? laneActive(lane.value) : null;
     lanes.value = next;
     lanesOf.value = id.value;
     if (lane.value && !next.some((l) => l.name === lane.value)) {
+      const gone = lane.value;
       selectLane(null);
+      useUi().toast('info', `Lane ${gone} is gone`, 'Its worktree was removed; devstack removed the lane with it. Showing the main working tree.');
       return;
     }
     // The shown lane started, or stopped: its own stream, or the main tree's.
@@ -288,6 +298,9 @@ export const useStack = defineStore('stack', () => {
           if (live.value) viewAt.value = Date.now();
           live.value = false;
         }
+        // A lane's own stream does not carry the lanes: when it breaks, the
+        // lane may be gone (its worktree removed); the main tree says.
+        if (s === 'error' && apiLane.value && id.value === stackId) checkLaneGone();
       },
     });
   }

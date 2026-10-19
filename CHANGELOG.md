@@ -99,6 +99,12 @@ and listed with their assets on the
 
 ### Fixed
 
+- **The dashboard lets go of a lane whose worktree was removed.** The
+  daemon removed such a lane (`lane_removed`), but a dashboard showing it
+  followed the lane's own event stream, which does not carry the lanes:
+  it said "reconnecting" for good and kept the lane in its lists. When the
+  shown lane's stream breaks, the dashboard now asks the main tree for the
+  lanes, and shows the main working tree with a note once the lane is gone.
 - **Stopping the main working tree no longer stops its lanes**
   ([ADR-0024](docs/adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md)).
   `devstack down` in the main tree, and "Stop stack" in the dashboard, shut
