@@ -448,8 +448,8 @@ fn pool_one(pool: &str, local: &Local) -> Result<()> {
         m.coordinator, m.id, m.name
     );
     println!(
-        "{:<18}{:<24}{:<9}{:<10}{:<12}SEEN",
-        "ID", "NAME", "STATE", "CPU", "MEMORY"
+        "{:<18}{:<24}{:<9}{:<10}{:<12}{:<10}SEEN",
+        "ID", "NAME", "STATE", "CPU", "MEMORY", "DEVSTACK"
     );
     for n in &nodes {
         let (cpu, mem) = match n.report.as_ref().filter(|r| r.sharing) {
@@ -459,13 +459,22 @@ fn pool_one(pool: &str, local: &Local) -> Result<()> {
             ),
             None => ("-".into(), "-".into()),
         };
+        // Its release; `older`: one that does not say (ADR-0031 point 8).
+        let release = match n.report.as_ref() {
+            Some(r) => r
+                .devstack
+                .as_ref()
+                .map_or("older".into(), |d| d.version.clone()),
+            None => "-".into(),
+        };
         println!(
-            "{:<18}{:<24}{:<9}{:<10}{:<12}{}",
+            "{:<18}{:<24}{:<9}{:<10}{:<12}{:<10}{}",
             n.id,
             n.name,
             if n.online { "online" } else { "offline" },
             cpu,
             mem,
+            release,
             n.seen.map_or("never".into(), ago)
         );
     }
@@ -567,6 +576,7 @@ pub fn run_lane(file: &Path, on: &str, lane: &str, keep: bool) -> Result<()> {
             cpus: 0.5,
             memory: 1 << 30,
         },
+        devstack: Some(devstack_node::version::Release::this()),
     })?;
     println!(
         "lease {} on {} ({})",

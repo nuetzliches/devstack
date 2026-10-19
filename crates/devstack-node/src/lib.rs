@@ -15,3 +15,4 @@ pub mod share;
 pub mod store;
 pub mod telemetry;
 pub mod tls;
+pub mod version;

@@ -91,6 +91,10 @@ pub struct NodeView {
     pub name: String,
     pub offer: Amount,
     pub leases: Vec<NodeLease>,
+    /// The devstack the agent runs, and so its lanes' daemons; absent from
+    /// an older agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub devstack: Option<crate::version::Release>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +165,9 @@ struct Inner {
     /// Whether the coordinator refused this node's API (not granted to run
     /// lanes), said once.
     refused: Mutex<Option<String>>,
+    /// What the coordinator said it runs at its last answer (`None`: not
+    /// yet, `Some(None)`: an older one that does not say), told once.
+    coordinator: Mutex<Option<Option<crate::version::Release>>>,
     /// What the node offers now, before what its leases need.
     offer: Mutex<Amount>,
     /// A static Linux `devstack` the lane containers mount (ADR-0028 point
@@ -435,6 +442,7 @@ async fn node(
         name: s.name.clone(),
         offer: s.available(),
         leases,
+        devstack: Some(crate::version::Release::this()),
     }))
 }
 
@@ -1497,6 +1505,7 @@ async fn background(s: Shared) {
             memory: available.memory,
             api: Some(s.api.clone()),
             dedicated: s.dedicated,
+            devstack: Some(crate::version::Release::this()),
             leases: s
                 .leases
                 .lock()
@@ -1528,6 +1537,14 @@ async fn background(s: Shared) {
                     eprintln!("node agent: {why}");
                 }
                 refused.clone_from(&a.refused);
+            }
+            // Another release at the coordinator: said once per change.
+            let mut known = s.coordinator.lock().unwrap();
+            if known.as_ref() != Some(&a.coordinator) {
+                if let Some(n) = crate::version::note("the coordinator", a.coordinator.as_ref()) {
+                    eprintln!("node agent: {n}");
+                }
+                *known = Some(a.coordinator.clone());
             }
         }
         // Leases an admin ended: their lanes stop like expired ones.
@@ -1607,6 +1624,7 @@ pub async fn serve(
         secret,
         blob_use: Mutex::new(HashMap::new()),
         refused: Mutex::new(None),
+        coordinator: Mutex::new(None),
         offer: Mutex::new(Amount::default()),
         bin,
         container: std::env::var("DEVSTACK_NODE_CONTAINER")

@@ -9,6 +9,21 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **The pool knows which devstack each party runs**
+  ([ADR-0031](docs/adr/0031-a-coordinator-places-lanes.md) point 8,
+  proposed; [pool.md](docs/pool.md#versions-in-a-pool)). Nodes and members
+  report their version and a pool protocol number, the coordinator answers
+  with its own and passes a node's on with a lease offer and a shared lane.
+  The coordinator places no lane on a node with another protocol and names
+  both releases when one is asked for by name. A node of another version, or
+  one too old to say, gets the lane with a warning: in `daemon.log`
+  (`pool_version_mismatch`), under the lane in the dashboard and `devstack
+  lane list`, and from `devstack up --on`. Opening a shared lane warns the
+  same way (dashboard and `devstack open`). The pool area shows each node's
+  version and the coordinator's.
+
 ### Changed
 
 - **API: `POST /v1/lanes` with `on` answers `202` once the lane is leased**
@@ -32,6 +47,11 @@ and listed with their assets on the
   `remote_lane_phase` with `ms`, which the pool's telemetry sends as the
   `devstack.duration` histogram labelled with `devstack.phase`.
   `devstack node run-lane` prints the phase times.
+- A tunnel that fails (`remote_lane_tunnel`, `shared_lane_tunnel`) says what
+  the node answered and names both versions when the node runs another
+  release; the lane daemon's "no service's or container's port" names its
+  version. Before, a 0.10 member opening a lane on a 0.9.8 node saw only a
+  port refused.
 
 ### Fixed
 

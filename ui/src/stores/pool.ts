@@ -285,13 +285,15 @@ export const usePool = defineStore('pool', () => {
 
   /** Open a service of a shared lane: a forward here, then the page. */
   async function openShared(pool: string, lease: string, service: string) {
-    const r = await act<{ url: string; port: number }>({
+    const r = await act<{ url: string; port: number; warning?: string }>({
       label: `Open ${service}`,
       path: at(paths.poolSharedOpen(lease), pool),
       body: { service },
       success: false,
     });
     if (!r.ok || !r.body?.url) return;
+    // Its node or owner runs another devstack: a failure there may be why.
+    if (r.body.warning) useUi().toast('warning', `${service}: another devstack`, r.body.warning, 12_000);
     // The scheme comes from the lane's owner: open web pages only.
     const url = webUrl(r.body.url);
     if (url) window.open(url, '_blank', 'noopener');

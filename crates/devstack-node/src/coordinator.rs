@@ -17,6 +17,7 @@
 
 use crate::pki::{self, Pair};
 use crate::store::{self, AuditEntry, Member, Role, State, Store};
+use crate::version::Release;
 use axum::extract::{Path as UrlPath, State as AxState};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -147,6 +148,10 @@ pub struct Report {
     /// Its GPUs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gpus: Vec<crate::share::Gpu>,
+    /// The devstack it runs; absent from a release before version
+    /// reporting (`crate::version`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub devstack: Option<Release>,
 }
 
 /// One moment of a node's capacity, or the pool's (ADR-0036): what it has,
@@ -322,6 +327,10 @@ pub struct LeaseRequest {
     /// What the lane is expected to need.
     #[serde(default)]
     pub need: crate::share::Amount,
+    /// The requester's devstack: the coordinator places the lane on a
+    /// node with the same pool protocol only. Absent from older requesters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub devstack: Option<Release>,
 }
 
 /// A member that runs lanes, as a requester reaches it.
@@ -331,6 +340,10 @@ pub struct NodeRef {
     pub name: String,
     /// `https://host:port`
     pub api: String,
+    /// The devstack it runs, from its last report; absent when it does not
+    /// say, or the coordinator does not pass it on (both older).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub devstack: Option<Release>,
 }
 
 /// The coordinator's answer to a `LeaseRequest`: the requester takes it to
@@ -342,6 +355,9 @@ pub struct LeaseOffer {
     /// requester.
     pub token: String,
     pub node: NodeRef,
+    /// The coordinator's devstack; absent from an older one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinator: Option<Release>,
 }
 
 /// A lease as the coordinator keeps it.
@@ -424,6 +440,10 @@ pub struct SharedLane {
     pub owner_name: String,
     pub node: NodeRef,
     pub services: Vec<SharedService>,
+    /// The owner's devstack, from its last report: what its sharing means
+    /// (`crate::version::PROTOCOL`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_devstack: Option<Release>,
 }
 
 /// A member as the pool shows it.
@@ -447,6 +467,15 @@ pub struct NodeView {
     pub kind: String,
 }
 
+/// Whether a requester and a node work together: the same pool protocol,
+/// or either does not say (an older release: placed, the requester warns).
+fn same_protocol(requester: Option<&Release>, node: Option<&Release>) -> bool {
+    match (requester, node) {
+        (Some(a), Some(b)) => a.protocol == b.protocol,
+        _ => true,
+    }
+}
+
 /// What a member is, from its last report.
 pub fn kind_of(report: Option<&Report>) -> &'static str {
     match report {
@@ -467,6 +496,9 @@ pub struct ReportAnswer {
     /// it to run lanes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused: Option<String>,
+    /// The coordinator's devstack; absent from an older one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinator: Option<Release>,
 }
 
 /// A member as `/v1/members` lists it (no request or certificate); the
@@ -846,7 +878,11 @@ async fn report(
         .lock()
         .unwrap()
         .insert(m.id, (std::time::Instant::now(), r));
-    Ok(Json(ReportAnswer { end, refused }))
+    Ok(Json(ReportAnswer {
+        end,
+        refused,
+        coordinator: Some(Release::this()),
+    }))
 }
 
 async fn nodes(
@@ -923,8 +959,9 @@ async fn lease_create(
                     && rep.api.is_some()
                     && rep.sharing
                     && rep.cpus >= r.need.cpus
-                    && rep.memory >= r.need.memory)
-                    .then_some((m, rep.memory))
+                    && rep.memory >= r.need.memory
+                    && same_protocol(r.devstack.as_ref(), rep.devstack.as_ref()))
+                .then_some((m, rep.memory))
             })
             .max_by_key(|(_, mem)| *mem)
             .map(|(m, _)| m.id.clone());
@@ -933,7 +970,7 @@ async fn lease_create(
             return Err((
                 StatusCode::CONFLICT,
                 format!(
-                    "no node of the pool can take the lane now ({:.1} CPU, {} MiB): none online, sharing and with that much free",
+                    "no node of the pool can take the lane now ({:.1} CPU, {} MiB): none online, sharing, with that much free and a devstack that works with the requester's",
                     r.need.cpus,
                     r.need.memory >> 20
                 ),
@@ -960,7 +997,7 @@ async fn lease_create(
             ));
         }
     };
-    let (api, offer) = {
+    let (api, offer, node_release) = {
         let reports = s.reports.lock().unwrap();
         let Some((at, rep)) = reports
             .get(&node.id)
@@ -1001,12 +1038,24 @@ async fn lease_create(
                 format!("{} does not share right now", node.name),
             ));
         }
+        if let (Some(theirs), Some(mine)) = (&rep.devstack, &r.devstack)
+            && !same_protocol(Some(mine), Some(theirs))
+        {
+            return Err((
+                StatusCode::CONFLICT,
+                format!(
+                    "{} runs {theirs}, the requester {mine}: they do not work together; update the older one",
+                    node.name
+                ),
+            ));
+        }
         (
             api,
             crate::share::Amount {
                 cpus: rep.cpus,
                 memory: rep.memory,
             },
+            rep.devstack.clone(),
         )
     };
     if r.need.cpus > offer.cpus || r.need.memory > offer.memory {
@@ -1047,7 +1096,9 @@ async fn lease_create(
             id: node.id,
             name: node.name,
             api,
+            devstack: node_release,
         },
+        coordinator: Some(Release::this()),
     }))
 }
 
@@ -1149,7 +1200,8 @@ async fn shared_list(
             if l.member == me.id || l.state != "running" || !sh.admits(&me.id, &me.tags) {
                 return None;
             }
-            let api = reports.get(&l.node)?.1.api.clone()?;
+            let rep = &reports.get(&l.node)?.1;
+            let api = rep.api.clone()?;
             Some(SharedLane {
                 lease: l.id.clone(),
                 repo: l.repo.clone(),
@@ -1160,8 +1212,10 @@ async fn shared_list(
                     id: l.node.clone(),
                     name: name(&l.node).unwrap_or_else(|| l.node.clone()),
                     api,
+                    devstack: rep.devstack.clone(),
                 },
                 services: sh.services.clone(),
+                owner_devstack: reports.get(&l.member).and_then(|(_, r)| r.devstack.clone()),
             })
         })
         .collect();

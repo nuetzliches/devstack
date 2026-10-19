@@ -759,18 +759,22 @@ pub fn up(stack_file: &Path, workers: bool, force: bool, on: Option<&str>) -> Re
                 println!("{}", step_line(m));
             }
         })?;
-        // `pool`: the coordinator chose; say which node.
-        let placed = on.map(|node| {
+        // `pool`: the coordinator chose; say which node, and whether it
+        // runs another devstack (known once the start is followed).
+        let view = on.and_then(|_| {
             c.call_raw("GET", "/v1/lanes", None)
                 .ok()
                 .and_then(|(_, body)| serde_json::from_str::<Vec<Value>>(&body).ok())
-                .and_then(|ls| {
-                    ls.into_iter()
-                        .find(|l| l["name"] == name.as_str())
-                        .and_then(|l| l["node"].as_str().map(str::to_string))
-                })
+                .and_then(|ls| ls.into_iter().find(|l| l["name"] == name.as_str()))
+        });
+        let placed = on.map(|node| {
+            view.as_ref()
+                .and_then(|l| l["node"].as_str().map(str::to_string))
                 .unwrap_or_else(|| node.to_string())
         });
+        if let Some(w) = view.as_ref().and_then(|l| l["node_warning"].as_str()) {
+            eprintln!("warning: {w}");
+        }
         match placed.as_deref() {
             Some(node) => println!(
                 "this worktree runs as lane `{name}` of {} on {node}",
@@ -1150,6 +1154,9 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
                 Some(e) => format!("{name}: {kind} {to} failed: {e}"),
                 None => format!("{name}: {kind} {to}{}", step_line(m)),
             });
+        }
+        if let Some(w) = l["node_warning"].as_str() {
+            troubles.push(format!("{name}: {w}"));
         }
         println!(
             "{:<24} {:<24} {:>8} {:>9}  {:<5}  {:<16} {}",

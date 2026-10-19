@@ -248,6 +248,7 @@ function pick(l: LaneView | null) {
         <template v-else>runs on this machine · </template>
         {{ current.owns_main ? 'serves the main ports' : 'no background workers' }}
         <span v-if="current.node_error" class="err" :title="current.node_error"> · {{ current.node_error }}</span>
+        <span v-if="current.node_warning" class="warn-text" :title="current.node_warning" data-testid="lane-node-warning"> · {{ current.node_warning }}</span>
       </span>
     </div>
   </header>
@@ -296,6 +297,9 @@ h1 {
 }
 .err {
   color: var(--danger);
+}
+.warn-text {
+  color: var(--warn-text);
 }
 .small {
   font-size: 12px;

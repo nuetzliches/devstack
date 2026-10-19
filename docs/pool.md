@@ -19,6 +19,7 @@ to [ADR-0037](adr/0037-telemetry-goes-to-the-pools-collector-with-consent.md).
 - [Administer](#administer): roles, tags, what a node runs
 - [Several pools](#several-pools)
 - [Capacity and telemetry](#capacity-and-telemetry)
+- [Versions in a pool](#versions-in-a-pool)
 - [Reference](#reference): files, environment
 
 ## Set up a coordinator
@@ -301,6 +302,29 @@ has two scripts (Python, standard library only): `fetch.py` exports the
 streams to NDJSON, `analyze.py` turns the export into a Markdown report
 (senders, send rounds and gaps, warnings, failed requests, durations,
 service starts, candidate triggers, node capacity, data-quality checks).
+
+## Versions in a pool
+
+Machines are updated one by one, so a pool runs several devstack releases at
+once. Each says which it runs: nodes and members in their reports, the
+coordinator in its answers. The pool area shows each node's version and the
+coordinator's, marked where it is not this machine's; `devstack pool` lists
+each node's (`older`: one that does not say).
+
+Releases work together when their **pool protocol** is the same: a number
+bumped by a change that two releases would misread (devstack 0.10 is `1`:
+a shared lane's ports and a lane on a dedicated node are the stack's main
+ports). A requester gets no lane on a node with another protocol: the
+coordinator does not place it there, and names both releases when the node
+is named. A node of another version with the same protocol, or one too old
+to say (before this was added), gets the lane, with a warning: in
+`daemon.log` (`pool_version_mismatch`), under the lane in the dashboard and
+in `devstack lane list`, and from `devstack up --on`. Opening a shared lane
+warns the same way when its node, or its owner against its node, runs
+another release, and a connection that fails names both versions.
+
+When in doubt, update the node and the coordinator first: `devstack
+--version` on each says what it runs.
 
 ## Reference
 

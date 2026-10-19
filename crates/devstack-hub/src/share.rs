@@ -42,6 +42,10 @@ pub struct Status {
     pub reported_at: Option<u128>,
     /// Why the last report failed.
     pub error: Option<String>,
+    /// The devstack the coordinator runs, from its answer to the last
+    /// report; `None` before one, or from an older coordinator.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coordinator: Option<devstack_node::version::Release>,
 }
 
 struct Sharing {
@@ -147,11 +151,12 @@ fn run(poked: &mpsc::Receiver<()>) {
             st.free = free;
             st.offer = offer;
             match result {
-                Ok(member) => {
-                    st.member = member;
+                Ok(answer) => {
+                    st.member = answer.is_some();
                     st.error = None;
-                    if member {
+                    if let Some(coordinator) = answer {
                         st.reported_at = Some(now_ms());
+                        st.coordinator = coordinator;
                     }
                 }
                 Err(e) => st.error = Some(e),
@@ -160,19 +165,19 @@ fn run(poked: &mpsc::Receiver<()>) {
     }
 }
 
-/// Report to the coordinator; `Ok(false)` when this machine is no approved
-/// member (nothing to report to).
+/// Report to the coordinator: what it says it runs; `Ok(None)` when this
+/// machine is no approved member (nothing to report to).
 fn report(
     pool: &str,
     settings: &Settings,
     offer: Amount,
     total: Amount,
     gpus: &[devstack_node::share::Gpu],
-) -> Result<bool, String> {
+) -> Result<Option<Option<devstack_node::version::Release>>, String> {
     let local = devstack_node::member::Local::new(&dir(pool));
     match local.membership() {
         Ok(Some(m)) if m.state == State::Approved => {}
-        Ok(_) => return Ok(false),
+        Ok(_) => return Ok(None),
         Err(e) => return Err(e.to_string()),
     }
     local
@@ -182,6 +187,7 @@ fn report(
             memory: offer.memory,
             api: None,
             dedicated: false,
+            devstack: Some(devstack_node::version::Release::this()),
             leases: Vec::new(),
             total: Some(total),
             used: None,
@@ -193,7 +199,7 @@ fn report(
                 })
                 .collect(),
         })
-        .map(|_| true)
+        .map(|a| Some(a.coordinator))
         .map_err(|e| e.to_string())
 }
 
