@@ -7,6 +7,20 @@ Releases before 0.10.0 are summarised in [plan.md §7.4](docs/plan.md#74-phase-2
 and listed with their assets on the
 [releases page](https://github.com/nuetzliches/devstack/releases).
 
+## [Unreleased]
+
+### Fixed
+
+- The file watcher honours the repository's ignore rules (`.gitignore` at
+  any depth, `.git/info/exclude`, the global excludes): a change to an
+  ignored file starts no candidate and no longer updates a lane's copy, as
+  it is not in the snapshot a build runs in. A dev server starting up (Vite
+  writing its prebundled dependencies into `.angular/cache`) no longer
+  rebuilds every built service. The caches of frontend tools (`.angular`,
+  `.vite`, `.next`, `.nuxt`, `.turbo`, `.cache`, `.svelte-kit`,
+  `.parcel-cache`) never count, with or without a `.gitignore`.
+  `restart_on` still sees ignored files.
+
 ## [0.10.1] - 2026-10-18
 
 ### Fixed

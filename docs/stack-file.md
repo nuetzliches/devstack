@@ -202,8 +202,18 @@ anything outside the repository. When one of those changed, `devstack restart
   short gap). Only for services the proxy cannot carry.
 
 Generated directories never count as changes: `bin`, `obj`, `node_modules`,
-`target`, `.git`, `.devstack`. The watcher does not open them either, so a
-package install running in one is never held up by devstack.
+`target`, `.git`, `.devstack`, and the caches of frontend tools (`.angular`,
+`.vite`, `.next`, `.nuxt`, `.turbo`, `.cache`, `.svelte-kit`,
+`.parcel-cache`), even where `.gitignore` does not list them. The watcher
+does not open them either, so a package install running in one is never held
+up by devstack.
+
+A file git ignores (`.gitignore` at any depth, `.git/info/exclude`, the
+global `core.excludesFile`) starts no candidate, even when `watch` matches
+it: it is not in the snapshot a build runs in, so it cannot change the build.
+To make a file a build input, take it out of the ignore rules. `restart_on`
+is not affected: dev servers and containers read the working tree itself, so
+`restart_on = [".env"]` restarts on an ignored `.env`.
 
 A folder that is moved or renamed is reported by its own path, not by its
 files; the files in it count when they are created or saved. A `watch`

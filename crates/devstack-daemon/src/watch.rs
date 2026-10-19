@@ -10,7 +10,8 @@
 //!   (ADR-0024).
 //!
 //! Generated directories never count (`bin`, `obj`, `node_modules`, `target`,
-//! `.git`, `.devstack`): a build in the repository would otherwise see its own
+//! `.git`, `.devstack`, and the caches of frontend tools: `.angular`, `.vite`,
+//! `.next`, ...): a build in the repository would otherwise see its own
 //! output as a change. They are not even looked at: an event is judged on its
 //! path alone, before the file system is asked anything about it. A package
 //! manager creates thousands of directories in `node_modules` in a burst, and
@@ -19,13 +20,24 @@
 //! opening it with no sharing, and a listing of the directory in between makes
 //! that open fail with `EBUSY`. For the same reason Windows lists no new
 //! directory at all (`LIST_NEW_DIRS`).
+//!
+//! What git ignores makes no candidate either, nor does it update a lane's
+//! copy ([`gitignore`]): a build runs in a snapshot that holds no ignored
+//! file, so such a change cannot change a build. A dev server's or a
+//! container's `restart_on` and the stack file are judged by the list above
+//! alone: those run from (or are) the working tree itself, where an ignored
+//! file (`.env`, `appsettings.Development.json`) is read, and its change is
+//! worth a restart when `restart_on` names it.
 
 use crate::supervisor::Supervisor;
 use devstack_config::model::Kind;
 use globset::GlobSet;
 use notify::{EventKind, RecursiveMode, Watcher as _};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+
+mod gitignore;
+use gitignore::Ignores;
 
 /// Keeps the OS watch alive; dropping it stops watching.
 pub struct Watcher {
@@ -36,7 +48,8 @@ fn set(patterns: &[String]) -> Option<GlobSet> {
     devstack_build::watch_set(patterns).ok().flatten()
 }
 
-/// Is `name`, one component of a path, a directory that never counts?
+/// Is `name`, one component of a path, a directory of git, of devstack or of
+/// a build's output?
 fn generated(name: &str) -> bool {
     matches!(
         name,
@@ -44,7 +57,36 @@ fn generated(name: &str) -> bool {
     )
 }
 
+/// Is `name` the cache directory of a frontend tool? Usually ignored by git
+/// as well; listed for a repository whose `.gitignore` does not say so, and
+/// so that the watcher never opens them (module doc). A dev server writes
+/// into them as it starts (Vite's prebundled dependencies in
+/// `.angular/cache/<version>/<project>/vite/deps`, a `package.json` among
+/// them).
+fn cache(name: &str) -> bool {
+    matches!(
+        name,
+        ".angular"
+            | ".vite"
+            | ".next"
+            | ".nuxt"
+            | ".turbo"
+            | ".cache"
+            | ".svelte-kit"
+            | ".parcel-cache"
+    )
+}
+
+/// Is `rel` (repository-relative, `/`-separated) in a directory that never
+/// counts: a generated one or a tool's cache?
 pub fn ignored(rel: &str) -> bool {
+    rel.split('/').any(|n| generated(n) || cache(n))
+}
+
+/// Is `rel` in a generated directory (not a cache)? What tells a remote
+/// lane's sync (ADR-0029) that a change needs no sync: a cache is a file of
+/// the worktree like any other there, sent when git does not ignore it.
+pub fn in_generated(rel: &str) -> bool {
     rel.split('/').any(generated)
 }
 
@@ -59,6 +101,13 @@ fn counted(repo: &Path, path: &Path) -> Option<String> {
         .to_string_lossy()
         .replace('\\', "/");
     (!rel.is_empty() && !ignored(&rel)).then_some(rel)
+}
+
+/// Does a change to `path` change the ignore rules? Asked of the event's own
+/// paths: `.git/info/exclude` is in a directory that never counts.
+fn rule_file(repo: &Path, path: &Path) -> bool {
+    path.strip_prefix(repo)
+        .is_ok_and(|r| gitignore::is_rule_file(&r.to_string_lossy().replace('\\', "/")))
 }
 
 /// The two things the watcher asks the file system. A link to a directory is
@@ -204,6 +253,12 @@ fn watch(sup: Arc<Supervisor>) -> Result<Watcher, String> {
     let repo = sup.repo.clone();
     let me = sup.clone();
     let lane_copy = lane;
+    // Read once here and again when a rule file changes, never per event.
+    let rules = Arc::new(RwLock::new(Arc::new(if only_stack_file {
+        Ignores::none()
+    } else {
+        Ignores::load(&repo)
+    })));
     let rescan = {
         let (me, built) = (
             sup.clone(),
@@ -231,20 +286,33 @@ fn watch(sup: Arc<Supervisor>) -> Result<Watcher, String> {
             return;
         }
         me.watcher_ok();
+        if !only_stack_file && ev.paths.iter().any(|p| rule_file(&repo, p)) {
+            let (rules, repo) = (rules.clone(), repo.clone());
+            me.debounce("gitignore".into(), move |_| {
+                let fresh = Arc::new(Ignores::load(&repo));
+                *rules.write().unwrap() = fresh;
+            });
+        }
+        let ignores = rules.read().unwrap().clone();
         for rel in rels(&repo, ev) {
-            if lane_copy {
+            // An ignored file is not in a snapshot: no input of a build, no
+            // part of a lane's copy (module doc).
+            let in_snapshot = !ignores.ignored(&rel);
+            if lane_copy && in_snapshot {
                 me.copy_changed();
             }
             if stack_rel.as_deref() == Some(rel.as_str()) {
                 me.stack_file_touched();
                 continue;
             }
-            // A build file (`Directory.Build.targets`, a lockfile) may be an
-            // input of any build; the build id decides (#13).
-            let build_file = devstack_build::is_build_file(&rel);
-            for (n, g) in &built {
-                if g.is_match(&rel) || build_file {
-                    me.changed(n, &rel);
+            if in_snapshot {
+                // A build file (`Directory.Build.targets`, a lockfile) may be
+                // an input of any build; the build id decides (#13).
+                let build_file = devstack_build::is_build_file(&rel);
+                for (n, g) in &built {
+                    if g.is_match(&rel) || build_file {
+                        me.changed(n, &rel);
+                    }
                 }
             }
             for (n, g) in &devservers {
@@ -301,8 +369,40 @@ mod tests {
             "src/Api/Program.cs",
             "src/binary-tools/x.cs",
             "docs/objects.md",
+            "src/cache/x.ts",
+            "web/src/app/angular.json",
         ] {
             assert!(!super::ignored(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn frontend_caches_do_not_count_but_are_synced_to_a_remote_lane() {
+        for p in [
+            "web/.angular/cache/20.1.0/app/vite/deps/package.json",
+            "web/.angular/cache/20.1.0/app/vite/deps_temp_5f3a/package.json",
+            "web/.vite/deps/_metadata.json",
+            ".next/cache/x",
+            "web/.nuxt/x",
+            ".turbo/x",
+            "node_tools/.cache/x",
+            "web/.svelte-kit/x",
+            ".parcel-cache/x",
+        ] {
+            assert!(super::ignored(p), "{p}");
+            assert!(!super::in_generated(p), "{p}");
+        }
+        assert!(super::in_generated("src/Api/bin/x.dll"));
+    }
+
+    #[test]
+    fn a_rule_file_is_seen_by_its_raw_path() {
+        let repo = Path::new("/r");
+        for p in ["/r/.gitignore", "/r/web/.gitignore", "/r/.git/info/exclude"] {
+            assert!(rule_file(repo, Path::new(p)), "{p}");
+        }
+        for p in ["/r/src/a.cs", "/elsewhere/.gitignore", "/r/.git/index"] {
+            assert!(!rule_file(repo, Path::new(p)), "{p}");
         }
     }
 
@@ -371,6 +471,7 @@ mod tests {
             "/r/target/debug",
             "/r/.devstack/lanes/main/src",
             "/r/obj",
+            "/r/web/.angular/cache/20/app/vite/deps_temp_1",
             "/elsewhere/dir", // not in the repository
             "/r",             // the repository itself
         ] {
