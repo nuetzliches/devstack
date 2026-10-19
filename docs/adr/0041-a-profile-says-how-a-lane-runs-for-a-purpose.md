@@ -1,6 +1,6 @@
 # ADR-0041: A profile says how a lane (or the main tree) runs for a purpose, chosen when it starts
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-19)
 - **Date:** 2026-10-19
 - **Deciders:** project owner
 - **Related:** [#115](https://github.com/nuetzliches/devstack/issues/115), [#103](https://github.com/nuetzliches/devstack/issues/103), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0023](0023-stack-file-compatibility.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md) (point 6: workers in lanes), [ADR-0038](0038-a-lanes-data-outlives-its-lease.md)
