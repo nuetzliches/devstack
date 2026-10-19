@@ -290,7 +290,9 @@ collects and this machine agreed, else dropped.
 Never sent: file contents, environment values, command lines, service output.
 Every text of a log line is cut to its first line before it leaves the
 machine (a failed job's reason keeps its process output in `daemon.log`
-only).
+only); fields with a command line, an environment, process output or a path
+on the machine stay in `daemon.log`, and user names in home paths and
+credentials in URLs are masked.
 
 To read what a pool collected when the collector writes to Elasticsearch
 (the OpenTelemetry collector's `elasticsearch` exporter), `scripts/telemetry/`

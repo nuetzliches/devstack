@@ -91,6 +91,13 @@ and listed with their assets on the
     as OTLP arrays. Log records carry `observedTimeUnixNano`.
   - Histogram buckets add 180 s, 600 s, 900 s, 1200 s and 1800 s.
   - `scripts/telemetry/analyze.py` reads the old and the new shape.
+  - A `prepare` line sent its command line (`run`) to the collector. Fields
+    that hold a command line, an environment, process output or a path on
+    the machine (`run`, `cmd`, `command_line`, `args`, `env`, `output`,
+    `repo`, `worktree`, `file`, `cwd`, `dir`) now stay in `daemon.log`, at
+    any depth; user names in home paths and credentials in URLs are masked
+    in every text that leaves. Lane lines name the worktree's path
+    `worktree` (was `path`).
 
 ## [0.10.1] - 2026-10-18
 

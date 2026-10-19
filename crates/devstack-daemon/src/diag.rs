@@ -25,8 +25,10 @@
 //! What leaves the machine (that collector, a pool's, ADR-0037) carries no
 //! service output: a reason or error of several lines is devstack's own first
 //! line, then the output of a build, a job or a service (which may hold a
-//! connection string); only the first line goes out. The file keeps all.
-//! A nested value goes out as dotted attributes (`status` `{"state":…}` as
+//! connection string); only the first line goes out. Command lines,
+//! environments, process output and paths on this machine stay in the file
+//! ([`LOCAL_ONLY`]); user names in home paths and URL credentials are masked.
+//! The file keeps all. A nested value goes out as dotted attributes (`status` `{"state":…}` as
 //! `devstack.status.state`), each record with the repository it concerns.
 
 use serde_json::{Map, Value};
@@ -104,21 +106,93 @@ impl DiagLog {
     }
 }
 
-/// A line as it may leave the machine: every text cut to its first line
-/// (ADR-0037: never service output).
+/// Fields that stay in the file, at any depth (ADR-0037 point 4: never
+/// command lines, environment values, service output, paths outside the
+/// repository): a command line (`run`, `cmd`, `command_line`, `args`), an
+/// environment (`env`), a process's output (`output`), a path on this
+/// machine (`repo`, `worktree`, `file`, `cwd`, `dir`). A diagnostic line
+/// that carries such a value uses one of these names.
+pub const LOCAL_ONLY: &[&str] = &[
+    "run",
+    "cmd",
+    "command_line",
+    "args",
+    "env",
+    "output",
+    "repo",
+    "worktree",
+    "file",
+    "cwd",
+    "dir",
+];
+
+/// A line as it may leave the machine: the [`LOCAL_ONLY`] fields left out,
+/// every text cut to its first line (ADR-0037: never service output), a
+/// user's name in a home directory path (`C:\Users\<name>`, `/home/<name>`)
+/// replaced by `~`, and the credentials of a URL (`scheme://user:pw@host`)
+/// by `***`.
 pub fn outbound(line: &Map<String, Value>) -> Map<String, Value> {
-    fn cut(v: &Value) -> Value {
+    fn clean(v: &Value) -> Value {
         match v {
-            Value::String(s) => match s.split_once('\n') {
-                Some((first, _)) => Value::String(format!("{} …", first.trim_end())),
-                None => v.clone(),
-            },
-            Value::Array(a) => Value::Array(a.iter().map(cut).collect()),
-            Value::Object(o) => Value::Object(o.iter().map(|(k, v)| (k.clone(), cut(v))).collect()),
+            Value::String(s) => {
+                let s = match s.split_once('\n') {
+                    Some((first, _)) => format!("{} …", first.trim_end()),
+                    None => s.clone(),
+                };
+                Value::String(scrub(&s))
+            }
+            Value::Array(a) => Value::Array(a.iter().map(clean).collect()),
+            Value::Object(o) => Value::Object(fields(o)),
             other => other.clone(),
         }
     }
-    line.iter().map(|(k, v)| (k.clone(), cut(v))).collect()
+    fn fields(o: &Map<String, Value>) -> Map<String, Value> {
+        o.iter()
+            .filter(|(k, _)| !LOCAL_ONLY.contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), clean(v)))
+            .collect()
+    }
+    fields(line)
+}
+
+/// A text without user names in home directories and without credentials
+/// in URLs (see [`outbound`]).
+fn scrub(s: &str) -> String {
+    let mut s = s.to_string();
+    // ASCII lowercase keeps the byte offsets.
+    for marker in ["\\users\\", "/users/", "/home/"] {
+        let mut from = 0;
+        while let Some(i) = s[from..].to_ascii_lowercase().find(marker) {
+            let start = from + i + marker.len();
+            let end = s[start..]
+                .find(|c: char| matches!(c, '\\' | '/' | '"' | '\'') || c.is_whitespace())
+                .map_or(s.len(), |e| start + e);
+            if end > start && &s[start..end] != "~" {
+                s.replace_range(start..end, "~");
+            }
+            from = start + 1;
+            if from >= s.len() {
+                break;
+            }
+        }
+    }
+    let mut from = 0;
+    while let Some(i) = s[from..].find("://") {
+        let start = from + i + 3;
+        let end = s[start..]
+            .find(|c: char| matches!(c, '/' | '"' | '\'' | '?' | '#') || c.is_whitespace())
+            .map_or(s.len(), |e| start + e);
+        if let Some(at) = s[start..end].rfind('@') {
+            s.replace_range(start..start + at, "***");
+            from = start + 4;
+        } else {
+            from = end;
+        }
+        if from >= s.len() {
+            break;
+        }
+    }
+    s
 }
 
 fn open_append(path: &Path) -> Option<File> {
@@ -416,6 +490,46 @@ mod tests {
         assert!(!text.contains("secret") && !text.contains("\nb"), "{text}");
         assert_eq!(out["status"]["reason"], "job exited with code 1 …");
         assert_eq!(out["n"], 3);
+    }
+
+    #[test]
+    fn command_lines_paths_and_credentials_do_not_leave_the_machine() {
+        let line = json!({
+            "event": "prepare",
+            "lane": "main",
+            "service": "api",
+            "run": "npm ci --token=abc",
+            "worktree": "C:\\Users\\jane\\src\\shop-fix",
+            "nested": { "env": { "DB": "secret" }, "args": ["--password", "pw"], "state": "ok" },
+            "error": "open C:\\Users\\Jane.Doe\\src\\x\\a.json: denied; /home/jdoe/x and /Users/j d",
+            "reason": "cannot reach https://bob:hunter2@registry.example/pkg (http://plain.example/x)",
+            "path": "/v1/lanes/fix/stop",
+        });
+        let out = Value::Object(outbound(line.as_object().unwrap()));
+        let text = out.to_string();
+        for leak in [
+            "npm ci", "abc", "jane", "Jane", "jdoe", "secret", "hunter2", "bob",
+        ] {
+            assert!(!text.contains(leak), "{leak} in {text}");
+        }
+        assert!(out.get("run").is_none() && out.get("worktree").is_none());
+        assert_eq!(out["nested"], json!({ "state": "ok" }));
+        assert_eq!(
+            out["error"],
+            "open C:\\Users\\~\\src\\x\\a.json: denied; /home/~/x and /Users/~ d"
+        );
+        assert_eq!(
+            out["reason"],
+            "cannot reach https://***@registry.example/pkg (http://plain.example/x)"
+        );
+        // What is not a leak goes as it was.
+        assert_eq!(out["path"], "/v1/lanes/fix/stop");
+        assert_eq!(out["service"], "api");
+        // The file keeps all of it.
+        let dir = tempfile::tempdir().unwrap();
+        let d = DiagLog::open(dir.path().join("daemon.log"));
+        d.write("info", "prepare", json!({ "run": "npm ci" }));
+        assert!(tail(d.path(), 1, None)[0].contains("npm ci"));
     }
 
     #[test]

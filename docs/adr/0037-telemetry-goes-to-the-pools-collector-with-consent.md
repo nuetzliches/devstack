@@ -109,4 +109,12 @@ tunnel connections (`tunnel`; with `devstack.tunnels` open and
 `os.type` and `devstack.repository` as metrics do, nested values as dotted
 attributes (`devstack.status.state`) and their observed time; the main
 working tree is the lane `main`. The histogram bounds reach 30 minutes.
+Point 4's "never command lines" did not hold either: a `prepare` line
+carried its `run`. Now `outbound` leaves out fields by name, at any depth
+(`LOCAL_ONLY`: `run`, `cmd`, `command_line`, `args`, `env`, `output`,
+`repo`, `worktree`, `file`, `cwd`, `dir`; a line that carries a command
+line, an environment, process output or a path on the machine uses one of
+them), and masks user names in home paths (`C:\Users\~`, `/home/~`) and
+credentials in URLs (`https://***@host`) in every text; `daemon.log`
+keeps all.
 `crates/devstack-daemon/src/telemetry.rs` and `diag.rs` enforce it.

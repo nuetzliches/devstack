@@ -466,7 +466,7 @@ impl Lanes {
                 let t = since.entry(n.clone()).or_insert_with(|| {
                     crate::diag::warn(
                         "lane_worktree_missing",
-                        serde_json::json!({ "lane": n, "path": known[n.as_str()].entry.path,
+                        serde_json::json!({ "lane": n, "worktree": known[n.as_str()].entry.path,
                             "forgotten_after_s": MISSING_GRACE.as_secs() }),
                     );
                     std::time::Instant::now()
@@ -508,12 +508,12 @@ impl Lanes {
                     .find(|n| !known.contains_key(n))
                     .expect("a free name");
                 let Some(number) = self.free_number(&known, false) else {
-                    crate::diag::warn("lane_no_ports", serde_json::json!({ "path": w.path }));
+                    crate::diag::warn("lane_no_ports", serde_json::json!({ "worktree": w.path }));
                     continue;
                 };
                 crate::diag::info(
                     "lane_found",
-                    serde_json::json!({ "lane": name, "path": w.path, "number": number }),
+                    serde_json::json!({ "lane": name, "worktree": w.path, "number": number }),
                 );
                 known.insert(
                     name.clone(),
@@ -929,7 +929,7 @@ impl Lanes {
             crate::diag::info(
                 "lane_started",
                 // `ms`: opening the lane; its services' starts have lines of their own.
-                serde_json::json!({ "lane": name, "path": entry.path, "number": entry.number,
+                serde_json::json!({ "lane": name, "worktree": entry.path, "number": entry.number,
                     "place": "local", "ms": t0.elapsed().as_millis() as u64 }),
             );
             Ok(lane)
