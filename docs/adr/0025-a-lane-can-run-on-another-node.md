@@ -1,6 +1,6 @@
 # ADR-0025: A lane can run on another node, as a Linux container with its own infrastructure
 
-- **Status:** Accepted (2026-10-16), point 10 amended and accepted (2026-10-16); placement and trust in detail: ADR-0026 to ADR-0031
+- **Status:** Accepted (2026-10-16), point 10 amended and accepted (2026-10-16); amended 2026-10-19 (a start on a node answers once leased, and its phases are timed); placement and trust in detail: ADR-0026 to ADR-0031
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** plan §3.5, §9, [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (local lanes, built in 0.5.0), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0004](0004-infrastructure-is-delegated-to-compose.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0011](0011-platform-windows-native-first.md), [ADR-0012](0012-shared-infrastructure-between-lanes.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md), [ADR-0027](0027-trust-between-nodes.md), [ADR-0028](0028-lane-images.md), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md)
@@ -130,6 +130,27 @@ copy of the fixture: leased, 7 files synced in 0.2 s, started on the node in
 healthy build on the node about 8 s later; `devstack lane stop` and `devstack
 down` (the daemon ends) each left nothing on the node.
 
+*Amended 2026-10-19.* **A start on a node answers once the lane is leased,
+and is followed.** A real stack's first start on a node took 4.4 minutes
+(sync 0.7 s, then one Compose group 39 s and another 3 min 41 s), and
+`POST /v1/lanes` held its request open all that time: a proxy or client with
+a shorter timeout ends it, and the minutes could not be broken down. Now the
+requester's daemon answers `202` once what can be told at once is told (the
+worktree, a clash with where the lane runs, the coordinator's lease and the
+node's admission: refused with `409`), and syncs and starts the lane in the
+background, as `POST /v1/up` does for services. Progress and outcome are the
+lane's `moving` (point 10's steps, in `GET /v1/lanes` and the `lanes`
+event): gone once it runs there, carrying the error when it failed. The CLI
+(`devstack up --on`), the MCP `up` and the dashboard follow it, so `up`
+still ends when the lane runs, or fails with the reason. The node times
+each phase of the start itself (its polling requester would miss a short
+one) and splits each Compose group into checking, images (pull, build) and
+containers, starting, and waiting until healthy; the requester logs every
+phase as `remote_lane_phase` with its `ms`, the lease and the sync
+included, so each phase is a duration of its own in the pool's telemetry
+([ADR-0037](0037-telemetry-goes-to-the-pools-collector-with-consent.md)).
+A move (point 10) still answers when done.
+
 ## Alternatives considered
 
 - **Remote builds only, run locally.** Moves CPU, not memory; the memory of a
@@ -194,3 +215,12 @@ may ask of the node). The requester side: `crates/devstack-daemon/src/remote.rs`
 `DEVSTACK_EXTERNAL_INFRA` names). A service's `platforms` in the stack file
 leaves it out where it cannot run (`on_this_platform` in the supervisor);
 `devstack check` does not judge Windows-only components.
+
+*Noted 2026-10-19, with the amendment.* The start that answers once leased:
+`Lanes::activate_remote` and `launch_remote` in
+`crates/devstack-daemon/src/lanes.rs`, `RemoteLane::lease` and `launch` in
+`remote.rs`, `lanes_start` (`202`) in `api.rs`; its clients `join_lane` in
+`crates/devstack/src/client.rs` (the CLI and the MCP server) and `startLane`
+in `ui/src/stores/stack.ts`. The phase times: `LaneState::phases` in
+`crates/devstack-node/src/node.rs`, the phases of `LaneRun::start` in
+`lanerun.rs`, `remote_lane_phase` in `remote.rs`.

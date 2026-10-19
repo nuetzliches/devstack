@@ -462,7 +462,8 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             if let Some(wt) = client::worktree()
                 && (on.is_some() || c.lane().is_none_or(|l| l == "-"))
             {
-                c.join_lane(wt, false, false, on)?;
+                // A start on a node is followed within the same timeout.
+                c.join_lane(wt, false, false, on, Some(timeout), |_| {})?;
             }
             match client::start_and_wait(&c, file, Some(timeout), |_, _| {})? {
                 UpOutcome::Ready(stack) => {

@@ -92,8 +92,9 @@ impl Client {
         let Some(token) = devstack_daemon::token::load() else {
             return Ok(None);
         };
-        // Long enough for a lane's first start on a node or its move, which
-        // the daemon answers when done (it waits up to 30 minutes itself).
+        // Long enough for a lane's move to a node, which the daemon answers
+        // when done (it waits up to 30 minutes itself). A start on a node
+        // answers at once and is followed.
         let agent = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(1900)))
             .http_status_as_error(false)
@@ -148,12 +149,19 @@ impl Client {
 
     /// Register this worktree as a lane (and make sure the shared
     /// infrastructure runs); from then on calls go to it.
+    ///
+    /// On a node (`on`) the daemon answers `202` once the lane is leased
+    /// and goes on syncing and starting it there: this follows the lane's
+    /// `moving` until it runs there (or its start failed, an error), at most
+    /// `within`, and tells `progress` each new step.
     pub fn join_lane(
         &mut self,
         wt: &Worktree,
         workers: bool,
         force: bool,
         on: Option<&str>,
+        within: Option<Duration>,
+        mut progress: impl FnMut(&Value),
     ) -> Result<String> {
         let (status, body) = self.call_raw(
             "POST",
@@ -169,8 +177,52 @@ impl Client {
             .as_str()
             .unwrap_or("")
             .to_string();
+        if status == 202 {
+            self.follow_start(&name, within, &mut progress)?;
+        }
         self.prefix = format!("/v1/lanes/{name}");
         Ok(name)
+    }
+
+    /// Follow the start of lane `name` on a node until it runs there; its
+    /// error if it failed.
+    fn follow_start(
+        &self,
+        name: &str,
+        within: Option<Duration>,
+        progress: &mut dyn FnMut(&Value),
+    ) -> Result<()> {
+        let t0 = Instant::now();
+        let mut last = Value::Null;
+        loop {
+            let lanes: Vec<Value> = serde_json::from_str(&self.get("/v1/lanes")?)?;
+            let Some(lane) = lanes.into_iter().find(|l| l["name"] == name) else {
+                bail!("lane `{name}` is gone (its worktree was removed?)");
+            };
+            let m = &lane["moving"];
+            if m.is_object() {
+                if let Some(e) = m["error"].as_str() {
+                    bail!("{e}");
+                }
+                if *m != last {
+                    progress(m);
+                    last = m.clone();
+                }
+            } else if lane["active"] == true {
+                return Ok(());
+            } else {
+                bail!("lane `{name}`: its start on the node ended, and it does not run");
+            }
+            if within.is_some_and(|w| t0.elapsed() > w) {
+                bail!(
+                    "lane `{name}` is still starting on its node after {} s ({}); it continues: \
+                     `devstack lane list` shows how far it got",
+                    t0.elapsed().as_secs(),
+                    m["what"].as_str().unwrap_or("")
+                );
+            }
+            std::thread::sleep(Duration::from_millis(700));
+        }
     }
 
     /// The path a call goes to: in a lane's worktree, the lane's API.
@@ -701,13 +753,12 @@ pub fn up(stack_file: &Path, workers: bool, force: bool, on: Option<&str>) -> Re
         if let Some(node) = on {
             println!("leasing, syncing and starting the lane on {node}...");
         }
-        let follow = on.map(|_| follow_steps(stack_file, None, Some(wt.path.clone())));
-        let joined = c.join_lane(wt, workers, force, on);
-        if let Some((done, steps)) = follow {
-            done.store(true, std::sync::atomic::Ordering::SeqCst);
-            let _ = steps.join();
-        }
-        let name = joined?;
+        // A start on a node answers once leased; its steps follow.
+        let name = c.join_lane(wt, workers, force, on, None, |m| {
+            if m["step"] != 0 {
+                println!("{}", step_line(m));
+            }
+        })?;
         // `pool`: the coordinator chose; say which node.
         let placed = on.map(|node| {
             c.call_raw("GET", "/v1/lanes", None)
@@ -1086,6 +1137,20 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
         if let Some(e) = l["node_error"].as_str() {
             troubles.push(format!("{name}: {e}"));
         }
+        // A start on a node or a move under way, or one that failed lately.
+        let m = &l["moving"];
+        if m.is_object() {
+            let to = m["to"].as_str().unwrap_or("");
+            let kind = if m["kind"] == "move" {
+                "moving to"
+            } else {
+                "starting on"
+            };
+            troubles.push(match m["error"].as_str() {
+                Some(e) => format!("{name}: {kind} {to} failed: {e}"),
+                None => format!("{name}: {kind} {to}{}", step_line(m)),
+            });
+        }
         println!(
             "{:<24} {:<24} {:>8} {:>9}  {:<5}  {:<16} {}",
             name,
@@ -1105,6 +1170,16 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
         println!("  ! {t}");
     }
     Ok(())
+}
+
+/// A lane's `moving` as a line: `  [2/3] sync: ...`.
+fn step_line(m: &Value) -> String {
+    format!(
+        "  [{}/{}] {}",
+        m["step"],
+        m["steps"],
+        m["what"].as_str().unwrap_or("")
+    )
 }
 
 /// Print the steps of a lane's start on a node or its move while `done` is
@@ -1143,12 +1218,7 @@ fn follow_steps(
             let Some(m) = lane.map(|l| &l["moving"]).filter(|m| m.is_object()) else {
                 continue;
             };
-            let line = format!(
-                "  [{}/{}] {}",
-                m["step"],
-                m["steps"],
-                m["what"].as_str().unwrap_or("")
-            );
+            let line = step_line(m);
             if line != last && m["step"] != 0 {
                 println!("{line}");
                 last = line;

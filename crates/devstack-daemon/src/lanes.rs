@@ -104,6 +104,15 @@ pub struct LaneMove {
     pub failed_at: Option<u128>,
 }
 
+/// What [`Lanes::activate_remote`] did with a lane: named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteStart {
+    /// It runs on that node already.
+    Running(String),
+    /// Its start there goes on in the background (its `moving`).
+    Starting(String),
+}
+
 /// How long a failed start or move stays shown.
 const MOVE_ERROR_FOR_MS: u128 = 10 * 60 * 1000;
 
@@ -1225,6 +1234,12 @@ impl Lanes {
         to: &str,
         steps: u8,
     ) -> impl Fn(u8, &str) + Send + Sync + 'a {
+        self.begin_move(name, kind, to, steps);
+        self.step_fn(name)
+    }
+
+    /// A start or move of `name` begins: its `moving` is shown from now on.
+    fn begin_move(&self, name: &str, kind: &'static str, to: &str, steps: u8) {
         let since = crate::state::now_ms();
         self.moves.lock().unwrap().insert(
             name.to_string(),
@@ -1240,6 +1255,10 @@ impl Lanes {
             },
         );
         self.announce();
+    }
+
+    /// What a start or move of `name` that has begun reports its steps to.
+    fn step_fn<'a>(&'a self, name: &str) -> impl Fn(u8, &str) + Send + Sync + 'a {
         let name = name.to_string();
         move |step: u8, what: &str| {
             if let Some(m) = self.moves.lock().unwrap().get_mut(&name) {
@@ -1288,12 +1307,20 @@ impl Lanes {
     /// Start the lane of the worktree at `path` on the node `on` (`devstack
     /// up --on`, ADR-0025): leased, synced and started there, followed from
     /// here. `need` is what it is expected to take.
+    ///
+    /// What can be told at once is answered at once: no such worktree, a
+    /// clash with where the lane runs, no lease (no node, the coordinator or
+    /// the node refuses). The sync and the start on the node, minutes on a
+    /// first start, go on in the background ([`RemoteStart::Starting`]); the
+    /// lane's `moving` shows how far they got, and is gone once it runs or
+    /// carries the error if it failed (B1: a request open for minutes
+    /// is cut off by whatever proxy or client has a shorter timeout).
     pub fn activate_remote(
-        &self,
+        self: &Arc<Self>,
         path: &Path,
         on: &str,
         need: devstack_node::share::Amount,
-    ) -> Result<String, String> {
+    ) -> Result<RemoteStart, String> {
         let path = std::path::absolute(path).map_err(|e| e.to_string())?;
         if same_tree(&path, &self.main.repo) {
             return Err("that is the main working tree: it runs on this machine".into());
@@ -1326,7 +1353,7 @@ impl Lanes {
             .retain(|n, r| n != &name || !r.state().ended);
         if let Some(r) = self.remote.lock().unwrap().get(&name) {
             return if r.is_at(on) {
-                Ok(name)
+                Ok(RemoteStart::Running(name))
             } else {
                 Err(format!(
                     "lane `{name}` runs on {} already: `devstack lane move {name} --to {on}` moves it",
@@ -1335,18 +1362,85 @@ impl Lanes {
             };
         }
         if !self.pending.lock().unwrap().insert(name.clone()) {
-            return Err(format!("lane `{name}` is being started"));
+            // The same start asked again (a client that was interrupted and
+            // runs `up --on` once more): it follows the one under way.
+            let same = self.moves.lock().unwrap().get(&name).is_some_and(|m| {
+                m.kind == "start" && m.error.is_none() && m.to.eq_ignore_ascii_case(on)
+            });
+            return if same {
+                Ok(RemoteStart::Starting(name))
+            } else {
+                Err(format!("lane `{name}` is being started or moved"))
+            };
         }
-        let step = self.stepper(&name, "start", on, 3);
+        self.begin_move(&name, "start", on, 3);
+        let leased = {
+            let step = self.step_fn(&name);
+            self.with_spec(&entry, on, need, true, &step, |spec| {
+                RemoteLane::lease(&self.rt, &spec)
+            })
+        };
+        let leased = match leased {
+            Ok(l) => l,
+            Err(e) => {
+                self.start_failed(&name, on, &e);
+                return Err(e);
+            }
+        };
+        let lanes = self.clone();
+        let (lane, to) = (name.clone(), on.to_string());
+        let spawned = std::thread::Builder::new()
+            .name(format!("lane-start-{name}"))
+            .spawn(move || lanes.launch_remote(&entry, &to, need, leased));
+        if let Err(e) = spawned {
+            // The lease expires on the node by itself.
+            let e = format!("lane `{lane}`: {e}");
+            self.start_failed(&lane, on, &e);
+            return Err(e);
+        }
+        Ok(RemoteStart::Starting(name))
+    }
+
+    /// The background part of [`Lanes::activate_remote`]: sync, start on
+    /// the node, follow. Its outcome is the lane's: running on the node, or
+    /// `moving` with the error.
+    fn launch_remote(
+        &self,
+        entry: &LaneEntry,
+        on: &str,
+        need: devstack_node::share::Amount,
+        leased: crate::remote::Leased,
+    ) {
+        let name = &entry.name;
         // Containers of an earlier local start would hold its ports here.
-        self.stop_local_infra(&name);
-        let result = self.start_remote(&entry, on, need, true, &step);
-        self.finish(&name, result.as_ref().err());
-        self.pending.lock().unwrap().remove(&name);
-        let lane = result?;
-        self.remote.lock().unwrap().insert(name.clone(), lane);
-        self.announce();
-        Ok(name)
+        self.stop_local_infra(name);
+        let result = {
+            let step = self.step_fn(name);
+            self.with_spec(entry, on, need, true, &step, |spec| {
+                RemoteLane::launch(&self.rt, spec, leased)
+            })
+        };
+        match result {
+            Ok(lane) => {
+                // Listed as running on the node before `moving` goes, so a
+                // client never sees it neither starting nor started.
+                self.remote.lock().unwrap().insert(name.clone(), lane);
+                self.finish(name, None);
+                self.pending.lock().unwrap().remove(name);
+            }
+            Err(e) => self.start_failed(name, on, &e),
+        }
+    }
+
+    /// A start on a node failed: said in the log, and in the lane's
+    /// `moving` for a while.
+    fn start_failed(&self, name: &str, on: &str, error: &String) {
+        crate::diag::warn(
+            "remote_lane_not_started",
+            serde_json::json!({ "lane": name, "on": on, "error": error }),
+        );
+        self.finish(name, Some(error));
+        self.pending.lock().unwrap().remove(name);
     }
 
     /// Whom the lane `name` is shared with: what its owner said, else the
@@ -1440,6 +1534,21 @@ impl Lanes {
         forward: bool,
         step: &(dyn Fn(u8, &str) + Send + Sync),
     ) -> Result<Arc<RemoteLane>, String> {
+        self.with_spec(entry, on, need, forward, step, |spec| {
+            RemoteLane::start(&self.rt, spec)
+        })
+    }
+
+    /// `f` with what the lane of `entry` on `on` is to be.
+    fn with_spec<T>(
+        &self,
+        entry: &LaneEntry,
+        on: &str,
+        need: devstack_node::share::Amount,
+        forward: bool,
+        step: &(dyn Fn(u8, &str) + Send + Sync),
+        f: impl FnOnce(crate::remote::RemoteSpec<'_>) -> Result<T, String>,
+    ) -> Result<T, String> {
         let stack_file = self
             .main
             .stack_file()
@@ -1450,31 +1559,28 @@ impl Lanes {
         let worktree = devstack_proc::long_path(&entry.path);
         let offset = lane_offset(entry.number, self.main.stack.lanes.port_step)
             .ok_or_else(|| format!("lane `{}`: its ports are beyond 65535", entry.name))?;
-        RemoteLane::start(
-            &self.rt,
-            crate::remote::RemoteSpec {
-                name: &entry.name,
-                repo: &self.main.stack.stack.name,
-                worktree: &worktree,
-                main: &self.main.repo,
-                extra: &self.main.stack.lanes.sync,
-                sharing: self.sharing_of(entry),
-                stack_file: &stack_file,
-                on,
-                need,
-                scratch: &scratch,
-                // The lane runs on its lane ports there as well: the same
-                // port on both ends.
-                ports: ports(&self.main.stack)
-                    .into_iter()
-                    .filter_map(|p| p.checked_add(offset))
-                    .map(|p| (p, p))
-                    .collect(),
-                port_offset: offset,
-                forward,
-                step,
-            },
-        )
+        f(crate::remote::RemoteSpec {
+            name: &entry.name,
+            repo: &self.main.stack.stack.name,
+            worktree: &worktree,
+            main: &self.main.repo,
+            extra: &self.main.stack.lanes.sync,
+            sharing: self.sharing_of(entry),
+            stack_file: &stack_file,
+            on,
+            need,
+            scratch: &scratch,
+            // The lane runs on its lane ports there as well: the same
+            // port on both ends.
+            ports: ports(&self.main.stack)
+                .into_iter()
+                .filter_map(|p| p.checked_add(offset))
+                .map(|p| (p, p))
+                .collect(),
+            port_offset: offset,
+            forward,
+            step,
+        })
     }
 
     /// The services a lane on a node must have ready before it takes over:

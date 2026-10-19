@@ -277,7 +277,10 @@ struct LaneStart {
 /// `POST /v1/lanes` with `{"path", "infra"?}`: start the lane of that
 /// worktree (`devstack up` in it does this; with `infra` the shared
 /// infrastructure is started if it is not up); `/v1/lanes/<name>/v1/up`
-/// then starts its services.
+/// then starts its services. `201` with its entry when it is started; with
+/// `on`, `202` with its entry while its start on the node goes on (its
+/// `moving`; gone once it runs there, or carrying the error), `201` if it
+/// runs there already.
 async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> Response {
     let lanes = match lanes_of(&s) {
         Ok(l) => l.clone(),
@@ -286,18 +289,27 @@ async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> 
     let main = s.sup.clone();
     let usage = s.usage.clone();
     let res = tokio::task::spawn_blocking(move || {
+        let view = |name: &str| {
+            lanes
+                .list()
+                .into_iter()
+                .find(|v| v.name == name)
+                .ok_or_else(|| format!("lane `{name}` is gone"))
+        };
         if let Some(on) = body.on.as_deref().filter(|o| !o.trim().is_empty()) {
             // What a local lane would need here is what it needs there.
             let need = devstack_node::share::Amount {
                 cpus: 0.5,
                 memory: lane_need(&main, &usage).max(1 << 30),
             };
-            let name = lanes.activate_remote(&body.path, on.trim(), need)?;
-            return lanes
-                .list()
-                .into_iter()
-                .find(|v| v.name == name)
-                .ok_or_else(|| format!("lane `{name}` is gone"));
+            return match lanes.activate_remote(&body.path, on.trim(), need)? {
+                crate::lanes::RemoteStart::Running(name) => {
+                    view(&name).map(|v| (StatusCode::CREATED, v))
+                }
+                crate::lanes::RemoteStart::Starting(name) => {
+                    view(&name).map(|v| (StatusCode::ACCEPTED, v))
+                }
+            };
         }
         if !body.force {
             memory_fits(&main, &usage)?;
@@ -307,16 +319,11 @@ async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> 
         if body.infra && main.stack.compose.values().any(|g| !g.shared.is_empty()) {
             main.infra_up()?;
         }
-        let name = lane.entry.name.clone();
-        lanes
-            .list()
-            .into_iter()
-            .find(|v| v.name == name)
-            .ok_or_else(|| format!("lane `{name}` is gone"))
+        view(&lane.entry.name).map(|v| (StatusCode::CREATED, v))
     })
     .await;
     match res {
-        Ok(Ok(view)) => (StatusCode::CREATED, Json(view)).into_response(),
+        Ok(Ok((status, view))) => (status, Json(view)).into_response(),
         Ok(Err(e)) => err(StatusCode::CONFLICT, e),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }

@@ -309,7 +309,7 @@ impl LaneRun {
         // created; nothing runs yet, so the network rules go in first.
         let mut groups: Vec<(String, Group, Model)> = Vec::new();
         for name in order(&stack) {
-            phase(&format!("infrastructure: {name} (checked)"));
+            phase(&format!("infrastructure: {name}: checking"));
             let overlay = self.overlay(&name);
             let _ = std::fs::remove_file(&overlay);
             let g = self.group(&stack, &name);
@@ -351,6 +351,11 @@ impl LaneRun {
             for n in &g.networks {
                 self.own_network_create(n)?;
             }
+            // Pulls and builds what is missing: the slow part of a first
+            // start, timed apart from starting and waiting.
+            phase(&format!(
+                "infrastructure: {name}: images (pull, build) and containers"
+            ));
             dc.create(&g)?;
             groups.push((name, g, model));
         }
@@ -377,7 +382,11 @@ impl LaneRun {
         let mut infra = BTreeMap::new();
         let mut infra_ports = Vec::new();
         for (name, g, model) in &groups {
-            phase(&format!("infrastructure: {name}"));
+            // Started, then waited for, as two phases: a slow container
+            // start and a slow health check are told apart.
+            phase(&format!("infrastructure: {name}: starting containers"));
+            dc.up_detached(g)?;
+            phase(&format!("infrastructure: {name}: waiting until healthy"));
             dc.up(g, Duration::from_secs(300))?;
             // Ports and environments as the stack file's Compose files have them
             // (`model`, read before the overlay that publishes nothing): the lane
