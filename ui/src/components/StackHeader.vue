@@ -25,6 +25,15 @@ const servedBy = computed(() => stack.lanes.find((l) => l.owns_main) ?? null);
 const lanes = computed(() => orderLanes(stack.lanes));
 const busyMain = computed(() => !!stack.busy['lane-main']);
 
+/** The shown tree's state and its event stream: live, or why not. */
+const liveState = computed(() => {
+  if (!stack.running) return { tone: '', label: 'offline', title: 'The stack daemon is not running' };
+  if (current.value && current.value.active === false) return { tone: '', label: 'not started', title: 'This worktree runs nothing yet' };
+  if (stack.live) return { tone: 'ok', label: 'live', title: `Receiving live events from the ${current.value ? 'lane' : 'main working tree'}` };
+  if (stack.stream === 'error') return { tone: 'warn', label: 'reconnecting', title: 'The event stream dropped; reconnecting' };
+  return { tone: '', label: 'connecting', title: 'Connecting to the event stream' };
+});
+
 /** Where the shown tree lives and which branch it has. */
 const path = computed(() => current.value?.path ?? view.value?.repo ?? stack.entry?.repo ?? '');
 const branch = computed(() => (current.value ? current.value.branch : view.value?.branch) ?? null);
@@ -101,7 +110,7 @@ function pick(l: LaneView | null) {
     <div class="line1">
       <h1 class="truncate">{{ view?.name ?? stack.entry?.name ?? 'Stack' }}</h1>
       <span v-if="hubAway" class="pill" title="The hub is not reachable"><span class="dot" />last seen {{ ago(stack.viewAt ?? hub.lastContact, now) }}</span>
-      <span v-else class="pill" :class="stack.running ? 'ok' : ''"><span class="dot" />{{ stack.running ? 'running' : 'offline' }}</span>
+      <span v-else class="pill" :class="liveState.tone" :title="liveState.title" data-testid="stack-live" role="status"><span class="dot" />{{ liveState.label }}</span>
       <span v-if="daemon" class="tag" title="daemon version">devstack {{ daemon.version }}</span>
       <span class="grow" />
       <template v-if="!hubAway">

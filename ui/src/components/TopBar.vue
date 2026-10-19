@@ -12,14 +12,12 @@ const hub = useHub();
 const stack = useStack();
 const ui = useUi();
 
+// The hub's connection; whether the shown stack or lane is live is in its
+// own header (StackHeader).
 const conn = computed(() => {
   if (hub.status === 'unreachable' || (hub.status === 'ok' && hub.stream === 'error')) return { tone: 'danger', label: 'Hub offline', title: 'The devstack hub is not reachable' };
   if (hub.status === 'loading' || hub.stream === 'connecting') return { tone: 'neutral', label: 'Connecting', title: 'Connecting to the hub' };
-  if (!stack.id) return { tone: 'ok', label: 'Hub', title: 'Connected to the hub' };
-  if (!stack.running) return { tone: 'warn', label: 'Stack offline', title: 'The stack daemon is not running' };
-  if (stack.live) return { tone: 'ok', label: 'Live', title: 'Receiving live events' };
-  if (stack.stream === 'error') return { tone: 'warn', label: 'Reconnecting', title: 'The stack event stream dropped; reconnecting' };
-  return { tone: 'neutral', label: 'Connecting', title: 'Connecting to the stack' };
+  return { tone: 'ok', label: 'Hub', title: 'Connected to the hub' };
 });
 
 const themeIcon = computed(() => (ui.theme === 'system' ? 'monitor' : ui.theme === 'light' ? 'sun' : 'moon'));

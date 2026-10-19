@@ -26,6 +26,14 @@ and listed with their assets on the
 
 ### Changed
 
+- **Dashboard sidebar.** Every worktree of a running stack is listed (no
+  more "N not started" fold), the main working tree as its own row first,
+  and each tree's state is a dot, as a stack's is (the counts and the place
+  are in its tooltip). A stack has a menu (its "…" button, or a right
+  click): open, start, stop, copy its path, and remove it from the
+  dashboard (`DELETE /hub/stacks/{id}`; nothing on disk changes). "Add a
+  stack" is the "+" next to "Stacks". The top bar shows the hub's
+  connection only; whether the shown tree is live is in its header.
 - **API: `POST /v1/lanes` with `on` answers `202` once the lane is leased**
   (was `201` when it ran, after minutes on a first start), and syncs and
   starts it on the node in the background; the lane's `moving` shows the
