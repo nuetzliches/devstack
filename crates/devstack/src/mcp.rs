@@ -311,6 +311,26 @@ pub fn tools() -> Vec<Value> {
             true,
         ),
         tool(
+            "lane_start",
+            "Start a lane (a git worktree of this repository, see `lanes`) beside the main working tree, from wherever this MCP server runs: its own ports (moved by its offset), its own containers and database, no background workers. Waits until its services are ready, like `up`. Use it to run another branch or commit in isolation instead of building a separate environment: `git worktree add <dir> <commit>` makes the lane, `lane_stop` stops it, `git worktree remove <dir>` ends it. POST /v1/lanes, then the lane's /v1/up.",
+            json!({
+                "lane": { "type": "string", "description": "The lane's name or branch (see `lanes`)" },
+                "on": { "type": "string", "description": "Run it on this node of the pool, or `pool` to let the coordinator choose; default: this machine" },
+                "timeout_s": { "type": "integer", "description": "How long to wait for its services (default 600)" },
+            }),
+            &["lane"],
+            false,
+        ),
+        tool(
+            "lane_stop",
+            "Stop a started lane: its services stop, its builds and containers' data stay; `lane_start` starts it again. Not the lane serving the main ports (`promote_lane` main first). POST /v1/lanes/{lane}/stop.",
+            json!({
+                "lane": { "type": "string", "description": "The lane's name (see `lanes`)" },
+            }),
+            &["lane"],
+            false,
+        ),
+        tool(
             "lane_move",
             "Move a started lane to another node of the pool, or back to this machine (`local`): a cold start there that takes over once it is ready; its data comes from the seed jobs again. POST /v1/lanes/{lane}/move.",
             json!({
@@ -433,7 +453,11 @@ fn checked(status: u16, body: String) -> Result<String> {
 fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
     match name {
         "status" => {
-            let mut text = client::status_text(&connect(file)?.stack()?);
+            let c = connect(file)?;
+            let mut text = client::status_text(&c.stack()?);
+            if let Some(n) = client::lanes_note(&c) {
+                text.push_str(&format!("\n{n}\n"));
+            }
             if let Some(n) = crate::skills::outdated_note(file) {
                 text.push_str(&format!("\n{n}\n"));
             }
@@ -543,6 +567,41 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             } else {
                 devstack_daemon::ansi::strip(&text).into_owned()
             })
+        }
+        "lane_start" => {
+            let lane = name_arg(args, "lane")?;
+            let timeout = Duration::from_secs(args["timeout_s"].as_u64().unwrap_or(600));
+            let on = args["on"].as_str().filter(|o| !o.trim().is_empty());
+            let started = client::start_lane(file, lane, on, Some(timeout), |_| {})?;
+            let mut notes = format!("lane `{}` started\n", started.name);
+            if let Some(w) = &started.warning {
+                notes.push_str(&format!("warning: {w}\n"));
+            }
+            match client::start_and_wait(&started.client, &started.file, Some(timeout), |_, _| {})?
+            {
+                UpOutcome::Ready(stack) => {
+                    Ok(format!("{notes}ready\n\n{}", client::status_text(&stack)))
+                }
+                UpOutcome::Failed { service, reason } => {
+                    anyhow::bail!("{notes}{service} failed:\n{reason}")
+                }
+                UpOutcome::TimedOut(stack) => anyhow::bail!(
+                    "{notes}still starting after {} s (it continues; check `status`)\n\n{}",
+                    timeout.as_secs(),
+                    client::status_text(&stack)
+                ),
+            }
+        }
+        "lane_stop" => {
+            let lane = name_arg(args, "lane")?;
+            let c = client::main_client(file)?;
+            let (status, text) = c.call_raw("POST", &format!("/v1/lanes/{lane}/stop"), None)?;
+            if status >= 400 {
+                anyhow::bail!("{}", client::error_text(&text));
+            }
+            Ok(format!(
+                "lane `{lane}` stopped; `lane_start` starts it again"
+            ))
         }
         "lane_move" | "lane_share" | "promote_lane" => {
             let lane = name_arg(args, "lane")?;
@@ -743,7 +802,13 @@ mod tests {
     #[test]
     fn lane_names_from_the_agent_stay_plain() {
         let file = Path::new("no-such-dir/devstack.toml");
-        for tool in ["lane_move", "lane_share", "promote_lane"] {
+        for tool in [
+            "lane_start",
+            "lane_stop",
+            "lane_move",
+            "lane_share",
+            "promote_lane",
+        ] {
             for bad in ["wt/stop?", "wt/v1/down?", "../x", ""] {
                 let args = json!({ "lane": bad, "to": "local", "with": [] });
                 let e = call(tool, &args, file).unwrap_err().to_string();

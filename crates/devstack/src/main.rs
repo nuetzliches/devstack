@@ -330,6 +330,16 @@ enum PoolAction {
 enum LaneAction {
     /// The lanes (the repository's worktrees), their branches and ports.
     List,
+    /// Start a lane (its name or branch, see `lane list`) from anywhere in
+    /// the repository, as `devstack up` in its worktree does: its own ports
+    /// and containers, beside the main tree.
+    Start {
+        name: String,
+        /// Run it on this node of the pool (its name or member id), or
+        /// `pool` to let the coordinator choose (ADR-0025).
+        #[arg(long, value_name = "NODE")]
+        on: Option<String>,
+    },
     /// Stop a lane: its services stop and it is no longer started (its
     /// builds stay). The worktree is git's: devstack never creates or removes
     /// one.
