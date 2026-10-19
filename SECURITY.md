@@ -105,7 +105,10 @@ browsers as well.
   - **Telemetry** to the pool's collector only with your consent, per pool,
     off by default (`devstack join --telemetry`, `devstack pool telemetry
     on|off`, the pool area): devstack's diagnostic log, cut to first lines as
-    above, and durations and outcomes of lane starts, syncs, moves and builds.
+    above, and durations and outcomes of lane starts, syncs, moves and stops,
+    service starts, builds and tunnel connections (with bytes through them).
+    Lines from a process's first seconds are kept on the machine until it
+    knows whether a pool with your consent collects, and dropped if none does.
     Never file contents, environment values, command lines or service output.
     The coordinator stamps your identity from your certificate. A node sends
     what concerns the lanes it runs with the coordinator's setting alone.

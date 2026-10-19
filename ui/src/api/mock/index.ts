@@ -212,7 +212,7 @@ export class MockTransport implements Transport {
       return json(200, {
         consent: method === 'PUT' ? !!(body as { enabled?: boolean } | undefined)?.enabled : false,
         collects: true,
-        what: ["devstack's diagnostic log", 'durations and outcomes of lane starts, syncs, moves and builds', 'never: file contents, environment values'],
+        what: ["devstack's diagnostic log", 'durations and outcomes of lane starts, syncs, moves and stops, service starts and builds', 'never: file contents, environment values'],
       });
     if (p === '/hub/pool/history' && method === 'GET') {
       const now = Math.floor(Date.now() / 1000);

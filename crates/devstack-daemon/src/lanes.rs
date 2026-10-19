@@ -466,7 +466,7 @@ impl Lanes {
                 let t = since.entry(n.clone()).or_insert_with(|| {
                     crate::diag::warn(
                         "lane_worktree_missing",
-                        serde_json::json!({ "lane": n, "path": known[n.as_str()].entry.path,
+                        serde_json::json!({ "lane": n, "worktree": known[n.as_str()].entry.path,
                             "forgotten_after_s": MISSING_GRACE.as_secs() }),
                     );
                     std::time::Instant::now()
@@ -508,12 +508,12 @@ impl Lanes {
                     .find(|n| !known.contains_key(n))
                     .expect("a free name");
                 let Some(number) = self.free_number(&known, false) else {
-                    crate::diag::warn("lane_no_ports", serde_json::json!({ "path": w.path }));
+                    crate::diag::warn("lane_no_ports", serde_json::json!({ "worktree": w.path }));
                     continue;
                 };
                 crate::diag::info(
                     "lane_found",
-                    serde_json::json!({ "lane": name, "path": w.path, "number": number }),
+                    serde_json::json!({ "lane": name, "worktree": w.path, "number": number }),
                 );
                 known.insert(
                     name.clone(),
@@ -899,6 +899,7 @@ impl Lanes {
         if !self.pending.lock().unwrap().insert(name.clone()) {
             return Err(format!("lane `{name}` is being started"));
         }
+        let t0 = std::time::Instant::now();
         let result = (|| {
             // Its range taken by another process since it was found: a new one.
             let step = self.main.stack.lanes.port_step;
@@ -927,7 +928,9 @@ impl Lanes {
             self.map.lock().unwrap().insert(name.clone(), lane.clone());
             crate::diag::info(
                 "lane_started",
-                serde_json::json!({ "lane": name, "path": entry.path, "number": entry.number }),
+                // `ms`: opening the lane; its services' starts have lines of their own.
+                serde_json::json!({ "lane": name, "worktree": entry.path, "number": entry.number,
+                    "place": "local", "ms": t0.elapsed().as_millis() as u64 }),
             );
             Ok(lane)
         })();
@@ -947,10 +950,16 @@ impl Lanes {
                 "lane `{name}` serves the main slot: `devstack promote --lane main` first"
             ));
         }
+        let t0 = std::time::Instant::now();
         let remote = self.remote.lock().unwrap().remove(name);
         if let Some(r) = remote {
+            let node = r.node.name.clone();
             self.stop_remote(r);
-            crate::diag::info("lane_stopped", serde_json::json!({ "lane": name }));
+            crate::diag::info(
+                "lane_stopped",
+                serde_json::json!({ "lane": name, "place": "remote", "node": node,
+                    "ms": t0.elapsed().as_millis() as u64 }),
+            );
             self.announce();
             return Ok(());
         }
@@ -967,7 +976,11 @@ impl Lanes {
         if let Some(l) = removed {
             l.sup.close();
         }
-        crate::diag::info("lane_stopped", serde_json::json!({ "lane": name }));
+        crate::diag::info(
+            "lane_stopped",
+            serde_json::json!({ "lane": name, "place": "local",
+                "ms": t0.elapsed().as_millis() as u64 }),
+        );
         self.announce();
         Ok(())
     }

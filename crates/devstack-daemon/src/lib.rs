@@ -217,6 +217,7 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
         Some(offset) => lanes::lane_stack(&stack, offset)?,
         None => stack,
     };
+    telemetry::set_repository(&stack.stack.name);
     devstack_proc::ensure_console().map_err(|e| e.to_string())?;
     let token = token::load_or_create().map_err(|e| format!("token: {e}"))?;
     // Known to the hub from now on (ADR-0021); a failure costs only the listing.

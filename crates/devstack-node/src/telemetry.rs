@@ -110,7 +110,8 @@ pub struct Info {
 pub fn collects() -> Vec<String> {
     [
         "devstack's diagnostic log (its decisions with their reasons)",
-        "durations and outcomes of lane starts, syncs, moves and builds",
+        "durations and outcomes of lane starts, syncs, moves and stops, service starts and builds",
+        "tunnels open, and how long and how many bytes the closed ones carried",
         "how many lanes and services run, and a node's capacity and use",
         "labels: repository, lane, service, node, member, devstack version, OS",
         "never: file contents, environment values, command lines, service output",
@@ -207,9 +208,12 @@ pub struct Durations {
     pub labels: Vec<(String, String)>,
 }
 
-/// Bucket bounds of the duration histograms, ms.
-const BOUNDS: [f64; 10] = [
-    250.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 30000.0, 60000.0, 120000.0, 300000.0,
+/// Bucket bounds of the duration histograms, ms: a quarter second to half
+/// an hour, at most a factor of 3 apart (a lane start of 2 to 10 minutes is
+/// common on a cold node; a first build may take longer).
+const BOUNDS: [f64; 15] = [
+    250.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 30000.0, 60000.0, 120000.0, 180000.0, 300000.0,
+    600000.0, 900000.0, 1200000.0, 1800000.0,
 ];
 
 /// OTLP/JSON `ExportMetricsServiceRequest`.
@@ -318,21 +322,33 @@ mod tests {
             &[],
             &[Durations {
                 name: "devstack.lane.start".into(),
-                values: vec![100.0, 1500.0, 400000.0],
-                labels: vec![],
+                values: vec![100.0, 1500.0, 150000.0, 400000.0, 4000000.0],
+                labels: vec![("devstack.lane".into(), "fix".into())],
             }],
         );
         let h =
             &b["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]["histogram"]["dataPoints"][0];
-        assert_eq!(h["count"], "3");
+        assert_eq!(h["count"], "5");
         let counts: Vec<&str> = h["bucketCounts"]
             .as_array()
             .unwrap()
             .iter()
             .map(|c| c.as_str().unwrap())
             .collect();
+        assert_eq!(counts.len(), BOUNDS.len() + 1);
         assert_eq!(counts[0], "1"); // <= 250
         assert_eq!(counts[3], "1"); // <= 2000
-        assert_eq!(counts[10], "1"); // above the last bound
+        assert_eq!(counts[9], "1"); // <= 180 s
+        assert_eq!(counts[11], "1"); // <= 600 s
+        assert_eq!(counts[15], "1"); // above the last bound
+        assert_eq!(
+            h["attributes"][0],
+            json!({ "key": "devstack.lane", "value": { "stringValue": "fix" } })
+        );
+    }
+
+    #[test]
+    fn bounds_rise() {
+        assert!(BOUNDS.windows(2).all(|w| w[0] < w[1] && w[1] / w[0] <= 3.0));
     }
 }

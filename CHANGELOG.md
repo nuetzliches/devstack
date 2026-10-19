@@ -69,6 +69,36 @@ and listed with their assets on the
 - The hub no longer takes a stack for running when its `daemon.json` was
   left by a killed daemon and another process now has that port.
 
+- **Telemetry** ([ADR-0037](docs/adr/0037-telemetry-goes-to-the-pools-collector-with-consent.md)
+  amended), after a review of three days of a pool's telemetry:
+  - A process's first lines (daemon start, restores, early errors, the main
+    slot) were lost: lines were kept only once the first round, ten seconds
+    in, had found a pool that collects. They are kept from the start now and
+    sent only if that round finds a pool with this machine's consent, else
+    dropped.
+  - Durations promised by the ADR are measured now: lane stops (local and
+    remote), local lane starts, service starts from the spawn to ready or
+    failed (with `result` and `restarts`; a service without a health check
+    reports its fixed wait as `settle_ms`, not as a duration), builds
+    (`build`, with `result`), tunnel connections (duration and bytes, and
+    tunnels open).
+  - Log records carry `os.type` and `devstack.repository`; duration
+    histograms carry repository, lane, node, place, service and result
+    besides the event. The main working tree's lane is `main` in the log,
+    not an empty name.
+  - Nested values (`status`, `candidate`) go out as dotted attributes
+    (`devstack.status.state`) instead of a JSON string; lists of plain values
+    as OTLP arrays. Log records carry `observedTimeUnixNano`.
+  - Histogram buckets add 180 s, 600 s, 900 s, 1200 s and 1800 s.
+  - `scripts/telemetry/analyze.py` reads the old and the new shape.
+  - A `prepare` line sent its command line (`run`) to the collector. Fields
+    that hold a command line, an environment, process output or a path on
+    the machine (`run`, `cmd`, `command_line`, `args`, `env`, `output`,
+    `repo`, `worktree`, `file`, `cwd`, `dir`) now stay in `daemon.log`, at
+    any depth; user names in home paths and credentials in URLs are masked
+    in every text that leaves. Lane lines name the worktree's path
+    `worktree` (was `path`).
+
 ## [0.10.1] - 2026-10-18
 
 ### Fixed
