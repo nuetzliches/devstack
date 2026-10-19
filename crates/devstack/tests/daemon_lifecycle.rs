@@ -1345,6 +1345,70 @@ steps = [{{ exec = "{hang}", timeout = "1s" }}]
     s.ok(&["down"]);
 }
 
+/// A long-running service that exits by itself, with any code, is started
+/// again after a backoff, five times in a row at most; a tool stays exited
+/// (#103: a lane's dev server exited with 0 and nothing brought it back).
+#[test]
+fn a_service_that_exits_by_itself_comes_back() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    let brief = if cfg!(windows) {
+        "ping -n 3 127.0.0.1 >NUL"
+    } else {
+        "sleep 2"
+    };
+    std::fs::write(
+        s.file(),
+        format!(
+            r#"version = 1
+[stack]
+name = "brief"
+[services.dev]
+kind = "devserver"
+run = "{brief}"
+[services.ui]
+kind = "tool"
+run = "{brief}"
+"#
+        ),
+    )
+    .unwrap();
+    s.ok(&["up"]);
+    let state = |name: &str| {
+        s.service_view(name)["status"]["state"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    };
+    let log = || s.daemon_log();
+    assert!(
+        wait_for(
+            || log().contains("\"service_restarting\"") && state("dev") == "running",
+            Duration::from_secs(30)
+        ),
+        "the dev server came back\n{}",
+        s.diag()
+    );
+    assert!(log().contains("\"service_exited\""), "{}", log());
+    assert!(
+        wait_for(|| state("ui") == "exited", Duration::from_secs(15)),
+        "a tool stays exited: {}",
+        state("ui")
+    );
+    // It keeps exiting: after five starts in a row devstack gives up.
+    assert!(
+        wait_for(|| state("dev") == "failed", Duration::from_secs(120)),
+        "{}",
+        s.diag()
+    );
+    let reason = s.service_view("dev")["status"]["reason"].to_string();
+    assert!(reason.contains("5 times in a row"), "{reason}");
+    s.ok(&["down"]);
+}
+
 /// GET on a port of this machine, the body.
 fn get_on(port: u16, path: &str) -> Option<String> {
     ureq::Agent::config_builder()

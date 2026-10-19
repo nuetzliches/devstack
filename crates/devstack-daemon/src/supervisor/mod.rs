@@ -41,6 +41,8 @@ struct Instance {
     log: PathBuf,
     /// Its cleanup record's name (ADR-0016), `<service>@<port>`.
     record: String,
+    /// When it was spawned: how long it ran, when it exits by itself.
+    started: Instant,
 }
 
 pub(crate) struct Slot {
@@ -59,6 +61,9 @@ pub(crate) struct Slot {
     spawned: Option<Instant>,
     /// Processes spawned for it in this daemon's life.
     starts: u32,
+    /// Times in a row it exited by itself and was started again; back to 0
+    /// once an instance ran for [`lifecycle::STABLE`].
+    exits: u32,
 }
 
 /// A built candidate a promotion gate holds (ADR-0013). The gate stays until
@@ -354,6 +359,7 @@ impl Supervisor {
                     in_flight: None,
                     spawned: None,
                     starts: 0,
+                    exits: 0,
                 },
             );
             op_locks.insert(name.clone(), Mutex::new(()));

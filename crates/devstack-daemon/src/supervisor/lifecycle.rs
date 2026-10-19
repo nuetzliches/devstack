@@ -18,6 +18,11 @@ use std::time::{Duration, Instant};
 /// How long a service without a health check is given to fail fast before
 /// it counts as running: a fixed wait, not a measurement.
 pub(super) const SETTLE: Duration = Duration::from_millis(500);
+/// A long-running service that exits by itself is started again, after 1,
+/// 2, 4, … s (at most a minute), [`MAX_EXITS`] times in a row; an instance
+/// that ran this long starts the count again.
+pub(super) const STABLE: Duration = Duration::from_secs(300);
+const MAX_EXITS: u32 = 5;
 
 impl Supervisor {
     /// Infra, then every autostart service for this platform, in order; a
@@ -166,6 +171,69 @@ impl Supervisor {
             .map(|(dir, id)| (id, dir));
         self.stop(name)?;
         self.start_with(name, artifact)
+    }
+
+    /// `name` exited by itself after running `ran`: start it again from the
+    /// same build after a backoff, unless something else touched it
+    /// meanwhile (a stop, a start, a switch); `Failed` after [`MAX_EXITS`]
+    /// times in a row.
+    fn restart_exited(
+        self: &Arc<Self>,
+        name: &str,
+        generation: u64,
+        ran: Duration,
+        code: i32,
+        build: Option<String>,
+    ) {
+        let n = {
+            let mut slots = self.slots.lock().unwrap();
+            let Some(slot) = slots.get_mut(name) else {
+                return;
+            };
+            if ran >= STABLE {
+                slot.exits = 0;
+            }
+            slot.exits += 1;
+            slot.exits
+        };
+        if n > MAX_EXITS {
+            let reason = format!(
+                "exited by itself {MAX_EXITS} times in a row (last with code {code}); not started again (devstack logs {name})"
+            );
+            crate::diag::warn(
+                "service_given_up",
+                serde_json::json!({ "lane": self.lane, "service": name, "reason": reason }),
+            );
+            self.set_status(name, Status::Failed { reason });
+            return;
+        }
+        let backoff = Duration::from_secs(1 << (n - 1).min(6)).min(Duration::from_secs(60));
+        let epoch = self.stop_epoch(name);
+        std::thread::sleep(backoff);
+        let still = {
+            let slots = self.slots.lock().unwrap();
+            slots.get(name).is_some_and(|s| {
+                s.generation == generation && matches!(s.view.status, Status::Exited { .. })
+            })
+        };
+        if !still || self.stopped_since(name, epoch) || self.closed() {
+            return;
+        }
+        crate::diag::info(
+            "service_restarting",
+            serde_json::json!({
+                "lane": self.lane,
+                "service": name,
+                "attempt": n,
+                "after_exit_code": code,
+                "backoff_ms": backoff.as_millis() as u64,
+            }),
+        );
+        let artifact = build
+            .map(|id| (self.layout.artifact(name, &id), id))
+            .filter(|(dir, _)| dir.is_dir())
+            .map(|(dir, id)| (id, dir));
+        let _ = self.start_with(name, artifact);
     }
 
     pub(super) fn stop_epoch(&self, name: &str) -> u64 {
@@ -476,6 +544,7 @@ impl Supervisor {
             build_id: artifact.map(|(id, _)| id.clone()),
             log,
             record,
+            started: Instant::now(),
         })
     }
 
@@ -640,9 +709,27 @@ impl Supervisor {
                             slot.view.pid = None;
                             slot.main.take()
                         };
+                        let mut ran = Duration::ZERO;
+                        let mut build = None;
                         if let Some(mut i) = inst {
+                            // What still ran of its tree says whether the
+                            // root (a shell, a wrapper) went, or everything.
+                            ran = i.started.elapsed();
+                            let left = i.tree.pids().len();
+                            build = i.build_id.clone();
                             i.tree.kill();
                             me.forget_record(&i.record);
+                            crate::diag::warn(
+                                "service_exited",
+                                serde_json::json!({
+                                    "lane": me.lane,
+                                    "service": name,
+                                    "exit_code": code,
+                                    "ran_s": ran.as_secs(),
+                                    "tree_left": left,
+                                    "why": "it exited by itself: no stop, restart or switch asked for it",
+                                }),
+                            );
                         }
                         if let Some(p) = me.proxy(&name) {
                             p.set_upstream(None);
@@ -651,6 +738,12 @@ impl Supervisor {
                             )));
                         }
                         me.set_status(&name, Status::Exited { exit_code: code });
+                        // A tool may be closed on purpose; everything else
+                        // that runs for good comes back.
+                        if matches!(svc.kind, Kind::Tool | Kind::Job) {
+                            return;
+                        }
+                        me.restart_exited(&name, generation, ran, code, build);
                         return;
                     }
                     if let (Some(h), Some(port)) = (&svc.health, port)

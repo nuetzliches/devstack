@@ -55,6 +55,19 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A long-running service that exits by itself is started again**
+  ([#103](https://github.com/nuetzliches/devstack/issues/103), comment). A
+  lane's dev server exited with code 0 a minute after it was healthy, and
+  nothing brought it back: tests against the lane found its port closed. A
+  `service`, `devserver` or `static` that exits without a stop, restart or
+  switch asking for it now starts again from the same build, after 1, 2,
+  4, … s (at most a minute); after five such exits in a row it is
+  `failed` with the reason, and an instance that ran for five minutes
+  starts the count again. A `tool` stays exited (it may have been closed on
+  purpose). `daemon.log` says why: `service_exited` (exit code, how long it
+  ran, what of its process tree still ran), `service_restarting`,
+  `service_given_up`; and `copy_synced` says what a sync changed in a
+  lane's copy under what runs from it.
 - **A lane on a node is checked for what it starts, not for the whole
   Compose file** ([ADR-0033](docs/adr/0033-a-node-decides-what-runs-on-it.md)
   point 7). A group that names its `services` was refused for a service it
