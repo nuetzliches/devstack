@@ -11,6 +11,9 @@ and listed with their assets on the
 
 ### Added
 
+- **"Discard data" for a stopped lane in the dashboard** (ADR-0038): its
+  containers and volumes go, here and on the nodes it ran on, so its next
+  start is fresh (`devstack lane reset`).
 - **A lane shared with you to view looks like your own** (ADR-0040). Under
   "Shared with you" it is a row like your lanes; it opens the same pages
   (overview, services and containers with their logs, infrastructure,

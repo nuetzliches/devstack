@@ -183,6 +183,16 @@ function pick(l: LaneView | null) {
           </div>
         </div>
         <button
+          v-if="current && current.active === false && !current.moving"
+          type="button"
+          class="btn btn-sm"
+          :title="`Throw ${laneLabel(current)}'s data away (its containers and volumes, here and on the nodes it ran on): it starts fresh`"
+          data-testid="lane-reset"
+          @click="stack.resetLane(current.name)"
+        >
+          <Icon name="trash" :size="14" /> Discard data
+        </button>
+        <button
           v-if="current && !current.owns_main && current.active !== false"
           type="button"
           class="btn btn-sm btn-stop"
