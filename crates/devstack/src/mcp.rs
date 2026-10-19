@@ -537,7 +537,14 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 });
             }
             let svc = name_arg(args, "service")?;
-            let text = connect(file)?.get(&format!("/v1/services/{svc}/logs?{q}"))?;
+            let c = connect(file)?;
+            // A container's logs know no builds and no kept files.
+            let path = if filter.build.is_none() && filter.file.is_none() {
+                client::logs_path(&c, svc, &q)?
+            } else {
+                format!("/v1/services/{svc}/logs?{q}")
+            };
+            let text = c.get(&path)?;
             Ok(if text.is_empty() {
                 format!("`{svc}` has written nothing yet (or nothing matching)")
             } else {
