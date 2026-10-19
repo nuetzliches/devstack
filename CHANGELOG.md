@@ -70,6 +70,19 @@ and listed with their assets on the
   longer takes its port from the lane, and a daemon that stops no longer
   takes the main slot back for services it stops anyway. The dashboard
   offers "Start stack" for a main tree whose daemon stayed for its lanes.
+- **A Compose port is no longer taken for a lost forward while the server
+  inside starts** ([#98](https://github.com/nuetzliches/devstack/issues/98)).
+  Docker Desktop's proxy accepts a connection and closes it until something
+  listens inside, which looked like a lost port forward: `status` warned
+  about ports that worked, and a database still starting could be
+  restarted. A container is judged once it has been ready (running, healthy
+  if it has a check) for 20 s, a port is lost only when three probes a
+  second apart say so, and one found lost is probed again every few seconds
+  until it answers ("reachable from this machine again"). A restart from
+  devstack, or a change of the container's state, clears the verdict, so
+  `status` no longer shows one from before a restart. devstack restarts a
+  container for a lost forward only when it has been ready for 20 s, and at
+  most once in 10 minutes.
 - **A lane on a node is checked for what it starts, not for the whole
   Compose file** ([ADR-0033](docs/adr/0033-a-node-decides-what-runs-on-it.md)
   point 7). A group that names its `services` was refused for a service it

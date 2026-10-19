@@ -1264,7 +1264,7 @@ async fn build_log(State(s): State<AppState>, Path(name): Path<String>) -> Respo
 /// (accepted and closed at once). Recorded in the view as `unreachable`.
 async fn infra_check(State(s): State<AppState>) -> Response {
     let sup = s.sup.clone();
-    match tokio::task::spawn_blocking(move || sup.check_forwards()).await {
+    match tokio::task::spawn_blocking(move || sup.check_forwards(false)).await {
         Ok(lost) => Json(
             lost.into_iter()
                 .map(|(group, service, ports)| serde_json::json!({ "group": group, "service": service, "ports": ports }))
