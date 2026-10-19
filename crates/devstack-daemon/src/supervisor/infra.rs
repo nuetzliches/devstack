@@ -168,6 +168,7 @@ impl Supervisor {
             }
         }
         ContainerView {
+            managed: self.starts(group, &c.service),
             service: c.service.clone(),
             name: c.name,
             exit_code: c.exit_code,
@@ -356,6 +357,49 @@ impl Supervisor {
             .map(|(k, _)| k.clone());
         let first = groups.next()?;
         groups.next().is_none().then_some(first)
+    }
+
+    /// The Compose group `group` starts `service` (it is in its `services`).
+    pub fn starts(&self, group: &str, service: &str) -> bool {
+        self.stack
+            .compose
+            .get(group)
+            .is_some_and(|g| g.services.iter().any(|s| s == service))
+    }
+
+    /// What `/v1/infra/{group}/{service}/…` names: `None` without such a
+    /// group. The routes accept what the view shows, and the view shows every
+    /// container `compose ps` reports for the group's project, also one of a
+    /// service the group does not start.
+    pub fn container_target(&self, group: &str, service: &str) -> Option<ContainerTarget> {
+        let cfg = self.stack.compose.get(group)?;
+        let infra = self.infra.lock().unwrap();
+        let shown = infra
+            .views
+            .iter()
+            .filter(|v| v.group == group)
+            .flat_map(|v| v.containers.iter());
+        Some(container_target(&cfg.services, shown, service))
+    }
+
+    /// Stop a container of the group's project the group does not start
+    /// (`docker stop` by its name: Compose may not know its service, an
+    /// orphan or one of an inactive profile).
+    pub fn stop_unmanaged(&self, group: &str, service: &str, name: &str) -> Result<(), String> {
+        if self.external_infra().is_some() {
+            return Err("the node runs this lane's containers (ADR-0025)".into());
+        }
+        let result = self.docker.stop_container(&self.repo, name);
+        let message = match &result {
+            Ok(()) => format!("{service}: stop done"),
+            Err(e) => format!("{service}: stop failed: {e}"),
+        };
+        self.emit(EventBody::Infra {
+            group: group.into(),
+            message,
+        });
+        self.refresh_containers();
+        result.map_err(|e| e.to_string())
     }
 
     /// `start`, `stop` or `restart` of one container from the dashboard or
@@ -631,6 +675,7 @@ impl Supervisor {
                                 urls: self.container_urls(&g, &svc, &here),
                                 ports,
                                 unreachable: Vec::new(),
+                                managed: true,
                             });
                         }
                     }
@@ -640,6 +685,36 @@ impl Supervisor {
             cache.views.push(view);
         }
         *self.infra.lock().unwrap() = cache;
+    }
+}
+
+/// What a container route names (see [`Supervisor::container_target`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContainerTarget {
+    /// In the group's `services`: started, stopped and restarted by devstack.
+    Managed,
+    /// A container of the group's project the group does not start (`name`:
+    /// its container name, which an explicit `container_name:` sets).
+    Unmanaged { name: String },
+    /// Neither started by the group nor a container of its project.
+    Unknown,
+}
+
+/// The routes key a container by its Compose service name, as `compose ps`
+/// reports it (`Service`), never by its container name.
+fn container_target<'a>(
+    services: &[String],
+    shown: impl IntoIterator<Item = &'a ContainerView>,
+    service: &str,
+) -> ContainerTarget {
+    if services.iter().any(|s| s == service) {
+        return ContainerTarget::Managed;
+    }
+    match shown.into_iter().find(|c| c.service == service) {
+        Some(c) => ContainerTarget::Unmanaged {
+            name: c.name.clone(),
+        },
+        None => ContainerTarget::Unknown,
     }
 }
 
@@ -654,4 +729,67 @@ fn lost_forwards(ports: &[String]) -> Vec<String> {
         })
         .cloned()
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A container as `compose ps` reports it, through the parser.
+    fn shown(line: &str, managed: bool) -> ContainerView {
+        let c = devstack_compose::parse_ps(line).unwrap().remove(0);
+        ContainerView {
+            service: c.service,
+            name: c.name,
+            state: c.state,
+            health: c.health,
+            exit_code: c.exit_code,
+            ports: Vec::new(),
+            urls: Vec::new(),
+            unreachable: Vec::new(),
+            managed,
+        }
+    }
+
+    const BLOBS: &str = r#"{"Service":"blobs","Name":"shop-blobs","State":"running","Health":"","ExitCode":0,"Publishers":[]}"#;
+
+    #[test]
+    fn an_explicit_container_name_is_addressed_by_its_service() {
+        // `container_name: shop-blobs` on service `blobs`: the view keys it
+        // by the service, and so does the route.
+        let view = [shown(BLOBS, true)];
+        assert_eq!(view[0].service, "blobs");
+        let services = ["db".to_string(), "blobs".to_string()];
+        assert_eq!(
+            container_target(&services, &view, "blobs"),
+            ContainerTarget::Managed
+        );
+        assert_eq!(
+            container_target(&services, &view, "shop-blobs"),
+            ContainerTarget::Unknown
+        );
+    }
+
+    #[test]
+    fn a_container_the_group_does_not_start_is_known_but_unmanaged() {
+        // The finding: the project runs `blobs` (started by hand, a profile,
+        // an earlier stack file), the group's `services` do not list it. The
+        // view shows it; the route used to answer a bare 404.
+        let view = [shown(BLOBS, false)];
+        let services = ["db".to_string()];
+        assert_eq!(
+            container_target(&services, &view, "blobs"),
+            ContainerTarget::Unmanaged {
+                name: "shop-blobs".into()
+            }
+        );
+        assert_eq!(
+            container_target(&services, &view, "db"),
+            ContainerTarget::Managed
+        );
+        assert_eq!(
+            container_target(&services, &view, "cache"),
+            ContainerTarget::Unknown
+        );
+    }
 }

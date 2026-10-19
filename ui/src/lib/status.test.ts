@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Candidate, ContainerView, ServiceView, Status } from '@/api/types';
-import { candidateLook, candidateSummary, containerBucket, containerLook, kindIcon, kindLabel, parseComposeMember, statusBucket, statusLook } from './status';
+import { candidateLook, candidateSummary, containerBucket, containerLook, containerRefuses,kindIcon, kindLabel, parseComposeMember, statusBucket, statusLook } from './status';
 
 const cand = (state: string): Candidate => ({ state, build_id: null, since: 0, reason: null });
 const svc = (kind: string): ServiceView => ({ kind }) as unknown as ServiceView;
@@ -59,6 +59,14 @@ describe('containers', () => {
     expect(containerLook(ctr('exited', '', 2))).toMatchObject({ tone: 'danger', detail: 'exit code 2' });
     expect(containerBucket(ctr('restarting'))).toBe('starting');
     expect(containerLook(ctr('')).label).toBe('Unknown');
+  });
+
+  it('knows which containers only stop', () => {
+    const c = (managed?: boolean) => ({ name: 'shop-blobs', managed }) as unknown as ContainerView;
+    expect(containerRefuses(null)).toBeNull();
+    expect(containerRefuses(c(true))).toBeNull();
+    expect(containerRefuses(c(undefined))).toBeNull();
+    expect(containerRefuses(c(false))).toContain('shop-blobs');
   });
 
   it('parses compose members', () => {

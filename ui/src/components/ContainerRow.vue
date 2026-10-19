@@ -2,7 +2,7 @@
 import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import type { ContainerView } from '@/api/types';
-import { containerLook } from '@/lib/status';
+import { containerLook, containerRefuses } from '@/lib/status';
 import { webUrl } from '@/lib/format';
 import { useStack } from '@/stores/stack';
 import StatusPill from './StatusPill.vue';
@@ -19,6 +19,8 @@ const load = computed(() => stack.usage?.containers.find((u) => u.group === prop
 const look = computed(() => (props.container ? containerLook(props.container) : null));
 const busy = computed(() => !!stack.busy[`ctr:${props.group}/${props.service}`]);
 const running = computed(() => props.container?.state === 'running' || props.container?.state === 'restarting');
+/** Not one the group starts: the daemon stops it, but refuses start and restart. */
+const refuses = computed(() => containerRefuses(props.container));
 const to = computed(() => ({ name: 'container', params: { stack: stack.id ?? '', group: props.group, service: props.service } }));
 const route = useRoute();
 const router = useRouter();
@@ -62,8 +64,9 @@ const extraUrls = computed(() => webUrls.value.filter((u) => !props.container!.p
           </template>
           <a v-for="u in extraUrls" :key="u" class="tag port-link" :href="u" target="_blank" rel="noopener" data-testid="container-url">{{ u.replace(/^https?:\/\//, '') }}</a>
           <span v-if="!container.ports.length" class="faint">no published ports</span>
+          <span v-if="refuses" class="tag" :title="refuses" data-testid="container-unmanaged">not in the stack file</span>
           <button
-            v-if="container.unreachable?.length"
+            v-if="container.unreachable?.length && !refuses"
             type="button"
             class="tag lost"
             :disabled="busy || stack.stale"
@@ -97,8 +100,8 @@ const extraUrls = computed(() => webUrls.value.filter((u) => !props.container!.p
       type="button"
       class="btn btn-ghost btn-sm btn-icon"
       :aria-label="`Start container ${service}`"
-      title="Start container"
-      :disabled="busy || stack.stale"
+      :title="refuses ?? 'Start container'"
+      :disabled="busy || stack.stale || !!refuses"
       data-testid="action-container-start"
       @click="stack.containerAction(group, service, 'start')"
     >
@@ -109,8 +112,8 @@ const extraUrls = computed(() => webUrls.value.filter((u) => !props.container!.p
         type="button"
         class="btn btn-ghost btn-sm btn-icon"
         :aria-label="`Restart container ${service}`"
-        title="Restart container"
-        :disabled="busy || stack.stale"
+        :title="refuses ?? 'Restart container'"
+        :disabled="busy || stack.stale || !!refuses"
         data-testid="action-container-restart"
         @click="stack.containerAction(group, service, 'restart')"
       >

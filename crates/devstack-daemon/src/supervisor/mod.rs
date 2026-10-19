@@ -28,6 +28,7 @@ mod candidate;
 mod copy;
 mod handover;
 mod infra;
+pub use infra::ContainerTarget;
 mod lifecycle;
 mod replace;
 

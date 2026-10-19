@@ -18,7 +18,7 @@ const inFlight = computed(() => stack.pending.length - attention.value.length);
 const infraErrors = computed(() => stack.view?.infra.filter((g) => g.error) ?? []);
 /** Running containers this machine cannot reach (Docker Desktop lost the forward). */
 const unreachable = computed(() =>
-  (stack.view?.infra ?? []).flatMap((g) => g.containers.filter((c) => c.unreachable?.length).map((c) => ({ group: g.group, service: c.service, ports: c.unreachable! }))),
+  (stack.view?.infra ?? []).flatMap((g) => g.containers.filter((c) => c.unreachable?.length && c.managed !== false).map((c) => ({ group: g.group, service: c.service, ports: c.unreachable! }))),
 );
 
 async function repairAll() {

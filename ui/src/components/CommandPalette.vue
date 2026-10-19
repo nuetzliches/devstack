@@ -60,7 +60,7 @@ const items = computed<Item[]>(() => {
       out.push({ id: `grp-stop:${g.name}`, label: `Stop group ${g.label}`, hint: 'group', icon: 'stop', run: () => stack.groupAction(g.name, g.label, 'stop') });
     }
     for (const g of v.infra)
-      for (const c of g.containers)
+      for (const c of g.containers.filter((c) => c.managed !== false))
         out.push({ id: `ctr:${g.group}/${c.service}`, label: `Restart container ${c.service}`, hint: `container · ${g.group}`, icon: 'box', run: () => stack.restartContainer(g.group, c.service) });
     for (const c of v.commands)
       out.push({

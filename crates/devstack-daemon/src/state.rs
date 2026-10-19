@@ -123,6 +123,12 @@ pub struct ContainerView {
     /// container may look healthy. A restart of the container fixes it.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub unreachable: Vec<String>,
+    /// The Compose group starts it (its service is in the group's
+    /// `services`). `false` for any other container of the project that
+    /// `compose ps` reports (started by hand, a service of a profile, an
+    /// orphan of an earlier stack file): shown, and it can be stopped, but
+    /// devstack neither starts nor restarts it.
+    pub managed: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
