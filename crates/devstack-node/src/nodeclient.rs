@@ -134,7 +134,10 @@ impl NodeClient {
     ///
     /// The node starts it in the background (a first start pulls or builds
     /// images); this waits until the lane is ready or its start failed, at
-    /// most `within`, and tells `phase` every new step.
+    /// most `within`, and tells `phase` every new step and `over` every step
+    /// that is over, with how long it took as the node measured it (an
+    /// older agent tells no times).
+    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         &self,
         lease: &str,
@@ -143,6 +146,7 @@ impl NodeClient {
         port_offset: u16,
         within: std::time::Duration,
         phase: &(dyn Fn(&str) + Send + Sync),
+        over: &(dyn Fn(&str, u64) + Send + Sync),
     ) -> Result<LaneState> {
         let _: LaneState = self
             .json(
@@ -158,6 +162,7 @@ impl NodeClient {
         let until = std::time::Instant::now() + within;
         let mut last = String::new();
         let mut renewed = std::time::Instant::now();
+        let mut told = 0;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             // The lease lives two minutes unless renewed, a start may take more.
@@ -166,6 +171,10 @@ impl NodeClient {
                 renewed = std::time::Instant::now();
             }
             let st = self.lane(lease).await?;
+            for t in st.phases.iter().skip(told) {
+                over(&t.phase, t.ms);
+            }
+            told = told.max(st.phases.len());
             if let Some(e) = st.error {
                 return Err(ClientError::Other(format!("starting the lane: {e}")));
             }

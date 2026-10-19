@@ -148,6 +148,34 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
+  /**
+   * Wait until the start of lane `name` on a node is over, as the `lanes`
+   * events tell it: `ok` once it runs there, else its error (none when the
+   * lane went away, or another stack is shown now).
+   */
+  function laneStarted(name: string): Promise<{ ok: boolean; error?: string }> {
+    const sid = id.value;
+    return new Promise((resolve) => {
+      let over = false;
+      let stop: (() => void) | null = null;
+      const check = () => {
+        if (over) return;
+        const l = id.value === sid ? lanes.value.find((x) => x.name === name) : undefined;
+        let result: { ok: boolean; error?: string } | null = null;
+        if (!l) result = { ok: false };
+        else if (l.moving?.error) result = { ok: false, error: l.moving.error };
+        else if (!l.moving && l.active !== false) result = { ok: true };
+        else if (!l.moving) result = { ok: false, error: 'its start on the node ended, and it does not run' };
+        if (!result) return;
+        over = true;
+        stop?.();
+        resolve(result);
+      };
+      stop = watch([lanes, id], check);
+      check();
+    });
+  }
+
   /** Start a lane not started yet (what `devstack up` in its worktree does), then show it. */
   /** `on`: a node of the pool, or `pool` (the coordinator chooses); absent: this machine. */
   async function startLane(name: string, on?: string) {
@@ -162,6 +190,19 @@ export const useStack = defineStore('stack', () => {
         success: false,
       });
       if (!res.ok) return;
+      // On a node the daemon answers `202` once the lane is leased; the sync
+      // and the start there go on, shown as the lane's `moving`.
+      if (res.status === 202) {
+        const sid = id.value;
+        await loadLanes();
+        const started = await laneStarted(name);
+        if (!started.ok) {
+          if (started.error) useUi().toast('error', `Start lane ${name} on ${on === 'pool' ? 'the pool' : on} failed`, started.error);
+          return;
+        }
+        if (id.value !== sid) return;
+      }
+      if (!id.value) return;
       const up = await act({ label: `Start lane ${name}`, path: daemonPath(id.value, `${v1.lane(name)}/v1/up`), success: `Lane ${name} is starting` });
       await loadLanes();
       // Show it only once the daemon lists it as started: never a lane the

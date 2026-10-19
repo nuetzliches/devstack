@@ -118,20 +118,25 @@ fn run(service: &str) {
 }
 
 /// The durations among `lines` (`ms`), by event: `devstack.duration` with
-/// the event as its label.
+/// the event as its label, and the phase (`remote_lane_phase`) as another.
 fn durations(lines: &[Value]) -> Vec<Durations> {
-    let mut by: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    let mut by: BTreeMap<(String, Option<String>), Vec<f64>> = BTreeMap::new();
     for l in lines {
         let (Some(event), Some(ms)) = (l["event"].as_str(), l["ms"].as_f64()) else {
             continue;
         };
-        by.entry(event.to_string()).or_default().push(ms);
+        let phase = l["phase"].as_str().map(str::to_string);
+        by.entry((event.to_string(), phase)).or_default().push(ms);
     }
     by.into_iter()
-        .map(|(event, values)| Durations {
-            name: "devstack.duration".into(),
-            values,
-            labels: vec![("devstack.event".into(), event)],
+        .map(|((event, phase), values)| {
+            let mut labels = vec![("devstack.event".into(), event)];
+            labels.extend(phase.map(|p| ("devstack.phase".into(), p)));
+            Durations {
+                name: "devstack.duration".into(),
+                values,
+                labels,
+            }
         })
         .collect()
 }
@@ -150,5 +155,21 @@ mod tests {
         assert_eq!(d.len(), 2);
         assert_eq!(d[1].values, [1200.0, 800.0]);
         assert_eq!(d[1].labels[0].1, "remote_lane_started");
+    }
+
+    #[test]
+    fn each_phase_of_a_lane_start_is_a_histogram_of_its_own() {
+        let lines = vec![
+            serde_json::json!({ "event": "remote_lane_phase", "phase": "sync", "ms": 600 }),
+            serde_json::json!({ "event": "remote_lane_phase", "phase": "infrastructure: app: waiting until healthy", "ms": 221_000 }),
+            serde_json::json!({ "event": "remote_lane_phase", "phase": "sync", "ms": 700 }),
+        ];
+        let d = super::durations(&lines);
+        assert_eq!(d.len(), 2);
+        let sync = d
+            .iter()
+            .find(|d| d.labels.contains(&("devstack.phase".into(), "sync".into())))
+            .unwrap();
+        assert_eq!(sync.values, [600.0, 700.0]);
     }
 }

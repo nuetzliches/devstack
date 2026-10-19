@@ -230,44 +230,117 @@ pub struct RemoteSpec<'a> {
     pub step: &'a (dyn Fn(u8, &str) + Send + Sync),
 }
 
+/// A lane leased on its node and admitted there, not yet synced or started
+/// ([`RemoteLane::lease`]). Dropped without [`RemoteLane::launch`], the lease
+/// expires on the node by itself.
+pub struct Leased {
+    pool: String,
+    offer: devstack_node::coordinator::LeaseOffer,
+    client: NodeClient,
+    list: Vec<String>,
+    elsewhere: Elsewhere,
+    /// When the coordinator granted the lease.
+    t0: Instant,
+}
+
+impl Leased {
+    /// The node's name.
+    pub fn node(&self) -> &str {
+        &self.offer.node.name
+    }
+}
+
+/// A phase of a lane's start on a node is over: `remote_lane_phase` with
+/// its duration, so each phase shows up as a duration of its own (B1: a
+/// start of minutes could not be broken down).
+fn phase_over(lane: &str, node: &str, phase: &str, ms: u64) {
+    crate::diag::info(
+        "remote_lane_phase",
+        serde_json::json!({ "lane": lane, "node": node, "phase": phase, "ms": ms }),
+    );
+}
+
 impl RemoteLane {
     /// Lease the lane on its node, sync it, start it there, and follow it.
     pub fn start(rt: &tokio::runtime::Handle, spec: RemoteSpec<'_>) -> Result<Arc<Self>, String> {
+        let leased = Self::lease(rt, &spec)?;
+        Self::launch(rt, spec, leased)
+    }
+
+    /// The part of a start that answers quickly and says whether the lane
+    /// can go there at all: the coordinator's lease and the node's
+    /// admission (step 1). Its files are listed before, so a failure there
+    /// holds no capacity.
+    pub fn lease(rt: &tokio::runtime::Handle, spec: &RemoteSpec<'_>) -> Result<Leased, String> {
+        let t = Instant::now();
+        (spec.step)(1, &format!("lease on {}", spec.on));
+        let (pool, node) = resolve_on(spec.on)?;
+        let local = local_member(&pool);
+        let (list, elsewhere) = files(spec.worktree, spec.main, spec.extra, spec.scratch)?;
+        let offer = local
+            .lease(&LeaseRequest {
+                node,
+                repo: spec.repo.into(),
+                lane: spec.name.into(),
+                need: spec.need,
+            })
+            .map_err(|e| format!("lease on `{}`: {e}", spec.on))?;
+        // Without a client the node cannot be told: the offer expires.
+        let client = NodeClient::new(&local, offer.node.clone()).map_err(|e| e.to_string())?;
+        let t0 = Instant::now();
+        if let Err(e) = rt.block_on(client.admit(&offer)) {
+            let _ = rt.block_on(client.release(&offer.id));
+            return Err(format!("lane `{}` on {}: {e}", spec.name, offer.node.name));
+        }
+        phase_over(
+            spec.name,
+            &offer.node.name,
+            "lease",
+            t.elapsed().as_millis() as u64,
+        );
+        Ok(Leased {
+            pool,
+            offer,
+            client,
+            list,
+            elsewhere,
+            t0,
+        })
+    }
+
+    /// The rest of a start, which may take minutes (a first start pulls and
+    /// builds images on the node): sync (step 2), start there (step 3),
+    /// follow it. On failure the lease is released.
+    pub fn launch(
+        rt: &tokio::runtime::Handle,
+        spec: RemoteSpec<'_>,
+        leased: Leased,
+    ) -> Result<Arc<Self>, String> {
         let RemoteSpec {
             name,
-            repo,
             worktree,
             main,
             extra,
             sharing,
             stack_file,
-            on,
-            need,
             scratch,
             ports,
             port_offset,
             forward,
             step,
+            ..
         } = spec;
-        step(1, &format!("lease on {on}"));
-        let (pool, node) = resolve_on(on)?;
-        let local = local_member(&pool);
-        // Listed before the lease: a failure here holds no capacity.
-        let (list, elsewhere) = files(worktree, main, extra, scratch)?;
-        let offer = local
-            .lease(&LeaseRequest {
-                node,
-                repo: repo.into(),
-                lane: name.into(),
-                need,
-            })
-            .map_err(|e| format!("lease on `{on}`: {e}"))?;
-        // Without a client the node cannot be told: the offer expires.
-        let client = NodeClient::new(&local, offer.node.clone()).map_err(|e| e.to_string())?;
-        let t0 = Instant::now();
+        let Leased {
+            pool,
+            offer,
+            client,
+            list,
+            elsewhere,
+            t0,
+        } = leased;
         let mut hashes = HashCache::default();
         let started = rt.block_on(async {
-            client.admit(&offer).await?;
+            let t = Instant::now();
             step(2, &format!("sync: comparing {} files", list.len()));
             let s = client
                 .sync_cached(
@@ -289,6 +362,7 @@ impl RemoteLane {
                 serde_json::json!({ "lane": name, "node": offer.node.name, "files": s.files,
                     "uploaded": s.uploaded, "bytes": s.bytes, "ms": t0.elapsed().as_millis() as u64 }),
             );
+            phase_over(name, &offer.node.name, "sync", t.elapsed().as_millis() as u64);
             // Paths in its logs point into the worktree, `/` as compilers
             // on the node write them.
             let display = worktree.to_string_lossy().replace('\\', "/");
@@ -302,13 +376,15 @@ impl RemoteLane {
                     Some(&display),
                     port_offset,
                     Duration::from_secs(1800),
-                    &move |p| {
+                    &|p| {
                         step(3, &format!("on {node}: {p}"));
                         crate::diag::info(
                             "remote_lane_starting",
                             serde_json::json!({ "lane": lane, "node": node, "phase": p }),
                         );
                     },
+                    // Measured on the node: exact, however short.
+                    &|p, ms| phase_over(&lane, &node, p, ms),
                 )
                 .await
         });

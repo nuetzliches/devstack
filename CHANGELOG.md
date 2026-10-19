@@ -9,6 +9,30 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **API: `POST /v1/lanes` with `on` answers `202` once the lane is leased**
+  (was `201` when it ran, after minutes on a first start), and syncs and
+  starts it on the node in the background; the lane's `moving` shows the
+  steps, and is gone once it runs there or carries the error
+  ([ADR-0025](docs/adr/0025-a-lane-can-run-on-another-node.md), amended
+  2026-10-19). A request held open for 4.4 minutes was cut off by proxies
+  and clients with shorter timeouts. A missing worktree, a clash with where
+  the lane runs and a refused lease are still answered at once (`409`).
+  `devstack up --on`, the MCP `up` and the dashboard follow the start, so
+  `up` still ends when the lane runs or fails with the reason; an
+  interrupted `up --on` run again follows the start under way. A client of
+  the API that starts lanes on nodes must follow `moving` before it calls
+  the lane's `/v1/up`. `devstack lane list` shows a start or move under
+  way, or one that failed lately.
+- Each phase of a lane's start on a node is timed: the node measures its
+  phases (`LaneState.phases`), each Compose group split into checking,
+  images (pull, build) and containers, starting, and waiting until healthy;
+  the requester logs every phase, the lease and the sync included, as
+  `remote_lane_phase` with `ms`, which the pool's telemetry sends as the
+  `devstack.duration` histogram labelled with `devstack.phase`.
+  `devstack node run-lane` prints the phase times.
+
 ### Fixed
 
 - The file watcher honours the repository's ignore rules (`.gitignore` at

@@ -409,7 +409,9 @@ export class MockTransport implements Transport {
       // `on`: a node, or `pool` (the coordinator picks build-server here).
       if (body?.on) laneNodes.set(l.name, body.on === 'pool' ? 'build-server' : String(body.on));
       else laneNodes.set(l.name, 'local');
-      return json(201, { ...l, active: true, running: 5 });
+      // On a node the daemon answers 202 and goes on in the background; here
+      // it has already started by the time the dashboard looks.
+      return json(body?.on ? 202 : 201, { ...l, active: true, running: 5 });
     }
     const lm = /^\/v1\/lanes\/([^/]+)\/main$/.exec(p);
     if (lm && method === 'POST') {

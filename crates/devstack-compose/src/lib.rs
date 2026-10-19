@@ -497,6 +497,17 @@ impl Docker {
         self.run(&g.dir, &a, budget::PULL).map(|_| ())
     }
 
+    /// Start exactly the group's selected services without waiting for
+    /// their health (Compose still waits for the `depends_on` conditions
+    /// among them). [`Docker::up`] afterwards waits.
+    pub fn up_detached(&self, g: &Group) -> Result<()> {
+        self.ensure_networks(g)?;
+        let mut a = g.base_args();
+        a.extend(["up".into(), "-d".into(), "--no-deps".into()]);
+        a.extend(g.services.iter().map(OsString::from));
+        self.run(&g.dir, &a, budget::PULL).map(|_| ())
+    }
+
     /// Start exactly the group's selected services and wait until they are
     /// running and healthy (`--wait`), at most `timeout` for that, on top of
     /// what pulling and building their images takes.

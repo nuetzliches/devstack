@@ -239,9 +239,27 @@ fn a_lane_runs_on_a_node_of_the_pool() {
         assert!(out.status.success(), "devstack {}: {both}", args.join(" "));
         both
     };
+    // The daemon answers 202 once leased; `up` follows the start on the
+    // node step by step and ends when the lane runs there.
     let up = cli(&wt, &["up", "--on", "ci-node"]);
     assert!(up.contains("on ci-node"), "{up}");
+    assert!(up.contains("[3/3] on ci-node: "), "{up}");
     assert!(up.contains("healthy"), "{up}");
+    // Each phase of the start is timed (B1).
+    let log =
+        std::fs::read_to_string(main.join(".devstack").join("daemon.log")).unwrap_or_default();
+    for phase in [
+        "\"lease\"",
+        "\"sync\"",
+        "waiting until healthy",
+        "the lane's daemon",
+    ] {
+        assert!(
+            log.lines()
+                .any(|l| l.contains("remote_lane_phase") && l.contains(phase)),
+            "no remote_lane_phase for {phase}:\n{log}"
+        );
+    }
     let list = cli(&main, &["lane", "list"]);
     let line = list
         .lines()

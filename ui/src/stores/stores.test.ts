@@ -131,6 +131,39 @@ describe('stack store', () => {
     expect(stack.apiLane).toBeNull();
     fake.stream('/hub/stacks/shop/api/v1/events');
   });
+
+  describe('a lane started on a node (202, B1)', () => {
+    const lane = { name: 'feat', path: '/src/feat', number: 1, port_offset: 100, owns_main: false, running: 0, services: 3 };
+    const starting = { ...lane, active: false, moving: { kind: 'start' as const, to: 'build', step: 2, steps: 3, what: 'sync', since: 0 } };
+
+    async function startOnNode() {
+      const stack = await shownStack();
+      const events = fake.stream('/hub/stacks/shop/api/v1/events');
+      events.handlers.onMessage({ type: 'lanes', lanes: [{ ...lane, active: false }] });
+      fake.on('/hub/stacks/shop/api/v1/lanes', (method) => (method === 'POST' ? { status: 202, ok: true, body: starting } : ok([starting])));
+      fake.on('/hub/stacks/shop/api/v1/lanes/feat/v1/up', { status: 202, ok: true, body: null });
+      const done = stack.startLane('feat', 'build');
+      await vi.waitFor(() => expect(stack.lanes[0]?.moving?.step).toBe(2));
+      return { stack, events, done };
+    }
+    const ups = () => fake.requests.filter((r) => r.path.endsWith('/feat/v1/up'));
+
+    it('starts its services once it runs there', async () => {
+      const { events, done } = await startOnNode();
+      expect(ups()).toHaveLength(0);
+      events.handlers.onMessage({ type: 'lanes', lanes: [{ ...lane, active: true, node: 'build' }] });
+      await done;
+      expect(ups()).toHaveLength(1);
+    });
+
+    it('says why its start failed, and starts nothing', async () => {
+      const { events, done } = await startOnNode();
+      events.handlers.onMessage({ type: 'lanes', lanes: [{ ...starting, moving: { ...starting.moving, error: 'no space left', failed_at: 1 } }] });
+      await done;
+      expect(ups()).toHaveLength(0);
+      expect(useUi().toasts.some((x) => x.message === 'no space left')).toBe(true);
+    });
+  });
 });
 
 describe('pool store', () => {

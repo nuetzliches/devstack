@@ -174,6 +174,9 @@ struct Inner {
     daemons: Mutex<HashMap<String, DaemonAddr>>,
     /// Lanes starting now, or whose start failed: the phase, or the error.
     starting: Mutex<HashMap<String, Result<String, String>>>,
+    /// The phases of each lane's last start that are over, with how long
+    /// each took (`LaneState::phases`), and when the current one began.
+    phase_times: Mutex<HashMap<String, (Vec<PhaseTime>, std::time::Instant)>>,
     /// A lease came or went: the next report is due now, not in `EVERY`.
     /// The coordinator admits a lease against the node's last report; one
     /// that still counts a released lease refuses a lane the node has room
@@ -299,10 +302,29 @@ impl Inner {
         }
     }
 
+    /// The phase `previous` of lease `id`'s start is over (another began,
+    /// or the start ended): how long it took goes into its `phases`.
+    fn phase_over(&self, id: &str, previous: Option<Result<String, String>>) {
+        let Some(Ok(phase)) = previous else { return };
+        let mut times = self.phase_times.lock().unwrap();
+        if let Some((done, since)) = times.get_mut(id) {
+            // "starting" is only the moment between the request and the
+            // first phase the lane reports.
+            if phase != "starting" {
+                done.push(PhaseTime {
+                    phase,
+                    ms: since.elapsed().as_millis() as u64,
+                });
+            }
+            *since = std::time::Instant::now();
+        }
+    }
+
     /// A lease is over: its lane stops, its mirror goes. Off the caller's
     /// thread, Docker takes its time.
     fn drop_lease(self: &Arc<Self>, l: NodeLease) {
         self.daemons.lock().unwrap().remove(&l.id);
+        self.phase_times.lock().unwrap().remove(&l.id);
         // What it needed is on offer again: the coordinator hears it now.
         self.changed.notify_one();
         let s = self.clone();
@@ -868,6 +890,20 @@ pub struct LaneState {
     /// requester's machine.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub infra_ports: Vec<u16>,
+    /// The phases of its last start that are over, in order, each with how
+    /// long it took, measured here (the requester polls, so it would see a
+    /// phase only to within its polling interval, or not at all). A failed
+    /// start's last entry is the phase it failed in. Older agents do not
+    /// send it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub phases: Vec<PhaseTime>,
+}
+
+/// A phase of a lane's start that is over, and how long it took.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhaseTime {
+    pub phase: String,
+    pub ms: u64,
 }
 
 /// Start the lane from its mirror: infrastructure, the lane container, its
@@ -914,6 +950,10 @@ async fn start(
         .lock()
         .unwrap()
         .insert(id.clone(), Ok("starting".into()));
+    s.phase_times
+        .lock()
+        .unwrap()
+        .insert(id.clone(), (Vec::new(), std::time::Instant::now()));
     let s2 = s.clone();
     let lid = id.clone();
     tokio::task::spawn_blocking(move || {
@@ -930,12 +970,19 @@ async fn start(
         let s3 = s2.clone();
         let pid = lid.clone();
         let phase = move |p: &str| {
-            s3.starting
+            let previous = s3
+                .starting
                 .lock()
                 .unwrap()
                 .insert(pid.clone(), Ok(p.to_string()));
+            s3.phase_over(&pid, previous);
         };
-        match run.start(&bin, s2.container.as_deref(), &phase) {
+        let result = run.start(&bin, s2.container.as_deref(), &phase);
+        // The last phase's time is in before the requester can see the
+        // start over.
+        let last = s2.starting.lock().unwrap().get(&lid).cloned();
+        s2.phase_over(&lid, last);
+        match result {
             Ok(addr) => {
                 s2.daemons.lock().unwrap().insert(lid.clone(), addr);
                 s2.starting.lock().unwrap().remove(&lid);
@@ -981,11 +1028,19 @@ async fn lane_state(
     if l.stack_file.is_none() {
         return Ok(Json(LaneState::default()));
     }
+    let phases = s
+        .phase_times
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|(p, _)| p.clone())
+        .unwrap_or_default();
     match s.starting.lock().unwrap().get(&id).cloned() {
         Some(Ok(phase)) => {
             return Ok(Json(LaneState {
                 started: true,
                 phase: Some(phase),
+                phases,
                 ..LaneState::default()
             }));
         }
@@ -993,6 +1048,7 @@ async fn lane_state(
             return Ok(Json(LaneState {
                 started: true,
                 error: Some(e),
+                phases,
                 ..LaneState::default()
             }));
         }
@@ -1013,6 +1069,7 @@ async fn lane_state(
         running,
         ready: running && infra_ports.is_some(),
         infra_ports: infra_ports.unwrap_or_default(),
+        phases,
         ..LaneState::default()
     }))
 }
@@ -1557,6 +1614,7 @@ pub async fn serve(
             .filter(|c| !c.trim().is_empty()),
         daemons: Mutex::new(HashMap::new()),
         starting: Mutex::new(HashMap::new()),
+        phase_times: Mutex::new(HashMap::new()),
         changed: tokio::sync::Notify::new(),
     });
     let bg = tokio::spawn(background(s.clone()));
