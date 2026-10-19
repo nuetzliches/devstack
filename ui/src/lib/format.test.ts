@@ -41,5 +41,8 @@ describe('paths.api', () => {
   it('goes to the lane named, but not for the lane routes', () => {
     expect(paths.api('abc', '/v1/stack', 'feat x')).toBe('/hub/stacks/abc/api/v1/lanes/feat%20x/v1/stack');
     expect(paths.api('abc', '/v1/lanes', 'feat')).toBe('/hub/stacks/abc/api/v1/lanes');
+    // A lane shared to view (ADR-0040): through the hub to its node, the pool kept.
+    expect(paths.api('shared~default~0d3a', '/v1/stack')).toBe('/hub/pool/shared/0d3a/api/v1/stack?pool=default');
+    expect(paths.api('shared~acme~0d3a', '/v1/usage?history=true', 'feat')).toBe('/hub/pool/shared/0d3a/api/v1/usage?history=true&pool=acme');
   });
 });

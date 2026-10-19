@@ -9,7 +9,7 @@
 // "…" button, or a right click) starts, stops and removes it.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { api, paths, v1 } from '@/api';
+import { api, paths, sharedId, v1 } from '@/api';
 import type { LaneView, StackEntry } from '@/api/types';
 import { act } from '@/lib/actions';
 import { laneLabel, orderLanes, nodeLabel, started } from '@/lib/lanes';
@@ -336,7 +336,19 @@ async function copyPath(s: StackEntry) {
           <div class="node-name faint small"><Icon name="server" :size="12" /> {{ node }}</div>
           <ul>
             <li v-for="l in lanes" :key="l.lease" class="shared-lane" :title="`${l.repo} · ${l.lane}, shared by ${l.owner_name}`">
-              <span class="label">{{ l.lane }} <span class="faint small">{{ l.owner_name }}</span></span>
+              <button
+                v-if="l.view"
+                type="button"
+                class="item lane"
+                :class="{ active: stack.id === sharedId(l.pool, l.lease) }"
+                :title="`${l.repo} · ${l.lane}, shared by ${l.owner_name} to view: its state, logs and events, read only`"
+                data-testid="sidebar-shared-view"
+                @click="router.push({ name: 'overview', params: { stack: sharedId(l.pool, l.lease) } })"
+              >
+                <span class="dot on" aria-hidden="true" />
+                <span class="label truncate">{{ l.lane }} <span class="faint small">{{ l.owner_name }}</span></span>
+              </button>
+              <span v-else class="label">{{ l.lane }} <span class="faint small">{{ l.owner_name }}</span></span>
               <span class="svcs">
                 <button
                   v-for="s in l.services"
