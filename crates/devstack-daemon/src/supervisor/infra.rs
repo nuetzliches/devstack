@@ -219,13 +219,19 @@ impl Supervisor {
                         .find(|o| o.service == c.service)
                         .map(|o| state(&o.state, &o.health));
                     let now = state(&c.state, &c.health);
-                    if before.as_deref() != Some(now.as_str()) {
+                    let changed = before.as_deref() != Some(now.as_str());
+                    if changed {
                         changes.push(format!("{}: {now}", c.service));
                     }
-                    // The last verdict of `check_forwards` stays until the
-                    // container stops (a restart repairs a lost forward).
-                    let up = c.state == "running";
-                    if up {
+                    self.forward_checks
+                        .lock()
+                        .unwrap()
+                        .entry((g.clone(), c.service.clone()))
+                        .or_default()
+                        .observe(is_ready(&c), changed, Instant::now());
+                    // The last verdict on its forwards stays while its state
+                    // does; `recheck_forwards` looks again (#98).
+                    if !changed && c.state == "running" {
                         c.unreachable = view
                             .containers
                             .iter()
@@ -433,6 +439,7 @@ impl Supervisor {
             "restart" => self.docker.restart(&g, service),
             _ => return Err(format!("unknown action `{action}`")),
         };
+        self.forwards_afresh(group, service);
         let message = match &result {
             Ok(()) => format!("{service}: {action} done"),
             Err(e) => format!("{service}: {action} failed: {e}"),
@@ -450,7 +457,9 @@ impl Supervisor {
         if self.is_shared(group, service) || self.external_infra().is_some() {
             return; // the main tree's container (ADR-0030)
         }
-        let message = match self.docker.restart(&self.compose_group(group), service) {
+        let restarted = self.docker.restart(&self.compose_group(group), service);
+        self.forwards_afresh(group, service);
+        let message = match restarted {
             Ok(()) => format!("{service}: restarted after a change"),
             Err(e) => format!("{service}: restart after a change failed: {e}"),
         };
@@ -473,38 +482,136 @@ impl Supervisor {
             .collect()
     }
 
-    /// Probe the published ports of every running container from this machine
+    /// Probe the published ports of every ready container from this machine
     /// and record lost port forwards in the view (on demand: a probe is a
     /// connection the server sees, so it does not run with every refresh).
-    pub fn check_forwards(&self) -> Vec<(String, String, Vec<String>)> {
+    /// `settled`: only containers ready for [`FORWARD_GRACE`]; one that just
+    /// started is judged by [`Self::recheck_forwards`] once it is.
+    pub fn check_forwards(&self, settled: bool) -> Vec<(String, String, Vec<String>)> {
         if self.external_infra().is_some() {
             return Vec::new(); // addresses on a Compose network, not host forwards
         }
-        let targets: Vec<(String, String, Vec<String>)> = self
-            .infra
-            .lock()
-            .unwrap()
-            .views
-            .iter()
-            .flat_map(|v| {
-                v.containers
-                    .iter()
-                    .filter(|c| {
-                        c.state == "running" && (c.health.is_empty() || c.health == "healthy")
-                    })
-                    .map(|c| (v.group.clone(), c.service.clone(), c.ports.clone()))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+        let now = Instant::now();
+        let targets: Vec<(String, String, Vec<String>)> = {
+            let infra = self.infra.lock().unwrap();
+            let checks = self.forward_checks.lock().unwrap();
+            infra
+                .views
+                .iter()
+                .flat_map(|v| {
+                    v.containers
+                        .iter()
+                        .filter(|c| is_ready(c) && !c.ports.is_empty())
+                        .filter(|c| {
+                            !settled
+                                || checks
+                                    .get(&(v.group.clone(), c.service.clone()))
+                                    .is_some_and(|f| f.settled(now))
+                        })
+                        .map(|c| (v.group.clone(), c.service.clone(), c.ports.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        };
         let mut out = Vec::new();
         for (g, svc, ports) in targets {
-            let lost = lost_forwards(&ports);
+            let lost = lost_forwards(&ports, FORWARD_TRIES);
+            self.judged(&g, &svc);
             self.set_unreachable(&g, &svc, lost.clone());
             if !lost.is_empty() {
                 out.push((g, svc, lost));
             }
         }
         out
+    }
+
+    /// From the sampler: judge a container's forwards once it has been ready
+    /// for [`FORWARD_GRACE`], and look again at those found lost, so a
+    /// verdict neither comes from a server still starting inside nor
+    /// outlives the repair (#98).
+    pub fn recheck_forwards(&self) {
+        if self.external_infra().is_some() {
+            return;
+        }
+        let now = Instant::now();
+        let targets: Vec<(String, String, Vec<String>, bool)> = {
+            let infra = self.infra.lock().unwrap();
+            let mut checks = self.forward_checks.lock().unwrap();
+            let mut t = Vec::new();
+            for v in &infra.views {
+                for c in v
+                    .containers
+                    .iter()
+                    .filter(|c| is_ready(c) && !c.ports.is_empty())
+                {
+                    let f = checks
+                        .entry((v.group.clone(), c.service.clone()))
+                        .or_default();
+                    let flagged = !c.unreachable.is_empty();
+                    if flagged || (!f.checked && f.settled(now)) {
+                        t.push((v.group.clone(), c.service.clone(), c.ports.clone(), flagged));
+                    }
+                }
+            }
+            t
+        };
+        for (g, svc, ports, flagged) in targets {
+            // One probe that answers clears a verdict; a new one is confirmed.
+            let lost = lost_forwards(&ports, if flagged { 1 } else { FORWARD_TRIES });
+            self.judged(&g, &svc);
+            self.set_unreachable(&g, &svc, lost.clone());
+            let message = match (flagged, lost.is_empty()) {
+                (false, false) => format!(
+                    "{svc}: {} closes connections from this machine at once (Docker lost the port forward, or nothing listens inside)",
+                    lost.join(", ")
+                ),
+                (true, true) => format!("{svc}: reachable from this machine again"),
+                _ => continue,
+            };
+            self.emit(EventBody::Infra { group: g, message });
+        }
+    }
+
+    /// The forwards of `service` were judged since it became ready.
+    fn judged(&self, group: &str, service: &str) {
+        self.forward_checks
+            .lock()
+            .unwrap()
+            .entry((group.to_string(), service.to_string()))
+            .or_default()
+            .checked = true;
+    }
+
+    /// `service` (re)started from here: no verdict on its forwards until it
+    /// is ready again, for a while.
+    fn forwards_afresh(&self, group: &str, service: &str) {
+        self.forward_checks
+            .lock()
+            .unwrap()
+            .entry((group.to_string(), service.to_string()))
+            .or_default()
+            .afresh();
+        self.set_unreachable(group, service, Vec::new());
+    }
+
+    /// How long `service` is ready (running, healthy if it has a check);
+    /// `None` while it is not.
+    fn ready_for(&self, group: &str, service: &str) -> Option<Duration> {
+        let ready = self.infra.lock().unwrap().views.iter().any(|v| {
+            v.group == group
+                && v.containers
+                    .iter()
+                    .any(|c| c.service == service && is_ready(c))
+        });
+        if !ready {
+            return None;
+        }
+        let now = Instant::now();
+        let mut checks = self.forward_checks.lock().unwrap();
+        let f = checks
+            .entry((group.to_string(), service.to_string()))
+            .or_default();
+        Some(now.duration_since(*f.ready_since.get_or_insert(now)))
     }
 
     fn set_unreachable(&self, group: &str, service: &str, lost: Vec<String>) {
@@ -528,9 +635,43 @@ impl Supervisor {
         if self.is_shared(group, service) || self.external_infra().is_some() {
             return Ok(()); // the main tree's container; it repairs its own
         }
-        let lost = lost_forwards(&self.container_ports(group, service));
+        let ports = self.container_ports(group, service);
+        let mut lost = lost_forwards(&ports, FORWARD_TRIES);
         self.set_unreachable(group, service, lost.clone());
         if lost.is_empty() {
+            return Ok(());
+        }
+        // Only a container ready for a while is judged: until the server
+        // inside listens, Docker Desktop's proxy closes a connection just as
+        // for a lost forward (#98). One that is not ready is not repaired by
+        // a restart either.
+        match self.ready_for(group, service) {
+            None => return Ok(()),
+            Some(d) if d < FORWARD_GRACE => {
+                std::thread::sleep(FORWARD_GRACE - d);
+                lost = lost_forwards(&ports, FORWARD_TRIES);
+                self.set_unreachable(group, service, lost.clone());
+                if lost.is_empty() {
+                    return Ok(());
+                }
+            }
+            Some(_) => {}
+        }
+        let may = self
+            .forward_checks
+            .lock()
+            .unwrap()
+            .entry((group.to_string(), service.to_string()))
+            .or_default()
+            .restart_now(Instant::now());
+        if !may {
+            self.emit(EventBody::Infra {
+                group: group.into(),
+                message: format!(
+                    "{service}: {} closes connections from this machine at once again; restarted lately, so not again (if a service cannot reach it, restart Docker Desktop)",
+                    lost.join(", ")
+                ),
+            });
             return Ok(());
         }
         self.emit(EventBody::Infra {
@@ -540,13 +681,13 @@ impl Supervisor {
                 lost.join(", ")
             ),
         });
-        self.docker
-            .restart(&self.compose_group(group), service)
-            .map_err(|e| format!("restart `{service}`: {e}"))?;
+        let restarted = self.docker.restart(&self.compose_group(group), service);
+        self.forwards_afresh(group, service);
+        restarted.map_err(|e| format!("restart `{service}`: {e}"))?;
         let t0 = Instant::now();
         loop {
             self.refresh_containers();
-            let still = lost_forwards(&self.container_ports(group, service));
+            let still = lost_forwards(&self.container_ports(group, service), 1);
             let up = self.infra.lock().unwrap().views.iter().any(|v| {
                 v.group == group
                     && v.containers.iter().any(|c| {
@@ -762,22 +903,146 @@ fn container_target<'a>(
     }
 }
 
-/// The published ports (`5432->127.0.0.1:5432`) whose forward is lost.
-fn lost_forwards(ports: &[String]) -> Vec<String> {
-    ports
-        .iter()
-        .filter(|p| {
+/// How long a container is ready before its published ports are judged:
+/// Docker calls one without a health check ready once it runs, and until the
+/// server inside listens, Docker Desktop's proxy accepts a connection and
+/// closes it, just as for a lost forward (#98).
+pub(crate) const FORWARD_GRACE: Duration = Duration::from_secs(20);
+/// Probes that must all find a forward closed at once, [`FORWARD_GAP`] apart.
+const FORWARD_TRIES: usize = 3;
+const FORWARD_GAP: Duration = Duration::from_secs(1);
+/// At most one restart of a container for a lost forward this often.
+const FORWARD_RESTART_EVERY: Duration = Duration::from_secs(600);
+
+/// Running, and healthy if it has a health check.
+fn is_ready(c: &ContainerView) -> bool {
+    c.state == "running" && (c.health.is_empty() || c.health == "healthy")
+}
+
+/// What is known of one Compose service's port forwards (#98).
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ForwardCheck {
+    /// Since when it is ready.
+    ready_since: Option<Instant>,
+    /// Its forwards were judged since it became ready.
+    checked: bool,
+    /// When it was last restarted for a lost forward.
+    restarted: Option<Instant>,
+}
+
+impl ForwardCheck {
+    /// `compose ps` saw it `ready` or not; `changed`: its state or health is
+    /// not what it was.
+    fn observe(&mut self, ready: bool, changed: bool, now: Instant) {
+        if !ready {
+            self.afresh();
+        } else if changed || self.ready_since.is_none() {
+            self.ready_since = Some(now);
+            self.checked = false;
+        }
+    }
+
+    /// It starts again: judged once it is ready again, for a while.
+    fn afresh(&mut self) {
+        self.ready_since = None;
+        self.checked = false;
+    }
+
+    /// Ready long enough for a verdict on its forwards.
+    fn settled(&self, now: Instant) -> bool {
+        self.ready_since
+            .is_some_and(|t| now.duration_since(t) >= FORWARD_GRACE)
+    }
+
+    /// A restart for a lost forward, unless there was one lately.
+    fn restart_now(&mut self, now: Instant) -> bool {
+        if self
+            .restarted
+            .is_some_and(|t| now.duration_since(t) < FORWARD_RESTART_EVERY)
+        {
+            return false;
+        }
+        self.restarted = Some(now);
+        true
+    }
+}
+
+/// The published ports (`5432->127.0.0.1:5432`) whose forward is lost: each
+/// of `tries` probes found it accepted and closed at once. One that answers
+/// once, or waits for the client, is not lost (#98).
+fn lost_forwards(ports: &[String], tries: usize) -> Vec<String> {
+    let mut lost: Vec<String> = ports.to_vec();
+    for i in 0..tries.max(1) {
+        if i > 0 {
+            if lost.is_empty() {
+                break;
+            }
+            std::thread::sleep(FORWARD_GAP);
+        }
+        lost.retain(|p| {
             p.split_once("->").is_some_and(|(_, addr)| {
                 devstack_compose::probe(addr) == devstack_compose::Reach::ClosedAtOnce
             })
-        })
-        .cloned()
-        .collect()
+        });
+    }
+    lost
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_forward_is_lost_only_when_every_probe_says_so() {
+        use std::net::TcpListener;
+        // Closes the first connection at once, then holds them: a server
+        // that came up between two probes (#98).
+        let late = TcpListener::bind("127.0.0.1:0").unwrap();
+        let late_port = late.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for (i, c) in late.incoming().enumerate() {
+                if i > 0 {
+                    held.push(c);
+                }
+            }
+        });
+        // Closes every connection at once: a lost forward.
+        let dead = TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead_port = dead.local_addr().unwrap().port();
+        std::thread::spawn(move || for _c in dead.incoming() {});
+        let ports = vec![
+            format!("80->127.0.0.1:{late_port}"),
+            format!("81->127.0.0.1:{dead_port}"),
+        ];
+        assert_eq!(lost_forwards(&ports, 3), vec![ports[1].clone()]);
+    }
+
+    #[test]
+    fn a_forward_is_judged_once_the_container_is_ready_for_a_while() {
+        let t0 = Instant::now();
+        let mut f = ForwardCheck::default();
+        f.observe(false, true, t0);
+        assert!(!f.settled(t0 + FORWARD_GRACE), "not ready: no verdict");
+        f.observe(true, true, t0);
+        assert!(!f.settled(t0 + FORWARD_GRACE / 2), "just ready: wait");
+        assert!(f.settled(t0 + FORWARD_GRACE));
+        // Its health changed (a restart Docker reported): from the start.
+        f.observe(true, true, t0 + FORWARD_GRACE);
+        assert!(!f.settled(t0 + FORWARD_GRACE + FORWARD_GRACE / 2));
+        // A restart from here clears it until the next `ps`.
+        f.afresh();
+        assert!(!f.settled(t0 + FORWARD_GRACE * 10));
+    }
+
+    #[test]
+    fn a_container_is_restarted_for_a_lost_forward_once_in_a_while() {
+        let t0 = Instant::now();
+        let mut f = ForwardCheck::default();
+        assert!(f.restart_now(t0));
+        assert!(!f.restart_now(t0 + Duration::from_secs(60)));
+        assert!(f.restart_now(t0 + FORWARD_RESTART_EVERY));
+    }
 
     /// A container as `compose ps` reports it, through the parser.
     fn shown(line: &str, managed: bool) -> ContainerView {

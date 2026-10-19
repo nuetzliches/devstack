@@ -182,20 +182,53 @@ struct DownQuery {
 }
 
 /// `204` once every service (and with `infra` every Compose group) stopped;
-/// `409` naming what did not.
+/// `409` naming what did not. In the main tree, lanes that still run keep the
+/// infrastructure their `shared` services use (ADR-0030), and the daemon they
+/// live in (ADR-0024): then `200` with `{"lanes": [...]}`, and `infra` is not
+/// done.
 async fn down(State(s): State<AppState>, Query(q): Query<DownQuery>) -> Response {
+    let lanes = s.lanes.as_ref().map(|l| l.active()).unwrap_or_default();
+    let infra = q.infra && lanes.is_empty();
     let sup = s.sup.clone();
-    match tokio::task::spawn_blocking(move || sup.down(q.infra)).await {
-        Ok(failed) if failed.is_empty() => StatusCode::NO_CONTENT.into_response(),
-        Ok(failed) => err(
+    match tokio::task::spawn_blocking(move || sup.down(infra)).await {
+        Ok(failed) if !failed.is_empty() => err(
             StatusCode::CONFLICT,
-            format!("did not stop:\n{}", failed.join("\n")),
+            format!(
+                "did not stop:
+{}",
+                failed.join(
+                    "
+"
+                )
+            ),
         ),
+        Ok(_) if !lanes.is_empty() => Json(serde_json::json!({ "lanes": lanes })).into_response(),
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 
-async fn shutdown(State(s): State<AppState>) -> Response {
+#[derive(Deserialize)]
+struct ShutdownQuery {
+    /// Not while a lane runs: `409` with `{"lanes": [...]}` instead.
+    #[serde(default)]
+    unless_lanes: bool,
+}
+
+async fn shutdown(State(s): State<AppState>, Query(q): Query<ShutdownQuery>) -> Response {
+    if q.unless_lanes {
+        let lanes = s.lanes.as_ref().map(|l| l.active()).unwrap_or_default();
+        if !lanes.is_empty() {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": format!("lanes run in this daemon: {}", lanes.join(", ")),
+                    "lanes": lanes,
+                })),
+            )
+                .into_response();
+        }
+    }
     s.shutdown.notify_one();
     StatusCode::ACCEPTED.into_response()
 }
@@ -1231,7 +1264,7 @@ async fn build_log(State(s): State<AppState>, Path(name): Path<String>) -> Respo
 /// (accepted and closed at once). Recorded in the view as `unreachable`.
 async fn infra_check(State(s): State<AppState>) -> Response {
     let sup = s.sup.clone();
-    match tokio::task::spawn_blocking(move || sup.check_forwards()).await {
+    match tokio::task::spawn_blocking(move || sup.check_forwards(false)).await {
         Ok(lost) => Json(
             lost.into_iter()
                 .map(|(group, service, ports)| serde_json::json!({ "group": group, "service": service, "ports": ports }))

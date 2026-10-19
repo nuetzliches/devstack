@@ -679,6 +679,32 @@ Connection: close
     }
 }
 
+/// "Check for updates" asks GitHub, so only the hub's own page may ask, and a
+/// machine that turned checks off says so instead of asking.
+#[test]
+fn a_check_for_updates_says_when_checks_are_off() {
+    let h = start();
+    let p = h.port;
+    let cookie = paired_cookie(&h);
+    let ask = |extra: &str| {
+        http(
+            p,
+            &format!(
+                "POST /hub/update/check HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\n{extra}Content-Length: 0\r\nConnection: close\r\n\r\n"
+            ),
+        )
+    };
+    let (s, _, _) = ask(&format!(
+        "Cookie: {cookie}\r\nOrigin: http://evil.example\r\n"
+    ));
+    assert_eq!(s, 403);
+    let (s, _, body) = ask(&format!(
+        "Cookie: {cookie}\r\nOrigin: http://127.0.0.1:{p}\r\n"
+    ));
+    assert_eq!(s, 409, "{body}");
+    assert!(body.contains("DEVSTACK_NO_UPDATE_CHECK"), "{body}");
+}
+
 /// #11: a start from the dashboard that fails before the daemon runs (here a
 /// stack file that needs a newer devstack) is reported on the stack's entry,
 /// instead of leaving the page on "Starting…".

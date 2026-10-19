@@ -620,6 +620,13 @@ pub fn print_status(stack: &Value) {
 /// no longer match.
 pub fn print_status_for(stack: &Value, stack_file: &Path) {
     print_status(stack);
+    if let Some(n) = Client::probe(&state_dir(stack_file).unwrap_or_default())
+        .ok()
+        .flatten()
+        .and_then(|c| lanes_note(&c))
+    {
+        println!("\n{n}");
+    }
     if let Some(n) = crate::skills::outdated_note(stack_file) {
         println!("\n{n}");
     }
@@ -1289,8 +1296,146 @@ pub fn lane_stop(stack_file: &Path, name: &str) -> Result<()> {
     if status >= 400 {
         bail!("{}", error_text(&body));
     }
-    println!("lane `{name}` stopped; `devstack up` in its worktree starts it again");
+    println!(
+        "lane `{name}` stopped; `devstack lane start {name}` (or `devstack up` in its worktree) starts it again"
+    );
     Ok(())
+}
+
+/// A lane started from wherever this runs (#103): its name and its
+/// node's version warning, if any; `client` then talks to it.
+pub struct StartedLane {
+    pub client: Client,
+    pub name: String,
+    pub file: PathBuf,
+    pub warning: Option<String>,
+}
+
+/// Start the lane `name` (its name or branch, see `lane list`) of this
+/// repository, here or on a node (`on`), from the main working tree or any
+/// worktree: the daemon is started if it does not run. `step` hears a start
+/// on a node step by step.
+pub fn start_lane(
+    stack_file: &Path,
+    name: &str,
+    on: Option<&str>,
+    within: Option<Duration>,
+    step: impl FnMut(&Value),
+) -> Result<StartedLane> {
+    let main_file = daemon_file(stack_file);
+    // A lane on a node needs no Docker here: everything of it runs there.
+    if on.is_none() {
+        ensure_engine(&main_file, |l| println!("{l}"))?;
+    }
+    let mut c = ensure_daemon(&main_file, &state_dir(stack_file)?)?;
+    let lanes: Vec<Value> = serde_json::from_str(&c.get("/v1/lanes")?)?;
+    let lane = lanes
+        .iter()
+        .find(|l| l["name"] == name)
+        .or_else(|| lanes.iter().find(|l| l["branch"] == name))
+        .ok_or_else(|| {
+            let known: Vec<&str> = lanes.iter().filter_map(|l| l["name"].as_str()).collect();
+            anyhow!(
+                "no lane `{name}`: {} (a lane is a `git worktree` of the repository)",
+                if known.is_empty() {
+                    "the repository has no other worktree".to_string()
+                } else {
+                    format!("the lanes are {}", known.join(", "))
+                }
+            )
+        })?;
+    let path = PathBuf::from(lane["path"].as_str().unwrap_or_default());
+    // Its own stack file says which services it starts; its branch may
+    // differ from the main tree's.
+    let file = main_file
+        .file_name()
+        .map(|f| path.join(f))
+        .filter(|f| f.is_file())
+        .unwrap_or_else(|| main_file.clone());
+    let wt = Worktree {
+        path,
+        main_file: main_file.clone(),
+    };
+    let name = c.join_lane(&wt, false, false, on, within, step)?;
+    let warning = on.and_then(|_| {
+        c.call_raw("GET", "/v1/lanes", None)
+            .ok()
+            .and_then(|(_, body)| serde_json::from_str::<Vec<Value>>(&body).ok())
+            .and_then(|ls| ls.into_iter().find(|l| l["name"] == name.as_str()))
+            .and_then(|l| l["node_warning"].as_str().map(str::to_string))
+    });
+    Ok(StartedLane {
+        client: c,
+        name,
+        file,
+        warning,
+    })
+}
+
+/// `devstack lane start <lane> [--on <node>]`: as `devstack up` in that
+/// worktree, from anywhere in the repository.
+pub fn lane_start(stack_file: &Path, name: &str, on: Option<&str>) -> Result<()> {
+    if let Some(node) = on {
+        println!("leasing, syncing and starting the lane on {node}...");
+    }
+    let started = start_lane(stack_file, name, on, None, |m| {
+        if m["step"] != 0 {
+            println!("{}", step_line(m));
+        }
+    })?;
+    if let Some(w) = &started.warning {
+        eprintln!("warning: {w}");
+    }
+    println!("lane `{}` started", started.name);
+    let t0 = Instant::now();
+    let outcome = start_and_wait(&started.client, &started.file, None, |name, st| {
+        println!("{:>6.1}s  {name:<22} {st}", t0.elapsed().as_secs_f64());
+    })?;
+    match outcome {
+        UpOutcome::Ready(stack) => {
+            println!();
+            print!("{}", status_text(&stack));
+            Ok(())
+        }
+        UpOutcome::Failed { service, reason } => {
+            eprintln!("\n{service} failed:\n{reason}");
+            std::process::exit(1);
+        }
+        UpOutcome::TimedOut(_) => unreachable!("no timeout given"),
+    }
+}
+
+/// One line on the lanes for `status` in the main working tree (#103): that
+/// worktrees exist, which run, and how to start one beside the main tree.
+pub fn lanes_note(c: &Client) -> Option<String> {
+    if c.lane().is_some() {
+        return None;
+    }
+    let lanes: Vec<Value> = serde_json::from_str(&c.get("/v1/lanes").ok()?).ok()?;
+    if lanes.is_empty() {
+        return None;
+    }
+    let started: Vec<String> = lanes
+        .iter()
+        .filter(|l| l["active"] != false)
+        .map(|l| {
+            let name = l["name"].as_str().unwrap_or("");
+            match l["node"].as_str() {
+                Some(node) => format!("{name} on {node}"),
+                None => name.to_string(),
+            }
+        })
+        .collect();
+    Some(format!(
+        "lanes: {} worktree(s), {} started{}; `devstack lane list`, `devstack lane start <lane>`",
+        lanes.len(),
+        started.len(),
+        if started.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", started.join(", "))
+        }
+    ))
 }
 
 pub fn promote_lane(stack_file: &Path, lane: &str) -> Result<()> {
@@ -1469,7 +1614,7 @@ pub fn run_command(stack_file: &Path, name: &str, yes: bool) -> Result<()> {
     }
 }
 
-pub fn down(stack_file: &Path, infra: bool) -> Result<()> {
+pub fn down(stack_file: &Path, infra: bool, all: bool) -> Result<()> {
     let sd = state_dir(stack_file)?;
     let Some(c) = Client::connect(&sd) else {
         println!("no daemon is running for this stack");
@@ -1493,6 +1638,16 @@ pub fn down(stack_file: &Path, infra: bool) -> Result<()> {
     if status >= 400 {
         bail!("{}", error_text(&body));
     }
+    // Lanes that still run keep the daemon they live in (ADR-0024) and the
+    // infrastructure they share (ADR-0030).
+    let lanes = running_lanes(status, &body);
+    if !lanes.is_empty() && !all {
+        println!(
+            "main working tree stopped; lanes keep running: {} (the daemon and the infrastructure stay; `devstack down --all` stops them too)",
+            lanes.join(", ")
+        );
+        return Ok(());
+    }
     let _ = c.post("/v1/shutdown", None);
     let t0 = Instant::now();
     while devstack_daemon::read_info(&sd).is_some() && t0.elapsed() < Duration::from_secs(30) {
@@ -1500,13 +1655,26 @@ pub fn down(stack_file: &Path, infra: bool) -> Result<()> {
     }
     println!(
         "stopped{}",
-        if infra {
+        if infra && !lanes.is_empty() {
+            "; infrastructure keeps running, lanes were using it (`down --infra` to stop it)"
+        } else if infra {
             ", infrastructure removed"
         } else {
             "; infrastructure keeps running (`down --infra` to stop it)"
         }
     );
     Ok(())
+}
+
+/// The lanes a `200` from the main tree's `/v1/down` names: they still run.
+pub fn running_lanes(status: u16, body: &str) -> Vec<String> {
+    if status != 200 {
+        return Vec::new();
+    }
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| serde_json::from_value(v["lanes"].clone()).ok())
+        .unwrap_or_default()
 }
 
 /// A stack with Compose groups needs the Docker engine. Start Docker Desktop

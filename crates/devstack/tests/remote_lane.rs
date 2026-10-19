@@ -309,8 +309,19 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     );
     cli(&main, &["promote", "--lane", "main"]);
 
-    // The daemon ends: the lane on the node goes with it (ADR-0025 point 7).
-    cli(&main, &["down"]);
+    // `down` in the main tree stops the main tree only: the lane on the
+    // node runs on, and answers on its port here.
+    let down = cli(&main, &["down"]);
+    assert!(down.contains("lanes keep running"), "{down}");
+    let body = http_get(port, "/health");
+    assert!(
+        body.contains("ok"),
+        "GET /health on {port} after `down`: {body}"
+    );
+
+    // `down --all`: the daemon ends, and the lane on the node goes with it
+    // (ADR-0025 point 7).
+    cli(&main, &["down", "--all"]);
     node_is_clear();
 }
 
