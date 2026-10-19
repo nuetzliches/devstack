@@ -11,6 +11,10 @@ and listed with their assets on the
 
 ### Added
 
+- **Check for updates in the dashboard.** The version in the top bar opens
+  a popover with the hub's and the shown stack's devstack, a "Check for
+  updates" button (`POST /hub/update/check`: the hub asks GitHub now instead
+  of at its next 12-hour look) and, when there is one, the update to install.
 - **The pool knows which devstack each party runs**
   ([ADR-0031](docs/adr/0031-a-coordinator-places-lanes.md) point 8;
   [pool.md](docs/pool.md#versions-in-a-pool)). Nodes and members

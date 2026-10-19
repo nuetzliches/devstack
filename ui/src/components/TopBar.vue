@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { isMock } from '@/api';
+import { ago, useNow } from '@/lib/format';
+import { usePopover } from '@/lib/popover';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import { useUi } from '@/stores/ui';
@@ -35,6 +37,15 @@ async function copyUpdate() {
     ui.toast('info', 'Run: devstack update', `It installs ${hub.newer}; running stacks switch at their next restart.`);
   }
 }
+const now = useNow();
+const verRoot = ref<HTMLElement | null>(null);
+const verTrigger = ref<HTMLButtonElement | null>(null);
+const { open: verOpen, toggle: verToggle } = usePopover(verRoot, verTrigger);
+function install() {
+  verOpen.value = false;
+  void hub.installUpdate();
+}
+
 const mismatch = computed(() => {
   const d = stack.entry?.daemon?.version;
   const h = hub.version;
@@ -94,11 +105,46 @@ const mismatch = computed(() => {
       >
         <span v-if="hub.updating" class="spinner" /><Icon v-else name="download" :size="13" /> {{ hub.updating ? `Installing ${hub.newer}…` : `Update to ${hub.newer}` }}
       </button>
-      <span class="ver hide-sm" :title="mismatch ? `daemon ${mismatch} differs from the hub's minor version` : 'hub version'">
-        <span v-if="isMock" class="pill sm info">mock</span>
-        <span>v{{ version }}</span>
-        <Icon v-if="mismatch" name="alert" :size="13" class="mismatch" label="version mismatch" />
-      </span>
+      <div ref="verRoot" class="ver-wrap hide-sm">
+        <button
+          ref="verTrigger"
+          type="button"
+          class="ver"
+          :aria-expanded="verOpen"
+          aria-haspopup="dialog"
+          :title="mismatch ? `daemon ${mismatch} differs from the hub's minor version` : 'Versions, and a check for updates'"
+          data-testid="version"
+          @click="verToggle()"
+        >
+          <span v-if="isMock" class="pill sm info">mock</span>
+          <span>v{{ version }}</span>
+          <Icon v-if="mismatch" name="alert" :size="13" class="mismatch" label="version mismatch" />
+        </button>
+        <div v-if="verOpen" class="ver-pop" role="dialog" aria-label="devstack version" data-testid="version-popover">
+          <dl>
+            <dt>Hub</dt>
+            <dd class="mono">{{ version }}</dd>
+            <template v-if="stack.entry?.daemon">
+              <dt>{{ stack.entry.name }}</dt>
+              <dd class="mono">
+                {{ stack.entry.daemon.version }}
+                <span v-if="mismatch" class="mismatch small">restart the stack to switch</span>
+              </dd>
+            </template>
+          </dl>
+          <p v-if="hub.newer" class="news" data-testid="version-newer">devstack {{ hub.newer }} is out.</p>
+          <p v-else-if="hub.lastCheck?.error" class="err small" data-testid="version-error">{{ hub.lastCheck.error }}</p>
+          <p v-else-if="hub.lastCheck" class="faint small" data-testid="version-current">Up to date · checked {{ ago(hub.lastCheck.at, now) }}</p>
+          <div class="ver-actions">
+            <button type="button" class="btn btn-sm" :disabled="hub.checkingUpdate" data-testid="version-check" @click="hub.checkUpdate()">
+              <span v-if="hub.checkingUpdate" class="spinner" /><Icon v-else name="restart" :size="13" /> Check for updates
+            </button>
+            <button v-if="hub.newer" type="button" class="btn btn-sm btn-primary" :disabled="hub.updating" @click="install()">
+              <Icon name="download" :size="13" /> Update to {{ hub.newer }}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </header>
 </template>
@@ -194,13 +240,73 @@ const mismatch = computed(() => {
   font-size: 12px;
   gap: 4px;
 }
+.ver-wrap {
+  position: relative;
+}
 .ver {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  font: inherit;
   font-size: 12px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+.ver:hover,
+.ver[aria-expanded='true'] {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.ver-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  width: 280px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elev);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+.ver-pop dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+.ver-pop dt {
+  color: var(--text-muted);
+}
+.ver-pop dd {
+  margin: 0;
+}
+.ver-pop p {
+  margin: 0;
+}
+.news {
+  color: var(--accent);
+  font-weight: 550;
+}
+.err {
+  color: var(--danger);
+}
+.small {
+  font-size: 12px;
+}
+.ver-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 .mismatch {
   color: var(--warn);
