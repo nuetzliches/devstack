@@ -139,3 +139,11 @@ lane are built (`max_cpus` in a policy, `--max-cpus` on `devstack node
 members policy`, `--cpus` on every container of the lane in `lanerun.rs`).
 Placing by node tags (`--on pool:gpu`) is not. `egress.rs` is this ADR's
 point 5, not [ADR-0022](0022-network-egress-sandbox.md), which is unbuilt.
+
+*Noted 2026-10-19.* Point 7 checks what the lane starts: the services
+`[compose.<group>] services` names, what they need (`depends_on`, `links`,
+`network_mode`/`volumes_from` of a service), and the top-level networks,
+volumes, secrets and configs those use (`check_model` in `confine.rs`). The
+agent brings up nothing else (`compose create|up <services>`), and the lane
+container has no Docker access, so the rest of a Compose file never runs on
+the node. A group that names no services runs, and is checked, whole.

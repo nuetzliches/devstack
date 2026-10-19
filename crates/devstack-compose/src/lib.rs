@@ -172,6 +172,20 @@ pub struct ServiceModel {
     /// Paths (strings or `{path}`), when read with `--no-env-resolution`.
     #[serde(default, deserialize_with = "nullable")]
     pub env_file: Vec<serde_json::Value>,
+    // What it needs of the project: `compose up <service>` starts or
+    // creates these too.
+    #[serde(default, deserialize_with = "nullable")]
+    pub depends_on: BTreeMap<String, serde_json::Value>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub links: Vec<String>,
+    /// The networks it joins, by key (`config` writes a map).
+    #[serde(default, deserialize_with = "nullable")]
+    pub networks: BTreeMap<String, Option<serde_json::Value>>,
+    /// `{source, target}` (or a name), as `config` writes them.
+    #[serde(default, deserialize_with = "nullable")]
+    pub secrets: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub configs: Vec<serde_json::Value>,
 }
 
 /// A service's mount, in the long syntax `config` always writes.

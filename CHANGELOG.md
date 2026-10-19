@@ -55,6 +55,14 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A lane on a node is checked for what it starts, not for the whole
+  Compose file** ([ADR-0033](docs/adr/0033-a-node-decides-what-runs-on-it.md)
+  point 7). A group that names its `services` was refused for a service it
+  never starts (a Docker socket or a host path mounted by a production-only
+  service, an external network only such a service joins). The node now
+  checks the named services, what they need (`depends_on`, `links`, a
+  service's network or volumes) and the networks, volumes, secrets and
+  configs those use; a group that names none is checked whole, as before.
 - The file watcher honours the repository's ignore rules (`.gitignore` at
   any depth, `.git/info/exclude`, the global excludes): a change to an
   ignored file starts no candidate and no longer updates a lane's copy, as
