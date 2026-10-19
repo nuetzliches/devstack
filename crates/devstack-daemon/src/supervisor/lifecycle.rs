@@ -28,7 +28,7 @@ impl Supervisor {
             self.infra_up()?;
             // Healthy inside Docker is not reachable from here: say so
             // (a service that needs the container repairs it, ensure_after).
-            for (g, svc, lost) in self.check_forwards() {
+            for (g, svc, lost) in self.check_forwards(true) {
                 self.emit(EventBody::Infra {
                     group: g,
                     message: format!(
