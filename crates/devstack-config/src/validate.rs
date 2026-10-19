@@ -223,6 +223,29 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         stack,
         issues: Vec::new(),
     };
+    // Each profile is checked as the stack it makes (ADR-0041), once: not
+    // again on a stack one was applied to.
+    for name in stack.profiles.keys().filter(|_| stack.profile.is_none()) {
+        if !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            || name.is_empty()
+        {
+            c.err(
+                format!("profiles.{name}"),
+                "a profile's name uses letters, digits, `-` and `_`",
+            );
+            continue;
+        }
+        match stack.apply_profile(name) {
+            Ok(s) => {
+                for i in validate(&s) {
+                    c.err(format!("profiles.{name} ({})", i.path), i.message);
+                }
+            }
+            Err(issues) => c.issues.extend(issues),
+        }
+    }
 
     if stack.version != SCHEMA_VERSION {
         c.err("version", unsupported_version(stack.version));

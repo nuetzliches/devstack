@@ -61,6 +61,8 @@ pub struct LaneRun {
     /// The lane's port offset on the requester's machine
     /// (`DEVSTACK_PORT_OFFSET`): it runs on those ports here too.
     pub port_offset: u16,
+    /// The profile it runs with (ADR-0041, `DEVSTACK_PROFILE`).
+    pub profile: Option<String>,
     /// The memory limit of each of its containers (ADR-0033), bytes.
     pub memory_limit: Option<u64>,
     /// Their CPU limit, cores.
@@ -385,7 +387,20 @@ impl LaneRun {
 
         let mut infra = BTreeMap::new();
         let mut infra_ports = Vec::new();
+        // A profile with `data = "fresh"` (ADR-0041): its slot's volumes go
+        // before its containers start (ADR-0038 keeps them otherwise).
+        let fresh = self
+            .profile
+            .as_ref()
+            .and_then(|p| stack.profiles.get(p))
+            .is_some_and(|p| p.data == Some(devstack_config::model::DataMode::Fresh));
         for (name, g, model) in &groups {
+            if fresh {
+                phase(&format!(
+                    "infrastructure: {name}: its data goes (a fresh start)"
+                ));
+                let _ = dc.remove(g);
+            }
             // Started, then waited for, as two phases: a slow container
             // start and a slow health check are told apart.
             phase(&format!("infrastructure: {name}: starting containers"));
@@ -526,6 +541,13 @@ impl LaneRun {
             "-e",
             &offset,
         ];
+        let profile_env = self
+            .profile
+            .as_ref()
+            .map(|p| format!("DEVSTACK_PROFILE={p}"));
+        if let Some(p) = &profile_env {
+            args.extend(["-e", p.as_str()]);
+        }
         if let Some(n) = networks.first() {
             args.extend(["--network", n.as_str()]);
         }

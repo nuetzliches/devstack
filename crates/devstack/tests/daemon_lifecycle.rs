@@ -1346,6 +1346,77 @@ steps = [{{ exec = "{hang}", timeout = "1s" }}]
     s.ok(&["down"]);
 }
 
+/// A profile (ADR-0041): chosen at `up`, it says which services start and
+/// what every command gets, `--run` runs its command once the tree is
+/// ready, and the tree runs with it until it stops.
+#[test]
+fn a_profile_runs_the_stack_for_a_purpose() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    let (idle, mark) = if cfg!(windows) {
+        ("ping -n 600 127.0.0.1 >NUL", "echo %MARK%> mark.txt")
+    } else {
+        ("sleep 600", "echo $MARK > mark.txt")
+    };
+    std::fs::write(
+        s.file(),
+        format!(
+            r#"version = 1
+[stack]
+name = "profiled"
+[services.base]
+kind = "tool"
+run = "{idle}"
+[services.extra]
+kind = "tool"
+run = "{idle}"
+autostart = false
+[commands.check]
+description = "writes what it got"
+steps = [{{ exec = "{mark}" }}]
+[profiles.acc]
+description = "an acceptance run"
+autostart = ["extra"]
+env = {{ MARK = "acceptance-run" }}
+command = "check"
+"#
+        ),
+    )
+    .unwrap();
+    let bad = s.cli(&["up", "--profile", "nope"], None);
+    assert!(!bad.status.success());
+    assert!(
+        String::from_utf8_lossy(&bad.stderr).contains("acc"),
+        "names the profiles there are"
+    );
+
+    let up = s.ok(&["up", "--profile", "acc", "--run"]);
+    assert!(up.contains("profile: acc"), "{up}");
+    assert!(up.contains("running `check`"), "{up}");
+    let state = |n: &str| {
+        s.service_view(n)["status"]["state"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    };
+    assert_eq!(state("extra"), "running", "the profile starts it");
+    assert_eq!(state("base"), "stopped", "and not this one");
+    let marked = std::fs::read_to_string(s.dir.path().join("mark.txt")).unwrap();
+    assert!(
+        marked.contains("acceptance-run"),
+        "the command got the profile's env: {marked}"
+    );
+    assert!(s.ok(&["status"]).contains("profile: acc"));
+    // Another profile, or none, needs the tree stopped first.
+    let other = s.cli(&["up"], None);
+    assert!(!other.status.success(), "the daemon runs with `acc`");
+    assert!(String::from_utf8_lossy(&other.stderr).contains("down"));
+    s.ok(&["down", "--all"]);
+}
+
 /// A long-running service that exits by itself, with any code, is started
 /// again after a backoff, five times in a row at most; a tool stays exited
 /// (#103: a lane's dev server exited with 0 and nothing brought it back).
@@ -1798,6 +1869,26 @@ fn a_worktree_runs_as_a_lane() {
     );
     s.ok(&["lane", "stop", &extra_name]);
     assert!(row(&extra_name).contains("stopped"), "{}", row(&extra_name));
+
+    // 8. A profile from the lane's own stack file (ADR-0041): its branch adds
+    //    one; it says what starts, and `--run` runs its command in the lane.
+    let file = extra.join("devstack.toml");
+    let mut toml = std::fs::read_to_string(&file).unwrap();
+    toml.push_str("\n[profiles.quick]\nautostart = [\"prep\", \"api\"]\ncommand = \"ping\"\n");
+    std::fs::write(&file, toml).unwrap();
+    let out = s.ok(&["lane", "start", &extra_name, "--profile", "quick", "--run"]);
+    assert!(out.contains("running `ping`"), "{out}");
+    assert!(
+        s.ok(&["lane", "list"])
+            .contains("runs with the profile `quick`"),
+        "{}",
+        s.ok(&["lane", "list"])
+    );
+    s.ok(&["lane", "stop", &extra_name]);
+    assert!(
+        !s.ok(&["lane", "list"]).contains("profile `quick`"),
+        "a profile holds while the lane runs"
+    );
 
     s.ok(&["down", "--all"]);
     for dir in [&wt, &extra] {

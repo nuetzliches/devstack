@@ -61,6 +61,18 @@ enum Cmd {
         /// lane runs there; the worktree stays.
         #[arg(long, value_name = "NODE")]
         on: Option<String>,
+        /// Run it with this profile of the stack file (ADR-0041): how it runs
+        /// for a purpose (an acceptance run). Shown by `status`.
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
+        /// With `--profile`: once ready, run the profile's `command` and end
+        /// with its result.
+        #[arg(long, requires = "profile")]
+        run: bool,
+        /// Confirm what the profile asks (`data = "fresh"` in the main tree
+        /// throws its data away) and what its command asks.
+        #[arg(long)]
+        yes: bool,
     },
     /// Stop the services and the daemon; `--infra` also removes the containers.
     /// In the main working tree, lanes that still run keep the daemon and the
@@ -344,6 +356,13 @@ enum LaneAction {
         /// `pool` to let the coordinator choose (ADR-0025).
         #[arg(long, value_name = "NODE")]
         on: Option<String>,
+        /// Run it with this profile of the stack file (ADR-0041).
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
+        /// With `--profile`: once ready, run the profile's `command` in the
+        /// lane and end with its result.
+        #[arg(long, requires = "profile")]
+        run: bool,
     },
     /// Stop a lane: its services stop and it is no longer started (its
     /// builds stay). The worktree is git's: devstack never creates or removes
@@ -664,7 +683,10 @@ mod tests {
 
     #[test]
     fn up_takes_its_lane_options() {
-        let Cmd::Up { workers, force, on } = parse(&["up", "--workers", "--on", "pool"]).cmd else {
+        let Cmd::Up {
+            workers, force, on, ..
+        } = parse(&["up", "--workers", "--on", "pool"]).cmd
+        else {
             panic!("not up");
         };
         assert!(workers && !force);

@@ -259,11 +259,17 @@ fn execute(
                     None => root.clone(),
                 };
                 let file = out.try_clone().map_err(|e| e.to_string())?;
+                // A profile's variables reach its commands too (ADR-0041),
+                // with the tree's own addresses.
+                let mut step_env = BTreeMap::new();
+                for (k, v) in sup.stack.profile.iter().flat_map(|p| &p.env) {
+                    step_env.insert(k.clone(), expand(v, &ctx, &env).map_err(|e| e.to_string())?);
+                }
                 let spec = devstack_proc::Spec {
                     name: "command".into(),
                     command,
                     cwd,
-                    env: BTreeMap::new(),
+                    env: step_env,
                     log: file,
                 };
                 let (mut tree, _) =

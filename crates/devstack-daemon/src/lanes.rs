@@ -78,6 +78,9 @@ pub struct LaneView {
     /// Who may also view it (ADR-0040): its state, logs, events, read only.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub viewed_by: Vec<String>,
+    /// The profile it runs with (ADR-0041), while it runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// What went wrong with a lane on a node lately (a sync, a renewal).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_error: Option<String>,
@@ -199,6 +202,8 @@ pub struct Lanes {
     /// Whom each lane is shared with, where its owner said so (ADR-0035);
     /// else `[lanes] share`. Kept in `.devstack/lane-shares.json`.
     shares: Mutex<BTreeMap<String, Vec<String>>>,
+    /// The profile each started lane runs with (ADR-0041), while it runs.
+    profiles: Mutex<BTreeMap<String, String>>,
     /// Who may also view each lane (ADR-0040), where its owner said so.
     /// Kept in `.devstack/lane-views.json`.
     views: Mutex<BTreeMap<String, Vec<String>>>,
@@ -469,6 +474,7 @@ impl Lanes {
             pending: Mutex::new(BTreeSet::new()),
             shares: Mutex::new(shares),
             views: Mutex::new(views),
+            profiles: Mutex::new(BTreeMap::new()),
             handover: Mutex::new(Handover::default()),
             syncing: Mutex::new(()),
             missing: Mutex::new(BTreeMap::new()),
@@ -758,6 +764,7 @@ impl Lanes {
             self.stop_remote(r);
         }
         self.missing.lock().unwrap().remove(name);
+        self.profiles.lock().unwrap().remove(name);
         self.remove_infra(name);
         // Its kept data on the nodes it ran on goes too (ADR-0038 point 4);
         // a node that does not answer keeps it until its retention ends.
@@ -1001,25 +1008,56 @@ impl Lanes {
         }
     }
 
-    fn open(&self, entry: &LaneEntry) -> Result<Arc<Lane>, String> {
-        let repo = devstack_proc::long_path(&entry.path);
-        if !repo.is_dir() {
-            return Err(format!("{} is gone", repo.display()));
-        }
-        // The lane's own stack file when its branch has one (it may have changed
-        // it), else the main working tree's.
+    /// The lane's own stack file when its branch has one (it may have changed
+    /// it), else the main working tree's.
+    fn stack_file_of(&self, repo: &Path) -> PathBuf {
         let own = repo.join(
             self.main
                 .stack_file()
                 .file_name()
                 .unwrap_or("devstack.toml".as_ref()),
         );
-        let file = if own.is_file() {
+        if own.is_file() {
             own
         } else {
             self.main.stack_file().to_path_buf()
-        };
+        }
+    }
+
+    /// Whether the worktree at `path` can run with `profile` (ADR-0041): its
+    /// own stack file has it, and what it makes holds.
+    pub fn check_profile(&self, path: &Path, profile: &str) -> Result<(), String> {
+        let repo = devstack_proc::long_path(&std::path::absolute(path).map_err(|e| e.to_string())?);
+        let file = self.stack_file_of(&repo);
         let stack = devstack_config::load(&file).map_err(|e| e.to_string())?;
+        stack.with_profile(profile).map(|_| ()).map_err(|issues| {
+            issues
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
+    }
+
+    fn open(&self, entry: &LaneEntry) -> Result<Arc<Lane>, String> {
+        let repo = devstack_proc::long_path(&entry.path);
+        if !repo.is_dir() {
+            return Err(format!("{} is gone", repo.display()));
+        }
+        let file = self.stack_file_of(&repo);
+        let stack = devstack_config::load(&file).map_err(|e| e.to_string())?;
+        // The profile it was started with (ADR-0041).
+        let profile = self.profiles.lock().unwrap().get(&entry.name).cloned();
+        let stack = match profile {
+            Some(p) => stack.with_profile(&p).map_err(|issues| {
+                issues
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })?,
+            None => stack,
+        };
         // The main stack's step: the free ranges were chosen with it.
         let offset = lane_offset(entry.number, self.main.stack.lanes.port_step)
             .ok_or_else(|| format!("lane number {} is beyond the port range", entry.number))?;
@@ -1139,6 +1177,7 @@ impl Lanes {
                     pool: on_node.map(|r| r.pool.clone()),
                     shared_with: self.share_of(&k.entry.name),
                     viewed_by: self.view_of(&k.entry.name),
+                    profile: self.profiles.lock().unwrap().get(&k.entry.name).cloned(),
                     node_error: node_state.and_then(|st| st.error),
                     node_warning: on_node
                         .and_then(|r| r.warning.clone())
@@ -1151,7 +1190,7 @@ impl Lanes {
 
     /// Start the lane of the worktree at `path` (`devstack up` in it): its
     /// supervisor is set up; `/v1/lanes/<name>/v1/up` starts its services.
-    pub fn activate(&self, path: &Path) -> Result<Arc<Lane>, String> {
+    pub fn activate(&self, path: &Path, profile: Option<&str>) -> Result<Arc<Lane>, String> {
         let path = std::path::absolute(path).map_err(|e| e.to_string())?;
         if same_tree(&path, &self.main.repo) {
             return Err("that is the main working tree; it is the lane `main` already".into());
@@ -1173,6 +1212,15 @@ impl Lanes {
             })?;
         let name = entry.name.clone();
         if let Some(l) = self.map.lock().unwrap().get(&name) {
+            let runs = l.sup.stack.profile.as_ref().map(|p| p.name.as_str());
+            if profile.is_some() && runs != profile {
+                return Err(format!(
+                    "lane `{name}` runs {}: `devstack lane stop {name}` first",
+                    runs.map_or("without a profile".to_string(), |p| format!(
+                        "with the profile `{p}`"
+                    ))
+                ));
+            }
             return Ok(l.clone());
         }
         if let Some(r) = self.remote.lock().unwrap().get(&name) {
@@ -1181,6 +1229,14 @@ impl Lanes {
                 r.node.name
             ));
         }
+        match profile {
+            Some(p) => self
+                .profiles
+                .lock()
+                .unwrap()
+                .insert(name.clone(), p.to_string()),
+            None => self.profiles.lock().unwrap().remove(&name),
+        };
         if !self.pending.lock().unwrap().insert(name.clone()) {
             return Err(format!("lane `{name}` is being started"));
         }
@@ -1236,6 +1292,8 @@ impl Lanes {
             ));
         }
         let t0 = std::time::Instant::now();
+        // A profile holds while the lane runs (ADR-0041).
+        self.profiles.lock().unwrap().remove(name);
         let remote = self.remote.lock().unwrap().remove(name);
         if let Some(r) = remote {
             let node = r.node.name.clone();
@@ -1630,6 +1688,7 @@ impl Lanes {
         path: &Path,
         on: &str,
         need: devstack_node::share::Amount,
+        profile: Option<&str>,
     ) -> Result<RemoteStart, String> {
         let path = std::path::absolute(path).map_err(|e| e.to_string())?;
         if same_tree(&path, &self.main.repo) {
@@ -1683,6 +1742,14 @@ impl Lanes {
                 Err(format!("lane `{name}` is being started or moved"))
             };
         }
+        match profile {
+            Some(p) => self
+                .profiles
+                .lock()
+                .unwrap()
+                .insert(name.clone(), p.to_string()),
+            None => self.profiles.lock().unwrap().remove(&name),
+        };
         self.begin_move(&name, "start", on, 3);
         let leased = {
             let step = self.step_fn(&name);
@@ -1910,6 +1977,7 @@ impl Lanes {
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_else(|_| "devstack.toml".into());
         let scratch = self.state_dir(&entry.name).join("remote");
+        let profile = self.profiles.lock().unwrap().get(&entry.name).cloned();
         let worktree = devstack_proc::long_path(&entry.path);
         let offset = lane_offset(entry.number, self.main.stack.lanes.port_step)
             .ok_or_else(|| format!("lane `{}`: its ports are beyond 65535", entry.name))?;
@@ -1934,6 +2002,7 @@ impl Lanes {
             port_offset: offset,
             forward,
             step,
+            profile: profile.as_deref(),
         })
     }
 
@@ -2083,15 +2152,18 @@ impl Lanes {
         self.remote.lock().unwrap().remove(name);
         self.pending.lock().unwrap().remove(name);
         step(2, "starting it here (build, infrastructure, services)");
-        let started = self.activate(&entry.path).and_then(|lane| {
-            lane.sup.up().inspect_err(|_| {
-                lane.sup.down(true);
-                let removed = self.map.lock().unwrap().remove(name);
-                if let Some(l) = removed {
-                    l.sup.close();
-                }
-            })
-        });
+        let profile = self.profiles.lock().unwrap().get(name).cloned();
+        let started = self
+            .activate(&entry.path, profile.as_deref())
+            .and_then(|lane| {
+                lane.sup.up().inspect_err(|_| {
+                    lane.sup.down(true);
+                    let removed = self.map.lock().unwrap().remove(name);
+                    if let Some(l) = removed {
+                        l.sup.close();
+                    }
+                })
+            });
         self.pending.lock().unwrap().insert(name.clone());
         match started {
             Ok(_) => {

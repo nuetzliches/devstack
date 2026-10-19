@@ -34,6 +34,194 @@ pub struct Stack {
     /// Other working trees run as lanes (plan §3.5).
     #[serde(default)]
     pub lanes: Lanes,
+    /// How a tree runs for a purpose (an acceptance run, ADR-0041), chosen
+    /// when it starts: `devstack up --profile <name>`.
+    #[serde(default)]
+    pub profiles: BTreeMap<String, Profile>,
+    /// The profile this stack runs with, once applied ([`Stack::with_profile`]).
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub profile: Option<Active>,
+}
+
+/// `[profiles.<name>]` (ADR-0041): an overlay that changes how the stack
+/// runs, never what it is.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Profile {
+    /// What it is for, shown where profiles are offered.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Background workers in a lane (as `--workers`); in the main tree they
+    /// run anyway.
+    #[serde(default)]
+    pub workers: Option<bool>,
+    /// `fresh`: the tree's own Compose volumes go before its containers
+    /// start, so its seed jobs fill a new database.
+    #[serde(default)]
+    pub data: Option<DataMode>,
+    /// Variables for every service and command of the tree; the usual
+    /// placeholders (`{service.web.url}`, `{compose.app.db.5432}`).
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    /// The services that start, instead of each service's own `autostart`.
+    #[serde(default)]
+    pub autostart: Option<Vec<String>>,
+    /// How single services run with this profile.
+    #[serde(default)]
+    pub services: BTreeMap<String, ServiceProfile>,
+    /// A `[commands]` entry that is the profile's purpose (the suite):
+    /// `devstack up --profile <name> --run` runs it once the tree is ready.
+    #[serde(default)]
+    pub command: Option<String>,
+}
+
+/// `fresh` or `keep` (the default).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DataMode {
+    #[default]
+    Keep,
+    Fresh,
+}
+
+/// What a profile changes of one service: the fields that say how it runs.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceProfile {
+    pub kind: Option<Kind>,
+    pub build: Option<String>,
+    pub output: Option<String>,
+    pub run: Option<String>,
+    pub spa: Option<bool>,
+    pub cwd: Option<String>,
+    pub health: Option<Health>,
+    /// Added to the service's `env`, over the profile's.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+/// The profile a stack runs with, applied.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Active {
+    pub name: String,
+    pub workers: Option<bool>,
+    pub data: DataMode,
+    pub env: BTreeMap<String, String>,
+    pub command: Option<String>,
+}
+
+impl Stack {
+    /// The stack as profile `name` runs it (ADR-0041), checked like a stack
+    /// file; the issues name the profile's keys.
+    pub fn with_profile(&self, name: &str) -> Result<Stack, Vec<crate::Issue>> {
+        let s = self.apply_profile(name)?;
+        let issues = crate::validate::validate(&s);
+        if issues.is_empty() {
+            Ok(s)
+        } else {
+            Err(issues
+                .into_iter()
+                .map(|i| crate::Issue {
+                    path: format!("profiles.{name} ({})", i.path),
+                    message: i.message,
+                })
+                .collect())
+        }
+    }
+
+    /// [`Self::with_profile`] without the check; unknown names are issues.
+    /// The applied stack keeps its `profiles`, to tell what else there is.
+    pub(crate) fn apply_profile(&self, name: &str) -> Result<Stack, Vec<crate::Issue>> {
+        let issue = |path: String, message: String| crate::Issue { path, message };
+        let Some(p) = self.profiles.get(name) else {
+            let known: Vec<&str> = self.profiles.keys().map(String::as_str).collect();
+            return Err(vec![issue(
+                "profiles".into(),
+                if known.is_empty() {
+                    format!("no profile `{name}`: the stack file has none")
+                } else {
+                    format!("no profile `{name}` (there are {})", known.join(", "))
+                },
+            )]);
+        };
+        let mut s = self.clone();
+        let mut issues = Vec::new();
+        for svc in s.services.values_mut() {
+            for (k, v) in &p.env {
+                svc.env.insert(k.clone(), v.clone());
+            }
+        }
+        for (n, o) in &p.services {
+            let Some(svc) = s.services.get_mut(n) else {
+                issues.push(issue(
+                    format!("profiles.{name}.services.{n}"),
+                    format!("no service `{n}` in `[services]`"),
+                ));
+                continue;
+            };
+            if let Some(k) = o.kind {
+                svc.kind = k;
+                // A static service has no `run`, unless the profile gives one.
+                if k == Kind::Static && o.run.is_none() {
+                    svc.run = String::new();
+                }
+            }
+            if o.build.is_some() {
+                svc.build = o.build.clone();
+            }
+            if o.output.is_some() {
+                svc.output = o.output.clone();
+            }
+            if let Some(r) = &o.run {
+                svc.run = r.clone();
+            }
+            if o.spa.is_some() {
+                svc.spa = o.spa;
+            }
+            if o.cwd.is_some() {
+                svc.cwd = o.cwd.clone();
+            }
+            if o.health.is_some() {
+                svc.health = o.health.clone();
+            }
+            for (k, v) in &o.env {
+                svc.env.insert(k.clone(), v.clone());
+            }
+        }
+        if let Some(list) = &p.autostart {
+            for (i, n) in list.iter().enumerate() {
+                if !s.services.contains_key(n) {
+                    issues.push(issue(
+                        format!("profiles.{name}.autostart[{i}]"),
+                        format!("no service `{n}` in `[services]`"),
+                    ));
+                }
+            }
+            for (n, svc) in s.services.iter_mut() {
+                svc.autostart = list.contains(n);
+            }
+        }
+        if let Some(c) = &p.command
+            && !s.commands.contains_key(c)
+        {
+            issues.push(issue(
+                format!("profiles.{name}.command"),
+                format!("no command `{c}` in `[commands]`"),
+            ));
+        }
+        if !issues.is_empty() {
+            return Err(issues);
+        }
+        s.profile = Some(Active {
+            name: name.to_string(),
+            workers: p.workers,
+            data: p.data.unwrap_or_default(),
+            env: p.env.clone(),
+            command: p.command.clone(),
+        });
+        Ok(s)
+    }
 }
 
 /// Lanes: another working tree (a `git worktree`, an agent's checkout) runs the

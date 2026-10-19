@@ -7,7 +7,12 @@ use std::path::Path;
 pub(crate) fn run(file: &Path, action: LaneAction) -> Result<()> {
     match action {
         LaneAction::List => client::lane_list(file),
-        LaneAction::Start { name, on } => client::lane_start(file, &name, on.as_deref()),
+        LaneAction::Start {
+            name,
+            on,
+            profile,
+            run,
+        } => client::lane_start(file, &name, on.as_deref(), profile.as_deref(), run),
         LaneAction::Stop { name } => client::lane_stop(file, &name),
         LaneAction::Reset { name } => client::lane_reset(file, &name),
         LaneAction::Prune {

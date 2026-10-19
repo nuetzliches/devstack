@@ -59,6 +59,12 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   git ignores do not go there unless `[lanes] sync` names them (a dev
   certificate); `prepare` installs what the copy lacks (`npm ci`).
   `[lanes] share` says whom such a lane is shared with by default.
+- **A purpose gets a profile, not a second stack file** (ADR-0041).
+  `[profiles.<name>]` changes how the stack runs for an acceptance run or a
+  light review: `workers`, `data = "fresh"`, `env` with the tree's
+  addresses, `autostart`, per service `kind = "static"` with `build` and
+  `output`, and the suite as `command`. Each profile is checked as the stack
+  it makes; add `requires = "0.11.0"` to `[stack]`.
 - **Hot reload is opt-in per session.** `[services.<name>.hot_reload]` with
   the watcher's `run` (`dotnet watch run --non-interactive`) only makes
   `devstack hot-reload <name> on` possible; the service still builds by

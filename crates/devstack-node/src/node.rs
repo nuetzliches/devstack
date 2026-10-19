@@ -696,6 +696,7 @@ impl Inner {
                 .unwrap_or_else(|| "devstack.toml".into()),
             display_root: None,
             port_offset: 0,
+            profile: None,
             memory_limit: None,
             cpu_limit: None,
             network: crate::policy::Network::Lan,
@@ -1428,6 +1429,9 @@ pub struct Start {
     /// runs on those ports here too.
     #[serde(default)]
     pub port_offset: u16,
+    /// The profile it runs with (ADR-0041); absent: none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 fn default_stack_file() -> String {
@@ -1484,10 +1488,17 @@ async fn start(
             format!("{} cannot run lanes: its agent is no Linux build", s.name),
         ));
     };
-    let (stack_file, display_root, port_offset) = body.map_or_else(
-        || (default_stack_file(), None, 0),
-        |Json(b)| (b.stack_file, b.display_root, b.port_offset),
+    let (stack_file, display_root, port_offset, profile) = body.map_or_else(
+        || (default_stack_file(), None, 0, None),
+        |Json(b)| (b.stack_file, b.display_root, b.port_offset, b.profile),
     );
+    if let Some(p) = &profile
+        && !p
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return Err(err(StatusCode::BAD_REQUEST, "not a profile's name"));
+    }
     if safe_path(&stack_file).is_none() {
         return Err(err(
             StatusCode::BAD_REQUEST,
@@ -1544,6 +1555,7 @@ async fn start(
         let mut run = s2.run(&l);
         run.display_root = display_root;
         run.port_offset = port_offset;
+        run.profile = profile;
         let policies = s2.policies();
         let all: Vec<&crate::policy::NodePolicy> = policies.iter().collect();
         if let Some(p) = crate::policy::NodePolicy::strictest(&all) {
