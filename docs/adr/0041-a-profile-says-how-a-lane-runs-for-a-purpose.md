@@ -116,6 +116,16 @@ start.
 
 ## Enforced by
 
+*Paths as built, noted 2026-10-19:* `crates/devstack-config/src/model.rs`
+(`Profile`, `Stack::with_profile`) and `validate.rs` (each profile checked
+as the stack it makes), `tests/profiles.rs`; the daemon applies
+`DEVSTACK_PROFILE` at start (`crates/devstack-daemon/src/lib.rs`), a lane's
+from its own stack file (`lanes.rs`: `open`, `check_profile`), `data =
+"fresh"` in `Supervisor::fresh_data` and, on a node, in `LaneRun::start`;
+the profile's env reaches `exec` steps (`commands.rs`); `--profile`,
+`--run`, `--yes` in `crates/devstack/src/client.rs`, MCP `up`/`lane_start`;
+the dashboard's lane start and stack header.
+
 Where it will live:
 
 - `crates/devstack-config`: `[profiles]`, the merge (`Stack::with_profile`),

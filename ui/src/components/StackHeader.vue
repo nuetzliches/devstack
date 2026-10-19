@@ -112,6 +112,7 @@ function pick(l: LaneView | null) {
       <span v-if="hubAway" class="pill" title="The hub is not reachable"><span class="dot" />last seen {{ ago(stack.viewAt ?? hub.lastContact, now) }}</span>
       <span v-else class="pill" :class="liveState.tone" :title="liveState.title" data-testid="stack-live" role="status"><span class="dot" />{{ liveState.label }}</span>
       <span v-if="daemon" class="tag" title="daemon version">devstack {{ daemon.version }}</span>
+      <span v-if="view?.profile" class="pill accent" data-testid="stack-profile" title="It runs with this profile of the stack file (ADR-0041) until it stops">profile: {{ view.profile }}</span>
       <span v-if="stack.sharedLane" class="pill info" data-testid="shared-banner" :title="`Shared with you to view by ${stack.sharedLane.owner_name}: its state, logs and events, read only. It runs on ${stack.sharedLane.node.name}.`">
         {{ stack.sharedLane.owner_name }}'s lane on {{ stack.sharedLane.node.name }} · read only
       </span>

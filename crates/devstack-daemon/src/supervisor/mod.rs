@@ -169,6 +169,8 @@ pub struct Supervisor {
     lane_pins: Mutex<Option<LanePins>>,
     /// Set when a lane is removed: its sampler threads end.
     closed: std::sync::atomic::AtomicBool,
+    /// Its profile's `data = "fresh"` was done, once per start (ADR-0041).
+    fresh_done: std::sync::atomic::AtomicBool,
     /// Per Compose service: since when it is ready, whether its forwards
     /// were probed since, when it was last restarted for a lost one (#98).
     forward_checks: Mutex<BTreeMap<(String, String), infra::ForwardCheck>>,
@@ -434,6 +436,7 @@ impl Supervisor {
             forwards: Mutex::new(BTreeMap::new()),
             lane_pins: Mutex::new(None),
             closed: std::sync::atomic::AtomicBool::new(false),
+            fresh_done: std::sync::atomic::AtomicBool::new(false),
             forward_checks: Mutex::new(BTreeMap::new()),
             lane,
         }))
@@ -553,7 +556,20 @@ impl Supervisor {
                 requires: c.requires.clone(),
             })
             .collect();
+        let profiles = self
+            .stack
+            .profiles
+            .iter()
+            .map(|(name, p)| crate::state::ProfileView {
+                name: name.clone(),
+                description: p.description.clone(),
+                fresh: p.data == Some(devstack_config::model::DataMode::Fresh),
+                command: p.command.clone(),
+            })
+            .collect();
         StackView {
+            profile: self.stack.profile.as_ref().map(|p| p.name.clone()),
+            profiles,
             name: self.stack.stack.name.clone(),
             repo: self.repo.clone(),
             version: devstack_config::VERSION.into(),

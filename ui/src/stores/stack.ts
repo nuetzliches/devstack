@@ -210,7 +210,7 @@ export const useStack = defineStore('stack', () => {
 
   /** Start a lane not started yet (what `devstack up` in its worktree does), then show it. */
   /** `on`: a node of the pool, or `pool` (the coordinator chooses); absent: this machine. */
-  async function startLane(name: string, on?: string) {
+  async function startLane(name: string, on?: string, profile?: string) {
     const l = lanes.value.find((x) => x.name === name);
     if (!id.value || !l) return;
     busy.value[`lane-start`] = name;
@@ -218,7 +218,7 @@ export const useStack = defineStore('stack', () => {
       const res = await act({
         label: on ? `Start lane ${name} on ${on === 'pool' ? 'the pool' : on}` : `Start lane ${name}`,
         path: daemonPath(id.value, v1.lanes),
-        body: on ? { path: l.path, on } : { path: l.path, infra: true },
+        body: { ...(on ? { path: l.path, on } : { path: l.path, infra: true }), ...(profile ? { profile } : {}) },
         success: false,
       });
       if (!res.ok) return;

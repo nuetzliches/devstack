@@ -8,7 +8,22 @@ use std::path::Path;
 pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
     match cmd {
         Cmd::Check { compose } => check(file, compose),
-        Cmd::Up { workers, force, on } => client::up(file, workers, force, on.as_deref()),
+        Cmd::Up {
+            workers,
+            force,
+            on,
+            profile,
+            run,
+            yes,
+        } => client::up(
+            file,
+            workers,
+            force,
+            on.as_deref(),
+            profile.as_deref(),
+            run,
+            yes,
+        ),
         Cmd::Down { infra, all } => client::down(file, infra, all),
         Cmd::Status => {
             let c = client::need(&client::state_dir(file)?)?;

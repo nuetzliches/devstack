@@ -171,6 +171,7 @@ impl NodeClient {
         stack_file: &str,
         display_root: Option<&str>,
         port_offset: u16,
+        profile: Option<&str>,
         within: std::time::Duration,
         phase: &(dyn Fn(&str) + Send + Sync),
         over: &(dyn Fn(&str, u64) + Send + Sync),
@@ -183,6 +184,7 @@ impl NodeClient {
                     stack_file: stack_file.into(),
                     display_root: display_root.map(str::to_string),
                     port_offset,
+                    profile: profile.map(str::to_string),
                 }),
             )
             .await?;

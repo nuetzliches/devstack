@@ -288,6 +288,8 @@ pub struct RemoteSpec<'a> {
     /// Hears each step: its number (1 lease, 2 sync, 3 start on the node)
     /// and what it does now.
     pub step: &'a (dyn Fn(u8, &str) + Send + Sync),
+    /// The profile it runs with (ADR-0041).
+    pub profile: Option<&'a str>,
 }
 
 /// A lane leased on its node and admitted there, not yet synced or started
@@ -442,6 +444,7 @@ impl RemoteLane {
             port_offset,
             forward,
             step,
+            profile,
             ..
         } = spec;
         let Leased {
@@ -490,6 +493,7 @@ impl RemoteLane {
                     stack_file,
                     Some(&display),
                     port_offset,
+                    profile,
                     Duration::from_secs(1800),
                     &|p| {
                         step(3, &format!("on {node}: {p}"));

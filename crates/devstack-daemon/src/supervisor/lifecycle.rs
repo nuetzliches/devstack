@@ -29,6 +29,10 @@ impl Supervisor {
     /// service that fails holds back only what comes `after` it.
     pub fn up(self: &Arc<Self>) -> Result<(), String> {
         {
+            // A profile with `data = "fresh"` (ADR-0041): the tree's own
+            // volumes go first, once per start, so its seed jobs fill new
+            // ones. On a node its agent does it (ADR-0025).
+            self.fresh_data();
             // Every lane has its own infrastructure (ADR-0030).
             self.infra_up()?;
             // Healthy inside Docker is not reachable from here: say so
@@ -73,6 +77,26 @@ impl Supervisor {
                 "failed: {}",
                 failed.into_iter().collect::<Vec<_>>().join(", ")
             ))
+        }
+    }
+
+    fn fresh_data(&self) {
+        let fresh = self
+            .stack
+            .profile
+            .as_ref()
+            .is_some_and(|p| p.data == devstack_config::model::DataMode::Fresh);
+        if !fresh || self.external_infra().is_some() || self.fresh_done.swap(true, Ordering::SeqCst)
+        {
+            return;
+        }
+        for g in self.group_order() {
+            let group = self.compose_group(&g);
+            let message = match self.docker.remove(&group) {
+                Ok(()) => "its data goes: the profile starts it fresh".to_string(),
+                Err(e) => format!("its data could not go: {e}"),
+            };
+            self.emit(EventBody::Infra { group: g, message });
         }
     }
 

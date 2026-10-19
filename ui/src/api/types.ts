@@ -102,6 +102,8 @@ export type LaneView = {
   pool?: string;
   /** Whom it is shared with in its pool (ADR-0035): member ids, tags, `*` for everyone. */
   shared_with?: string[];
+  /** The profile it runs with (ADR-0041), while it runs. */
+  profile?: string;
   /** What went wrong with it on its node lately (a sync, a renewal). */
   node_error?: string;
   /** Its node or the pool's coordinator runs another devstack than this machine, or does not say which. */
@@ -179,7 +181,14 @@ export type StackView = {
   branch?: string | null;
   /** The stack file changed since the daemon started; applies with the next start. Older daemons omit it. */
   config_changed?: boolean;
+  /** The profile this tree runs with (ADR-0041). */
+  profile?: string;
+  /** The stack file's profiles, for a start with one. */
+  profiles?: ProfileView[];
 };
+
+/** A profile of the stack file (ADR-0041). */
+export type ProfileView = { name: string; description?: string; fresh?: boolean; command?: string };
 
 // ---------------------------------------------------------------- usage
 

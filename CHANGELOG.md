@@ -11,6 +11,20 @@ and listed with their assets on the
 
 ### Added
 
+- **Profiles: a tree runs for a purpose** ([#115](https://github.com/nuetzliches/devstack/issues/115),
+  [ADR-0041](docs/adr/0041-a-profile-says-how-a-lane-runs-for-a-purpose.md)).
+  `[profiles.<name>]` in the stack file changes how a lane or the main tree
+  runs, chosen at start: background workers, fresh data (the tree's own
+  volumes go first; on a node its slot's), variables for every service and
+  command with the tree's addresses, which services start, per service how
+  it runs (a frontend as a `static` build instead of a dev server), and the
+  command it is for. `devstack up --profile <name> [--run]`, `devstack lane
+  start <lane> --profile <name> [--run]`, the MCP `up` and `lane_start`
+  with `profile` and `run`, and the dashboard's lane start offer them; the
+  tree runs with it until it stops (`status`, `lane list`, the stack
+  header). Each profile is checked as the stack it makes. A lane takes the
+  profiles of its own worktree's stack file. A file with `[profiles]`
+  needs this release (`requires = "0.11.0"`).
 - **An admin updates a server's devstack from the dashboard**
   ([ADR-0039](docs/adr/0039-an-admin-can-update-a-server-node.md)).
   "Update" in the pool area, for a node of the kind server that is online:

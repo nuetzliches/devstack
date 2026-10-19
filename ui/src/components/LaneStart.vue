@@ -4,7 +4,7 @@
 // in the pool with the coordinator choosing (ADR-0031 point 4). A start on a
 // node shows its steps as the daemon reports them, so it survives
 // navigating away and back.
-import { computed, onBeforeUnmount } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import type { LaneView } from '@/api/types';
 import { laneLabel } from '@/lib/lanes';
 import { usePool } from '@/stores/pool';
@@ -24,8 +24,13 @@ const running = computed(() => !!m.value && !m.value.error && m.value.kind === '
 const failed = computed(() => (m.value?.error && m.value.kind === 'start' ? m.value : null));
 const placeName = (to: string) => (to === 'pool' ? 'the pool' : pool.pools.some((p) => p.name === to) ? `the pool ${to}` : to);
 
+/** The stack file's profiles (ADR-0041): how the lane runs for a purpose. */
+const profiles = computed(() => stack.view?.profiles ?? []);
+const profile = ref('');
+const chosen = computed(() => profiles.value.find((p) => p.name === profile.value) ?? null);
+
 function start(on?: string) {
-  void stack.startLane(props.lane.name, on);
+  void stack.startLane(props.lane.name, on, profile.value || undefined);
 }
 </script>
 
@@ -53,6 +58,14 @@ function start(on?: string) {
         <Icon name="alert" :size="14" /> Starting on {{ placeName(failed.to) }} failed: {{ failed.error }}
       </p>
 
+      <label v-if="profiles.length" class="profile" data-testid="lane-start-profile">
+        <span>Profile</span>
+        <select v-model="profile" class="input">
+          <option value="">none: as the stack file says</option>
+          <option v-for="p in profiles" :key="p.name" :value="p.name">{{ p.name }}{{ p.description ? ` · ${p.description}` : '' }}</option>
+        </select>
+        <span v-if="chosen?.fresh" class="faint small">starts with fresh data: its databases are seeded again</span>
+      </label>
       <div class="choices">
         <button type="button" class="btn btn-primary" :disabled="busy || running" data-testid="lane-start-here" @click="start()">
           <span v-if="busy && !running" class="spinner" /><Icon v-else name="play" :size="14" /> Start here
@@ -142,5 +155,16 @@ function start(on?: string) {
 }
 .mono {
   font-family: var(--font-mono, monospace);
+}
+.profile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+  font-size: 13px;
+}
+.profile select {
+  max-width: 360px;
 }
 </style>

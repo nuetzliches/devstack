@@ -307,6 +307,9 @@ struct LaneStart {
     /// or member id.
     #[serde(default)]
     on: Option<String>,
+    /// Run it with this profile of the stack file (ADR-0041).
+    #[serde(default)]
+    profile: Option<String>,
 }
 
 /// `POST /v1/lanes` with `{"path", "infra"?}`: start the lane of that
@@ -331,13 +334,18 @@ async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> 
                 .find(|v| v.name == name)
                 .ok_or_else(|| format!("lane `{name}` is gone"))
         };
+        let profile = body.profile.as_deref().filter(|p| !p.trim().is_empty());
+        // The lane's own stack file has its profiles: its branch may add one.
+        if let Some(p) = profile {
+            lanes.check_profile(&body.path, p)?;
+        }
         if let Some(on) = body.on.as_deref().filter(|o| !o.trim().is_empty()) {
             // What a local lane would need here is what it needs there.
             let need = devstack_node::share::Amount {
                 cpus: 0.5,
                 memory: lane_need(&main, &usage).max(1 << 30),
             };
-            return match lanes.activate_remote(&body.path, on.trim(), need)? {
+            return match lanes.activate_remote(&body.path, on.trim(), need, profile)? {
                 crate::lanes::RemoteStart::Running(name) => {
                     view(&name).map(|v| (StatusCode::CREATED, v))
                 }
@@ -349,8 +357,10 @@ async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> 
         if !body.force {
             memory_fits(&main, &usage)?;
         }
-        let lane = lanes.activate(&body.path)?;
-        lane.sup.set_lane_workers(body.workers);
+        let lane = lanes.activate(&body.path, profile)?;
+        // A profile may turn the workers on (ADR-0041).
+        let workers = lane.sup.stack.profile.as_ref().and_then(|p| p.workers);
+        lane.sup.set_lane_workers(workers.unwrap_or(body.workers));
         if body.infra && main.stack.compose.values().any(|g| !g.shared.is_empty()) {
             main.infra_up()?;
         }

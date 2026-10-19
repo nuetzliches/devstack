@@ -154,12 +154,14 @@ impl Client {
     /// and goes on syncing and starting it there: this follows the lane's
     /// `moving` until it runs there (or its start failed, an error), at most
     /// `within`, and tells `progress` each new step.
+    #[allow(clippy::too_many_arguments)]
     pub fn join_lane(
         &mut self,
         wt: &Worktree,
         workers: bool,
         force: bool,
         on: Option<&str>,
+        profile: Option<&str>,
         within: Option<Duration>,
         mut progress: impl FnMut(&Value),
     ) -> Result<String> {
@@ -167,7 +169,8 @@ impl Client {
             "POST",
             "/v1/lanes",
             Some(serde_json::json!({
-                "path": wt.path, "infra": on.is_none(), "workers": workers, "force": force, "on": on
+                "path": wt.path, "infra": on.is_none(), "workers": workers, "force": force, "on": on,
+                "profile": profile
             })),
         )?;
         if status >= 400 {
@@ -435,6 +438,16 @@ pub fn error_text(body: &str) -> String {
 
 /// Start the daemon in the background unless it runs; wait until it answers.
 pub fn ensure_daemon(stack_file: &Path, state_dir: &Path) -> Result<Client> {
+    ensure_daemon_with(stack_file, state_dir, None)
+}
+
+/// [`ensure_daemon`]; a daemon it starts runs the main tree with `profile`
+/// (ADR-0041).
+pub fn ensure_daemon_with(
+    stack_file: &Path,
+    state_dir: &Path,
+    profile: Option<&str>,
+) -> Result<Client> {
     // A daemon that runs but does not answer is an error: a second one would
     // only fail on its state lock.
     if let Some(c) = Client::probe(state_dir)? {
@@ -465,6 +478,10 @@ pub fn ensure_daemon(stack_file: &Path, state_dir: &Path) -> Result<Client> {
         .stdin(std::process::Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
+    match profile {
+        Some(p) => cmd.env("DEVSTACK_PROFILE", p),
+        None => cmd.env_remove("DEVSTACK_PROFILE"),
+    };
     // Own console without a window, out of the terminal's job, no inherited
     // pipes (devstack_proc::spawn_detached).
     let mut child = devstack_proc::spawn_detached(&mut cmd).context("start the daemon")?;
@@ -636,6 +653,9 @@ pub fn print_status_for(stack: &Value, stack_file: &Path) {
 pub fn status_text(stack: &Value) -> String {
     use std::fmt::Write;
     let mut out = String::new();
+    if let Some(p) = stack["profile"].as_str() {
+        let _ = writeln!(out, "profile: {p} (ADR-0041)\n");
+    }
     if stack["config_changed"].as_bool() == Some(true) {
         let _ = writeln!(
             out,
@@ -736,9 +756,55 @@ fn truncate(s: &str, n: usize) -> String {
 
 /// `devstack up`: infra, then autostart services; follow until all are ready
 /// or one fails. Exit code 1 on failure.
-pub fn up(stack_file: &Path, workers: bool, force: bool, on: Option<&str>) -> Result<()> {
+/// What `--profile` asks of a start (ADR-0041): its command, checked
+/// against the stack file before anything starts.
+pub struct ProfileStart {
+    pub name: String,
+    pub command: Option<String>,
+    pub fresh: bool,
+}
+
+pub fn profile_start(
+    stack_file: &Path,
+    profile: Option<&str>,
+    run: bool,
+) -> Result<Option<ProfileStart>> {
+    let Some(name) = profile else { return Ok(None) };
+    let stack = devstack_config::load(stack_file)?;
+    stack.with_profile(name).map_err(|issues| {
+        anyhow!(
+            "{}",
+            issues
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    })?;
+    let p = &stack.profiles[name];
+    if run && p.command.is_none() {
+        bail!("the profile `{name}` names no `command` to run (`[profiles.{name}] command = ...`)");
+    }
+    Ok(Some(ProfileStart {
+        name: name.to_string(),
+        command: p.command.clone(),
+        fresh: p.data == Some(devstack_config::model::DataMode::Fresh),
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn up(
+    stack_file: &Path,
+    workers: bool,
+    force: bool,
+    on: Option<&str>,
+    profile: Option<&str>,
+    run: bool,
+    yes: bool,
+) -> Result<()> {
     // Resolves whether this is a lane's worktree.
     let sd = state_dir(stack_file)?;
+    let wanted = profile_start(stack_file, profile, run)?;
     if on.is_some() && worktree().is_none() {
         bail!(
             "--on runs a worktree's lane on another machine: run it in a `git worktree` of the repository"
@@ -748,7 +814,37 @@ pub fn up(stack_file: &Path, workers: bool, force: bool, on: Option<&str>) -> Re
     if on.is_none() {
         ensure_engine(stack_file, |l| println!("{l}"))?;
     }
-    let mut c = ensure_daemon(&daemon_file(stack_file), &sd)?;
+    // In the main tree the daemon runs it; a fresh start there throws away
+    // the data that usually matters (ADR-0041).
+    let main_profile = wanted.as_ref().filter(|_| worktree().is_none());
+    if let Some(p) = main_profile
+        && p.fresh
+        && !yes
+    {
+        bail!(
+            "the profile `{}` starts the main working tree with fresh data: its containers' volumes go. Confirm with --yes, or run it in a lane",
+            p.name
+        );
+    }
+    let mut c = ensure_daemon_with(
+        &daemon_file(stack_file),
+        &sd,
+        main_profile.map(|p| p.name.as_str()),
+    )?;
+    if worktree().is_none() {
+        let runs = c.stack()?["profile"].as_str().map(str::to_string);
+        if runs.as_deref() != profile {
+            bail!(
+                "the main working tree runs {}: `devstack down` first, then `devstack up{}`",
+                runs.map_or("without a profile".to_string(), |p| format!(
+                    "with the profile `{p}`"
+                )),
+                profile
+                    .map(|p| format!(" --profile {p}"))
+                    .unwrap_or_default()
+            );
+        }
+    }
     if c.lane().is_some_and(|l| l != "-") && on.is_none() && (workers || force) {
         eprintln!(
             "note: this worktree's lane is started already; --workers and --force apply when it starts (`devstack down` here first)"
@@ -761,7 +857,7 @@ pub fn up(stack_file: &Path, workers: bool, force: bool, on: Option<&str>) -> Re
             println!("leasing, syncing and starting the lane on {node}...");
         }
         // A start on a node answers once leased; its steps follow.
-        let name = c.join_lane(wt, workers, force, on, None, |m| {
+        let name = c.join_lane(wt, workers, force, on, profile, None, |m| {
             if m["step"] != 0 {
                 println!("{}", step_line(m));
             }
@@ -802,6 +898,10 @@ pub fn up(stack_file: &Path, workers: bool, force: bool, on: Option<&str>) -> Re
         UpOutcome::Ready(stack) => {
             println!();
             print_status_for(&stack, stack_file);
+            if run && let Some(cmd) = wanted.as_ref().and_then(|p| p.command.as_deref()) {
+                println!("\nrunning `{cmd}`, the profile's command");
+                println!("{}", run_command_on(&c, cmd, yes)?);
+            }
             Ok(())
         }
         UpOutcome::Failed { service, reason } => {
@@ -836,6 +936,11 @@ pub fn start_and_wait(
         bail!("{}", error_text(&body));
     }
     let stack_cfg = devstack_config::load(stack_file)?;
+    // What starts is what the profile the tree runs with says (ADR-0041).
+    let stack_cfg = match c.stack()?["profile"].as_str() {
+        Some(p) => stack_cfg.with_profile(p).unwrap_or(stack_cfg),
+        None => stack_cfg,
+    };
     let expected: Vec<String> = stack_cfg
         .services
         .iter()
@@ -1149,6 +1254,9 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
             format!("{}/{}", l["running"], l["services"])
         };
         let name = l["name"].as_str().unwrap_or("");
+        if let Some(p) = l["profile"].as_str() {
+            troubles.push(format!("{name}: runs with the profile `{p}`"));
+        }
         if let Some(e) = l["node_error"].as_str() {
             troubles.push(format!("{name}: {e}"));
         }
@@ -1325,6 +1433,7 @@ pub fn start_lane(
     stack_file: &Path,
     name: &str,
     on: Option<&str>,
+    profile: Option<&str>,
     within: Option<Duration>,
     step: impl FnMut(&Value),
 ) -> Result<StartedLane> {
@@ -1362,7 +1471,7 @@ pub fn start_lane(
         path,
         main_file: main_file.clone(),
     };
-    let name = c.join_lane(&wt, false, false, on, within, step)?;
+    let name = c.join_lane(&wt, false, false, on, profile, within, step)?;
     let warning = on.and_then(|_| {
         c.call_raw("GET", "/v1/lanes", None)
             .ok()
@@ -1380,11 +1489,17 @@ pub fn start_lane(
 
 /// `devstack lane start <lane> [--on <node>]`: as `devstack up` in that
 /// worktree, from anywhere in the repository.
-pub fn lane_start(stack_file: &Path, name: &str, on: Option<&str>) -> Result<()> {
+pub fn lane_start(
+    stack_file: &Path,
+    name: &str,
+    on: Option<&str>,
+    profile: Option<&str>,
+    run: bool,
+) -> Result<()> {
     if let Some(node) = on {
         println!("leasing, syncing and starting the lane on {node}...");
     }
-    let started = start_lane(stack_file, name, on, None, |m| {
+    let started = start_lane(stack_file, name, on, profile, None, |m| {
         if m["step"] != 0 {
             println!("{}", step_line(m));
         }
@@ -1392,6 +1507,8 @@ pub fn lane_start(stack_file: &Path, name: &str, on: Option<&str>) -> Result<()>
     if let Some(w) = &started.warning {
         eprintln!("warning: {w}");
     }
+    // Its command, from the lane's own stack file (its branch's profiles).
+    let wanted = profile_start(&started.file, profile, run)?;
     println!("lane `{}` started", started.name);
     let t0 = Instant::now();
     let outcome = start_and_wait(&started.client, &started.file, None, |name, st| {
@@ -1401,6 +1518,13 @@ pub fn lane_start(stack_file: &Path, name: &str, on: Option<&str>) -> Result<()>
         UpOutcome::Ready(stack) => {
             println!();
             print!("{}", status_text(&stack));
+            if run && let Some(cmd) = wanted.as_ref().and_then(|p| p.command.as_deref()) {
+                println!(
+                    "\nrunning `{cmd}` in lane `{}`, the profile's command",
+                    started.name
+                );
+                println!("{}", run_command_on(&started.client, cmd, false)?);
+            }
             Ok(())
         }
         UpOutcome::Failed { service, reason } => {
@@ -1629,6 +1753,13 @@ pub fn follow_logs(c: &Client, name: &str, tail: usize, grep: Option<&str>) -> R
 
 pub fn run_command(stack_file: &Path, name: &str, yes: bool) -> Result<()> {
     let c = need(&state_dir(stack_file)?)?;
+    println!("{}", run_command_on(&c, name, yes)?);
+    Ok(())
+}
+
+/// Run command `name` where `c` points (the main tree or a lane) and follow
+/// it to its end: its output, or an error with it.
+pub fn run_command_on(c: &Client, name: &str, yes: bool) -> Result<String> {
     let (mut status, mut body) = c.post(
         &format!("/v1/commands/{name}"),
         Some(serde_json::json!({ "confirm": yes })),
@@ -1663,12 +1794,12 @@ pub fn run_command(stack_file: &Path, name: &str, yes: bool) -> Result<()> {
     loop {
         let info: Value = serde_json::from_str(&c.get(&format!("/v1/runs/{run}"))?)?;
         if info["status"] != "running" {
-            println!("{}", c.get(&format!("/v1/runs/{run}/log"))?);
+            let log = c.get(&format!("/v1/runs/{run}/log"))?;
             if info["status"] == "succeeded" {
-                return Ok(());
+                return Ok(log);
             }
             bail!(
-                "command `{name}` failed: {}",
+                "{log}\ncommand `{name}` failed: {}",
                 info["error"].as_str().unwrap_or("")
             );
         }

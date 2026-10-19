@@ -184,6 +184,26 @@ pub struct StackView {
     /// OS dropped its events): edits then make no candidates until it does.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub watcher_error: Option<String>,
+    /// The profile this tree runs with (ADR-0041).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// The stack file's profiles, for a start with one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<ProfileView>,
+}
+
+/// A profile of the stack file (ADR-0041).
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileView {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// It throws the tree's data away at start.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub fresh: bool,
+    /// A command it is for (`up --profile <name> --run`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

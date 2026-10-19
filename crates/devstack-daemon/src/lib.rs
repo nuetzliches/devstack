@@ -206,6 +206,26 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
             return Err(e.to_string());
         }
     };
+    // The profile it starts with (ADR-0041): `devstack up --profile` sets it
+    // for the main tree, a node's agent for a lane there.
+    let stack = match std::env::var("DEVSTACK_PROFILE")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+    {
+        Some(p) => match stack.with_profile(p.trim()) {
+            Ok(s) => s,
+            Err(issues) => {
+                let e = issues
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                diag::warn("daemon_start_failed", serde_json::json!({ "error": e }));
+                return Err(e);
+            }
+        },
+        None => stack,
+    };
     // A lane on a node runs on the ports it has on its developer's machine
     // (`DEVSTACK_PORT_OFFSET`): links, `{service.x.port}` and the forwarded
     // ports there are the same (ADR-0029 point 4).

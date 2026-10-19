@@ -467,6 +467,49 @@ Commands run with
 command with `confirm` runs from MCP only with `confirm: true`, which an agent
 sends only after the user agreed.
 
+## `[profiles.<name>]`: how a tree runs for a purpose ([ADR-0041](adr/0041-a-profile-says-how-a-lane-runs-for-a-purpose.md))
+
+A lane, or the main tree, runs the stack as written for daily work: dev
+servers that watch, no workers in a lane, the data the seed jobs made once.
+A profile is a named overlay chosen when a tree starts, for another purpose:
+an acceptance run of a given commit, say.
+
+```toml
+[profiles.acceptance]
+description = "the end-to-end suite on a build"
+workers   = true                         # background workers in a lane (as --workers)
+data      = "fresh"                      # the tree's own volumes go first: seeded anew
+autostart = ["api", "web", "worker"]     # these start, instead of each service's autostart
+env       = { BASE_URL = "{service.web.url}", JOBS_URL = "{compose.app.scheduler.4000}" }
+command   = "e2e"                        # `up --profile acceptance --run` runs it once ready
+
+[profiles.acceptance.services.web]
+kind   = "static"                        # a build served as files: no dev server, no watch
+build  = "npm run build -- --configuration e2e"
+output = "dist/web/browser"
+```
+
+```sh
+devstack up --profile acceptance [--run]              # in a worktree: its lane
+devstack lane start <lane> --profile acceptance --run  # from the main tree
+```
+
+- **What it may set:** `workers`, `data` (`keep`, the default, or
+  `fresh`), `env` (for every service and every command's `exec` steps, with
+  the usual placeholders), `autostart`, `command` (one of `[commands]`), and
+  per service `kind`, `build`, `output`, `run`, `spa`, `cwd`, `health` and
+  `env`. A service it does not name runs as the file says.
+- **Checked like the rest of the file:** each profile's result must be a
+  valid stack (a `static` needs `build`, `output` and `port`); a service, a
+  command or a key that is not there is an error.
+- **A tree runs with it until it stops.** `status`, `lane list` and the
+  dashboard show it; a start without `--profile` runs without one. In the
+  main tree the daemon starts with it: another profile needs `devstack down`
+  first, and `data = "fresh"` there needs `--yes` (its data usually matters).
+- A lane takes its profiles from its own worktree's stack file, so a branch
+  can bring one. On a node, `fresh` empties its slot's volumes (ADR-0038).
+- A file with `[profiles]` should say `requires = "0.11.0"` in `[stack]`.
+
 ## `[groups.<name>]`: views
 
 ```toml
