@@ -32,6 +32,9 @@ export const useHub = defineStore('hub', () => {
   const newer = ref<string | null>(null);
   /** `devstack update` started from the dashboard runs. */
   const updating = ref(false);
+  /** The last "Check for updates" of this page: when, and what it found or why not. */
+  const lastCheck = ref<{ at: number; newer: string | null; error: string | null } | null>(null);
+  const checkingUpdate = ref(false);
   let sub: Subscription | null = null;
   let hadBreak = false;
   let checking: Promise<void> | null = null;
@@ -161,5 +164,49 @@ export const useHub = defineStore('hub', () => {
     if (res.ok) updating.value = true;
   }
 
-  return { status, version, stacks, lastContact, stream, fresh, starting, docker, dockerStarting, newer, updating, reachable, init, checkSession, startDocker, installUpdate, entry, save };
+  /** Ask the hub to look for a newer release now (`POST /hub/update/check`). */
+  async function checkUpdate() {
+    if (checkingUpdate.value) return;
+    checkingUpdate.value = true;
+    const at = () => Date.now();
+    try {
+      const res = await api().request<{ newer?: string | null; error?: string }>('POST', paths.hubUpdateCheck);
+      const body = typeof res.body === 'object' && res.body ? res.body : {};
+      if (res.ok) {
+        newer.value = body.newer ?? null;
+        lastCheck.value = { at: at(), newer: newer.value, error: null };
+      } else {
+        const why = res.status === 404 ? 'This hub checks on its own only (it is older than this dashboard).' : (body.error ?? `The hub answered ${res.status}.`);
+        lastCheck.value = { at: at(), newer: null, error: why };
+      }
+    } catch {
+      lastCheck.value = { at: at(), newer: null, error: 'The hub is not reachable.' };
+    } finally {
+      checkingUpdate.value = false;
+    }
+  }
+
+  return {
+    status,
+    version,
+    stacks,
+    lastContact,
+    stream,
+    fresh,
+    starting,
+    docker,
+    dockerStarting,
+    newer,
+    updating,
+    lastCheck,
+    checkingUpdate,
+    reachable,
+    init,
+    checkSession,
+    startDocker,
+    installUpdate,
+    checkUpdate,
+    entry,
+    save,
+  };
 });

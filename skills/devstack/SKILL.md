@@ -72,7 +72,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack top` | CPU, memory, disk per service, container, group and lane |
 | `devstack ui` | dashboard in the browser (pairs the browser once); `--browser chrome\|edge\|firefox\|<path>` or `DEVSTACK_BROWSER` picks the browser, `--print` only prints the link |
 | `devstack update` | install the newest devstack (`--check` only asks); stacks switch at their next restart |
-| `devstack down` | stop the services and the daemon; containers keep running. `down --infra` removes them too |
+| `devstack down` | stop the services and the daemon; containers keep running. `down --infra` removes them too. In the main tree, lanes that run keep the daemon and the infrastructure (only the main tree's services stop); `down --all` stops the lanes too: ask first, they may be someone else's |
 
 ### Is my change live?
 

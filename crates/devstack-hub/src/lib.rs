@@ -130,7 +130,7 @@ struct AppState {
     newer: watch::Receiver<Option<String>>,
     /// Asks the release check to look again if its last answer is older than
     /// an hour (a dashboard connected, see `watch_release`).
-    release_poke: std::sync::mpsc::Sender<()>,
+    release_poke: std::sync::mpsc::Sender<Poke>,
     /// `POST /hub/update`: running, or how the last one failed.
     update: watch::Sender<UpdateState>,
     /// Why a start from the dashboard failed, by stack id (#11).
@@ -428,6 +428,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/events", get(events))
         .route("/hub/ws", get(ws::ws))
         .route("/hub/update", post(update))
+        .route("/hub/update/check", post(update_check))
         .route("/hub/inspect", get(inspect))
         .route("/hub/pick-folder", post(pick_folder))
         .route("/hub/stacks/add", post(stack_add))
@@ -813,25 +814,41 @@ fn watch_engine(fast_until: Arc<std::sync::atomic::AtomicU64>) -> watch::Receive
     rx
 }
 
+/// What the release watcher is asked (`watch_release`).
+enum Poke {
+    /// A dashboard connected: look again if the last answer is over an hour old.
+    Stale,
+    /// "Check for updates": look now and answer with the newer release, if any.
+    Now(std::sync::mpsc::Sender<Result<Option<String>, String>>),
+}
+
 /// Look for a newer release at start, then every 12 hours by the wall clock,
 /// and when a dashboard connects and the last answer is older than an hour
-/// (the `Sender` pokes). Not with a 12-hour sleep: on Windows a sleeping
-/// thread's time stands still while the machine is in standby, so a hub from
-/// last night would not look again until well into the day. A failed check
-/// is tried again after an hour. `DEVSTACK_NO_UPDATE_CHECK` turns it off.
-fn watch_release() -> (watch::Receiver<Option<String>>, std::sync::mpsc::Sender<()>) {
+/// (the `Sender` pokes), or at once when asked (`POST /hub/update/check`).
+/// Not with a 12-hour sleep: on Windows a sleeping thread's time stands still
+/// while the machine is in standby, so a hub from last night would not look
+/// again until well into the day. A failed check is tried again after an
+/// hour. `DEVSTACK_NO_UPDATE_CHECK` turns it off.
+fn watch_release() -> (
+    watch::Receiver<Option<String>>,
+    std::sync::mpsc::Sender<Poke>,
+) {
     use std::sync::mpsc::RecvTimeoutError;
     use std::time::SystemTime;
     const EVERY: Duration = Duration::from_secs(12 * 3600);
     const RETRY: Duration = Duration::from_secs(3600);
     const FRESH: Duration = Duration::from_secs(3600);
+    // GitHub answers 60 unauthenticated requests an hour: a button clicked
+    // again and again gets the last answer.
+    const AGAIN: Duration = Duration::from_secs(30);
     let (tx, rx) = watch::channel(None);
-    let (poke, pokes) = std::sync::mpsc::channel::<()>();
+    let (poke, pokes) = std::sync::mpsc::channel::<Poke>();
     if release::check_disabled() {
         return (rx, poke);
     }
     std::thread::spawn(move || {
         let mut last: Option<SystemTime> = None;
+        let mut answer: Option<Result<Option<String>, String>> = None;
         let mut next = SystemTime::now();
         loop {
             // The first look at once, then once a minute or when poked.
@@ -840,20 +857,27 @@ fn watch_release() -> (watch::Receiver<Option<String>>, std::sync::mpsc::Sender<
             } else {
                 Duration::from_secs(60)
             };
-            let poked = match pokes.recv_timeout(wait) {
-                Ok(()) => true,
-                Err(RecvTimeoutError::Timeout) => false,
+            let (poked, reply) = match pokes.recv_timeout(wait) {
+                Ok(Poke::Stale) => (true, None),
+                Ok(Poke::Now(reply)) => (true, Some(reply)),
+                Err(RecvTimeoutError::Timeout) => (false, None),
                 Err(RecvTimeoutError::Disconnected) => return,
             };
             let now = SystemTime::now();
-            let stale = |t: Option<SystemTime>| {
-                t.is_none_or(|t| now.duration_since(t).unwrap_or(FRESH) >= FRESH)
+            let older = |t: Option<SystemTime>, than: Duration| {
+                t.is_none_or(|t| now.duration_since(t).unwrap_or(than) >= than)
             };
-            if now < next && !(poked && stale(last)) {
+            let due = now >= next
+                || (poked && older(last, FRESH))
+                || (reply.is_some() && older(last, AGAIN));
+            if !due {
+                if let (Some(reply), Some(a)) = (reply, &answer) {
+                    let _ = reply.send(a.clone());
+                }
                 continue;
             }
             last = Some(now);
-            match release::latest() {
+            let got = match release::latest() {
                 Ok(latest) => {
                     next = now + EVERY;
                     let newer = release::newer(&latest, VERSION).then_some(latest);
@@ -864,22 +888,64 @@ fn watch_release() -> (watch::Receiver<Option<String>>, std::sync::mpsc::Sender<
                             if let Some(v) = &newer {
                                 diag::info("release", serde_json::json!({ "newer": v }));
                             }
-                            *cur = newer;
+                            *cur = newer.clone();
                             true
                         }
                     });
+                    Ok(newer)
                 }
                 Err(e) => {
                     next = now + RETRY;
                     diag::warn("release_check", serde_json::json!({ "error": e }));
+                    Err(e.to_string())
                 }
+            };
+            if let Some(reply) = reply {
+                let _ = reply.send(got.clone());
             }
+            answer = Some(got);
             if tx.is_closed() {
                 return;
             }
         }
     });
     (rx, poke)
+}
+
+/// `POST /hub/update/check`: look for a newer release now. `{"current",
+/// "newer"}` (`newer` is `null` when this is the latest); the hub stream's
+/// `release` event says the same. Asked again within 30 s, the last answer.
+async fn update_check(State(s): State<AppState>) -> Response {
+    if release::check_disabled() {
+        return err(
+            StatusCode::CONFLICT,
+            "update checks are off on this machine (DEVSTACK_NO_UPDATE_CHECK)",
+        );
+    }
+    let (reply, answer) = std::sync::mpsc::channel();
+    if s.release_poke.send(Poke::Now(reply)).is_err() {
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "the release check is not running",
+        );
+    }
+    let got = tokio::task::spawn_blocking(move || answer.recv_timeout(Duration::from_secs(30)))
+        .await
+        .ok()
+        .and_then(Result::ok);
+    match got {
+        Some(Ok(newer)) => {
+            Json(serde_json::json!({ "current": VERSION, "newer": newer })).into_response()
+        }
+        Some(Err(e)) => err(
+            StatusCode::BAD_GATEWAY,
+            format!("could not ask GitHub: {e}"),
+        ),
+        None => err(
+            StatusCode::GATEWAY_TIMEOUT,
+            "GitHub did not answer within 30 s",
+        ),
+    }
 }
 
 /// The dashboard's update (`POST /hub/update`), as the hub stream tells it.
@@ -1130,7 +1196,7 @@ async fn events(State(s): State<AppState>) -> Response {
 fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Value> + Send + use<> {
     // A dashboard just connected, often after the machine woke up: a release
     // check from yesterday evening is not what it should show.
-    let _ = s.release_poke.send(());
+    let _ = s.release_poke.send(Poke::Stale);
     let update = tokio_stream::wrappers::WatchStream::new(s.update.subscribe())
         .map(|u| serde_json::json!({ "type": "update", "update": u }));
     let stacks = tokio_stream::wrappers::WatchStream::new(s.stacks.clone())
@@ -1619,6 +1685,9 @@ fn start_up(s: &AppState, id: &str, exe: &std::path::Path, e: &StackEntry) -> Re
 struct DownQuery {
     #[serde(default)]
     infra: bool,
+    /// Its lanes, too: the daemon exits even while lanes run.
+    #[serde(default)]
+    all: bool,
 }
 
 async fn stack_down(
@@ -1646,13 +1715,33 @@ async fn stack_down(
         // services: it says `stopping` and stops taking connections at once,
         // so nothing (an `up`, a forwarded request) takes it for a daemon
         // that serves while its services stop.
-        if q.infra {
-            let _ = daemon_request(port, &token, Method::POST, "/v1/down?infra=true").await;
-        }
-        let told = daemon_request(port, &token, Method::POST, "/v1/shutdown").await;
+        //
+        // Lanes that still run keep their daemon (ADR-0024) and the
+        // infrastructure they share (ADR-0030): then only the main tree's
+        // services stop (`200` from `down`, `409` from `shutdown`). A daemon
+        // from before this does not know `unless_lanes` and exits.
+        let shutdown = || daemon_request(port, &token, Method::POST, "/v1/shutdown");
+        let exits = if q.infra {
+            let path = "/v1/down?infra=true";
+            let kept = daemon_request(port, &token, Method::POST, path).await == Ok(200);
+            (q.all || !kept) && shutdown().await.is_ok()
+        } else {
+            let path = if q.all {
+                "/v1/shutdown"
+            } else {
+                "/v1/shutdown?unless_lanes=true"
+            };
+            match daemon_request(port, &token, Method::POST, path).await {
+                Ok(409) => {
+                    let _ = daemon_request(port, &token, Method::POST, "/v1/down").await;
+                    false
+                }
+                r => r.is_ok(),
+            }
+        };
         // Over when that daemon is gone: its `daemon.json` goes last.
         let t0 = Instant::now();
-        while told.is_ok()
+        while exits
             && t0.elapsed() < STOP_WAIT
             && devstack_daemon::read_info(&state)
                 .is_some_and(|i| i.pid == daemon.pid && devstack_proc::pid_alive(i.pid))

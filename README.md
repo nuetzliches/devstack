@@ -121,7 +121,7 @@ devstack run reset                 # a command of the stack file (a database res
 devstack top --watch               # CPU, memory, disk per service, container, group and lane
 devstack env api                   # what a service gets, with origins
 devstack logs --daemon             # devstack's own decisions with their reasons
-devstack down [--infra]
+devstack down [--infra] [--all]    # running lanes keep the daemon; --all stops them too
 ```
 
 ## Lanes: every worktree, side by side

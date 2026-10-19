@@ -164,6 +164,9 @@ pub struct Supervisor {
     lane_pins: Mutex<Option<LanePins>>,
     /// Set when a lane is removed: its sampler threads end.
     closed: std::sync::atomic::AtomicBool,
+    /// Per Compose service: since when it is ready, whether its forwards
+    /// were probed since, when it was last restarted for a lost one (#98).
+    forward_checks: Mutex<BTreeMap<(String, String), infra::ForwardCheck>>,
 }
 
 /// The artifact ids of a service the lanes run or may go back to.
@@ -425,6 +428,7 @@ impl Supervisor {
             forwards: Mutex::new(BTreeMap::new()),
             lane_pins: Mutex::new(None),
             closed: std::sync::atomic::AtomicBool::new(false),
+            forward_checks: Mutex::new(BTreeMap::new()),
             lane,
         }))
     }

@@ -1591,7 +1591,7 @@ pub fn run_command(stack_file: &Path, name: &str, yes: bool) -> Result<()> {
     }
 }
 
-pub fn down(stack_file: &Path, infra: bool) -> Result<()> {
+pub fn down(stack_file: &Path, infra: bool, all: bool) -> Result<()> {
     let sd = state_dir(stack_file)?;
     let Some(c) = Client::connect(&sd) else {
         println!("no daemon is running for this stack");
@@ -1615,6 +1615,16 @@ pub fn down(stack_file: &Path, infra: bool) -> Result<()> {
     if status >= 400 {
         bail!("{}", error_text(&body));
     }
+    // Lanes that still run keep the daemon they live in (ADR-0024) and the
+    // infrastructure they share (ADR-0030).
+    let lanes = running_lanes(status, &body);
+    if !lanes.is_empty() && !all {
+        println!(
+            "main working tree stopped; lanes keep running: {} (the daemon and the infrastructure stay; `devstack down --all` stops them too)",
+            lanes.join(", ")
+        );
+        return Ok(());
+    }
     let _ = c.post("/v1/shutdown", None);
     let t0 = Instant::now();
     while devstack_daemon::read_info(&sd).is_some() && t0.elapsed() < Duration::from_secs(30) {
@@ -1622,13 +1632,26 @@ pub fn down(stack_file: &Path, infra: bool) -> Result<()> {
     }
     println!(
         "stopped{}",
-        if infra {
+        if infra && !lanes.is_empty() {
+            "; infrastructure keeps running, lanes were using it (`down --infra` to stop it)"
+        } else if infra {
             ", infrastructure removed"
         } else {
             "; infrastructure keeps running (`down --infra` to stop it)"
         }
     );
     Ok(())
+}
+
+/// The lanes a `200` from the main tree's `/v1/down` names: they still run.
+pub fn running_lanes(status: u16, body: &str) -> Vec<String> {
+    if status != 200 {
+        return Vec::new();
+    }
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| serde_json::from_value(v["lanes"].clone()).ok())
+        .unwrap_or_default()
 }
 
 /// A stack with Compose groups needs the Docker engine. Start Docker Desktop

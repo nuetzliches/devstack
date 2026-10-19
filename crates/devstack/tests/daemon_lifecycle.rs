@@ -367,7 +367,8 @@ impl Drop for Stack {
             // The daemon's own account is the only evidence once the temp dir is gone.
             eprintln!("--- daemon.log ---\n{}\n--- end ---", self.daemon_log());
         }
-        let _ = self.cli(&["down", "--infra"], None);
+        // `--all`: a lane a test started must not keep the daemon.
+        let _ = self.cli(&["down", "--infra", "--all"], None);
     }
 }
 
@@ -1573,6 +1574,24 @@ fn a_worktree_runs_as_a_lane() {
         wait_for(|| lane_info()["workers"] == true, Duration::from_secs(60)),
         "the lane runs the workers now"
     );
+    // `down` in the main tree stops the main tree only: the lane that serves
+    // the main ports keeps them, and the daemon it lives in stays (ADR-0024).
+    let daemon = s.daemon_pid();
+    let out = s.ok(&["down"]);
+    assert!(
+        out.contains("lanes keep running") && out.contains(&lane),
+        "{out}"
+    );
+    assert!(
+        s.api("/info").is_some_and(|i| i.contains(&lane_build)),
+        "the main port still serves the lane\n{}",
+        s.diag()
+    );
+    assert!(
+        get_on(web_port, "/").is_some_and(|b| b.contains("lane site")),
+        "the dev server's forward stays"
+    );
+    assert_eq!(s.daemon_pid(), daemon, "the daemon stays");
     s.ok(&["promote", "--lane", "main"]);
     assert!(
         wait_for(
@@ -1600,6 +1619,22 @@ fn a_worktree_runs_as_a_lane() {
         "what was stopped before stays stopped\n{}",
         s.ok(&["status"])
     );
+    // `down` and `up` in the main tree leave a running lane alone.
+    let out = s.ok(&["down"]);
+    assert!(out.contains("lanes keep running"), "{out}");
+    assert!(
+        wait_for(|| s.api("/health").is_none(), Duration::from_secs(30)),
+        "the main tree stopped"
+    );
+    let lane_pid = lane_info()["pid"].clone();
+    s.cli(&["up"], None); // `broken` fails, the rest runs
+    assert!(
+        wait_for(|| s.api("/health").is_some(), Duration::from_secs(120)),
+        "the main tree runs again\n{}",
+        s.diag()
+    );
+    assert_eq!(s.daemon_pid(), daemon, "in the same daemon");
+    assert_eq!(lane_info()["pid"], lane_pid, "the lane ran on, untouched");
 
     // 5. The lane runs from a copy of its worktree: `prepare` ran there, an
     //    edit reaches its dev server within moments, and nothing runs in the
@@ -1700,7 +1735,7 @@ fn a_worktree_runs_as_a_lane() {
     s.ok(&["lane", "stop", &extra_name]);
     assert!(row(&extra_name).contains("stopped"), "{}", row(&extra_name));
 
-    s.ok(&["down"]);
+    s.ok(&["down", "--all"]);
     for dir in [&wt, &extra] {
         let _ = Command::new("git")
             .args(["worktree", "remove", "--force"])
