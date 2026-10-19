@@ -281,6 +281,14 @@ Every text of a log line is cut to its first line before it leaves the
 machine (a failed job's reason keeps its process output in `daemon.log`
 only).
 
+To read what a pool collected when the collector writes to Elasticsearch
+(the OpenTelemetry collector's `elasticsearch` exporter), `scripts/telemetry/`
+has two scripts (Python, standard library only): `fetch.py` exports the
+`logs-generic.otel-<namespace>` and `metrics-generic.otel-<namespace>`
+streams to NDJSON, `analyze.py` turns the export into a Markdown report
+(senders, send rounds and gaps, warnings, failed requests, durations,
+service starts, candidate triggers, node capacity, data-quality checks).
+
 ## Reference
 
 | What | Where |
