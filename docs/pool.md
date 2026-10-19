@@ -259,7 +259,14 @@ included (found with `nvidia-smi`), for the last hour or day, and the same per
 node. The coordinator keeps that history in memory.
 
 A pool can collect **telemetry**: devstack's diagnostic log and how long
-lane starts, syncs and moves take. The collector (OTLP/HTTP) is set on the
+lane starts, syncs, moves and stops, service starts, builds and tunnel
+connections take, with their outcome. Durations go out as
+`devstack.duration` histograms labelled with the event, repository, lane
+(`main` for the main working tree), node, place (`local`, `remote`),
+service and result; log records carry the repository and the operating
+system, and nested values as dotted attributes (`devstack.status.state`).
+A service without a health check counts as running after a fixed wait
+(`settle_ms`), which is no duration. The collector (OTLP/HTTP) is set on the
 coordinator only:
 
 ```sh
@@ -275,6 +282,10 @@ their certificate, and **only with their consent**, per pool, off by default:
 devstack pool telemetry on     # or `join --telemetry`, or the switch in the pool area
 devstack pool telemetry        # whether the pool collects, and what is sent
 ```
+
+A daemon or the hub keeps its lines from its start until its first round
+(after ten seconds) has asked its pools: they are sent only if a pool
+collects and this machine agreed, else dropped.
 
 Never sent: file contents, environment values, command lines, service output.
 Every text of a log line is cut to its first line before it leaves the

@@ -54,6 +54,11 @@ pub(crate) struct Slot {
     /// artifact is chosen until it runs (or does not): pinned against
     /// pruning meanwhile (ADR-0002 retention).
     in_flight: Option<String>,
+    /// When its process was spawned, until the start is over (ready or
+    /// failed): the start's duration goes to the diagnostic log (ADR-0037).
+    spawned: Option<Instant>,
+    /// Processes spawned for it in this daemon's life.
+    starts: u32,
 }
 
 /// A built candidate a promotion gate holds (ADR-0013). The gate stays until
@@ -167,7 +172,9 @@ pub(crate) type LanePins = Box<dyn Fn(&str) -> Vec<String> + Send + Sync>;
 /// Every state change also goes to the diagnostic log (plan §11): the event as
 /// the clients see it, as a warning when something failed. Snapshots and load
 /// samples stay out (no decision in them, and they would drown the rest).
-fn record(body: &EventBody, lane: &str) {
+///
+/// `extra` joins the line (a start's duration, its result and restarts).
+fn record(body: &EventBody, lane: &str, extra: Option<serde_json::Map<String, serde_json::Value>>) {
     // Lanes have log lines of their own (`lane_found`, `lane_started`, ...).
     if matches!(
         body,
@@ -192,14 +199,45 @@ fn record(body: &EventBody, lane: &str) {
     let bad = ["failed", "unhealthy", "exited"];
     let warn =
         bad.contains(&state_of("status").as_str()) || bad.contains(&state_of("candidate").as_str());
-    if !lane.is_empty() {
-        v.insert("lane".into(), serde_json::Value::String(lane.into()));
-    }
+    // The main working tree is the lane `main` (the log says so).
+    v.insert("lane".into(), serde_json::Value::String(lane.into()));
+    v.extend(extra.unwrap_or_default());
     crate::diag::log(
         if warn { "warn" } else { "info" },
         &event,
         serde_json::Value::Object(v),
     );
+}
+
+/// What the line of the state a start ended in says about the start
+/// (ADR-0037 point 4): `ms` from the spawn, `result`, `restarts` (processes
+/// spawned for the service in this daemon's life before this one). A
+/// service without a health check is `running` after a fixed wait
+/// ([`lifecycle::SETTLE`]), not a measurement: no `ms`, `settle_ms` instead.
+/// `None` for a start that was stopped.
+fn start_fields(
+    status: &Status,
+    took: Duration,
+    starts: u32,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let result = match status {
+        Status::Stopped | Status::Building { .. } | Status::Starting => return None,
+        Status::Failed { reason } if reason == STOPPED => return None,
+        s if s.is_ready() => "ok",
+        _ => "failed",
+    };
+    let mut m = serde_json::Map::new();
+    if *status == Status::Running {
+        m.insert(
+            "settle_ms".into(),
+            (lifecycle::SETTLE.as_millis() as u64).into(),
+        );
+    } else {
+        m.insert("ms".into(), (took.as_millis() as u64).into());
+    }
+    m.insert("result".into(), result.into());
+    m.insert("restarts".into(), starts.saturating_sub(1).into());
+    Some(m)
 }
 
 /// Hash of the stack file, line endings ignored (a checkout may flip them).
@@ -314,6 +352,8 @@ impl Supervisor {
                     previous: None,
                     generation: 0,
                     in_flight: None,
+                    spawned: None,
+                    starts: 0,
                 },
             );
             op_locks.insert(name.clone(), Mutex::new(()));
@@ -403,7 +443,16 @@ impl Supervisor {
     }
 
     pub(crate) fn emit(&self, body: EventBody) {
-        record(&body, &self.lane);
+        self.emit_with(body, None);
+    }
+
+    /// [`Self::emit`], with fields the diagnostic line has beyond the event.
+    fn emit_with(
+        &self,
+        body: EventBody,
+        extra: Option<serde_json::Map<String, serde_json::Value>>,
+    ) {
+        record(&body, &self.lane, extra);
         let _ = self.events.send(Event {
             seq: self.seq.fetch_add(1, Ordering::SeqCst),
             at: now_ms(),
@@ -412,7 +461,7 @@ impl Supervisor {
     }
 
     fn set_status(&self, name: &str, status: Status) {
-        let build_id = {
+        let (build_id, start) = {
             let mut slots = self.slots.lock().unwrap();
             let Some(slot) = slots.get_mut(name) else {
                 return;
@@ -422,13 +471,27 @@ impl Supervisor {
             }
             slot.view.status = status.clone();
             slot.view.since = now_ms();
-            slot.view.build_id.clone()
+            let start = match status {
+                Status::Starting => {
+                    slot.spawned = Some(Instant::now());
+                    slot.starts += 1;
+                    None
+                }
+                _ => slot
+                    .spawned
+                    .take()
+                    .and_then(|t0| start_fields(&status, t0.elapsed(), slot.starts)),
+            };
+            (slot.view.build_id.clone(), start)
         };
-        self.emit(EventBody::Service {
-            service: name.into(),
-            status,
-            build_id,
-        });
+        self.emit_with(
+            EventBody::Service {
+                service: name.into(),
+                status,
+                build_id,
+            },
+            start,
+        );
     }
 
     fn set_candidate(&self, name: &str, candidate: Option<Candidate>) {
@@ -813,6 +876,40 @@ pub fn port_in_use(port: u16) -> bool {
 
 #[cfg(test)]
 mod port_tests {
+    #[test]
+    fn a_start_says_how_long_it_took_unless_it_only_waited() {
+        use super::{STOPPED, Status, start_fields};
+        use std::time::Duration;
+        let took = Duration::from_millis(1234);
+        let f = start_fields(&Status::Healthy, took, 3).unwrap();
+        assert_eq!(f["ms"], 1234);
+        assert_eq!(f["result"], "ok");
+        assert_eq!(f["restarts"], 2);
+        let f = start_fields(&Status::Failed { reason: "x".into() }, took, 1).unwrap();
+        assert_eq!(
+            (&f["result"], &f["restarts"]),
+            (&"failed".into(), &0.into())
+        );
+        let f = start_fields(&Status::Completed { exit_code: 0 }, took, 1).unwrap();
+        assert_eq!(f["ms"], 1234);
+        // Without a health check: a fixed wait, no duration.
+        let f = start_fields(&Status::Running, took, 1).unwrap();
+        assert!(f.get("ms").is_none());
+        assert_eq!(f["settle_ms"], 500);
+        // A start that was stopped is no start that took long.
+        assert!(start_fields(&Status::Stopped, took, 1).is_none());
+        assert!(
+            start_fields(
+                &Status::Failed {
+                    reason: STOPPED.into()
+                },
+                took,
+                1
+            )
+            .is_none()
+        );
+    }
+
     #[test]
     fn a_port_held_on_ipv6_loopback_only_is_in_use() {
         let Ok(l) = std::net::TcpListener::bind(("::1", 0)) else {

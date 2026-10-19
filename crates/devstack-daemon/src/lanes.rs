@@ -899,6 +899,7 @@ impl Lanes {
         if !self.pending.lock().unwrap().insert(name.clone()) {
             return Err(format!("lane `{name}` is being started"));
         }
+        let t0 = std::time::Instant::now();
         let result = (|| {
             // Its range taken by another process since it was found: a new one.
             let step = self.main.stack.lanes.port_step;
@@ -927,7 +928,9 @@ impl Lanes {
             self.map.lock().unwrap().insert(name.clone(), lane.clone());
             crate::diag::info(
                 "lane_started",
-                serde_json::json!({ "lane": name, "path": entry.path, "number": entry.number }),
+                // `ms`: opening the lane; its services' starts have lines of their own.
+                serde_json::json!({ "lane": name, "path": entry.path, "number": entry.number,
+                    "place": "local", "ms": t0.elapsed().as_millis() as u64 }),
             );
             Ok(lane)
         })();
@@ -947,10 +950,16 @@ impl Lanes {
                 "lane `{name}` serves the main slot: `devstack promote --lane main` first"
             ));
         }
+        let t0 = std::time::Instant::now();
         let remote = self.remote.lock().unwrap().remove(name);
         if let Some(r) = remote {
+            let node = r.node.name.clone();
             self.stop_remote(r);
-            crate::diag::info("lane_stopped", serde_json::json!({ "lane": name }));
+            crate::diag::info(
+                "lane_stopped",
+                serde_json::json!({ "lane": name, "place": "remote", "node": node,
+                    "ms": t0.elapsed().as_millis() as u64 }),
+            );
             self.announce();
             return Ok(());
         }
@@ -967,7 +976,11 @@ impl Lanes {
         if let Some(l) = removed {
             l.sup.close();
         }
-        crate::diag::info("lane_stopped", serde_json::json!({ "lane": name }));
+        crate::diag::info(
+            "lane_stopped",
+            serde_json::json!({ "lane": name, "place": "local",
+                "ms": t0.elapsed().as_millis() as u64 }),
+        );
         self.announce();
         Ok(())
     }

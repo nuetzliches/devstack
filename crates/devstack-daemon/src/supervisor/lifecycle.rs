@@ -15,6 +15,10 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+/// How long a service without a health check is given to fail fast before
+/// it counts as running: a fixed wait, not a measurement.
+pub(super) const SETTLE: Duration = Duration::from_millis(500);
+
 impl Supervisor {
     /// Infra, then every autostart service for this platform, in order; a
     /// service that fails holds back only what comes `after` it.
@@ -588,7 +592,7 @@ impl Supervisor {
                 }
                 _ => {
                     // Give it a moment to fail fast, e.g. on a wrong command line.
-                    std::thread::sleep(Duration::from_millis(500));
+                    std::thread::sleep(SETTLE);
                     if let Some(code) = inst.tree.try_exit_code() {
                         return Err(format!(
                             "exited with code {code} right after start\n{}",

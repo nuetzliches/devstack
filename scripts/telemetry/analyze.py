@@ -64,6 +64,25 @@ def nested(value):
     return value
 
 
+def obj(a: dict, key: str):
+    """A nested value of the attributes `a` (without prefix): a JSON string
+    under `key` from older senders, dotted keys (`status.state`) from newer."""
+    value = nested(a.get(key))
+    if value is not None:
+        return value
+    prefix = key + "."
+    out: dict = {}
+    for k, v in a.items():
+        if not k.startswith(prefix):
+            continue
+        node = out
+        *path, leaf = k[len(prefix):].split(".")
+        for p in path:
+            node = node.setdefault(p, {})
+        node[leaf] = v
+    return out or None
+
+
 def member(doc: dict) -> str:
     return res(doc, "devstack.member.name")
 
@@ -205,7 +224,7 @@ def service_starts(logs: list[dict]) -> str:
     rows, failed = [], []
     for d in seq:
         a = attrs(d)
-        status = nested(a.get("status"))
+        status = obj(a, "status")
         state = status.get("state") if isinstance(status, dict) else None
         key = (member(d), a.get("lane", ""), a.get("service", "-"))
         if state == "starting":
@@ -226,7 +245,7 @@ def candidates(logs: list[dict]) -> str:
     for d in logs:
         if d.get("body", {}).get("text") != "candidate":
             continue
-        c = nested(attrs(d).get("candidate"))
+        c = obj(attrs(d), "candidate")
         if isinstance(c, dict) and c.get("state") == "changed" and c.get("reason"):
             why[c["reason"]].add(attrs(d).get("service", "-"))
             n[c["reason"]] += 1

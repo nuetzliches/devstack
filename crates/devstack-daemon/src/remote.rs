@@ -935,9 +935,10 @@ impl RemoteLane {
             .await
             .map_err(|e| e.to_string())?;
         let mut up = hyper_util::rt::TokioIo::new(up);
+        let open = crate::telemetry::Tunnel::open(&self.name, &self.node.name);
         tokio::io::copy_bidirectional(&mut up, &mut tcp)
             .await
-            .map(|_| ())
+            .map(|(a, b)| open.closed(a + b))
             .map_err(|e| e.to_string())
     }
 

@@ -6,7 +6,7 @@ use devstack_build::{Outcome, build_id};
 use devstack_config::model::Service;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 impl Supervisor {
     /// Keep the newest artifacts of a service and everything something runs or
@@ -159,6 +159,7 @@ impl Supervisor {
                 snap = self.snapshot.lock().unwrap();
             }
             let started = now_ms();
+            let t0 = Instant::now();
             let mut running = self
                 .builder
                 .start_as("main", &snap, name, svc, id.clone())
@@ -171,10 +172,17 @@ impl Supervisor {
                 }
                 if cancel() {
                     self.builder.cancel(&mut running);
+                    self.build_done(name, &id, t0, "superseded");
                     return Err(SUPERSEDED.into());
                 }
                 std::thread::sleep(Duration::from_millis(100));
             };
+            let result = match &outcome {
+                Outcome::Published { .. } => "ok",
+                Outcome::Failed { .. } => "failed",
+                Outcome::Cancelled { .. } => "cancelled",
+            };
+            self.build_done(name, &id, t0, result);
             match outcome {
                 Outcome::Published { .. } => {
                     let now = build_id(&self.snapshot.lock().unwrap().manifest, svc)
@@ -208,6 +216,20 @@ impl Supervisor {
             }
         }
         Ok(Some((id.clone(), self.layout.artifact(name, &id))))
+    }
+
+    /// A build ended: how long it ran and how (ADR-0037 point 4).
+    fn build_done(&self, name: &str, id: &str, t0: Instant, result: &str) {
+        crate::diag::info(
+            "build",
+            serde_json::json!({
+                "lane": self.lane,
+                "service": name,
+                "build_id": id,
+                "result": result,
+                "ms": t0.elapsed().as_millis() as u64,
+            }),
+        );
     }
 
     /// Remove an artifact this daemon just published (since `since`, Unix

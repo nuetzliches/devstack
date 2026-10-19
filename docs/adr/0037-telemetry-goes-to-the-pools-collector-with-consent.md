@@ -92,3 +92,21 @@ coordinator strips identity attributes a member sets on records and data
 points too, not only on the resource (`strip_identity` in
 `crates/devstack-node/src/telemetry.rs`), and passes collector errors to
 admins only.
+
+*Amended 2026-10-19.* A review of three days of a pool's telemetry found
+point 4 kept only in part. Now: a process keeps its lines (bounded) from its
+start until the first round has asked the pools, so its start, restores and
+early errors arrive; nothing is sent before that round finds a pool that
+collects and this machine's consent, and without one what was kept is
+dropped (point 3 holds). Durations (`ms`, a `devstack.duration` histogram by
+event, repository, lane, node, place, service and result) come with lane
+stops (local and remote), local lane starts (opening the lane), service
+starts (from the spawn to ready or failed, with `result` and `restarts`; a
+service without a health check is running after a fixed wait, which is sent
+as `settle_ms`, not as a duration), builds (`build`, with `result`) and
+tunnel connections (`tunnel`; with `devstack.tunnels` open and
+`devstack.tunnel.bytes` through those that closed). Log records carry
+`os.type` and `devstack.repository` as metrics do, nested values as dotted
+attributes (`devstack.status.state`) and their observed time; the main
+working tree is the lane `main`. The histogram bounds reach 30 minutes.
+`crates/devstack-daemon/src/telemetry.rs` and `diag.rs` enforce it.

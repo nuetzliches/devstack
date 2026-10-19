@@ -26,6 +26,8 @@
 //! service output: a reason or error of several lines is devstack's own first
 //! line, then the output of a build, a job or a service (which may hold a
 //! connection string); only the first line goes out. The file keeps all.
+//! A nested value goes out as dotted attributes (`status` `{"state":…}` as
+//! `devstack.status.state`), each record with the repository it concerns.
 
 use serde_json::{Map, Value};
 use std::fs::File;
@@ -68,6 +70,11 @@ impl DiagLog {
             for (k, v) in f {
                 line.entry(k).or_insert(v);
             }
+        }
+        // The main working tree is the lane `main` (as `DEVSTACK_LANE` and
+        // `main_slot` say), not an empty name.
+        if line.get("lane").and_then(Value::as_str) == Some("") {
+            line.insert("lane".into(), Value::String("main".into()));
         }
         let otlp = OTLP.get().and_then(Option::as_ref);
         if otlp.is_some() || crate::telemetry::active() {
@@ -183,24 +190,48 @@ fn export_loop(url: &str, service: &str, rx: &std::sync::mpsc::Receiver<Value>) 
         let _ = agent
             .post(url)
             .header("Content-Type", "application/json")
-            .send(otlp_body(service, &batch).to_string());
+            .send(otlp_body(service, crate::telemetry::repository(), &batch).to_string());
     }
 }
 
-/// OTLP/JSON `ExportLogsServiceRequest` for diagnostic lines.
-pub fn otlp_body(service: &str, lines: &[Value]) -> Value {
-    let attr = |k: &str, v: &Value| {
-        let value = match v {
-            Value::String(s) => serde_json::json!({ "stringValue": s }),
-            Value::Bool(b) => serde_json::json!({ "boolValue": b }),
-            Value::Number(n) if n.is_i64() || n.is_u64() => {
-                serde_json::json!({ "intValue": n.to_string() })
+/// An OTLP attribute value of a scalar (anything else as its JSON text).
+fn otlp_value(v: &Value) -> Value {
+    match v {
+        Value::String(s) => serde_json::json!({ "stringValue": s }),
+        Value::Bool(b) => serde_json::json!({ "boolValue": b }),
+        Value::Number(n) if n.is_i64() || n.is_u64() => {
+            serde_json::json!({ "intValue": n.to_string() })
+        }
+        Value::Number(n) => serde_json::json!({ "doubleValue": n.as_f64() }),
+        other => serde_json::json!({ "stringValue": other.to_string() }),
+    }
+}
+
+/// `v` as attributes under `key`: an object flattened to dotted keys
+/// (`devstack.status.state`), so a collector's store can filter on them; a
+/// list of scalars as an OTLP array; nulls left out.
+fn flatten(key: &str, v: &Value, out: &mut Vec<Value>) {
+    match v {
+        Value::Null => {}
+        Value::Object(o) => {
+            for (k, x) in o {
+                flatten(&format!("{key}.{k}"), x, out);
             }
-            Value::Number(n) => serde_json::json!({ "doubleValue": n.as_f64() }),
-            other => serde_json::json!({ "stringValue": other.to_string() }),
-        };
-        serde_json::json!({ "key": k, "value": value })
-    };
+        }
+        Value::Array(a) if a.iter().all(|x| !x.is_object() && !x.is_array()) => {
+            let values: Vec<Value> = a.iter().filter(|x| !x.is_null()).map(otlp_value).collect();
+            out.push(
+                serde_json::json!({ "key": key, "value": { "arrayValue": { "values": values } } }),
+            );
+        }
+        other => out.push(serde_json::json!({ "key": key, "value": otlp_value(other) })),
+    }
+}
+
+/// OTLP/JSON `ExportLogsServiceRequest` for diagnostic lines; `repository`
+/// (the stack this process runs) labels every record that has none.
+pub fn otlp_body(service: &str, repository: Option<&str>, lines: &[Value]) -> Value {
+    let observed = jiff::Timestamp::now().as_nanosecond().to_string();
     let records: Vec<Value> = lines
         .iter()
         .filter_map(Value::as_object)
@@ -216,15 +247,25 @@ pub fn otlp_body(service: &str, lines: &[Value]) -> Value {
                 .and_then(Value::as_str)
                 .and_then(|a| a.parse::<jiff::Timestamp>().ok())
                 .map(|t| t.as_nanosecond().to_string())
-                .unwrap_or_default();
-            let attributes: Vec<Value> = m
-                .iter()
-                .filter(|(k, _)| !matches!(k.as_str(), "at" | "level" | "event"))
-                .filter(|(_, v)| !v.is_null())
-                .map(|(k, v)| attr(&format!("devstack.{k}"), v))
-                .collect();
+                .unwrap_or_else(|| observed.clone());
+            let mut attributes = Vec::new();
+            for (k, v) in m {
+                if !matches!(k.as_str(), "at" | "level" | "event") {
+                    flatten(&format!("devstack.{k}"), v, &mut attributes);
+                }
+            }
+            if let Some(r) = repository
+                && !m.contains_key("repository")
+            {
+                flatten(
+                    "devstack.repository",
+                    &Value::String(r.into()),
+                    &mut attributes,
+                );
+            }
             serde_json::json!({
                 "timeUnixNano": nanos,
+                "observedTimeUnixNano": observed,
                 "severityNumber": num,
                 "severityText": text,
                 "body": { "stringValue": m.get("event").and_then(Value::as_str).unwrap_or("") },
@@ -233,10 +274,7 @@ pub fn otlp_body(service: &str, lines: &[Value]) -> Value {
         })
         .collect();
     serde_json::json!({ "resourceLogs": [{
-        "resource": { "attributes": [
-            attr("service.name", &Value::String(service.into())),
-            attr("service.version", &Value::String(devstack_config::VERSION.into())),
-        ]},
+        "resource": devstack_node::telemetry::resource(service),
         "scopeLogs": [{ "scope": { "name": "devstack" }, "logRecords": records }],
     }]})
 }
@@ -406,20 +444,84 @@ mod tests {
     #[test]
     fn diagnostic_lines_become_otlp_log_records() {
         let line = json!({"at":"2026-10-15T12:00:00.000+02:00","level":"warn","event":"candidate","service":"api","code":3,"candidate":{"state":"failed"},"gone":null});
-        let body = otlp_body("devstack-daemon", &[line]);
+        let body = otlp_body("devstack-daemon", Some("shop"), &[line]);
         let rec = &body["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0];
         assert_eq!(rec["body"]["stringValue"], "candidate");
         assert_eq!(rec["severityText"], "WARN");
         assert_eq!(rec["timeUnixNano"], "1792058400000000000");
+        let observed: i128 = rec["observedTimeUnixNano"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(observed > 1_792_058_400_000_000_000, "{observed}");
         let attrs = rec["attributes"].as_array().unwrap();
         assert!(attrs.contains(&json!({"key":"devstack.service","value":{"stringValue":"api"}})));
         assert!(attrs.contains(&json!({"key":"devstack.code","value":{"intValue":"3"}})));
-        assert!(attrs.iter().any(|a| a["key"] == "devstack.candidate"));
-        assert!(!attrs.iter().any(|a| a["key"] == "devstack.gone"));
-        assert_eq!(
-            body["resourceLogs"][0]["resource"]["attributes"][0]["value"]["stringValue"],
-            "devstack-daemon"
+        assert!(
+            attrs.contains(&json!({"key":"devstack.repository","value":{"stringValue":"shop"}}))
         );
+        assert!(attrs.iter().any(|a| a["key"] == "devstack.candidate.state"));
+        assert!(!attrs.iter().any(|a| a["key"] == "devstack.gone"));
+        let resource = body["resourceLogs"][0]["resource"]["attributes"]
+            .as_array()
+            .unwrap();
+        assert_eq!(resource[0]["value"]["stringValue"], "devstack-daemon");
+        assert!(resource.iter().any(|a| a["key"] == "os.type"));
+    }
+
+    #[test]
+    fn nested_values_become_dotted_attributes() {
+        let line = json!({"event":"service","service":"api","status":{"state":"failed","reason":"x"},
+            "candidate":{"state":"built","build":{"id":"b1"}},"paths":["a","b"],"mixed":[{"a":1}]});
+        let body = otlp_body("devstack-daemon", None, &[line]);
+        let rec = &body["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0];
+        let attrs = rec["attributes"].as_array().unwrap();
+        let get = |k: &str| {
+            attrs
+                .iter()
+                .find(|a| a["key"] == k)
+                .map(|a| a["value"].clone())
+        };
+        assert_eq!(
+            get("devstack.status.state").unwrap()["stringValue"],
+            "failed"
+        );
+        assert_eq!(get("devstack.status.reason").unwrap()["stringValue"], "x");
+        assert_eq!(
+            get("devstack.candidate.build.id").unwrap()["stringValue"],
+            "b1"
+        );
+        assert!(get("devstack.status").is_none() && get("devstack.candidate").is_none());
+        assert_eq!(
+            get("devstack.paths").unwrap(),
+            json!({"arrayValue":{"values":[{"stringValue":"a"},{"stringValue":"b"}]}})
+        );
+        // A list of objects stays one text.
+        assert_eq!(
+            get("devstack.mixed").unwrap()["stringValue"],
+            r#"[{"a":1}]"#
+        );
+        // No repository (the hub): no such attribute. No `at`: the time it went.
+        assert!(get("devstack.repository").is_none());
+        assert_eq!(rec["timeUnixNano"], rec["observedTimeUnixNano"]);
+    }
+
+    #[test]
+    fn the_main_lane_is_called_main() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = DiagLog::open(dir.path().join("daemon.log"));
+        d.write("info", "restored", json!({ "lane": "", "service": "api" }));
+        d.write(
+            "info",
+            "restored",
+            json!({ "lane": "fix", "service": "api" }),
+        );
+        let lines = tail(d.path(), 10, None);
+        let v: Value = serde_json::from_str(&lines[0]).unwrap();
+        assert_eq!(v["lane"], "main");
+        let v: Value = serde_json::from_str(&lines[1]).unwrap();
+        assert_eq!(v["lane"], "fix");
     }
 
     #[test]

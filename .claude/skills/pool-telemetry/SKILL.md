@@ -10,11 +10,14 @@ an OTLP collector; with the OpenTelemetry collector's `elasticsearch`
 exporter it lands in two data streams per tenant:
 
 - `logs-generic.otel-<namespace>`: the diagnostic lines (`body.text` is the
-  event, `attributes.devstack.*` its fields);
+  event, `attributes.devstack.*` its fields; nested values as dotted keys,
+  `devstack.status.state`, from older senders as a JSON string under
+  `devstack.status`; `devstack.repository` on every record of a daemon);
 - `metrics-generic.otel-<namespace>`: gauges every 60 s per process
-  (`devstack.lanes`, `devstack.services`, `devstack.node.*`) and
-  `devstack.duration` histograms (bucket counts only; exact values are in
-  the log lines' `ms`).
+  (`devstack.lanes`, `devstack.services`, `devstack.tunnels`,
+  `devstack.tunnel.bytes`, `devstack.node.*`) and `devstack.duration`
+  histograms by event, repository, lane, node, place, service and result
+  (bucket counts only; exact values are in the log lines' `ms`).
 
 The sender is in `resource.attributes`: `devstack.member.name`/`.id` (set by
 the coordinator from the certificate), `service.name` (`devstack-daemon`,
