@@ -38,11 +38,16 @@ pub fn builds(
     let mut out: Vec<BuildEntry> = Vec::new();
     // A build starts before its id is known (`building` without one).
     let mut pending_start: Option<u64> = None;
+    // The main working tree: `main` in the log since 2026-10-19; before,
+    // no lane or an empty one.
+    let main = |l: &str| if l.is_empty() { "main" } else { l }.to_string();
+    let lane = main(lane);
     for line in lines {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if v["service"].as_str() != Some(service) || v["lane"].as_str().unwrap_or("") != lane {
+        if v["service"].as_str() != Some(service) || main(v["lane"].as_str().unwrap_or("")) != lane
+        {
             continue;
         }
         let Some(at) = at_ms(&v) else { continue };
@@ -229,5 +234,33 @@ mod tests {
         );
         assert_eq!(b[0].reason.as_deref(), Some("exited with code 3"));
         assert_eq!(builds(&lines, "api", "", None, 2).len(), 2);
+    }
+
+    #[test]
+    fn the_main_lane_is_read_by_either_name() {
+        let lines = vec![
+            // Before 2026-10-19: no lane for the main working tree.
+            ev(
+                1,
+                r#""event":"service","service":"api","build_id":"aaa","status":{"state":"healthy"}"#,
+            ),
+            // Since: `main`.
+            ev(
+                2,
+                r#""event":"service","service":"api","lane":"main","build_id":"bbb","status":{"state":"healthy"}"#,
+            ),
+            ev(
+                3,
+                r#""event":"service","service":"api","lane":"feat","build_id":"ccc","status":{"state":"healthy"}"#,
+            ),
+        ];
+        for lane in ["", "main"] {
+            let ids: Vec<String> = builds(&lines, "api", lane, None, 10)
+                .into_iter()
+                .map(|e| e.build)
+                .collect();
+            assert_eq!(ids, ["bbb", "aaa"], "lane {lane:?}");
+        }
+        assert_eq!(builds(&lines, "api", "feat", None, 10).len(), 1);
     }
 }
