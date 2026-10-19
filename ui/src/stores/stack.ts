@@ -274,6 +274,19 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
+  /** Throw a stopped lane's data away, here and on its nodes (ADR-0038): its next start is fresh. */
+  async function resetLane(name: string) {
+    if (!id.value) return;
+    await act({
+      label: `Discard the data of lane ${name}`,
+      path: daemonPath(id.value, v1.laneReset(name)),
+      confirmText: 'Its containers and volumes go, here and on the nodes it ran on: its databases are seeded again at its next start. The worktree and its builds stay.',
+      confirmLabel: 'Discard data',
+      danger: true,
+      success: `Lane ${name} starts fresh next time`,
+    });
+  }
+
   // Follow the hub: connect when the stack starts, drop the stream when it stops.
   watch(running, (r) => {
     if (r && !sub) connect();
@@ -709,6 +722,7 @@ export const useStack = defineStore('stack', () => {
     laneMain,
     startLane,
     stopLane,
+    resetLane,
     moveLane,
     serviceAction,
     groupAction,

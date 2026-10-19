@@ -11,6 +11,9 @@ and listed with their assets on the
 
 ### Added
 
+- **"Discard data" for a stopped lane in the dashboard** (ADR-0038): its
+  containers and volumes go, here and on the nodes it ran on, so its next
+  start is fresh (`devstack lane reset`).
 - **`devstack lane reset` and `devstack lane prune`**
   ([ADR-0038](docs/adr/0038-a-lanes-data-outlives-its-lease.md)). `reset
   <lane>` throws a stopped lane's data away, here and on the nodes it ran
