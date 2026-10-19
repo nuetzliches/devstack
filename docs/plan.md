@@ -1,7 +1,7 @@
 # devstack: plan
 
-- **Status:** Active: phases 0 to 2 done (0.4.0), phase 3 done (lanes per worktree 0.7.0, each with its own infrastructure since 0.8.0, ADR-0030), phase 4 under way; the pool since 0.9.0: lanes on other machines, moved, shared, given the main ports; node policies, several pools, capacity over time, telemetry with consent (ADR-0025 to ADR-0037, 0.9.0 to 0.9.8; [pool.md](pool.md), §7.4, backlog §13); 0.10.0 (2026-10-18) carries the fixes of the review of 0.9.8: lanes confined on a node, nodes granted by an admin, the promotion gate and restore of ADR-0013/0016 as written, the hub's origin rules ([CHANGELOG](../CHANGELOG.md))
-- **Date:** 2026-10-14, status updated 2026-10-18
+- **Status:** Active: phases 0 to 2 done (0.4.0), phase 3 done (lanes per worktree 0.7.0, each with its own infrastructure since 0.8.0, ADR-0030), phase 4 under way; the pool since 0.9.0: lanes on other machines, moved, shared, given the main ports; node policies, several pools, capacity over time, telemetry with consent (ADR-0025 to ADR-0037, 0.9.0 to 0.9.8; [pool.md](pool.md), §7.4, backlog §13); 0.10.0 (2026-10-18) carries the fixes of the review of 0.9.8: lanes confined on a node, nodes granted by an admin, the promotion gate and restore of ADR-0013/0016 as written, the hub's origin rules; 0.11.0 (2026-10-19): lanes that outlive the main tree's stop, keep their data on a node, run with a profile, and can be viewed when shared; a server updated by an admin (ADR-0038 to ADR-0041) ([CHANGELOG](../CHANGELOG.md))
+- **Date:** 2026-10-14, status updated 2026-10-19
 - **Inputs:** [problem-statement.md](problem-statement.md), [ADR index](adr/README.md)
 
 This document is the planning artefact. Decisions it relies on are recorded as
@@ -692,6 +692,18 @@ provenance attestation. The UI got unit tests (`npm test`).
 
 **Not covered by an automated test:** a machine reboot, a Docker Desktop
 restart, the `devstack://` link opened from a browser, an IDE terminal closing.
+
+**0.11.0 (2026-10-19): lanes as a place, not a different stack.** Stopping
+the main tree no longer stops its lanes (ADR-0024). A lane on a node keeps
+its mirror, builds and volumes there for its next start, until the node's
+retention ends, and `lane reset`/`lane prune` throw them away (ADR-0038). A
+remote lane's containers show their output and load, through its node. A
+shared lane can be shared to view and is then shown as one's own, read only
+(ADR-0040). An admin has a server update its devstack from the dashboard
+(ADR-0039). Profiles say how a tree runs for a purpose, an acceptance run
+above all (ADR-0041). Lanes start from the main tree (CLI and MCP), a
+service that exits by itself comes back, and a Compose port is judged only
+once its container is settled.
 
 ## 8. Open questions
 
