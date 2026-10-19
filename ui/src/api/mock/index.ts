@@ -431,6 +431,7 @@ export class MockTransport implements Transport {
       s.startedLanes.delete(decodeURIComponent(stop[1]));
       return json(200, []);
     }
+    if (/^\/v1\/lanes\/[^/]+\/reset$/.test(p) && method === 'POST') return json(200, []);
     const fw = /^\/v1\/lanes\/[^/]+(\/v1\/.*)$/.exec(p);
     if (fw) p = fw[1];
     const view = () => json(200, s.view);
