@@ -1,0 +1,110 @@
+# ADR-0039: An admin can have a server node update its devstack, from the dashboard
+
+- **Status:** Proposed
+- **Date:** 2026-10-19
+- **Deciders:** project owner
+- **Related:** [ADR-0031](0031-a-coordinator-places-lanes.md) (point 8: versions in a pool), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md) (extended here), [ADR-0033](0033-a-node-decides-what-runs-on-it.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md) (point 4: dedicated nodes), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md)
+
+## Context
+
+Since ADR-0031 point 8 every node reports its devstack version, and the pool
+area shows it. A pool where the node's version differs from the members' gets
+a warning on each lane. Another protocol gets no lanes at all. The way out is
+"update the older one", and for a server that means someone with SSH access to
+it running `devstack update` and restarting the agent, which nothing does for
+them: there is no service unit, `devstack update` restarts only the hub, and a
+running `devstack node agent` keeps the old binary.
+
+The admin who sees the warning in the dashboard is usually not the one with
+the shell. The coordinator never calls a node. Its one channel to a node is
+the answer to the node's report every 15 seconds, which already carries
+"end this lease" (ADR-0032 point 4).
+
+## Decision
+
+1. **An admin orders an update of one node** (`POST /v1/admin/nodes/{id}/update`,
+   optionally a version, else the latest release). The coordinator accepts it
+   only when all of these hold:
+   - the caller is an admin;
+   - the node is a **server** (granted as a node, its agent started with
+     `--dedicated`, ADR-0025 point 4);
+   - it is online.
+
+   The coordinator records the order in the audit log (ADR-0032 point 5).
+   Developer machines are never updated this way: their owner runs
+   `devstack update`, and the dashboard tells them so.
+2. **The order travels as an answer to the node's report**: `update: {version,
+   by, at}`, beside `end`. The coordinator never connects to a node, and the
+   node opens no new port. An older agent ignores the field.
+3. **The node decides** (ADR-0033):
+   - it refuses when its policy says `remote_update = false`;
+   - it refuses while it holds leases, unless the order says `drain`: then it
+     takes no new lease and updates once the last one ended;
+   - it refuses when it runs in a container: that update is a new image, and
+     the agent says so.
+4. **The update is the release, checked as `devstack update` checks it**: the
+   GitHub release asset for its platform, against `SHA256SUMS`. A URL or a
+   binary from the coordinator is never run. A dev build or a `cargo install`
+   copy refuses, as `devstack update` does.
+5. **The agent restarts itself.** Under a service manager it exits with a
+   code that asks to be restarted (`devstack node agent install` writes a
+   systemd unit with `Restart=always`). Started by hand, it re-executes itself
+   with the same arguments. The next report carries the new version, and that
+   ends the order.
+6. **Progress and failure are reported**: `Report.update: {target, state,
+   error?}`. The pool area shows them in the node's version cell, beside an
+   **Update** button that only an admin sees, and only for a server that is
+   online. The button is highlighted when the node is older than the hub. The
+   dashboard only hides the button; the coordinator decides (ADR-0032
+   point 1).
+
+## Alternatives considered
+
+- **Only show the command** (`ssh <node> devstack update`, copied). No new
+  right, but the warning stays until someone with the shell has time. That
+  is what happens now.
+- **The coordinator calls the node.** It would need a client certificate and
+  a route into every node, and so a new trust direction (ADR-0027). The
+  report channel already exists and works through NAT.
+- **Updates for every node, developer machines too.** A developer machine's
+  devstack is its owner's: it runs their hub and stacks. An admin of a pool
+  is not an admin of a colleague's machine.
+- **Automatic updates on a server** (it follows the latest release by itself).
+  It is simpler, but a pool then changes its version without anyone deciding
+  it, and members get warnings at random.
+
+## Consequences
+
+- The admin role gains a right over servers: replacing the code they run,
+  limited to signed releases. A stolen admin certificate can force a
+  server to a release it did not run, an older one included. A node may
+  refuse versions older than its own unless the order says `downgrade`.
+- `devstack node agent install` (a systemd unit) has to be built. Without
+  it, re-executing loses a supervisor the operator set up by other means.
+- Leases on the node end if the order says to update without draining.
+  Lanes on it then restart cold on their requesters' next `up` (ADR-0025
+  point 7). That is why `drain` is the default in the dashboard.
+- The coordinator's own update is not covered.
+
+## Enforced by
+
+Where it will live:
+
+- `crates/devstack-node/src/coordinator.rs`: the admin route, the checks, the
+  order in `ReportAnswer`, the audit entry.
+- `crates/devstack-node/src/node.rs`: acting on the order (policy, leases,
+  container), `Report.update`, re-exec or the exit code.
+- `crates/devstack/src/update.rs`: the download and check, shared with the
+  agent (no hub restart there).
+- `crates/devstack-node/src/policy.rs`: `remote_update`.
+- `crates/devstack/src/poolcmd.rs`: `devstack node agent install`,
+  `devstack node members update <id> [--version] [--drain]`.
+- `crates/devstack-hub/src/pool.rs`: `POST /hub/pool/nodes/{id}/update`.
+- `ui/src/views/PoolView.vue`, `ui/src/stores/pool.ts`: the button and the
+  state.
+- `docs/pool.md`, `docs/dashboard-api.md`.
+
+## What this ADR does not say
+
+- That nodes update without an order. They do not.
+- How the coordinator is updated. Its host is still operated by hand.
