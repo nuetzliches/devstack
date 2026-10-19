@@ -401,7 +401,11 @@ in the snapshot: `prepare` installs what is missing.
   whom it is shared with until its owner says otherwise (`devstack lane
   share <lane> --with <id|tag|*>`, or the lane's share button). Members it
   is shared with see it in their dashboard and open its services (those
-  with a `port`) through its node; they do not control it.
+  with a `port`, and its Compose containers the dashboard links as a web
+  page: a `urls` entry with `http`/`https`, or a published port without
+  one; `urls = { db = "" }` keeps a container out) through its node; they
+  do not control it. A group's `shared` containers are the main tree's and
+  never shared.
 - `sync`: a lane on another machine gets the worktree's files without the
   ignored ones, like a local lane's snapshot. What it needs all the same, a
   TLS certificate made for `localhost` by a local CA the browser trusts, say,

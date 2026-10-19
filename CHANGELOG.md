@@ -18,6 +18,12 @@ and listed with their assets on the
   container's port in this stack`. The owner sends the lane's ports now
   (the change reaches the pool with its next renewal, once the owner's
   daemon runs this release).
+- **A shared lane shares its Compose containers with a web page too.** Only
+  services with a `port` were shared, so a container's web interface stayed
+  out of reach for those it was shared with. Shared now: the containers the
+  owner's dashboard links as a web page (a `urls` entry with `http`/`https`,
+  or a published port without an entry), on the lane's ports; `urls = { db =
+  "" }` keeps one out, a group's `shared` containers stay the main tree's.
 
 ## [0.11.0] - 2026-10-19
 
