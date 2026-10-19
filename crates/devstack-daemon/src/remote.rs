@@ -276,8 +276,8 @@ pub struct RemoteSpec<'a> {
     /// A directory of this daemon's for the lane.
     pub scratch: &'a Path,
     /// Each service port of the lane, as `(on the node, here)`: the lane
-    /// listens on the stack's ports there, here on them moved by its offset,
-    /// as a local lane does (ADR-0029 point 4).
+    /// listens on the stack's ports moved by its offset, there and here, as
+    /// a local lane does (ADR-0029 point 4).
     pub ports: Vec<(u16, u16)>,
     /// What the lane's ports are moved by here; it runs on those ports on
     /// the node too.
