@@ -1,6 +1,6 @@
 # ADR-0038: A lane's mirror and data outlive its lease on a node, for a while, and can be pruned
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-19)
 - **Date:** 2026-10-19
 - **Deciders:** project owner
 - **Related:** [#99](https://github.com/nuetzliches/devstack/issues/99), [ADR-0025](0025-a-lane-can-run-on-another-node.md) (points 5 and 7 amended here), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) (point 2 and its Consequences), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md), [ADR-0033](0033-a-node-decides-what-runs-on-it.md), [ADR-0034](0034-a-machine-can-belong-to-several-pools.md)

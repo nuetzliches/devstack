@@ -1,6 +1,6 @@
 # ADR-0025: A lane can run on another node, as a Linux container with its own infrastructure
 
-- **Status:** Accepted (2026-10-16), point 10 amended and accepted (2026-10-16); amended 2026-10-19 (a start on a node answers once leased, and its phases are timed); placement and trust in detail: ADR-0026 to ADR-0031
+- **Status:** Accepted (2026-10-16), point 10 amended and accepted (2026-10-16); amended 2026-10-19 (a start on a node answers once leased, and its phases are timed); points 5 and 7 amended by [ADR-0038](0038-a-lanes-data-outlives-its-lease.md) (2026-10-19: a lane's mirror and data outlive its lease, for a while); placement and trust in detail: ADR-0026 to ADR-0031
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** plan §3.5, §9, [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (local lanes, built in 0.5.0), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0004](0004-infrastructure-is-delegated-to-compose.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0011](0011-platform-windows-native-first.md), [ADR-0012](0012-shared-infrastructure-between-lanes.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md), [ADR-0027](0027-trust-between-nodes.md), [ADR-0028](0028-lane-images.md), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md)
