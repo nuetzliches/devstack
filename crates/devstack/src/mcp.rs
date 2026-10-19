@@ -346,6 +346,7 @@ pub fn tools() -> Vec<Value> {
             json!({
                 "lane": { "type": "string" },
                 "with": { "type": "array", "items": { "type": "string" }, "description": "Member ids or tags (`team:qa`), `*` for every member; empty: nobody" },
+                "view": { "type": "array", "items": { "type": "string" }, "description": "Who may also view it (state, logs, events, read only; ADR-0040); ask the user first, logs show what the services print. Absent: unchanged" },
             }),
             &["lane", "with"],
             false,
@@ -625,7 +626,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 ),
                 "lane_share" => (
                     format!("/v1/lanes/{lane}/share"),
-                    json!({ "with": args["with"].clone() }),
+                    json!({ "with": args["with"].clone(), "view": args.get("view").cloned() }),
                 ),
                 _ => (format!("/v1/lanes/{lane}/main"), json!({})),
             };

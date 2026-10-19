@@ -75,6 +75,9 @@ pub struct LaneView {
     /// `*` for every member; empty: nobody.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub shared_with: Vec<String>,
+    /// Who may also view it (ADR-0040): its state, logs, events, read only.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub viewed_by: Vec<String>,
     /// What went wrong with a lane on a node lately (a sync, a renewal).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_error: Option<String>,
@@ -196,6 +199,9 @@ pub struct Lanes {
     /// Whom each lane is shared with, where its owner said so (ADR-0035);
     /// else `[lanes] share`. Kept in `.devstack/lane-shares.json`.
     shares: Mutex<BTreeMap<String, Vec<String>>>,
+    /// Who may also view each lane (ADR-0040), where its owner said so.
+    /// Kept in `.devstack/lane-views.json`.
+    views: Mutex<BTreeMap<String, Vec<String>>>,
     /// One main-slot hand-over at a time, and what it took from the main tree.
     handover: Mutex<Handover>,
     /// One [`Lanes::sync`] at a time: asking git and applying the answer go
@@ -445,6 +451,10 @@ impl Lanes {
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
+        let views = std::fs::read(root_state.join("lane-views.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
         let me = Arc::new(Self {
             root_state,
             main,
@@ -458,6 +468,7 @@ impl Lanes {
             moves: Mutex::new(BTreeMap::new()),
             pending: Mutex::new(BTreeSet::new()),
             shares: Mutex::new(shares),
+            views: Mutex::new(views),
             handover: Mutex::new(Handover::default()),
             syncing: Mutex::new(()),
             missing: Mutex::new(BTreeMap::new()),
@@ -1127,6 +1138,7 @@ impl Lanes {
                     node: on_node.map(|r| r.node.name.clone()),
                     pool: on_node.map(|r| r.pool.clone()),
                     shared_with: self.share_of(&k.entry.name),
+                    viewed_by: self.view_of(&k.entry.name),
                     node_error: node_state.and_then(|st| st.error),
                     node_warning: on_node
                         .and_then(|r| r.warning.clone())
@@ -1760,11 +1772,23 @@ impl Lanes {
             .unwrap_or_else(|| self.main.stack.lanes.share.clone())
     }
 
+    /// Who may view the lane `name` (ADR-0040): what its owner said; nobody
+    /// otherwise, the stack file never says so.
+    fn view_of(&self, name: &str) -> Vec<String> {
+        self.views
+            .lock()
+            .unwrap()
+            .get(name)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// What the coordinator is told of the lane `entry` shared: whom with,
     /// and its services with a port (on the node, and here).
     fn sharing_of(&self, entry: &LaneEntry) -> Option<devstack_node::coordinator::Sharing> {
         let with = self.share_of(&entry.name);
-        if with.is_empty() {
+        let view = self.view_of(&entry.name);
+        if with.is_empty() && view.is_empty() {
             return None;
         }
         let offset = lane_offset(entry.number, self.main.stack.lanes.port_step)?;
@@ -1792,13 +1816,23 @@ impl Lanes {
                 })
             })
             .collect();
-        Some(devstack_node::coordinator::Sharing { with, services })
+        Some(devstack_node::coordinator::Sharing {
+            with,
+            services,
+            view,
+        })
     }
 
     /// Share the lane `name` with `with` (member ids, tags, `*`), or with
-    /// nobody (empty), ADR-0035. A lane on a node tells the coordinator at
+    /// nobody (empty), ADR-0035; `view`: who may also view it (ADR-0040),
+    /// unchanged when `None`. A lane on a node tells the coordinator at
     /// once; one not on a node keeps it for when it goes to one.
-    pub fn share_lane(&self, name: &str, with: Vec<String>) -> Result<(), String> {
+    pub fn share_lane(
+        &self,
+        name: &str,
+        with: Vec<String>,
+        view: Option<Vec<String>>,
+    ) -> Result<(), String> {
         let entry = self
             .known
             .lock()
@@ -1811,6 +1845,20 @@ impl Lanes {
             .map(|w| w.trim().to_string())
             .filter(|w| !w.is_empty())
             .collect();
+        if let Some(view) = view {
+            let view: Vec<String> = view
+                .into_iter()
+                .map(|w| w.trim().to_string())
+                .filter(|w| !w.is_empty())
+                .collect();
+            let mut views = self.views.lock().unwrap();
+            views.insert(name.to_string(), view);
+            let _ = std::fs::create_dir_all(&self.root_state);
+            let _ = std::fs::write(
+                self.root_state.join("lane-views.json"),
+                serde_json::to_vec_pretty(&*views).expect("views serialise"),
+            );
+        }
         {
             let mut shares = self.shares.lock().unwrap();
             shares.insert(name.to_string(), with);

@@ -1269,19 +1269,25 @@ pub fn lane_move(stack_file: &Path, name: &str, to: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn lane_share(stack_file: &Path, name: &str, with: &[String]) -> Result<()> {
+pub fn lane_share(stack_file: &Path, name: &str, with: &[String], view: &[String]) -> Result<()> {
     let c = main_client(stack_file)?;
     let (status, body) = c.call_raw(
         "POST",
         &format!("/v1/lanes/{name}/share"),
-        Some(serde_json::json!({ "with": with })),
+        Some(serde_json::json!({ "with": with, "view": view })),
     )?;
     if status >= 400 {
         bail!("{}", error_text(&body));
     }
-    if with.is_empty() {
+    if !view.is_empty() {
+        println!(
+            "lane `{name}` can be viewed by {} (state, logs, events; read only)",
+            view.join(", ")
+        );
+    }
+    if with.is_empty() && view.is_empty() {
         println!("lane `{name}` is shared with nobody");
-    } else {
+    } else if !with.is_empty() {
         println!(
             "lane `{name}` is shared with {} (while it runs on a node of the pool)",
             with.join(", ")

@@ -10,7 +10,12 @@
 //!   `warning`: the node, or the lane's owner, runs another devstack than
 //!   this machine, or does not say which (ADR-0031, amended 2026-10-19).
 //!
-//! Both take `?pool=<name>` (ADR-0034).
+//! - `GET /hub/pool/shared/{lease}/api/<path>`: a lane shared with this
+//!   machine to view (ADR-0040), read through its node: the lane daemon's
+//!   `<path>` (state, events, logs, usage), streams passed through. The node
+//!   checks that this machine may view it, and that `<path>` only reads.
+//!
+//! All take `?pool=<name>` (ADR-0034).
 
 use axum::Json;
 use axum::extract::{Path, Query};
@@ -28,7 +33,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 #[derive(Deserialize, Default)]
 pub struct PoolQuery {
     #[serde(default)]
-    pool: Option<String>,
+    pub(crate) pool: Option<String>,
 }
 
 impl PoolQuery {
@@ -63,6 +68,120 @@ type Forwards = Mutex<HashMap<(String, String, u16), u16>>;
 fn forwards() -> &'static Forwards {
     static F: OnceLock<Forwards> = OnceLock::new();
     F.get_or_init(Default::default)
+}
+
+/// The lanes shared with this machine, per pool, as the coordinator said
+/// lately: a dashboard viewing one reads it many times a minute.
+type Listed = Mutex<HashMap<String, (std::time::Instant, Vec<SharedLane>)>>;
+
+fn listed() -> &'static Listed {
+    static L: OnceLock<Listed> = OnceLock::new();
+    L.get_or_init(Default::default)
+}
+
+/// The lane `lease` shared with this machine to view, and the membership
+/// to reach its node with; the answer to give otherwise.
+#[allow(clippy::result_large_err)] // the error is the answer itself
+async fn viewable(q: &PoolQuery, lease: &str) -> Result<(Local, SharedLane), Response> {
+    let local = q.local().map_err(|r| *r)?;
+    let key = format!("{:?}", q.pool);
+    let cached = listed()
+        .lock()
+        .unwrap()
+        .get(&key)
+        .filter(|(at, _)| at.elapsed() < std::time::Duration::from_secs(10))
+        .map(|(_, l)| l.clone());
+    let lanes = match cached {
+        Some(l) => l,
+        None => {
+            let l2 = q.local().map_err(|r| *r)?;
+            let got = tokio::task::spawn_blocking(move || l2.shared()).await;
+            let lanes = match got {
+                Ok(Ok(v)) => v,
+                Ok(Err(e)) => return Err(error(StatusCode::BAD_GATEWAY, e.to_string())),
+                Err(e) => return Err(error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+            };
+            listed()
+                .lock()
+                .unwrap()
+                .insert(key, (std::time::Instant::now(), lanes.clone()));
+            lanes
+        }
+    };
+    let Some(lane) = lanes.into_iter().find(|l| l.lease == lease) else {
+        return Err(error(
+            StatusCode::NOT_FOUND,
+            format!("no lane `{lease}` is shared with this machine"),
+        ));
+    };
+    if !lane.view {
+        return Err(error(
+            StatusCode::FORBIDDEN,
+            format!(
+                "lane `{}` is shared with this machine to use, not to view",
+                lane.lane
+            ),
+        ));
+    }
+    Ok((local, lane))
+}
+
+/// A read of the shared lane `lease` through its node (ADR-0040):
+/// `path_and_query` is the lane daemon's (`/v1/stack`), without `pool`.
+#[allow(clippy::result_large_err)] // the error is the answer itself
+pub(crate) async fn view_get(
+    q: &PoolQuery,
+    lease: &str,
+    path_and_query: &str,
+) -> Result<hyper::Response<hyper::body::Incoming>, Response> {
+    let (local, lane) = viewable(q, lease).await?;
+    let client = NodeClient::new(&local, lane.node.clone())
+        .map_err(|e| error(StatusCode::BAD_GATEWAY, e.to_string()))?;
+    let req = hyper::Request::get(path_and_query)
+        .header(hyper::header::ACCEPT, "text/event-stream, */*")
+        .body(http_body_util::Empty::<bytes::Bytes>::new())
+        .map_err(|_| error(StatusCode::BAD_REQUEST, "bad path".into()))?;
+    client
+        .view(lease, req)
+        .await
+        .map_err(|e| error(StatusCode::BAD_GATEWAY, format!("{}: {e}", lane.node.name)))
+}
+
+/// The query of a request without `pool`, which the hub keeps.
+pub(crate) fn without_pool(query: Option<&str>) -> String {
+    let rest: Vec<&str> = query
+        .unwrap_or("")
+        .split('&')
+        .filter(|kv| !kv.is_empty() && !kv.starts_with("pool="))
+        .collect();
+    if rest.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", rest.join("&"))
+    }
+}
+
+/// `GET /hub/pool/shared/{lease}/api/{*rest}`.
+pub async fn view(
+    Path((lease, rest)): Path<(String, String)>,
+    Query(q): Query<PoolQuery>,
+    req: axum::extract::Request,
+) -> Response {
+    let path = format!("/{rest}{}", without_pool(req.uri().query()));
+    match view_get(&q, &lease, &path).await {
+        Ok(resp) => {
+            let (parts, body) = resp.into_parts();
+            let mut out = Response::new(axum::body::Body::new(body));
+            *out.status_mut() = parts.status;
+            for h in [hyper::header::CONTENT_TYPE, hyper::header::CACHE_CONTROL] {
+                if let Some(v) = parts.headers.get(&h) {
+                    out.headers_mut().insert(h, v.clone());
+                }
+            }
+            out
+        }
+        Err(r) => r,
+    }
 }
 
 pub async fn list(Query(q): Query<PoolQuery>) -> Response {
@@ -239,6 +358,20 @@ fn release_warning(lane: &SharedLane) -> Option<String> {
 }
 
 #[cfg(test)]
+mod view_tests {
+    #[test]
+    fn the_pool_stays_with_the_hub() {
+        assert_eq!(super::without_pool(Some("pool=acme&tail=50")), "?tail=50");
+        assert_eq!(super::without_pool(Some("pool=acme")), "");
+        assert_eq!(super::without_pool(None), "");
+        assert_eq!(
+            super::without_pool(Some("tail=5&history=true")),
+            "?tail=5&history=true"
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use devstack_node::coordinator::NodeRef;
@@ -259,6 +392,7 @@ mod tests {
             },
             services: Vec::new(),
             owner_devstack: owner,
+            view: false,
         }
     }
 
