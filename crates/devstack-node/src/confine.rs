@@ -14,6 +14,7 @@
 use crate::policy::Network;
 use crate::safefs::resolve_beneath;
 use devstack_compose::{Group, Model};
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -104,14 +105,91 @@ fn empty(v: &Option<String>) -> bool {
     v.as_deref().is_none_or(|s| s.trim().is_empty())
 }
 
+/// The services `compose create|up <services>` brings up: those named and
+/// what they need (`depends_on`, `links`, a service's network or volumes);
+/// every service when none are named.
+fn started<'a>(model: &'a Model, services: &[String]) -> BTreeSet<&'a str> {
+    if services.is_empty() {
+        return model.services.keys().map(String::as_str).collect();
+    }
+    let mut seen = BTreeSet::new();
+    let mut todo: Vec<&str> = services.iter().map(String::as_str).collect();
+    while let Some(name) = todo.pop() {
+        let Some((name, s)) = model.services.get_key_value(name) else {
+            continue;
+        };
+        if !seen.insert(name.as_str()) {
+            continue;
+        }
+        todo.extend(s.depends_on.keys().map(String::as_str));
+        todo.extend(s.links.iter().map(|l| l.split(':').next().unwrap_or(l)));
+        todo.extend(
+            s.network_mode
+                .iter()
+                .chain(&s.pid)
+                .chain(&s.ipc)
+                .filter_map(|v| v.strip_prefix("service:")),
+        );
+        todo.extend(
+            s.volumes_from
+                .iter()
+                .filter(|v| !v.starts_with("container:"))
+                .map(|v| {
+                    let v = v.strip_prefix("service:").unwrap_or(v);
+                    v.split(':').next().unwrap_or(v)
+                }),
+        );
+    }
+    seen
+}
+
+/// The top-level networks, volumes, secrets and configs `services` use.
+#[derive(Default)]
+struct Uses {
+    networks: BTreeSet<String>,
+    volumes: BTreeSet<String>,
+    secrets: BTreeSet<String>,
+    configs: BTreeSet<String>,
+}
+
+fn uses(model: &Model, services: &BTreeSet<&str>) -> Uses {
+    let source = |v: &serde_json::Value| match v {
+        serde_json::Value::String(s) => Some(s.clone()),
+        v => v.get("source").and_then(|s| s.as_str()).map(String::from),
+    };
+    let mut u = Uses::default();
+    for name in services {
+        let s = &model.services[*name];
+        if s.networks.is_empty() && s.network_mode.is_none() {
+            u.networks.insert("default".into());
+        }
+        u.networks.extend(s.networks.keys().cloned());
+        u.volumes.extend(
+            s.volumes
+                .iter()
+                .filter(|m| m.kind == "volume")
+                .filter_map(|m| m.source.clone()),
+        );
+        u.secrets.extend(s.secrets.iter().filter_map(source));
+        u.configs.extend(s.configs.iter().filter_map(source));
+    }
+    u
+}
+
 /// Check a group's model (read with `--no-env-resolution`) for a lane on a
-/// node under `network`: every problem, in words.
+/// node under `network`: every problem, in words. `services` are those the
+/// group names (`[compose.<group>] services`): only they and what they need
+/// run, so only they are checked, and only the networks, volumes, secrets
+/// and configs they use. A Compose file may hold more (a production stack's
+/// other services) as long as the lane does not start them. With none named
+/// all run, and everything is checked.
 pub fn check_model(
     group: &str,
     model: &Model,
     src: &Path,
     network: Network,
     own_networks: &[String],
+    services: &[String],
 ) -> Result<(), String> {
     let mut bad = Vec::new();
     let beneath = |what: &str, p: &str, bad: &mut Vec<String>| {
@@ -119,7 +197,16 @@ pub fn check_model(
             bad.push(format!("{what}: {e}"));
         }
     };
-    for (name, s) in &model.services {
+    let run = started(model, services);
+    let used = (!services.is_empty()).then(|| uses(model, &run));
+    let checked = |set: fn(&Uses) -> &BTreeSet<String>, key: &str| {
+        used.as_ref().is_none_or(|u| set(u).contains(key))
+    };
+    for (name, s) in model
+        .services
+        .iter()
+        .filter(|(n, _)| run.contains(n.as_str()))
+    {
         let mut no = |what: String| bad.push(format!("service `{name}`: {what}"));
         if s.privileged {
             no("`privileged`".into());
@@ -250,7 +337,9 @@ pub fn check_model(
         }
     }
     for (key, v) in &model.volumes {
-        let Some(v) = v else { continue };
+        let Some(v) = v.as_ref().filter(|_| checked(|u| &u.volumes, key)) else {
+            continue;
+        };
         if v.external {
             bad.push(format!(
                 "volume `{key}`: an external volume (it may be another lane's)"
@@ -269,7 +358,9 @@ pub fn check_model(
         }
     }
     for (key, n) in &model.networks {
-        let Some(n) = n else { continue };
+        let Some(n) = n.as_ref().filter(|_| checked(|u| &u.networks, key)) else {
+            continue;
+        };
         let name = n.name.as_deref().unwrap_or(key);
         if n.external && !own_networks.iter().any(|o| o == name) {
             bad.push(format!(
@@ -306,9 +397,16 @@ pub fn check_model(
             }
         }
     }
-    for (kind, items) in [("secret", &model.secrets), ("config", &model.configs)] {
+    let secrets: fn(&Uses) -> &BTreeSet<String> = |u| &u.secrets;
+    let configs: fn(&Uses) -> &BTreeSet<String> = |u| &u.configs;
+    for (kind, items, set) in [
+        ("secret", &model.secrets, secrets),
+        ("config", &model.configs, configs),
+    ] {
         for (key, f) in items {
-            let Some(f) = f else { continue };
+            let Some(f) = f.as_ref().filter(|_| checked(set, key)) else {
+                continue;
+            };
             if f.external {
                 bad.push(format!("{kind} `{key}`: an external one"));
             }
@@ -346,9 +444,9 @@ mod tests {
               "networks":{{"default":{{"name":"shop-ab_default"}},"edge":{{"name":"edge","external":true}}}}}}"#
         ));
         assert!(
-            check_model("app", &fine, &src, Network::Internet, &["edge".into()]).is_ok(),
+            check_model("app", &fine, &src, Network::Internet, &["edge".into()], &[]).is_ok(),
             "{:?}",
-            check_model("app", &fine, &src, Network::Internet, &["edge".into()])
+            check_model("app", &fine, &src, Network::Internet, &["edge".into()], &[])
         );
 
         let root = model(&format!(
@@ -368,7 +466,7 @@ mod tests {
                           "wide":{{"ipam":{{"config":[{{"subnet":"10.0.0.0/8"}}]}},"enable_ipv6":true}}}},
               "secrets":{{"key":{{"file":"/etc/shadow"}}}}}}"#
         ));
-        let e = check_model("app", &root, &src, Network::Internet, &[]).unwrap_err();
+        let e = check_model("app", &root, &src, Network::Internet, &[], &[]).unwrap_err();
         for what in [
             "`privileged`",
             "`cap_add` (SYS_ADMIN)",
@@ -399,11 +497,64 @@ mod tests {
         // Three bind mounts, all outside.
         assert_eq!(e.matches("a bind mount").count(), 3, "{e}");
         // On a `lan` node, addresses and IPv6 of the lane's own are its own.
-        let e = check_model("app", &root, &src, Network::Lan, &[]).unwrap_err();
+        let e = check_model("app", &root, &src, Network::Lan, &[], &[]).unwrap_err();
         assert!(
             !e.contains("its own addresses") && !e.contains("IPv6"),
             "{e}"
         );
+    }
+
+    #[test]
+    fn only_what_the_group_starts_is_checked() {
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        // A production Compose file: the lane starts `api` (and `db`, which
+        // it needs), never `ops` or `edge`.
+        let m = model(
+            r#"{"services":{
+                "api":{"image":"api","depends_on":{"db":{"condition":"service_started"}},
+                       "networks":{"default":null}},
+                "db":{"image":"postgres","volumes":[{"type":"volume","source":"data","target":"/d"}],
+                      "secrets":[{"source":"pw","target":"/run/secrets/pw"}]},
+                "ops":{"image":"ops","volumes":[{"type":"bind","source":"/var/run/docker.sock","target":"/s"}],
+                       "networks":{"es":null}},
+                "edge":{"image":"caddy","privileged":true,"volumes":[{"type":"volume","source":"theirs","target":"/t"}],
+                        "secrets":[{"source":"key","target":"/k"}]}},
+              "networks":{"default":{"name":"p_default"},"es":{"name":"shared-es","external":true}},
+              "volumes":{"data":{"name":"p_data"},"theirs":{"name":"x","external":true}},
+              "secrets":{"pw":{"file":"/etc/shadow"},"key":{"file":"/etc/ssh/key"}}}"#,
+        );
+        let api = ["api".to_string()];
+        let e = check_model("app", &m, &src, Network::Internet, &[], &api).unwrap_err();
+        // `db` runs with `api`: its secret is checked.
+        assert!(e.contains("secret `pw`"), "{e}");
+        for not in [
+            "`ops`",
+            "`edge`",
+            "network `es`",
+            "volume `theirs`",
+            "secret `key`",
+        ] {
+            assert!(!e.contains(not), "{not} in:\n{e}");
+        }
+        // A named service on an external network: refused.
+        let e = check_model("app", &m, &src, Network::Internet, &[], &["ops".into()]).unwrap_err();
+        assert!(
+            e.contains("network `es`") && e.contains("service `ops`"),
+            "{e}"
+        );
+        // None named: everything runs, everything is checked.
+        let e = check_model("app", &m, &src, Network::Internet, &[], &[]).unwrap_err();
+        for what in [
+            "service `edge`",
+            "service `ops`",
+            "network `es`",
+            "volume `theirs`",
+            "secret `key`",
+        ] {
+            assert!(e.contains(what), "{what} missing in:\n{e}");
+        }
     }
 
     #[test]

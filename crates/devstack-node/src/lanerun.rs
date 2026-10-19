@@ -316,7 +316,7 @@ impl LaneRun {
             crate::confine::check_group(&g, &src).map_err(RunError::Config)?;
             let own = &stack.compose[&name].networks;
             let paths = self.config(&g, &["--no-env-resolution"])?;
-            crate::confine::check_model(&name, &paths, &src, self.network, own)
+            crate::confine::check_model(&name, &paths, &src, self.network, own, &g.services)
                 .map_err(RunError::Config)?;
             let model = self.config(&g, &[])?;
             let options = devstack_compose::NodeOptions {

@@ -153,7 +153,11 @@ of the host (`pid`, `ipc`, `network_mode: host`, ...), sets `userns_mode`,
 reads an env file outside the lane's files; external volumes, volumes with
 `driver_opts`, external networks the stack file does not list under
 `[compose.<group>] networks`, network drivers other than `bridge`, and, on
-an `internet` or `none` node, subnets or IPv6 of its own. Compose files,
+an `internet` or `none` node, subnets or IPv6 of its own. Only what the lane
+starts is checked: the services `[compose.<group>] services` names, what
+they depend on, and the networks, volumes and secrets those use; a Compose
+file shared with production may hold other services (a socket-mounting
+admin tool, a reverse proxy) that the lane never starts. Compose files,
 env files, `extends` and `include` are read from the lane's files only, and
 the sync never follows a link out of them. Every container of the lane gets
 the node's limits and a process limit; the lane container drops every
