@@ -152,6 +152,18 @@ pub struct Report {
     /// reporting (`crate::version`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub devstack: Option<Release>,
+    /// The stopped lanes it keeps for their next start (ADR-0038), as last
+    /// counted; absent from an older node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<Kept>,
+}
+
+/// What a node keeps of stopped lanes (ADR-0038 point 3).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Kept {
+    pub lanes: usize,
+    /// Their directories (mirrors, builds, caches); volumes not counted.
+    pub bytes: u64,
 }
 
 /// One moment of a node's capacity, or the pool's (ADR-0036): what it has,

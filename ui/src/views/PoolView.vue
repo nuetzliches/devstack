@@ -474,7 +474,15 @@ function policyText(id: string) {
                 <template v-if="n.report?.sharing">{{ n.report.cpus.toFixed(1) }} CPU · {{ bytes(n.report.memory) }}</template>
                 <span v-else class="faint">not shared</span>
               </td>
-              <td class="tabular">{{ lanesOn(n.id) || '–' }}</td>
+              <td class="tabular">
+                {{ lanesOn(n.id) || '–' }}
+                <span
+                  v-if="n.report?.kept?.lanes"
+                  class="faint small"
+                  :title="`${n.report.kept.lanes} stopped lane(s) kept there for their next start: mirrors, builds, caches (volumes not counted)`"
+                  data-testid="pool-node-kept"
+                >· {{ n.report.kept.lanes }} kept, {{ bytes(n.report.kept.bytes) }}</span>
+              </td>
               <td class="faint">{{ n.seen === undefined ? 'never' : ago(now - n.seen * 1000, now) }}</td>
               <td v-if="pool.isAdmin" class="actions">
                 <button

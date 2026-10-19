@@ -315,9 +315,35 @@ impl RemoteLane {
         // Without a client the node cannot be told: the offer expires.
         let client = NodeClient::new(&local, offer.node.clone()).map_err(|e| e.to_string())?;
         let t0 = Instant::now();
-        if let Err(e) = rt.block_on(client.admit(&offer)) {
-            let _ = rt.block_on(client.release(&offer.id));
-            return Err(format!("lane `{}` on {}: {e}", spec.name, offer.node.name));
+        let admitted = match rt.block_on(client.admit(&offer)) {
+            Ok(l) => l,
+            Err(e) => {
+                let _ = rt.block_on(client.release(&offer.id));
+                return Err(format!("lane `{}` on {}: {e}", spec.name, offer.node.name));
+            }
+        };
+        // It starts from what it kept there (ADR-0038): said, with its age,
+        // since its data may be from another branch.
+        if let Some(used) = admitted.kept {
+            let ago = (devstack_node::store::now().saturating_sub(used) / 60).max(1);
+            let age = if ago < 120 {
+                format!("{ago} min")
+            } else if ago < 48 * 60 {
+                format!("{} h", ago / 60)
+            } else {
+                format!("{} days", ago / (24 * 60))
+            };
+            (spec.step)(
+                1,
+                &format!(
+                    "lease on {}: starts from its data kept there, last used {age} ago (`devstack lane reset {}` starts fresh)",
+                    offer.node.name, spec.name
+                ),
+            );
+            crate::diag::info(
+                "remote_lane_kept",
+                serde_json::json!({ "lane": spec.name, "node": offer.node.name, "used": used }),
+            );
         }
         phase_over(
             spec.name,
