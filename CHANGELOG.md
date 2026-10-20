@@ -9,6 +9,20 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-10-21
+
+The release of 0.14.0 stopped at the advisory check: three advisories of
+that day against the TLS certificate checks. 0.14.1 is 0.14.0 with them
+fixed; 0.14.0 was tagged but never published.
+
+### Security
+
+- `rustls-webpki` 0.103.16 (RUSTSEC-2026-0382), `webpki-root-certs` and
+  `webpki-roots` 1.0.10 (RUSTSEC-2026-0383 and its sibling): certificate
+  paths through the distrusted emSign intermediates are refused. They
+  check the TLS of the update and release checks (`ureq`); the pool's
+  mutual TLS trusts its own CA only and was not affected.
+
 ## [0.14.0] - 2026-10-21
 
 ### Added
@@ -664,7 +678,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/nuetzliches/devstack/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/nuetzliches/devstack/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/nuetzliches/devstack/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/nuetzliches/devstack/compare/v0.12.0...v0.13.0
