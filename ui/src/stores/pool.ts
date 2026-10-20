@@ -68,6 +68,28 @@ export const usePool = defineStore('pool', () => {
     }
   }
 
+  /** Where this machine's lanes start without `--on` (ADR-0025): `null` here. */
+  const defaultOn = ref<string | null>(null);
+  async function loadDefaultOn() {
+    try {
+      const r = await api().request<{ on: string | null }>('GET', paths.poolDefaultOn);
+      if (r.ok && r.body && typeof r.body === 'object') defaultOn.value = r.body.on ?? null;
+    } catch {
+      /* keep what is known */
+    }
+  }
+  /** Set it: consent to send a worktree there without being asked; `null`: here. */
+  async function setDefaultOn(on: string | null) {
+    const r = await act<{ on: string | null }>({
+      label: 'Where lanes start',
+      method: 'PUT',
+      path: paths.poolDefaultOn,
+      body: { on },
+      success: on ? `Lanes start on ${on === 'pool' ? 'the pool' : on} unless told otherwise` : 'Lanes start on this machine unless told otherwise',
+    });
+    if (r.ok) await loadDefaultOn();
+  }
+
   /** Agree to send the shown pool telemetry, or take it back. */
   async function setTelemetry(enabled: boolean) {
     const r = await act({
@@ -84,6 +106,7 @@ export const usePool = defineStore('pool', () => {
     loading.value = true;
     void loadShare();
     void loadTelemetry();
+    void loadDefaultOn();
     try {
       const list = await api().request<PoolEntry[]>('GET', paths.pools);
       if (list.ok && Array.isArray(list.body) && list.body.length) pools.value = list.body;
@@ -336,6 +359,8 @@ export const usePool = defineStore('pool', () => {
     current,
     targets,
     placeable,
+    defaultOn,
+    setDefaultOn,
     shared,
     openShared,
     telemetry,

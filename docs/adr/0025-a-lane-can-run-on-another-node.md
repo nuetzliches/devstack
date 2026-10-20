@@ -246,3 +246,18 @@ leaves it out where it cannot run (`on_this_platform` in the supervisor);
 in `ui/src/stores/stack.ts`. The phase times: `LaneState::phases` in
 `crates/devstack-node/src/node.rs`, the phases of `LaneRun::start` in
 `lanerun.rs`, `remote_lane_phase` in `remote.rs`.
+
+*Amended 2026-10-21 (the project owner's decision): where a lane goes
+without `--on`.* A lane starts on this machine unless asked otherwise. A
+machine may set where its lanes go by default (`devstack pool default-on
+pool|<pool>|<node>|local`, or the pool area; `placement.json` in
+devstack's per-user state). That setting is the user's consent to send a
+worktree's files to the pool without being asked each time: the CLI and
+the MCP tools resolve a start without `on` to it, an explicit `on` wins,
+`on = "local"` keeps it here. Joining a pool is no such consent. The
+setting is read by the client, not the daemon: a daemon of an older
+release is asked as before. An agent that would start a lane elsewhere
+than the default asks first; `devstack pool placement <lane>` (MCP
+`placement`) shows where it could go, with each node's load and the
+coordinator's order and reasons (ADR-0026 point 3).
+

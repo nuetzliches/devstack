@@ -11,6 +11,18 @@ and listed with their assets on the
 
 ### Added
 
+- **Where a lane starts without `--on` is the machine's choice**
+  ([ADR-0025](docs/adr/0025-a-lane-can-run-on-another-node.md), amended).
+  `devstack pool default-on pool|<pool>|<node>|local` (or the pool area)
+  sets it; it is consent to send worktrees there without being asked, so it
+  is never set by joining. `devstack up` in a worktree, `devstack lane
+  start` and the MCP `up` and `lane_start` use it when no place is named;
+  `--on local` keeps a lane here. Resolved by the client, so a daemon of an
+  older release is asked as before.
+- **`devstack pool placement <lane>` and the MCP tool `placement`**: before
+  choosing where a lane runs, this machine's free CPU and memory and each
+  node's load, free disk, lanes and the coordinator's rank and reason
+  (computed from the nodes' reports when the coordinator is older).
 - **The pool places a lane where it starts warm**
   ([ADR-0026](docs/adr/0026-placement-by-the-requester-admission-by-the-node.md)
   point 3, as decided and not built until now). With `--on pool` the

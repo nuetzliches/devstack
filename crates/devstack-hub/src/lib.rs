@@ -457,6 +457,10 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/pool/history", get(pool::history))
         .route("/hub/pool/placement", get(pool::placement))
         .route(
+            "/hub/pool/default-on",
+            get(pool::default_on).put(pool::set_default_on),
+        )
+        .route(
             "/hub/pool/telemetry",
             get(pool::telemetry).put(pool::set_telemetry),
         )

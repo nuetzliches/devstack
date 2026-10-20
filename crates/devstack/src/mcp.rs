@@ -231,7 +231,7 @@ pub fn tools() -> Vec<Value> {
             "Start the stack: the daemon if needed, the infrastructure, then every autostart service, building what is not built yet. Waits until all are ready or one fails. In a worktree, its lane; with `on`, the lane on a node of the pool (ADR-0025). POST /v1/up.",
             json!({
                 "timeout_s": { "type": "integer", "minimum": 1, "description": "Give up waiting after this many seconds (default 600); the stack keeps starting" },
-                "on": { "type": "string", "description": "In a worktree only: run its lane on this node of the pool (its name or member id), `pool` for the coordinator to choose, `<pool>:<node>` in another pool" },
+                "on": { "type": "string", "description": "In a worktree only. Where it runs (ADR-0025): a node of the pool (its name or member id), `pool` for the coordinator to choose (warm first), `<pool>:<node>` in another pool, `local` for this machine. Without it: where this machine starts lanes by default (`devstack pool default-on`; `local` unless the user set it). The worktree's files go to that machine: unless the default says so, ask the user before starting elsewhere; `placement` shows where it could go" },
                 "profile": { "type": "string", "description": "A profile of the stack file (ADR-0041): how it runs for a purpose, e.g. an acceptance run. In the main tree only when the daemon starts; a profile with fresh data there needs `yes`" },
                 "run": { "type": "boolean", "description": "With `profile`: once ready, run the profile's command and return its result" },
                 "yes": { "type": "boolean", "description": "Confirm what the profile asks; ask the user first" },
@@ -318,13 +318,22 @@ pub fn tools() -> Vec<Value> {
             "Start a lane (a git worktree of this repository, see `lanes`) beside the main working tree, from wherever this MCP server runs: its own ports (moved by its offset), its own containers and database, no background workers. Waits until its services are ready, like `up`. Use it to run another branch or commit in isolation instead of building a separate environment: `git worktree add <dir> <commit>` makes the lane, `lane_stop` stops it, `git worktree remove <dir>` ends it. POST /v1/lanes, then the lane's /v1/up.",
             json!({
                 "lane": { "type": "string", "description": "The lane's name or branch (see `lanes`)" },
-                "on": { "type": "string", "description": "Run it on this node of the pool, or `pool` to let the coordinator choose; default: this machine" },
+                "on": { "type": "string", "description": "Where it runs (ADR-0025): a node of the pool (its name or member id), `pool` for the coordinator to choose (warm first), `<pool>:<node>` in another pool, `local` for this machine. Without it: where this machine starts lanes by default (`devstack pool default-on`; `local` unless the user set it). The worktree's files go to that machine: unless the default says so, ask the user before starting elsewhere; `placement` shows where it could go" },
                 "profile": { "type": "string", "description": "A profile of the stack file (ADR-0041), e.g. for an acceptance run of this lane's commit" },
                 "run": { "type": "boolean", "description": "With `profile`: once ready, run the profile's command in the lane and return its result" },
                 "timeout_s": { "type": "integer", "description": "How long to wait for its services (default 600)" },
             }),
             &["lane"],
             false,
+        ),
+        tool(
+            "placement",
+            "Where a lane could start before starting it (ADR-0025, ADR-0026 point 3): this machine's free CPU and memory, and for each joined pool every node with its free and used CPU and memory, free disk, lanes running, devstack version, and the coordinator's rank and reason (`keeps this lane's data`, `the repository ran there`, `free capacity`, or why it cannot take it); and where lanes start without `on` (`default_on`). Read only. Choose `on` from it, or `pool` to let the coordinator decide. The coordinator's GET /v1/placement and /v1/nodes, with this member's certificate.",
+            json!({
+                "lane": { "type": "string", "description": "The lane's name (see `lanes`)" },
+            }),
+            &["lane"],
+            true,
         ),
         tool(
             "lane_stop",
@@ -481,7 +490,9 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 );
             }
             let on = args["on"].as_str().filter(|o| !o.trim().is_empty());
-            if on.is_some() && client::worktree().is_none() {
+            if on.is_some_and(|o| !devstack_node::member::is_here(o))
+                && client::worktree().is_none()
+            {
                 anyhow::bail!(
                     "`on` runs a worktree's lane on a node: this is the main working tree"
                 );
@@ -693,6 +704,12 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 "lane_share" => format!("lane `{lane}` shared with {}", args["with"]),
                 _ => format!("{lane} serves the main ports"),
             })
+        }
+        "placement" => {
+            let lane = name_arg(args, "lane")?;
+            Ok(serde_json::to_string_pretty(&client::placement(
+                file, lane,
+            )?)?)
         }
         "lanes" => {
             let c = client::need(&client::state_dir(file)?)?;

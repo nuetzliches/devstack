@@ -805,6 +805,15 @@ pub fn up(
     // Resolves whether this is a lane's worktree.
     let sd = state_dir(stack_file)?;
     let wanted = profile_start(stack_file, profile, run)?;
+    // In a worktree, no `--on`: where this machine starts lanes by default
+    // (ADR-0025); `--on local` keeps it here. The main tree runs here.
+    let explicit = on.filter(|o| !devstack_node::member::is_here(o));
+    let resolved = if worktree().is_some() {
+        devstack_daemon::remote::effective_on(on)
+    } else {
+        explicit.map(str::to_string)
+    };
+    let on = resolved.as_deref();
     if on.is_some() && worktree().is_none() {
         bail!(
             "--on runs a worktree's lane on another machine: run it in a `git worktree` of the repository"
@@ -1432,6 +1441,9 @@ pub fn start_lane(
     step: impl FnMut(&Value),
 ) -> Result<StartedLane> {
     let main_file = daemon_file(stack_file);
+    // No `on`: where this machine starts lanes by default (ADR-0025).
+    let resolved = devstack_daemon::remote::effective_on(on);
+    let on = resolved.as_deref();
     // A lane on a node needs no Docker here: everything of it runs there.
     if on.is_none() {
         ensure_engine(&main_file, |l| println!("{l}"))?;
@@ -1899,6 +1911,156 @@ pub fn ensure_engine(stack_file: &Path, mut progress: impl FnMut(&str)) -> Resul
             Ok(())
         }
     }
+}
+
+/// Where a lane could start (ADR-0025, ADR-0026 point 3): this machine's
+/// free capacity, and per joined pool each node with its load, its lanes
+/// and the coordinator's order and reason; and where lanes go by default.
+/// What `devstack pool placement` prints and the MCP `placement` returns.
+pub fn placement(stack_file: &Path, lane: &str) -> Result<Value> {
+    use devstack_node::member;
+    let stack = devstack_config::load(stack_file)?;
+    let repo = stack.stack.name.clone();
+    let state = devstack_daemon::remote::state_dir();
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let here = serde_json::json!({
+        "cpus": cores,
+        "memory_free": devstack_proc::memory_available(),
+        "memory_total": devstack_proc::memory_total(),
+    });
+    let mut pools = Vec::new();
+    for (name, _) in member::pools(&state) {
+        let local = devstack_daemon::remote::local_member(&name);
+        let Some(me) = local
+            .membership()
+            .ok()
+            .flatten()
+            .filter(|m| m.state == devstack_node::store::State::Approved)
+        else {
+            continue;
+        };
+        let nodes = local.nodes().unwrap_or_default();
+        // An older coordinator has no order to give: the same ranking from
+        // its nodes' reports, without their policies (it says so).
+        let mut computed_here = false;
+        let order = local
+            .placement(&repo, lane, devstack_node::share::Amount::default())
+            .or_else(|e| {
+                if !e.to_string().starts_with("404") {
+                    return Err(e.to_string());
+                }
+                computed_here = true;
+                let reports: Vec<(&str, &str, &devstack_node::coordinator::Report)> = nodes
+                    .iter()
+                    // Nodes only: a developer's machine that asks for lanes is none.
+                    .filter(|n| n.online && !n.paused && n.id != me.id)
+                    .filter(|n| matches!(n.kind.as_str(), "server" | "node"))
+                    .filter_map(|n| Some((n.id.as_str(), n.name.as_str(), n.report.as_ref()?)))
+                    .collect();
+                Ok(devstack_node::coordinator::rank(
+                    &reports,
+                    &me.id,
+                    &repo,
+                    lane,
+                    devstack_node::policy::floor_need(devstack_node::share::Amount::default()),
+                    Some(&devstack_node::version::Release::this()),
+                ))
+            });
+        let leases = local.leases().unwrap_or_default();
+        let ranked: Vec<Value> = match &order {
+            Ok(list) => list
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let rep = nodes.iter().find(|n| n.id == p.node).and_then(|n| n.report.as_ref());
+                    serde_json::json!({
+                        "node": p.name,
+                        "on": if name == member::DEFAULT_POOL { p.name.clone() } else { format!("{name}:{}", p.name) },
+                        "rank": i + 1,
+                        "eligible": p.eligible,
+                        "why": p.why,
+                        "cpus_free": p.cpus,
+                        "memory_free": p.memory,
+                        "cpus_total": rep.and_then(|r| r.total).map(|t| t.cpus),
+                        "memory_total": rep.and_then(|r| r.total).map(|t| t.memory),
+                        "cpus_used": rep.and_then(|r| r.used).map(|u| u.cpus),
+                        "memory_used": rep.and_then(|r| r.used).map(|u| u.memory),
+                        "disk_free": rep.and_then(|r| r.disk_free),
+                        "lanes": leases.iter().filter(|l| l.node == p.node).count(),
+                        "devstack": rep.and_then(|r| r.devstack.as_ref()).map(|d| d.version.clone()),
+                    })
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        pools.push(serde_json::json!({
+            "pool": name,
+            "on": if name == member::DEFAULT_POOL { "pool".to_string() } else { name.clone() },
+            "nodes": ranked,
+            "error": order.err(),
+            "note": computed_here.then_some("the coordinator runs an older devstack: this order is computed here from its nodes' reports, without their policies"),
+        }));
+    }
+    Ok(serde_json::json!({
+        "lane": lane,
+        "repository": repo,
+        "default_on": member::default_on(&state).unwrap_or_else(|| "local".into()),
+        "here": here,
+        "pools": pools,
+    }))
+}
+
+/// `devstack pool placement <lane>`: [`placement`] as a table.
+pub fn print_placement(stack_file: &Path, lane: &str) -> Result<()> {
+    let p = placement(stack_file, lane)?;
+    let gib = |v: &Value| {
+        v.as_u64().map_or("-".into(), |b| {
+            format!("{:.1} GiB", b as f64 / (1u64 << 30) as f64)
+        })
+    };
+    println!(
+        "lane `{lane}` of `{}`; without --on it starts: {}",
+        p["repository"].as_str().unwrap_or(""),
+        p["default_on"].as_str().unwrap_or("local")
+    );
+    println!(
+        "here: {} cores, {} of {} memory free",
+        p["here"]["cpus"],
+        gib(&p["here"]["memory_free"]),
+        gib(&p["here"]["memory_total"])
+    );
+    for pool in p["pools"].as_array().into_iter().flatten() {
+        println!(
+            "\npool `{}` (--on {}):",
+            pool["pool"].as_str().unwrap_or(""),
+            pool["on"].as_str().unwrap_or("")
+        );
+        if let Some(e) = pool["error"].as_str() {
+            println!("  no order from the coordinator: {e}");
+            continue;
+        }
+        if let Some(n) = pool["note"].as_str() {
+            println!("  ({n})");
+        }
+        for n in pool["nodes"].as_array().into_iter().flatten() {
+            println!(
+                "  {}. {:<20} {:>5.1} CPU / {:>9} free, {} lane(s), disk {}  {}{}",
+                n["rank"],
+                n["node"].as_str().unwrap_or(""),
+                n["cpus_free"].as_f64().unwrap_or(0.0),
+                gib(&n["memory_free"]),
+                n["lanes"],
+                gib(&n["disk_free"]),
+                if n["eligible"] == true {
+                    ""
+                } else {
+                    "cannot take it: "
+                },
+                n["why"].as_str().unwrap_or("")
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

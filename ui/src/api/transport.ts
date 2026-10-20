@@ -66,6 +66,7 @@ export const paths = {
   poolHistory: (pool: string, node: string | undefined, range: string) =>
     `/hub/pool/history?range=${range}${pool !== 'default' ? `&pool=${enc(pool)}` : ''}${node ? `&node=${enc(node)}` : ''}`,
   poolSharedOpen: (lease: string) => `/hub/pool/shared/${enc(lease)}/open`,
+  poolDefaultOn: '/hub/pool/default-on',
   poolPlacement: (pool: string, repo: string, lane: string) =>
     `/hub/pool/placement?repo=${enc(repo)}&lane=${enc(lane)}${pool !== 'default' ? `&pool=${enc(pool)}` : ''}`,
   poolShare: '/hub/pool/share',

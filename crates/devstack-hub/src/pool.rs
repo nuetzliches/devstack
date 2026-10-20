@@ -246,6 +246,55 @@ pub struct ConsentBody {
     enabled: bool,
 }
 
+/// `GET /hub/pool/default-on`: where this machine's lanes start without
+/// `--on` (ADR-0025, amended 2026-10-21): `{on}`, `null` here.
+pub async fn default_on() -> Response {
+    let state = devstack_daemon::remote::state_dir();
+    Json(json!({ "on": devstack_node::member::default_on(&state) })).into_response()
+}
+
+/// `PUT /hub/pool/default-on {on}`: set it (`null` or `local`: here). The
+/// user's consent to send a worktree there without being asked; only to a
+/// pool this machine is an approved member of.
+pub async fn set_default_on(Json(b): Json<DefaultOn>) -> Response {
+    let on = b.on.as_deref().map(str::trim).filter(|o| !o.is_empty());
+    if let Some(o) = on.filter(|o| !devstack_node::member::is_here(o)) {
+        let pool = match devstack_daemon::remote::resolve_on(o) {
+            Ok((pool, _)) => pool,
+            Err(e) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response();
+            }
+        };
+        let approved = devstack_daemon::remote::local_member(&pool)
+            .membership()
+            .ok()
+            .flatten()
+            .is_some_and(|m| m.state == devstack_node::store::State::Approved);
+        if !approved {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": format!("this machine is no approved member of the pool `{pool}`") })),
+            )
+                .into_response();
+        }
+    }
+    let state = devstack_daemon::remote::state_dir();
+    match devstack_node::member::set_default_on(&state, on) {
+        Ok(()) => Json(json!({ "on": devstack_node::member::default_on(&state) })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DefaultOn {
+    #[serde(default)]
+    on: Option<String>,
+}
+
 /// `GET /hub/pool/telemetry`: whether this machine agreed to send the
 /// pool's collector telemetry, whether the pool collects, and what
 /// (ADR-0037).
