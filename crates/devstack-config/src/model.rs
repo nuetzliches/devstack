@@ -160,11 +160,37 @@ impl Stack {
                 ));
                 continue;
             };
-            if let Some(k) = o.kind {
+            if let Some(k) = o.kind
+                && k != svc.kind
+            {
                 svc.kind = k;
-                // A static service has no `run`, unless the profile gives one.
-                if k == Kind::Static && o.run.is_none() {
+                // What only the old kind takes goes (a dev server's `rebuild`
+                // under a `static` profile, say): the profile cannot unset a
+                // key, and the stack it makes must be valid. What the profile
+                // gives itself is set below.
+                if k == Kind::Static {
                     svc.run = String::new();
+                }
+                if k != Kind::Devserver {
+                    svc.rebuild = None;
+                    svc.restart_on.clear();
+                }
+                if matches!(k, Kind::Devserver | Kind::Tool) {
+                    svc.build = None;
+                    svc.output = None;
+                }
+                if k != Kind::Static {
+                    svc.spa = None;
+                }
+                if k != Kind::Service {
+                    svc.hot_reload = None;
+                }
+                if k != Kind::Job {
+                    svc.timeout = None;
+                }
+                if matches!(k, Kind::Job | Kind::Tool) {
+                    svc.health = None;
+                    svc.proxy = None;
                 }
             }
             if o.build.is_some() {
@@ -815,6 +841,16 @@ impl Service {
         self.kind == Kind::Devserver
             && self.port.is_some()
             && self.proxy.unwrap_or(true)
-            && self.run.contains("{port}")
+            && self.run_takes_port()
+    }
+
+    /// `run` has the placeholder `{port}` (not the literal text `{{port}}`).
+    pub fn run_takes_port(&self) -> bool {
+        use crate::interpolate::{Placeholder, parse, placeholders};
+        parse(&self.run).is_ok_and(|segs| {
+            placeholders(&segs)
+                .iter()
+                .any(|p| matches!(p, Placeholder::Port))
+        })
     }
 }

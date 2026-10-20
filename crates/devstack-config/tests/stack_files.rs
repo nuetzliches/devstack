@@ -655,4 +655,72 @@ fn a_dev_server_with_a_port_of_its_own_is_fronted() {
         issues.iter().any(|i| i.contains("needs `{port}`")),
         "{issues:?}"
     );
+    // The literal text `{{port}}` is no placeholder.
+    assert!(!fronted(dev("ng serve --text {{port}}", "")));
+    let issues = invalid(&dev("ng serve --text {{port}}", "proxy = true"));
+    assert!(
+        issues.iter().any(|i| i.contains("needs `{port}`")),
+        "{issues:?}"
+    );
+}
+
+#[test]
+fn working_directories_and_the_output_stay_inside_the_repository() {
+    let issues = invalid(&format!(
+        "{MINIMAL}cwd = \"../outside\"\n[services.api.prepare]\nrun = \"npm ci\"\ncwd = \"/abs\"\n[services.api.hot_reload]\nrun = \"dotnet watch run\"\ncwd = \"C:/elsewhere\"\n"
+    ));
+    for path in [
+        "services.api.cwd",
+        "services.api.prepare.cwd",
+        "services.api.hot_reload.cwd",
+    ] {
+        assert!(
+            has(&issues, path, "inside the repository"),
+            "{path}: {issues:?}"
+        );
+    }
+    for output in ["C:/tmp/out", "../out", "{repo}/../out", "/out"] {
+        let text = MINIMAL.replace("output = \"bin\"", &format!("output = \"{output}\""));
+        let issues = invalid(&text);
+        assert!(
+            has(&issues, "services.api.output", "inside the repository"),
+            "{output}: {issues:?}"
+        );
+    }
+    for output in ["bin", "{repo}/bin", "{repo}", "${OUT_DIR:-bin}"] {
+        let text = MINIMAL.replace("output = \"bin\"", &format!("output = \"{output}\""));
+        from_str(&text, Path::new("t.toml")).unwrap_or_else(|e| panic!("{output}: {e}"));
+    }
+}
+
+#[test]
+fn a_health_check_needs_time() {
+    let issues = invalid(&format!(
+        "{MINIMAL}health = {{ http = \"/health\", timeout = \"0s\" }}\n"
+    ));
+    assert!(
+        has(&issues, "services.api.health.timeout", "more than 0"),
+        "{issues:?}"
+    );
+}
+
+#[test]
+fn ports_a_first_lane_would_collide_on_are_a_warning() {
+    let text = format!(
+        "{MINIMAL}[services.web]\nkind = \"devserver\"\nrun = \"serve\"\nport = 5100\n[services.docs]\nkind = \"devserver\"\nrun = \"serve\"\nport = 4200\n"
+    );
+    let s = from_str(&text, Path::new("t.toml")).unwrap();
+    let w: Vec<String> = devstack_config::validate::warnings(&s)
+        .iter()
+        .map(|i| i.to_string())
+        .collect();
+    // 5000 and 5100: lane 1. 4200 against 5000 and 5100: lanes 8 and 9, no warning.
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(
+        w[0].starts_with("services.web.port") && w[0].contains("lane 1"),
+        "{w:?}"
+    );
+    let other = text.replace("port = 5100", "port = 5150");
+    let s = from_str(&other, Path::new("t.toml")).unwrap();
+    assert!(devstack_config::validate::warnings(&s).is_empty());
 }
