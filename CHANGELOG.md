@@ -9,6 +9,180 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-21
+
+A release of fixes from a review of the whole code base: the pool node runs
+what it checked and nothing else, several node agents share a Docker engine,
+the supervisor keeps edits and stops it lost before, and the stack file
+keeps its paths in the repository. Some stack and Compose files that loaded
+before are refused now (see Changed); devstack has no users outside its
+maintainers yet, so there is no migration.
+
+### Security
+
+- **A node runs the Compose model it checked**, written beside the lane's
+  mirror, and never reads the lane's files again: nothing the lane changes
+  between the check and the start, or later, reaches Compose. Bind mounts of
+  the mirror become `subpath` mounts of a volume bound to it (Docker refuses
+  a link out of it at every container start); secret and config files are
+  copied. A node takes no sync for a lane while it starts (`409`) and stops
+  what of the lane still runs before it checks its files.
+- Compose and Docker on a node run with only what Docker needs of the
+  agent's environment; a service's or build's variable without a value stays
+  unset, and secrets or configs `from environment` are refused.
+- A node refuses Compose keys it does not know, and `use_api_socket`,
+  `provider`, `oom_kill_disable`, a negative `oom_score_adj`, logging drivers
+  that send elsewhere, privileged lifecycle hooks, non-GPU device
+  reservations, `build.tags`, `build.cache_to` and a local
+  `build.cache_from`; a build's secrets are checked like a service's.
+- Two node agents on one Docker engine (one per pool) no longer remove each
+  other's lane containers and network rules: each agent tags its containers,
+  lane images and iptables chains (`devstack.agent=<tag>`,
+  `ds-<tag>-<lease>-f/-i`) and sweeps only its own. Leftovers of an earlier
+  agent (`dsl-<lease>` chains, untagged lane containers) are removed with
+  their lease or by the next sweep. Update all agents on one engine together.
+- Telemetry: paths on this machine no longer leave it inside error texts
+  (the repository, a lane's worktree, devstack's state and the home directory
+  go out as `<repo>`, `<worktree>`, `<devstack>`, `~`); the masking of
+  `/users/` no longer touches URLs; a collector that answers `404` stops the
+  sending at once.
+- Releases come only from a tag on a commit of `main`. The installers check
+  who built the archive (`gh attestation verify --signer-workflow
+  …/release.yml`) and show gh's reason when it fails, so a network or login
+  problem no longer reads like a tampered archive.
+
+### Changed
+
+- **Stack file paths stay in the repository** (ADR-0002): `cwd`, `output`,
+  `prepare.cwd` and `hot_reload.cwd` are refused when absolute, on another
+  drive or with `..` (`output` may start with `{repo}`); a build whose `cwd`
+  or expanded `output` leaves its snapshot fails. Also refused now:
+  `health.timeout = "0s"`, and `{port}`, `{artifact}` or `{is_main}` in a
+  profile's `env` (commands get it too).
+- A profile that changes a service's `kind` drops what only the old kind
+  takes: a `kind = "static"` profile over a dev server with `rebuild` or
+  `restart_on` (ADR-0041 over ADR-0042) made the whole stack file fail to
+  load.
+- `devstack build` no longer takes `--lane` (it always failed); a lane builds
+  in its daemon (`devstack restart <service>` in its worktree).
+- `devstack self uninstall` names the pool memberships it removes, refuses
+  while the per-user state holds a pool coordinator unless
+  `--with-coordinator`, and refuses while another devstack process of the
+  user runs (a node agent, a coordinator, an MCP server).
+- The static server caches only files whose name carries a content hash;
+  every other file is sent with `no-cache` and an `ETag` (`304` while
+  unchanged), so a promoted build shows at the next load.
+- MCP `up`: `timeout_s` is one deadline for Docker, the daemon, the lane and
+  its services.
+- CI builds with `--locked` and checks the declared minimum Rust version.
+- Docs: SECURITY.md says that a lane's uploads and data outlive its lease
+  (ADR-0038), that releases are checked by checksum, not signature (ADR-0039,
+  amended), and that the Windows binary is not code-signed. ADR-0017 is
+  amended for ADR-0041's profiles. A viewer of a shared lane reads no
+  container logs (the 0.11.0 notes said otherwise). `docs/pool.md` says that
+  images a node pulls are pulled with its credentials and can be run by any
+  lane there.
+
+### Added
+
+- `devstack check` warns when one of the first three lanes would run a
+  service on another service's port (`[lanes] port_step`).
+- Pool: admins can withdraw a node update while it waits for its lanes
+  (`DELETE /hub/pool/nodes/{id}/update`, **Cancel update** in the pool area);
+  the node reports `cancelled`.
+
+### Fixed
+
+- **Pool node**
+  - `devstack lane stop`, the end of a lease, purging a kept lane and
+    removing a member remove the lane's infrastructure containers (and, on
+    purge, its volumes) on the node; before, every group was skipped once it
+    had started.
+  - A `data = "fresh"` profile on a node no longer recreates the lane's
+    networks without the node's flags and egress rules.
+  - Admission no longer over-commits: a node checks and records a lease in
+    one step, and the coordinator counts offered, not yet admitted leases
+    against a node's capacity.
+  - A node counts its kept lanes' volumes against a member's room, removes
+    the images built for a lane with its kept data and lane images with
+    their member or when disk runs short, and refuses a lane with less than
+    5 GiB of disk free.
+  - A node answers large syncs off its async workers, limits container log
+    streams per member (16), asks the coordinator about unknown certificates
+    at most every 5 s, and drops connections that send no request within
+    30 s. Lease repository and lane names are bounded in length and
+    characters; a `:` in a synced path is accepted on Linux nodes.
+  - An update an admin orders gives up after eight hours of waiting for
+    lanes; a node whose new release does not start keeps running the old
+    one; the update replaces the binary the agent runs (the one its service
+    unit starts again), not a copy in `~/.local/bin`.
+- **Supervisor**
+  - A first start after a daemon start that fails for a passing reason (a
+    port still held, infra not reachable yet) no longer uses up the restore:
+    the next start runs the build last promoted again, instead of building
+    the tree into main past the promotion gate and the migrator.
+  - An edit made while a service that exited by itself waits for its
+    restart, or while it starts, is no longer lost: it follows as a
+    candidate once the service runs again.
+  - `devstack stop` while a candidate's migrator runs is final: the
+    candidate no longer starts the stopped service afterwards; the same for
+    a `restart` in flight.
+  - "serving without background workers" stays in the status and the
+    dashboard; the next health check no longer turns it into `healthy`.
+  - Two services after the same job run it once for one change, not once
+    per candidate.
+  - A build ended by `devstack stop` is reported as stopped, not "superseded
+    by a newer change". A build whose inputs changed while it ran is no
+    longer published and then deleted.
+  - After `devstack promote --lane main`, a service that does not run in the
+    main tree answers "`x` is stopped" instead of "lane `y` is not
+    answering".
+  - A lane whose worktree is removed while the lane starts is forgotten
+    after the start, not during it. On Windows, a lane's state directory
+    that cannot be deleted at once is retried, logged, and swept at the next
+    daemon start.
+- **Builds and the stack file**
+  - The build id follows a `${VAR}` in `build` and `output`: with another
+    value devstack reused the old artifact. Ids of lines without `${VAR}`
+    are unchanged.
+  - A Docker call over its time budget ends with everything it started:
+    before, only the `docker` CLI was ended and Compose's plugin kept
+    running.
+  - Publishing a build follows symbolic links and junctions
+    (`node_modules/.bin`, pnpm layouts) instead of failing.
+  - Env files: a byte order mark (Windows PowerShell 5.1) no longer hides
+    the first variable; `${A:-${B}}`, `${VAR:+alt}` and `${VAR+alt}` work as
+    in Compose. `{{port}}` in a dev server's `run` no longer counts as
+    `{port}`.
+- **CLI, daemon and dashboard**
+  - `devstack down` against a daemon that refuses the token or hangs shows
+    why instead of "no daemon is running"; `down --all` in the main tree
+    ends it by its pid. The MCP tools pass that error on. `down` without
+    `--all` leaves the daemon running for a lane started meanwhile.
+  - A second `devstack up` while the first daemon is still starting waits
+    for it instead of failing.
+  - `devstack lane start --profile … --run` checks the profile's command
+    before the lane starts.
+  - `devstack node agent --print-unit` quotes paths with spaces, `%` and `$`
+    for systemd; `--pool` is checked before it goes into a hub URL.
+  - A lane on a node no longer hides a port that cannot be forwarded behind
+    a sync that worked.
+  - `self uninstall` no longer says "uninstalled" when the per-user state
+    could not be removed; `logs --follow | head` no longer says the daemon
+    ended the stream; `doctor` without a stack file warns about a missing
+    Docker instead of failing.
+  - A refused request whose JSON answer is larger than 64 KiB reaches the
+    dashboard and the CLI whole; the request logs of the daemon and the hub
+    no longer send an empty body for it.
+  - The hub closes a dashboard WebSocket after two pings without an answer,
+    so a connection that went away (a laptop that slept) no longer holds its
+    daemon stream until the system's TCP timeout.
+  - Opening a service of a lane shared with this machine with
+    `?pool=default` and without `pool` uses one forward, not two.
+  - A lane shared with this machine shows no control that would change it,
+    the command palette included; before, the controls were only hidden by
+    style rules.
+
 ## [0.14.1] - 2026-10-21
 
 The release of 0.14.0 stopped at the advisory check: three advisories of
@@ -678,7 +852,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.14.1...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/nuetzliches/devstack/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/nuetzliches/devstack/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/nuetzliches/devstack/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/nuetzliches/devstack/compare/v0.13.0...v0.13.1
