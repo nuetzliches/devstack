@@ -988,8 +988,26 @@ fn the_launcher_starts_one_daemon_from_anywhere() {
     // The caller's directory can go while the daemon runs.
     std::fs::remove_dir_all(&cwd).expect("the daemon holds the caller's directory");
     std::fs::create_dir_all(&cwd).unwrap();
+    // The token replaced since the daemon started: it refuses this CLI.
+    // `down` says so (not "no daemon"); `down --all` ends it by its pid.
+    let token = ["devstack", "token"]
+        .iter()
+        .fold(home.path().to_path_buf(), |p, s| p.join(s));
+    assert!(token.is_file(), "{}", token.display());
+    std::fs::write(&token, "not-the-daemons-token").unwrap();
     let (ok, out) = done(run(&["down"]));
-    assert!(ok, "down: {out}");
+    assert!(
+        !ok && out.contains("HTTP 401") && out.contains("down --all"),
+        "down: {out}"
+    );
+    let (ok, out) = done(run(&["down", "--all"]));
+    assert!(
+        ok && out.contains("ending the daemon by its pid"),
+        "down --all: {out}"
+    );
+    assert!(!state.join("daemon.json").exists(), "{out}");
+    let (ok, out) = done(run(&["status"]));
+    assert!(!ok && out.contains("no daemon is running"), "{out}");
 
     // A daemon.json whose process is gone: no daemon, said at once.
     let dead = serde_json::json!({ "pid": u32::MAX - 1, "port": free_port(), "started": 0, "version": "0" });
@@ -1015,6 +1033,15 @@ fn the_launcher_starts_one_daemon_from_anywhere() {
     let (ok, out) = done(run(&["status"]));
     assert!(!ok && out.contains("does not answer"), "{out}");
     assert!(t0.elapsed() < Duration::from_secs(40), "{:?}", t0.elapsed());
+    // `down` says so too, and how to end it, instead of "no daemon".
+    let (ok, out) = done(run(&["down"]));
+    assert!(
+        !ok && out.contains("does not answer") && out.contains("down --all"),
+        "{out}"
+    );
+    // That process does not hold the stack's lock: not ended by its pid.
+    let (ok, out) = done(run(&["down", "--all"]));
+    assert!(ok && out.contains("no daemon is running"), "{out}");
     let _ = std::fs::remove_file(state.join("daemon.json"));
     drop(held);
 }

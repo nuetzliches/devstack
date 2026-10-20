@@ -535,11 +535,15 @@ pub fn ensure_daemon_with(
         match exited {
             // Another `up` may have started a daemon at the same moment, and
             // ours gave up on the state lock: give that one a few seconds.
-            // While that one's process lives, it is still starting.
+            // While that one's process lives, or something holds the state
+            // lock (a daemon that has not written `daemon.json` yet: a slow
+            // Docker engine), it is still starting: waited for up to the
+            // limit below.
             Some((at, status))
                 if at.elapsed() > EXITED_GRACE
                     && !devstack_daemon::read_info(state_dir)
-                        .is_some_and(|i| i.pid != child.id() && pid_alive(i.pid)) =>
+                        .is_some_and(|i| i.pid != child.id() && pid_alive(i.pid))
+                    && devstack_proc::StateLock::acquire(state_dir).is_ok() =>
             {
                 bail!(
                     "the daemon exited ({status}):\n{}",
@@ -1440,7 +1444,7 @@ pub fn lane_share(stack_file: &Path, name: &str, with: &[String]) -> Result<()> 
         println!("lane `{name}` is shared with nobody");
     } else {
         println!(
-            "lane `{name}` is shared with {} (while it runs on a node of the pool):              they open its services and see its state, logs and events, read only",
+            "lane `{name}` is shared with {} (while it runs on a node of the pool): they open its services and see its state, logs and events, read only",
             with.join(", ")
         );
     }
@@ -1466,17 +1470,22 @@ pub struct StartedLane {
     pub name: String,
     pub file: PathBuf,
     pub warning: Option<String>,
+    /// What its `--profile` asks (its command), checked before it started.
+    pub wanted: Option<ProfileStart>,
 }
 
 /// Start the lane `name` (its name or branch, see `lane list`) of this
 /// repository, here or on a node (`on`), from the main working tree or any
 /// worktree: the daemon is started if it does not run. `step` hears a start
-/// on a node step by step.
+/// on a node step by step. `profile` (and with `run` its command) is
+/// checked against the lane's own stack file before anything starts.
+#[allow(clippy::too_many_arguments)]
 pub fn start_lane(
     stack_file: &Path,
     name: &str,
     on: Option<&str>,
     profile: Option<&str>,
+    run: bool,
     within: Option<Duration>,
     step: impl FnMut(&Value),
 ) -> Result<StartedLane> {
@@ -1513,6 +1522,8 @@ pub fn start_lane(
         .map(|f| path.join(f))
         .filter(|f| f.is_file())
         .unwrap_or_else(|| main_file.clone());
+    // Its branch's profiles, before it starts (ADR-0041).
+    let wanted = profile_start(&file, profile, run)?;
     let wt = Worktree {
         path,
         main_file: main_file.clone(),
@@ -1530,6 +1541,7 @@ pub fn start_lane(
         name,
         file,
         warning,
+        wanted,
     })
 }
 
@@ -1545,7 +1557,7 @@ pub fn lane_start(
     if let Some(node) = on {
         println!("leasing, syncing and starting the lane on {node}...");
     }
-    let started = start_lane(stack_file, name, on, profile, None, |m| {
+    let started = start_lane(stack_file, name, on, profile, run, None, |m| {
         if m["step"] != 0 {
             println!("{}", step_line(m));
         }
@@ -1553,8 +1565,7 @@ pub fn lane_start(
     if let Some(w) = &started.warning {
         eprintln!("warning: {w}");
     }
-    // Its command, from the lane's own stack file (its branch's profiles).
-    let wanted = profile_start(&started.file, profile, run)?;
+    let wanted = started.wanted.as_ref();
     println!("lane `{}` started", started.name);
     let t0 = Instant::now();
     let outcome = start_and_wait(&started.client, &started.file, None, |name, st| {
@@ -1564,7 +1575,7 @@ pub fn lane_start(
         UpOutcome::Ready(stack) => {
             println!();
             print!("{}", status_text(&stack));
-            if run && let Some(cmd) = wanted.as_ref().and_then(|p| p.command.as_deref()) {
+            if run && let Some(cmd) = wanted.and_then(|p| p.command.as_deref()) {
                 println!(
                     "\nrunning `{cmd}` in lane `{}`, the profile's command",
                     started.name
@@ -1769,6 +1780,7 @@ pub fn follow_logs(c: &Client, name: &str, tail: usize, grep: Option<&str>) -> R
     };
     let needle = grep.map(str::to_lowercase);
     use std::io::Write as _;
+    let mut closed = false;
     c.stream(&path, |ev| {
         let mut out = std::io::stdout().lock();
         let ok = match ev["type"].as_str() {
@@ -1791,9 +1803,13 @@ pub fn follow_logs(c: &Client, name: &str, tail: usize, grep: Option<&str>) -> R
             .is_ok(),
             _ => true,
         };
-        ok && out.flush().is_ok() // a closed pipe (`| head`) ends it
+        // A closed pipe (`| head`) ends it.
+        closed = !(ok && out.flush().is_ok());
+        !closed
     })?;
-    eprintln!("the daemon ended the log stream (stopped?)");
+    if !closed {
+        eprintln!("the daemon ended the log stream (stopped?)");
+    }
     Ok(())
 }
 

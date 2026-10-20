@@ -186,7 +186,7 @@ Every command and flag: `devstack --help`, `devstack <command> --help`.
 | `devstack doctor` | what this machine lacks for this stack, with the fix; exits 1 when something fails |
 | `devstack up [--on <node>\|pool] [--workers] [--force]`, `down [--infra]`, `status` | start (in a worktree: its lane, here or on a node), stop, show the stack |
 | `devstack start\|stop\|restart [--rebuild] <service\|group>`, `promote`, `rollback`, `hot-reload` | one service or group |
-| `devstack build <service> [--lane <lane>]` | sync the snapshot and build an artifact, without starting it |
+| `devstack build <service>` | sync the main tree's snapshot and build an artifact, without starting it (in a lane: `devstack restart <service>` in its worktree) |
 | `devstack builds <service>`, `logs`, `top`, `env <service> [--export dotenv]` | what ran, what it printed, what it uses, what it gets |
 | `devstack run <command>` | a command of the stack file |
 | `devstack lane list\|stop\|move\|share` | the lanes (worktrees), see above |

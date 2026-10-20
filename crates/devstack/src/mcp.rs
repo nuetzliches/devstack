@@ -230,7 +230,7 @@ pub fn tools() -> Vec<Value> {
             "up",
             "Start the stack: the daemon if needed, the infrastructure, then every autostart service, building what is not built yet. Waits until all are ready or one fails. In a worktree, its lane; with `on`, the lane on a node of the pool (ADR-0025). POST /v1/up.",
             json!({
-                "timeout_s": { "type": "integer", "minimum": 1, "description": "Give up waiting after this many seconds (default 600); the stack keeps starting" },
+                "timeout_s": { "type": "integer", "minimum": 1, "description": "Give up waiting after this many seconds in all (default 600): starting Docker (up to 180 s) and the daemon (up to 120 s) count too, and are waited for to the end; the stack keeps starting" },
                 "on": { "type": "string", "description": "In a worktree only. Where it runs (ADR-0025): a node of the pool (its name or member id), `pool` for the coordinator to choose (warm first), `<pool>:<node>` in another pool, `local` for this machine. Without it: where this machine starts lanes by default (`devstack pool default-on`; `local` unless the user set it). The worktree's files go to that machine: unless the default says so, ask the user before starting elsewhere; `placement` shows where it could go" },
                 "profile": { "type": "string", "description": "A profile of the stack file (ADR-0041): how it runs for a purpose, e.g. an acceptance run. In the main tree only when the daemon starts; a profile with fresh data there needs `yes`" },
                 "run": { "type": "boolean", "description": "With `profile`: once ready, run the profile's command and return its result" },
@@ -480,6 +480,13 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
         }
         "up" => {
             let timeout = Duration::from_secs(args["timeout_s"].as_u64().unwrap_or(600));
+            // One deadline for all of it: Docker, the daemon, the lane, the services.
+            let t0 = std::time::Instant::now();
+            let left = || {
+                timeout
+                    .saturating_sub(t0.elapsed())
+                    .max(Duration::from_secs(1))
+            };
             let sd = client::state_dir(file)?;
             let profile = args["profile"].as_str().filter(|p| !p.trim().is_empty());
             let yes = args["yes"] == true;
@@ -528,7 +535,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 && (on.is_some() || c.lane().is_none_or(|l| l == "-"))
             {
                 // A start on a node is followed within the same timeout.
-                let name = c.join_lane(wt, false, false, on, profile, Some(timeout), |_| {})?;
+                let name = c.join_lane(wt, false, false, on, profile, Some(left()), |_| {})?;
                 // Its node runs another devstack (ADR-0031 point 8): said
                 // with the outcome.
                 if on.is_some()
@@ -542,7 +549,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                     notes.push_str(&format!("warning: {w}\n"));
                 }
             }
-            match client::start_and_wait(&c, file, Some(timeout), |_, _| {})? {
+            match client::start_and_wait(&c, file, Some(left()), |_, _| {})? {
                 UpOutcome::Ready(stack) => {
                     let mut text = format!("{notes}ready\n\n{}", client::status_text(&stack));
                     if args["run"] == true
@@ -561,7 +568,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 }
                 UpOutcome::TimedOut(stack) => anyhow::bail!(
                     "{notes}still starting after {} s (it continues; check `status`)\n\n{}",
-                    timeout.as_secs(),
+                    t0.elapsed().as_secs(),
                     client::status_text(&stack)
                 ),
             }
@@ -637,8 +644,9 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             let timeout = Duration::from_secs(args["timeout_s"].as_u64().unwrap_or(600));
             let on = args["on"].as_str().filter(|o| !o.trim().is_empty());
             let profile = args["profile"].as_str().filter(|p| !p.trim().is_empty());
-            let started = client::start_lane(file, lane, on, profile, Some(timeout), |_| {})?;
-            let wanted = client::profile_start(&started.file, profile, args["run"] == true)?;
+            let run = args["run"] == true;
+            let started = client::start_lane(file, lane, on, profile, run, Some(timeout), |_| {})?;
+            let wanted = started.wanted.as_ref();
             let mut notes = format!("lane `{}` started\n", started.name);
             if let Some(w) = &started.warning {
                 notes.push_str(&format!("warning: {w}\n"));
@@ -647,9 +655,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             {
                 UpOutcome::Ready(stack) => {
                     let mut text = format!("{notes}ready\n\n{}", client::status_text(&stack));
-                    if args["run"] == true
-                        && let Some(cmd) = wanted.as_ref().and_then(|p| p.command.as_deref())
-                    {
+                    if run && let Some(cmd) = wanted.and_then(|p| p.command.as_deref()) {
                         let log = client::run_command_on(&started.client, cmd, false)?;
                         text.push_str(&format!(
                             "\n`{cmd}` succeeded:\n{}",

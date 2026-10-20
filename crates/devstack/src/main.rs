@@ -38,13 +38,10 @@ enum Cmd {
         #[arg(long)]
         compose: bool,
     },
-    /// Sync the lane's snapshot and build a service into an artifact (ADR-0002).
-    Build {
-        service: String,
-        /// Lane to build from; `main` is the repository itself.
-        #[arg(long, default_value = "main")]
-        lane: String,
-    },
+    /// Sync the main working tree's snapshot and build a service into an
+    /// artifact (ADR-0002). A lane builds in its daemon (`devstack restart
+    /// <service>` in its worktree).
+    Build { service: String },
     /// Start the stack: daemon (if needed), infrastructure, services in order.
     /// In a worktree: its lane, with its own infrastructure (ADR-0030).
     Up {
