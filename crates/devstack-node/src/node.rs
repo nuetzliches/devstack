@@ -59,6 +59,16 @@ const MAX_LIST: usize = 32 << 20;
 /// does not answer (ADR-0031 point 6): renewals go on, a member removed in
 /// the meantime is refused after this at the latest.
 const MEMBERS_VALID_FOR: Duration = Duration::from_secs(3600);
+/// How long a node waits for its lanes to end before an update an admin
+/// ordered (ADR-0039): then it gives up and takes lanes again.
+const DRAIN_FOR: Duration = Duration::from_secs(8 * 3600);
+/// The coordinator's list of members is not asked for again within this,
+/// for a caller it does not name either: a member approved just now waits
+/// this long at most.
+const MEMBERS_ASKED_AGAIN: Duration = Duration::from_secs(5);
+/// How many container output streams one member follows here at once
+/// (each holds a `docker logs --follow` and its readers).
+const MAX_FOLLOWS: usize = 16;
 
 pub struct NodeConfig {
     /// This machine's membership (`member::default_dir`); the node keeps its
@@ -123,8 +133,8 @@ pub struct SlotView {
     pub repo: String,
     pub lane: String,
     pub used: u64,
-    /// What its directory takes (the mirror, builds, caches), bytes;
-    /// volumes not counted.
+    /// What its directory (the mirror, builds, caches) and its volumes
+    /// take, bytes; the volumes as the node last counted them.
     pub bytes: u64,
     /// A lease runs there now.
     pub active: bool,
@@ -210,10 +220,17 @@ struct Inner {
     update: Mutex<Option<crate::coordinator::UpdateReport>>,
     /// Updating: no new lane is admitted.
     draining: std::sync::atomic::AtomicBool,
+    /// The order (its `at`) the coordinator no longer sends while the node
+    /// waits for its lanes: an admin cancelled it.
+    update_withdrawn: Mutex<Option<u64>>,
     leases: Mutex<HashMap<String, NodeLease>>,
     /// The approved members, as the coordinator last listed them.
     /// With their tags, which this node's policy may ask for (ADR-0033).
     members: Mutex<(Option<Instant>, MemberTags)>,
+    /// When the coordinator was last asked for that list, answered or not.
+    members_asked: Mutex<Option<Instant>>,
+    /// How many container output streams each member follows now.
+    follows: Mutex<HashMap<String, usize>>,
     /// What this node lets run on it, as the coordinator last said; `false`
     /// until the coordinator said it once.
     policy: Mutex<(bool, Option<crate::policy::NodePolicy>)>,
@@ -234,6 +251,9 @@ struct Inner {
     views_ok: Mutex<HashMap<(String, String), (Instant, bool)>>,
     /// What the stopped lanes kept here take, as the last sweep counted.
     kept_use: Mutex<Option<crate::coordinator::Kept>>,
+    /// What each slot's volumes take, as the last sweep counted (counting
+    /// is slow).
+    volume_use: Mutex<HashMap<String, u64>>,
     /// Whether the coordinator refused this node's API (not granted to run
     /// lanes), said once.
     refused: Mutex<Option<String>>,
@@ -387,6 +407,8 @@ impl Inner {
             info.lane, info.member, info.repo
         );
         self.slot_run(slot, info).purge(self.container.as_deref());
+        remove_built_images(slot);
+        self.volume_use.lock().unwrap().remove(slot);
         self.slot_purging.lock().unwrap().remove(slot);
         self.slot_busy.lock().unwrap().remove(slot);
         true
@@ -423,11 +445,38 @@ impl Inner {
 
     /// Kept lanes past their time go, and the least recently used of a
     /// member over its room (ADR-0038 point 3).
+    /// What slot `slot` takes: its directory, and its volumes as the last
+    /// sweep counted them.
+    fn slot_bytes(&self, slot: &str) -> u64 {
+        tree_size(&self.slots().join(slot))
+            + self
+                .volume_use
+                .lock()
+                .unwrap()
+                .get(slot)
+                .copied()
+                .unwrap_or(0)
+    }
+
     fn sweep_slots(&self) {
         let (keep_for, room) = self.keep();
         let now = crate::store::now();
+        let kept = self.kept();
+        // Volumes count against the room too (ADR-0038 point 3).
+        *self.volume_use.lock().unwrap() = if kept.is_empty() {
+            HashMap::new()
+        } else {
+            slot_volumes()
+        };
+        // Short of disk: the lane images no lane uses go (built again from
+        // their Dockerfile when one starts).
+        if devstack_proc::disk_free(&self.root)
+            .is_some_and(|f| f < 2 * crate::coordinator::MIN_DISK_FREE)
+        {
+            remove_lane_images(&self.owner(), |_| true);
+        }
         let mut by_member: HashMap<String, Vec<(String, SlotInfo, u64)>> = HashMap::new();
-        for (slot, info) in self.kept() {
+        for (slot, info) in kept {
             if self.in_use(&slot) {
                 continue;
             }
@@ -435,7 +484,7 @@ impl Inner {
                 self.purge_slot(&slot, &info, "kept for as long as this node keeps lanes");
                 continue;
             }
-            let bytes = tree_size(&self.slots().join(&slot));
+            let bytes = self.slot_bytes(&slot);
             by_member
                 .entry(info.member.clone())
                 .or_default()
@@ -464,9 +513,17 @@ impl Inner {
         }
     }
 
+    /// What tells this agent's lane containers, images and network rules
+    /// from another pool's agent's on the same engine (ADR-0034).
+    fn owner(&self) -> String {
+        crate::lanerun::owner_tag(&self.secret)
+    }
+
     /// Left over by an agent that stopped between a lease's end and its
     /// cleanup: lane directories, slots without what they say about
-    /// themselves, and lane containers no lease has.
+    /// themselves, lane containers no lease has, and their network rules.
+    /// Only this agent's: another pool's agent on the same engine keeps its
+    /// own (ADR-0034).
     fn sweep_orphans(&self) {
         let leases: HashSet<String> = self.leases.lock().unwrap().keys().cloned().collect();
         if let Ok(rd) = std::fs::read_dir(self.lanes()) {
@@ -484,27 +541,31 @@ impl Inner {
                 }
             }
         }
-        let out = std::process::Command::new("docker")
-            .args([
-                "ps",
-                "-a",
-                "--filter",
-                "label=devstack.lease",
-                "--format",
-                "{{.Label \"devstack.lease\"}}\t{{.Names}}",
-            ])
-            .output();
-        if let Ok(out) = out {
-            for l in String::from_utf8_lossy(&out.stdout).lines() {
-                if let Some((id, name)) = l.split_once('\t')
-                    && !leases.contains(id)
-                {
-                    let _ = std::process::Command::new("docker")
-                        .args(["rm", "-f", "--", name])
-                        .output();
-                }
+        let owner = self.owner();
+        let mut live = Vec::new();
+        for c in lane_containers() {
+            let ours = match c.owner.as_str() {
+                o if o == owner => true,
+                // An older agent's: labelled without its owner. Its mirror
+                // is under this agent's state if it is this agent's.
+                "" => mounts_under(&c.name, &self.root),
+                _ => false,
+            };
+            if ours && !self.leases.lock().unwrap().contains_key(&c.lease) {
+                let _ = std::process::Command::new("docker")
+                    .args(["rm", "-f", "--", &c.name])
+                    .output();
+            } else {
+                live.push(c.lease);
             }
         }
+        // The rules of lanes it no longer holds (ADR-0033 point 5), read
+        // which they are when nothing sets rules: a lane starting meanwhile
+        // is held already.
+        crate::egress::cleanup(&self.root, &owner, || {
+            let held = self.leases.lock().unwrap().keys().cloned().collect();
+            (held, live)
+        });
     }
 
     fn update_state(&self, at: u64, state: &str, target: Option<String>, error: Option<String>) {
@@ -564,10 +625,32 @@ impl Inner {
             target.as_deref().unwrap_or("the latest release")
         );
         if order.drain {
+            // The state first: a drain an earlier order ends meanwhile sees
+            // it is no longer its own and leaves admission to this one.
+            self.update_state(at, "draining", target.clone(), None);
             self.draining
                 .store(true, std::sync::atomic::Ordering::SeqCst);
-            self.update_state(at, "draining", target.clone(), None);
+            let until = Instant::now() + DRAIN_FOR;
             while !self.leases.lock().unwrap().is_empty() {
+                // The admin withdrew the order (or the coordinator forgot
+                // it): the node takes lanes again.
+                if self.update_withdrawn(at) {
+                    if self.end_drain(at, "cancelled", target, None) {
+                        eprintln!("node agent: the update was cancelled; lanes are admitted again");
+                    }
+                    return;
+                }
+                if Instant::now() >= until {
+                    let why = format!(
+                        "its lanes still ran after {} hours: order it again, or without waiting for them",
+                        DRAIN_FOR.as_secs() / 3600
+                    );
+                    if self.end_drain(at, "failed", target, Some(why.clone())) {
+                        eprintln!("node agent: the update gave up: {why}");
+                        crate::telemetry::node_log("warn", "node_update_failed", &[("error", why)]);
+                    }
+                    return;
+                }
                 std::thread::sleep(Duration::from_secs(5));
             }
         }
@@ -586,11 +669,57 @@ impl Inner {
                 self.update_state(at, "failed", target, Some(e));
             }
             Ok(Some(binary)) => {
-                self.update_state(at, "restarting", target, None);
+                self.update_state(at, "restarting", target.clone(), None);
                 eprintln!("node agent: starting again on {}", binary.display());
-                restart_on(&binary);
+                // On success this process ends (or is replaced); on failure
+                // it goes on with the release it runs.
+                let e = restart_on(&binary);
+                self.draining
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                eprintln!(
+                    "node agent: {e}; it goes on running {}",
+                    env!("CARGO_PKG_VERSION")
+                );
+                crate::telemetry::node_log("warn", "node_update_failed", &[("error", e.clone())]);
+                self.update_state(at, "failed", target, Some(e));
             }
         }
+    }
+
+    /// End the wait for lanes of the update ordered at `at`, unless a later
+    /// order is under way already: admission opens again and the report
+    /// says `state`. Whether it was still this order's.
+    fn end_drain(
+        &self,
+        at: u64,
+        state: &str,
+        target: Option<String>,
+        error: Option<String>,
+    ) -> bool {
+        let mut u = self.update.lock().unwrap();
+        if u.as_ref().is_none_or(|u| u.at != at) {
+            return false;
+        }
+        self.draining
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        *u = Some(crate::coordinator::UpdateReport {
+            at,
+            state: state.into(),
+            target,
+            error,
+        });
+        drop(u);
+        self.changed.notify_one();
+        true
+    }
+
+    /// Whether the coordinator's last answer no longer carries the update
+    /// ordered at `at`.
+    fn update_withdrawn(&self, at: u64) -> bool {
+        self.update_withdrawn
+            .lock()
+            .unwrap()
+            .is_some_and(|w| w == at)
     }
 
     /// What `member`'s blobs take here (counted once, then kept up to date).
@@ -674,6 +803,10 @@ impl Inner {
                 self.purge_slot(&slot, &info, "the pool no longer lists its member");
             }
         }
+        // The lane images built for them (ADR-0028).
+        remove_lane_images(&self.owner(), |m| {
+            !approved.contains(m) && !holding.contains(m)
+        });
         let Ok(rd) = std::fs::read_dir(self.root.join("blobs")) else {
             return;
         };
@@ -697,9 +830,15 @@ impl Inner {
     /// What is left for a new lease: the offer, less what recently admitted
     /// leases need (they are not in the measured usage yet).
     fn available(&self) -> Amount {
+        self.available_in(&self.leases.lock().unwrap())
+    }
+
+    /// [`Inner::available`] with the leases' lock held: admission checks and
+    /// records a lease in one step, so two at once cannot both take the
+    /// same room (ADR-0026 point 4).
+    fn available_in(&self, leases: &HashMap<String, NodeLease>) -> Amount {
         let offer = *self.offer.lock().unwrap();
         let now = crate::store::now();
-        let leases = self.leases.lock().unwrap();
         let settling = leases
             .values()
             .filter(|l| now.saturating_sub(l.admitted) < SETTLING.as_secs());
@@ -798,12 +937,14 @@ impl Inner {
                         );
                     } else {
                         run.purge(s.container.as_deref());
+                        remove_built_images(slot);
                     }
                     s.slot_busy.lock().unwrap().remove(slot);
                 }
                 None => {
                     if l.stack_file.is_some() {
                         run.purge(s.container.as_deref());
+                        remove_built_images(&l.id);
                     }
                     let _ = std::fs::remove_dir_all(&run.dir);
                 }
@@ -821,12 +962,23 @@ async fn caller(s: &Shared, peer: &Peer) -> ApiResult<String> {
     let Some(id) = peer.member.clone() else {
         return Err(err(StatusCode::UNAUTHORIZED, "no member certificate"));
     };
+    // A certificate the list does not name is asked about at most every
+    // few seconds: unknown callers cannot make every request a round trip
+    // to the coordinator.
     let fresh = {
         let m = s.members.lock().unwrap();
         m.0.is_some_and(|at| at.elapsed() < Duration::from_secs(30)) && m.1.contains_key(&id)
     };
+    let ask = !fresh && {
+        let mut last = s.members_asked.lock().unwrap();
+        let due = last.is_none_or(|t| t.elapsed() >= MEMBERS_ASKED_AGAIN);
+        if due {
+            *last = Some(Instant::now());
+        }
+        due
+    };
     let mut asked = false;
-    if !fresh {
+    if ask {
         let s2 = s.clone();
         let listed = tokio::task::spawn_blocking(move || s2.local.members())
             .await
@@ -913,7 +1065,7 @@ async fn slots_list(
             .filter(|(_, i)| i.member == who)
             .map(|(slot, i)| SlotView {
                 active: s2.in_use(&slot),
-                bytes: tree_size(&s2.slots().join(&slot)),
+                bytes: s2.slot_bytes(&slot),
                 repo: i.repo,
                 lane: i.lane,
                 used: i.used,
@@ -1098,24 +1250,26 @@ async fn admit(
     if let Err(why) = crate::policy::NodePolicy::admits_all(&all, &who, &tags, &lease.repo) {
         return Err(err(StatusCode::FORBIDDEN, format!("{}: {why}", s.name)));
     }
-    // The node admits against what it has now (ADR-0031 point 4), and takes
-    // a lane to need at least the least.
-    let mut lease = lease;
-    lease.need = crate::policy::floor_need(lease.need);
-    let free = s.available();
-    if lease.need.cpus > free.cpus || lease.need.memory > free.memory {
+    // A lane needs room on disk too: its mirror, builds, images and volumes
+    // (ADR-0038), whatever its slot keeps already.
+    if let Some(free) = devstack_proc::disk_free(&s.root)
+        && free < crate::coordinator::MIN_DISK_FREE
+    {
         return Err(err(
             StatusCode::CONFLICT,
             format!(
-                "{} offers {:.1} CPU and {} MiB now; the lane needs {:.1} CPU and {} MiB",
+                "{} has {} MiB of disk free, less than {} MiB",
                 s.name,
-                free.cpus,
-                free.memory >> 20,
-                lease.need.cpus,
-                lease.need.memory >> 20
+                free >> 20,
+                crate::coordinator::MIN_DISK_FREE >> 20
             ),
         ));
     }
+    // The node admits against what it has now (ADR-0031 point 4), and takes
+    // a lane to need at least the least; checked below, with the lease
+    // recorded in the same step.
+    let mut lease = lease;
+    lease.need = crate::policy::floor_need(lease.need);
     let now = crate::store::now();
     let slot = s.slot_name(&who, &lease.repo, &lease.lane);
     // What an earlier lease of the lane kept here, and since when.
@@ -1137,6 +1291,20 @@ async fn admit(
         kept,
     };
     let mut leases = s.leases.lock().unwrap();
+    let free = s.available_in(&leases);
+    if l.need.cpus > free.cpus || l.need.memory > free.memory {
+        return Err(err(
+            StatusCode::CONFLICT,
+            format!(
+                "{} offers {:.1} CPU and {} MiB now; the lane needs {:.1} CPU and {} MiB",
+                s.name,
+                free.cpus,
+                free.memory >> 20,
+                l.need.cpus,
+                l.need.memory >> 20
+            ),
+        ));
+    }
     if s.slot_purging.lock().unwrap().contains(&slot) {
         return Err(err(
             StatusCode::CONFLICT,
@@ -1267,12 +1435,16 @@ async fn missing(
     let who = caller(&s, &peer).await?;
     lease_of(&s, &id, &who)?;
     let blobs = s.blobs(&who);
-    let mut seen = HashSet::new();
-    let hashes = h
-        .hashes
-        .into_iter()
-        .filter(|x| valid_hash(x) && seen.insert(x.clone()) && !blobs.join(x).exists())
-        .collect();
+    // Up to about 250 000 lookups: not on the async workers.
+    let hashes = tokio::task::spawn_blocking(move || {
+        let mut seen = HashSet::new();
+        h.hashes
+            .into_iter()
+            .filter(|x| valid_hash(x) && seen.insert(x.clone()) && !blobs.join(x).exists())
+            .collect()
+    })
+    .await
+    .map_err(internal)?;
     Ok(Json(Hashes { hashes }))
 }
 
@@ -1848,7 +2020,7 @@ async fn proxy(
     // The lane's containers are the node's to reach: its daemon has no
     // Docker (#101).
     if let Some(route) = InfraRoute::parse(req.method(), &rest) {
-        return infra(&s, &l, route, req.uri()).await;
+        return infra(&s, &l.member.clone(), &l, route, req.uri()).await;
     }
     // A service route that names containers (a group's restart, a Compose
     // service by its name): the agent acts on them, the daemon on the rest
@@ -2046,6 +2218,7 @@ fn infra_err(status: StatusCode, msg: impl Into<String>) -> axum::response::Resp
 /// on the containers of the projects the agent started for it.
 async fn infra(
     s: &Shared,
+    who: &str,
     l: &NodeLease,
     route: InfraRoute,
     uri: &hyper::Uri,
@@ -2101,9 +2274,15 @@ async fn infra(
             }
         }
         InfraRoute::Stream { .. } => {
+            let Some(held) = Follow::take(s, who) else {
+                return infra_err(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    format!("you follow {MAX_FOLLOWS} container outputs here already"),
+                );
+            };
             let tail = q.tail.unwrap_or(500).min(5000);
             match crate::laneinfra::follow(&c.name, tail) {
-                Ok(child) => sse_lines(child),
+                Ok(child) => sse_lines(child, held),
                 Err(e) => infra_err(StatusCode::BAD_GATEWAY, e),
             }
         }
@@ -2135,10 +2314,44 @@ async fn infra(
     }
 }
 
+/// One of a member's container output streams ([`MAX_FOLLOWS`]): given
+/// back when it is dropped, with the stream.
+struct Follow {
+    s: Shared,
+    who: String,
+}
+
+impl Follow {
+    fn take(s: &Shared, who: &str) -> Option<Self> {
+        let mut follows = s.follows.lock().unwrap();
+        let n = follows.entry(who.to_string()).or_insert(0);
+        if *n >= MAX_FOLLOWS {
+            return None;
+        }
+        *n += 1;
+        Some(Self {
+            s: s.clone(),
+            who: who.to_string(),
+        })
+    }
+}
+
+impl Drop for Follow {
+    fn drop(&mut self) {
+        let mut follows = self.s.follows.lock().unwrap();
+        if let Some(n) = follows.get_mut(&self.who) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                follows.remove(&self.who);
+            }
+        }
+    }
+}
+
 /// A followed container's output as the lane's daemon streams it: one SSE
 /// event `{"type":"line","text"}` per line, until the reader goes away or
-/// the output ends.
-fn sse_lines(mut child: std::process::Child) -> axum::response::Response {
+/// the output ends. `held` is given back then.
+fn sse_lines(mut child: std::process::Child, held: Follow) -> axum::response::Response {
     use axum::response::IntoResponse;
     let (tx, body) = http_body_util::channel::Channel::<bytes::Bytes, std::io::Error>::new(64);
     let tx = Arc::new(tokio::sync::Mutex::new(tx));
@@ -2206,6 +2419,7 @@ fn sse_lines(mut child: std::process::Child) -> axum::response::Response {
         let mut c = child.lock().unwrap();
         let _ = c.kill();
         let _ = c.wait();
+        drop(held);
     });
     (
         [
@@ -2311,9 +2525,9 @@ async fn view(
             .cloned()
             .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("no lane `{id}` here")))?;
         may_view(&s, &l, &who).await?;
-        Ok::<_, (StatusCode, String)>(l)
+        Ok::<_, (StatusCode, String)>((who, l))
     };
-    let l = match lease.await {
+    let (who, l) = match lease.await {
         Ok(l) => l,
         Err(e) => return e.into_response(),
     };
@@ -2321,7 +2535,7 @@ async fn view(
         Some(InfraRoute::Act { .. }) => {
             return err(StatusCode::FORBIDDEN, "viewers do not change a lane").into_response();
         }
-        Some(route) => return infra(&s, &l, route, req.uri()).await,
+        Some(route) => return infra(&s, &who, &l, route, req.uri()).await,
         None => {}
     }
     if !viewable(&rest) {
@@ -2584,6 +2798,156 @@ fn capacity_metrics(
     crate::telemetry::metrics_body("devstack-node", &v, &[])
 }
 
+/// The bytes the Compose volumes of each slot take: projects are
+/// `<project>-<slot>` (ADR-0038 point 1). `docker system df -v`: slow.
+fn slot_volumes() -> HashMap<String, u64> {
+    let mut out = HashMap::new();
+    for v in devstack_compose::Docker::default()
+        .volumes()
+        .unwrap_or_default()
+    {
+        if let Some(slot) = v.project.as_deref().and_then(slot_of_project) {
+            *out.entry(slot.to_string()).or_insert(0) += v.size;
+        }
+    }
+    out
+}
+
+/// The slot a Compose project of a lane belongs to: its last `-` part, 24
+/// hex digits (`lanerun::secret_name`).
+fn slot_of_project(project: &str) -> Option<&str> {
+    let (_, slot) = project.rsplit_once('-')?;
+    (slot.len() == 24 && slot.bytes().all(|b| b.is_ascii_hexdigit())).then_some(slot)
+}
+
+/// The ids of images with `filter`, each with the label `label`.
+fn images_labelled(filter: &str, label: &str) -> Vec<(String, String)> {
+    let docker = |args: &[&str]| {
+        std::process::Command::new("docker")
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
+    };
+    let ids = docker(&["image", "ls", "-q", "--no-trunc", "--filter", filter]);
+    let mut ids: Vec<&str> = ids.split_whitespace().collect();
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    let format = format!("{{{{.Id}}}}\t{{{{index .Config.Labels \"{label}\"}}}}");
+    let mut args = vec!["image", "inspect", "--format", &format, "--"];
+    args.extend(ids);
+    docker(&args)
+        .lines()
+        .filter_map(|l| {
+            let (id, v) = l.trim_end_matches('\r').split_once('\t')?;
+            Some((id.to_string(), v.to_string()))
+        })
+        .collect()
+}
+
+/// Remove images `ids` that nothing uses (an image a container uses stays).
+fn remove_images(ids: &[String]) {
+    for id in ids {
+        let _ = std::process::Command::new("docker")
+            .args(["image", "rm", "--", id])
+            .output();
+    }
+}
+
+/// The images Compose built for slot `slot`'s projects go with it: a
+/// Dockerfile changed is another image each time, kept until the slot goes.
+fn remove_built_images(slot: &str) {
+    let ids: Vec<String> = images_labelled(
+        "label=com.docker.compose.project",
+        "com.docker.compose.project",
+    )
+    .into_iter()
+    .filter(|(_, project)| project.rsplit_once('-').is_some_and(|(_, s)| s == slot))
+    .map(|(id, _)| id)
+    .collect();
+    remove_images(&ids);
+}
+
+/// The lane images this agent built (`[lanes] dockerfile`, ADR-0028) for
+/// the members `gone` says are, or all of them that no container uses.
+fn remove_lane_images(owner: &str, gone: impl Fn(&str) -> bool) {
+    let ids: Vec<String> =
+        images_labelled(&format!("label=devstack.agent={owner}"), "devstack.member")
+            .into_iter()
+            .filter(|(_, member)| gone(member))
+            .map(|(id, _)| id)
+            .collect();
+    remove_images(&ids);
+}
+
+/// A lane container on the engine, any agent's.
+struct LaneContainer {
+    lease: String,
+    /// Its agent's owner tag; empty from an agent before there was one.
+    owner: String,
+    name: String,
+}
+
+/// Every lane container on the engine (`label=devstack.lease`), whichever
+/// agent's.
+fn lane_containers() -> Vec<LaneContainer> {
+    let Ok(out) = std::process::Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            "label=devstack.lease",
+            "--format",
+            "{{.Label \"devstack.lease\"}}\t{{.Label \"devstack.agent\"}}\t{{.Names}}",
+        ])
+        .output()
+    else {
+        return Vec::new();
+    };
+    parse_lane_containers(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_lane_containers(text: &str) -> Vec<LaneContainer> {
+    text.lines()
+        .filter_map(|l| {
+            let mut f = l.trim_end_matches('\r').splitn(3, '\t');
+            let (lease, owner, name) = (f.next()?, f.next()?, f.next()?);
+            (!lease.is_empty() && !name.is_empty()).then(|| LaneContainer {
+                lease: lease.to_string(),
+                // Docker prints a label a container lacks as `<no value>`.
+                owner: owner.trim_start_matches("<no value>").to_string(),
+                name: name.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Whether container `name` mounts something under `root` (where an agent
+/// keeps its lanes' mirrors): an older agent's lane container, by where its
+/// mirror is.
+fn mounts_under(name: &str, root: &Path) -> bool {
+    let Ok(out) = std::process::Command::new("docker")
+        .args([
+            "inspect",
+            "--format",
+            "{{range .Mounts}}{{.Source}}\n{{end}}",
+            "--",
+            name,
+        ])
+        .output()
+    else {
+        return false;
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .any(|m| !m.trim().is_empty() && Path::new(m.trim()).starts_with(root))
+}
+
 /// What the containers of the lanes `ids` use now (`docker stats`): their
 /// names carry the lease's id.
 fn lanes_use(ids: &[String]) -> Amount {
@@ -2836,6 +3200,23 @@ async fn background(s: Shared) {
                 *known = Some(a.coordinator.clone());
             }
         }
+        // An update the node waits for its lanes for, that the coordinator
+        // no longer sends: cancelled by an admin, or forgotten by a
+        // coordinator that restarted. The node takes lanes again.
+        if let Ok(Ok(a)) = &answer {
+            let waiting = s
+                .update
+                .lock()
+                .unwrap()
+                .as_ref()
+                .filter(|u| u.state == "draining")
+                .map(|u| u.at);
+            if let Some(at) = waiting
+                && a.update.as_ref().is_none_or(|o| o.at != at)
+            {
+                *s.update_withdrawn.lock().unwrap() = Some(at);
+            }
+        }
         // An update an admin ordered (ADR-0039), once per order.
         if let Ok(Ok(a)) = &answer
             && let Some(order) = a.update.clone()
@@ -2883,20 +3264,22 @@ async fn background(s: Shared) {
 
 /// The agent again, on `binary`, with the arguments it was started with. On
 /// Unix in place of this process (a supervisor sees the same process go on);
-/// elsewhere a new process, and this one ends.
-fn restart_on(binary: &Path) -> ! {
+/// elsewhere a new process, and this one ends. Returns only when that
+/// failed, with why: this process then goes on.
+fn restart_on(binary: &Path) -> String {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         let e = std::process::Command::new(binary).args(&args).exec();
-        eprintln!("node agent: cannot start {}: {e}", binary.display());
-        std::process::exit(75);
+        format!("cannot start {}: {e}", binary.display())
     }
     #[cfg(not(unix))]
     {
-        let _ = std::process::Command::new(binary).args(&args).spawn();
-        std::process::exit(0);
+        match std::process::Command::new(binary).args(&args).spawn() {
+            Ok(_) => std::process::exit(0),
+            Err(e) => format!("cannot start {}: {e}", binary.display()),
+        }
     }
 }
 
@@ -2937,10 +3320,8 @@ pub async fn serve(
         .map(|l| (l.id.clone(), l))
         .collect();
     let bin = linux_binary(&root);
-    // Rules of lanes that ended while the agent was down (ADR-0033 point 5).
-    let held: Vec<String> = leases.keys().cloned().collect();
-    let state = root.clone();
-    tokio::task::spawn_blocking(move || crate::egress::cleanup(&state, &held));
+    // Rules of lanes that ended while the agent was down (ADR-0033 point 5)
+    // go with the first sweep (`sweep_orphans`).
     let local_policy = local_policy(&root)?;
     let secret = node_secret(&root)?;
     let s = Arc::new(Inner {
@@ -2954,8 +3335,11 @@ pub async fn serve(
         on_update: config.on_update.clone(),
         update: Mutex::new(None),
         draining: std::sync::atomic::AtomicBool::new(false),
+        update_withdrawn: Mutex::new(None),
         leases: Mutex::new(leases),
         members: Mutex::new((None, HashMap::new())),
+        members_asked: Mutex::new(None),
+        follows: Mutex::new(HashMap::new()),
         policy: Mutex::new((false, None)),
         local_policy,
         secret,
@@ -2963,6 +3347,7 @@ pub async fn serve(
         slot_busy: Mutex::new(HashSet::new()),
         slot_purging: Mutex::new(HashSet::new()),
         kept_use: Mutex::new(None),
+        volume_use: Mutex::new(HashMap::new()),
         views_ok: Mutex::new(HashMap::new()),
         refused: Mutex::new(None),
         coordinator: Mutex::new(None),
@@ -3072,6 +3457,40 @@ pub fn serve_blocking(config: NodeConfig, listen: std::net::SocketAddr) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lane_containers_tell_their_agent() {
+        let c = parse_lane_containers(
+            "aa11\t0a1b2c3d\tdevstack-lane-aa11\nbb22\t\tdevstack-lane-bb22\r\ncc33\t<no value>\tdevstack-lane-cc33\n\n",
+        );
+        let v: Vec<(&str, &str, &str)> = c
+            .iter()
+            .map(|c| (c.lease.as_str(), c.owner.as_str(), c.name.as_str()))
+            .collect();
+        assert_eq!(
+            v,
+            [
+                ("aa11", "0a1b2c3d", "devstack-lane-aa11"),
+                // An older agent's: no owner.
+                ("bb22", "", "devstack-lane-bb22"),
+                ("cc33", "", "devstack-lane-cc33"),
+            ]
+        );
+        // Two agents' tags differ, one agent's stays.
+        let a = crate::lanerun::owner_tag("secret-of-one-pool");
+        assert_eq!(a.len(), 8);
+        assert_eq!(a, crate::lanerun::owner_tag("secret-of-one-pool"));
+        assert_ne!(a, crate::lanerun::owner_tag("secret-of-another"));
+    }
+
+    #[test]
+    fn a_slots_volumes_are_known_by_their_project() {
+        let slot = "0123456789abcdef01234567";
+        assert_eq!(slot_of_project(&format!("shop-{slot}")), Some(slot));
+        assert_eq!(slot_of_project(&format!("my-shop-{slot}")), Some(slot));
+        assert_eq!(slot_of_project("shop-main"), None);
+        assert_eq!(slot_of_project("shop"), None);
+    }
 
     #[test]
     fn a_viewer_reads_a_lane_and_changes_nothing() {

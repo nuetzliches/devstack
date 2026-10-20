@@ -1,6 +1,6 @@
 # ADR-0000: Title as a statement, not a topic
 
-- **Status:** Proposed | Accepted | Open | Superseded by [ADR-NNNN](NNNN-….md)
+- **Status:** Proposed | Accepted | Accepted, provisional | Open | Superseded by [ADR-NNNN](NNNN-….md) | Decided by [ADR-NNNN](NNNN-….md) (see the [status values](README.md#status-values); amendments are named here too)
 - **Date:** YYYY-MM-DD
 - **Deciders:** who
 - **Related:** issues, PRs, planning documents

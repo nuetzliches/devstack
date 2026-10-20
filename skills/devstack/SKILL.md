@@ -66,15 +66,15 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack lane share <name> --with <id\|tag\|*>` | let others in the pool open the lane's services and view its state, logs and events, read only (they do not control it). Ask the user first: they read what its services print. Without `--with`: nobody again |
 | `devstack pool` / `devstack pool shared` / `devstack open <lane> [service]` | the pools and their machines; lanes others share with you; open one of their services here |
 | `devstack logs --daemon` | devstack's own log: every decision with its reason (`--grep <service>`, `--hub` for the dashboard hub) |
-| `devstack restart <service>` | rebuild now; the running instance stays until the new one is healthy |
+| `devstack restart <service>` | rebuild now; the running instance stays until the new one is healthy. `--rebuild` builds again although an artifact for the same inputs exists (an input devstack does not see changed: the SDK, a file outside the repository) |
 | `devstack restart <group>` | every service of a group from the stack file, built at the same time, and its containers (`start`/`stop` take a group too) |
 | `devstack restart <group>.<service>` | one Compose container (`compose.app.web` or `web` work too; `start`/`stop` as well); in a lane its own container, on a node through the node |
 | `devstack promote <service>` | take over a candidate that is held (schema change, see below) |
 | `devstack rollback <service>` | back to the build before the last replacement, without building |
-| `devstack start` / `stop <service>` | one service |
+| `devstack start <service>` / `stop <service>` | one service |
 | `devstack run <command>` | a command of the stack file (list below) |
 | `devstack top` | CPU, memory, disk per service, container, group and lane |
-| `devstack ui` | dashboard in the browser (pairs the browser once); `--browser chrome\|edge\|firefox\|<path>` or `DEVSTACK_BROWSER` picks the browser, `--print` only prints the link |
+| `devstack ui` | dashboard in the browser (pairs the browser once); `--browser chrome\|edge\|firefox\|brave\|<path>`, else `DEVSTACK_BROWSER`, else `BROWSER` picks the browser, `--print` only prints the link |
 | `devstack update` | install the newest devstack (`--check` only asks); stacks switch at their next restart |
 | `devstack down` | stop the services and the daemon; containers keep running. `down --infra` removes them too. In the main tree, lanes that run keep the daemon and the infrastructure (only the main tree's services stop); `down --all` stops the lanes too: ask first, they may be someone else's |
 
@@ -125,9 +125,14 @@ port tell within a second, and they are the evidence to quote.
 node), `down`, `start_service`, `stop_service`, `restart_service`,
 `promote_service`, `rollback_service`, `hot_reload`, `logs`, `builds`,
 `diagnostics`, `doctor`, `run_command`, `usage`, `lanes`, `lane_start`,
-`lane_stop`, `lane_move`, `lane_share`, `promote_lane`, `hub_status`,
-`hub_start`. `lane_start` and `lane_stop` work from the main tree too: an
-agent there runs another worktree's lane without moving to it.
+`lane_stop`, `lane_move`, `lane_share`, `promote_lane`, `placement`,
+`hub_status`, `hub_start`. `lane_start` and `lane_stop` work from the main tree too: an
+agent there runs another worktree's lane without moving to it. `up` also
+takes `profile`, `run` and `yes` (as `--profile`, `--run`, `--yes`) and
+`timeout_s` (how long it waits for the services; the stack keeps starting);
+`lane_start` takes `profile`, `run` and `timeout_s` too; `logs` takes `file` (one kept log, from its
+list); `diagnostics` takes `source: "hub"` for the hub's log. Each tool
+describes its parameters.
 Register it once (project `.mcp.json` or user configuration):
 
 ```json

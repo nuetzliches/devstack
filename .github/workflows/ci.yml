@@ -109,14 +109,14 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: cargo fmt --all -- --check
       - name: clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # Opt-in tests are #[ignore]d; they run in their own steps and jobs.
       - name: test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
       # Linux runners have a Docker engine with Linux containers; Windows runners do not.
       - name: compose against Docker
         if: matrix.os == 'ubuntu-latest'
-        run: cargo test -p devstack-compose --test docker -- --include-ignored
+        run: cargo test --locked -p devstack-compose --test docker -- --include-ignored
         env:
           DEVSTACK_DOCKER_TESTS: '1'
       - name: a lane's infrastructure on a node, start to purge
@@ -133,6 +133,25 @@ jobs:
       - name: fixture stack compose groups
         if: matrix.os == 'ubuntu-latest'
         run: target/debug/devstack check --compose -f examples/fixture-stack/devstack.toml
+
+  msrv:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    # The workspace builds with the `rust-version` it declares (Cargo.toml):
+    # a newer language or library feature needs that line raised too.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: rust-version from Cargo.toml
+        id: msrv
+        shell: bash
+        run: echo "version=$(grep -m1 '^rust-version = ' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: check
+        run: cargo check --workspace --all-targets --locked
 
   deny:
     needs: changes
@@ -195,7 +214,7 @@ jobs:
           dotnet build "$RUNNER_TEMP/prime-api/Api.csproj" -nologo -v q
       - name: daemon lifecycle
         shell: bash
-        run: cargo test -p devstack --test daemon_lifecycle -- --include-ignored --nocapture ${{ matrix.skip }}
+        run: cargo test --locked -p devstack --test daemon_lifecycle -- --include-ignored --nocapture ${{ matrix.skip }}
         env:
           DEVSTACK_INTEGRATION: '1'
           DEVSTACK_INTEGRATION_COMPOSE: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
@@ -217,9 +236,9 @@ jobs:
       - name: musl tools
         run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
       - name: static build for the lane container
-        run: cargo build --release -p devstack --target x86_64-unknown-linux-musl
+        run: cargo build --release --locked -p devstack --target x86_64-unknown-linux-musl
       - name: lane on a node
-        run: cargo test -p devstack --test remote_lane -- --include-ignored --nocapture
+        run: cargo test --locked -p devstack --test remote_lane -- --include-ignored --nocapture
         env:
           DEVSTACK_INTEGRATION_NODE: '1'
           DEVSTACK_LANE_BIN: ${{ github.workspace }}/target/x86_64-unknown-linux-musl/release/devstack

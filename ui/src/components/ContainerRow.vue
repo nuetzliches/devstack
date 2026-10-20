@@ -66,7 +66,7 @@ const extraUrls = computed(() => webUrls.value.filter((u) => !props.container!.p
           <span v-if="!container.ports.length" class="faint">no published ports</span>
           <span v-if="refuses" class="tag" :title="refuses" data-testid="container-unmanaged">not in the stack file</span>
           <button
-            v-if="container.unreachable?.length && !refuses"
+            v-if="container.unreachable?.length && !refuses && !stack.readOnly"
             type="button"
             class="tag lost"
             :disabled="busy || stack.stale"
@@ -95,8 +95,10 @@ const extraUrls = computed(() => webUrls.value.filter((u) => !props.container!.p
     </button>
     <StatusPill class="row-pill" v-if="look" :tone="look.tone" :label="look.label" :busy="look.busy" :title="container ? `${container.name}: ${container.state}${container.health ? ` (${container.health})` : ''}` : undefined" />
     <StatusPill v-else class="row-pill" tone="neutral" label="Missing" />
+    <!-- Someone else's lane (ADR-0040): nothing that would change it. -->
+    <template v-if="stack.readOnly" />
     <button
-      v-if="!running"
+      v-else-if="!running"
       type="button"
       class="btn btn-ghost btn-sm btn-icon"
       :aria-label="`Start container ${service}`"

@@ -370,15 +370,19 @@ pub fn no_window(cmd: &mut Command) {
 }
 
 /// Run `cmd` to its end and collect its output, at most `budget`; `None`
-/// when it took longer (it is killed then). Its streams are read while it
-/// runs, so a chatty child cannot block on a full pipe.
+/// when it took longer. It runs as a tree of its own
+/// ([`devstack_proc::Call`]): over budget, the program and everything it
+/// started end (`docker compose` runs Compose's plugin as a child, which
+/// would otherwise go on and hold the pipes). Its streams are read while it
+/// runs, so a chatty child cannot block on a full pipe. On Windows it runs
+/// without a console window.
 pub fn output_within(mut cmd: Command, budget: Duration) -> std::io::Result<Option<Output>> {
     use std::io::Read;
     use std::process::Stdio;
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = cmd.spawn()?;
+    let mut call = devstack_proc::Call::spawn(&mut cmd)?;
     fn reader(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
         std::thread::spawn(move || {
             let mut buf = Vec::new();
@@ -388,22 +392,31 @@ pub fn output_within(mut cmd: Command, budget: Duration) -> std::io::Result<Opti
             buf
         })
     }
-    let out = reader(child.stdout.take());
-    let err = reader(child.stderr.take());
+    let out = reader(call.child().stdout.take());
+    let err = reader(call.child().stderr.take());
     let t0 = std::time::Instant::now();
     let status = loop {
-        if let Some(s) = child.try_wait()? {
+        if let Some(s) = call.child().try_wait()? {
             break s;
         }
         if t0.elapsed() >= budget {
-            let _ = child.kill();
-            let _ = child.wait();
-            // The readers end once nothing holds the pipes; a grandchild
-            // (Compose's plugin) may, so they are left to finish alone.
+            call.kill();
+            // With the tree gone the pipes close and the readers end. A
+            // process that left the tree (a daemon it started) could still
+            // hold them: the readers get a moment, then are left alone.
+            let until = std::time::Instant::now() + Duration::from_secs(5);
+            while !(out.is_finished() && err.is_finished()) && std::time::Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if out.is_finished() && err.is_finished() {
+                let _ = (out.join(), err.join());
+            }
             return Ok(None);
         }
         std::thread::sleep(Duration::from_millis(25));
     };
+    // What the program left running (Windows: its job) ends with the call.
+    drop(call);
     Ok(Some(Output {
         status,
         stdout: out.join().unwrap_or_default(),

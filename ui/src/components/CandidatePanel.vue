@@ -70,7 +70,7 @@ const heldParts = computed(() => (c.value.reason ?? '').split(/(devstack promote
           <Icon name="terminal" /> Console
         </button>
         <button
-          v-if="c.state === 'held'"
+          v-if="c.state === 'held' && !stack.readOnly"
           type="button"
           class="btn btn-warn"
           :disabled="!!busy || stack.stale"
@@ -83,6 +83,7 @@ const heldParts = computed(() => (c.value.reason ?? '').split(/(devstack promote
         <template v-if="c.state === 'failed'">
           <button type="button" class="btn" data-testid="action-build-log" @click="emit('buildLog')"><Icon name="file" /> Build log</button>
           <button
+            v-if="!stack.readOnly"
             type="button"
             class="btn"
             :disabled="!!busy || stack.stale"

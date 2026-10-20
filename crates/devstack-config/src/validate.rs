@@ -237,6 +237,12 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
             );
             continue;
         }
+        // The profile's `env` reaches every command's `exec` steps too, where
+        // `{port}`, `{artifact}` and `{is_main}` have no value; in services
+        // it is checked below, with each service's.
+        for (k, v) in &stack.profiles[name].env {
+            c.text(&format!("profiles.{name}.env.{k}"), v, Scope::Command);
+        }
         match stack.apply_profile(name) {
             Ok(s) => {
                 for i in validate(&s) {
@@ -471,6 +477,7 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
             );
             if let Some(d) = &h.cwd {
                 c.literal(&format!("{p}.hot_reload.cwd"), d);
+                c.repo_path(&format!("{p}.hot_reload.cwd"), d);
             }
         }
         if let Some(prep) = &svc.prepare {
@@ -483,6 +490,7 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
             c.literal(&format!("{p}.prepare.run"), &prep.run);
             if let Some(d) = &prep.cwd {
                 c.literal(&format!("{p}.prepare.cwd"), d);
+                c.repo_path(&format!("{p}.prepare.cwd"), d);
             }
             c.globs(&format!("{p}.prepare.inputs"), &prep.inputs);
         }
@@ -513,7 +521,7 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                 "only a long-running service or a dev server with a `port` can sit behind the proxy",
             );
         }
-        if svc.proxy == Some(true) && svc.kind == Kind::Devserver && !svc.run.contains("{port}") {
+        if svc.proxy == Some(true) && svc.kind == Kind::Devserver && !svc.run_takes_port() {
             c.err(
                 format!("{p}.proxy"),
                 "a dev server behind devstack's forward runs on a port of its own: its `run` needs `{port}` (ADR-0043)",
@@ -521,6 +529,9 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         }
         if svc.health.is_some() && svc.port.is_none() {
             c.err(format!("{p}.health"), "an HTTP health check needs `port`");
+        }
+        if svc.health.as_ref().is_some_and(|h| h.timeout.is_zero()) {
+            c.err(format!("{p}.health.timeout"), "must be more than 0");
         }
         if let Some(port) = svc.port {
             if port == 0 {
@@ -626,9 +637,28 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                 c.text(&format!("{p}.{k}"), v, Scope::Build);
             }
         }
+        // The build's output is copied from the snapshot (ADR-0002); where
+        // `{repo}` or `${VAR}` make it absolute, the builder checks that it
+        // stays there.
+        if let Some(o) = &svc.output {
+            let rel = match o.strip_prefix("{repo}") {
+                Some(r) => r.trim_start_matches(['/', '\\']),
+                None => o,
+            };
+            if !(rel.is_empty() && o.starts_with("{repo}"))
+                && !o.contains("${")
+                && !inside_repo(rel)
+            {
+                c.err(
+                    format!("{p}.output"),
+                    format!("`{o}` must be a path inside the repository, relative to it"),
+                );
+            }
+        }
         // A working directory is joined to the repository (or snapshot) as written.
         if let Some(d) = &svc.cwd {
             c.literal(&format!("{p}.cwd"), d);
+            c.repo_path(&format!("{p}.cwd"), d);
         }
         for (k, v) in &svc.env {
             c.text(&format!("{p}.env.{k}"), v, scope);
@@ -791,6 +821,48 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
     }
 
     c.issues
+}
+
+/// Lanes up to this number are worth a warning when their ports collide; a
+/// collision further out (5000 and 4200 at step 100: lane 8) costs a lane
+/// number nobody misses.
+const FIRST_LANES: u32 = 3;
+
+/// What a valid stack file may want changed (`devstack check` prints them):
+/// two services whose ports differ by one of the first few multiples of
+/// `[lanes] port_step`, so that one of the first lanes would run one of
+/// them on the other's port. The daemon skips such lane numbers, so lane 1
+/// is not on `port + port_step` as the file suggests.
+pub fn warnings(stack: &Stack) -> Vec<Issue> {
+    let step = u32::from(stack.lanes.port_step);
+    let mut out = Vec::new();
+    if step == 0 {
+        return out;
+    }
+    let ports: Vec<(&str, u32)> = stack
+        .services
+        .iter()
+        .filter_map(|(n, s)| s.port.map(|p| (n.as_str(), u32::from(p))))
+        .collect();
+    for (i, &(a, pa)) in ports.iter().enumerate() {
+        for &(b, pb) in &ports[i + 1..] {
+            let (low, lp, high, hp) = if pa <= pb {
+                (a, pa, b, pb)
+            } else {
+                (b, pb, a, pa)
+            };
+            let lane = (hp - lp) / step;
+            if hp != lp && (hp - lp) % step == 0 && lane <= FIRST_LANES {
+                out.push(Issue {
+                    path: format!("services.{high}.port"),
+                    message: format!(
+                        "lane {lane} would run `{low}` on {hp}, this service's port ({lp} + {lane} x `[lanes] port_step` {step}): the daemon skips that lane number; choose ports whose difference is no multiple of {step}"
+                    ),
+                });
+            }
+        }
+    }
+    out
 }
 
 /// First cycle in a dependency graph, as a path that starts and ends at the same node.

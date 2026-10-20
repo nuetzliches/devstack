@@ -153,8 +153,15 @@ A pool is a group of machines that trust each other to a stated degree
     (a link in the way is replaced), so a lane's own code cannot make the
     agent write outside its mirror; the lane container mounts its mirror, a
     home directory of its own and, read-only, the agent's devstack binary;
-  - uploaded files are kept per member, capped at 8 GiB per member, and
-    removed when the lease ends;
+  - uploaded files are kept per member, capped at 8 GiB per member; the end
+    of a lease does **not** remove them, nor the lane's mirror, builds and
+    volumes ([ADR-0038](docs/adr/0038-a-lanes-data-outlives-its-lease.md)):
+    a stopped lane stays on the node for a week on a dedicated node, a day
+    otherwise, at most 20 GiB of kept lanes per member (the node's policy
+    sets both), unless its stack says `[lanes] keep_data = false`. The node
+    removes them at once when the coordinator no longer lists the member,
+    and when the lane's worktree is removed (best effort, if the node is
+    reachable). Until then, the node's owner can read them;
   - every container of a lane gets the lease's memory and CPU limits and a
     process limit; the lane container drops every capability and cannot
     gain privileges, and gets no Docker socket;
@@ -182,15 +189,24 @@ A pool is a group of machines that trust each other to a stated degree
   installers and `devstack update` check the download against it. That proves
   the archive is the one the release lists (not damaged or swapped on the
   way), not who built it: both come from the same release.
-- Releases carry a build provenance attestation of the archives,
-  `SHA256SUMS` and the installers, from the next release (0.10.0) on. With the
+- Releases since 0.10.0 carry a build provenance attestation of the
+  archives, `SHA256SUMS` and the installers. With the
   [GitHub CLI](https://cli.github.com) logged in, the installers verify it
-  (`gh attestation verify <archive> --repo nuetzliches/devstack`) and stop if
-  it fails; you can run the same command yourself.
-- `devstack update` checks only `SHA256SUMS`, until releases are signed with a
-  key the binary knows.
-- The release workflow pins every action by commit and requires `cargo deny
-  check advisories` and `npm audit` to pass.
+  (`gh attestation verify <archive> --repo nuetzliches/devstack
+  --signer-workflow nuetzliches/devstack/.github/workflows/release.yml`) and
+  stop if it fails, showing gh's reason; you can run the same command
+  yourself.
+- `devstack update`, and a server node an admin updates
+  ([ADR-0039](docs/adr/0039-an-admin-can-update-a-server-node.md)), check
+  only `SHA256SUMS`: the trust is GitHub's TLS and control of this
+  repository. Releases are not signed with a key the binary knows.
+- The Windows executable is not Authenticode-signed: SmartScreen or an
+  endpoint protection product may warn about, or hold back, a freshly
+  downloaded `devstack.exe`. The checksum and the attestation above are how
+  to check it.
+- The release workflow pins every action by commit, releases only a tag on a
+  commit of `main`, and requires `cargo deny check advisories` and
+  `npm audit` to pass.
 
 ## Hub integration on the machine
 

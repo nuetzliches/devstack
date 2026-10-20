@@ -326,7 +326,9 @@ pub struct UpdateRequest {
 pub struct UpdateReport {
     /// The order's `at`.
     pub at: u64,
-    /// `draining`, `installing`, `restarting`, `done`, `refused`, `failed`.
+    /// `draining`, `installing`, `restarting`, `done`, `refused`, `failed`,
+    /// `cancelled` (an admin withdrew it while the node waited for its
+    /// lanes).
     pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
@@ -337,7 +339,10 @@ pub struct UpdateReport {
 impl UpdateReport {
     /// Over: the order can go.
     pub fn over(&self) -> bool {
-        matches!(self.state.as_str(), "done" | "refused" | "failed")
+        matches!(
+            self.state.as_str(),
+            "done" | "refused" | "failed" | "cancelled"
+        )
     }
 }
 
@@ -830,6 +835,36 @@ pub struct JoinAnswer {
 
 /// An offered lease not admitted within this time is dropped.
 const OFFER_FOR: Duration = Duration::from_secs(300);
+/// How long an offered lease holds what it needs on its node against other
+/// offers: a requester admits it at once, and the node's next report
+/// (brought forward by the admission) counts it from then on.
+const OFFER_HOLDS: Duration = Duration::from_secs(60);
+
+/// What leases offered for `node` and not admitted there yet need: the
+/// node's last report does not count them.
+fn offered_need(
+    leases: &HashMap<String, (Lease, String, std::time::Instant)>,
+    node: &str,
+) -> crate::share::Amount {
+    leases
+        .values()
+        .filter(|(l, _, at)| l.node == node && l.state == "offered" && at.elapsed() < OFFER_HOLDS)
+        .fold(crate::share::Amount::default(), |a, (l, _, _)| {
+            crate::share::Amount {
+                cpus: a.cpus + l.need.cpus,
+                memory: a.memory + l.need.memory,
+            }
+        })
+}
+
+/// A node's report with what offered leases hold taken off its offer.
+fn less_offered(rep: &Report, held: crate::share::Amount) -> Report {
+    Report {
+        cpus: (rep.cpus - held.cpus).max(0.0),
+        memory: rep.memory.saturating_sub(held.memory),
+        ..rep.clone()
+    }
+}
 
 struct Inner {
     dir: PathBuf,
@@ -937,7 +972,10 @@ fn router(shared: Shared) -> Router {
         .route("/v1/admin/nodes/{id}/pause", post(admin_pause))
         .route("/v1/admin/nodes/{id}/resume", post(admin_resume))
         .route("/v1/admin/leases/{id}/end", post(admin_end))
-        .route("/v1/admin/nodes/{id}/update", post(admin_update))
+        .route(
+            "/v1/admin/nodes/{id}/update",
+            post(admin_update).delete(admin_update_cancel),
+        )
         .route("/v1/admin/nodes/{id}/prune", post(admin_prune))
         .route("/v1/admin/members/{id}/tags", post(admin_tags))
         .route("/v1/admin/members/{id}/node", post(admin_node))
@@ -1181,7 +1219,20 @@ async fn nodes(
 /// The nodes that may take `r` for `me` at all (granted, online, not
 /// paused, not the requester, admitted by their policy), ranked.
 fn placement_for(s: &Shared, ms: &[Member], me: &Member, r: &LeaseRequest) -> Vec<Placement> {
-    let reports = s.reports.lock().unwrap();
+    let leases = s.leases.lock().unwrap().clone();
+    // What each node offers less what offers not admitted yet hold there.
+    let reports: HashMap<String, (std::time::Instant, Report)> = s
+        .reports
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(id, (at, rep))| {
+            (
+                id.clone(),
+                (*at, less_offered(rep, offered_need(&leases, id))),
+            )
+        })
+        .collect();
     let nodes: Vec<(&str, &str, &Report)> = ms
         .iter()
         .filter(|m| m.state == State::Approved && m.node && !m.paused && m.id != me.id)
@@ -1369,37 +1420,48 @@ async fn lease_create(
             rep.devstack.clone(),
         )
     };
-    if r.need.cpus > offer.cpus || r.need.memory > offer.memory {
-        return Err((
-            StatusCode::CONFLICT,
-            format!(
-                "{} offers {:.1} CPU and {} MiB now; the lane needs {:.1} CPU and {} MiB",
-                node.name,
-                offer.cpus,
-                offer.memory >> 20,
-                r.need.cpus,
-                r.need.memory >> 20
-            ),
-        ));
-    }
+    // Checked and offered in one step, less what other offers for the node
+    // hold until it admits them: two requests between two reports cannot
+    // both be offered the same room (ADR-0026 point 4).
     let id = random_hex(8);
     let token = random_hex(24);
-    let lease = Lease {
-        id: id.clone(),
-        node: node.id.clone(),
-        member: me.id,
-        repo: r.repo,
-        lane: r.lane,
-        need: r.need,
-        state: "offered".into(),
-        created: store::now(),
-        expires_in: None,
-        shared: None,
-    };
-    s.leases.lock().unwrap().insert(
-        id.clone(),
-        (lease, token.clone(), std::time::Instant::now()),
-    );
+    {
+        let mut leases = s.leases.lock().unwrap();
+        let held = offered_need(&leases, &node.id);
+        let offer = crate::share::Amount {
+            cpus: (offer.cpus - held.cpus).max(0.0),
+            memory: offer.memory.saturating_sub(held.memory),
+        };
+        if r.need.cpus > offer.cpus || r.need.memory > offer.memory {
+            return Err((
+                StatusCode::CONFLICT,
+                format!(
+                    "{} offers {:.1} CPU and {} MiB now; the lane needs {:.1} CPU and {} MiB",
+                    node.name,
+                    offer.cpus,
+                    offer.memory >> 20,
+                    r.need.cpus,
+                    r.need.memory >> 20
+                ),
+            ));
+        }
+        let lease = Lease {
+            id: id.clone(),
+            node: node.id.clone(),
+            member: me.id,
+            repo: r.repo,
+            lane: r.lane,
+            need: r.need,
+            state: "offered".into(),
+            created: store::now(),
+            expires_in: None,
+            shared: None,
+        };
+        leases.insert(
+            id.clone(),
+            (lease, token.clone(), std::time::Instant::now()),
+        );
+    }
     Ok(Json(LeaseOffer {
         why,
         id,
@@ -1826,6 +1888,38 @@ async fn admin_update(
     Ok(StatusCode::ACCEPTED)
 }
 
+/// `DELETE /v1/admin/nodes/{id}/update`: withdraw an update a node has not
+/// begun to install (it waits for its lanes): the order is no longer sent,
+/// and the node takes lanes again (ADR-0039). `404` without an order.
+async fn admin_update_cancel(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<StatusCode> {
+    let (_, by) = admin(&s, &peer)?;
+    let installing = s.reports.lock().unwrap().get(&id).is_some_and(|(_, r)| {
+        r.update
+            .as_ref()
+            .is_some_and(|u| matches!(u.state.as_str(), "installing" | "restarting"))
+    });
+    if installing {
+        return Err((
+            StatusCode::CONFLICT,
+            "the node installs the update already: it cannot be withdrawn now".into(),
+        ));
+    }
+    if s.updates.lock().unwrap().remove(&id).is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("no update ordered for `{id}`"),
+        ));
+    }
+    s.store
+        .record(&by, "update cancelled", &id, None)
+        .map_err(store_err)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// `POST /v1/admin/nodes/{id}/prune` (ADR-0038 point 5): the node removes
 /// the stopped lanes it keeps, at its next report.
 async fn admin_prune(
@@ -2100,6 +2194,68 @@ mod placement_tests {
         assert!(why("small").contains("offers 0.5 CPU"), "{o:?}");
         assert!(why("full").contains("disk free"), "{o:?}");
         assert!(why("off").contains("does not share"), "{o:?}");
+    }
+
+    #[test]
+    fn offers_not_admitted_yet_hold_their_room() {
+        let lease = |id: &str, node: &str, state: &str, gib: u64| {
+            (
+                id.to_string(),
+                (
+                    Lease {
+                        id: id.into(),
+                        node: node.into(),
+                        member: "me".into(),
+                        repo: "shop".into(),
+                        lane: id.into(),
+                        need: Amount {
+                            cpus: 1.0,
+                            memory: gib * GIB,
+                        },
+                        state: state.into(),
+                        created: 0,
+                        expires_in: None,
+                        shared: None,
+                    },
+                    String::new(),
+                    std::time::Instant::now(),
+                ),
+            )
+        };
+        let leases: HashMap<_, _> = [
+            lease("a", "n1", "offered", 4),
+            lease("b", "n1", "offered", 2),
+            // Admitted: the node's report counts it already.
+            lease("c", "n1", "running", 8),
+            lease("d", "n2", "offered", 16),
+        ]
+        .into_iter()
+        .collect();
+        let held = offered_need(&leases, "n1");
+        assert_eq!((held.cpus, held.memory), (2.0, 6 * GIB));
+        let rep = less_offered(&node(4.0, 8, &[]), held);
+        assert_eq!((rep.cpus, rep.memory), (2.0, 2 * GIB));
+        // A second lane of 4 GiB no longer fits there.
+        let o = order(
+            &[("n1", "n1", &rep)],
+            Amount {
+                cpus: 1.0,
+                memory: 4 * GIB,
+            },
+        );
+        assert!(!o[0].1, "{o:?}");
+        // More held than offered: nothing left, never less.
+        let rep = less_offered(&node(1.0, 1, &[]), held);
+        assert_eq!((rep.cpus, rep.memory), (0.0, 0));
+        assert!(
+            UpdateReport {
+                at: 1,
+                state: "cancelled".into(),
+                target: None,
+                error: None
+            }
+            .over()
+        );
     }
 }
 

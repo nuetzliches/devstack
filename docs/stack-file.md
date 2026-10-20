@@ -32,7 +32,8 @@ requires  = "0.2.0"             # oldest devstack that can run this file
 env_files = [".env.defaults", ".env"]   # for ${VAR} everywhere; missing files are skipped
 ```
 
-`requires` is checked before anything else: an older devstack asks to be
+`name` must not be empty. `requires` is a version like `0.11.0`, and is
+checked before anything else: an older devstack asks to be
 updated instead of failing on a key it does not know. Raise it when the file
 starts using something new. A pre-release devstack (`0.9.8-rc1`) counts as
 older than its release (`0.9.8`). Next comes `version`: a file of another
@@ -45,16 +46,24 @@ schema version says so, not which of its keys is unknown.
   Windows reserves for devices (`con`, `prn`, `aux`, `nul`, `com1`-`com9`,
   `lpt1`-`lpt9`): they become directory names.
 - **Paths** in `env_files`, `[compose.<group>] files` and `env_files`,
-  `[lanes] dockerfile` and `sync` are relative to the repository and stay
+  `[lanes] dockerfile` and `sync`, and a service's `cwd`, `output`,
+  `prepare.cwd` and `hot_reload.cwd` are relative to the repository and stay
   inside it: no absolute path, no drive (`C:`), no `..`, judged the same on
-  every platform.
+  every platform. `output` may start with `{repo}`; where `${VAR}` makes it
+  absolute, the build fails unless it is in the snapshot.
 - **Env files** are read in Compose's dialect: `KEY=VALUE` lines, `#`
   comments, an optional `export `; an unquoted value ends at ` #`; a
   `"double-quoted"` one may span lines and knows the escapes `\n`, `\r`,
   `\t`, `\\`, `\"`, `\$`, and `$$` for a `$`; a `'single-quoted'` one is
   taken as written. `${VAR}`, `${VAR:-default}`, `${VAR-default}` and `$VAR`
   in an unquoted or double-quoted value come from the process environment,
-  then from what the files set before; an unknown one is empty.
+  then from what the files set before; an unknown one is empty. A default
+  may hold another reference (`${A:-${B}}`); `${VAR:+alt}` and
+  `${VAR+alt}` give `alt` when the variable is set (`:+`: and not empty).
+  Unlike Compose, `${VAR:?message}` and `${VAR?message}` do not fail: they
+  read as `${VAR}`. A byte order mark at the start of the file is skipped.
+  (The stack file's own `${VAR}` knows `${VAR}` and `${VAR:-default}`
+  only; see "Placeholders".)
 
 ## `[compose.<group>]`: the infra plane
 
@@ -132,8 +141,10 @@ Rules `devstack check` enforces:
   to `static` only.
 - Every other kind needs `run`.
 - `job`: no `port`, no `health`. `tool`: no `health`.
-- `health` needs `port`; `proxy = true` only for a `service` or `static`
-  with a `port`.
+- `health` needs `port`; `proxy = true` only for a `service`, `static` or
+  `devserver` with a `port` (a `devserver`'s `run` then takes `{port}`).
+- A service's `timeout` is more than 0.
+- `after` never names the service itself (nor a Compose group itself).
 - `port` is 1-65535 and leaves room for a lane (`port` + `[lanes]
   port_step` at most 65535). Two services may share a port only if at most
   one of them starts automatically (`autostart`).
@@ -184,8 +195,10 @@ What goes into the build id:
   yarn), `tsconfig.json` / `tsconfig.base.json`, `Cargo.toml`/`.lock`,
   `go.mod`/`.sum`, `pyproject.toml`, `pom.xml`, Gradle build and settings
   files. A change to one starts candidates like a watched file;
-- the `build` command, `output`, `cwd` and `prepare` (`run`, `cwd`,
-  `inputs`, and the content of the files `inputs` matches).
+- the `build` command and `output` as the build runs them (a `${VAR}` in
+  them with its value, `{repo}` as written, so lanes share the id), `cwd`
+  and `prepare` (`run`, `cwd`, `inputs`, and the content of the files
+  `inputs` matches).
 
 Not in it: ignored files (they are not in the snapshot either), the SDK and
 anything outside the repository. When one of those changed, `devstack restart
@@ -212,7 +225,9 @@ anything outside the repository. When one of those changed, `devstack restart
   `rebuild = { start = '^rebuild: start', ok = '^rebuild: done in (?P<ms>\d+)', failed = '^rebuild: broken' }`
   (TOML literal strings, so a backslash stays one; `start` optional; a group
   `ms` or `s` in `ok` is its time). A service in
-  hot-reload mode is read the same way (`auto`).
+  hot-reload mode is read the same way (`auto`). `rebuild` belongs to
+  `kind = "devserver"` only; an unknown tool name or a pattern that is no
+  regular expression is an error.
 - `proxy = false`: no proxy; a restart happens in place on the fixed port (a
   short gap). Only for services the proxy cannot carry.
 - A dev server whose `run` takes `{port}` runs on a port of its own, and
@@ -255,9 +270,11 @@ health = { http = "/health/ready", timeout = "180s", insecure_tls = true }
   **readiness** endpoint that checks what the service needs (database), not a
   bare liveness probe: devstack switches traffic to a candidate only once it is
   healthy.
-- `timeout`: how long a start may take until it counts as failed.
-- `insecure_tls`: the service speaks HTTPS with a self-signed certificate. The
-  service's URL (`{service.x.url}`, the dashboard link) then uses `https`.
+- `timeout`: how long a start may take until it counts as failed; more
+  than 0.
+- `insecure_tls` (default `false`): the service speaks HTTPS with a
+  self-signed certificate. The service's URL (`{service.x.url}`, the
+  dashboard link) then uses `https`.
 
 `http` and `timeout` are required.
 
@@ -341,7 +358,8 @@ port, with the same environment and health check. Edits are applied by the
 toolchain's own watcher in place; devstack's watcher and candidates stay quiet
 for the service, and a broken edit is no longer kept away from it. `off` builds
 and starts it as usual again. For a debugging session, not as the default
-([plan §3.4a](plan.md)); only for services with `build`.
+([plan §3.4a](plan.md)); only for `kind = "service"` with `build` (a dev
+server reloads itself).
 
 ### Other keys
 
@@ -349,7 +367,7 @@ and starts it as usual again. For a debugging session, not as the default
 | --- | --- |
 | `autostart = false` | started only on demand (`devstack start <service>`) |
 | `lanes = false` | runs in the main working tree only, never in a lane: for what may run once per machine (a tray app, something holding a global lock); see `[lanes]` |
-| `platforms = ["windows"]` | only on these platforms (`windows`, `linux`, `macos`) |
+| `platforms = ["windows"]` | only on these platforms (`windows`, `linux`, `macos`); default `[]`: every platform |
 | `ensure_dirs = ["{repo}/data/files"]` | created before start |
 | `prepare = { run = "npm ci", inputs = ["web/package-lock.json"] }` | installs what a copy of the source lacks (see below) |
 | `timeout = "10m"` | `kind = "job"` only: how long it may run before it counts as failed and is stopped; default 30 minutes. `devstack stop <job>` ends it at once |
@@ -387,12 +405,15 @@ image      = "registry.example/shop-lane:1"   # a Linux image with the stack's t
 dockerfile = "dev/lane.Dockerfile"            # or one the node builds from the lane's source
 sync       = ["web/certs/*.pem"]              # ignored files such a lane needs all the same
 share      = ["team:qa"]                      # whom such a lane is shared with by default (`*`: everyone); none: nobody
-keep_data  = true                             # such a lane keeps its data on its node for its next start there (ADR-0038)
+keep_data  = true                             # the default: such a lane keeps its data on its node for its next start there (ADR-0038)
 ```
 
 `port_step` is 1-10000. `dockerfile` and `sync` stay inside the repository
 (see "Names, paths, env files"); `sync` holds globs; `image`, if set, is
-not empty.
+not empty. Two services whose ports differ by a multiple of `port_step`
+(`api = 5000`, `web = 5100`, step 100) collide in a lane: the daemon skips
+those lane numbers, and `devstack check` warns where that hits one of the
+first three lanes.
 
 Every `git worktree` of the repository is a **lane** of the main tree's
 daemon, the moment git creates it; the dashboard shows it under the stack,
@@ -509,7 +530,7 @@ env       = { BASE_URL = "{service.web.url}", JOBS_URL = "{compose.app.scheduler
 command   = "e2e"                        # `up --profile acceptance --run` runs it once ready
 
 [profiles.acceptance.services.web]
-kind   = "static"                        # a build served as files: no dev server, no watch
+kind   = "static"                        # a build served as files instead of a dev server
 build  = "npm run build -- --configuration e2e"
 output = "dist/web/browser"
 ```
@@ -521,9 +542,20 @@ devstack lane start <lane> --profile acceptance --run  # from the main tree
 
 - **What it may set:** `workers`, `data` (`keep`, the default, or
   `fresh`), `env` (for every service and every command's `exec` steps, with
-  the usual placeholders), `autostart`, `command` (one of `[commands]`), and
+  the placeholders a command has: no `{port}`, `{artifact}` or
+  `{is_main}`), `autostart`, `command` (one of `[commands]`), and
   per service `kind`, `build`, `output`, `run`, `spa`, `cwd`, `health` and
-  `env`. A service it does not name runs as the file says.
+  `env`. A service it does not name runs as the file says. Its `env` is
+  added to every service's, a service's own `env` in the profile on top.
+  `watch`, `port` and the other keys stay as the file says.
+- **Another `kind` drops what only the old one takes:** a dev server made
+  `static` loses its `run` (unless the profile gives one), `rebuild` and
+  `restart_on`; a `devserver` or `tool` loses `build` and `output`; `spa`
+  stays with `static` only, `hot_reload` with `service`, `timeout` with
+  `job`; a `job` or `tool` loses `health` and `proxy`. What the profile sets
+  itself comes on top.
+- **Its name** uses letters, digits, `-` and `_`; `description` is optional,
+  shown where a profile is chosen.
 - **Checked like the rest of the file:** each profile's result must be a
   valid stack (a `static` needs `build`, `output` and `port`); a service, a
   command or a key that is not there is an error.
@@ -546,6 +578,8 @@ members = ["api", "web", "compose.app.db", "command.seed"]
 
 Labels for the dashboard and `devstack status`, not dependencies: a member may
 be in several groups, and members of no group appear under "Other".
+`label` defaults to the group's key; groups without `order` follow those
+with one, alphabetically.
 `members` is required, not empty, lists each member once, and names what
 exists (a `compose.<group>.<service>` member is a service its group starts).
 
@@ -572,6 +606,8 @@ number is seconds).
 Where they have a value: `{port}` only in a service with a `port`,
 `{artifact}` only in a service with `build` (not in `hot_reload.run`),
 `{service.<name>.…}` only for a service with a `port`, `{compose.…}` only
-for a service its group starts. `build` and `output` take `{repo}` only;
-commands no `{port}`, `{artifact}` or `{is_main}`; `cwd`,
-`prepare.run`, `prepare.cwd` and `hot_reload.cwd` none at all.
+for a service its group starts. `build` and `output` take `{repo}` and
+`${VAR}` only (every lane shares the artifact); commands (their `exec`, an
+`exec` step's `cwd` included) no `{port}`, `{artifact}` or `{is_main}`; a
+service's `cwd`, `prepare.run`, `prepare.cwd` and `hot_reload.cwd` none at
+all.

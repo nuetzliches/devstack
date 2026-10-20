@@ -99,8 +99,12 @@ impl Job {
                 if !ok {
                     return None;
                 }
+                // The ids run past the struct's one-element array: read them
+                // through a pointer derived from `list` (the whole buffer),
+                // not from a reference to that array.
+                let ids = (&raw const (*list).ProcessIdList).cast::<usize>();
                 return Some(
-                    std::slice::from_raw_parts((*list).ProcessIdList.as_ptr(), n.min(room))
+                    std::slice::from_raw_parts(ids, n.min(room))
                         .iter()
                         .map(|&p| p as u32)
                         .collect(),
@@ -139,6 +143,13 @@ impl Job {
             memory: pids.iter().map(|&p| working_set(p)).sum(),
             processes: pids.len() as u32,
         }
+    }
+
+    /// Put a process (created suspended, so it has started nothing yet)
+    /// into the job.
+    pub(crate) fn assign(&self, child: &Child) -> bool {
+        // SAFETY: valid job and process handles.
+        unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle() as HANDLE) != 0 }
     }
 
     pub(crate) fn terminate(&self) {
