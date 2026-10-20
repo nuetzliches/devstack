@@ -148,6 +148,31 @@ Where it will live:
 - `crates/devstack-config`: `[lanes] keep_data`; `docs/stack-file.md`.
 - `docs/pool.md` (what a member uploads is kept…), `SECURITY.md`.
 
+*Noted 2026-10-20.* The disk a slot takes, as built (`node.rs`): its
+directory and its Compose volumes (by the volumes' project label,
+`<project>-<slot>`, counted with `docker system df -v` at every sweep), so
+point 3's cap holds over volumes too, and `GET /v1/slots` and the kept disk
+in the pool area count them. The images Compose built for a slot's projects
+(by Compose's project label) go when the slot is purged. Lane images built
+from `[lanes] dockerfile` (ADR-0028) carry the agent's and the member's
+labels: they go with the member, and, when less than 10 GiB of disk is free,
+those no container uses go. Consequences' "Admission has to count kept slots
+against free disk": a node refuses a lease with less than 5 GiB free where it
+keeps lanes (ADR-0026, noted 2026-10-20).
+
+*Paths as built, noted 2026-10-20.* `crates/devstack-node/src/node.rs`:
+the slot's name (`slot_name`), kept slots (`kept`, `in_use`), the end of a
+lease keeping the slot (`drop_lease`), `gc_blobs` under pressure only, the
+retention and cap sweep (`sweep_slots`, `keep`), the orphan sweep on start
+(`sweep_orphans`), `GET/DELETE /v1/slots` (`slots_list`, `slots_purge`).
+`crates/devstack-node/src/lanerun.rs`: `stop` without volumes, `purge`
+with. `crates/devstack-node/src/policy.rs`: `keep_lanes_hours`,
+`keep_lanes_gib`. `crates/devstack-daemon/src/remote.rs`: the nodes a lane
+ran on are noted in the lane's state as `lane-<name>/nodes.json` (`ran_on`,
+`note_ran_on`), not `remote/slots.json`; `purge_slot`, `slots_on`.
+`crates/devstack-daemon/src/lanes.rs`: purge on `forget`, `reset`,
+`prune`. `[lanes] keep_data` in `crates/devstack-config/src/model.rs`.
+
 ## What this ADR does not say
 
 - That lanes survive a restart of the requester's daemon. They still stop

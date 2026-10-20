@@ -43,7 +43,9 @@ const items = computed<Item[]>(() => {
   }
   for (const s of hub.stacks)
     if (s.id !== sid) out.push({ id: `stack:${s.id}`, label: s.name, hint: `stack${s.running ? '' : ', stopped'}`, icon: 'layers', run: () => router.push({ name: 'overview', params: { stack: s.id } }) });
-  if (sid && stack.entry) {
+  // Someone else's lane (ADR-0040) is viewed: nothing that would change it is offered.
+  const changes = !stack.readOnly;
+  if (sid && stack.entry && changes) {
     if (stack.running) {
       out.push({ id: 'stack:restart', label: `Restart stack ${stack.entry.name}`, hint: 'stack', icon: 'restart', run: () => stack.restartStack() });
       out.push({ id: 'stack:stop', label: `Stop stack ${stack.entry.name}`, hint: 'stack', icon: 'stop', run: () => stack.stopStack() });
@@ -52,8 +54,10 @@ const items = computed<Item[]>(() => {
   if (v && stack.running) {
     for (const s of v.services) {
       out.push({ id: `svc:${s.name}`, label: s.name, hint: 'service', icon: 'server', run: () => go('service', { name: s.name }) });
-      out.push({ id: `svc-restart:${s.name}`, label: `Restart ${s.name}`, hint: 'service, rebuild', icon: 'restart', run: () => stack.serviceAction(s.name, 'restart') });
+      if (changes) out.push({ id: `svc-restart:${s.name}`, label: `Restart ${s.name}`, hint: 'service, rebuild', icon: 'restart', run: () => stack.serviceAction(s.name, 'restart') });
     }
+  }
+  if (v && stack.running && changes) {
     for (const g of v.groups) {
       out.push({ id: `grp-restart:${g.name}`, label: `Restart group ${g.label}`, hint: 'group', icon: 'restart', run: () => stack.groupAction(g.name, g.label, 'restart') });
       out.push({ id: `grp-start:${g.name}`, label: `Start group ${g.label}`, hint: 'group', icon: 'play', run: () => stack.groupAction(g.name, g.label, 'start') });

@@ -34,6 +34,7 @@ async function run() {
     </div>
     <span v-if="lastRun?.status === 'running'" class="pill accent pulse sm"><span class="dot" />running</span>
     <button
+      v-if="!stack.readOnly"
       type="button"
       class="btn btn-sm"
       :disabled="running || stack.stale"

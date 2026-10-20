@@ -105,7 +105,7 @@ const kv = computed(() => {
             </div>
           </div>
         </div>
-        <div class="btn-group">
+        <div v-if="!stack.readOnly" class="btn-group">
           <template v-for="a in actions" :key="a.action">
             <button
               v-if="a.show"

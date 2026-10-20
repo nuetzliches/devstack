@@ -342,6 +342,34 @@ fn build_id_covers_cwd_and_prepare() {
     assert_ne!(before, after);
 }
 
+/// A `${VAR}` in `build` or `output` counts as the build runs it: another
+/// value is another build, `{repo}` (each lane's snapshot) is not.
+#[test]
+fn build_id_follows_the_expanded_build_line() {
+    let r = repo();
+    let state = tempfile::tempdir().unwrap();
+    let mut snap = Snapshot::open(r.path(), &state.path().join("lane")).unwrap();
+    snap.sync().unwrap();
+    let svc = service(
+        "build = \"tool --configuration ${DEVSTACK_TEST_BUILD_ID_CONFIG:-dev} {repo}\"\noutput = \"out\"\nrun = \"x\"\n",
+    );
+    let unset = build_id(&snap.manifest, &svc).unwrap();
+    // SAFETY: the variable is this test's own; no other thread reads it.
+    unsafe { std::env::set_var("DEVSTACK_TEST_BUILD_ID_CONFIG", "e2e") };
+    let set = build_id(&snap.manifest, &svc).unwrap();
+    // SAFETY: as above.
+    unsafe { std::env::remove_var("DEVSTACK_TEST_BUILD_ID_CONFIG") };
+    assert_ne!(unset, set);
+    let dev =
+        service("build = \"tool --configuration dev {repo}\"\noutput = \"out\"\nrun = \"x\"\n");
+    assert_eq!(unset, build_id(&snap.manifest, &dev).unwrap());
+    // Another lane, another snapshot path: the same id.
+    let state2 = tempfile::tempdir().unwrap();
+    let mut other = Snapshot::open(r.path(), &state2.path().join("lane-2")).unwrap();
+    other.sync().unwrap();
+    assert_eq!(unset, build_id(&other.manifest, &svc).unwrap());
+}
+
 /// F-27: removals come before copies, and a path may change its type.
 #[test]
 fn snapshot_follows_renames_and_type_changes() {

@@ -62,8 +62,10 @@ infrastructure and the pool are in §3.5 and [pool.md](pool.md).
   supervisor and the HTTP API. Binds loopback only.
 - **devstack (CLI):** thin client of the HTTP API. Can start the daemon
   (`devstack up`) and attaches to it otherwise.
-- **MCP server:** `devstack mcp` (stdio), a client of the same API. Tools map
-  one-to-one onto API endpoints ([ADR-0007](adr/0007-one-http-api-is-the-control-surface.md)).
+- **MCP server:** `devstack mcp` (stdio), a client of the same API. Most
+  tools are one API endpoint; some do what the CLI does around it (`up`
+  also starts the daemon and Docker, `doctor` and `diagnostics` read the
+  machine and the daemon's log) ([ADR-0007](adr/0007-one-http-api-is-the-control-surface.md)).
 - **Dashboard:** Vue 3 SPA served by the daemon from the same origin
   ([ADR-0006](adr/0006-dashboard-vue-same-origin.md)); as built, served by
   the hub for every stack ([ADR-0021](adr/0021-a-hub-serves-the-dashboard.md)).
@@ -127,8 +129,9 @@ references).
 6. **Promotion gate** ([ADR-0013](adr/0013-schema-changes-hold-promotion.md)):
    automatic unless the build changes declared schema inputs, in which case the
    candidate waits for an explicit `devstack promote`.
-7. **Promotion** per [ADR-0010](adr/0010-promotion-mechanism.md) (open:
-   restart on the fixed port vs. switch a reverse proxy).
+7. **Promotion** per [ADR-0010](adr/0010-promotion-mechanism.md): the
+   reverse proxy on the fixed port switches to the candidate (option B,
+   measured).
 8. The previous main artifact is kept. `devstack rollback <service>` promotes it
    again without a build. Retention: last N artifacts per service (default 5).
 
@@ -243,11 +246,15 @@ graceful stop.
 
 > The reference is [stack-file.md](stack-file.md), kept in step with the
 > code (and `devstack schema`). The tables below are the original draft and lack
-> what came later (`[lanes]`, `compose.shared`, `kind = "static"`, `prepare`,
-> `hot_reload`, lane placeholders).
+> what came later (`[lanes]` with `keep_data`, `[profiles]`, `compose.shared`,
+> `kind = "static"`, `prepare`, `hot_reload`, `rebuild`, `proxy`, `timeout`,
+> `data`, lane placeholders).
 
-Format: TOML, `devstack.toml` in the repository root, no profiles in version 1
-([ADR-0017](adr/0017-stack-file-is-toml.md), provisional). A complete example is
+Format: TOML, `devstack.toml` in the repository root
+([ADR-0017](adr/0017-stack-file-is-toml.md), confirmed). No environment
+profiles in version 1; `[profiles]` of
+[ADR-0041](adr/0041-a-profile-says-how-a-lane-runs-for-a-purpose.md) say how
+the one stack runs for a purpose (ADR-0017, amended). A complete example is
 [`examples/devstack.toml`](../examples/devstack.toml).
 
 ### 4.1 Top level
@@ -356,7 +363,8 @@ Resolution order: `{…}` first, then `${…}`, so a default may contain a place
 
 ### 4.6 Deliberately not in version 1
 
-Profiles and layering of stack files, conditionals and expressions, per-lane
+Profiles for other environments and layering of stack files (a purpose
+profile, ADR-0041, is something else), conditionals and expressions, per-lane
 overrides, secrets management of its own (secrets come from env files, which the
 downstream secret tooling fills).
 
@@ -705,6 +713,16 @@ above all (ADR-0041). Lanes start from the main tree (CLI and MCP), a
 service that exits by itself comes back, and a Compose port is judged only
 once its container is settled.
 
+**0.12.0 to 0.14.1 (2026-10-20/21): dev servers and placement.** A dev
+server's rebuilds show like builds, read from its output (ADR-0042), and its
+fixed port is devstack's, forwarded to its instance (ADR-0043). Sharing a
+lane includes viewing it (ADR-0040 amended). A node's own lines reach the
+pool's telemetry, and a server that cannot update itself says so
+beforehand (ADR-0039). The coordinator places a lane where it starts warm
+(ADR-0026 point 3), where a lane starts without `--on` is the machine's
+choice, and a lane's start on a node shows its phases. The details are in
+the [changelog](../CHANGELOG.md).
+
 ## 8. Open questions
 
 | # | Question | Where it is tracked |
@@ -717,8 +735,8 @@ once its container is settled.
 | O-6 | Default daemon port | Resolved: the daemon takes a free port and writes it to `.devstack/daemon.json`; the hub has a fixed one (4250, `DEVSTACK_HUB_PORT`) |
 | O-7 | Lanes per worktree only, or also per agent session in one tree | Resolved: per worktree; agents work in worktrees ([ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md); owner, 2026-10-17: devstack never creates worktrees) |
 | O-8 | Development values that are not secret (local passwords, dev API keys): a tracked `dev/.env.defaults` next to the untracked `dev/.env`, or everything through the downstream secret chain | Downstream decision; devstack supports several env files per group either way |
-| O-10 | How build servers outlive a single build but die with the daemon (spike (b)) | [ADR-0020](adr/0020-builds-share-one-long-lived-build-job.md), accepted |
 | O-9 | Minimum Docker Compose version (overlays rely on `!reset`, `!override`, `required: false`) | Resolved: 2.24.4, checked by `devstack doctor` |
+| O-10 | How build servers outlive a single build but die with the daemon (spike (b)) | [ADR-0020](adr/0020-builds-share-one-long-lived-build-job.md), accepted |
 
 ## 9. Risks
 
@@ -822,7 +840,7 @@ second worktree runs.
   is visible as such and not as the service's load.
 - Aggregation: a service sums its instances (main plus candidates), a group its
   members, a lane its services and its own Compose project if it has one
-  (ADR-0012).
+  (ADR-0030).
 - Exposed through `GET /v1/usage`, the SSE stream, `devstack top` and the
   dashboard (§6).
 

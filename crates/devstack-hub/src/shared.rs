@@ -38,13 +38,18 @@ pub struct PoolQuery {
 }
 
 impl PoolQuery {
-    fn local(&self) -> Result<Local, Box<Response>> {
-        let p = self
-            .pool
+    /// The pool meant: no `pool`, an empty one and `default` are the same
+    /// pool, and key the caches and forwards alike.
+    fn name(&self) -> &str {
+        self.pool
             .as_deref()
             .map(str::trim)
             .filter(|p| !p.is_empty())
-            .unwrap_or(devstack_node::member::DEFAULT_POOL);
+            .unwrap_or(devstack_node::member::DEFAULT_POOL)
+    }
+
+    fn local(&self) -> Result<Local, Box<Response>> {
+        let p = self.name();
         if !devstack_node::member::valid_pool_name(p) {
             return Err(Box::new(error(
                 StatusCode::BAD_REQUEST,
@@ -85,7 +90,7 @@ fn listed() -> &'static Listed {
 #[allow(clippy::result_large_err)] // the error is the answer itself
 async fn viewable(q: &PoolQuery, lease: &str) -> Result<(Local, SharedLane), Response> {
     let local = q.local().map_err(|r| *r)?;
-    let key = format!("{:?}", q.pool);
+    let key = q.name().to_string();
     let cached = listed()
         .lock()
         .unwrap()
@@ -209,7 +214,7 @@ pub async fn open(
         Ok(l) => l,
         Err(r) => return *r,
     };
-    let key_dir = format!("{:?}", q.pool);
+    let key_dir = q.name().to_string();
     let found = tokio::task::spawn_blocking(move || {
         let lanes: Vec<SharedLane> = local.shared()?;
         Ok::<_, devstack_node::member::MemberError>((local, lanes))
@@ -360,6 +365,19 @@ mod view_tests {
             super::without_pool(Some("tail=5&history=true")),
             "?tail=5&history=true"
         );
+    }
+
+    #[test]
+    fn no_pool_and_the_default_pool_are_one_pool() {
+        let q = |p: Option<&str>| super::PoolQuery {
+            pool: p.map(String::from),
+        };
+        let default = devstack_node::member::DEFAULT_POOL;
+        assert_eq!(q(None).name(), default);
+        assert_eq!(q(Some("")).name(), default);
+        assert_eq!(q(Some(" ")).name(), default);
+        assert_eq!(q(Some(default)).name(), default);
+        assert_eq!(q(Some(" acme ")).name(), "acme");
     }
 }
 
