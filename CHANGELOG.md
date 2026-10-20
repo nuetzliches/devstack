@@ -9,6 +9,14 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- A node's `node_lane_started` carries the start's whole time; it said `0`
+  (the time since its last phase).
+- A command run's line says how long it ran and, when it failed, why
+  (`ms`, `error`); the pool's telemetry counts its time by command and
+  result. Before, a failed run said only `failed`.
+
 ## [0.13.1] - 2026-10-20
 
 ### Fixed

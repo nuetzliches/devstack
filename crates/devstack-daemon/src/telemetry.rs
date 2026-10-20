@@ -253,14 +253,18 @@ fn run(service: &str) {
 }
 
 /// The labels a duration is counted by: its event, the process's
-/// repository, and the line's lane, node, place, service, result and phase
-/// (`remote_lane_phase`) where it has them (each of few values).
+/// repository, and the line's lane, node, place, service, result, phase
+/// (`remote_lane_phase`), command and its status (a run's `succeeded` or
+/// `failed`; a service's status is an object and stays out) where it has
+/// them (each of few values).
 fn labels(repo: Option<&str>, event: &str, line: &Value) -> Vec<(String, String)> {
     let mut l = vec![("devstack.event".to_string(), event.to_string())];
     if let Some(r) = repo {
         l.push(("devstack.repository".into(), r.into()));
     }
-    for k in ["lane", "node", "place", "service", "result", "phase"] {
+    for k in [
+        "lane", "node", "place", "service", "result", "phase", "command", "status",
+    ] {
         if let Some(v) = line[k].as_str().filter(|v| !v.is_empty()) {
             l.push((format!("devstack.{k}"), v.to_string()));
         }
@@ -339,6 +343,25 @@ fn tunnel_gauges(repo: Option<&str>, tunnels: &[TunnelClosed]) -> Vec<Gauge> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_command_run_is_counted_by_its_name_and_result() {
+        let lines = vec![
+            serde_json::json!({ "event": "command", "command": "backup", "status": "failed", "ms": 900 }),
+            serde_json::json!({ "event": "command", "command": "backup", "status": "succeeded", "ms": 1200 }),
+            serde_json::json!({ "event": "command", "command": "backup", "status": "running" }),
+        ];
+        let d = durations(None, &lines);
+        assert_eq!(d.len(), 2, "one per result");
+        assert!(d.iter().all(|d| {
+            d.labels
+                .contains(&("devstack.command".into(), "backup".into()))
+        }));
+        assert!(d.iter().any(|d| {
+            d.labels
+                .contains(&("devstack.status".into(), "failed".into()))
+        }));
+    }
 
     #[test]
     fn durations_are_grouped_by_event_and_labels() {

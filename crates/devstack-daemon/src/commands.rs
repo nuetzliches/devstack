@@ -186,6 +186,7 @@ pub fn start(
     });
 
     let (sup, runs, name) = (Arc::clone(sup), Arc::clone(runs), name.to_string());
+    let t0 = std::time::Instant::now();
     std::thread::spawn(move || {
         let result = execute(&sup, &runs, id, &cmd.steps, &log);
         runs.cancelled.lock().unwrap().remove(&id);
@@ -195,16 +196,26 @@ pub fn start(
         } else {
             "failed"
         };
+        // Its time, and why it failed (the diagnostic line; only its first
+        // line leaves the machine, ADR-0037).
+        let mut extra = serde_json::Map::new();
+        extra.insert("ms".into(), (t0.elapsed().as_millis() as u64).into());
+        if let Err(e) = &result {
+            extra.insert("error".into(), e.clone().into());
+        }
         runs.update(id, |r| {
             r.finished = Some(now_ms());
             r.status = status.into();
             r.error = result.err();
         });
-        sup.emit(EventBody::Command {
-            command: name,
-            run: id,
-            status: status.into(),
-        });
+        sup.emit_with(
+            EventBody::Command {
+                command: name,
+                run: id,
+                status: status.into(),
+            },
+            Some(extra),
+        );
     });
     Ok(id)
 }
