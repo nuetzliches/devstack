@@ -126,6 +126,21 @@ devstack up --on build-server     # that node
 devstack up --on pool             # the coordinator picks: warm first, then free capacity (below)
 ```
 
+A lane starts on this machine unless told otherwise. A machine may start
+its lanes elsewhere by default
+([ADR-0025](adr/0025-a-lane-can-run-on-another-node.md), amended
+2026-10-21); that is the user's consent to send worktrees there without
+being asked each time, so it is set by hand, never by joining:
+
+```sh
+devstack pool default-on pool          # or a pool's name, a node, <pool>:<node>; or the pool area
+devstack pool default-on local         # back to this machine
+devstack pool placement <lane>         # where it could go: each node's load, the coordinator's order and why
+```
+
+`devstack up` in a worktree, `devstack lane start` and an agent's `up` and
+`lane_start` without `--on`/`on` use it; `--on local` keeps one lane here.
+
 With `pool` the coordinator places the lane
 ([ADR-0026](adr/0026-placement-by-the-requester-admission-by-the-node.md)
 point 3): of the granted, online, sharing nodes that are not paused, admit

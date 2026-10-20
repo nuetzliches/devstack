@@ -319,6 +319,34 @@ function policyText(id: string) {
       <div class="card-body"><ShareSwitch /></div>
     </section>
 
+    <section v-if="!addingPool && me?.state === 'approved'" class="card" data-testid="pool-default-on">
+      <header class="card-header">
+        <Icon name="server" :size="18" />
+        <h2>Where lanes start</h2>
+        <span class="faint small">without a place named (`devstack up`, an agent's `lane_start`)</span>
+      </header>
+      <div class="card-body">
+        <label class="consent">
+          <input type="radio" name="default-on" :checked="!pool.defaultOn" data-testid="pool-default-on-here" @change="pool.setDefaultOn(null)" />
+          <span>On this machine</span>
+        </label>
+        <label v-for="p in pool.pools.filter((x) => x.joined)" :key="p.name" class="consent">
+          <input
+            type="radio"
+            name="default-on"
+            :checked="pool.defaultOn === (p.name === 'default' ? 'pool' : p.name)"
+            :data-testid="`pool-default-on-${p.name}`"
+            @change="pool.setDefaultOn(p.name === 'default' ? 'pool' : p.name)"
+          />
+          <span>In the pool{{ p.name === 'default' ? '' : ` ${p.name}` }}: its coordinator picks the node (warm first, then free capacity)</span>
+        </label>
+        <p class="muted small">
+          Choosing the pool lets the CLI and agents send a worktree's files to a node of it without asking each time. A place named
+          explicitly (`--on`, `on`) always wins; `local` keeps a lane here.
+        </p>
+      </div>
+    </section>
+
     <section v-if="!addingPool && me?.state === 'approved' && pool.telemetry" class="card" data-testid="pool-telemetry">
       <header class="card-header">
         <Icon name="activity" :size="18" />

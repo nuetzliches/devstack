@@ -20,6 +20,8 @@ type Route = { stop(): void } | null;
 
 /** Where a mock lane was moved to (`local` or a node). */
 const laneNodes = new Map<string, string>();
+/** Where lanes start without a place named (ADR-0025): `null` here. */
+let mockDefaultOn: string | null = null;
 /** Lanes starting on a node, since when (ms): the mock plays the phases. */
 const remoteStarts = new Map<string, number>();
 const START_PHASES: [number, string, string][] = [
@@ -248,6 +250,10 @@ export class MockTransport implements Transport {
         collects: true,
         what: ["devstack's diagnostic log", 'durations and outcomes of lane starts, syncs, moves and stops, service starts and builds', 'never: file contents, environment values'],
       });
+    if (p === '/hub/pool/default-on') {
+      if (method === 'PUT') mockDefaultOn = (body as { on?: string | null } | undefined)?.on ?? null;
+      return json(200, { on: mockDefaultOn });
+    }
     if (p === '/hub/pool/placement' && method === 'GET') {
       // The default pool has one node; a lane named like one that ran there is warm.
       const lane = url.searchParams.get('lane') ?? '';

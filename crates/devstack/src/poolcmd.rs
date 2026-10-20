@@ -366,6 +366,47 @@ pub fn join(
 }
 
 /// `devstack pool telemetry [on|off]` (ADR-0037).
+/// `devstack pool default-on [ON]`: where this machine's lanes start
+/// without `--on` (ADR-0025, amended 2026-10-21); shows it without `ON`.
+pub fn default_on(on: Option<&str>) -> Result<()> {
+    use devstack_node::member;
+    let state = devstack_daemon::remote::state_dir();
+    let Some(on) = on.map(str::trim).filter(|o| !o.is_empty()) else {
+        match member::default_on(&state) {
+            Some(o) => println!(
+                "lanes start on `{o}` without --on (`devstack pool default-on local` keeps them here)"
+            ),
+            None => println!(
+                "lanes start on this machine without --on (`devstack pool default-on pool` sends them to the pool)"
+            ),
+        }
+        return Ok(());
+    };
+    if !member::is_here(on) {
+        // A pool this machine belongs to, approved: else the start would fail.
+        let (pool, _) = devstack_daemon::remote::resolve_on(on).map_err(|e| anyhow::anyhow!(e))?;
+        let approved = devstack_daemon::remote::local_member(&pool)
+            .membership()
+            .ok()
+            .flatten()
+            .is_some_and(|m| m.state == devstack_node::store::State::Approved);
+        if !approved {
+            anyhow::bail!(
+                "this machine is no approved member of the pool `{pool}`: `devstack join` first"
+            );
+        }
+    }
+    member::set_default_on(&state, Some(on))?;
+    if member::is_here(on) {
+        println!("lanes start on this machine without --on");
+    } else {
+        println!(
+            "lanes start on `{on}` without --on: their worktree's files go there without asking (`devstack pool default-on local` takes it back)"
+        );
+    }
+    Ok(())
+}
+
 pub fn telemetry(pool: &str, state: Option<&str>) -> Result<()> {
     use devstack_node::telemetry::Consent;
     let dir = member_dir(pool)?;

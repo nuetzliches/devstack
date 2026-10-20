@@ -24,6 +24,8 @@ pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
         Cmd::Pool { pool, action } => match action {
             None => poolcmd::pool(pool.as_deref()),
             Some(PoolAction::Shared) => hubcmd::shared(pool.as_deref()),
+            Some(PoolAction::DefaultOn { on }) => poolcmd::default_on(on.as_deref()),
+            Some(PoolAction::Placement { lane }) => crate::client::print_placement(file, &lane),
             Some(PoolAction::Telemetry { state }) => poolcmd::telemetry(
                 pool.as_deref()
                     .unwrap_or(devstack_node::member::DEFAULT_POOL),

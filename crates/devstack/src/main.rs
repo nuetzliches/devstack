@@ -344,6 +344,17 @@ enum PoolAction {
     Telemetry { state: Option<String> },
     /// The lanes others share with this machine (ADR-0035).
     Shared,
+    /// Where this machine's lanes start without `--on` (ADR-0025): `local`
+    /// (the default), `pool`, a pool's name, a node or `<pool>:<node>`;
+    /// nothing to show it. Setting it is consent to send a worktree there
+    /// without being asked.
+    DefaultOn { on: Option<String> },
+    /// Where a lane could start: this machine, and each node of the pools
+    /// with its load, its lanes and the coordinator's order and reason.
+    Placement {
+        /// The lane (its name, see `devstack lane list`).
+        lane: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -766,6 +777,21 @@ mod tests {
             parse(&["pool", "--pool", "team", "telemetry", "on"]).cmd,
             Cmd::Pool { pool: Some(p), action: Some(PoolAction::Telemetry { state: Some(s) }) }
                 if p == "team" && s == "on"
+        ));
+        assert!(matches!(
+            parse(&["pool", "default-on", "pool"]).cmd,
+            Cmd::Pool { action: Some(PoolAction::DefaultOn { on: Some(o) }), .. } if o == "pool"
+        ));
+        assert!(matches!(
+            parse(&["pool", "default-on"]).cmd,
+            Cmd::Pool {
+                action: Some(PoolAction::DefaultOn { on: None }),
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse(&["pool", "placement", "feature"]).cmd,
+            Cmd::Pool { action: Some(PoolAction::Placement { lane }), .. } if lane == "feature"
         ));
         // `--dir` of `node members` is global to its actions.
         assert!(matches!(

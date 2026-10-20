@@ -131,6 +131,37 @@ pub fn pool_dir(state: &Path, name: &str) -> PathBuf {
         .join(name)
 }
 
+/// Where this machine's lanes start when no `--on` says (ADR-0025, amended
+/// 2026-10-21): `None` here (the default), else an `--on` value (`pool`, a
+/// pool's name, a node, `<pool>:<node>`). Kept in `placement.json` in
+/// devstack's per-user state; setting it is the user's consent to send a
+/// worktree there without being asked.
+pub fn default_on(state: &Path) -> Option<String> {
+    #[derive(Deserialize)]
+    struct File {
+        on: Option<String>,
+    }
+    let f: File =
+        serde_json::from_slice(&std::fs::read(state.join("placement.json")).ok()?).ok()?;
+    f.on.map(|o| o.trim().to_string())
+        .filter(|o| !o.is_empty() && !is_here(o))
+}
+
+/// Set where lanes start without `--on`; `None` or `local`: here.
+pub fn set_default_on(state: &Path, on: Option<&str>) -> std::io::Result<()> {
+    let on = on.map(str::trim).filter(|o| !o.is_empty() && !is_here(o));
+    std::fs::create_dir_all(state)?;
+    std::fs::write(
+        state.join("placement.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({ "on": on }))?,
+    )
+}
+
+/// `local` (or `here`): this machine, whatever the default says.
+pub fn is_here(on: &str) -> bool {
+    on.eq_ignore_ascii_case("local") || on.eq_ignore_ascii_case("here")
+}
+
 /// The pools this machine belongs to or asked to join: the default pool
 /// first (always, joined or not), then the others by name.
 pub fn pools(state: &Path) -> Vec<(String, PathBuf)> {
@@ -575,6 +606,22 @@ impl Local {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn where_lanes_start_by_default() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(default_on(d.path()), None, "here unless set");
+        set_default_on(d.path(), Some("pool")).unwrap();
+        assert_eq!(default_on(d.path()).as_deref(), Some("pool"));
+        set_default_on(d.path(), Some("team:build-box")).unwrap();
+        assert_eq!(default_on(d.path()).as_deref(), Some("team:build-box"));
+        for here in ["local", "here", "LOCAL", ""] {
+            set_default_on(d.path(), Some(here)).unwrap();
+            assert_eq!(default_on(d.path()), None, "{here}");
+        }
+        assert!(is_here("Local") && !is_here("pool"));
+    }
+
     use super::*;
 
     #[test]

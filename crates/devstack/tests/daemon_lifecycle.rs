@@ -306,12 +306,17 @@ members = [\"api\", \"command.ping\"]
     }
 
     fn stack_view(&self) -> Value {
+        self.daemon_get("/v1/stack")
+    }
+
+    /// A GET on the daemon's API, with its token.
+    fn daemon_get(&self, path: &str) -> Value {
         let daemon: Value = serde_json::from_slice(
             &std::fs::read(self.dir.path().join(".devstack/daemon.json")).unwrap(),
         )
         .unwrap();
         let token = std::fs::read_to_string(self.token_home.path().join("devstack/token")).unwrap();
-        let mut r = ureq::get(&format!("http://127.0.0.1:{}/v1/stack", daemon["port"]))
+        let mut r = ureq::get(&format!("http://127.0.0.1:{}{path}", daemon["port"]))
             .header("Authorization", &format!("Bearer {token}"))
             .call()
             .unwrap();
@@ -1703,9 +1708,20 @@ fn a_worktree_runs_as_a_lane() {
     );
     let refused = wt_cli(&["start", "tray"]);
     assert!(refused.contains("main working tree only"), "{refused}");
+    // Asked of the lane, not of a port: another of its processes (a dev
+    // server behind its forward, ADR-0043) may hold `tray_port + offset`
+    // by chance and serve the same page.
+    let lane_view = s.daemon_get(&format!("/v1/lanes/{lane}/v1/stack"));
+    let tray = lane_view["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["name"] == "tray")
+        .cloned()
+        .unwrap_or(Value::Null);
     assert!(
-        get_on(tray_port + offset, "/").is_none(),
-        "no tray in the lane"
+        tray.is_null() || tray["status"]["state"] == "stopped",
+        "no tray in the lane: {tray}"
     );
 
     // 3. An edit in the worktree reaches the lane only.

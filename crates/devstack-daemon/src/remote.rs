@@ -84,7 +84,7 @@ pub struct RemoteLane {
 }
 
 /// devstack's per-user state, where this machine's memberships live.
-pub(crate) fn state_dir() -> PathBuf {
+pub fn state_dir() -> PathBuf {
     crate::token::token_path()
         .parent()
         .expect("token path has a parent")
@@ -150,6 +150,27 @@ pub fn slots_on(
 
 pub fn local_member(pool: &str) -> Local {
     Local::new(&devstack_node::member::pool_dir(&state_dir(), pool))
+}
+
+/// Where a lane starts, as a client asked (ADR-0025, amended 2026-10-21):
+/// `on` as given, `local`/`here` this machine (`None`), no `on` the
+/// machine's default (`devstack pool default-on`), here when it has none or
+/// its pool is not joined.
+pub fn effective_on(on: Option<&str>) -> Option<String> {
+    match on.map(str::trim).filter(|o| !o.is_empty()) {
+        Some(o) if devstack_node::member::is_here(o) => None,
+        Some(o) => Some(o.to_string()),
+        None => {
+            let d = devstack_node::member::default_on(&state_dir())?;
+            let (pool, _) = resolve_on(&d).ok()?;
+            local_member(&pool)
+                .membership()
+                .ok()
+                .flatten()
+                .filter(|m| m.state == devstack_node::store::State::Approved)
+                .map(|_| d)
+        }
+    }
 }
 
 /// `--on` split into the pool and the node asked for (ADR-0034 point 3).
