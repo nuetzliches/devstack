@@ -198,7 +198,7 @@ Every command and flag: `devstack --help`, `devstack <command> --help`.
 | `devstack pool [shared\|telemetry on\|off]`, `open <lane> [<service>]` | the pool as this machine sees it; lanes others share with you |
 | `devstack node init\|serve\|fingerprint\|agent` | run a pool's coordinator or a node agent ([pool.md](docs/pool.md)) |
 | `devstack node members [approve\|remove\|role\|tags\|node\|policy]` | administer a pool on its coordinator; `node <id> on\|off` grants a member to run the pool's lanes |
-| `devstack update [--check] [--version <v>]`, `self uninstall` | install a newer release (or only say whether one exists) and move the hub onto it; remove devstack for this user |
+| `devstack update [--check] [--version <v>]`, `self uninstall [--with-coordinator]` | install a newer release (or only say whether one exists) and move the hub onto it; remove devstack for this user (its pool memberships go too; a coordinator kept in the per-user state only with `--with-coordinator`) |
 
 ## Why
 

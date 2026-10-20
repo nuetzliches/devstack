@@ -453,8 +453,9 @@ fn name_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
 }
 
 fn connect(file: &Path) -> Result<Client> {
-    client::need(&client::state_dir(file)?)
-        .map_err(|_| anyhow::anyhow!("no daemon is running for this stack; call `up` first"))
+    // A daemon that runs but refuses or hangs says so: `up` would not help.
+    client::Client::probe(&client::state_dir(file)?)?
+        .ok_or_else(|| anyhow::anyhow!("no daemon is running for this stack; call `up` first"))
 }
 
 fn checked(status: u16, body: String) -> Result<String> {

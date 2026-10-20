@@ -144,7 +144,7 @@ Register it once (project `.mcp.json` or user configuration):
 | anything does not start, before guessing | `devstack doctor` (MCP `doctor`): what this machine lacks for this stack, one line each, with the fix |
 | something happened and nothing says why (a restart, a switch, a stop) | `devstack logs --daemon --grep <service>` (MCP `diagnostics`): service and candidate states with reasons, every request that changed something, daemon start and stop; it works with the daemon stopped |
 | `devstack up`: Docker is not running | `up` (CLI and MCP) starts Docker Desktop and waits; with Docker Engine as a Linux service it names `sudo systemctl start docker` for the user |
-| "the daemon of this stack (pid …) does not answer" | it hangs: `devstack logs --daemon -n 50` says what it did last; end that process (ask the user first), then `devstack up` |
+| "the daemon of this stack (pid …) does not answer" or "… refused: missing or wrong token" | it hangs, or the token changed since it started: `devstack logs --daemon -n 50` says what it did last; `devstack down --all` in the main tree ends it by its pid, lanes included (ask the user first), then `devstack up` |
 | a port is taken | another process (often a second copy of the stack, an IDE run, a leftover process) holds it; find it (`Get-NetTCPConnection -LocalPort <p>` / `ss -ltnp`) and ask before ending it |
 | `failed` candidate | the old build keeps running; `devstack status` shows the reason, the build log is in `.devstack/logs/<service>/build-<id>.log` |
 | `held` candidate | waits for `devstack promote <service>` after the user agreed |

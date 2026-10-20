@@ -80,7 +80,8 @@ enum Cmd {
     Down {
         #[arg(long)]
         infra: bool,
-        /// The lanes too: the daemon exits even while lanes run.
+        /// The lanes too: the daemon exits even while lanes run. A daemon
+        /// that refuses this CLI or hangs is ended by its pid.
         #[arg(long)]
         all: bool,
     },
@@ -571,11 +572,17 @@ enum HubAction {
 enum SelfAction {
     /// Remove devstack for this user: hub, its start at logon and link, the
     /// per-user state, the PATH entry and the installed binary. Repositories keep
-    /// their .devstack/ directories. Refuses while a stack runs.
+    /// their .devstack/ directories. Refuses while a stack or another devstack
+    /// process (a node agent, a coordinator, an MCP server) runs.
     Uninstall {
         /// Do not ask.
         #[arg(long)]
         yes: bool,
+        /// Remove the pool coordinator kept in the per-user state too (its CA:
+        /// every member's certificate becomes worthless). Without it,
+        /// uninstalling refuses while there is one.
+        #[arg(long)]
+        with_coordinator: bool,
     },
 }
 
@@ -826,7 +833,10 @@ mod tests {
         assert!(matches!(
             parse(&["self", "uninstall", "--yes"]).cmd,
             Cmd::Myself {
-                action: SelfAction::Uninstall { yes: true }
+                action: SelfAction::Uninstall {
+                    yes: true,
+                    with_coordinator: false
+                }
             }
         ));
         assert!(matches!(
