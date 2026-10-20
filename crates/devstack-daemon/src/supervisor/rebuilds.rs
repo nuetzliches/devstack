@@ -27,6 +27,9 @@ struct Run {
     tracker: Option<Tracker>,
     /// It is up: its first build is over, what follows is a rebuild.
     live: bool,
+    /// The finished rebuild last logged (its start): error lines that follow
+    /// it update the view, not the log.
+    logged: Option<u128>,
 }
 
 impl Supervisor {
@@ -98,6 +101,7 @@ impl Supervisor {
                             partial: String::new(),
                             tracker: Tracker::new(svc.rebuild.as_ref()),
                             live: false,
+                            logged: None,
                         },
                     );
                     runs.get_mut(name).expect("inserted")
@@ -115,7 +119,11 @@ impl Supervisor {
                 if let Some(v) = tracker.feed(&line, now)
                     && was_live
                 {
-                    let done = (v.state != "rebuilding").then(|| {
+                    let finished = v.state != "rebuilding" && run.logged != Some(v.since);
+                    if finished {
+                        run.logged = Some(v.since);
+                    }
+                    let done = finished.then(|| {
                         let mut extra = serde_json::Map::new();
                         if let Some(ms) = v.ms {
                             extra.insert("ms".into(), ms.into());
