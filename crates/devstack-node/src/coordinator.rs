@@ -1295,6 +1295,7 @@ async fn lease_create(
     Json(mut r): Json<LeaseRequest>,
 ) -> ApiResult<Json<LeaseOffer>> {
     let me = member(&s, &peer)?;
+    crate::policy::valid_lease_names(&r.repo, &r.lane).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     // A lane needs at least the least, whatever it claims (ADR-0033 point 4).
     r.need = crate::policy::floor_need(r.need);
     let offered = s

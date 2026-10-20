@@ -11,6 +11,7 @@
 //! - `POST /v1/leases/{id}/sync/missing` `{hashes}`: the blobs it lacks
 //! - `PUT /v1/blobs/{hash}`: one blob, by its BLAKE3 hash
 //! - `POST /v1/leases/{id}/sync/apply` `{files}`: make the mirror exactly this
+//!   (`409` while the lane starts: the agent checks its files then)
 //! - `POST /v1/leases/{id}/start` `{stack_file}`, `POST /v1/leases/{id}/stop`,
 //!   `GET /v1/leases/{id}/lane`: the lane itself (`lanerun`)
 //! - `ANY /v1/leases/{id}/api/{*rest}`: the lane daemon's API, streamed
@@ -272,6 +273,12 @@ struct Inner {
     daemons: Mutex<HashMap<String, DaemonAddr>>,
     /// Lanes starting now, or whose start failed: the phase, or the error.
     starting: Mutex<HashMap<String, Result<String, String>>>,
+    /// Leases whose mirror a sync writes now. A sync waits for no start
+    /// and a start for no sync: one taken under the `starting` lock while
+    /// the lane starts is refused (`409`), and a start waits until those
+    /// begun before it are done (the agent checks the lane's files, and
+    /// nothing may change them meanwhile).
+    applying: Mutex<HashMap<String, usize>>,
     /// The phases of each lane's last start that are over, with how long
     /// each took (`LaneState::phases`), and when the current one began.
     phase_times: Mutex<HashMap<String, (Vec<PhaseTime>, std::time::Instant)>>,
@@ -1225,6 +1232,9 @@ async fn admit(
             "the lease is not for this node and you",
         ));
     }
+    // An older coordinator did not check them.
+    crate::policy::valid_lease_names(&lease.repo, &lease.lane)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     // What this node lets run on it (ADR-0033), whatever the coordinator
     // checked already.
     let tags = s
@@ -1548,10 +1558,11 @@ async fn receive_blob(
 }
 
 /// A mirror path from a requester, made safe: relative, no `..`, no drive or
-/// root, `/`-separated.
+/// root, `/`-separated. A `:` is a file name's on Linux, where lanes run; on
+/// Windows it would name a drive or a stream.
 fn safe_path(p: &str) -> Option<PathBuf> {
     let p = p.replace('\\', "/");
-    if p.contains(':') {
+    if cfg!(windows) && p.contains(':') {
         return None;
     }
     let mut out = PathBuf::new();
@@ -1808,6 +1819,10 @@ async fn start(
     // The whole start, every phase: `phase_times` restarts its clock at each.
     let t0 = std::time::Instant::now();
     tokio::task::spawn_blocking(move || {
+        // A sync that began before the start ends first; none begins now.
+        while s2.applying.lock().unwrap().contains_key(&lid) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
         let mut run = s2.run(&l);
         run.display_root = display_root;
         run.port_offset = port_offset;
@@ -2689,11 +2704,45 @@ async fn apply(
     let who = caller(&s, &peer).await?;
     let l = lease_of(&s, &id, &who)?;
     let (blobs, lane) = (s.blobs(&who), s.dir_of(&l));
+    // Not while the lane starts: the agent checks its files then, and
+    // Compose must run what was checked. The requester syncs again.
+    let _writing = {
+        let starting = s.starting.lock().unwrap();
+        if matches!(starting.get(&id), Some(Ok(_))) {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "the lane is starting: its files change once it runs",
+            ));
+        }
+        Applying::new(s.clone(), id.clone())
+    };
     let r = tokio::task::spawn_blocking(move || apply_files(&blobs, &lane, &a.files))
         .await
         .map_err(internal)?;
     r.map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e.to_string()))
+}
+
+/// A sync writing a lease's mirror ([`Inner::applying`]), until dropped.
+struct Applying(Shared, String);
+
+impl Applying {
+    fn new(s: Shared, id: String) -> Self {
+        *s.applying.lock().unwrap().entry(id.clone()).or_default() += 1;
+        Self(s, id)
+    }
+}
+
+impl Drop for Applying {
+    fn drop(&mut self) {
+        let mut a = self.0.applying.lock().unwrap();
+        if let Some(n) = a.get_mut(&self.1) {
+            *n -= 1;
+            if *n == 0 {
+                a.remove(&self.1);
+            }
+        }
+    }
 }
 
 /// A node's capacity as OTLP gauges (ADR-0037 point 4).
@@ -3309,6 +3358,7 @@ pub async fn serve(
             .filter(|c| !c.trim().is_empty()),
         daemons: Mutex::new(HashMap::new()),
         starting: Mutex::new(HashMap::new()),
+        applying: Mutex::new(HashMap::new()),
         phase_times: Mutex::new(HashMap::new()),
         changed: tokio::sync::Notify::new(),
     });
@@ -3535,9 +3585,31 @@ mod tests {
     fn a_path_from_a_requester_stays_in_the_mirror() {
         assert!(safe_path("src/Api/Program.cs").is_some());
         assert!(safe_path("src\\Api\\Program.cs").is_some());
-        for bad in ["", "/etc/passwd", "../x", "a/../../x", "C:/x", "a/./b"] {
+        for bad in ["", "/etc/passwd", "../x", "a/../../x", "a/./b"] {
             assert!(safe_path(bad).is_none(), "{bad}");
         }
+        // A drive on Windows; a file name on Linux, where lanes run.
+        assert_eq!(safe_path("C:/x").is_none(), cfg!(windows));
+        assert_eq!(safe_path("docs/a:b.md").is_some(), !cfg!(windows));
+    }
+
+    #[test]
+    fn lease_names_are_bounded() {
+        use crate::policy::valid_lease_names;
+        assert!(valid_lease_names("Shop API", "login-fix").is_ok());
+        assert!(valid_lease_names("shop", "feature_x.2").is_ok());
+        for (repo, lane) in [
+            ("", "x"),
+            ("shop", ""),
+            ("sh\nop", "x"),
+            ("shop", "a/b"),
+            ("shop", "a b"),
+            ("shop", "a\u{0}"),
+        ] {
+            assert!(valid_lease_names(repo, lane).is_err(), "{repo:?} {lane:?}");
+        }
+        assert!(valid_lease_names(&"r".repeat(129), "x").is_err());
+        assert!(valid_lease_names("shop", &"l".repeat(65)).is_err());
     }
 
     #[test]

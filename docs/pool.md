@@ -196,19 +196,48 @@ devstack promote --lane main            # back to the main working tree
 
 What a lane's Compose files may ask of a node is less than on your machine:
 the node runs them on its own Docker engine. It refuses, naming each, a
-service that is privileged, adds capabilities or devices, shares a namespace
-of the host (`pid`, `ipc`, `network_mode: host`, ...), sets `userns_mode`,
-`cgroup_parent`, `security_opt` or `sysctls`, or mounts, builds from or
-reads an env file outside the lane's files; external volumes, volumes with
-`driver_opts`, external networks the stack file does not list under
-`[compose.<group>] networks`, network drivers other than `bridge`, and, on
-an `internet` or `none` node, subnets or IPv6 of its own. Only what the lane
-starts is checked: the services `[compose.<group>] services` names, what
-they depend on, and the networks, volumes and secrets those use; a Compose
-file shared with production may hold other services (a socket-mounting
-admin tool, a reverse proxy) that the lane never starts. Compose files,
-env files, `extends` and `include` are read from the lane's files only, and
-the sync never follows a link out of them. Every container of the lane gets
+service that is privileged, adds capabilities or devices (GPUs with the
+`nvidia` driver excepted), shares a namespace of the host (`pid`, `ipc`,
+`network_mode: host`, ...), sets `userns_mode`, `cgroup_parent`,
+`security_opt`, `sysctls`, `oom_kill_disable` or a negative `oom_score_adj`,
+uses `use_api_socket` or a `provider`, logs through a driver other than
+`json-file` or `local`, runs a privileged `post_start`/`pre_stop` hook, or
+mounts, builds from or reads an env file outside the lane's files; a build
+with `tags` (the node names the images it builds), `cache_to` or a local
+`cache_from`; a secret or config from `environment` (the node's own);
+external volumes, volumes with `driver_opts`, external networks the stack
+file does not list under `[compose.<group>] networks`, network drivers other
+than `bridge`, and, on an `internet` or `none` node, subnets or IPv6 of its
+own. A service key the node does not know yet is refused too, by name. Only
+what the lane starts is checked: the services `[compose.<group>] services`
+names, what they depend on, and the networks, volumes and secrets those
+(and their builds) use; a Compose file shared with production may hold other
+services (a socket-mounting admin tool, a reverse proxy) that the lane never
+starts. Compose files, env files, `extends` and `include` are read from the
+lane's files only, and the sync never follows a link out of them.
+
+The node runs what it checked, not the lane's files again: it writes the
+checked model beside the lane's copy, where the lane cannot write, and
+Compose takes it from there. Its bind mounts of the lane's files become
+mounts of one volume bound to the lane's copy, each at its path as a
+`subpath` (Docker refuses a link out of a volume, at every start of the
+container); its secrets' and configs' files are copied. A variable a service
+or build leaves without a value (`environment: [NAME]`) stays unset: nothing
+of the node's environment reaches a lane, and Compose on the node runs with
+only what Docker needs (`PATH`, `HOME`, `DOCKER_*`). While a lane starts,
+the node takes no sync for it (`409`; the lane's own start syncs before).
+Before it checks, it stops whatever of the lane still runs; `devstack lane
+stop`, the end of a lease and the removal of a member remove every container
+of the lane's Compose projects, whatever its files say by then.
+
+Images are not the member's alone: an image a lane pulls (`[lanes] image`,
+a service's `image:`) is pulled with the node's registry credentials, and
+any lane on the node can then run it by its name. Only images the node
+builds for a member (`[lanes] dockerfile`, a Compose `build`) have names
+other lanes cannot tell. Keep a private image off a shared node, or give the
+node no credentials for it.
+
+Every container of the lane gets
 the node's limits and a process limit; the lane container drops every
 capability. What a member uploads is kept per member, at most 8 GiB: the
 end of a lease keeps it, so the same lane started again sends only what

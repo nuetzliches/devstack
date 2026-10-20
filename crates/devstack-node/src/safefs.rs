@@ -73,6 +73,13 @@ pub fn remove_beneath(root: &Path, rel: &Path) -> io::Result<bool> {
     imp::remove(root, rel)
 }
 
+/// Make the directories of `rel` beneath `root` where they are missing (as
+/// Docker makes a bind mount's missing source), never through a link: a
+/// link or a file in the way is replaced.
+pub fn make_dirs_beneath(root: &Path, rel: &Path) -> io::Result<()> {
+    imp::walk(root, &components(rel)?, true).map(|_| ())
+}
+
 /// Read the regular file `rel` beneath `root`, at most `max` bytes.
 pub fn read_beneath(root: &Path, rel: &Path, max: u64) -> io::Result<Vec<u8>> {
     let mut f = imp::open_read(root, rel)?;
@@ -205,7 +212,7 @@ mod imp {
     /// The directories of `comps` beneath `root`, opened without following
     /// a link; made (`create`) where missing, with what is in the way
     /// removed. `None` when one is missing and `create` is off.
-    fn walk(
+    pub(super) fn walk(
         root: &Path,
         comps: &[std::ffi::OsString],
         create: bool,
@@ -359,7 +366,11 @@ mod imp {
     /// The directory of `dirs` beneath `root`, checked one component at a
     /// time; made where missing (`create`), with a link or file in the way
     /// removed.
-    fn walk(root: &Path, dirs: &[std::ffi::OsString], create: bool) -> io::Result<Option<PathBuf>> {
+    pub(super) fn walk(
+        root: &Path,
+        dirs: &[std::ffi::OsString],
+        create: bool,
+    ) -> io::Result<Option<PathBuf>> {
         let mut cur = root.to_path_buf();
         for c in dirs {
             cur.push(c);

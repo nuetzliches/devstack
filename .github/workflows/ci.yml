@@ -119,6 +119,11 @@ jobs:
         run: cargo test --locked -p devstack-compose --test docker -- --include-ignored
         env:
           DEVSTACK_DOCKER_TESTS: '1'
+      - name: a lane's infrastructure on a node, start to purge
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test -p devstack-node --test lanerun -- --include-ignored
+        env:
+          DEVSTACK_DOCKER_TESTS: '1'
       # The binary the tests just built; `cargo run` would build it once more.
       - name: example stack files
         shell: bash

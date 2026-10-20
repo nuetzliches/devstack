@@ -15,6 +15,28 @@ pub const MIN_NEED: Amount = Amount {
     memory: 256 << 20,
 };
 
+/// A lease's repository (`[stack] name`) and lane as a requester names
+/// them, checked before they go into a lease, the node's files, the lane
+/// container's environment and every report: a repository of at most 128
+/// characters without control characters, a lane of at most 64 letters,
+/// digits, `-`, `_` and `.` (a lane's name is `[a-z0-9-]` already).
+pub fn valid_lease_names(repo: &str, lane: &str) -> Result<(), String> {
+    if repo.trim().is_empty() || repo.chars().count() > 128 || repo.chars().any(char::is_control) {
+        return Err(
+            "the repository name must be 1 to 128 characters without control characters".into(),
+        );
+    }
+    if lane.is_empty()
+        || lane.len() > 64
+        || !lane
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    {
+        return Err("the lane name must be 1 to 64 letters, digits, `-`, `_` or `.`".into());
+    }
+    Ok(())
+}
+
 /// `need`, at least [`MIN_NEED`].
 pub fn floor_need(need: Amount) -> Amount {
     Amount {

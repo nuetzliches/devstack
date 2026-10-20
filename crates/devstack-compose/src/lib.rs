@@ -130,6 +130,8 @@ pub struct FileModel {
     pub file: Option<String>,
     #[serde(default, deserialize_with = "nullable")]
     pub external: bool,
+    /// The variable of Compose's own environment it is read from.
+    pub environment: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -211,6 +213,16 @@ pub struct BuildModel {
     #[serde(default, deserialize_with = "nullable")]
     pub entitlements: Vec<String>,
     pub ssh: Option<serde_json::Value>,
+    /// More names the built image is tagged with.
+    #[serde(default, deserialize_with = "nullable")]
+    pub tags: Vec<String>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub cache_from: Vec<String>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub cache_to: Vec<String>,
+    /// Top-level secrets the build mounts (`{source, target}` or a name).
+    #[serde(default, deserialize_with = "nullable")]
+    pub secrets: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -412,24 +424,89 @@ pub fn output_within(mut cmd: Command, budget: Duration) -> std::io::Result<Opti
     }))
 }
 
+/// The variables a Docker CLI needs to reach its engine and its own
+/// configuration (registry credentials, plugins, contexts), and those a
+/// process needs on Windows; [`clean_env`] keeps these only.
+const DOCKER_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "TMPDIR",
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "DOCKER_CERT_PATH",
+    "DOCKER_TLS_VERIFY",
+    "DOCKER_API_VERSION",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "TEMP",
+    "TMP",
+    "PATHEXT",
+    "COMSPEC",
+];
+
+/// Run `cmd` with only what the Docker CLI needs of this process's
+/// environment ([`DOCKER_ENV`]): Compose resolves a service's
+/// `environment: [NAME]`, a secret's `environment` and `${VAR}` from it, and
+/// a node agent's environment is not a lane's to read (ADR-0033).
+pub fn clean_env(cmd: &mut Command) {
+    cmd.env_clear();
+    for (k, v) in std::env::vars_os() {
+        let name = k.to_string_lossy();
+        let keep = DOCKER_ENV.iter().any(|d| {
+            if cfg!(windows) {
+                d.eq_ignore_ascii_case(&name)
+            } else {
+                *d == name
+            }
+        });
+        if keep {
+            cmd.env(k, v);
+        }
+    }
+}
+
 /// Runs the Docker CLI. `program` is `docker` unless a test substitutes it.
 #[derive(Debug, Clone)]
 pub struct Docker {
     pub program: String,
+    /// Run it with [`clean_env`] (a node agent's calls), not with this
+    /// process's whole environment.
+    pub clean_env: bool,
 }
 
 impl Default for Docker {
     fn default() -> Self {
         Self {
             program: "docker".into(),
+            clean_env: false,
         }
     }
 }
 
 impl Docker {
+    /// The Docker CLI with only what it needs of the environment
+    /// ([`clean_env`]).
+    pub fn clean() -> Self {
+        Self {
+            clean_env: true,
+            ..Self::default()
+        }
+    }
+
     fn command(&self, dir: &Path, args: &[OsString]) -> Command {
         let mut cmd = Command::new(&self.program);
         cmd.args(args).current_dir(dir);
+        if self.clean_env {
+            clean_env(&mut cmd);
+        }
         no_window(&mut cmd);
         cmd
     }
@@ -1197,6 +1274,24 @@ mod tests {
         assert_eq!(c[0].published(9999), None);
         assert!(parse_ps("").unwrap().is_empty());
         assert_eq!(parse_ps("[]").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn a_clean_environment_keeps_what_docker_needs_only() {
+        let mut cmd = Command::new("docker");
+        clean_env(&mut cmd);
+        let kept: Vec<String> = cmd
+            .get_envs()
+            .map(|(k, _)| k.to_string_lossy().to_uppercase())
+            .collect();
+        assert!(
+            kept.iter().all(|k| DOCKER_ENV.contains(&k.as_str())),
+            "{kept:?}"
+        );
+        if std::env::var_os("PATH").is_some() {
+            assert!(kept.iter().any(|k| k == "PATH"), "{kept:?}");
+        }
+        assert!(Docker::clean().clean_env && !Docker::default().clean_env);
     }
 
     #[test]

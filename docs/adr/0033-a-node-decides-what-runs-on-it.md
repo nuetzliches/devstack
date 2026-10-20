@@ -1,6 +1,6 @@
 # ADR-0033: A node decides who runs lanes on it, and what a lane there may do
 
-- **Status:** Accepted (2026-10-16), amended 2026-10-17 (what a lane's Compose files may ask; limits on every container; the node's own policy)
+- **Status:** Accepted (2026-10-16), amended 2026-10-17 (what a lane's Compose files may ask; limits on every container; the node's own policy), amended 2026-10-20 (the node runs the model it checked; known keys only; a lane's projects end with it)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md) (point 4: the node admits), [ADR-0027](0027-trust-between-nodes.md), [ADR-0031](0031-a-coordinator-places-lanes.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md)
@@ -87,6 +87,42 @@ to 5:
     the stricter network hold). The agent asks the coordinator for the
     node's policy before it admits its first lease, and never assumes none.
 
+*Amended 2026-10-20.* Point 7 checked a model, and Compose on the node then
+read the lane's files again to run one: what the lane (a request to sync,
+one of its containers that still ran, its own code writing a link into the
+mirror) changed between the two, or after, ran unchecked; values Compose
+fills in from its own environment came from the agent's; and keys Compose
+learnt since (`use_api_socket`, `provider`) were not refused. So:
+
+11. **The node runs the model it checked.** The agent writes the model
+    `config` gave, after the check, beside the mirror where the lane cannot
+    write, and that file and its overlay are all Compose on the node reads.
+    In it: only the services the lane starts; each bind mount of the mirror
+    a mount of one volume bound to the mirror, with the path as its
+    `subpath` (Docker resolves a subpath beneath its volume and refuses a
+    link out of it at every start of the container, where a bind mount
+    follows one); each secret's and config's file a copy; a variable left
+    without a value (`environment: [NAME]`, a build's `args`) removed. Docker
+    runs with only what it needs of the agent's environment (`PATH`, `HOME`,
+    `DOCKER_*`). Before the check the lane's containers stop, and the node
+    takes no sync for the lane while it starts.
+12. **Known keys only.** A service may use the keys the node knows to stay
+    in the container or checks; any other is refused by name until it is
+    known. On top of point 7: `use_api_socket`, `provider`,
+    `oom_kill_disable`, a negative `oom_score_adj`, a logging driver other
+    than `json-file`/`local`/`none`, a privileged lifecycle hook, device
+    reservations other than GPUs (`nvidia`), a build's `tags` (point 9: the
+    node names what it builds), `cache_to` and local `cache_from`, and
+    secrets or configs from `environment`.
+13. **A lane's projects end with it.** The agent records each Compose
+    project it creates for a lane, and takes them down by Compose's labels
+    when the lane stops, its lease ends or its slot is purged, whatever the
+    lane's files say by then.
+
+Images a node pulls (`[lanes] image`, a service's `image:`) are pulled with
+the node's credentials and can be run by any lane there by name; only images
+it builds are named per member (point 9). `pool.md` says so.
+
 This confines what a lane asks for, not the engine it runs on: the lane's
 containers still share the node's kernel and Docker engine with other
 lanes. A Docker engine per lane (rootless, or a VM per node) is the
@@ -139,6 +175,14 @@ lane are built (`max_cpus` in a policy, `--max-cpus` on `devstack node
 members policy`, `--cpus` on every container of the lane in `lanerun.rs`).
 Placing by node tags (`--on pool:gpu`) is not. `egress.rs` is this ADR's
 point 5, not [ADR-0022](0022-network-egress-sandbox.md), which is unbuilt.
+
+Amendment 2026-10-20: `crates/devstack-node/src/confine.rs` (`check`,
+`render`, `strip_unset`), `crates/devstack-node/src/lanerun.rs` (`compose/`
+beside the mirror, `projects.json`, `take_down` by label),
+`crates/devstack-compose/src/lib.rs` (`clean_env`, `Docker::clean`),
+`crates/devstack-node/src/node.rs` (no sync while a lane starts),
+`crates/devstack-node/tests/lanerun.rs` (start, stop, purge on a real
+engine).
 
 *Noted 2026-10-19.* Point 7 checks what the lane starts: the services
 `[compose.<group>] services` names, what they need (`depends_on`, `links`,
