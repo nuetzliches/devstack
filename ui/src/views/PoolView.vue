@@ -7,6 +7,7 @@
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { ago, bytes } from '@/lib/format';
 import { usePool } from '@/stores/pool';
+import { sharedId } from '@/api';
 import Icon from '@/components/icons/Icon.vue';
 import ShareSwitch from '@/components/ShareSwitch.vue';
 import CapacityChart from '@/components/CapacityChart.vue';
@@ -375,7 +376,10 @@ function policyText(id: string) {
         <tbody>
           <tr v-for="l in sharedHere" :key="l.lease">
             <td>
-              <strong>{{ l.lane }}</strong> <span class="faint">{{ l.repo }}</span>
+              <RouterLink :to="{ name: 'overview', params: { stack: sharedId(l.pool, l.lease) } }" title="Its state, logs and events, read only" data-testid="pool-shared-view">
+                <strong>{{ l.lane }}</strong>
+              </RouterLink>
+              <span class="faint">{{ l.repo }}</span>
             </td>
             <td>{{ l.node.name }}</td>
             <td>{{ l.owner_name }}</td>

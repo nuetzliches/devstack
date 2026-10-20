@@ -40,15 +40,15 @@ const poolHint = computed(() => {
   const n = o.nodes ?? [];
   return `${n.filter((x) => x.online).length}/${n.length}`;
 });
-// Lanes others share with this machine (ADR-0035), by node.
-const sharedByNode = computed(() => {
-  const by = new Map<string, typeof pool.shared>();
-  for (const l of pool.shared) {
-    const key = l.pool === 'default' ? l.node.name : `${l.pool}:${l.node.name}`;
-    by.set(key, [...(by.get(key) ?? []), l]);
-  }
-  return [...by.entries()].sort(([a], [b]) => a.localeCompare(b));
-});
+// Lanes others share with this machine (ADR-0035), listed as the stacks are;
+// a click opens the lane read only, as one's own is shown (ADR-0040).
+const sharedLanes = computed(() =>
+  [...pool.shared].sort((a, b) => `${a.repo} ${a.lane} ${a.owner_name}`.localeCompare(`${b.repo} ${b.lane} ${b.owner_name}`)),
+);
+function sharedTitle(l: (typeof pool.shared)[number]): string {
+  const node = l.pool === 'default' ? l.node.name : `${l.pool}:${l.node.name}`;
+  return `${l.repo} · ${l.lane}\nshared by ${l.owner_name}, runs on ${node} · read only`;
+}
 const adding = ref(false);
 /** Stacks whose worktrees are folded away; only the toggle changes it. */
 const collapsed = ref<Record<string, boolean>>(persist.get<Record<string, boolean>>('sidebar.collapsed') ?? {});
@@ -329,41 +329,26 @@ async function copyPath(s: StackEntry) {
         No stacks yet. <button type="button" class="link" @click="adding = true">Add one</button>, or run <code>devstack up</code> in a project.
       </li>
     </ul>
-    <template v-if="sharedByNode.length">
+    <template v-if="sharedLanes.length">
       <div class="head" data-testid="sidebar-shared">Shared with you</div>
-      <ul class="tree shared">
-        <li v-for="[node, lanes] in sharedByNode" :key="node">
-          <div class="node-name faint small"><Icon name="server" :size="12" /> {{ node }}</div>
-          <ul>
-            <li v-for="l in lanes" :key="l.lease" class="shared-lane" :title="`${l.repo} · ${l.lane}, shared by ${l.owner_name}`">
-              <button
-                v-if="l.view"
-                type="button"
-                class="item lane"
-                :class="{ active: stack.id === sharedId(l.pool, l.lease) }"
-                :title="`${l.repo} · ${l.lane}, shared by ${l.owner_name} to view: its state, logs and events, read only`"
-                data-testid="sidebar-shared-view"
-                @click="router.push({ name: 'overview', params: { stack: sharedId(l.pool, l.lease) } })"
-              >
-                <span class="dot on" aria-hidden="true" />
-                <span class="label truncate">{{ l.lane }} <span class="faint small">{{ l.owner_name }}</span></span>
-              </button>
-              <span v-else class="label">{{ l.lane }} <span class="faint small">{{ l.owner_name }}</span></span>
-              <span class="svcs">
-                <button
-                  v-for="s in l.services"
-                  :key="s.name"
-                  type="button"
-                  class="pill sm outline svc"
-                  :title="`Open ${s.name}`"
-                  data-testid="sidebar-shared-open"
-                  @click="pool.openShared(l.pool, l.lease, s.name)"
-                >
-                  {{ s.name }}
-                </button>
-              </span>
-            </li>
-          </ul>
+      <ul class="stacks">
+        <li v-for="l in sharedLanes" :key="`${l.pool}~${l.lease}`" class="stack" :class="{ current: stack.id === sharedId(l.pool, l.lease) }">
+          <div class="stack-row">
+            <span class="fold-space" />
+            <button
+              type="button"
+              class="item"
+              :class="{ active: stack.id === sharedId(l.pool, l.lease) }"
+              :title="sharedTitle(l)"
+              data-testid="sidebar-shared-lane"
+              @click="router.push({ name: 'overview', params: { stack: sharedId(l.pool, l.lease) } })"
+            >
+              <span class="dot on" aria-hidden="true" />
+              <span class="label truncate">{{ l.repo }} · {{ l.lane }}</span>
+              <span class="faint small truncate owner" data-testid="sidebar-shared-owner">{{ l.owner_name }}</span>
+            </button>
+            <span class="more-space" />
+          </div>
         </li>
       </ul>
     </template>
@@ -491,36 +476,14 @@ ul {
   margin-left: 30px;
   padding-left: 4px;
 }
-.shared {
-  list-style: none;
-  margin: 0 0 8px;
-  padding: 0 8px;
+.owner {
+  flex: 0 1 auto;
+  max-width: 45%;
+  font-weight: 400;
 }
-.shared ul {
-  list-style: none;
-  margin: 0;
-  padding: 0 0 0 18px;
-}
-.node-name {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 0 2px;
-}
-.shared-lane {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 3px 0;
-  font-size: 13px;
-}
-.svcs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.svc {
-  cursor: pointer;
+.more-space {
+  width: 24px;
+  flex: none;
 }
 .item {
   display: flex;

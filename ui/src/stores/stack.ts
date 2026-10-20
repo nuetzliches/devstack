@@ -43,7 +43,7 @@ export const useStack = defineStore('stack', () => {
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let usageFetched = false;
 
-  /** A lane someone shares with this machine to view (ADR-0040): shown as one's own, read only. */
+  /** A lane someone shares with this machine (ADR-0040): shown as one's own, read only. */
   const shared = computed(() => sharedRef(id.value));
   const sharedLane = computed(() => {
     const r = shared.value;
@@ -55,7 +55,7 @@ export const useStack = defineStore('stack', () => {
     const own = hub.entry(id.value);
     const l = sharedLane.value;
     if (own || !l || !id.value) return own;
-    return { id: id.value, name: `${l.repo} · ${l.lane}`, file: '', repo: l.repo, running: !!l.view, daemon: null, last_seen: null };
+    return { id: id.value, name: `${l.repo} · ${l.lane}`, file: '', repo: l.repo, running: true, daemon: null, last_seen: null };
   });
   const running = computed(() => !!entry.value?.running);
   /** The view shown is not live: hub away, stack down, or not connected yet. */

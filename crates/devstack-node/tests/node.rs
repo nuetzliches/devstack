@@ -315,20 +315,32 @@ fn a_lane_is_leased_admitted_and_synced() {
     // that it does not run).
     use devstack_node::coordinator::{SharedService, Sharing};
     assert!(other.shared().unwrap().is_empty());
+    let read = |c: &NodeClient, path: &str| {
+        let req = hyper::Request::get(path)
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .unwrap();
+        rt.block_on(c.view(&lease.id, req))
+            .map(|r| r.status().as_u16())
+            .unwrap_or_else(|e| match e {
+                ClientError::Status(s, _) => s,
+                e => panic!("{e}"),
+            })
+    };
     assert!(matches!(
         rt.block_on(theirs.open_shared(&lease.id, 5173)),
         Err(ClientError::Status(403, _))
     ));
-    let sharing = Sharing {
-        with: vec!["*".into()],
-        services: vec![SharedService {
+    // Not shared: not viewed either (ADR-0040).
+    assert_eq!(read(&theirs, "/v1/stack"), 403);
+    let sharing = Sharing::new(
+        vec!["*".into()],
+        vec![SharedService {
             name: "web".into(),
             port: 5173,
             scheme: "http".into(),
             here: 5273,
         }],
-        view: Vec::new(),
-    };
+    );
     assert!(
         other.share_lease(&lease.id, Some(&sharing)).is_err(),
         "only its owner shares a lane"
@@ -362,30 +374,7 @@ fn a_lane_is_leased_admitted_and_synced() {
         rt.block_on(theirs.open_shared(&lease.id, 5173)),
         Err(ClientError::Status(409, _))
     ));
-    // Shared to use, not to view (ADR-0040): its state stays its owner's.
-    let read = |c: &NodeClient, path: &str| {
-        let req = hyper::Request::get(path)
-            .body(http_body_util::Empty::<bytes::Bytes>::new())
-            .unwrap();
-        rt.block_on(c.view(&lease.id, req))
-            .map(|r| r.status().as_u16())
-            .unwrap_or_else(|e| match e {
-                ClientError::Status(s, _) => s,
-                e => panic!("{e}"),
-            })
-    };
-    assert!(!seen[0].view);
-    assert_eq!(read(&theirs, "/v1/stack"), 403);
-    requester
-        .share_lease(
-            &lease.id,
-            Some(&Sharing {
-                view: vec!["*".into()],
-                ..sharing.clone()
-            }),
-        )
-        .unwrap();
-    assert!(other.shared().unwrap()[0].view, "listed as viewable");
+    // Shared, it may be viewed as well (ADR-0040, amended 2026-10-20).
     // Past the check, the lane that never started answers that it does not
     // run; a change, or a path that is not for reading, stays refused.
     std::thread::sleep(Duration::from_secs(6)); // the node's last word, 5 s
@@ -398,6 +387,9 @@ fn a_lane_is_leased_admitted_and_synced() {
         rt.block_on(theirs.open_shared(&lease.id, 5173)),
         Err(ClientError::Status(403, _))
     ));
+    // Unshared, it is not viewed any more once the node asks again.
+    std::thread::sleep(Duration::from_secs(6));
+    assert_eq!(read(&theirs, "/v1/stack"), 403);
 
     // One lease at a time per lane: its data is one.
     let twice = requester

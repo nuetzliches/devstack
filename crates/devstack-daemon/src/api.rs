@@ -620,13 +620,11 @@ struct LaneShare {
     /// Member ids or tags of the pool, `*` for every member; empty: nobody.
     #[serde(default)]
     with: Vec<String>,
-    /// Who may also view it (ADR-0040); absent: as it was.
-    #[serde(default)]
-    view: Option<Vec<String>>,
 }
 
 /// `POST /v1/lanes/{lane}/share {"with"}`: share a lane on a node with
-/// others in its pool, or stop (ADR-0035). Answers with the lanes.
+/// others in its pool, or stop (ADR-0035); they may use and view it
+/// (ADR-0040). Answers with the lanes.
 async fn lanes_share(
     State(s): State<AppState>,
     Path(lane): Path<String>,
@@ -637,9 +635,7 @@ async fn lanes_share(
         Err(r) => return r,
     };
     let res = tokio::task::spawn_blocking(move || {
-        lanes
-            .share_lane(&lane, body.with, body.view)
-            .map(|()| lanes.list())
+        lanes.share_lane(&lane, body.with).map(|()| lanes.list())
     })
     .await;
     match res {

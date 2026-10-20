@@ -85,14 +85,14 @@ export const paths = {
    * lane: the stack store knows which one is shown (`useStack().apiLane`).
    */
   api: (stack: string, path: string, lane: string | null = null) => {
-    // A lane shared with this machine to view (ADR-0040): read through its node.
+    // A lane shared with this machine (ADR-0040): read through its node.
     const shared = sharedRef(stack);
     if (shared) return `/hub/pool/shared/${enc(shared.lease)}/api${path}${path.includes('?') ? '&' : '?'}pool=${enc(shared.pool)}`;
     return `/hub/stacks/${enc(stack)}/api${lane && path.startsWith('/v1/') && !path.startsWith('/v1/lanes') ? `/v1/lanes/${enc(lane)}` : ''}${path}`;
   },
 };
 
-/** The id under which the dashboard shows a lane shared with this machine to view (ADR-0040). */
+/** The id under which the dashboard shows a lane shared with this machine (ADR-0040). */
 export function sharedId(pool: string, lease: string): string {
   return `shared~${pool}~${lease}`;
 }

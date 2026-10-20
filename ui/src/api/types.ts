@@ -390,8 +390,6 @@ export type SharedLane = {
   services: SharedService[];
   /** The owner's devstack, from its last report. */
   owner_devstack?: PoolRelease;
-  /** This machine may view it as well (ADR-0040); older coordinators omit it. */
-  view?: boolean;
 };
 
 /** A node's or the pool's capacity at one moment (ADR-0036), `GET /hub/pool/history`. */

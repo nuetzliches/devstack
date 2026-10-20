@@ -470,10 +470,13 @@ pub struct Sharing {
     pub with: Vec<String>,
     /// What they may open.
     pub services: Vec<SharedService>,
-    /// Who may also view it (ADR-0040): its state, logs, events, usage,
-    /// read only. Viewing includes using. Absent from an older owner.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub view: Vec<String>,
+    /// Only for devstack 0.11, which kept a separate list of who may view a
+    /// lane (ADR-0040 before its amendment of 2026-10-20). Whoever a lane is
+    /// shared with may view it now: an owner sends `with` here as well, so a
+    /// 0.11 coordinator or node lets them view; read, it only widens `with`
+    /// (a 0.11 owner's viewers could use the lane too).
+    #[serde(default, rename = "view", skip_serializing_if = "Vec::is_empty")]
+    pub legacy_view: Vec<String>,
 }
 
 fn listed(list: &[String], id: &str, tags: &[String]) -> bool {
@@ -482,14 +485,19 @@ fn listed(list: &[String], id: &str, tags: &[String]) -> bool {
 }
 
 impl Sharing {
-    /// May the member `id` with `tags` use it?
-    pub fn admits(&self, id: &str, tags: &[String]) -> bool {
-        listed(&self.with, id, tags) || listed(&self.view, id, tags)
+    /// The lane shared `with` those, for `services`, as an owner tells it.
+    pub fn new(with: Vec<String>, services: Vec<SharedService>) -> Self {
+        Self {
+            legacy_view: with.clone(),
+            with,
+            services,
+        }
     }
 
-    /// May the member `id` with `tags` view it (ADR-0040)?
-    pub fn admits_view(&self, id: &str, tags: &[String]) -> bool {
-        listed(&self.view, id, tags)
+    /// May the member `id` with `tags` use it, and view it (ADR-0040,
+    /// amended 2026-10-20: sharing a lane includes viewing it)?
+    pub fn admits(&self, id: &str, tags: &[String]) -> bool {
+        listed(&self.with, id, tags) || listed(&self.legacy_view, id, tags)
     }
 }
 
@@ -540,9 +548,11 @@ pub struct SharedLane {
     /// (`crate::version::PROTOCOL`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_devstack: Option<Release>,
-    /// The caller may view it as well (ADR-0040).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub view: bool,
+    /// Only for devstack 0.11, whose hub and dashboard view a shared lane
+    /// only where this is `true`: always `true` now, as whoever a lane is
+    /// shared with may view it (ADR-0040, amended 2026-10-20). Not read.
+    #[serde(default, rename = "view")]
+    pub legacy_view: bool,
 }
 
 /// A member as the pool shows it.
@@ -1346,7 +1356,7 @@ async fn shared_list(
                 },
                 services: sh.services.clone(),
                 owner_devstack: reports.get(&l.member).and_then(|(_, r)| r.devstack.clone()),
-                view: sh.admits_view(&me.id, &me.tags),
+                legacy_view: true,
             })
         })
         .collect();
@@ -1818,6 +1828,38 @@ mod history_tests {
 #[cfg(test)]
 mod share_tests {
     use super::*;
+
+    /// Whoever a lane is shared with may view it (ADR-0040, amended
+    /// 2026-10-20); nobody else may.
+    #[test]
+    fn a_lane_is_viewed_by_whom_it_is_shared_with() {
+        let qa = vec!["team:qa".to_string()];
+        let sh = Sharing::new(qa.clone(), Vec::new());
+        assert!(sh.admits("bob", &qa));
+        assert!(sh.admits("ann", &["x".into(), "team:qa".into()]));
+        assert!(!sh.admits("eve", &[]));
+        assert!(!Sharing::default().admits("bob", &qa));
+        // Told as devstack 0.11 reads it: the same members may view it.
+        let wire = serde_json::to_value(&sh).unwrap();
+        assert_eq!(wire["view"], wire["with"]);
+    }
+
+    /// A sharing from devstack 0.11, with viewers of its own, still reads;
+    /// they could use the lane, and may still.
+    #[test]
+    fn an_older_sharing_still_reads() {
+        let old: Sharing =
+            serde_json::from_str(r#"{"with":["team:dev"],"services":[],"view":["bob"]}"#).unwrap();
+        assert!(old.admits("bob", &[]) && old.admits("ann", &["team:dev".into()]));
+        let plain: Sharing = serde_json::from_str(r#"{"with":["*"],"services":[]}"#).unwrap();
+        assert!(plain.admits("bob", &[]));
+        let listed: SharedLane = serde_json::from_str(
+            r#"{"lease":"l","repo":"shop","lane":"fix","owner":"o","owner_name":"o",
+                "node":{"id":"n","name":"n","api":"https://n"},"services":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(listed.lane, "fix");
+    }
 
     #[test]
     fn a_shared_service_is_a_web_page_only() {

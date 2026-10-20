@@ -75,9 +75,6 @@ pub struct LaneView {
     /// `*` for every member; empty: nobody.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub shared_with: Vec<String>,
-    /// Who may also view it (ADR-0040): its state, logs, events, read only.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub viewed_by: Vec<String>,
     /// The profile it runs with (ADR-0041), while it runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
@@ -158,6 +155,41 @@ fn lane_offset(number: u16, step: u16) -> Option<u16> {
     number.checked_mul(step)
 }
 
+/// Whom each lane is shared with, from `.devstack/lane-shares.json`. The
+/// separate viewers devstack 0.11 kept (`lane-views.json`, ADR-0040 before
+/// its amendment of 2026-10-20) could use the lane as well: they are added
+/// to its sharing once, and the file goes. `default`: `[lanes] share`, for
+/// a lane its owner never shared.
+fn load_shares(state: &Path, default: &[String]) -> BTreeMap<String, Vec<String>> {
+    let read = |f: &str| -> Option<BTreeMap<String, Vec<String>>> {
+        serde_json::from_slice(&std::fs::read(state.join(f)).ok()?).ok()
+    };
+    let mut shares = read("lane-shares.json").unwrap_or_default();
+    let views_file = state.join("lane-views.json");
+    if !views_file.exists() {
+        return shares;
+    }
+    for (lane, view) in read("lane-views.json").unwrap_or_default() {
+        if view.is_empty() {
+            continue;
+        }
+        let with = shares.entry(lane).or_insert_with(|| default.to_vec());
+        for v in view {
+            if !with.contains(&v) {
+                with.push(v);
+            }
+        }
+    }
+    let saved = std::fs::write(
+        state.join("lane-shares.json"),
+        serde_json::to_vec_pretty(&shares).expect("shares serialise"),
+    );
+    if saved.is_ok() {
+        let _ = std::fs::remove_file(&views_file);
+    }
+    shares
+}
+
 #[derive(Debug, Clone)]
 struct Known {
     entry: LaneEntry,
@@ -200,13 +232,11 @@ pub struct Lanes {
     /// Lanes being started right now, so one is not started twice.
     pending: Mutex<BTreeSet<String>>,
     /// Whom each lane is shared with, where its owner said so (ADR-0035);
-    /// else `[lanes] share`. Kept in `.devstack/lane-shares.json`.
+    /// else `[lanes] share`. They may view it too (ADR-0040, amended
+    /// 2026-10-20). Kept in `.devstack/lane-shares.json`.
     shares: Mutex<BTreeMap<String, Vec<String>>>,
     /// The profile each started lane runs with (ADR-0041), while it runs.
     profiles: Mutex<BTreeMap<String, String>>,
-    /// Who may also view each lane (ADR-0040), where its owner said so.
-    /// Kept in `.devstack/lane-views.json`.
-    views: Mutex<BTreeMap<String, Vec<String>>>,
     /// One main-slot hand-over at a time, and what it took from the main tree.
     handover: Mutex<Handover>,
     /// One [`Lanes::sync`] at a time: asking git and applying the answer go
@@ -550,14 +580,7 @@ impl Lanes {
         token: Arc<String>,
         port: u16,
     ) -> Arc<Self> {
-        let shares = std::fs::read(root_state.join("lane-shares.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
-        let views = std::fs::read(root_state.join("lane-views.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+        let shares = load_shares(&root_state, &main.stack.lanes.share);
         let me = Arc::new(Self {
             root_state,
             main,
@@ -571,7 +594,6 @@ impl Lanes {
             moves: Mutex::new(BTreeMap::new()),
             pending: Mutex::new(BTreeSet::new()),
             shares: Mutex::new(shares),
-            views: Mutex::new(views),
             profiles: Mutex::new(BTreeMap::new()),
             handover: Mutex::new(Handover::default()),
             syncing: Mutex::new(()),
@@ -1274,7 +1296,6 @@ impl Lanes {
                     node: on_node.map(|r| r.node.name.clone()),
                     pool: on_node.map(|r| r.pool.clone()),
                     shared_with: self.share_of(&k.entry.name),
-                    viewed_by: self.view_of(&k.entry.name),
                     profile: self.profiles.lock().unwrap().get(&k.entry.name).cloned(),
                     node_error: node_state.and_then(|st| st.error),
                     node_warning: on_node
@@ -1937,23 +1958,11 @@ impl Lanes {
             .unwrap_or_else(|| self.main.stack.lanes.share.clone())
     }
 
-    /// Who may view the lane `name` (ADR-0040): what its owner said; nobody
-    /// otherwise, the stack file never says so.
-    fn view_of(&self, name: &str) -> Vec<String> {
-        self.views
-            .lock()
-            .unwrap()
-            .get(name)
-            .cloned()
-            .unwrap_or_default()
-    }
-
     /// What the coordinator is told of the lane `entry` shared: whom with,
     /// and its services with a port (on the node, and here).
     fn sharing_of(&self, entry: &LaneEntry) -> Option<devstack_node::coordinator::Sharing> {
         let with = self.share_of(&entry.name);
-        let view = self.view_of(&entry.name);
-        if with.is_empty() && view.is_empty() {
+        if with.is_empty() {
             return None;
         }
         let offset = lane_offset(entry.number, self.main.stack.lanes.port_step)?;
@@ -1963,23 +1972,14 @@ impl Lanes {
             &entry.name,
             &self.main.published_ports(),
         );
-        Some(devstack_node::coordinator::Sharing {
-            with,
-            services,
-            view,
-        })
+        Some(devstack_node::coordinator::Sharing::new(with, services))
     }
 
     /// Share the lane `name` with `with` (member ids, tags, `*`), or with
-    /// nobody (empty), ADR-0035; `view`: who may also view it (ADR-0040),
-    /// unchanged when `None`. A lane on a node tells the coordinator at
-    /// once; one not on a node keeps it for when it goes to one.
-    pub fn share_lane(
-        &self,
-        name: &str,
-        with: Vec<String>,
-        view: Option<Vec<String>>,
-    ) -> Result<(), String> {
+    /// nobody (empty), ADR-0035; they may use it and view it (ADR-0040). A
+    /// lane on a node tells the coordinator at once; one not on a node keeps
+    /// it for when it goes to one.
+    pub fn share_lane(&self, name: &str, with: Vec<String>) -> Result<(), String> {
         let entry = self
             .known
             .lock()
@@ -1992,20 +1992,6 @@ impl Lanes {
             .map(|w| w.trim().to_string())
             .filter(|w| !w.is_empty())
             .collect();
-        if let Some(view) = view {
-            let view: Vec<String> = view
-                .into_iter()
-                .map(|w| w.trim().to_string())
-                .filter(|w| !w.is_empty())
-                .collect();
-            let mut views = self.views.lock().unwrap();
-            views.insert(name.to_string(), view);
-            let _ = std::fs::create_dir_all(&self.root_state);
-            let _ = std::fs::write(
-                self.root_state.join("lane-views.json"),
-                serde_json::to_vec_pretty(&*views).expect("views serialise"),
-            );
-        }
         {
             let mut shares = self.shares.lock().unwrap();
             shares.insert(name.to_string(), with);
@@ -2398,6 +2384,23 @@ port = 8080
             "{s:?}"
         );
         assert!(s.iter().all(|s| s.here == s.port));
+    }
+
+    #[test]
+    fn viewers_of_a_lane_join_its_sharing() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("lane-shares.json"), r#"{"a": ["team:qa"]}"#).unwrap();
+        std::fs::write(
+            d.path().join("lane-views.json"),
+            r#"{"a": ["team:qa", "bob"], "b": ["*"], "c": []}"#,
+        )
+        .unwrap();
+        let shares = super::load_shares(d.path(), &["team:dev".to_string()]);
+        assert_eq!(shares["a"], ["team:qa", "bob"]);
+        assert_eq!(shares["b"], ["team:dev", "*"]);
+        assert!(!shares.contains_key("c"));
+        assert!(!d.path().join("lane-views.json").exists());
+        assert_eq!(super::load_shares(d.path(), &[]), shares);
     }
 
     #[test]
