@@ -326,7 +326,7 @@ never runs Compose for them itself: a request that names containers and
 lacks the header (it came past an agent that could not read the stack file,
 or an older one) is answered `409`. The requester's daemon answers `409`
 with what to update when the node's devstack is older than the release that
-does this (0.11.2; 0.11.0 for `/v1/infra/...`).
+does this (0.12.0; 0.11.0 for `/v1/infra/...`).
 
 Long actions (`restart`, `promote`, `rollback`) answer when done; progress
 arrives meanwhile as `candidate` and `service` events. What can take many
