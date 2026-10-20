@@ -7,8 +7,12 @@
 //! `.devstack/` directory (artifacts, logs) until someone deletes it, and the
 //! command lists them so nothing is forgotten.
 //!
-//! It refuses while a stack still runs: its processes belong to a daemon that
-//! the binary being removed started.
+//! It refuses while a stack still runs (its processes belong to a daemon that
+//! the binary being removed started) or another devstack process of this
+//! user does (a node agent, a coordinator, an MCP server), and while the
+//! per-user state holds a pool coordinator, unless `--with-coordinator`: a
+//! coordinator's CA cannot be made again. It names the pool memberships that
+//! go with the state.
 
 use anyhow::{Result, anyhow, bail};
 use std::io::Write as _;
@@ -31,7 +35,76 @@ fn state_root() -> PathBuf {
         .to_path_buf()
 }
 
-pub fn uninstall(yes: bool) -> Result<()> {
+/// What of the pool lives in the per-user state and goes with it: the
+/// coordinator's directory, if it has a CA there, and the pools this machine
+/// has a membership of (ADR-0034).
+fn pool_state(root: &Path) -> (Option<PathBuf>, Vec<String>) {
+    let coordinator = Some(crate::poolcmd::coordinator_dir(None))
+        .filter(|d| d.starts_with(root) && d.join("ca.key").exists());
+    let memberships = devstack_node::member::pools(root)
+        .into_iter()
+        .filter(|(_, dir)| dir.starts_with(root) && dir.join("member.json").is_file())
+        .map(|(name, _)| name)
+        .collect();
+    (coordinator, memberships)
+}
+
+/// Other devstack processes of this user, besides this one and the hub
+/// (which is stopped): a node agent, a coordinator, an MCP server. They run
+/// the binary that is to go, and a running one cannot be deleted (Windows).
+fn other_devstack_processes(hub: Option<u32>) -> Vec<u32> {
+    let me = std::process::id();
+    running_devstack_pids()
+        .into_iter()
+        .filter(|p| *p != me && Some(*p) != hub)
+        .collect()
+}
+
+#[cfg(windows)]
+fn running_devstack_pids() -> Vec<u32> {
+    let user = match (std::env::var("USERDOMAIN"), std::env::var("USERNAME")) {
+        (Ok(d), Ok(u)) => format!("{d}\\{u}"),
+        (_, Ok(u)) => u,
+        _ => return Vec::new(),
+    };
+    let out = std::process::Command::new("tasklist")
+        .args([
+            "/FI",
+            "IMAGENAME eq devstack.exe",
+            "/FI",
+            &format!("USERNAME eq {user}"),
+            "/FO",
+            "CSV",
+            "/NH",
+        ])
+        .output();
+    let Ok(out) = out else { return Vec::new() };
+    // `"devstack.exe","1234","Console","1","12,345 K"`
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.split(',').nth(1)?.trim_matches('"').parse().ok())
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn running_devstack_pids() -> Vec<u32> {
+    // SAFETY: getuid cannot fail.
+    let uid = unsafe { libc::getuid() };
+    let out = std::process::Command::new("ps")
+        .args(["-U", &uid.to_string(), "-o", "pid=,comm="])
+        .output();
+    let Ok(out) = out else { return Vec::new() };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let (pid, comm) = l.trim().split_once(char::is_whitespace)?;
+            let name = comm.trim().rsplit('/').next()?;
+            (name == "devstack").then(|| pid.parse().ok())?
+        })
+        .collect()
+}
+
+pub fn uninstall(yes: bool, with_coordinator: bool) -> Result<()> {
     let stacks = devstack_daemon::registry::list();
     let running: Vec<&devstack_daemon::registry::Entry> = stacks
         .iter()
@@ -49,15 +122,43 @@ pub fn uninstall(yes: bool) -> Result<()> {
             list.join("\n")
         );
     }
+    let others = other_devstack_processes(devstack_hub::read_info().map(|h| h.pid));
+    if !others.is_empty() {
+        let list: Vec<String> = others.iter().map(u32::to_string).collect();
+        bail!(
+            "other devstack processes run (a node agent, a coordinator, an MCP server?): pid {}; end them first",
+            list.join(", ")
+        );
+    }
+    let root = state_root();
+    let (coordinator, memberships) = pool_state(&root);
+    if let Some(dir) = &coordinator
+        && !with_coordinator
+    {
+        bail!(
+            "{} holds a pool coordinator: its CA cannot be made again, and every member's certificate depends on it. \
+             Move it elsewhere (`DEVSTACK_COORDINATOR_DIR`, `devstack node serve --dir`) or uninstall with `--with-coordinator`",
+            dir.display()
+        );
+    }
 
     let exe = std::env::current_exe()?;
     let ours = install_dir().is_some_and(|d| exe.parent() == Some(d.as_path()));
     println!("devstack self uninstall removes:");
     println!("  - the dashboard hub, its start at logon and the devstack:// link");
-    println!(
-        "  - {} (token, list of stacks, hub log)",
-        state_root().display()
-    );
+    println!("  - {} (token, list of stacks, hub log)", root.display());
+    if !memberships.is_empty() {
+        println!(
+            "  - this machine's membership of the pools {} (joining again needs an admin's approval)",
+            memberships.join(", ")
+        );
+    }
+    if let Some(dir) = &coordinator {
+        println!(
+            "  - the pool coordinator in {} with its CA: every member must join a new one",
+            dir.display()
+        );
+    }
     if ours {
         println!("  - {} and its PATH entry", exe.display());
     } else {
@@ -87,12 +188,25 @@ pub fn uninstall(yes: bool) -> Result<()> {
     std::thread::sleep(std::time::Duration::from_millis(500));
     crate::integration::uninstall()?;
     // The marker of `integration` lives in the state root too; all of it goes.
-    remove_dir(&state_root());
+    let removed = remove_dir(&root);
     if ours {
         remove_from_path(exe.parent().unwrap())?;
         remove_binary(&exe)?;
     }
-    println!("devstack is uninstalled.");
+    if removed {
+        println!("devstack is uninstalled.");
+    } else {
+        println!(
+            "devstack is uninstalled, except for {} (see above): delete it once nothing holds it",
+            root.display()
+        );
+    }
+    if ours && cfg!(windows) {
+        println!(
+            "{} goes in a few seconds, once this process has exited.",
+            exe.parent().unwrap().display()
+        );
+    }
     Ok(())
 }
 
@@ -104,11 +218,14 @@ fn confirm(prompt: &str) -> Result<bool> {
     Ok(matches!(line.trim(), "y" | "Y" | "yes" | "j" | "ja"))
 }
 
-fn remove_dir(dir: &Path) {
-    if let Err(e) = std::fs::remove_dir_all(dir)
-        && e.kind() != std::io::ErrorKind::NotFound
-    {
-        eprintln!("note: could not remove {}: {e}", dir.display());
+/// Whether `dir` is gone.
+fn remove_dir(dir: &Path) -> bool {
+    match std::fs::remove_dir_all(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            eprintln!("could not remove {}: {e}", dir.display());
+            false
+        }
+        _ => true,
     }
 }
 

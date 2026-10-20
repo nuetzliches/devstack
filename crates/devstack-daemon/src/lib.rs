@@ -195,6 +195,8 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     )?;
     // Only the lock holder writes the diagnostic log (plan §11).
     diag::init(state_dir.join("daemon.log"));
+    // Its path stays on this machine (ADR-0037 point 4).
+    diag::add_root(&repo, "<repo>");
     // Read after the log is open: a stack file this devstack cannot run (one
     // that needs a newer devstack) says so in `devstack logs --daemon` (#11).
     let stack = match devstack_config::load(stack_file) {

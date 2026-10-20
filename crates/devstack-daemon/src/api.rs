@@ -1161,7 +1161,14 @@ async fn run_command(
     body: Option<Json<RunBody>>,
 ) -> Response {
     let confirm = body.map(|b| b.0.confirm).unwrap_or(false);
-    match commands::start(&s.sup, &s.runs, &name, confirm) {
+    // It creates and prunes the run's log directory: file I/O, off the
+    // async workers.
+    let started =
+        tokio::task::spawn_blocking(move || commands::start(&s.sup, &s.runs, &name, confirm)).await;
+    let Ok(started) = started else {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "the run did not start");
+    };
+    match started {
         Ok(id) => (StatusCode::ACCEPTED, Json(serde_json::json!({ "run": id }))).into_response(),
         Err(e @ RunError::Unknown(_)) => err(StatusCode::NOT_FOUND, e.to_string()),
         Err(RunError::NeedsConfirmation(text)) => (

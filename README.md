@@ -188,7 +188,7 @@ Every command and flag: `devstack --help`, `devstack <command> --help`.
 | `devstack doctor` | what this machine lacks for this stack, with the fix; exits 1 when something fails |
 | `devstack up [--on <node>\|pool] [--workers] [--force] [--profile <name> [--run]] [--yes]`, `down [--infra] [--all]`, `status` | start (in a worktree: its lane, here or on a node; with a profile of the stack file, for a purpose such as an acceptance run), stop (`--all`: the lanes too), show the stack |
 | `devstack start\|stop\|restart <service\|group>`, `promote`, `rollback`, `hot-reload` | one service or group; `restart --rebuild` builds again although an artifact for the same inputs exists |
-| `devstack build <service> [--lane <lane>]` | sync the snapshot and build an artifact, without starting it |
+| `devstack build <service>` | sync the main tree's snapshot and build an artifact, without starting it (in a lane: `devstack restart <service>` in its worktree) |
 | `devstack builds <service>`, `logs`, `top`, `env <service> [--export dotenv]` | what ran, what it printed, what it uses, what it gets |
 | `devstack run <command>` | a command of the stack file |
 | `devstack lane list\|start\|stop\|reset\|prune\|move\|share` | the lanes (worktrees), see above; `reset` throws a stopped lane's data away, `prune` removes what gone lanes left behind |
@@ -200,7 +200,7 @@ Every command and flag: `devstack --help`, `devstack <command> --help`.
 | `devstack pool [shared\|telemetry on\|off]`, `open <lane> [<service>]` | the pool as this machine sees it; lanes others share with you |
 | `devstack node init\|serve\|fingerprint\|agent` | run a pool's coordinator or a node agent ([pool.md](docs/pool.md)) |
 | `devstack node members [approve\|remove\|role\|tags\|node\|policy]` | administer a pool on its coordinator; `node <id> on\|off` grants a member to run the pool's lanes |
-| `devstack update [--check] [--version <v>]`, `self uninstall` | install a newer release (or only say whether one exists) and move the hub onto it; remove devstack for this user |
+| `devstack update [--check] [--version <v>]`, `self uninstall [--with-coordinator]` | install a newer release (or only say whether one exists) and move the hub onto it; remove devstack for this user (its pool memberships go too; a coordinator kept in the per-user state only with `--with-coordinator`) |
 
 ## Why
 

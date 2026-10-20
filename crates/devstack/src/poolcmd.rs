@@ -646,7 +646,7 @@ Wants=network-online.target
 
 [Service]
 User={user}
-Environment=HOME={home}
+Environment={home}
 ExecStart={exe} {args}
 Restart=always
 RestartSec=5
@@ -654,9 +654,38 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 ",
-        exe = exe.display(),
-        args = args.join(" ")
+        home = systemd_word(&format!("HOME={home}")),
+        exe = systemd_word(&exe.to_string_lossy()),
+        args = args
+            .iter()
+            .map(|a| systemd_word(a))
+            .collect::<Vec<_>>()
+            .join(" ")
     ))
+}
+
+/// One word of a systemd unit's `ExecStart=` or `Environment=`: as it is
+/// when it is plain, else in double quotes, `\` and `"` escaped, `%` and `$`
+/// doubled (systemd expands both, quoted or not).
+fn systemd_word(s: &str) -> String {
+    let plain = !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._:@,=+-".contains(c));
+    if plain {
+        return s.to_string();
+    }
+    let mut out = String::from('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str(r"\\"),
+            '"' => out.push_str(r#"\""#),
+            '%' => out.push_str("%%"),
+            '$' => out.push_str("$$"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// `devstack node run-lane`: a lane on a node, driven from here without the
@@ -775,4 +804,25 @@ pub fn run_lane(file: &Path, on: &str, lane: &str, keep: bool) -> Result<()> {
         println!("released lease {id}");
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::systemd_word;
+
+    #[test]
+    fn a_unit_quotes_what_has_spaces_or_specifiers() {
+        assert_eq!(
+            systemd_word("/usr/local/bin/devstack"),
+            "/usr/local/bin/devstack"
+        );
+        assert_eq!(
+            systemd_word("/home/a b/.local/bin/devstack"),
+            r#""/home/a b/.local/bin/devstack""#
+        );
+        assert_eq!(systemd_word("HOME=/home/x%y"), r#""HOME=/home/x%%y""#);
+        assert_eq!(systemd_word(r#"a"b$c\d"#), r#""a\"b$$c\\d""#);
+        assert_eq!(systemd_word(""), r#""""#);
+        assert_eq!(systemd_word("0.0.0.0:7480"), "0.0.0.0:7480");
+    }
 }

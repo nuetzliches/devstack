@@ -126,3 +126,15 @@ first line of the reason), `node_lane_stopped`, `node_lease_ended`,
 `node_update_refused`, `node_update_failed` (`node_log` in
 `crates/devstack-node/src/telemetry.rs`). A refused request's log line
 carries the first line of its `error`.
+
+*Noted 2026-10-20, later.* Point 4's "never paths outside the repository"
+did not hold for texts: an error's message names the paths it concerns (a
+watcher's `about ["D:\\src\\shop"]`, a refused lane request's "`<path>` is
+gone"), and only user names in home paths were masked. Now `outbound`
+replaces the roots the process knows in every text: the repository as
+`<repo>`, a lane's worktree as `<worktree>`, devstack's state as
+`<devstack>`, the home directory as `~` (`diag::add_root`). The masking of
+`/users/` no longer touches a URL's path segment (`https://x/users/42`).
+Point 2's "the member stops sending" now holds at once: a `404` to a send
+marks the pool as not collecting until it is asked again (10 minutes),
+where before the member sent on until then.
