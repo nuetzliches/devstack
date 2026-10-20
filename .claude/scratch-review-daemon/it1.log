@@ -1,8 +1,0 @@
-
-running 3 tests
-test a_worktree_runs_as_a_lane ... ok
-test lifecycle_services_only ... ok
-test edits_become_candidates ... ok
-
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 48.85s
-

@@ -65,7 +65,7 @@ stay.
 | [0014](0014-native-services-take-their-configuration-from-compose.md) | Native services take their configuration from the Compose service they replace | Accepted |
 | [0015](0015-devstack-is-optional.md) | devstack accelerates a stack, it is never required to run one | Accepted |
 | [0016](0016-a-daemon-restart-is-a-clean-restart.md) | A daemon restart is a clean restart from the last promoted artifacts | Accepted |
-| [0017](0017-stack-file-is-toml.md) | The stack file is TOML, without profiles in version 1 | Accepted |
+| [0017](0017-stack-file-is-toml.md) | The stack file is TOML, without profiles in version 1 | Accepted, amended 2026-10-20 (ADR-0041's profiles are not the environments ruled out) |
 | [0018](0018-dashboard-is-a-browser-page.md) | The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper | Accepted; who serves it amended by ADR-0021; the tray is not built |
 | [0019](0019-control-api-security.md) | The control API trusts the user's own processes, never a web page | Accepted, amended (own page for reads too; the hub proves itself; IPv4 loopback and `DEVSTACK_LISTEN`; the cookie is the hub's, no `token rotate`) |
 | [0020](0020-builds-share-one-long-lived-build-job.md) | Builds share one long-lived build job; a cancel ends only the cancelled build's tree | Accepted |
@@ -87,7 +87,7 @@ stay.
 | [0036](0036-the-pool-shows-its-capacity-over-time.md) | The pool shows its capacity, GPUs included, and how it changed | Accepted |
 | [0037](0037-telemetry-goes-to-the-pools-collector-with-consent.md) | Telemetry goes to the pool's collector, if the pool has one and the member agrees | Accepted |
 | [0038](0038-a-lanes-data-outlives-its-lease.md) | A lane's mirror and data outlive its lease on a node, for a while, and can be pruned | Accepted |
-| [0039](0039-an-admin-can-update-a-server-node.md) | An admin can have a server node update its devstack, from the dashboard | Accepted |
+| [0039](0039-an-admin-can-update-a-server-node.md) | An admin can have a server node update its devstack, from the dashboard | Accepted, amended 2026-10-20 (a checksum from the release, not a signature; the running binary is replaced) |
 | [0040](0040-a-shared-lane-can-be-watched-like-ones-own.md) | A shared lane can be shared for viewing, and is then shown as one's own lane is | Accepted; amended 2026-10-20 (sharing a lane includes viewing it) |
 | [0041](0041-a-profile-says-how-a-lane-runs-for-a-purpose.md) | A profile says how a lane (or the main tree) runs for a purpose, chosen when it starts | Accepted |
 | [0042](0042-a-dev-servers-rebuilds-show-like-builds.md) | A dev server's rebuilds show like builds, read from its output | Accepted |

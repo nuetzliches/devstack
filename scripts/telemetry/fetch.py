@@ -12,9 +12,11 @@ Two ways to reach Elasticsearch:
   --es URL                 directly (e.g. through an SSH tunnel); the user is
                            --user (default `elastic`), the password
                            $ES_PASSWORD.
-  --ssh HOST --container C on HOST, inside container C, with `curl` and the
-                           container's own $ELASTIC_PASSWORD. Nothing leaves
-                           the host but the documents.
+  --ssh HOST --container C on HOST, inside container C (default
+                           `elasticsearch`), with `curl` and the container's
+                           own $ELASTIC_PASSWORD, which never appears on a
+                           command line. Nothing leaves the host but the
+                           documents.
 
 Standard library only.
 """
@@ -25,6 +27,7 @@ import argparse
 import base64
 import json
 import os
+import shlex
 import subprocess
 import sys
 import urllib.request
@@ -50,12 +53,18 @@ class Es:
             req.add_header("authorization", f"Basic {token}")
             with urllib.request.urlopen(req) as r:
                 return json.load(r)
-        # Over SSH: the body goes through stdin, the password stays on the host.
+        # Over SSH: the body goes through stdin, the password stays on the host
+        # and off every command line. `printf` is a shell builtin; curl reads
+        # the credentials as a config file from its stdin (`-K -`) and the
+        # body from the original stdin, moved to fd 3.
+        user = self.args.user.replace("\\", "\\\\").replace('"', '\\"')
         inner = (
-            f'curl -s -X {method} -u "elastic:$ELASTIC_PASSWORD" '
-            f'-H content-type:application/json "http://localhost:9200{path}" -d @-'
+            "exec 3<&0; "
+            f'printf \'user = "{user}:%s"\\n\' "$ELASTIC_PASSWORD" | '
+            f"curl -s -K - -X {method} -H content-type:application/json "
+            f'"http://localhost:9200{path}" --data-binary @/dev/fd/3'
         )
-        remote = f"docker exec -i {self.args.container} sh -c '{inner}'"
+        remote = f"docker exec -i {shlex.quote(self.args.container)} sh -c {shlex.quote(inner)}"
         cmd = ["ssh", "-o", "BatchMode=yes", self.args.ssh, remote]
         out = subprocess.run(cmd, input=data or b"{}", capture_output=True, check=True)
         return json.loads(out.stdout)
@@ -93,7 +102,11 @@ def main() -> None:
     p.add_argument("--es", help="Elasticsearch URL, e.g. http://localhost:9201")
     p.add_argument("--user", default="elastic")
     p.add_argument("--ssh", help="SSH host that runs the Elasticsearch container")
-    p.add_argument("--container", default="otel-es")
+    p.add_argument(
+        "--container",
+        default="elasticsearch",
+        help="with --ssh: the Elasticsearch container's name (default: elasticsearch)",
+    )
     p.add_argument("--namespace", default="devstack", help="the collector's tenant (data stream namespace)")
     p.add_argument("--since", help="only documents at or after this time (ES date math, e.g. now-2d)")
     p.add_argument("--out", type=Path, default=Path(".telemetry"), help="output directory")
