@@ -499,11 +499,24 @@ impl Supervisor {
     }
 
     fn set_status(&self, name: &str, status: Status) {
+        self.set_status_of(name, None, status);
+    }
+
+    /// [`Self::set_status`], only while the slot still runs `generation`
+    /// (`None`: whatever it runs): a health check that ended after a stop or
+    /// a switch says nothing about what runs now. The event goes out under
+    /// the same lock as the state, so the dashboard hears the states in the
+    /// order they were set (a stop's `stopped` is never overtaken by a
+    /// check's `unhealthy` from before it).
+    pub(super) fn set_status_of(&self, name: &str, generation: Option<u64>, status: Status) {
+        let mut slots = self.slots.lock().unwrap();
         let (build_id, start) = {
-            let mut slots = self.slots.lock().unwrap();
             let Some(slot) = slots.get_mut(name) else {
                 return;
             };
+            if generation.is_some_and(|g| g != slot.generation) {
+                return;
+            }
             if slot.view.status == status {
                 return;
             }
@@ -530,6 +543,7 @@ impl Supervisor {
             },
             start,
         );
+        drop(slots);
     }
 
     fn set_candidate(&self, name: &str, candidate: Option<Candidate>) {

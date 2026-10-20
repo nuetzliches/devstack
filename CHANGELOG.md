@@ -9,6 +9,15 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- A service stopped while its health check ran no longer shows
+  "unhealthy" in the dashboard: the check's result is dropped once the
+  instance it checked is gone, and a service's events go out in the order
+  its states were set (a stop's `stopped` could be overtaken by an
+  `unhealthy` from just before it, and stayed on the page while the
+  daemon knew it stopped).
+
 ## [0.13.0] - 2026-10-20
 
 ### Changed
