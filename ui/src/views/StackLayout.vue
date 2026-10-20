@@ -72,7 +72,7 @@ function isActive(name: string) {
 </script>
 
 <template>
-  <div :class="{ 'read-only': stack.readOnly }">
+  <div>
     <StackHeader />
     <nav class="subnav" aria-label="Stack views">
       <div class="subnav-inner">
@@ -101,7 +101,7 @@ function isActive(name: string) {
           <template v-else><strong>Docker is not running.</strong> This stack's containers need it<template v-if="!dockerDown.starter">: {{ dockerDown.hint }}</template>.</template>
         </span>
         <button
-          v-if="dockerDown.state === 'stopped' && dockerDown.starter"
+          v-if="dockerDown.state === 'stopped' && dockerDown.starter && !stack.readOnly"
           type="button"
           class="btn btn-primary btn-sm"
           :disabled="hub.dockerStarting"
@@ -119,7 +119,7 @@ function isActive(name: string) {
           A restart of the stack switches it over<template v-if="stack.view?.config_changed"> and applies the changed stack file</template>.
         </span>
         <span v-else class="grow"><strong>The stack file changed since {{ stack.entry?.name ?? 'the stack' }} started.</strong> It applies after a restart.</span>
-        <button type="button" class="btn btn-primary btn-sm" :disabled="!!stack.busy['stack']" data-testid="action-restart-stack" @click="stack.restartStack()">
+        <button v-if="!stack.readOnly" type="button" class="btn btn-primary btn-sm" :disabled="!!stack.busy['stack']" data-testid="action-restart-stack" @click="stack.restartStack()">
           <span v-if="stack.busy['stack'] === 'restart'" class="spinner" /><Icon v-else name="restart" :size="14" />
           {{ stack.busy['stack'] === 'restart' ? 'Restarting…' : 'Restart stack' }}
         </button>
@@ -144,7 +144,7 @@ function isActive(name: string) {
             </span>
           </template>
         </span>
-        <button type="button" class="btn btn-primary btn-sm" :disabled="starting" data-testid="action-start-stack" @click="stack.startStack()">
+        <button v-if="!stack.readOnly" type="button" class="btn btn-primary btn-sm" :disabled="starting" data-testid="action-start-stack" @click="stack.startStack()">
           <span v-if="starting" class="spinner" /><Icon v-else name="play" :size="14" />
           {{ starting ? 'Starting…' : 'Start stack' }}
         </button>
@@ -256,17 +256,5 @@ function isActive(name: string) {
   white-space: pre-wrap;
   max-height: 14em;
   overflow: auto;
-}
-</style>
-
-<style>
-/* Someone else's lane (ADR-0040): what would change it is not offered. */
-.read-only [data-testid^="action-"]:not([data-testid="action-build-log"]):not([data-testid="action-kept-logs"]):not([data-testid="action-candidate-console"]):not([data-testid="action-pin"]),
-.read-only [data-testid="group-start"],
-.read-only [data-testid="group-stop"],
-.read-only [data-testid="group-restart"],
-.read-only [data-testid="command-run"],
-.read-only [data-testid="container-unreachable"] {
-  display: none !important;
 }
 </style>
