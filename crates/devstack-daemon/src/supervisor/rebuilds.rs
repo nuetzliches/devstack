@@ -63,16 +63,20 @@ impl Supervisor {
             }
             // A service rebuilds by itself in hot-reload mode only (its
             // toolchain's watcher, plan §3.4a); built, devstack builds it.
-            let (log, status) = match self.slots.lock().unwrap().get(name) {
-                Some(s) if svc.kind == Kind::Devserver || s.view.hot_reload => {
-                    (s.view.log.clone(), s.view.status.clone())
+            // Read under the lock, acted on after it: `set_rebuild` takes it
+            // again.
+            let seen = self
+                .slots
+                .lock()
+                .unwrap()
+                .get(name)
+                .filter(|s| svc.kind == Kind::Devserver || s.view.hot_reload)
+                .map(|s| (s.view.log.clone(), s.view.status.clone()));
+            let Some((log, status)) = seen else {
+                if runs.remove(name).is_some() {
+                    self.set_rebuild(name, None, None);
                 }
-                _ => {
-                    if runs.remove(name).is_some() {
-                        self.set_rebuild(name, None, None);
-                    }
-                    continue;
-                }
+                continue;
             };
             let up = matches!(status, Status::Running | Status::Healthy);
             let running = up || matches!(status, Status::Starting | Status::Unhealthy { .. });
