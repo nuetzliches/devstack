@@ -662,6 +662,9 @@ pub fn run_lane(file: &Path, on: &str, lane: &str, keep: bool) -> Result<()> {
             s.bytes / 1024,
             t0.elapsed().as_secs_f64()
         );
+        for f in &s.failed {
+            eprintln!("not written on the node: {f}");
+        }
         let rel = file
             .strip_prefix(&repo)
             .map(|p| p.to_string_lossy().replace('\\', "/"))

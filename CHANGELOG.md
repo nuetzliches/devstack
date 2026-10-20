@@ -53,6 +53,27 @@ and listed with their assets on the
   program.
 - A node sends its capacity every minute on average; it drifted to every
   67 s.
+- **A lane on a node restarts its own containers** ([#128](https://github.com/nuetzliches/devstack/issues/128),
+  [ADR-0025](docs/adr/0025-a-lane-can-run-on-another-node.md)). `devstack
+  restart <group>` with Compose members ran `docker compose` with the main
+  tree's project and files inside the lane container on the node, which has
+  no Docker (and with one in reach would have hit the main tree's
+  containers). The node's agent now restarts the lane's own containers (its
+  project `<project>-<slot>`), for the lane's owner, only those the group
+  starts, and the lane's daemon never runs Compose for them. A node older
+  than this release is refused with what to update.
+- **`devstack restart` (and `start`, `stop`) takes a Compose service**:
+  `app.web`, the member form `compose.app.web`, or `web` when one compose
+  group starts it, locally, in a lane and in a lane on a node (it answered
+  `no service`). The same for `POST /v1/services/{name}/…` and the MCP's
+  `restart_service`.
+- **A file a node cannot write no longer stops a lane's sync.** The node
+  writes the others and names it; the lane's trouble shows it, and
+  `remote_lane_sync_failed` goes to the daemon's log (and the pool's
+  telemetry), at most once per lane every ten seconds with how many were
+  left out. It is tried again with the next change or full comparison, not
+  every tick. Every failed sync is logged so, not only shown in the
+  dashboard.
 
 ## [0.11.1] - 2026-10-19
 

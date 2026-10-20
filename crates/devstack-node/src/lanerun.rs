@@ -178,7 +178,7 @@ impl LaneRun {
     }
 
     /// The stack file, read without following a link the lane put there.
-    fn stack(&self) -> Result<devstack_config::Stack> {
+    pub(crate) fn stack(&self) -> Result<devstack_config::Stack> {
         let rel = Path::new(&self.stack_file);
         let text = safefs::read_beneath(&self.src(), rel, 1 << 20)
             .map_err(|e| RunError::Config(format!("the stack file `{}`: {e}", self.stack_file)))?;

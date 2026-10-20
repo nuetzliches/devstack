@@ -272,13 +272,30 @@ async fn shutdown(State(s): State<AppState>, Query(q): Query<ShutdownQuery>) -> 
 async fn service_action(
     State(s): State<AppState>,
     Path((name, action)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
     if !s.sup.stack.services.contains_key(&name) {
         // A group by its name, so `devstack restart backend` works.
         if s.sup.stack.groups.contains_key(&name) {
-            return group_action(State(s), Path((name, action))).await;
+            return group_action(State(s), Path((name, action)), headers).await;
         }
-        return err(StatusCode::NOT_FOUND, format!("no service `{name}`"));
+        // A Compose service as a group member names it, or by its own name
+        // (`app.web`, `compose.app.web`, `web`), so `devstack restart web`
+        // works too (#128).
+        if let Some((group, service)) = s.sup.stack.compose_service(&name)
+            && matches!(action.as_str(), "start" | "stop" | "restart")
+        {
+            return match act_on_container(&s, group, service, action, node_acted(&headers)).await {
+                Ok(()) => Json(s.sup.view()).into_response(),
+                Err(r) => r,
+            };
+        }
+        return err(
+            StatusCode::NOT_FOUND,
+            format!(
+                "no service `{name}`, no group of that name, and no Compose service (`<group>.<service>`, or a service one compose group starts)"
+            ),
+        );
     }
     let sup = s.sup.clone();
     let result = match action.as_str() {
@@ -699,6 +716,12 @@ async fn lane_forward(
         Err(r) => return r,
     };
     if let Some(r) = lanes.remote(&lane) {
+        // A node too old to act on the lane's containers would hand the
+        // request to the lane's daemon, which has no Docker (#128): said
+        // here, by the names of this machine's stack file.
+        if let Some(e) = r.too_old_for(&s.sup.stack, req.method(), &format!("/v1/{rest}")) {
+            return err(StatusCode::CONFLICT, e);
+        }
         // On a node: its daemon's API, passed through as it is.
         let query = req
             .uri()
@@ -784,10 +807,18 @@ async fn service_env(
 
 /// `POST /v1/groups/{name}/{start|stop|restart}`: every member; `409` names
 /// the members that failed (the others ran).
+/// The node's agent acted on the containers this request names already
+/// (a lane on a node, #128): its daemon, which has no Docker, leaves them.
+fn node_acted(headers: &axum::http::HeaderMap) -> bool {
+    headers.contains_key(devstack_node::laneinfra::ACTED_HEADER)
+}
+
 async fn group_action(
     State(s): State<AppState>,
     Path((name, action)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
+    let acted = node_acted(&headers);
     if !s.sup.stack.groups.contains_key(&name) {
         return err(StatusCode::NOT_FOUND, format!("no group `{name}`"));
     }
@@ -798,7 +829,7 @@ async fn group_action(
         );
     }
     let sup = s.sup.clone();
-    match tokio::task::spawn_blocking(move || sup.group_action(&name, &action)).await {
+    match tokio::task::spawn_blocking(move || sup.group_action(&name, &action, acted)).await {
         Ok(Ok(())) => Json(s.sup.view()).into_response(),
         Ok(Err(e)) => err(StatusCode::CONFLICT, e),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
@@ -1485,6 +1516,7 @@ fn infra_target(s: &AppState, group: &str, service: &str) -> Result<ContainerTar
 async fn container_action(
     State(s): State<AppState>,
     Path((group, service, action)): Path<(String, String, String)>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
     if !matches!(action.as_str(), "start" | "stop" | "restart") {
         return err(
@@ -1492,31 +1524,51 @@ async fn container_action(
             format!("unknown action `{action}`: start, stop or restart"),
         );
     }
-    let target = match infra_target(&s, &group, &service) {
+    match act_on_container(&s, group, service, action, node_acted(&headers)).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(r) => r,
+    }
+}
+
+/// `start`, `stop` or `restart` of one container of a compose group, for
+/// the container route and a service route that names one; `acted`: a
+/// node's agent did it already.
+#[allow(clippy::result_large_err)] // the error is the answer itself
+async fn act_on_container(
+    s: &AppState,
+    group: String,
+    service: String,
+    action: String,
+    acted: bool,
+) -> Result<(), Response> {
+    let target = match infra_target(s, &group, &service) {
         Ok(t) => t,
-        Err(e) => return err(StatusCode::NOT_FOUND, e),
+        Err(e) => return Err(err(StatusCode::NOT_FOUND, e)),
     };
     let sup = s.sup.clone();
     let res = match target {
         ContainerTarget::Unmanaged { name } if action == "stop" => {
-            tokio::task::spawn_blocking(move || sup.stop_unmanaged(&group, &service, &name)).await
+            tokio::task::spawn_blocking(move || sup.stop_unmanaged(&group, &service, &name, acted))
+                .await
         }
         ContainerTarget::Unmanaged { name } => {
-            return err(
+            return Err(err(
                 StatusCode::CONFLICT,
                 format!(
                     "`{service}` (container `{name}`) belongs to the Compose project, but compose group `{group}` does not start it (it is not in its `services`): devstack can stop it, not {action} it. Add it to `services` to manage it"
                 ),
-            );
+            ));
         }
         _ => {
-            tokio::task::spawn_blocking(move || sup.container_action(&group, &service, &action))
-                .await
+            tokio::task::spawn_blocking(move || {
+                sup.container_action(&group, &service, &action, acted)
+            })
+            .await
         }
     };
     match res {
-        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
-        Ok(Err(e)) => err(StatusCode::CONFLICT, e),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(err(StatusCode::CONFLICT, e)),
+        Err(e) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     }
 }

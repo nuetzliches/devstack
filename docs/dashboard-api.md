@@ -300,12 +300,31 @@ type UsageReport = {
 | `GET /v1/runs/{id}/log` | text, a command run's output so far (the last 20 000 lines) |
 | `POST /v1/runs/{id}/cancel` | `202`; the run stops: its `exec` step's process tree is killed, its `run` step's job stopped, no further step starts; it ends `failed` with error `cancelled`. `409` when it is not running, `404` for no such run |
 | `GET /v1/tunnel/{port}` with `Upgrade: devstack-tcp` | a raw TCP connection to that port of the lane (ADR-0029 point 4): how a lane on a node reaches its requester's forwards; the node agent passes it through |
-| `POST /v1/services/{name}/start` \| `stop` \| `restart` \| `rebuild` \| `promote` \| `rollback` | `200 StackView`, or `409 {"error": "..."}` (e.g. compiler errors; the running instance stays). `rebuild` is `restart` that builds even when an artifact for the same inputs exists (`devstack restart --rebuild`; the build gets the id `<inputs>-<n>`). A `stop` ends a start in progress (a build, a health wait, a job) at once. For a name that is no service but a group, `start`/`stop`/`restart` act on the group. `hot-reload-on` / `hot-reload-off` switch a service with `hot_reload` in the stack file into and out of hot-reload mode (`ServiceView.hot_reload`, `hot_reload_available`) |
+| `POST /v1/services/{name}/start` \| `stop` \| `restart` \| `rebuild` \| `promote` \| `rollback` | `200 StackView`, or `409 {"error": "..."}` (e.g. compiler errors; the running instance stays). `rebuild` is `restart` that builds even when an artifact for the same inputs exists (`devstack restart --rebuild`; the build gets the id `<inputs>-<n>`). A `stop` ends a start in progress (a build, a health wait, a job) at once. For a name that is no service but a group, `start`/`stop`/`restart` act on the group; for a name that is neither but a Compose service (`<group>.<service>`, the member form `compose.<group>.<service>`, or `<service>` when exactly one compose group lists it in `services`) they act on that container as `/v1/infra/{group}/{service}/…` does, and answer `200 StackView`. `404` for a name that is none of these. `hot-reload-on` / `hot-reload-off` switch a service with `hot_reload` in the stack file into and out of hot-reload mode (`ServiceView.hot_reload`, `hot_reload_available`) |
 | `POST /v1/groups/{name}/start` \| `stop` \| `restart` | every member service of the group: start in member order, stop in reverse, restart (build) at the same time; `restart` also restarts container members, commands are left out. `200 StackView`, or `409` naming each member that failed (the others ran) |
 | `POST /v1/infra/{group}/{service}/{start\|stop\|restart}` | `204`; one container (in a lane its own; a `shared` one: `409`). `{service}` is the Compose service name, as `ContainerView.service` gives it, never the container name (`container_name:`). The routes accept every container the view shows: one the group does not start (`managed: false`: started by hand, of a profile, left from an earlier stack file) can be stopped (`docker stop` by its name), `start` and `restart` answer `409` with the reason; a service that is neither in `services` nor a container of the project: `404` with the reason; another action: `400`. The dashboard shows each container on a page of its own (`/s/<stack>/infra/<group>/<service>`) with its log |
 | `POST /v1/commands/{name}` with `{"confirm": false}` | `202 {"run": 7}`, or `428 {"confirm": "text"}` (ask the user, then send `confirm: true`), `409 {"error"}` (a required service is not ready) |
 | `GET /v1/commands/{name}/runs` | `[Run]` |
 | `GET /v1/runs/{id}` | `Run` = `{ id, command, started, finished: number|null, status, error: string|null, log }` |
+
+**A lane on a node** (ADR-0025): its daemon has no Docker, so its node's
+agent acts on its containers, for the lane's owner only, under the same
+paths (`/v1/lanes/<lane>/v1/...` on the requester's daemon). It answers
+`/v1/infra/{group}/{service}/{start|stop|restart}` itself (since 0.11.0,
+#101); `start` and `restart` only for a service the lane's compose group
+lists in `services` (on a node its `shared` ones are the lane's own too),
+`stop` for any container of the lane's project. For
+`POST /v1/services/{name}/{start|stop|restart}` and
+`POST /v1/groups/{name}/restart` that name containers (a Compose service by
+its name, a group's container members on `restart`) it acts on them, by
+container name in the projects it started for the lease, then passes the
+request on with `X-Devstack-Node-Acted: 1` for the daemon's answer (#128); a
+container it could not act on makes the answer `409` naming it. The daemon
+never runs Compose for them itself: a request that names containers and
+lacks the header (it came past an agent that could not read the stack file,
+or an older one) is answered `409`. The requester's daemon answers `409`
+with what to update when the node's devstack is older than the release that
+does this (0.11.2; 0.11.0 for `/v1/infra/...`).
 
 Long actions (`restart`, `promote`, `rollback`) answer when done; progress
 arrives meanwhile as `candidate` and `service` events. What can take many

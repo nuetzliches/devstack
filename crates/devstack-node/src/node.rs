@@ -179,6 +179,10 @@ pub struct Apply {
 pub struct Applied {
     pub written: usize,
     pub removed: usize,
+    /// The files that could not be written, `path: error`; the others were
+    /// (#128). An older node fails the whole sync at the first one instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1444,7 +1448,7 @@ pub fn apply_files(
         let mut from = std::fs::File::open(&blob)
             .map_err(|_| NodeError::Other(format!("`{}`: blob {} not uploaded", f.path, f.hash)))?;
         let mode = if f.exec { 0o755 } else { 0o644 };
-        crate::safefs::write_beneath(&src, &rel, mode, |to| {
+        let written = crate::safefs::write_beneath(&src, &rel, mode, |to| {
             let h = crate::safefs::copy_hashing(&mut from, to)?;
             if h == f.hash {
                 Ok(())
@@ -1454,10 +1458,20 @@ pub fn apply_files(
                     f.hash
                 )))
             }
-        })
-        .map_err(|e| NodeError::Other(format!("`{}`: {e}", f.path)))?;
-        have.insert(f.path.clone(), f.hash.clone());
-        out.written += 1;
+        });
+        match written {
+            Ok(()) => {
+                have.insert(f.path.clone(), f.hash.clone());
+                out.written += 1;
+            }
+            // One path that cannot be written (a directory the lane made
+            // root's) holds up no other (#128): it is named, and tried again
+            // with the next sync.
+            Err(e) => {
+                have.remove(&f.path);
+                out.failed.push(format!("{}: {e}", f.path));
+            }
+        }
     }
     let gone: Vec<String> = have
         .keys()
@@ -1825,6 +1839,28 @@ async fn proxy(
     if let Some(route) = InfraRoute::parse(req.method(), &rest) {
         return infra(&s, &l, route, req.uri()).await;
     }
+    // A service route that names containers (a group's restart, a Compose
+    // service by its name): the agent acts on them, the daemon on the rest
+    // and answers (#128). Only the agent says it did.
+    req.headers_mut().remove(crate::laneinfra::ACTED_HEADER);
+    let mut failed = Vec::new();
+    if let Some((route, name, action)) = named_route(req.method(), &rest) {
+        let run = s.run(&l);
+        let acted = tokio::task::spawn_blocking(move || act_named(&run, route, &name, &action))
+            .await
+            .unwrap_or(None);
+        if let Some(mut a) = acted {
+            if a.single && !a.failed.is_empty() {
+                let (status, e) = a.failed.remove(0);
+                return infra_err(status, e);
+            }
+            failed = a.failed;
+            req.headers_mut().insert(
+                crate::laneinfra::ACTED_HEADER,
+                hyper::header::HeaderValue::from_static("1"),
+            );
+        }
+    }
     let d = match daemon_of(&s, l).await {
         Ok(d) => d,
         Err(e) => return e.into_response(),
@@ -1834,7 +1870,105 @@ async fn proxy(
         .query()
         .map(|q| format!("?{q}"))
         .unwrap_or_default();
-    pass(d, format!("/{rest}{query}"), upgrade_in, req).await
+    let res = pass(d, format!("/{rest}{query}"), upgrade_in, req).await;
+    if failed.is_empty() {
+        res
+    } else {
+        with_failures(res, failed).await
+    }
+}
+
+/// `POST v1/services/{name}/{action}` or `POST v1/groups/{name}/{action}`
+/// of the lane daemon's API, for `start`, `stop` and `restart`.
+fn named_route(
+    method: &hyper::Method,
+    rest: &str,
+) -> Option<(crate::laneinfra::Named, String, String)> {
+    use crate::laneinfra::Named;
+    if method != hyper::Method::POST {
+        return None;
+    }
+    let rest = rest.strip_prefix("v1/")?;
+    let (route, rest) = if let Some(r) = rest.strip_prefix("services/") {
+        (Named::Services, r)
+    } else {
+        (Named::Groups, rest.strip_prefix("groups/")?)
+    };
+    let (name, action) = rest.split_once('/')?;
+    (!name.is_empty() && matches!(action, "start" | "stop" | "restart"))
+        .then(|| (route, name.to_string(), action.to_string()))
+}
+
+/// What the agent did to the containers a named route names.
+struct Acted {
+    /// The route names one Compose service (no group): its error is the
+    /// answer, the daemon is asked only for its view.
+    single: bool,
+    /// The containers it could not act on: the status and the error.
+    failed: Vec<(StatusCode, String)>,
+}
+
+/// Act on the containers that `action` of `name` on `route` names, as
+/// [`crate::laneinfra::named`] reads the lane's stack file; `None` when it
+/// names none, or the stack file does not read (the daemon answers then,
+/// and acts on no container: it has no Docker).
+fn act_named(
+    run: &LaneRun,
+    route: crate::laneinfra::Named,
+    name: &str,
+    action: &str,
+) -> Option<Acted> {
+    use crate::laneinfra;
+    let stack = run.stack().ok()?;
+    let targets = laneinfra::named(&stack, route, name, action);
+    if targets.is_empty() {
+        return None;
+    }
+    let single = route == laneinfra::Named::Services && !stack.groups.contains_key(name);
+    let mut failed = Vec::new();
+    for (group, service) in &targets {
+        let r = laneinfra::may_act(&stack, group, service, action)
+            .map_err(|e| (StatusCode::CONFLICT, e))
+            .and_then(|()| {
+                laneinfra::find(&run.dir, group, service).map_err(|e| (StatusCode::NOT_FOUND, e))
+            })
+            .and_then(|c| laneinfra::act(&c.name, action).map_err(|e| (StatusCode::CONFLICT, e)));
+        if let Err((status, e)) = r {
+            failed.push((status, if single { e } else { format!("{service}: {e}") }));
+        }
+    }
+    // The new states, for the lane's dashboard at once.
+    let _ = laneinfra::refresh(&run.dir, &run.src());
+    Some(Acted { single, failed })
+}
+
+/// The daemon's answer to a group's restart, with the containers the agent
+/// could not restart: `409` with every error, as the daemon names the
+/// members that failed.
+async fn with_failures(
+    res: axum::response::Response,
+    failed: Vec<(StatusCode, String)>,
+) -> axum::response::Response {
+    use http_body_util::BodyExt;
+    let status = res.status();
+    let body = res
+        .into_body()
+        .collect()
+        .await
+        .map(|b| b.to_bytes())
+        .unwrap_or_default();
+    let mut errors: Vec<String> = Vec::new();
+    if !status.is_success() {
+        let e = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v["error"].as_str().map(str::to_string))
+            .unwrap_or_else(|| String::from_utf8_lossy(&body).trim().to_string());
+        if !e.is_empty() {
+            errors.push(e);
+        }
+    }
+    errors.extend(failed.into_iter().map(|(_, e)| e));
+    infra_err(StatusCode::CONFLICT, errors.join("\n"))
 }
 
 /// What of the lane daemon's `/v1/infra/{group}/{service}/…` the node answers
@@ -1962,9 +2096,19 @@ async fn infra(
                 Err(e) => infra_err(StatusCode::BAD_GATEWAY, e),
             }
         }
-        InfraRoute::Act { action, .. } => {
+        InfraRoute::Act {
+            action,
+            group,
+            service,
+        } => {
             let name = c.name.clone();
+            let run = s.run(l);
             let done = tokio::task::spawn_blocking(move || {
+                // Only what the lane's group starts (ADR-0033, #128).
+                let stack = run
+                    .stack()
+                    .map_err(|e| format!("the lane's stack file, read on its node: {e}"))?;
+                crate::laneinfra::may_act(&stack, &group, &service, &action)?;
                 let r = crate::laneinfra::act(&name, &action);
                 // The new state, for the lane's dashboard at once.
                 let _ = crate::laneinfra::refresh(&dir, &dir.join("src"));
@@ -2939,6 +3083,30 @@ mod tests {
     }
 
     #[test]
+    fn the_node_looks_at_service_routes_that_may_name_containers() {
+        use crate::laneinfra::Named;
+        use hyper::Method;
+        let some = |route, name: &str, action: &str| Some((route, name.into(), action.into()));
+        assert_eq!(
+            named_route(&Method::POST, "v1/services/app.web/restart"),
+            some(Named::Services, "app.web", "restart")
+        );
+        assert_eq!(
+            named_route(&Method::POST, "v1/groups/server/restart"),
+            some(Named::Groups, "server", "restart")
+        );
+        for (m, p) in [
+            (Method::GET, "v1/services/web/restart"),
+            (Method::POST, "v1/services/web/rebuild"),
+            (Method::POST, "v1/services/web/logs/x"),
+            (Method::POST, "v1/services//restart"),
+            (Method::POST, "v1/commands/seed"),
+        ] {
+            assert_eq!(named_route(&m, p), None, "{m} {p}");
+        }
+    }
+
+    #[test]
     fn a_path_from_a_requester_stays_in_the_mirror() {
         assert!(safe_path("src/Api/Program.cs").is_some());
         assert!(safe_path("src\\Api\\Program.cs").is_some());
@@ -2981,9 +3149,29 @@ mod tests {
         // A blob whose content changed since it was stored does not land.
         let c = put("c");
         std::fs::write(blobs.join(&c), "not c").unwrap();
-        let e = apply_files(&blobs, &lane, &[f("c.txt", &c)]).unwrap_err();
-        assert!(e.to_string().contains("does not have its hash"), "{e}");
+        // One path that cannot be written holds up no other (#128): it is
+        // named, the rest lands, and the next sync tries it again.
+        let dh = put("d");
+        let r = apply_files(&blobs, &lane, &[f("c.txt", &c), f("d.txt", &dh)]).unwrap();
+        assert_eq!(r.written, 1);
+        assert_eq!(r.failed.len(), 1, "{:?}", r.failed);
+        assert!(
+            r.failed[0].starts_with("c.txt: ") && r.failed[0].contains("does not have its hash"),
+            "{:?}",
+            r.failed
+        );
         assert!(!lane.join("src/c.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(lane.join("src/d.txt")).unwrap(),
+            "d"
+        );
+        std::fs::write(blobs.join(&c), "c").unwrap();
+        let r = apply_files(&blobs, &lane, &[f("c.txt", &c), f("d.txt", &dh)]).unwrap();
+        assert_eq!((r.written, r.failed.len()), (1, 0), "only c.txt again");
+        assert_eq!(
+            std::fs::read_to_string(lane.join("src/c.txt")).unwrap(),
+            "c"
+        );
     }
 
     #[cfg(unix)]

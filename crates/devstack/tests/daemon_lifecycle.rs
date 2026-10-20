@@ -875,6 +875,13 @@ fn lifecycle(with_compose: bool) {
         let first = s.sse_first("/v1/infra/app/db/logs/stream?tail=20");
         assert!(first.contains("\"type\":\"line\""), "{first}");
         assert!(first.contains("db"), "{first}");
+        // A Compose service by its name, as a member names it or by itself
+        // (#128).
+        for name in ["app.db", "compose.app.db", "db"] {
+            s.ok(&["restart", name]);
+        }
+        let out = s.cli(&["restart", "nope.db"], None);
+        assert!(!out.status.success(), "no such group");
     }
 
     // down: nothing left.

@@ -133,6 +133,25 @@ every 30 s besides), starts it there and forwards its ports to your machine:
 The dashboard shows where each lane runs, its start step by step, and offers
 **Start here / on a node / in the pool** for a lane that is not started.
 
+**Its containers** are the lane's own, on the node, in its Compose project
+`<project>-<lane slot>` (they never touch the main tree's). From the worktree
+you control them as a local lane's: `devstack restart app.web` (also
+`compose.app.web`, or `web` when one compose group starts it), `start` and
+`stop` the same, `devstack restart <group>` with its container members, `devstack
+logs web`, and the dashboard's container page. The lane container has no
+Docker: the node's agent does it, for the lane's owner only, and only for a
+service the group lists in `services` (`stop` for any container of the
+lane's project). A node older than this machine's devstack says so instead
+(`409`: update devstack on the node). Not yet through the node: a container's
+`restart_on`.
+
+**A file the node cannot write** (a directory in the lane's copy that its
+code made another user's) does not hold up the others: the rest is synced,
+the lane's trouble in the dashboard names the file, `remote_lane_sync_failed`
+goes to `devstack logs --daemon` (and the pool's telemetry, with consent),
+and the file is tried again with the next change or the next full
+comparison.
+
 **What goes to the node:** every file of the worktree git does not ignore,
 tracked or not (an untracked `.env` that git does not ignore goes too), and
 the ignored files `[lanes] sync` names, from the worktree or else the main
@@ -400,7 +419,7 @@ What the node agent sets in a lane container, for the `devstack` daemon in it
 | `DEVSTACK_LISTEN` | `0.0.0.0:7600`: the daemon's API on the lane's network, for the agent (token and `Host` checked) |
 | `DEVSTACK_PORT_OFFSET` | the lane's port offset on the requester; the lane runs on those ports in the container too |
 | `DEVSTACK_DISPLAY_ROOT` | where the requester has the lane's files, so paths in compiler messages and logs show as the developer's |
-| `DEVSTACK_EXTERNAL_INFRA` | the file (`/src/.devstack/external-infra.json`) in which the agent describes the lane's containers, which it started itself; it writes their states, health and load (`cpu`, `memory`, `at`) into it every 5 s, and answers the lane's container routes (`/v1/infra/{group}/{service}/logs`, `logs/stream`, `start`/`stop`/`restart`) itself, for the lane's owner, since the lane has no Docker |
+| `DEVSTACK_EXTERNAL_INFRA` | the file (`/src/.devstack/external-infra.json`) in which the agent describes the lane's containers, which it started itself; it writes their states, health and load (`cpu`, `memory`, `at`) into it every 5 s, and answers the lane's container routes (`/v1/infra/{group}/{service}/logs`, `logs/stream`, `start`/`stop`/`restart`) itself, for the lane's owner, since the lane has no Docker; the service routes that name containers (`/v1/services/app.web/restart`, a group's restart) it acts on before it passes them to the daemon ([dashboard-api.md](dashboard-api.md#actions)) |
 
 On the node, `DEVSTACK_NODE_CONTAINER` (the agent's container name, when it
 runs in one) and `DEVSTACK_NODE_COMPOSE_IMAGE` (the image it reads Compose

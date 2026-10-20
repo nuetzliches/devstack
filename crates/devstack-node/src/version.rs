@@ -119,6 +119,31 @@ pub fn note_with(who: &str, peer: Option<&Release>, me: &Release) -> Option<Stri
     }
 }
 
+/// Whether `peer` runs `min` or a later release; one that runs this very
+/// build's version does too (a build from the branch that brings the
+/// change). A peer that does not say runs an older one.
+pub fn at_least(peer: Option<&Release>, min: &str) -> bool {
+    at_least_with(peer, min, &Release::this())
+}
+
+/// [`at_least`] against `me`.
+pub fn at_least_with(peer: Option<&Release>, min: &str, me: &Release) -> bool {
+    /// `0.11.2` (a pre-release or build suffix ignored) as numbers.
+    fn parts(v: &str) -> Option<(u64, u64, u64)> {
+        let core = v.split(['-', '+']).next()?;
+        let mut it = core.split('.').map(|p| p.parse::<u64>().ok());
+        Some((it.next()??, it.next()??, it.next().unwrap_or(Some(0))?))
+    }
+    let Some(p) = peer else { return false };
+    if p.version == me.version {
+        return true;
+    }
+    match (parts(&p.version), parts(min)) {
+        (Some(have), Some(want)) => have >= want,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +166,17 @@ mod tests {
         );
         assert_eq!(compat_with(None, &me), Compat::Unknown);
         assert_eq!(compat(Some(&Release::this())), Compat::Same);
+    }
+
+    #[test]
+    fn a_peer_runs_a_release_or_a_later_one() {
+        let me = r("0.11.1", 1);
+        let at = |v: &str| at_least_with(Some(&r(v, 1)), "0.11.2", &me);
+        assert!(at("0.11.2") && at("0.12.0") && at("1.0.0") && at("0.11.10"));
+        assert!(!at("0.11.0") && !at("0.9.9") && !at("garbage"));
+        assert!(at("0.11.1"), "this very build's version");
+        assert!(at("0.11.2-rc.1"), "a suffix is ignored");
+        assert!(!at_least_with(None, "0.11.2", &me), "one that does not say");
     }
 
     #[test]

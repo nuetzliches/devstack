@@ -291,6 +291,56 @@ pub struct Group {
     pub order: Option<i32>,
 }
 
+impl Stack {
+    /// The Compose service a name stands for, `(group, service)`, as the
+    /// CLI takes it (#128): `<group>.<service>`, the group member's form
+    /// `compose.<group>.<service>`, or a bare `<service>` that exactly one
+    /// Compose group lists in its `services`. The dotted forms need the
+    /// Compose group only (the container routes tell a service the group
+    /// does not start). A service or group of the stack file by that name
+    /// comes first: callers look for those before.
+    pub fn compose_service(&self, name: &str) -> Option<(String, String)> {
+        let dotted = name.strip_prefix("compose.").unwrap_or(name);
+        if let Some((group, service)) = dotted.split_once('.') {
+            return (!service.is_empty()
+                && !service.contains('.')
+                && self.compose.contains_key(group))
+            .then(|| (group.to_string(), service.to_string()));
+        }
+        if name.starts_with("compose.") {
+            return None;
+        }
+        let mut groups = self
+            .compose
+            .iter()
+            .filter(|(_, g)| g.services.iter().any(|s| s == name));
+        let (group, _) = groups.next()?;
+        groups
+            .next()
+            .is_none()
+            .then(|| (group.clone(), name.to_string()))
+    }
+
+    /// The Compose services group `group` has as members
+    /// (`compose.<group>.<service>`), in member order.
+    pub fn group_containers(&self, group: &str) -> Vec<(String, String)> {
+        self.groups
+            .get(group)
+            .map(|g| {
+                g.parsed_members()
+                    .into_iter()
+                    .filter_map(|m| match m {
+                        Ok(Member::ComposeService { group, service }) => {
+                            Some((group.to_string(), service.to_string()))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
 /// A group member, resolved from its string form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Member<'a> {

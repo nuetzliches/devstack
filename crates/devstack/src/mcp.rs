@@ -262,7 +262,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "restart_service",
-            "Rebuild the service from the current working tree and replace the running instance. If the build fails, the old instance keeps running and the compiler output is returned. A group name restarts every service of the group (built at the same time) and its containers. POST /v1/services/{service}/restart.",
+            "Rebuild the service from the current working tree and replace the running instance. If the build fails, the old instance keeps running and the compiler output is returned. A group name restarts every service of the group (built at the same time) and its containers; a Compose service (`app.web`, `compose.app.web`, or `web` if one group starts it) restarts that container. POST /v1/services/{service}/restart.",
             service.clone(),
             &["service"],
             false,

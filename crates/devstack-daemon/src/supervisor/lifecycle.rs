@@ -847,7 +847,14 @@ impl Supervisor {
     /// pulls dependencies first) and stop in reverse; restarts build at the
     /// same time. `restart` also restarts container members; commands are
     /// left out. Errors name the members that failed, the others still ran.
-    pub fn group_action(self: &Arc<Self>, group: &str, action: &str) -> Result<(), String> {
+    /// In a lane on a node its agent restarts the container members
+    /// (`node_acted`, #128): this daemon has no Docker.
+    pub fn group_action(
+        self: &Arc<Self>,
+        group: &str,
+        action: &str,
+        node_acted: bool,
+    ) -> Result<(), String> {
         let g = self
             .stack
             .groups
@@ -900,9 +907,22 @@ impl Supervisor {
                         .into_iter()
                         .filter_map(|(s, r)| r.err().map(|e| format!("{s}: {e}"))),
                 );
-                for (grp, svc) in &containers {
-                    if let Err(e) = self.docker.restart(&self.compose_group(grp), svc) {
-                        failed.push(format!("{svc}: {e}"));
+                if self.external_infra().is_some() {
+                    // Never `docker compose` here: the lane container has
+                    // no Docker, and the project would be the main tree's.
+                    if !containers.is_empty() && !node_acted {
+                        let names: Vec<&str> = containers.iter().map(|(_, s)| s.as_str()).collect();
+                        failed.push(format!(
+                            "{}: {}",
+                            names.join(", "),
+                            super::infra::NODE_DID_NOT_ACT
+                        ));
+                    }
+                } else {
+                    for (grp, svc) in &containers {
+                        if let Err(e) = self.docker.restart(&self.compose_group(grp), svc) {
+                            failed.push(format!("{svc}: {e}"));
+                        }
                     }
                 }
                 if !containers.is_empty() {

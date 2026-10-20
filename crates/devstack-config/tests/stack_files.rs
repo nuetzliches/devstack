@@ -532,3 +532,51 @@ fn an_overlong_duration_is_an_error_not_a_wrap() {
     assert!(devstack_config::model::parse_duration("99999999999999999h").is_err());
     assert!(devstack_config::model::parse_duration("999999999999999999m").is_err());
 }
+
+#[test]
+fn a_compose_service_is_named_as_a_member_is_or_by_itself() {
+    // #128: `devstack restart app.web`, `compose.app.web` and `web`.
+    let text = r#"
+version = 1
+[stack]
+name = "t"
+[compose.app]
+project = "t-dev"
+files = ["compose.yml"]
+services = ["db", "web", "worker"]
+[compose.tools]
+project = "t-tools"
+files = ["tools.yml"]
+services = ["db", "mail"]
+[services.api]
+build = "dotnet build"
+output = "bin"
+run = "{artifact}/Api"
+port = 5000
+[groups.server]
+members = ["compose.app.web", "api", "compose.app.worker"]
+"#;
+    let s = from_str(text, Path::new("t")).unwrap();
+    let pair = |g: &str, s: &str| Some((g.to_string(), s.to_string()));
+    assert_eq!(s.compose_service("app.web"), pair("app", "web"));
+    assert_eq!(s.compose_service("compose.app.web"), pair("app", "web"));
+    assert_eq!(s.compose_service("web"), pair("app", "web"));
+    assert_eq!(s.compose_service("mail"), pair("tools", "mail"));
+    // A service the group does not start, named with its group: the
+    // container routes tell it apart.
+    assert_eq!(s.compose_service("app.cache"), pair("app", "cache"));
+    // `db` is in two groups: only with its group.
+    assert_eq!(s.compose_service("db"), None);
+    assert_eq!(s.compose_service("tools.db"), pair("tools", "db"));
+    for none in ["nope.web", "compose.web", "app.", "app.web.x", "cache", ""] {
+        assert_eq!(s.compose_service(none), None, "{none}");
+    }
+    assert_eq!(
+        s.group_containers("server"),
+        vec![
+            ("app".to_string(), "web".to_string()),
+            ("app".to_string(), "worker".to_string())
+        ]
+    );
+    assert!(s.group_containers("nope").is_empty());
+}
