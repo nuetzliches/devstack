@@ -820,13 +820,17 @@ impl Supervisor {
                         && last_health.elapsed() >= Duration::from_secs(5)
                     {
                         last_health = Instant::now();
-                        match me
+                        // Set only while this instance is still the one the
+                        // slot runs: a check that ended after a stop says
+                        // nothing about the service now.
+                        let s = match me
                             .health
                             .check(port, &h.http, h.insecure_tls, h.insecure_tls)
                         {
-                            Ok(()) => me.set_status(&name, Status::Healthy),
-                            Err(reason) => me.set_status(&name, Status::Unhealthy { reason }),
-                        }
+                            Ok(()) => Status::Healthy,
+                            Err(reason) => Status::Unhealthy { reason },
+                        };
+                        me.set_status_of(&name, Some(generation), s);
                     }
                 }
             });
