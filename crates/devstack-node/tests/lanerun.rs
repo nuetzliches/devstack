@@ -33,6 +33,7 @@ fn a_lane_stops_and_is_purged_with_its_infrastructure() {
     let dir = d.path().join("slots").join(&tag);
     let src = dir.join("src");
     std::fs::create_dir_all(src.join("data")).unwrap();
+    std::fs::create_dir_all(src.join("api")).unwrap();
     std::fs::write(
         src.join("devstack.toml"),
         "version = 1\n\n[stack]\nname = \"t\"\n\n[lanes]\nimage = \"busybox:1.37\"\n\n\
@@ -41,7 +42,13 @@ fn a_lane_stops_and_is_purged_with_its_infrastructure() {
     .unwrap();
     std::fs::write(
         src.join("compose.yml"),
+        // `api` is the stack's own service: the lane does not start it.
         r#"services:
+  api:
+    image: busybox:1.37
+    profiles: [container-app]
+    ports: ["8080:80"]
+    depends_on: [db]
   db:
     image: busybox:1.37
     command: ["sh", "-c", "trap 'exit 0' TERM; while true; do sleep 1; done"]

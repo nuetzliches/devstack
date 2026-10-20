@@ -514,6 +514,10 @@ impl LaneRun {
             )
             .map_err(|e| RunError::Config(format!("compose group `{name}`: {e}")))?;
             let file = compose_dir.join(format!("{name}.json"));
+            // The overlay covers what the node runs, nothing more: an entry
+            // for a service left out would be a service without an image.
+            let ran = devstack_compose::parse_config(&rendered)
+                .map_err(|e| RunError::Config(format!("compose group `{name}`: {e}")))?;
             std::fs::write(&file, rendered).map_err(|e| RunError::Io(file.clone(), e))?;
             let options = devstack_compose::NodeOptions {
                 own_networks: own.clone(),
@@ -523,7 +527,7 @@ impl LaneRun {
                 memory: self.memory_limit,
                 cpus: self.cpu_limit,
                 pids: Some(PIDS_LIMIT),
-                build_images: model
+                build_images: ran
                     .services
                     .iter()
                     .filter(|(_, s)| s.build.is_some())
@@ -538,9 +542,8 @@ impl LaneRun {
                     })
                     .collect(),
             };
-            let text =
-                devstack_compose::node_overlay(&model, &mirror.project, &self.slot, &options)
-                    .map_err(|e| RunError::Config(format!("compose group `{name}`: {e}")))?;
+            let text = devstack_compose::node_overlay(&ran, &mirror.project, &self.slot, &options)
+                .map_err(|e| RunError::Config(format!("compose group `{name}`: {e}")))?;
             let overlay = compose_dir.join(format!("{name}.yml"));
             std::fs::write(&overlay, text).map_err(|e| RunError::Io(overlay.clone(), e))?;
             let project = self.project(&stack, &name);
