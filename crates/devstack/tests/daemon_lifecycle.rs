@@ -1520,6 +1520,297 @@ run = "{brief}"
     s.ok(&["down"]);
 }
 
+/// A command that runs for about `s` seconds.
+fn runs_for(s: u32) -> String {
+    if cfg!(windows) {
+        format!("ping -n {} 127.0.0.1 >NUL", s + 1)
+    } else {
+        format!("sleep {s}")
+    }
+}
+
+/// A service built from `src/Site` (the build is a no-op that copies it):
+/// an edit there is a new build, without an SDK.
+const SITE_BUILD: &str =
+    "build = \"git --version\"\noutput = \"src/Site\"\nwatch = [\"src/Site/**\"]\n";
+
+impl Stack {
+    fn state(&self, name: &str) -> String {
+        self.service_view(name)["status"]["state"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    }
+
+    fn build_of(&self, name: &str) -> String {
+        self.service_view(name)["build_id"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    }
+
+    fn edit_site(&self, text: &str) {
+        std::fs::write(self.dir.path().join("src/Site/index.html"), text).unwrap();
+    }
+}
+
+/// The first start after a daemon start restores the build last promoted
+/// (ADR-0016); one that fails for a passing reason (its port still held)
+/// does not use that up: the next start restores again instead of taking the
+/// tree into main unpromoted, and the edit then comes as a candidate.
+#[test]
+fn a_failed_first_start_restores_again() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    let port = free_port();
+    std::fs::write(
+        s.file(),
+        format!(
+            "version = 1\n[stack]\nname = \"restore\"\n[services.app]\n{SITE_BUILD}run = \"{}\"\nport = {port}\nproxy = false\n",
+            runs_for(600)
+        ),
+    )
+    .unwrap();
+    s.ok(&["up"]);
+    let promoted = s.build_of("app");
+    assert!(!promoted.is_empty(), "{}", s.diag());
+    s.ok(&["down"]);
+
+    s.edit_site("<p>edited while down</p>");
+    let held = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    let up = s.cli(&["up"], None);
+    assert!(!up.status.success(), "the port is held: {}", s.diag());
+    drop(held);
+    s.ok(&["start", "app"]);
+    assert_eq!(
+        s.build_of("app"),
+        promoted,
+        "restored, not built\n{}",
+        s.diag()
+    );
+    let restored = s
+        .daemon_log()
+        .lines()
+        .filter(|l| l.contains("\"event\":\"restored\""))
+        .count();
+    assert!(restored >= 2, "restored at both starts\n{}", s.diag());
+    assert!(
+        wait_for(
+            || {
+                let b = s.build_of("app");
+                !b.is_empty() && b != promoted && s.state("app") == "running"
+            },
+            Duration::from_secs(60)
+        ),
+        "the edit made while down arrives as a candidate\n{}",
+        s.diag()
+    );
+    s.ok(&["down"]);
+}
+
+/// An edit while a service that exited by itself waits for its restart is
+/// not lost: it starts again from its build, and the edit follows as a
+/// candidate (ADR-0003).
+#[test]
+fn an_edit_while_exited_follows_the_restart() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    std::fs::write(
+        s.file(),
+        format!(
+            "version = 1\n[stack]\nname = \"exits\"\n[services.app]\n{SITE_BUILD}run = \"{}\"\n",
+            runs_for(5)
+        ),
+    )
+    .unwrap();
+    s.ok(&["up"]);
+    let first = s.build_of("app");
+    // Two restarts in: the next backoff (4 s) is longer than the watcher's
+    // quiet time, so the edit is seen while it is down.
+    assert!(
+        wait_for(
+            || s.daemon_log().matches("\"service_restarting\"").count() >= 2
+                && s.state("app") == "running",
+            Duration::from_secs(90)
+        ),
+        "{}",
+        s.diag()
+    );
+    assert!(
+        wait_for(|| s.state("app") == "exited", Duration::from_secs(30)),
+        "{}",
+        s.diag()
+    );
+    s.edit_site("<p>edited while it was down</p>");
+    assert!(
+        wait_for(
+            || {
+                let b = s.build_of("app");
+                !b.is_empty() && b != first
+            },
+            Duration::from_secs(60)
+        ),
+        "the edit came in as a candidate\n{}",
+        s.diag()
+    );
+    s.ok(&["down"]);
+}
+
+/// A `stop` while a candidate's migrator runs: the service stays stopped,
+/// the candidate does not start it again (ADR-0003).
+#[test]
+fn a_stop_while_the_migrator_runs_holds() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    std::fs::write(
+        s.file(),
+        format!(
+            "version = 1\n[stack]\nname = \"migrating\"\n[services.migrate]\nkind = \"job\"\nrun = \"{}\"\n[services.app]\n{SITE_BUILD}run = \"{}\"\nafter = [\"migrate\"]\n",
+            runs_for(8),
+            runs_for(600)
+        ),
+    )
+    .unwrap();
+    s.ok(&["up"]);
+    assert_eq!(s.state("app"), "running", "{}", s.diag());
+    s.edit_site("<p>a change with a migration</p>");
+    assert!(
+        wait_for(|| s.state("migrate") == "starting", Duration::from_secs(60)),
+        "the candidate runs the migrator\n{}",
+        s.diag()
+    );
+    s.ok(&["stop", "app"]);
+    assert!(
+        wait_for(
+            || s.state("migrate") == "completed",
+            Duration::from_secs(60)
+        ),
+        "{}",
+        s.diag()
+    );
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(
+        s.state("app"),
+        "stopped",
+        "the candidate started a stopped service\n{}",
+        s.diag()
+    );
+    s.ok(&["down"]);
+}
+
+/// Two services after the same job, one change: the job runs once for it,
+/// not once per candidate (a seed job is not idempotent).
+#[test]
+fn a_job_runs_once_for_two_candidates() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    let idle = runs_for(600);
+    std::fs::write(
+        s.file(),
+        format!(
+            "version = 1\n[stack]\nname = \"seeded\"\n[services.seed]\nkind = \"job\"\nrun = \"echo run>>seed.count\"\n[services.a]\n{SITE_BUILD}run = \"{idle}\"\nafter = [\"seed\"]\n[services.b]\n{SITE_BUILD}run = \"{idle}\"\nafter = [\"seed\"]\n"
+        ),
+    )
+    .unwrap();
+    let runs = || {
+        std::fs::read_to_string(s.dir.path().join("seed.count"))
+            .map(|t| t.lines().count())
+            .unwrap_or(0)
+    };
+    s.ok(&["up"]);
+    assert_eq!(runs(), 1, "{}", s.diag());
+    let (a, b) = (s.build_of("a"), s.build_of("b"));
+    s.edit_site("<p>a change both build</p>");
+    assert!(
+        wait_for(
+            || s.build_of("a") != a
+                && s.build_of("b") != b
+                && s.state("a") == "running"
+                && s.state("b") == "running",
+            Duration::from_secs(90)
+        ),
+        "{}",
+        s.diag()
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(runs(), 2, "once for the change\n{}", s.diag());
+    s.ok(&["down"]);
+}
+
+/// The relay's second start (with workers) fails: the new build serves
+/// without its background workers, and the status keeps saying so after
+/// the next health check (ADR-0008).
+#[test]
+fn serving_without_workers_stays_visible() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    let port = free_port();
+    let flag = s.dir.path().join("no-workers");
+    let site = s.dir.path().join("src/Site");
+    // Fails to start with its workers once `flag` exists.
+    let run = if cfg!(windows) {
+        format!(
+            "(if \"%W%\"==\"true\" if exist \"{}\" exit 7) & \"{BIN}\" serve-static \"{}\" --port {{port}}",
+            flag.display(),
+            site.display()
+        )
+    } else {
+        format!(
+            "if [ \"$W\" = true ] && [ -f '{}' ]; then exit 7; fi; exec '{BIN}' serve-static '{}' --port {{port}}",
+            flag.display(),
+            site.display()
+        )
+    };
+    std::fs::write(
+        s.file(),
+        format!(
+            "version = 1\n[stack]\nname = \"relay\"\n[services.web]\nrun = '''{run}'''\nport = {port}\nhealth = {{ http = \"/\", timeout = \"30s\" }}\nworkers = {{ env = {{ W = \"{{is_main}}\" }} }}\n"
+        ),
+    )
+    .unwrap();
+    s.ok(&["up"]);
+    assert_eq!(s.state("web"), "healthy", "{}", s.diag());
+    std::fs::write(&flag, "").unwrap();
+    let out = s.cli(&["restart", "web"], None);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        text.contains("without background workers"),
+        "{text}\n{}",
+        s.diag()
+    );
+    assert!(get_on(port, "/").is_some(), "the new build serves");
+    // Past the monitor's next health checks (every 5 s).
+    std::thread::sleep(Duration::from_secs(12));
+    let status = &s.service_view("web")["status"];
+    assert_eq!(status["state"], "unhealthy", "{status}\n{}", s.diag());
+    assert!(
+        status["reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("without background workers")),
+        "{status}"
+    );
+    s.ok(&["down"]);
+}
+
 /// GET on a port of this machine, the body.
 fn get_on(port: u16, path: &str) -> Option<String> {
     ureq::Agent::config_builder()

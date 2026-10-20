@@ -205,6 +205,37 @@ fn build_publish_failure_cancel_and_prune() {
     assert!(dir.join("version.txt").is_file(), "republished complete");
     assert!(builder.artifact("s", &id).is_some());
 
+    // Inputs that changed while it built: nothing is published under the
+    // id, and an artifact of that id that exists stays as it is.
+    let other = service(&OK_BUILD.replace("version.txt", "stale.txt"));
+    let mut run = builder.start("main", &snap, "st", &other).unwrap();
+    let out = loop {
+        if let Some(o) = builder.poll_checked(&mut run, &|| false).unwrap() {
+            break o;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(matches!(out, Outcome::Stale { .. }), "{out:?}");
+    assert!(builder.artifact("st", &run.id).is_none());
+    assert!(
+        fs::read_dir(layout.artifacts("st"))
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(true),
+        "no temporary directory left"
+    );
+    let mut run = builder.start("main", &snap, "s", &ok).unwrap();
+    let out = loop {
+        if let Some(o) = builder.poll_checked(&mut run, &|| false).unwrap() {
+            break o;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(matches!(out, Outcome::Stale { .. }), "{out:?}");
+    assert!(
+        builder.artifact("s", &id).is_some(),
+        "the existing one stays"
+    );
+
     // Failure: nothing published, no temporary directory left.
     let failing = service("build = \"exit 4\"\noutput = \"out\"\nrun = \"x\"\n");
     let mut run = builder.start("main", &snap, "f", &failing).unwrap();

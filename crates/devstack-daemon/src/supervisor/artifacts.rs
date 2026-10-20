@@ -1,7 +1,7 @@
 //! Artifacts: build, prune, pins, restore.
 
-use super::{KEEP_ARTIFACTS, SUPERSEDED, Supervisor, tail};
-use crate::state::{Candidate, Persisted, Status, now_ms};
+use super::{KEEP_ARTIFACTS, STOPPED, SUPERSEDED, Supervisor, tail};
+use crate::state::{Candidate, Persisted, Status};
 use devstack_build::{Outcome, build_id};
 use devstack_config::model::Service;
 use std::collections::BTreeSet;
@@ -82,11 +82,14 @@ impl Supervisor {
     }
 
     /// Sync the main lane and build `name` unless its artifact exists.
+    /// `cancel` ends the build; it was a stop when one came in since
+    /// `stops` (the error says [`STOPPED`] then, else [`SUPERSEDED`]).
     pub(super) fn build_locked(
         &self,
         name: &str,
         svc: &Service,
         cancel: &dyn Fn() -> bool,
+        stops: u64,
     ) -> Result<(String, PathBuf), String> {
         // While an instance serves, the build is the candidate's business: the
         // service itself stays "healthy", it still answers (ADR-0003).
@@ -103,10 +106,10 @@ impl Supervisor {
         let forced = self.force_build.lock().unwrap().remove(name);
         // All services of a tree share one snapshot: another one's build may
         // sync it while this one builds. An artifact whose inputs changed
-        // under it is not what its id says (ADR-0002); it goes, and the build
-        // runs again on the tree as it is now.
+        // under it is not what its id says (ADR-0002); it is not published,
+        // and the build runs again on the tree as it is now.
         for _ in 0..3 {
-            if let Some(a) = self.build_once(name, svc, cancel, &building, forced)? {
+            if let Some(a) = self.build_once(name, svc, cancel, stops, &building, forced)? {
                 self.slots.lock().unwrap().get_mut(name).unwrap().in_flight = Some(a.0.clone());
                 return Ok(a);
             }
@@ -121,6 +124,7 @@ impl Supervisor {
         name: &str,
         svc: &Service,
         cancel: &dyn Fn() -> bool,
+        stops: u64,
         building: &dyn Fn(Option<String>),
         forced: bool,
     ) -> Result<Option<(String, PathBuf)>, String> {
@@ -161,20 +165,36 @@ impl Supervisor {
                 self.run_prepare(name, job, cancel)?;
                 snap = self.snapshot.lock().unwrap();
             }
-            let started = now_ms();
             let t0 = Instant::now();
             let mut running = self
                 .builder
                 .start_as("main", &snap, name, svc, id.clone())
                 .map_err(|e| e.to_string())?;
             drop(snap); // other services may sync while this one builds
+            // All services of a tree share one snapshot: another one's build
+            // may sync it while this one builds. Published only while its
+            // inputs are still the ones its id says, checked before the id
+            // exists: no other supervisor can pick up a wrong artifact.
+            let fresh = || {
+                build_id(&self.snapshot.lock().unwrap().manifest, svc).is_ok_and(|now| now == base)
+            };
             // A newer change supersedes the build: kill it (ADR-0003, spike b).
             let outcome = loop {
-                if let Some(o) = self.builder.poll(&mut running).map_err(|e| e.to_string())? {
+                if let Some(o) = self
+                    .builder
+                    .poll_checked(&mut running, &fresh)
+                    .map_err(|e| e.to_string())?
+                {
                     break o;
                 }
                 if cancel() {
                     self.builder.cancel(&mut running);
+                    // A stop is no newer change (and no failed start: the
+                    // diagnostic log keeps the two apart, ADR-0037).
+                    if self.stopped_since(name, stops) {
+                        self.build_done(name, &id, t0, "stopped");
+                        return Err(STOPPED.into());
+                    }
                     self.build_done(name, &id, t0, "superseded");
                     return Err(SUPERSEDED.into());
                 }
@@ -184,26 +204,22 @@ impl Supervisor {
                 Outcome::Published { .. } => "ok",
                 Outcome::Failed { .. } => "failed",
                 Outcome::Cancelled { .. } => "cancelled",
+                Outcome::Stale { .. } => "discarded",
             };
             self.build_done(name, &id, t0, result);
             match outcome {
-                Outcome::Published { .. } => {
-                    let now = build_id(&self.snapshot.lock().unwrap().manifest, svc)
-                        .map_err(|e| e.to_string())?;
-                    if now != base {
-                        crate::diag::warn(
-                            "build_discarded",
-                            serde_json::json!({
-                                "lane": self.lane,
-                                "service": name,
-                                "build_id": id,
-                                "why": "its inputs changed in the snapshot while it built (another build synced it); built again",
-                            }),
-                        );
-                        self.discard_artifact(name, &id, started);
-                        return Ok(None);
-                    }
-                    self.prune_artifacts(name)
+                Outcome::Published { .. } => self.prune_artifacts(name),
+                Outcome::Stale { .. } => {
+                    crate::diag::warn(
+                        "build_discarded",
+                        serde_json::json!({
+                            "lane": self.lane,
+                            "service": name,
+                            "build_id": id,
+                            "why": "its inputs changed in the snapshot while it built (another build synced it); built again",
+                        }),
+                    );
+                    return Ok(None);
                 }
                 Outcome::Failed { exit_code, log, .. } => {
                     // Point compiler messages at the repository, not at the
@@ -233,21 +249,6 @@ impl Supervisor {
                 "ms": t0.elapsed().as_millis() as u64,
             }),
         );
-    }
-
-    /// Remove an artifact this daemon just published (since `since`, Unix
-    /// ms), its metadata first: without it the directory is no artifact.
-    fn discard_artifact(&self, name: &str, id: &str, since: u128) {
-        if self
-            .builder
-            .artifact(name, id)
-            .is_none_or(|m| m.created < since)
-        {
-            return; // published before this build: not this build's to remove
-        }
-        let dir = self.layout.artifact(name, id);
-        let _ = std::fs::remove_file(dir.join(devstack_build::META_FILE));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

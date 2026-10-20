@@ -197,7 +197,15 @@ impl Supervisor {
                 proxy.set_waiting(Waiting::Refuse(format!("lane `{lane}` is not answering")));
                 proxy.set_upstream(Some(Upstream { port, build }));
             }
-            None => proxy.set_upstream(None),
+            None => {
+                // Until this tree's own instance runs (a start sets its own
+                // waiting), the port says why it does not answer, not that a
+                // lane does not.
+                proxy.set_upstream(None);
+                proxy.set_waiting(Waiting::Refuse(format!(
+                    "`{name}` is stopped (devstack start {name})"
+                )));
+            }
         }
         Ok(())
     }

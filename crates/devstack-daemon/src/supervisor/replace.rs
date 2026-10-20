@@ -1,6 +1,6 @@
 //! Restart, replacement behind the proxy, rollback.
 
-use super::{Instance, Supervisor, first_lines, free_port};
+use super::{Instance, STOPPED, Supervisor, first_lines, free_port};
 use crate::proxy::{Proxy, Upstream};
 use crate::state::{Candidate, Status, now_ms};
 use devstack_config::model::{Kind, Service};
@@ -59,12 +59,13 @@ impl Supervisor {
         }
         let svc = self.service(name)?.clone();
         self.absorb(name);
+        let requested = now_ms();
+        let epoch = self.stop_epoch(name);
         let mut artifact = None;
         if svc.build.is_some() {
-            let epoch = self.stop_epoch(name);
             let _op = self.op_locks[name].lock().unwrap();
             let before = self.slots.lock().unwrap()[name].view.status.clone();
-            match self.build_locked(name, &svc, &|| self.stopped_since(name, epoch)) {
+            match self.build_locked(name, &svc, &|| self.stopped_since(name, epoch), epoch) {
                 Ok(a) => artifact = Some(a),
                 Err(e) => {
                     // Back to what is actually running; the error goes to the caller.
@@ -82,7 +83,11 @@ The running instance was left as it was."
                 }
             }
         }
-        self.rerun_after_jobs(&svc)?;
+        self.rerun_after_jobs(&svc, requested)?;
+        // A stop came in while the jobs ran: it wins over this restart.
+        if self.stopped_since(name, epoch) {
+            return Err(STOPPED.into());
+        }
         let running = self.slots.lock().unwrap()[name].main.is_some();
         if svc.proxied() && running {
             self.replace(name, &svc, artifact)?;
@@ -91,6 +96,11 @@ The running instance was left as it was."
             self.stop(name)?;
             self.start_with(name, artifact)?;
         }
+        if svc.kind == Kind::Job
+            && let Some(s) = self.slots.lock().unwrap().get_mut(name)
+        {
+            s.ran_since = Some(requested);
+        }
         // A build of the tree as it is now is main: a held candidate is older.
         self.release_held(name, None);
         Ok(())
@@ -98,19 +108,47 @@ The running instance was left as it was."
 
     /// Jobs `svc` comes after run again first (a schema migrator for a
     /// migration that came with the change); their build is cached when
-    /// nothing changed. A failing job leaves the running instance alone.
-    pub(super) fn rerun_after_jobs(self: &Arc<Self>, svc: &Service) -> Result<(), String> {
+    /// nothing changed. A failing job leaves the running instance alone. A
+    /// job whose last successful run was asked for at or after `since` (the
+    /// build of what takes over began) ran for this change already: another
+    /// service after the same job took over first (a seed job must not run
+    /// twice for one change).
+    pub(super) fn rerun_after_jobs(
+        self: &Arc<Self>,
+        svc: &Service,
+        since: u128,
+    ) -> Result<(), String> {
         for dep in &svc.after {
-            if self
+            if !self
                 .stack
                 .services
                 .get(dep)
                 .is_some_and(|d| d.kind == Kind::Job)
             {
-                self.restart(dep).map_err(|e| {
-                    format!("`{dep}` failed:\n{e}\nThe running instance was left as it was.")
-                })?;
+                continue;
             }
+            // One at a time: the other one's run ends first, then counts.
+            let _one = self.reruns[dep.as_str()].lock().unwrap();
+            let ran = {
+                let slots = self.slots.lock().unwrap();
+                let s = &slots[dep.as_str()];
+                s.view.status == (Status::Completed { exit_code: 0 })
+                    && s.ran_since.is_some_and(|t| t >= since)
+            };
+            if ran {
+                crate::diag::info(
+                    "job_not_rerun",
+                    serde_json::json!({
+                        "lane": self.lane,
+                        "service": dep,
+                        "why": "it completed for this change already, run by another service after it",
+                    }),
+                );
+                continue;
+            }
+            self.restart(dep).map_err(|e| {
+                format!("`{dep}` failed:\n{e}\nThe running instance was left as it was.")
+            })?;
         }
         Ok(())
     }
@@ -268,13 +306,20 @@ The running instance was left as it was."
         if let Some(p) = self.proxy(name) {
             p.set_pending(None);
         }
+        // Kept with the instance: its health checks fold it into the status
+        // (a passing one would say `healthy` otherwise).
+        let generation = {
+            let mut slots = self.slots.lock().unwrap();
+            let slot = slots.get_mut(name).unwrap();
+            slot.without_workers = Some((slot.generation, reason.clone()));
+            slot.generation
+        };
         self.set_status(
             name,
             Status::Unhealthy {
                 reason: reason.clone(),
             },
         );
-        let generation = self.slots.lock().unwrap()[name].generation;
         self.spawn_monitor(name.to_string(), svc.clone(), generation);
         Err(reason)
     }

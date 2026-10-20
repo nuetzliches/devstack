@@ -1,7 +1,7 @@
 //! The candidate pipeline (ADR-0003) and the promotion gate (ADR-0013).
 
-use super::{DEBOUNCE, Held, RESCAN, SUPERSEDED, Supervisor, first_lines};
-use crate::state::Candidate;
+use super::{DEBOUNCE, Held, RESCAN, STOPPED, SUPERSEDED, Supervisor, first_lines};
+use crate::state::{Candidate, Status, now_ms};
 use devstack_config::model::Service;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -84,13 +84,20 @@ impl Supervisor {
             if c.epoch == epoch {
                 c.worker = false;
                 c.last = None;
+                drop(changes);
+                // Kept for a start that may have finished meanwhile, before
+                // the paths were back: it found nothing to take up.
+                if superseded && self.service_running(name) {
+                    self.resume_changes(name);
+                }
                 return;
             }
         }
     }
 
     /// Build a candidate from the current tree and promote it unless a gate
-    /// holds it. Returns true if a newer change superseded the build.
+    /// holds it. Returns true if a newer change superseded the build, or if
+    /// the paths wait for a start in progress or after an exit.
     fn candidate_from(self: &Arc<Self>, name: &str, paths: &BTreeSet<String>, epoch: u64) -> bool {
         let superseded = self.candidate_inner(name, paths, epoch);
         if let Some(s) = self.slots.lock().unwrap().get_mut(name) {
@@ -109,13 +116,27 @@ impl Supervisor {
                 p.set_pending(None);
             }
         };
-        // Nothing runs: nothing to replace. The next start builds anyway.
-        if self.slots.lock().unwrap()[name].main.is_none() {
-            clear();
-            return false;
-        }
         // A newer change supersedes the build; a stop ends it.
         let stops = self.stop_epoch(name);
+        let began = now_ms();
+        // Nothing runs: nothing to replace. A start the user asks for builds
+        // the tree anyway; but an instance that exited by itself starts
+        // again from its old build, and a start in progress may have read
+        // the tree before this change: the paths are kept, and that start
+        // takes them up as a candidate once it runs (`resume_changes`).
+        let (serving, coming) = {
+            let slots = self.slots.lock().unwrap();
+            let s = &slots[name];
+            let coming = matches!(
+                s.view.status,
+                Status::Exited { .. } | Status::Building { .. } | Status::Starting
+            );
+            (s.main.is_some(), coming)
+        };
+        if !serving {
+            clear();
+            return coming;
+        }
         let newer = || {
             self.stopped_since(name, stops)
                 || self
@@ -130,9 +151,9 @@ impl Supervisor {
         }
         let artifact = {
             let _op = self.op_locks[name].lock().unwrap();
-            match self.build_locked(name, &svc, &newer) {
+            match self.build_locked(name, &svc, &newer, stops) {
                 Ok(a) => a,
-                Err(e) if e == SUPERSEDED && self.stopped_since(name, stops) => {
+                Err(_) if self.stopped_since(name, stops) => {
                     clear();
                     return false;
                 }
@@ -214,7 +235,13 @@ impl Supervisor {
             }
             return false;
         }
-        if let Err(e) = self.take_over(name, &svc, artifact) {
+        if let Err(e) = self.take_over(name, &svc, artifact, stops, began) {
+            // A stop came in meanwhile: the service stays stopped, and the
+            // candidate goes with it.
+            if self.stopped_since(name, stops) {
+                clear();
+                return false;
+            }
             // replace() has set the candidate to failed already where it applies.
             let already = self.slots.lock().unwrap()[name]
                 .view
@@ -231,16 +258,23 @@ impl Supervisor {
         false
     }
 
-    /// Run the jobs `svc` comes after (a schema migrator), then put the
-    /// artifact into the main slot: through a candidate behind the proxy, or by
-    /// a restart in place.
+    /// Run the jobs `svc` comes after (a schema migrator) unless they ran
+    /// since `since` (Unix ms), then put the artifact into the main slot:
+    /// through a candidate behind the proxy, or by a restart in place. A
+    /// stop since `stops` ends it before that: what the user stopped stays
+    /// stopped (ADR-0003).
     fn take_over(
         self: &Arc<Self>,
         name: &str,
         svc: &Service,
         artifact: (String, PathBuf),
+        stops: u64,
+        since: u128,
     ) -> Result<(), String> {
-        self.rerun_after_jobs(svc)?;
+        self.rerun_after_jobs(svc, since)?;
+        if self.stopped_since(name, stops) {
+            return Err(STOPPED.into());
+        }
         if svc.proxied() && self.slots.lock().unwrap()[name].main.is_some() {
             return self.replace(name, svc, Some(artifact));
         }
@@ -255,6 +289,20 @@ impl Supervisor {
         if let Some(c) = self.changes.lock().unwrap().get_mut(name) {
             c.paths.clear();
             c.absorbed = c.epoch;
+        }
+    }
+
+    /// `name` runs (again): changes kept while it did not (an exit by
+    /// itself, a start in progress) become a candidate now, as if the
+    /// watcher had just seen them.
+    pub(super) fn resume_changes(self: &Arc<Self>, name: &str) {
+        let path = self.changes.lock().unwrap().get(name).and_then(|c| {
+            (c.absorbed < c.epoch)
+                .then(|| c.paths.first().cloned())
+                .flatten()
+        });
+        if let Some(p) = path {
+            self.changed(name, &p);
         }
     }
 
@@ -291,7 +339,7 @@ impl Supervisor {
         };
         let id = artifact.0.clone();
         // Released only once it is main: a failed take-over keeps it held.
-        self.take_over(name, &svc, artifact)?;
+        self.take_over(name, &svc, artifact, self.stop_epoch(name), now_ms())?;
         self.release_held(name, Some(&id));
         Ok(())
     }

@@ -50,7 +50,7 @@ stay.
 | ADR | Title | Status |
 |---|---|---|
 | [0001](0001-development-is-adr-driven.md) | Development is ADR-driven | Accepted |
-| [0002](0002-processes-run-from-immutable-artifacts.md) | Processes run from immutable artifacts, never from the build output of the source tree | Accepted, amended (services without `build`; a build whose inputs changed meanwhile) |
+| [0002](0002-processes-run-from-immutable-artifacts.md) | Processes run from immutable artifacts, never from the build output of the source tree | Accepted, amended (services without `build`; a build whose inputs changed meanwhile, checked before it is published) |
 | [0003](0003-changes-flow-through-candidates.md) | Changes flow through candidates; the main slot only holds a stack that built and passed health | Accepted |
 | [0004](0004-infrastructure-is-delegated-to-compose.md) | Infrastructure comes from the project's existing Compose files plus a dev overlay | Accepted |
 | [0005](0005-rust-for-daemon-and-cli.md) | Rust for daemon and CLI | Accepted |

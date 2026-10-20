@@ -65,6 +65,13 @@ pub(crate) struct Slot {
     /// Times in a row it exited by itself and was started again; back to 0
     /// once an instance ran for [`lifecycle::STABLE`].
     exits: u32,
+    /// The relay's second start failed (ADR-0008): the instance of this
+    /// generation serves without its background workers, and says so in its
+    /// status until another instance takes its place.
+    without_workers: Option<(u64, String)>,
+    /// A job: when its last successful run was asked for (Unix ms). A
+    /// candidate built after that needs no run of its own.
+    ran_since: Option<u128>,
 }
 
 /// A built candidate a promotion gate holds (ADR-0013). The gate stays until
@@ -99,6 +106,9 @@ pub struct Supervisor {
     slots: Mutex<BTreeMap<String, Slot>>,
     /// One operation per service at a time.
     op_locks: BTreeMap<String, Mutex<()>>,
+    /// Per job: one run before a take-over at a time, so two services after
+    /// the same job do not run it twice for one change.
+    reruns: BTreeMap<String, Mutex<()>>,
     snapshot: Mutex<Snapshot>,
     infra: Mutex<InfraCache>,
     /// In a lane on a node: each published container on its loopback port
@@ -344,6 +354,7 @@ impl Supervisor {
         };
         let mut slots = BTreeMap::new();
         let mut op_locks = BTreeMap::new();
+        let mut reruns = BTreeMap::new();
         let mut stops = BTreeMap::new();
         for (name, svc) in &stack.services {
             slots.insert(
@@ -377,9 +388,12 @@ impl Supervisor {
                     spawned: None,
                     starts: 0,
                     exits: 0,
+                    without_workers: None,
+                    ran_since: None,
                 },
             );
             op_locks.insert(name.clone(), Mutex::new(()));
+            reruns.insert(name.clone(), Mutex::new(()));
             stops.insert(name.clone(), AtomicU64::new(0));
         }
         let persisted = Persisted::load(&state_dir);
@@ -415,6 +429,7 @@ impl Supervisor {
             health: Checker::default(),
             slots: Mutex::new(slots),
             op_locks,
+            reruns,
             snapshot: Mutex::new(snapshot),
             infra: Mutex::new(InfraCache::default()),
             loopback: Mutex::new(BTreeMap::new()),
