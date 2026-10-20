@@ -236,7 +236,10 @@ lists the member. The images Compose built for a lane go with its slot, and
 the lane images built from `[lanes] dockerfile` with the member, or when the
 node has less than 10 GiB free. A node with less than 5 GiB free where it
 keeps lanes takes no lane. A stack with `[lanes]
-keep_data = false` keeps nothing. A move to another node is a cold start
+keep_data = false` keeps nothing. `devstack lane reset <lane>` throws a
+stopped lane's data away, here and on the nodes it ran on;
+`devstack lane prune [--older-than 7d]` removes what this repository's
+gone lanes left (both ask the node with `DELETE /v1/slots`). A move to another node is a cold start
 there: data never moves between nodes. It runs without background workers unless it holds the
 main ports. When its lease ends (an admin ends it, the node goes away for
 longer than a lease lives), the main working tree takes the main ports back
@@ -291,6 +294,12 @@ devstack node members node <id> on|off          # whether the pool runs lanes th
 devstack node members policy build-server --allow team:backend --repo shop \
     --memory-headroom 2 --max-cpus 8 --network internet
 ```
+
+`devstack node members policy <node>` without options prints the node's
+policy; with any option it **replaces** the whole policy: what the command
+does not name goes back to its default (no `--allow` or `--repo` limit,
+no memory or CPU limit, `--network lan`): repeat every option the node
+should keep. `--clear` removes the policy.
 
 A node's **policy** (ADR-0033): who may run lanes there (member ids or
 tags), which repositories (`[stack] name`; a guard against mistakes, not
@@ -452,6 +461,9 @@ same arguments. "Prune" on a node removes the stopped lanes it keeps
 | Node agent state (leases, mirrors, uploaded files per member, `policy.json`, `secret`) | `node/` beside its membership |
 | Ports | coordinator and node agent: as you choose (`--listen`); mutual TLS with the pool's CA |
 | Certificates | the pool's CA 20 years, the coordinator's server certificate 10, a member's 5; not renewed: when one expires, that member (for the CA, the pool) is set up again |
+| Leases | live 120 s; the requester renews every 30 s |
+| Uploads to a node | at most 512 MiB per file, 8 GiB per member |
+| Kept lanes on a node | `GET /v1/slots` (the caller's own), `DELETE /v1/slots?repo=&lane=` (`lane reset`, `lane prune`, a removed worktree) |
 | HTTP API | the hub's `/hub/pool...` routes in [dashboard-api.md](dashboard-api.md) |
 
 What the node agent sets in a lane container, for the `devstack` daemon in it

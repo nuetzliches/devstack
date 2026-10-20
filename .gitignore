@@ -23,3 +23,11 @@ examples/**/obj/
 
 # Pool telemetry exports (scripts/telemetry/fetch.py): downstream data.
 /.telemetry/
+__pycache__/
+
+# Local notes (reviews, telemetry findings): they may name downstream stacks.
+*.local.md
+
+# Agent session state; only the project's own skills are tracked.
+/.claude/*
+!/.claude/skills/

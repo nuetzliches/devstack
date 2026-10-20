@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-10-19)
 - **Date:** 2026-10-19
 - **Deciders:** project owner
-- **Related:** [#115](https://github.com/nuetzliches/devstack/issues/115), [#103](https://github.com/nuetzliches/devstack/issues/103), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0023](0023-stack-file-compatibility.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md) (point 6: workers in lanes), [ADR-0038](0038-a-lanes-data-outlives-its-lease.md)
+- **Related:** [#115](https://github.com/nuetzliches/devstack/issues/115), [#103](https://github.com/nuetzliches/devstack/issues/103), [ADR-0017](0017-stack-file-is-toml.md) (its "no profiles in version 1" meant environments; amended), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0023](0023-stack-file-compatibility.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md) (point 6: workers in lanes), [ADR-0038](0038-a-lanes-data-outlives-its-lease.md)
 
 ## Context
 

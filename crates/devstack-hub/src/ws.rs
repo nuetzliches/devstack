@@ -101,9 +101,16 @@ pub(crate) async fn ws(
 /// Until either side ends: messages out, pings so a closed tab is noticed
 /// even on a quiet stream. When the stream ends the socket closes, and the
 /// dashboard reconnects as it did after an event stream ended.
+///
+/// A ping that goes out says nothing: on a half-open connection (a laptop
+/// that slept, a network that went away) it lands in the send buffer, and
+/// only the system's retransmit timeout, many minutes later, would end the
+/// socket and the daemon stream behind it. So the browser has to answer:
+/// after [`MISSED_PINGS`] pings without a word back, the socket is closed.
 async fn pump(mut socket: WebSocket, mut messages: Messages) {
-    let mut ping = tokio::time::interval(Duration::from_secs(20));
+    let mut ping = tokio::time::interval(PING_EVERY);
     ping.tick().await;
+    let mut unanswered = 0u32;
     loop {
         tokio::select! {
             m = messages.next() => match m {
@@ -119,16 +126,27 @@ async fn pump(mut socket: WebSocket, mut messages: Messages) {
             },
             incoming = socket.recv() => match incoming {
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
-                Some(Ok(_)) => {}
+                // A pong, or anything else: the other side is there.
+                Some(Ok(_)) => unanswered = 0,
             },
             _ = ping.tick() => {
+                if unanswered >= MISSED_PINGS {
+                    return;
+                }
                 if socket.send(Message::Ping(Bytes::new())).await.is_err() {
                     return;
                 }
+                unanswered += 1;
             }
         }
     }
 }
+
+/// How often the hub pings a dashboard's socket.
+const PING_EVERY: Duration = Duration::from_secs(20);
+
+/// Pings in a row without an answer after which the socket counts as gone.
+const MISSED_PINGS: u32 = 2;
 
 /// The `data` of each server-sent event in a body; comments (keep-alives)
 /// and other fields are dropped, multi-line data joined with `\n`.

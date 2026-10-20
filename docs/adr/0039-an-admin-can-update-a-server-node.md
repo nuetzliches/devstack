@@ -1,6 +1,6 @@
 # ADR-0039: An admin can have a server node update its devstack, from the dashboard
 
-- **Status:** Accepted (2026-10-19); amended 2026-10-20 (a drain ends, and can be withdrawn)
+- **Status:** Accepted (2026-10-19); amended 2026-10-20 (what the release check proves; which binary is replaced; a drain ends, and can be withdrawn)
 - **Date:** 2026-10-19
 - **Deciders:** project owner
 - **Related:** [ADR-0031](0031-a-coordinator-places-lanes.md) (point 8: versions in a pool), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md) (extended here), [ADR-0033](0033-a-node-decides-what-runs-on-it.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md) (point 4: dedicated nodes), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md)
@@ -126,6 +126,23 @@ Where it will live:
 is given: its report's `no_update` names why (its own policy, an agent in a
 container, no way to install), and the dashboard disables **Update** with
 that reason. A refusal is logged (`node_update_refused`).
+
+## Addendum 2026-10-20: what the release check proves, and which binary
+
+- **"Limited to signed releases" (Consequences) is not what was built.** The
+  node takes a release of this repository from GitHub and compares the
+  archive with the `SHA256SUMS` of the same release (point 4). That proves
+  the download is the file the release lists, not who built it: the chain of
+  trust is GitHub's TLS and control of the repository. No key is compiled
+  into the binary, and the agent does not check the release's build
+  provenance (the installers do, with `gh`). A signature the binary checks
+  (a key in devstack, a signature file in each release) would close that; it
+  is not built. SECURITY.md says the same.
+- **The binary replaced is the one the agent runs** (`current_exe`),
+  wherever it lives: a service unit starts that path again. `devstack
+  update` on a developer machine still replaces the installers' copy.
+- **`devstack node agent install` is not built** (Consequences): the unit is
+  printed with `--print-unit`, and the operator installs it.
 
 ## Addendum 2026-10-20: a drain ends, and can be withdrawn
 

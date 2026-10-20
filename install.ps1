@@ -176,9 +176,15 @@ function Test-Provenance([string]$File) {
             return
         }
     }
-    & gh attestation verify $File --repo $Repo *> $null
+    # Signed by the release workflow itself, not by any workflow of the repository.
+    # gh's stderr is kept for the message; Windows PowerShell 5.1 would turn
+    # each of its lines into a terminating error under 'Stop'.
+    $ErrorActionPreference = 'Continue'
+    $said =& gh attestation verify $File --repo $Repo --signer-workflow "$Repo/.github/workflows/release.yml" 2>&1 | ForEach-Object { "$_" } | Out-String
     if ($LASTEXITCODE -ne 0) {
-        throw "the build provenance of $asset does not verify (gh attestation verify $asset --repo $Repo)"
+        # gh's own words: a network or login problem reads differently from an
+        # archive that is not the one the release workflow built.
+        throw "the build provenance of $asset could not be verified (gh attestation verify $asset --repo $Repo):`n$($said.Trim())"
     }
     Note "built by $Repo's release workflow (attestation verified)"
 }
