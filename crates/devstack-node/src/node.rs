@@ -1633,6 +1633,8 @@ async fn start(
         .insert(id.clone(), (Vec::new(), std::time::Instant::now()));
     let s2 = s.clone();
     let lid = id.clone();
+    // The whole start, every phase: `phase_times` restarts its clock at each.
+    let t0 = std::time::Instant::now();
     tokio::task::spawn_blocking(move || {
         let mut run = s2.run(&l);
         run.display_root = display_root;
@@ -1660,13 +1662,7 @@ async fn start(
         // start over.
         let last = s2.starting.lock().unwrap().get(&lid).cloned();
         s2.phase_over(&lid, last.clone());
-        let ms = s2
-            .phase_times
-            .lock()
-            .unwrap()
-            .get(&lid)
-            .map_or(0, |(_, t0)| t0.elapsed().as_millis())
-            .to_string();
+        let ms = t0.elapsed().as_millis().to_string();
         let what = |extra: Vec<(&'static str, String)>| {
             let mut f = vec![
                 ("lease", lid.clone()),

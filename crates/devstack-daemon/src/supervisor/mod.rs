@@ -485,7 +485,7 @@ impl Supervisor {
         });
     }
 
-    fn emit_with(
+    pub(crate) fn emit_with(
         &self,
         body: EventBody,
         extra: Option<serde_json::Map<String, serde_json::Value>>,
