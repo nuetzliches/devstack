@@ -572,6 +572,7 @@ name = "devstack-compose"
 version = "0.14.1"
 dependencies = [
  "devstack-config",
+ "devstack-proc",
  "serde",
  "serde_json",
  "tempfile",
