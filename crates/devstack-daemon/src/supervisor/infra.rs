@@ -10,6 +10,11 @@ use std::time::{Duration, Instant};
 /// In a lane on a node, its agent answers for the containers (#101); one
 /// that passes such a request on to the lane is older than that.
 const NODE_TOO_OLD: &str = "the node runs this lane's containers, and its devstack is too old to show their output: update devstack on the node";
+/// The same for starting, stopping and restarting them (#128): the agent
+/// does it and says so ([`devstack_node::laneinfra::ACTED_HEADER`]); a
+/// request without that word reached the daemon past an older agent, or
+/// one that could not read the lane's stack file.
+pub(crate) const NODE_DID_NOT_ACT: &str = "the node runs this lane's containers and did not start, stop or restart them: its devstack is too old (update devstack on the node), or it could not read the lane's stack file";
 
 impl Supervisor {
     /// The published address of every Compose port, `(group, service,
@@ -401,9 +406,15 @@ impl Supervisor {
     /// Stop a container of the group's project the group does not start
     /// (`docker stop` by its name: Compose may not know its service, an
     /// orphan or one of an inactive profile).
-    pub fn stop_unmanaged(&self, group: &str, service: &str, name: &str) -> Result<(), String> {
+    pub fn stop_unmanaged(
+        &self,
+        group: &str,
+        service: &str,
+        name: &str,
+        node_acted: bool,
+    ) -> Result<(), String> {
         if self.external_infra().is_some() {
-            return Err("the node runs this lane's containers (ADR-0025)".into());
+            return self.acted_on_node(group, service, "stop", node_acted);
         }
         let result = self.docker.stop_container(&self.repo, name);
         let message = match &result {
@@ -418,11 +429,39 @@ impl Supervisor {
         result.map_err(|e| e.to_string())
     }
 
+    /// In a lane on a node: its agent started, stopped or restarted the
+    /// container (`node_acted`), and the view shows it at once; or it did
+    /// not, and this daemon cannot (it has no Docker, ADR-0025).
+    fn acted_on_node(
+        &self,
+        group: &str,
+        service: &str,
+        action: &str,
+        node_acted: bool,
+    ) -> Result<(), String> {
+        if !node_acted {
+            return Err(NODE_DID_NOT_ACT.into());
+        }
+        self.emit(EventBody::Infra {
+            group: group.into(),
+            message: format!("{service}: {action} done (by its node)"),
+        });
+        self.refresh_containers();
+        Ok(())
+    }
+
     /// `start`, `stop` or `restart` of one container from the dashboard or
-    /// the CLI. A lane acts on its own containers only (ADR-0030).
-    pub fn container_action(&self, group: &str, service: &str, action: &str) -> Result<(), String> {
+    /// the CLI. A lane acts on its own containers only (ADR-0030); a lane on
+    /// a node has its node's agent act on them (`node_acted`, #128).
+    pub fn container_action(
+        &self,
+        group: &str,
+        service: &str,
+        action: &str,
+        node_acted: bool,
+    ) -> Result<(), String> {
         if self.external_infra().is_some() {
-            return Err("the node runs this lane's containers (ADR-0025)".into());
+            return self.acted_on_node(group, service, action, node_acted);
         }
         if self.is_shared(group, service) {
             return Err(format!(

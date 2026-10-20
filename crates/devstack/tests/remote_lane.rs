@@ -296,6 +296,16 @@ fn a_lane_runs_on_a_node_of_the_pool() {
         std::thread::sleep(Duration::from_secs(3));
     }
 
+    // They are restarted through the node too, the lane's own (its project
+    // `devstack-fixture-<slot>`), never the main tree's (#128): one by its
+    // name, then the group's container members with its services.
+    let before = lane_db_started();
+    cli(&wt, &["restart", "app.db"]);
+    let after = lane_db_started();
+    assert_ne!(before, after, "app.db restarted on the node");
+    cli(&wt, &["restart", "app"]);
+    assert_ne!(after, lane_db_started(), "the group restarted its db");
+
     // The main slot to the lane on the node: the fixed port answers from
     // there, and comes back to the main tree (ADR-0025 point 4).
     cli(&main, &["promote", "--lane", "wt"]);
@@ -353,6 +363,33 @@ fn git(dir: &Path, args: &[&str]) {
         args.join(" "),
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// When the lane's `db` container on the node last started: the one of a
+/// project `devstack-fixture-<slot>`, not the main tree's.
+fn lane_db_started() -> String {
+    let out = Command::new("docker")
+        .args([
+            "ps",
+            "--filter",
+            "label=com.docker.compose.service=db",
+            "--format",
+            "{{.Names}}\t{{.Label \"com.docker.compose.project\"}}",
+        ])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let name = text
+        .lines()
+        .filter_map(|l| l.split_once('\t'))
+        .find(|(_, p)| p.starts_with("devstack-fixture-"))
+        .map(|(n, _)| n.to_string())
+        .unwrap_or_else(|| panic!("no lane db container:\n{text}"));
+    let out = Command::new("docker")
+        .args(["inspect", "-f", "{{.State.StartedAt}}", &name])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
 /// The fixture stack's files (not its local build output) into `to`.

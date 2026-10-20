@@ -86,19 +86,22 @@ enum Cmd {
     },
     /// State of services and infrastructure.
     Status,
-    /// Start a service, or every service of a group.
+    /// Start a service, every service of a group, or one Compose container.
     Start {
-        /// A service or a group of the stack file.
+        /// A service or a group of the stack file, or a Compose service
+        /// (`app.web`, `compose.app.web`, or `web` if one group starts it).
         service: String,
     },
-    /// Stop a service, or every service of a group.
+    /// Stop a service, every service of a group, or one Compose container.
     Stop {
-        /// A service or a group of the stack file.
+        /// A service or a group of the stack file, or a Compose service
+        /// (`app.web`, `compose.app.web`, or `web` if one group starts it).
         service: String,
     },
-    /// Rebuild and restart a service; for a group every service (built at the same time) and its containers.
+    /// Rebuild and restart a service; for a group every service (built at the same time) and its containers; restart one Compose container.
     Restart {
-        /// A service or a group of the stack file.
+        /// A service or a group of the stack file, or a Compose service
+        /// (`app.web`, `compose.app.web`, or `web` if one group starts it).
         service: String,
         /// Build again even if an artifact for the same inputs exists (an
         /// input devstack does not see changed: the SDK, a file outside the

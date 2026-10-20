@@ -173,6 +173,75 @@ pub fn follow(name: &str, tail: usize) -> Result<std::process::Child, String> {
         .map_err(|e| format!("run docker: {e}"))
 }
 
+/// What the agent sets on a request it passes to the lane's daemon once it
+/// started, stopped or restarted the containers the request names (#128):
+/// the daemon, which has no Docker, leaves them out. The agent removes it
+/// from every request that comes in.
+pub const ACTED_HEADER: &str = "x-devstack-node-acted";
+
+/// Which of the lane daemon's routes names containers by a name of the
+/// stack file: `POST /v1/services/{name}/{action}` (a service, a group, a
+/// Compose service) or `POST /v1/groups/{name}/{action}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Named {
+    Services,
+    Groups,
+}
+
+/// The containers a `named` route acts on with `action`, `(group,
+/// service)`, as the lane's daemon reads the name (#128): none for one of
+/// its services; a group's Compose members on `restart` (a group's `start`
+/// and `stop` leave its containers alone); one Compose service named
+/// `<group>.<service>`, `compose.<group>.<service>` or, unambiguous,
+/// `<service>`.
+pub fn named(
+    stack: &devstack_config::Stack,
+    route: Named,
+    name: &str,
+    action: &str,
+) -> Vec<(String, String)> {
+    if !matches!(action, "start" | "stop" | "restart") {
+        return Vec::new();
+    }
+    if route == Named::Services && stack.services.contains_key(name) {
+        return Vec::new();
+    }
+    if stack.groups.contains_key(name) {
+        return if action == "restart" {
+            stack.group_containers(name)
+        } else {
+            Vec::new()
+        };
+    }
+    match route {
+        Named::Services => stack.compose_service(name).into_iter().collect(),
+        Named::Groups => Vec::new(),
+    }
+}
+
+/// Whether the agent may `action` the lane's container of `group.service`:
+/// one the lane's Compose group starts (its `services`, ADR-0033: what the
+/// lane may start). One of its project the group does not start can be
+/// stopped only, as on a developer's machine. On a node a group's `shared`
+/// services are the lane's own as well (ADR-0025 point 3).
+pub fn may_act(
+    stack: &devstack_config::Stack,
+    group: &str,
+    service: &str,
+    action: &str,
+) -> Result<(), String> {
+    let cfg = stack
+        .compose
+        .get(group)
+        .ok_or_else(|| format!("no compose group `{group}` in this lane"))?;
+    if action == "stop" || cfg.services.iter().any(|s| s == service) {
+        return Ok(());
+    }
+    Err(format!(
+        "`{group}.{service}` is not in compose group `{group}`'s `services`: the lane does not start it, so its node does not {action} it (it can stop it)"
+    ))
+}
+
 /// `start`, `stop` or `restart` of one container, by its name.
 pub fn act(name: &str, action: &str) -> Result<(), String> {
     let args: Vec<&str> = match action {
@@ -288,6 +357,72 @@ pub fn refresh(dir: &Path, src: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const STACK: &str = r#"
+version = 1
+[stack]
+name = "shop"
+[compose.app]
+project = "shop"
+files = ["compose.yml"]
+services = ["db", "web", "mail"]
+shared = ["mail"]
+[services.api]
+build = "dotnet build"
+output = "bin"
+run = "{artifact}/Api"
+port = 5000
+[groups.server]
+members = ["compose.app.db", "compose.app.web", "api"]
+"#;
+
+    fn stack() -> devstack_config::Stack {
+        devstack_config::from_str(STACK, Path::new("devstack.toml")).unwrap()
+    }
+
+    #[test]
+    fn a_route_names_the_containers_the_daemon_would_act_on() {
+        let s = stack();
+        let pair = |g: &str, s: &str| (g.to_string(), s.to_string());
+        for name in ["app.web", "compose.app.web", "web"] {
+            assert_eq!(
+                named(&s, Named::Services, name, "restart"),
+                vec![pair("app", "web")],
+                "{name}"
+            );
+        }
+        assert_eq!(
+            named(&s, Named::Services, "server", "restart"),
+            vec![pair("app", "db"), pair("app", "web")]
+        );
+        assert_eq!(
+            named(&s, Named::Groups, "server", "restart"),
+            vec![pair("app", "db"), pair("app", "web")]
+        );
+        // A group's start and stop leave its containers alone, as locally.
+        assert!(named(&s, Named::Groups, "server", "stop").is_empty());
+        // The daemon's own: a service, another action, an unknown name.
+        assert!(named(&s, Named::Services, "api", "restart").is_empty());
+        assert!(named(&s, Named::Services, "web", "rebuild").is_empty());
+        assert!(named(&s, Named::Services, "nope", "restart").is_empty());
+        assert!(named(&s, Named::Groups, "app.web", "restart").is_empty());
+    }
+
+    #[test]
+    fn the_node_acts_only_on_what_the_lanes_group_starts() {
+        let s = stack();
+        assert!(may_act(&s, "app", "web", "restart").is_ok());
+        assert!(may_act(&s, "app", "db", "start").is_ok());
+        // Not in the group's `services`: stopped, never started.
+        let e = may_act(&s, "app", "cache", "restart").unwrap_err();
+        assert!(e.contains("not in compose group `app`'s `services`"), "{e}");
+        assert!(may_act(&s, "app", "cache", "start").is_err());
+        assert!(may_act(&s, "app", "cache", "stop").is_ok());
+        assert!(may_act(&s, "tools", "db", "stop").is_err(), "no such group");
+        // On a node a lane shares nothing (ADR-0025 point 3): its `shared`
+        // services run in its own project, and are its own to restart.
+        assert!(may_act(&s, "app", "mail", "restart").is_ok());
+    }
 
     #[test]
     fn containers_come_from_docker_ps_with_their_health() {

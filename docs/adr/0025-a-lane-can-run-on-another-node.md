@@ -151,6 +151,28 @@ included, so each phase is a duration of its own in the pool's telemetry
 ([ADR-0037](0037-telemetry-goes-to-the-pools-collector-with-consent.md)).
 A move (point 10) still answers when done.
 
+*Noted 2026-10-20 (#128), on points 2 and 6.* **A remote lane's containers
+are controlled through its node's agent.** The lane container has no Docker
+(point 2), so its daemon must never run Compose for them: in a lane container
+its project would be the main tree's, not the lane's `<project>-<slot>`, and
+it fails or, with a Docker API in reach, hits the wrong containers. The
+agent, which started them, acts on them: for the lease's owner only (mutual
+TLS), by container name among the projects it started for the lease (no
+Compose file of the mirror is read, ADR-0033), and `start`/`restart` only
+for a service the lane's compose group lists in `services` (on a node a
+group's `shared` services are the lane's own, point 3). It answers
+`/v1/infra/{group}/{service}/…` itself (since #101); for a service route
+that names containers (a Compose service by its name, a group's restart) it
+acts on them and passes the request to the daemon with a header saying so,
+and the daemon answers for the rest (its services, its view). A daemon in a
+lane container refuses what names containers without that header. The
+requester's daemon refuses such a request for a node whose devstack is older
+than the release that does this, rather than pass it on. Built in
+`crates/devstack-node/src/laneinfra.rs` (`named`, `may_act`), `node.rs`
+(`proxy`, `act_named`), `crates/devstack-daemon/src/supervisor/infra.rs`
+(`container_action`, `NODE_DID_NOT_ACT`), `lifecycle.rs` (`group_action`),
+`api.rs` (`service_action`, `lane_forward`) and `remote.rs` (`too_old_for`).
+
 ## Alternatives considered
 
 - **Remote builds only, run locally.** Moves CPU, not memory; the memory of a

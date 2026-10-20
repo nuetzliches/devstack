@@ -41,6 +41,9 @@ pub struct SyncStats {
     /// What the node changed in the mirror.
     pub written: usize,
     pub removed: usize,
+    /// The files the node could not write, `path: error` (#128); the others
+    /// it wrote.
+    pub failed: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -439,6 +442,7 @@ impl NodeClient {
             .await?;
         stats.written = applied.written;
         stats.removed = applied.removed;
+        stats.failed = applied.failed;
         Ok(stats)
     }
 

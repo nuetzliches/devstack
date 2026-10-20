@@ -50,6 +50,8 @@ pub struct RemoteLane {
     /// The node or the coordinator runs another devstack than this
     /// machine, or does not say which: shown with the lane while it runs.
     pub warning: Option<String>,
+    /// What the node runs, as the lease offer said (`None`: it does not say).
+    node_release: Option<Release>,
     worktree: PathBuf,
     /// Where `[lanes] sync` files come from when the worktree has none.
     main: PathBuf,
@@ -457,6 +459,7 @@ impl RemoteLane {
             warning,
         } = leased;
         let mut hashes = HashCache::default();
+        let unwritten: Mutex<Option<String>> = Mutex::new(None);
         let started = rt.block_on(async {
             let t = Instant::now();
             step(2, &format!("sync: comparing {} files", list.len()));
@@ -480,6 +483,18 @@ impl RemoteLane {
                 serde_json::json!({ "lane": name, "node": offer.node.name, "files": s.files,
                     "uploaded": s.uploaded, "bytes": s.bytes, "ms": t0.elapsed().as_millis() as u64 }),
             );
+            // Files the node could not write: the lane starts with the rest,
+            // and says so (#128).
+            if !s.failed.is_empty() {
+                let e = not_written(&s.failed);
+                step(2, &format!("sync: {e}"));
+                crate::diag::warn(
+                    "remote_lane_sync_failed",
+                    serde_json::json!({ "lane": name, "node": offer.node.name,
+                        "error": e.lines().next().unwrap_or_default() }),
+                );
+                *unwritten.lock().unwrap() = Some(e);
+            }
             phase_over(name, &offer.node.name, "sync", t.elapsed().as_millis() as u64);
             // Paths in its logs point into the worktree, `/` as compilers
             // on the node write them.
@@ -566,12 +581,14 @@ impl RemoteLane {
                 }
             }
         };
+        let node_release = offer.node.devstack.clone();
         let lane = Arc::new(Self {
             name: name.into(),
             pool,
             node: offer.node,
             lease: offer.id,
             warning,
+            node_release,
             worktree: worktree.to_path_buf(),
             main: main.to_path_buf(),
             extra: extra.to_vec(),
@@ -600,6 +617,9 @@ impl RemoteLane {
                     }
                 }
             });
+        }
+        if let Some(e) = unwritten.into_inner().unwrap() {
+            lane.trouble(Some(format!("sync: {e}")));
         }
         if sharing.is_some()
             && let Err(e) = lane.share(sharing)
@@ -680,6 +700,18 @@ impl RemoteLane {
 
     fn trouble(&self, what: Option<String>) {
         self.state.lock().unwrap().error = what;
+    }
+
+    /// A sync that failed, in part or in full, goes to the diagnostic log
+    /// (#128): at most one line per lane every ten seconds, with how many
+    /// were left out.
+    fn sync_failed(&self, error: &str) {
+        crate::diag::warn_limited(
+            &format!("remote_lane_sync_failed:{}", self.name),
+            "remote_lane_sync_failed",
+            serde_json::json!({ "lane": self.name, "node": self.node.name,
+                "error": error.lines().next().unwrap_or_default() }),
+        );
     }
 
     /// While the lane runs: sync what changes, renew the lease, read its
@@ -763,12 +795,22 @@ impl RemoteLane {
                                             "written": s.written, "removed": s.removed }),
                                     );
                                 }
-                                seen = Some(fp);
-                                self.trouble(None);
+                                if s.failed.is_empty() {
+                                    seen = Some(fp);
+                                    self.trouble(None);
+                                } else {
+                                    // The rest landed; these are tried
+                                    // again with the next change or the
+                                    // next full sync, not every tick.
+                                    let e = not_written(&s.failed);
+                                    self.sync_failed(&e);
+                                    self.trouble(Some(format!("sync: {e}")));
+                                }
                             }
                             Err(e) => {
                                 // Tried again at the next tick.
                                 self.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
+                                self.sync_failed(&e.to_string());
                                 self.trouble(Some(format!("sync: {e}")));
                             }
                         }
@@ -1074,6 +1116,27 @@ impl RemoteLane {
             .map_err(|e| e.to_string())
     }
 
+    /// Why the node cannot do what `method` on the lane daemon's `path`
+    /// (`/v1/...`) asks of the lane's containers, as `stack` names them:
+    /// its devstack is older than the release that does (#101, #128).
+    /// `None` when it can, or the request asks nothing of them.
+    pub fn too_old_for(
+        &self,
+        stack: &devstack_config::Stack,
+        method: &axum::http::Method,
+        path: &str,
+    ) -> Option<String> {
+        let min = containers_need(stack, method, path)?;
+        if version::at_least(self.node_release.as_ref(), min) {
+            return None;
+        }
+        Some(format!(
+            "the node {} runs this lane's containers, and its devstack is too old to start, stop or restart them ({}; {min} or later does): update devstack on the node",
+            self.node.name,
+            version::describe(self.node_release.as_ref())
+        ))
+    }
+
     /// The lane's API, passed through (`req`'s URI is the daemon's path).
     pub async fn forward(&self, req: axum::extract::Request) -> axum::response::Response {
         use axum::response::IntoResponse;
@@ -1098,6 +1161,54 @@ impl RemoteLane {
             serde_json::json!({ "lane": self.name, "node": self.node.name, "lease": self.lease }),
         );
     }
+}
+
+/// The release a node needs to act on the containers `method path` names
+/// (`/v1/...` of the lane daemon's API): `/v1/infra/{group}/{service}/…`
+/// since #101, a service route that names containers (a group's restart,
+/// a Compose service by its name) since #128. `None`: it names none.
+fn containers_need(
+    stack: &devstack_config::Stack,
+    method: &axum::http::Method,
+    path: &str,
+) -> Option<&'static str> {
+    use devstack_node::laneinfra::{Named, named};
+    if method != axum::http::Method::POST {
+        return None;
+    }
+    let rest = path.strip_prefix("/v1/")?;
+    let parts: Vec<&str> = rest.split('/').collect();
+    match parts.as_slice() {
+        ["infra", _, _, a] if matches!(*a, "start" | "stop" | "restart") => Some("0.11.0"),
+        [kind @ ("services" | "groups"), name, action] => {
+            let route = if *kind == "services" {
+                Named::Services
+            } else {
+                Named::Groups
+            };
+            (!named(stack, route, name, action).is_empty()).then_some("0.11.2")
+        }
+        _ => None,
+    }
+}
+
+/// The files a node could not write in a lane's mirror, for its trouble
+/// and the log: the first few by name, how many more.
+fn not_written(failed: &[String]) -> String {
+    const SHOWN: usize = 3;
+    let mut s = format!(
+        "not written on the node: {}",
+        failed
+            .iter()
+            .take(SHOWN)
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
+    if failed.len() > SHOWN {
+        s.push_str(&format!(" (and {} more)", failed.len() - SHOWN));
+    }
+    s
 }
 
 /// What a lease offer says of the node's and the coordinator's devstack:
@@ -1307,6 +1418,72 @@ mod tests {
         );
         assert!(
             matches!(super::readiness(&v("healthy", "failed"), &exp), Some(Err(e)) if e.contains("port taken"))
+        );
+    }
+
+    #[test]
+    fn a_request_that_names_containers_needs_a_node_that_acts_on_them() {
+        use axum::http::Method;
+        let stack = devstack_config::from_str(
+            r#"
+version = 1
+[stack]
+name = "shop"
+[compose.app]
+project = "shop"
+files = ["compose.yml"]
+services = ["db", "web"]
+[services.api]
+build = "dotnet build"
+output = "bin"
+run = "{artifact}/Api"
+port = 5000
+[groups.server]
+members = ["compose.app.db", "api"]
+[groups.front]
+members = ["api"]
+"#,
+            std::path::Path::new("devstack.toml"),
+        )
+        .unwrap();
+        let need = |m: &Method, p: &str| super::containers_need(&stack, m, p);
+        assert_eq!(
+            need(&Method::POST, "/v1/infra/app/db/restart"),
+            Some("0.11.0")
+        );
+        for p in [
+            "/v1/services/app.web/restart",
+            "/v1/services/compose.app.web/stop",
+            "/v1/services/web/start",
+            "/v1/services/server/restart",
+            "/v1/groups/server/restart",
+        ] {
+            assert_eq!(need(&Method::POST, p), Some("0.11.2"), "{p}");
+        }
+        for (m, p) in [
+            (Method::POST, "/v1/services/api/restart"),
+            (Method::POST, "/v1/services/server/stop"),
+            (Method::POST, "/v1/groups/front/restart"),
+            (Method::GET, "/v1/infra/app/db/logs"),
+            (Method::GET, "/v1/services/web/restart"),
+            (Method::POST, "/v1/up"),
+        ] {
+            assert_eq!(need(&m, p), None, "{m} {p}");
+        }
+    }
+
+    #[test]
+    fn files_not_written_are_named_a_few_at_a_time() {
+        let failed: Vec<String> = (1..=5).map(|i| format!("f{i}: denied")).collect();
+        let e = super::not_written(&failed);
+        assert!(
+            e.starts_with("not written on the node: f1: denied; f2: denied; f3: denied"),
+            "{e}"
+        );
+        assert!(e.ends_with("(and 2 more)"), "{e}");
+        assert_eq!(
+            super::not_written(&failed[..1]),
+            "not written on the node: f1: denied"
         );
     }
 }
