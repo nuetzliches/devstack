@@ -164,6 +164,127 @@ pub struct Report {
     /// rather than offer the order. Absent: it updates itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_update: Option<String>,
+    /// The lanes it has a slot for (ADR-0038: mirror, builds, volumes),
+    /// running or kept: where a lane starts warm (ADR-0026 point 3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slots: Vec<SlotRef>,
+    /// Bytes free where it keeps lanes; absent from an older node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk_free: Option<u64>,
+}
+
+/// A lane a node has a slot for: whose, of which repository.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SlotRef {
+    pub member: String,
+    pub repo: String,
+    pub lane: String,
+}
+
+/// Less free disk than this where a node keeps lanes: it takes none (a
+/// lane's images, mirror and volumes need room).
+pub const MIN_DISK_FREE: u64 = 5 << 30;
+
+/// Where a lane would go, best first (ADR-0026 point 3, ADR-0031 point 4):
+/// `GET /v1/placement`, and the coordinator's own choice.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Placement {
+    pub node: String,
+    pub name: String,
+    /// It can take the lane now.
+    pub eligible: bool,
+    /// Why it ranks where it does, or why it cannot take the lane.
+    pub why: String,
+    /// What it offers now.
+    pub cpus: f64,
+    pub memory: u64,
+}
+
+/// Rank the nodes for a lane of `member`'s `repo`/`lane` needing `need`:
+/// first the hard conditions (each node's own reason when it fails one),
+/// then, with room to spare (half as much again as the need), a node that
+/// keeps this lane's data, then one the repository ran on (its images and
+/// builds are there), then the most free capacity for the need (the lower
+/// of free memory and free CPU, each over the need). `nodes` are the
+/// candidates already granted, online and admitted by their policy, with
+/// their last report.
+pub fn rank(
+    nodes: &[(&str, &str, &Report)],
+    member: &str,
+    repo: &str,
+    lane: &str,
+    need: crate::share::Amount,
+    requester: Option<&Release>,
+) -> Vec<Placement> {
+    let mut out: Vec<(u8, f64, Placement)> = nodes
+        .iter()
+        .map(|(id, name, rep)| {
+            let refuse = if rep.api.is_none() {
+                Some("runs no node agent".to_string())
+            } else if !rep.sharing {
+                Some("does not share now".into())
+            } else if !same_protocol(requester, rep.devstack.as_ref()) {
+                Some("runs a devstack that does not work with the requester's".into())
+            } else if rep.cpus < need.cpus || rep.memory < need.memory {
+                Some(format!(
+                    "offers {:.1} CPU and {} MiB, the lane needs {:.1} CPU and {} MiB",
+                    rep.cpus,
+                    rep.memory >> 20,
+                    need.cpus,
+                    need.memory >> 20
+                ))
+            } else if rep.disk_free.is_some_and(|d| d < MIN_DISK_FREE) {
+                Some(format!(
+                    "has {} MiB of disk free, less than {} MiB",
+                    rep.disk_free.unwrap_or(0) >> 20,
+                    MIN_DISK_FREE >> 20
+                ))
+            } else {
+                None
+            };
+            let ratio = {
+                let m = rep.memory as f64 / need.memory.max(1) as f64;
+                let c = rep.cpus / need.cpus.max(0.01);
+                m.min(c)
+            };
+            let roomy =
+                rep.memory as f64 >= need.memory as f64 * 1.5 && rep.cpus >= need.cpus * 1.5;
+            let kept = rep
+                .slots
+                .iter()
+                .any(|s| s.member == member && s.repo == repo && s.lane == lane);
+            let warm = rep.slots.iter().any(|s| s.repo == repo);
+            let (tier, why) = match &refuse {
+                Some(r) => (9, r.clone()),
+                None if roomy && kept => {
+                    (0, "keeps this lane's data (mirror, builds, volumes)".into())
+                }
+                None if roomy && warm => (
+                    1,
+                    "the repository ran there (its images and builds are there)".into(),
+                ),
+                None => (2, format!("free capacity: {:.1}× the lane's need", ratio)),
+            };
+            (
+                tier,
+                ratio,
+                Placement {
+                    node: id.to_string(),
+                    name: name.to_string(),
+                    eligible: refuse.is_none(),
+                    why,
+                    cpus: rep.cpus,
+                    memory: rep.memory,
+                },
+            )
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then(b.1.total_cmp(&a.1))
+            .then(a.2.name.cmp(&b.2.name))
+    });
+    out.into_iter().map(|(_, _, p)| p).collect()
 }
 
 /// An admin's order that a server update its devstack (ADR-0039).
@@ -441,6 +562,10 @@ pub struct LeaseOffer {
     /// The coordinator's devstack; absent from an older one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coordinator: Option<Release>,
+    /// Why the coordinator chose this node (`pool`); absent when the
+    /// requester named it, and from an older coordinator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }
 
 /// A lease as the coordinator keeps it.
@@ -793,6 +918,7 @@ fn router(shared: Shared) -> Router {
         .route("/v1/nodes/report", post(report))
         .route("/v1/nodes", get(nodes))
         .route("/v1/leases", get(leases).post(lease_create))
+        .route("/v1/placement", get(placement))
         .route("/v1/leases/{id}", get(lease_get))
         .route("/v1/leases/{id}/share", axum::routing::put(lease_share))
         .route("/v1/leases/{id}/shared", get(lease_shared))
@@ -1052,6 +1178,66 @@ async fn nodes(
     ))
 }
 
+/// The nodes that may take `r` for `me` at all (granted, online, not
+/// paused, not the requester, admitted by their policy), ranked.
+fn placement_for(s: &Shared, ms: &[Member], me: &Member, r: &LeaseRequest) -> Vec<Placement> {
+    let reports = s.reports.lock().unwrap();
+    let nodes: Vec<(&str, &str, &Report)> = ms
+        .iter()
+        .filter(|m| m.state == State::Approved && m.node && !m.paused && m.id != me.id)
+        .filter(|m| {
+            m.policy
+                .as_ref()
+                .is_none_or(|p| p.admits(&me.id, &me.tags, &r.repo).is_ok())
+        })
+        .filter_map(|m| {
+            let (at, rep) = reports.get(&m.id)?;
+            (at.elapsed() < ONLINE_FOR).then_some((m.id.as_str(), m.name.as_str(), rep))
+        })
+        .collect();
+    rank(
+        &nodes,
+        &me.id,
+        &r.repo,
+        &r.lane,
+        crate::policy::floor_need(r.need),
+        r.devstack.as_ref(),
+    )
+}
+
+/// `GET /v1/placement?repo=&lane=&cpus=&memory=`: where a lane of the
+/// caller's would go, best first, with why (what the dashboard shows
+/// beside the nodes to start it on).
+async fn placement(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    axum::extract::Query(q): axum::extract::Query<PlacementQuery>,
+) -> ApiResult<Json<Vec<Placement>>> {
+    let me = member(&s, &peer)?;
+    let ms = s.store.list().map_err(internal)?;
+    let r = LeaseRequest {
+        node: String::new(),
+        repo: q.repo,
+        lane: q.lane,
+        need: crate::share::Amount {
+            cpus: q.cpus.unwrap_or(0.0),
+            memory: q.memory.unwrap_or(0),
+        },
+        devstack: Some(Release::this()),
+    };
+    Ok(Json(placement_for(&s, &ms, &me, &r)))
+}
+
+#[derive(Debug, Deserialize)]
+struct PlacementQuery {
+    repo: String,
+    lane: String,
+    #[serde(default)]
+    cpus: Option<f64>,
+    #[serde(default)]
+    memory: Option<u64>,
+}
+
 async fn lease_create(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
@@ -1080,32 +1266,16 @@ async fn lease_create(
             .collect()
     };
     // No node named (`pool`): the coordinator places the lane (ADR-0031
-    // point 4): of the nodes an admin granted that are online, run lanes,
-    // share, are not paused and offer enough, the one with the most memory
-    // free, not the requester itself.
+    // point 4, in the order of ADR-0026 point 3): of the nodes an admin
+    // granted that are online, run lanes, share, are not paused and offer
+    // enough, not the requester itself, warm ones first (`rank`).
+    let mut why = None;
     if r.node.is_empty() || r.node.eq_ignore_ascii_case("pool") {
-        let reports = s.reports.lock().unwrap();
-        let best = ms
-            .iter()
-            .filter(|m| m.state == State::Approved && m.node && !m.paused && m.id != me.id)
-            .filter(|m| {
-                m.policy
-                    .as_ref()
-                    .is_none_or(|p| p.admits(&me.id, &me.tags, &r.repo).is_ok())
-            })
-            .filter_map(|m| {
-                let (at, rep) = reports.get(&m.id)?;
-                (at.elapsed() < ONLINE_FOR
-                    && rep.api.is_some()
-                    && rep.sharing
-                    && rep.cpus >= r.need.cpus
-                    && rep.memory >= r.need.memory
-                    && same_protocol(r.devstack.as_ref(), rep.devstack.as_ref()))
-                .then_some((m, rep.memory))
-            })
-            .max_by_key(|(_, mem)| *mem)
-            .map(|(m, _)| m.id.clone());
-        drop(reports);
+        let ranked = placement_for(&s, &ms, &me, &r);
+        let best = ranked.into_iter().find(|p| p.eligible).map(|p| {
+            why = Some(p.why);
+            p.node
+        });
         let Some(id) = best else {
             return Err((
                 StatusCode::CONFLICT,
@@ -1230,6 +1400,7 @@ async fn lease_create(
         (lease, token.clone(), std::time::Instant::now()),
     );
     Ok(Json(LeaseOffer {
+        why,
         id,
         token,
         node: NodeRef {
@@ -1822,6 +1993,112 @@ mod history_tests {
         // Step 0: a's last (2) + b's (10); step 1: 4 + 20.
         assert_eq!((s[0].used_cpus, s[1].used_cpus), (12.0, 24.0));
         assert_eq!(s[0].total_cpus, 16.0);
+    }
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+    use crate::share::Amount;
+
+    const GIB: u64 = 1 << 30;
+
+    fn node(cpus: f64, mem_gib: u64, slots: &[(&str, &str, &str)]) -> Report {
+        Report {
+            sharing: true,
+            cpus,
+            memory: mem_gib * GIB,
+            api: Some("https://n:1".into()),
+            devstack: Some(Release::this()),
+            slots: slots
+                .iter()
+                .map(|(m, r, l)| SlotRef {
+                    member: m.to_string(),
+                    repo: r.to_string(),
+                    lane: l.to_string(),
+                })
+                .collect(),
+            disk_free: Some(100 * GIB),
+            ..Report::default()
+        }
+    }
+
+    fn order(nodes: &[(&str, &str, &Report)], need: Amount) -> Vec<(String, bool, String)> {
+        rank(nodes, "me", "shop", "fix", need, Some(&Release::this()))
+            .into_iter()
+            .map(|p| (p.name, p.eligible, p.why))
+            .collect()
+    }
+
+    #[test]
+    fn a_lane_goes_where_it_starts_warm_with_room_to_spare() {
+        let need = Amount {
+            cpus: 1.0,
+            memory: 4 * GIB,
+        };
+        let big = node(16.0, 64, &[]);
+        let warm = node(4.0, 8, &[("someone", "shop", "other")]);
+        let kept = node(4.0, 8, &[("me", "shop", "fix")]);
+        let o = order(
+            &[
+                ("a", "big", &big),
+                ("b", "warm", &warm),
+                ("c", "kept", &kept),
+            ],
+            need,
+        );
+        let names: Vec<&str> = o.iter().map(|x| x.0.as_str()).collect();
+        assert_eq!(names, ["kept", "warm", "big"], "{o:?}");
+        assert!(o[0].2.contains("keeps this lane's data"), "{o:?}");
+        assert!(o[1].2.contains("the repository ran there"), "{o:?}");
+
+        // Warm, but without room to spare (less than 1.5× the need): by
+        // capacity like any other.
+        let tight = node(1.2, 5, &[("me", "shop", "fix")]);
+        let o = order(&[("a", "big", &big), ("c", "tight", &tight)], need);
+        assert_eq!(o[0].0, "big", "{o:?}");
+    }
+
+    #[test]
+    fn free_capacity_counts_cpu_and_memory_against_the_need() {
+        let need = Amount {
+            cpus: 2.0,
+            memory: 2 * GIB,
+        };
+        // Much memory, little CPU: 1.25× the need in CPU.
+        let ram = node(2.5, 64, &[]);
+        let both = node(8.0, 8, &[]);
+        let o = order(&[("a", "ram", &ram), ("b", "both", &both)], need);
+        assert_eq!(o[0].0, "both", "{o:?}");
+    }
+
+    #[test]
+    fn what_cannot_take_the_lane_says_why_and_comes_last() {
+        let need = Amount {
+            cpus: 1.0,
+            memory: 4 * GIB,
+        };
+        let small = node(0.5, 2, &[("me", "shop", "fix")]);
+        let mut full = node(8.0, 32, &[]);
+        full.disk_free = Some(GIB);
+        let mut off = node(8.0, 32, &[]);
+        off.sharing = false;
+        let ok = node(2.0, 8, &[]);
+        let o = order(
+            &[
+                ("a", "small", &small),
+                ("b", "full", &full),
+                ("c", "off", &off),
+                ("d", "ok", &ok),
+            ],
+            need,
+        );
+        assert_eq!((o[0].0.as_str(), o[0].1), ("ok", true), "{o:?}");
+        assert!(o[1..].iter().all(|x| !x.1), "{o:?}");
+        let why = |n: &str| o.iter().find(|x| x.0 == n).unwrap().2.clone();
+        assert!(why("small").contains("offers 0.5 CPU"), "{o:?}");
+        assert!(why("full").contains("disk free"), "{o:?}");
+        assert!(why("off").contains("does not share"), "{o:?}");
     }
 }
 

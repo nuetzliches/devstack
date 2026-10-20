@@ -11,6 +11,7 @@ and listed with their assets on the
 
 ### Added
 
+<<<<<<< HEAD
 - **A lane's start on a node shows its phases**: while it has no pages yet
   (its daemon does not run on the node before its infrastructure is up),
   its start lists each phase over so far with its time (lease, sync, lane
@@ -28,6 +29,18 @@ and listed with their assets on the
 - A command run's line says how long it ran and, when it failed, why
   (`ms`, `error`); the pool's telemetry counts its time by command and
   result. Before, a failed run said only `failed`.
+=======
+- **The pool places a lane where it starts warm**
+  ([ADR-0026](docs/adr/0026-placement-by-the-requester-admission-by-the-node.md)
+  point 3, as decided and not built until now). With `--on pool` the
+  coordinator prefers, with room to spare, a node that keeps this lane's
+  data, then one the repository ran on (its images and builds are there),
+  then the most free capacity for the lane's need (CPU and memory, not
+  memory alone); a node with less than 5 GiB of disk free takes none. The
+  lease says why (`remote_lane_placed`, the start's first step), and
+  `GET /hub/pool/placement` gives the order with reasons. Nodes report
+  their slots and free disk.
+>>>>>>> 26defff (feat(pool): the coordinator places a lane where it starts warm (ADR-0026 point 3))
 
 ## [0.13.1] - 2026-10-20
 

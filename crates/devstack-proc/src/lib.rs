@@ -347,6 +347,43 @@ pub fn memory_available() -> Option<u64> {
     }
 }
 
+/// Bytes free for this user on the filesystem that holds `path`.
+pub fn disk_free(path: &std::path::Path) -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut free: u64 = 0;
+        // SAFETY: `wide` is a NUL-terminated UTF-16 path; the other out
+        // parameters may be null.
+        let ok = unsafe {
+            GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &mut free,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        } != 0;
+        ok.then_some(free)
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+        let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+        // SAFETY: `c` is a NUL-terminated path, `s` a statvfs to fill.
+        let ok = unsafe { libc::statvfs(c.as_ptr(), &mut s) } == 0;
+        #[allow(clippy::unnecessary_cast)]
+        ok.then(|| s.f_bavail as u64 * s.f_frsize as u64)
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = path;
+        None
+    }
+}
+
 /// Windows: the long form of a path (`C:\Users\RUNNER~1` becomes
 /// `C:\Users\runneradmin`). Compilers report long paths; a repository known
 /// by its 8.3 name would not be recognised in their messages. Unlike

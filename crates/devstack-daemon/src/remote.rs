@@ -363,6 +363,14 @@ impl RemoteLane {
         // Another release, or one that does not say, is a warning
         // (ADR-0031 point 8).
         let warning = release_warning(&offer).map_err(|e| format!("lane `{}`: {e}", spec.name))?;
+        // The coordinator chose the node (`pool`): said why (ADR-0026 point 3).
+        if let Some(why) = &offer.why {
+            crate::diag::info(
+                "remote_lane_placed",
+                serde_json::json!({ "lane": spec.name, "node": offer.node.name, "why": why }),
+            );
+            (spec.step)(1, &format!("lease on {}: {why}", offer.node.name));
+        }
         if let Some(w) = &warning {
             crate::diag::warn(
                 "pool_version_mismatch",
@@ -1309,6 +1317,7 @@ mod tests {
                 devstack: node,
             },
             coordinator,
+            why: None,
         }
     }
 

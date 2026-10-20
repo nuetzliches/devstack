@@ -191,6 +191,8 @@ fn report(
             kept: None,
             update: None,
             no_update: None,
+            slots: Vec::new(),
+            disk_free: None,
             leases: Vec::new(),
             total: Some(total),
             used: None,
