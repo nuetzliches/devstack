@@ -11,6 +11,16 @@ and listed with their assets on the
 
 ### Added
 
+- **The pool places a lane where it starts warm**
+  ([ADR-0026](docs/adr/0026-placement-by-the-requester-admission-by-the-node.md)
+  point 3, as decided and not built until now). With `--on pool` the
+  coordinator prefers, with room to spare, a node that keeps this lane's
+  data, then one the repository ran on (its images and builds are there),
+  then the most free capacity for the lane's need (CPU and memory, not
+  memory alone); a node with less than 5 GiB of disk free takes none. The
+  lease says why (`remote_lane_placed`, the start's first step), and
+  `GET /hub/pool/placement` gives the order with reasons. Nodes report
+  their slots and free disk.
 - **A lane's start on a node shows its phases**: while it has no pages yet
   (its daemon does not run on the node before its infrastructure is up),
   its start lists each phase over so far with its time (lease, sync, lane

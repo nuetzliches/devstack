@@ -2736,6 +2736,16 @@ async fn background(s: Shared) {
             kept: *s.kept_use.lock().unwrap(),
             update: s.update.lock().unwrap().clone(),
             no_update: s.no_update(),
+            slots: s
+                .kept()
+                .into_iter()
+                .map(|(_, i)| crate::coordinator::SlotRef {
+                    member: i.member,
+                    repo: i.repo,
+                    lane: i.lane,
+                })
+                .collect(),
+            disk_free: devstack_proc::disk_free(&s.root),
             leases: s
                 .leases
                 .lock()

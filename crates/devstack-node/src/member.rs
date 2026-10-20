@@ -404,6 +404,32 @@ impl Local {
         self.get("/v1/me")
     }
 
+    /// Where a lane of this machine's would go in the pool, best first.
+    pub fn placement(
+        &self,
+        repo: &str,
+        lane: &str,
+        need: crate::share::Amount,
+    ) -> Result<Vec<crate::coordinator::Placement>> {
+        let enc = |s: &str| {
+            s.bytes()
+                .map(|b| match b {
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
+                        (b as char).to_string()
+                    }
+                    _ => format!("%{b:02X}"),
+                })
+                .collect::<String>()
+        };
+        self.get(&format!(
+            "/v1/placement?repo={}&lane={}&cpus={}&memory={}",
+            enc(repo),
+            enc(lane),
+            need.cpus,
+            need.memory
+        ))
+    }
+
     pub fn members(&self) -> Result<Vec<MemberView>> {
         self.get("/v1/members")
     }

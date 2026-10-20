@@ -93,3 +93,10 @@ The admission counts what lanes declare or are taken to need, not what they
 use, so "never over-commits" holds for declared needs. Not built: scoring by
 mirrors and image layers (point 3, `--on pool` takes the granted node with
 the most free memory) and reclaiming with a grace period (point 6).
+
+*Noted 2026-10-21.* Point 3 as built (by the coordinator, ADR-0031 point 4):
+"a mirror on the node" is a slot of the lane (ADR-0038), "image layers
+present" a slot of the repository there; preferred only with room to spare
+(1.5× the need), so a warm but nearly full node does not win. Added to the
+hard conditions: free disk where the node keeps lanes (5 GiB at least).
+Round-trip time is not measured.

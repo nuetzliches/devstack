@@ -134,3 +134,13 @@ refuses a member missing from the list it takes from the coordinator, and
 trusts its last list for at most an hour while the coordinator does not
 answer (`MEMBERS_VALID_FOR` in `node.rs`), so point 6 holds for an hour, then
 renewals of every member fail until the coordinator answers again.
+
+*Noted 2026-10-21.* Point 4 as built until 0.13: of the eligible nodes the
+one with the most free memory; ADR-0026 point 3's mirror and image
+preferences were not built. Now `rank` in `crates/devstack-node/src/coordinator.rs`:
+hard conditions (each node's reason when it fails one, at least
+`MIN_DISK_FREE` of disk), then with room to spare (1.5× the need) a node
+with a slot of this lane (its kept data, ADR-0038), then one with a slot of
+the repository (its images and builds), then free capacity for the need.
+Nodes report their slots and their free disk; the lease offer says `why`;
+`GET /v1/placement` gives the order to the dashboard.

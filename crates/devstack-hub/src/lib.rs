@@ -455,6 +455,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/pool/members/{id}/node", post(pool::node))
         .route("/hub/pools", get(pool::pools))
         .route("/hub/pool/history", get(pool::history))
+        .route("/hub/pool/placement", get(pool::placement))
         .route(
             "/hub/pool/telemetry",
             get(pool::telemetry).put(pool::set_telemetry),

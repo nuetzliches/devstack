@@ -123,8 +123,21 @@ In a worktree:
 
 ```sh
 devstack up --on build-server     # that node
-devstack up --on pool             # the coordinator picks the granted node with the most free memory
+devstack up --on pool             # the coordinator picks: warm first, then free capacity (below)
 ```
+
+With `pool` the coordinator places the lane
+([ADR-0026](adr/0026-placement-by-the-requester-admission-by-the-node.md)
+point 3): of the granted, online, sharing nodes that are not paused, admit
+the lane by their policy, run a devstack of the same pool protocol, offer
+what the lane needs and have at least 5 GiB of disk free, it takes, among
+those with room to spare (half as much again as the need), one that keeps
+this lane's data (a start from its mirror, builds and volumes), then one the
+repository ran on (its images and builds are there); otherwise, and among
+equals, the one with the most free capacity for the need (the lower of free
+memory and free CPU, each over the need). The lease says why, in the lane's
+start and in `daemon.log` (`remote_lane_placed`); the dashboard shows the
+order and the reasons beside the nodes to start on.
 
 devstack leases the lane, syncs the worktree to the node (by content, only
 what changed: a change within two seconds of saving, and everything compared

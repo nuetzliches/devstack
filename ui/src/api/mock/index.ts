@@ -248,6 +248,20 @@ export class MockTransport implements Transport {
         collects: true,
         what: ["devstack's diagnostic log", 'durations and outcomes of lane starts, syncs, moves and stops, service starts and builds', 'never: file contents, environment values'],
       });
+    if (p === '/hub/pool/placement' && method === 'GET') {
+      // The default pool has one node; a lane named like one that ran there is warm.
+      const lane = url.searchParams.get('lane') ?? '';
+      return json(200, [
+        {
+          node: '9f8e7d6c5b4a3921',
+          name: 'build-server',
+          eligible: true,
+          why: lane === 'review-cart' ? "keeps this lane's data (mirror, builds, volumes)" : 'the repository ran there (its images and builds are there)',
+          cpus: 12,
+          memory: 48 * 2 ** 30,
+        },
+      ]);
+    }
     if (p === '/hub/pool/history' && method === 'GET') {
       const now = Math.floor(Date.now() / 1000);
       const node = url.searchParams.get('node');

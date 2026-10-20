@@ -307,6 +307,33 @@ pub async fn history(Query(h): Query<HistoryQuery>) -> Response {
     }
 }
 
+/// `GET /hub/pool/placement?pool=&repo=&lane=&cpus=&memory=`: where the
+/// coordinator would start a lane of this machine's, best first, with why
+/// (ADR-0026 point 3): what the dashboard shows beside the nodes.
+pub async fn placement(Query(q): Query<PlacementQuery>) -> Response {
+    let p = PoolQuery { pool: q.pool };
+    let need = devstack_node::share::Amount {
+        cpus: q.cpus.unwrap_or(0.0),
+        memory: q.memory.unwrap_or(0),
+    };
+    match blocking(&p, move |l| l.placement(&q.repo, &q.lane, need)).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PlacementQuery {
+    #[serde(default)]
+    pool: Option<String>,
+    repo: String,
+    lane: String,
+    #[serde(default)]
+    cpus: Option<f64>,
+    #[serde(default)]
+    memory: Option<u64>,
+}
+
 /// `POST /hub/pool/nodes/{id}/update` `{version?, drain?, downgrade?}`
 /// (ADR-0039).
 pub async fn update(

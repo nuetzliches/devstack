@@ -4,8 +4,9 @@
 // in the pool with the coordinator choosing (ADR-0031 point 4). A start on a
 // node shows its steps as the daemon reports them, so it survives
 // navigating away and back.
-import { computed, onBeforeUnmount, ref } from 'vue';
-import type { LaneView } from '@/api/types';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { api, paths } from '@/api';
+import type { LaneView, Placement } from '@/api/types';
 import { duration, useNow } from '@/lib/format';
 import { laneLabel } from '@/lib/lanes';
 import { usePool } from '@/stores/pool';
@@ -35,15 +36,32 @@ const current = computed(() => {
 });
 /** Lanes running on a node now, of its pool's leases. */
 const lanesOn = (poolName: string, node: string) => (pool.overviews[poolName]?.leases ?? []).filter((l) => l.node === node).length;
-/** The node the coordinator would pick in a pool: the most free memory (ADR-0031 point 4). */
-const pick = computed(() => {
-  const best: Record<string, string> = {};
-  for (const t of nodes.value) {
-    const cur = nodes.value.find((x) => x.on === best[t.pool]);
-    if (!cur || (t.node.report?.memory ?? 0) > (cur.node.report?.memory ?? 0)) best[t.pool] = t.on;
+/** Where each pool's coordinator would start this lane, best first, with why
+ * (ADR-0026 point 3): its own order, not one guessed here. */
+const placement = ref<Record<string, Placement[]>>({});
+async function loadPlacement() {
+  const repo = stack.view?.name;
+  if (!repo) return;
+  const out: Record<string, Placement[]> = {};
+  for (const p of pool.placeable) {
+    try {
+      const r = await api().request<Placement[]>('GET', paths.poolPlacement(p.pool, repo, props.lane.name));
+      if (r.ok && Array.isArray(r.body)) out[p.pool] = r.body;
+    } catch {
+      // An older coordinator has no order to give: the cards show the numbers.
+    }
   }
-  return new Set(Object.values(best));
-});
+  placement.value = out;
+}
+watch(() => [props.lane.name, stack.view?.name, pool.placeable.map((p) => p.pool).join()], () => void loadPlacement(), { immediate: true });
+const placementTimer = setInterval(() => void loadPlacement(), 30_000);
+onBeforeUnmount(() => clearInterval(placementTimer));
+/** A node's place in its pool's order: its rank (1: the pick) and why. */
+function placeOf(poolName: string, nodeId: string) {
+  const list = placement.value[poolName] ?? [];
+  const i = list.findIndex((p) => p.node === nodeId);
+  return i < 0 ? null : { rank: i + 1, pick: i === 0 && list[0].eligible, ...list[i] };
+}
 
 /** The stack file's profiles (ADR-0041): how the lane runs for a purpose. */
 const profiles = computed(() => stack.view?.profiles ?? []);
@@ -125,7 +143,7 @@ function start(on?: string) {
           type="button"
           class="btn"
           :disabled="busy || running"
-          title="The coordinator picks the node with the most free memory"
+          :title="placement[p.pool]?.[0]?.eligible ? `The coordinator would start it on ${placement[p.pool][0].name}: ${placement[p.pool][0].why}` : 'The coordinator picks the node: warm first, then free capacity'"
           data-testid="lane-start-pool"
           @click="start(p.on)"
         >
@@ -144,7 +162,10 @@ function start(on?: string) {
         >
           <span class="tname">
             <Icon name="server" :size="14" /> on <strong>{{ n.label }}</strong>
-            <span v-if="pick.has(n.on)" class="pill sm info" title="The coordinator picks the node with the most free memory">pool's pick</span>
+            <span v-if="placeOf(n.pool, n.node.id)?.pick" class="pill sm info" data-testid="lane-start-pick" :title="`The coordinator would start it here: ${placeOf(n.pool, n.node.id)?.why}`">pool's pick</span>
+          </span>
+          <span v-if="placeOf(n.pool, n.node.id)" class="why" :class="{ err: !placeOf(n.pool, n.node.id)?.eligible }" data-testid="lane-start-why">
+            {{ placeOf(n.pool, n.node.id)?.eligible ? `#${placeOf(n.pool, n.node.id)?.rank} · ` : 'cannot take it: ' }}{{ placeOf(n.pool, n.node.id)?.why }}
           </span>
           <NodeLoad :pool="n.pool" :node="n.node" :lanes="lanesOn(n.pool, n.node.id)" />
         </button>
@@ -278,5 +299,12 @@ function start(on?: string) {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+.why {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.why.err {
+  color: var(--danger);
 }
 </style>
