@@ -572,6 +572,78 @@ fn fingerprint(dir: &Path) -> Vec<(std::ffi::OsString, Option<std::time::SystemT
     out
 }
 
+/// Remove a forgotten lane's state directory (its snapshot, its logs). On
+/// Windows a file still open (a sampler walking it, a virus scanner, a
+/// process of the lane that is just going) fails the delete: it is said, and
+/// tried again for a while; what still stays is swept at the next daemon
+/// start ([`sweep_state_dirs`]). A lane of the same name found again
+/// meanwhile (`lanes` lists it) keeps its directory.
+fn remove_state_dir(lane: &str, dir: PathBuf, lanes: PathBuf) {
+    let first = match std::fs::remove_dir_all(&dir) {
+        Ok(()) => return,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => e,
+    };
+    crate::diag::warn(
+        "lane_state_not_removed",
+        serde_json::json!({ "lane": lane, "error": first.to_string(), "retry": true }),
+    );
+    let lane = lane.to_string();
+    let _ = std::thread::Builder::new()
+        .name(format!("lane-remove-{lane}"))
+        .spawn(move || {
+            let mut last = first;
+            // Longer than a disk sample of the lane takes to notice it is closed.
+            for _ in 0..24 {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                // Unreadable counts as listed: never remove what may be in use.
+                let listed = std::fs::read(&lanes)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<Vec<LaneEntry>>(&b).ok())
+                    .is_none_or(|l| l.iter().any(|e| e.name == lane));
+                if listed {
+                    return;
+                }
+                match std::fs::remove_dir_all(&dir) {
+                    Ok(()) => {
+                        crate::diag::info(
+                            "lane_state_removed",
+                            serde_json::json!({ "lane": lane }),
+                        );
+                        return;
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+                    Err(e) => last = e,
+                }
+            }
+            crate::diag::warn(
+                "lane_state_not_removed",
+                serde_json::json!({ "lane": lane, "error": last.to_string(), "retry": false,
+                    "why": "the next daemon start removes it" }),
+            );
+        });
+}
+
+/// State directories (`lane-<name>`) of lanes no longer known: a removal
+/// that failed before (a file held open on Windows). Only with the list of
+/// lanes read (`known`): without it every lane would look forgotten.
+fn sweep_state_dirs(root: &Path, known: &BTreeSet<String>) {
+    for e in std::fs::read_dir(root).into_iter().flatten().flatten() {
+        let file_name = e.file_name();
+        let Some(lane) = file_name.to_str().and_then(|n| n.strip_prefix("lane-")) else {
+            continue;
+        };
+        if known.contains(lane) || !e.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let r = std::fs::remove_dir_all(e.path());
+        crate::diag::info(
+            "lane_state_swept",
+            serde_json::json!({ "lane": lane, "error": r.err().map(|e| e.to_string()) }),
+        );
+    }
+}
+
 impl Lanes {
     fn file(&self) -> PathBuf {
         self.root_state.join("lanes.json")
@@ -628,16 +700,19 @@ impl Lanes {
             missing: Mutex::new(BTreeMap::new()),
             closing: std::sync::atomic::AtomicBool::new(false),
         });
-        let remembered: Vec<LaneEntry> = match std::fs::read(me.file()) {
-            Ok(b) => serde_json::from_slice(&b).unwrap_or_else(|e| {
-                crate::diag::warn(
-                    "lanes_unreadable",
-                    serde_json::json!({ "error": e.to_string() }),
-                );
-                Vec::new()
-            }),
-            Err(_) => Vec::new(),
+        let remembered: Option<Vec<LaneEntry>> = match std::fs::read(me.file()) {
+            Ok(b) => serde_json::from_slice(&b)
+                .inspect_err(|e| {
+                    crate::diag::warn(
+                        "lanes_unreadable",
+                        serde_json::json!({ "error": e.to_string() }),
+                    );
+                })
+                .ok(),
+            Err(_) => None,
         };
+        let read = remembered.is_some();
+        let remembered = remembered.unwrap_or_default();
         {
             let mut known = me.known.lock().unwrap();
             for e in remembered {
@@ -651,6 +726,10 @@ impl Lanes {
             }
         }
         me.sync();
+        if read {
+            let known: BTreeSet<String> = me.known.lock().unwrap().keys().cloned().collect();
+            sweep_state_dirs(&me.root_state, &known);
+        }
         // The main tree keeps the builds of the started lanes when it prunes.
         let weak = Arc::downgrade(&me);
         me.main.set_lane_pins(Box::new(move |service| {
@@ -891,8 +970,25 @@ impl Lanes {
         })
     }
 
-    /// Stop a lane, if it runs, and drop it with its state.
+    /// Stop a lane, if it runs, and drop it with its state. Not while it is
+    /// being started (its supervisor is being set up from that state): the
+    /// next sync forgets it, once the start is over.
     fn forget(&self, name: &str, why: &str) {
+        // Held for the whole of it: a start that comes in meanwhile is
+        // refused ("is being started"), and finds the lane gone after.
+        if !self.pending.lock().unwrap().insert(name.to_string()) {
+            crate::diag::info(
+                "lane_forget_deferred",
+                serde_json::json!({ "lane": name, "why": "it is being started" }),
+            );
+            return;
+        }
+        self.forget_claimed(name, why);
+        self.pending.lock().unwrap().remove(name);
+        self.announce();
+    }
+
+    fn forget_claimed(&self, name: &str, why: &str) {
         if self.main.served_by().as_deref() == Some(name)
             && let Err(e) = self.take_main("main")
         {
@@ -940,12 +1036,11 @@ impl Lanes {
                 self.save(&known);
             }
         }
-        let _ = std::fs::remove_dir_all(self.state_dir(name));
+        remove_state_dir(name, self.state_dir(name), self.file());
         crate::diag::info(
             "lane_removed",
             serde_json::json!({ "lane": name, "why": why }),
         );
-        self.announce();
     }
 
     /// Throw the data of lane `name` away, here and on the nodes it ran on
@@ -1387,6 +1482,11 @@ impl Lanes {
         };
         if !self.pending.lock().unwrap().insert(name.clone()) {
             return Err(format!("lane `{name}` is being started"));
+        }
+        // Forgotten (its worktree went) between the look-up and now.
+        if !self.known.lock().unwrap().contains_key(&name) {
+            self.pending.lock().unwrap().remove(&name);
+            return Err(format!("lane `{name}` is gone: its worktree was removed"));
         }
         let t0 = std::time::Instant::now();
         let result = (|| {
@@ -2292,6 +2392,27 @@ impl Lanes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_state_of_a_forgotten_lane_is_swept() {
+        let d = tempfile::tempdir().unwrap();
+        for dir in ["lane-a", "lane-gone", "lane-lane-x", "lanes"] {
+            std::fs::create_dir_all(d.path().join(dir).join("src")).unwrap();
+        }
+        std::fs::write(d.path().join("lane-shares.json"), "{}").unwrap();
+        let known: BTreeSet<String> = ["a", "lane-x"].map(String::from).into();
+        sweep_state_dirs(d.path(), &known);
+        assert!(d.path().join("lane-a").is_dir());
+        assert!(d.path().join("lane-lane-x").is_dir());
+        assert!(d.path().join("lanes").is_dir());
+        assert!(d.path().join("lane-shares.json").is_file());
+        assert!(!d.path().join("lane-gone").exists());
+
+        // Nothing holds it: removed at once (the list only stops a retry).
+        let lanes = d.path().join("lanes.json");
+        remove_state_dir("a", d.path().join("lane-a"), lanes);
+        assert!(!d.path().join("lane-a").exists());
+    }
 
     #[test]
     fn a_project_is_a_lanes_only_with_its_overlay_in_this_repository() {
