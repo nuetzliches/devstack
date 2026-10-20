@@ -148,6 +148,19 @@ Where it will live:
 - `crates/devstack-config`: `[lanes] keep_data`; `docs/stack-file.md`.
 - `docs/pool.md` (what a member uploads is kept…), `SECURITY.md`.
 
+*Paths as built, noted 2026-10-20.* `crates/devstack-node/src/node.rs`:
+the slot's name (`slot_name`), kept slots (`kept`, `in_use`), the end of a
+lease keeping the slot (`drop_lease`), `gc_blobs` under pressure only, the
+retention and cap sweep (`sweep_slots`, `keep`), the orphan sweep on start
+(`sweep_orphans`), `GET/DELETE /v1/slots` (`slots_list`, `slots_purge`).
+`crates/devstack-node/src/lanerun.rs`: `stop` without volumes, `purge`
+with. `crates/devstack-node/src/policy.rs`: `keep_lanes_hours`,
+`keep_lanes_gib`. `crates/devstack-daemon/src/remote.rs`: the nodes a lane
+ran on are noted in the lane's state as `lane-<name>/nodes.json` (`ran_on`,
+`note_ran_on`), not `remote/slots.json`; `purge_slot`, `slots_on`.
+`crates/devstack-daemon/src/lanes.rs`: purge on `forget`, `reset`,
+`prune`. `[lanes] keep_data` in `crates/devstack-config/src/model.rs`.
+
 ## What this ADR does not say
 
 - That lanes survive a restart of the requester's daemon. They still stop

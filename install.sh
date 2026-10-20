@@ -81,8 +81,12 @@ main() {
   elif older "$version" "$first_attested"; then
     echo "Note: build provenance not checked (v$version predates attestations)."
   else
-    gh attestation verify "$tmp/$asset" --repo "$repo" >/dev/null \
-      || { echo "the build provenance of $asset does not verify (gh attestation verify)" >&2; exit 1; }
+    # Signed by the release workflow itself, not by any workflow of the
+    # repository. On failure gh's own words follow: a network or login
+    # problem reads differently from an archive the workflow did not build.
+    gh attestation verify "$tmp/$asset" --repo "$repo" \
+      --signer-workflow "$repo/.github/workflows/release.yml" >/dev/null \
+      || { echo "the build provenance of $asset could not be verified (gh attestation verify, output above)" >&2; exit 1; }
     echo "Built by $repo's release workflow (attestation verified)"
   fi
 

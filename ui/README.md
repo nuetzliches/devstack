@@ -104,9 +104,9 @@ src/
                 (numbers, times, webUrl), ansi (terminal colours), lanes, pins, sort, popover, tooltip,
                 app-update (new dashboard after a hub update)
   components/   TopBar, Sidebar, StackSwitcher, StackHeader, PendingIndicator, CommandPalette,
-                ServiceRow, ContainerRow, CommandRow, CandidatePanel, BuildTimeline, BuildLogModal,
-                KeptLogsModal, Diagnostics, ErrorLine, LogView, RowUsage, Sparkline, CapacityChart,
-                LaneStart, ShareSwitch, AddStackDialog, ScanStacks, StatusPill, SortTh, Modal,
+                ServiceRow, ContainerRow, CommandRow, CandidatePanel, RebuildPanel, BuildTimeline,
+                BuildLogModal, KeptLogsModal, Diagnostics, ErrorLine, LogView, RowUsage, Sparkline,
+                CapacityChart, NodeLoad, LaneStart, ShareSwitch, AddStackDialog, ScanStacks, StatusPill, SortTh, Modal,
                 GlobalDialogs, Toasts, icons/
   views/        Home, OverviewHome, Overview, ServiceDetail, ContainerDetail, Infra, Commands, Usage,
                 Events, Pool, StackLayout, Unpaired
@@ -131,7 +131,8 @@ and dark (stored in `localStorage`).
 
 ## Test hooks
 
-Key elements carry `data-testid` for Playwright: `stack-switcher`,
+Key elements carry `data-testid`, for browser automation (there is no
+end-to-end suite in this repository, and the unit tests do not use them): `stack-switcher`,
 `stack-option`, `service-row` (with `data-service`, `data-state`),
 `candidate-banner` and `candidate-line` (with `data-state`), `action-start`,
 `action-stop`, `action-restart`, `action-promote`, `action-rollback`,

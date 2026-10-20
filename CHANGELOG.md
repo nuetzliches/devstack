@@ -232,13 +232,13 @@ fixed; 0.14.0 was tagged but never published.
   start is fresh (`devstack lane reset`).
 - **A lane shared with you to view looks like your own** (ADR-0040). Under
   "Shared with you" it is a row like your lanes; it opens the same pages
-  (overview, services and containers with their logs, infrastructure,
+  (overview, services with their logs, containers, infrastructure,
   commands' runs, events, usage), live, read through its node, with its
   owner and node named and nothing that would change it.
 - **A shared lane can be shared to view** ([ADR-0040](docs/adr/0040-a-shared-lane-can-be-watched-like-ones-own.md)).
   `devstack lane share <lane> --view <member|tag|*>` (API: `view` beside
   `with`; MCP `lane_share` with `view`) lets them read the lane as its
-  owner does: its state, events, services' and containers' logs, command
+  owner does: its state, events, services' logs, command
   runs and usage, never its environment, changing nothing. The node lets
   only those reads through (`GET /v1/leases/{id}/view/…`), checked with the
   coordinator at least every 5 s; the hub reads through it
