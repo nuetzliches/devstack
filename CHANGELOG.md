@@ -9,6 +9,12 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- A failed rebuild of a dev server is logged once (`devserver_rebuild` with
+  `ms` and `result`); each error line that followed its marker logged it
+  again, and the pool's telemetry counted it as often.
+
 ## [0.12.0] - 2026-10-20
 
 ### Added
