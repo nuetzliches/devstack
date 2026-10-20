@@ -21,9 +21,11 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 mod builds;
+mod call;
 mod detach;
 mod lock;
 pub use builds::{Build, BuildJob};
+pub use call::Call;
 pub use detach::{keep_std_handles, spawn_detached};
 pub use lock::{LockError, StateLock};
 

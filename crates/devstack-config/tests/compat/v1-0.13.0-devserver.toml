@@ -1,0 +1,43 @@
+# Frozen for 0.13.0: a dev server whose rebuilds devstack reads (`rebuild`,
+# ADR-0042: a known tool, or a tool's own lines) and whose fixed port
+# devstack holds (`proxy`, ADR-0043).
+version = 1
+
+[stack]
+name = "shop"
+requires = "0.13.0"
+
+[lanes]
+port_step = 100
+
+[services.api]
+build = "dotnet build src/Api/Api.csproj -c Debug"
+output = "src/Api/bin/Debug/net10.0"
+run = "dotnet {artifact}/Api.dll"
+port = 5000
+
+[services.web]
+kind = "devserver"
+cwd = "web"
+run = "npx ng serve --port {port}"
+port = 4200
+proxy = true
+rebuild = "angular"
+restart_on = ["web/angular.json", "web/proxy.conf.json"]
+health = { http = "/", timeout = "180s" }
+prepare = { run = "npm ci", inputs = ["web/package-lock.json"] }
+
+[services.docs]
+kind = "devserver"
+cwd = "docs"
+run = "node serve.js --port {port}"
+port = 4400
+rebuild = { start = '^rebuild: start', ok = '^rebuild: done in (?P<ms>\d+)', failed = '^rebuild: broken' }
+
+[services.admin]
+kind = "devserver"
+cwd = "admin"
+run = "npx vite --port 4500 --strictPort"
+port = 4500
+proxy = false
+rebuild = "vite"

@@ -126,3 +126,47 @@ build = "npm run build"
     let e = s.with_profile("acceptance").unwrap_err();
     assert!(e[0].message.contains("has none"), "{e:?}");
 }
+
+/// A profile that makes a dev server a `static` build (ADR-0041's own
+/// example) over one that says how it rebuilds (ADR-0042).
+#[test]
+fn another_kind_drops_what_only_the_old_one_takes() {
+    let text = BASE.replace(
+        "port = 4200\n",
+        "port = 4200\nrebuild = \"angular\"\nrestart_on = [\"angular.json\"]\nproxy = true\n",
+    );
+    let s = devstack_config::from_str(
+        &format!(
+            "{text}\n[profiles.acc.services.web]\nkind = \"static\"\nbuild = \"npm run build\"\noutput = \"dist/web/browser\"\n"
+        ),
+        Path::new("devstack.toml"),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert!(s.services["web"].rebuild.is_some());
+    let p = s.with_profile("acc").unwrap();
+    let web = &p.services["web"];
+    assert_eq!(web.kind, Kind::Static);
+    assert!(web.rebuild.is_none() && web.restart_on.is_empty() && web.run.is_empty());
+    assert_eq!(web.proxy, Some(true));
+
+    // And the other way: a built service made a dev server loses its build.
+    let p = load(
+        "[profiles.dev.services.api]\nkind = \"devserver\"\nrun = \"dotnet watch run --urls http://localhost:{port}\"\n",
+    )
+    .unwrap()
+    .with_profile("dev")
+    .unwrap();
+    assert!(p.services["api"].build.is_none() && p.services["api"].output.is_none());
+}
+
+#[test]
+fn a_profiles_env_takes_the_placeholders_of_a_command() {
+    let e = load("[profiles.x]\nenv = { P = \"{port}\" }\n")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains("profiles.x.env.P") && e.contains("not available in a command"),
+        "{e}"
+    );
+    load("[profiles.x]\nenv = { U = \"{service.api.url}\", L = \"{lane}\" }\n").unwrap();
+}

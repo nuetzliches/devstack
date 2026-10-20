@@ -226,6 +226,17 @@ export const usePool = defineStore('pool', () => {
     if (r.ok) setTimeout(() => void load(), 1500);
   }
 
+  /** Withdraw an update a server waits for its lanes for (ADR-0039): it takes lanes again. */
+  async function cancelUpdate(id: string, name: string) {
+    const r = await act({
+      label: `Cancel the update of ${name}`,
+      path: at(paths.poolUpdate(id)),
+      method: 'DELETE',
+      success: `${name} takes lanes again after its next report`,
+    });
+    if (r.ok) setTimeout(() => void load(), 1500);
+  }
+
   /** Have a node remove the stopped lanes it keeps (ADR-0038). */
   async function pruneNode(id: string, name: string) {
     const r = await act({
@@ -381,6 +392,7 @@ export const usePool = defineStore('pool', () => {
     setShare,
     setPaused,
     updateNode,
+    cancelUpdate,
     pruneNode,
     endLease,
     join,

@@ -396,6 +396,15 @@ pub async fn update(
     }
 }
 
+/// `DELETE /hub/pool/nodes/{id}/update`: withdraw an update the node waits
+/// for its lanes for (ADR-0039).
+pub async fn update_cancel(Path(id): Path<String>, Query(q): Query<PoolQuery>) -> Response {
+    match blocking(&q, move |l| l.admin_update_cancel(&id)).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => error(&e),
+    }
+}
+
 /// `POST /hub/pool/nodes/{id}/prune` (ADR-0038).
 pub async fn prune(Path(id): Path<String>, Query(q): Query<PoolQuery>) -> Response {
     match blocking(&q, move |l| l.admin_prune(&id)).await {

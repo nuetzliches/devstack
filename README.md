@@ -28,7 +28,7 @@ devstack ui        # every stack, live, in the browser
   --export dotenv` runs any service without devstack.
 - **Windows and Linux, natively.** One static binary, no WSL required.
 
-> **0.9** · local stacks, lanes and the pool are in daily use on .NET, Node and
+> **Before 1.0** · local stacks, lanes and the pool are in daily use on .NET, Node and
 > Angular stacks. See [what is planned](docs/plan.md) and
 > [the decisions behind it](docs/adr/README.md).
 
@@ -51,6 +51,8 @@ same release. Each release also carries a build provenance attestation; with
 the [GitHub CLI](https://cli.github.com) installed and logged in, the scripts
 verify it (`gh attestation verify <archive> --repo nuetzliches/devstack`):
 built by this repository's release workflow (releases from 0.10.0 on). The
+Windows executable is not code-signed, so SmartScreen or an endpoint
+protection product may warn about it at first ([SECURITY.md](SECURITY.md#release-integrity)). The
 [landing page](https://nuetzliches.github.io/devstack/) tells whether your
 machine is ready. `devstack update` (or the dashboard) installs a newer
 release; `devstack self uninstall` removes devstack again. From source: `cargo
@@ -162,8 +164,8 @@ per machine, a customer's beside the team's. Setup and everything else:
 `status`, `up` (with `on` for a node), `down`, `start_service`,
 `stop_service`, `restart_service`, `promote_service`, `rollback_service`,
 `hot_reload`, `logs`, `builds`, `diagnostics`, `doctor`, `run_command`,
-`usage`, `lanes`, `lane_move`, `lane_share`, `promote_lane`, `hub_status`,
-`hub_start`.
+`usage`, `lanes`, `lane_start`, `lane_stop`, `lane_move`, `lane_share`,
+`promote_lane`, `placement`, `hub_status`, `hub_start`.
 
 ```json
 { "mcpServers": { "devstack": { "command": "devstack", "args": ["mcp"] } } }
@@ -184,12 +186,12 @@ Every command and flag: `devstack --help`, `devstack <command> --help`.
 |---|---|
 | `devstack init`, `check [--compose]`, `schema` | write a first stack file; validate it (with `--compose` every Compose group on its own too); print its JSON Schema |
 | `devstack doctor` | what this machine lacks for this stack, with the fix; exits 1 when something fails |
-| `devstack up [--on <node>\|pool] [--workers] [--force]`, `down [--infra]`, `status` | start (in a worktree: its lane, here or on a node), stop, show the stack |
-| `devstack start\|stop\|restart [--rebuild] <service\|group>`, `promote`, `rollback`, `hot-reload` | one service or group |
+| `devstack up [--on <node>\|pool] [--workers] [--force] [--profile <name> [--run]] [--yes]`, `down [--infra] [--all]`, `status` | start (in a worktree: its lane, here or on a node; with a profile of the stack file, for a purpose such as an acceptance run), stop (`--all`: the lanes too), show the stack |
+| `devstack start\|stop\|restart <service\|group>`, `promote`, `rollback`, `hot-reload` | one service or group; `restart --rebuild` builds again although an artifact for the same inputs exists |
 | `devstack build <service>` | sync the main tree's snapshot and build an artifact, without starting it (in a lane: `devstack restart <service>` in its worktree) |
 | `devstack builds <service>`, `logs`, `top`, `env <service> [--export dotenv]` | what ran, what it printed, what it uses, what it gets |
 | `devstack run <command>` | a command of the stack file |
-| `devstack lane list\|stop\|move\|share` | the lanes (worktrees), see above |
+| `devstack lane list\|start\|stop\|reset\|prune\|move\|share` | the lanes (worktrees), see above; `reset` throws a stopped lane's data away, `prune` removes what gone lanes left behind |
 | `devstack ui [--browser <name\|path>] [--print]` | open and pair the dashboard; the browser is `--browser`, else `DEVSTACK_BROWSER`, else `BROWSER`, else the system's default |
 | `devstack hub [status\|stop\|start\|install\|uninstall]` | the hub that serves the dashboard: without an action in the foreground; `stop` leaves the stacks running; `install` registers it at logon and the `devstack://` link (`--no-autostart`: the link only), `uninstall` removes both, and `devstack up` then leaves them alone |
 | `devstack skills install [--dir] [--force]`, `skills check` | write the agent skills; check that they match this devstack and stack file (exits 1 when not) |
@@ -224,7 +226,7 @@ dashboard ─────┘    one per repo,   └── services: main slot (f
 
 | Variable | Effect |
 |---|---|
-| `DEVSTACK_BROWSER` | the browser `devstack ui` pairs (`chrome`, `edge`, `firefox`, a path) |
+| `DEVSTACK_BROWSER` | the browser `devstack ui` pairs (`chrome`, `edge`, `firefox`, `brave`, a path) |
 | `DEVSTACK_HUB_PORT` | the hub's port (default 4250) |
 | `DEVSTACK_NO_HUB` | `devstack up` does not start the dashboard hub |
 | `DEVSTACK_NO_HUB_INTEGRATION` | the installer registers no hub at logon and no `devstack://` link (and records that); `devstack up` registers neither while it is set |

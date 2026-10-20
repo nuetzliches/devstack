@@ -100,3 +100,13 @@ present" a slot of the repository there; preferred only with room to spare
 (1.5× the need), so a warm but nearly full node does not win. Added to the
 hard conditions: free disk where the node keeps lanes (5 GiB at least).
 Round-trip time is not measured.
+
+*Noted 2026-10-20.* Point 4's "atomically", as built: the node checks a
+lease against what it offers and records it in one step, under the lock of
+its leases, so two admissions at once cannot both take the same room
+(`admit`, `available_in`). The coordinator does the same for its offers: it
+takes what leases offered for a node and not yet admitted there need off
+the node's last report, for a minute (`OFFER_HOLDS`) or until the node's
+report counts them, in placement and when it creates a lease. A node also
+refuses a lease when less than 5 GiB of disk is free where it keeps lanes,
+the same hard condition the coordinator places by.

@@ -63,6 +63,17 @@ mod tests {
             Err(LockError::Held(_))
         ));
         drop(first);
-        StateLock::acquire(dir.path()).unwrap();
+        // A process another test spawns at this moment holds a copy of the
+        // handle between its fork and its exec (close-on-exec): wait that out.
+        let t0 = std::time::Instant::now();
+        loop {
+            match StateLock::acquire(dir.path()) {
+                Ok(_) => break,
+                Err(LockError::Held(_)) if t0.elapsed().as_secs() < 5 => {
+                    std::thread::sleep(std::time::Duration::from_millis(20))
+                }
+                Err(e) => panic!("{e}"),
+            }
+        }
     }
 }

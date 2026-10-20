@@ -490,7 +490,11 @@ fn env_var(name: &str) -> Option<String> {
 ///
 /// `${VAR}`, `${VAR:-default}`, `${VAR-default}` and `$VAR` look in the
 /// process environment first, then in the variables defined above them; an
-/// unknown one is empty, as in Compose.
+/// unknown one is empty, as in Compose. A default may hold another
+/// reference (`${A:-${B}}`); `${VAR:+alt}` / `${VAR+alt}` give `alt` when
+/// the variable is set (and not empty). `${VAR:?message}` and
+/// `${VAR?message}` read as `${VAR}`: Compose fails on an unset one, devstack
+/// does not. A byte order mark at the start is skipped.
 pub fn parse_env_file(text: &str) -> BTreeMap<String, String> {
     parse_env_file_with(text, &env_var)
 }
@@ -502,7 +506,9 @@ pub fn parse_env_file_with(
     outer: &dyn Fn(&str) -> Option<String>,
 ) -> BTreeMap<String, String> {
     let mut out: BTreeMap<String, String> = BTreeMap::new();
-    let mut rest = text;
+    // A byte order mark (Windows PowerShell 5.1 writes one) is not part of
+    // the first key.
+    let mut rest = text.strip_prefix('\u{feff}').unwrap_or(text);
     while !rest.is_empty() {
         let (line, after) = rest.split_once('\n').unwrap_or((rest, ""));
         let stmt = line.trim();
@@ -586,7 +592,7 @@ fn expand_value(s: &str, escapes: bool, lookup: &dyn Fn(&str) -> Option<String>)
                 i += 2;
             }
             '$' if c.get(i + 1) == Some(&'{') => {
-                let Some(close) = c[i + 2..].iter().position(|&x| x == '}') else {
+                let Some(close) = closing_brace(&c[i + 2..]) else {
                     out.extend(&c[i..]);
                     break;
                 };
@@ -596,14 +602,28 @@ fn expand_value(s: &str, escapes: bool, lookup: &dyn Fn(&str) -> Option<String>)
                     .unwrap_or(body.len());
                 let (name, op) = body.split_at(name_len);
                 let value = lookup(name);
+                let set = value.as_ref().is_some_and(|v| !v.is_empty());
                 let value = if let Some(d) = op.strip_prefix(":-") {
                     value
                         .filter(|v| !v.is_empty())
                         .unwrap_or_else(|| expand_value(d, false, lookup))
                 } else if let Some(d) = op.strip_prefix('-') {
                     value.unwrap_or_else(|| expand_value(d, false, lookup))
+                } else if let Some(alt) = op.strip_prefix(":+") {
+                    if set {
+                        expand_value(alt, false, lookup)
+                    } else {
+                        String::new()
+                    }
+                } else if let Some(alt) = op.strip_prefix('+') {
+                    if value.is_some() {
+                        expand_value(alt, false, lookup)
+                    } else {
+                        String::new()
+                    }
                 } else {
-                    // `${VAR}`, and `${VAR:?message}`, which only Compose reports.
+                    // `${VAR}`, and `${VAR:?message}` / `${VAR?message}`,
+                    // which only Compose reports: here an unset one is empty.
                     value.unwrap_or_default()
                 };
                 out.push_str(&value);
@@ -628,6 +648,27 @@ fn expand_value(s: &str, escapes: bool, lookup: &dyn Fn(&str) -> Option<String>)
         }
     }
     out
+}
+
+/// Offset of the `}` that closes a `${` whose body starts at `c[0]`: a
+/// `${…}` inside it (`${A:-${B}}`) is skipped as a whole, `$$` is a `$`.
+fn closing_brace(c: &[char]) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < c.len() {
+        match c[i] {
+            '$' if c.get(i + 1) == Some(&'$') => i += 1,
+            '$' if c.get(i + 1) == Some(&'{') => {
+                depth += 1;
+                i += 1;
+            }
+            '}' if depth == 0 => return Some(i),
+            '}' => depth -= 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Write an environment as a dotenv file (ADR-0015 export) in Compose's
@@ -831,6 +872,23 @@ mod tests {
         // The process environment comes before the file's own variables.
         let m = parse_env_file_with("A=file\nB=${A}\n", &|k| (k == "A").then(|| "env".into()));
         assert_eq!(m["B"], "env");
+    }
+
+    #[test]
+    fn env_files_nest_defaults_and_take_alternatives() {
+        let text = concat!(
+            "\u{feff}FIRST=1\n",
+            "EMPTY=\n",
+            "A=${NOPE:-${FIRST}}|${NOPE:-${ALSO_NOPE:-deep}}|${NOPE-${FIRST}x}\n",
+            "B=${FIRST:+set}|${EMPTY:+set}|${NOPE:+set}|${EMPTY+set}|${NOPE+set}\n",
+            "C=${FIRST:?gone}|${NOPE?gone}|${NOPE:-$${x}}\n",
+        );
+        let m = parse_env_file_with(text, &|_| None);
+        assert_eq!(m["FIRST"], "1", "a byte order mark is not part of the key");
+        assert!(!m.keys().any(|k| k.starts_with('\u{feff}')));
+        assert_eq!(m["A"], "1|deep|1x");
+        assert_eq!(m["B"], "set|||set|");
+        assert_eq!(m["C"], "1||${x}");
     }
 
     /// F-22: what `--export dotenv` writes reads back as it was.

@@ -449,7 +449,10 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/pool/nodes/{id}/pause", post(pool::pause))
         .route("/hub/pool/nodes/{id}/resume", post(pool::resume))
         .route("/hub/pool/leases/{id}/end", post(pool::end))
-        .route("/hub/pool/nodes/{id}/update", post(pool::update))
+        .route(
+            "/hub/pool/nodes/{id}/update",
+            post(pool::update).delete(pool::update_cancel),
+        )
         .route("/hub/pool/nodes/{id}/prune", post(pool::prune))
         .route("/hub/pool/members/{id}/tags", post(pool::tags))
         .route("/hub/pool/members/{id}/node", post(pool::node))
@@ -525,7 +528,7 @@ async fn audit(req: Request, next: Next) -> Response {
         serde_json::json!({ "method": method.as_str(), "path": path, "status": status });
     // Why it was refused: a 409 alone explains nothing afterwards.
     let res = if status >= 400 {
-        let (res, error) = error_of(res).await;
+        let (res, error) = devstack_daemon::api::error_of(res).await;
         if let Some(e) = error {
             fields["error"] = e.into();
         }
@@ -539,30 +542,6 @@ async fn audit(req: Request, next: Next) -> Response {
         fields,
     );
     res
-}
-
-/// The `error` of a refused answer (`{"error": …}`, small), for the
-/// request's log line; the answer goes on unchanged.
-async fn error_of(res: Response) -> (Response, Option<String>) {
-    let json = res
-        .headers()
-        .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.starts_with("application/json"));
-    if !json {
-        return (res, None);
-    }
-    let (parts, body) = res.into_parts();
-    let Ok(bytes) = axum::body::to_bytes(body, 64 * 1024).await else {
-        return (Response::from_parts(parts, axum::body::Body::empty()), None);
-    };
-    let error = serde_json::from_slice::<serde_json::Value>(&bytes)
-        .ok()
-        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from));
-    (
-        Response::from_parts(parts, axum::body::Body::from(bytes)),
-        error,
-    )
 }
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {

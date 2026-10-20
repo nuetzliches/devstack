@@ -128,8 +128,13 @@ async fn audit(State(s): State<AppState>, req: Request, next: Next) -> Response 
 }
 
 /// The `error` of a refused answer (`{"error": …}`, small), for the
-/// request's log line; the answer goes on unchanged.
-async fn error_of(res: Response) -> (Response, Option<String>) {
+/// request's log line; the answer goes on unchanged. An answer whose size is
+/// not known up front, or is over the limit, is not read at all: it streams
+/// on as it came, and the log line goes without the reason. The hub's audit
+/// uses this too.
+pub async fn error_of(res: Response) -> (Response, Option<String>) {
+    use axum::body::HttpBody;
+    const LIMIT: u64 = 64 * 1024;
     let json = res
         .headers()
         .get(axum::http::header::CONTENT_TYPE)
@@ -138,8 +143,21 @@ async fn error_of(res: Response) -> (Response, Option<String>) {
     if !json {
         return (res, None);
     }
-    let (parts, body) = res.into_parts();
-    let Ok(bytes) = axum::body::to_bytes(body, 64 * 1024).await else {
+    let declared = res
+        .headers()
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+    let small = res.body().size_hint().upper().is_some_and(|n| n <= LIMIT)
+        && declared.is_none_or(|n| n <= LIMIT);
+    if !small {
+        return (res, None);
+    }
+    let (mut parts, body) = res.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, LIMIT as usize).await else {
+        // The body failed while it was read: what is left of it cannot be
+        // sent, and the length it declared no longer holds.
+        parts.headers.remove(axum::http::header::CONTENT_LENGTH);
         return (Response::from_parts(parts, axum::body::Body::empty()), None);
     };
     let error = serde_json::from_slice::<serde_json::Value>(&bytes)
@@ -1577,5 +1595,59 @@ async fn act_on_container(
         Ok(Ok(())) => Ok(()),
         Ok(Err(e)) => Err(err(StatusCode::CONFLICT, e)),
         Err(e) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+
+    fn refused(body: Body, len: Option<usize>) -> Response {
+        let mut b = Response::builder()
+            .status(StatusCode::CONFLICT)
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(n) = len {
+            b = b.header(header::CONTENT_LENGTH, n);
+        }
+        b.body(body).unwrap()
+    }
+
+    async fn all(res: Response) -> Vec<u8> {
+        axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec()
+    }
+
+    #[tokio::test]
+    async fn a_small_refusal_gives_its_reason_and_goes_on_unchanged() {
+        let text = r#"{"error":"busy"}"#;
+        let (res, error) = error_of(refused(Body::from(text), Some(text.len()))).await;
+        assert_eq!(error.as_deref(), Some("busy"));
+        assert_eq!(all(res).await, text.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn a_large_refusal_is_not_read_and_arrives_whole() {
+        let text = format!(r#"{{"error":"{}"}}"#, "x".repeat(100 * 1024));
+        let (res, error) = error_of(refused(Body::from(text.clone()), Some(text.len()))).await;
+        assert_eq!(error, None);
+        assert_eq!(
+            res.headers()[header::CONTENT_LENGTH],
+            text.len().to_string().as_str()
+        );
+        assert_eq!(all(res).await, text.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn a_refusal_of_unknown_size_is_not_read() {
+        let chunks = tokio_stream::iter(vec![
+            Ok::<_, std::io::Error>(bytes::Bytes::from_static(br#"{"error":"#)),
+            Ok(bytes::Bytes::from_static(br#""streamed"}"#)),
+        ]);
+        let (res, error) = error_of(refused(Body::from_stream(chunks), None)).await;
+        assert_eq!(error, None);
+        assert_eq!(all(res).await, br#"{"error":"streamed"}"#);
     }
 }

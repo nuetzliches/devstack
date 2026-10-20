@@ -156,9 +156,10 @@ pub fn is_build_file(path: &str) -> bool {
 /// files matched by `watch` (all files when it is empty) with their content
 /// hashes; the build-system files ([`BUILD_FILES`]) in the directory of a
 /// watched file or above it, and the files of `prepare.inputs`; and the build
-/// command, output path, working directory and `prepare` (command, directory,
-/// inputs), so changing how a service is built also yields a new id. Ignored
-/// files are not in the snapshot and count for nothing.
+/// command and output path (with `${VAR}` expanded, `{repo}` as written),
+/// working directory and `prepare` (command, directory, inputs), so changing
+/// how a service is built also yields a new id. Ignored files are not in the
+/// snapshot and count for nothing.
 pub fn build_id(manifest: &Manifest, svc: &Service) -> Result<String> {
     let set = watch_set(&svc.watch)?;
     // Directories that hold a watched file: a build file applies to them if it
@@ -182,12 +183,27 @@ pub fn build_id(manifest: &Manifest, svc: &Service) -> Result<String> {
     let prepare = svc.prepare.as_ref();
     // What `prepare` installs from (a lockfile) shapes the build as well.
     let prepared = watch_set(prepare.map_or(&[][..], |p| p.inputs.as_slice()))?;
+    // `build` and `output` as the build runs them: a changed `${VAR}` is
+    // another build. `{repo}` stays as written, so every lane's snapshot
+    // gives the same id.
+    let build = svc
+        .build
+        .as_deref()
+        .map(|s| expand(s, REPO_IN_ID))
+        .transpose()?;
+    let output = svc
+        .output
+        .as_deref()
+        .map(|s| expand(s, REPO_IN_ID))
+        .transpose()?;
     let mut h = blake3::Hasher::new();
+    // Still v3: a line without `${VAR}` and `{{` hashes as before, so an
+    // update does not rebuild every service.
     h.update(b"devstack build id v3\0");
     let inputs = prepare.map(|p| p.inputs.join("\n"));
     for part in [
-        svc.build.as_deref(),
-        svc.output.as_deref(),
+        build.as_deref(),
+        output.as_deref(),
         svc.cwd.as_deref(),
         prepare.map(|p| p.run.as_str()),
         prepare.and_then(|p| p.cwd.as_deref()),
@@ -354,16 +370,17 @@ impl Builder {
                 "service `{service}` has no `build`/`output`"
             )));
         };
-        let log = self.layout.build_log(service, &id);
-        fs::create_dir_all(log.parent().expect("log has a parent"))
-            .map_err(|e| BuildError::io("create log dir", e))?;
         let cwd = match &svc.cwd {
-            Some(c) => snap.dir.join(c),
+            Some(c) => inside_snapshot(&snap.dir, c, "cwd")?,
             None => snap.dir.clone(),
         };
         // In a build, `{repo}` is the snapshot: that is where the build runs.
-        let command = expand(command, &snap.dir)?;
-        let output = snap.dir.join(expand(output, &snap.dir)?);
+        let repo = snap.dir.to_string_lossy();
+        let command = expand(command, &repo)?;
+        let output = inside_snapshot(&snap.dir, &expand(output, &repo)?, "output")?;
+        let log = self.layout.build_log(service, &id);
+        fs::create_dir_all(log.parent().expect("log has a parent"))
+            .map_err(|e| BuildError::io("create log dir", e))?;
         let spec = devstack_proc::Spec {
             name: format!("build-{service}"),
             command,
@@ -512,18 +529,54 @@ impl Builder {
 /// (validation allows `{repo}` and `${VAR}` there): `{repo}` is the snapshot,
 /// `${VAR}` comes from the daemon's environment, `{{`/`}}` are braces. The
 /// same on every platform, before the shell sees the line.
-fn expand(s: &str, snapshot: &Path) -> Result<String> {
-    struct Snap<'a>(&'a Path);
+fn expand(s: &str, repo: &str) -> Result<String> {
+    struct Snap<'a>(&'a str);
     impl Resolve for Snap<'_> {
         fn resolve(&self, p: &Placeholder) -> std::result::Result<String, String> {
             match p {
-                Placeholder::Repo => Ok(self.0.to_string_lossy().into_owned()),
+                Placeholder::Repo => Ok(self.0.to_string()),
                 other => Err(format!("`{other}` is not known to a build")),
             }
         }
     }
-    interpolate::expand(s, &Snap(snapshot), &|k| std::env::var(k).ok())
+    interpolate::expand(s, &Snap(repo), &|k| std::env::var(k).ok())
         .map_err(|e| BuildError::Other(format!("`{s}`: {e}")))
+}
+
+/// What `{repo}` stands for in the build id: the same text for every lane.
+const REPO_IN_ID: &str = "{repo}";
+
+/// `path` with `.` and `..` taken out, without asking the file system.
+fn lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push(c);
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// `rel` (as written, or absolute through `{repo}` or `${VAR}`) under the
+/// snapshot `snap`, or an error when it leaves it (ADR-0002: a build runs in
+/// the snapshot and is copied from there).
+fn inside_snapshot(snap: &Path, rel: &str, what: &str) -> Result<PathBuf> {
+    let base = lexical(snap);
+    let p = lexical(&snap.join(rel));
+    if p.starts_with(&base) {
+        Ok(p)
+    } else {
+        Err(BuildError::Other(format!(
+            "`{what}` is `{rel}`, outside the repository: a build runs in its snapshot and publishes from there"
+        )))
+    }
 }
 
 /// Rename a directory that was just written. On Windows a directory cannot
@@ -549,22 +602,120 @@ fn transient(e: &std::io::Error) -> bool {
     matches!(e.raw_os_error(), Some(5 | 32))
 }
 
+/// Copy a build's output. A symbolic link (a junction on Windows) is copied
+/// as what it points to, so the artifact holds no link back into the
+/// snapshot (`node_modules/.bin`, a pnpm layout); a link whose target is gone
+/// is left out, one that points to a directory above it is an error.
 fn copy_dir(from: &Path, to: &Path) -> Result<()> {
+    let mut above = Vec::new();
+    copy_tree(from, to, &mut above)
+}
+
+fn copy_tree(from: &Path, to: &Path, above: &mut Vec<PathBuf>) -> Result<()> {
+    above.push(fs::canonicalize(from).unwrap_or_else(|_| from.to_path_buf()));
     fs::create_dir_all(to).map_err(|e| BuildError::io(format!("create {}", to.display()), e))?;
     for e in
         fs::read_dir(from).map_err(|e| BuildError::io(format!("read {}", from.display()), e))?
     {
         let e = e.map_err(|e| BuildError::io("read dir entry", e))?;
         let (src, dst) = (e.path(), to.join(e.file_name()));
-        if e.file_type()
-            .map_err(|e| BuildError::io("file type", e))?
-            .is_dir()
-        {
-            copy_dir(&src, &dst)?;
+        let mut ty = e.file_type().map_err(|e| BuildError::io("file type", e))?;
+        if ty.is_symlink() {
+            match fs::metadata(&src) {
+                Ok(m) => ty = m.file_type(),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(BuildError::io(format!("follow {}", src.display()), e)),
+            }
+            if ty.is_dir()
+                && let Ok(target) = fs::canonicalize(&src)
+                && above.contains(&target)
+            {
+                return Err(BuildError::Other(format!(
+                    "`{}` links to a directory that contains it",
+                    src.display()
+                )));
+            }
+        }
+        if ty.is_dir() {
+            copy_tree(&src, &dst, above)?;
         } else {
             fs::copy(&src, &dst)
                 .map_err(|e| BuildError::io(format!("copy {}", src.display()), e))?;
         }
     }
+    above.pop();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A link to a directory: a junction on Windows (no privilege needed),
+    /// a symbolic link elsewhere.
+    fn link_dir(target: &Path, link: &Path) {
+        #[cfg(windows)]
+        {
+            let ok = std::process::Command::new("cmd")
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "mklink /J failed");
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
+    #[test]
+    fn a_linked_directory_is_copied_as_its_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out");
+        let pkg = dir.path().join("pkg");
+        fs::create_dir_all(out.join("sub")).unwrap();
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(pkg.join("tool.js"), "x").unwrap();
+        fs::write(out.join("sub/a.txt"), "a").unwrap();
+        link_dir(&pkg, &out.join("bin"));
+        let to = dir.path().join("art");
+        copy_dir(&out, &to).unwrap();
+        assert_eq!(fs::read_to_string(to.join("bin/tool.js")).unwrap(), "x");
+        assert_eq!(fs::read_to_string(to.join("sub/a.txt")).unwrap(), "a");
+        assert!(
+            !fs::symlink_metadata(to.join("bin"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn a_link_to_a_directory_above_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out");
+        fs::create_dir_all(out.join("sub")).unwrap();
+        link_dir(&out, &out.join("sub").join("loop"));
+        let err = copy_dir(&out, &dir.path().join("art")).unwrap_err();
+        assert!(err.to_string().contains("contains it"), "{err}");
+    }
+
+    #[test]
+    fn output_and_cwd_stay_in_the_snapshot() {
+        let snap = Path::new(if cfg!(windows) { r"C:\s\src" } else { "/s/src" });
+        assert!(inside_snapshot(snap, "dist/app", "output").is_ok());
+        assert!(inside_snapshot(snap, "a/../dist", "output").is_ok());
+        let abs = snap.join("dist");
+        assert!(inside_snapshot(snap, &abs.to_string_lossy(), "output").is_ok());
+        assert!(inside_snapshot(snap, "../outside", "cwd").is_err());
+        assert!(inside_snapshot(snap, "a/../../outside", "cwd").is_err());
+        let other = if cfg!(windows) {
+            r"C:\tmp\out"
+        } else {
+            "/tmp/out"
+        };
+        assert!(inside_snapshot(snap, other, "output").is_err());
+    }
 }
