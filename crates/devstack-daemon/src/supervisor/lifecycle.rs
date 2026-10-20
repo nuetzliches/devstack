@@ -352,6 +352,34 @@ impl Supervisor {
         self.proxies.lock().unwrap().get(name).cloned()
     }
 
+    /// The front on a dev server's fixed port (ADR-0043), bound on its first
+    /// start; a port another process holds names it.
+    pub(super) fn ensure_front(&self, name: &str, svc: &Service) -> Result<(), String> {
+        let mut fronts = self.fronts.lock().unwrap();
+        if fronts.contains_key(name) {
+            return Ok(());
+        }
+        let port = svc.port.expect("a fronted dev server has a port");
+        if port_in_use(port) {
+            return Err(super::port_taken(port));
+        }
+        let f = crate::tcpfwd::Front::bind(port, &self.rt)
+            .map_err(|e| format!("forward on port {port}: {e}"))?;
+        fronts.insert(name.into(), f);
+        Ok(())
+    }
+
+    /// Set the front of `name`, if it has one, unless a lane serves the
+    /// main ports (the front is the lane's then, `tcp_forward`).
+    pub(super) fn set_front(&self, name: &str, state: crate::tcpfwd::FrontState) {
+        if self.fronts_to_lane.lock().unwrap().contains(name) {
+            return;
+        }
+        if let Some(f) = self.fronts.lock().unwrap().get(name) {
+            f.set(state);
+        }
+    }
+
     fn start_locked(
         self: &Arc<Self>,
         name: &str,
@@ -393,14 +421,24 @@ impl Supervisor {
         }
 
         // 2. The port: behind the proxy an internal one, else the fixed one, free.
+        let hold = svc
+            .health
+            .as_ref()
+            .map_or(Duration::from_secs(60), |h| h.timeout);
+        let fronted = svc.fronted();
         let proxy = if svc.proxied() {
             let p = self.ensure_proxy(name, svc)?;
-            let hold = svc
-                .health
-                .as_ref()
-                .map_or(Duration::from_secs(60), |h| h.timeout);
             p.set_waiting(Waiting::Hold(hold));
             Some(p)
+        } else if fronted {
+            // A dev server's fixed port is devstack's (ADR-0043): new
+            // connections wait while it starts.
+            if let Some(e) = self.main_ports_elsewhere(name, svc) {
+                return Err(e);
+            }
+            self.ensure_front(name, svc)?;
+            self.set_front(name, crate::tcpfwd::FrontState::Hold(hold));
+            None
         } else {
             if let Some(port) = svc.port
                 && port_in_use(port)
@@ -411,6 +449,7 @@ impl Supervisor {
         };
         let port = match &proxy {
             Some(_) => Some(free_port()?),
+            None if fronted => Some(free_port()?),
             None => svc.port,
         };
 
@@ -421,6 +460,9 @@ impl Supervisor {
                     "`{name}` failed to start: {}",
                     reason.lines().next().unwrap_or("")
                 )));
+            }
+            if fronted {
+                self.set_front(name, crate::tcpfwd::FrontState::Refuse);
             }
         };
         let mut inst = match self.launch(name, svc, artifact.as_ref(), port, true, &cancel) {
@@ -452,12 +494,15 @@ impl Supervisor {
         // 4. In service: behind the proxy, switch it on; record it; watch it.
         //    Unless a lane took the main ports meanwhile (`promote --lane`
         //    while this one built): this instance runs with workers.
-        if proxy.is_some()
+        if (proxy.is_some() || fronted)
             && let Some(e) = self.main_ports_elsewhere(name, svc)
         {
             inst.tree.kill();
             self.forget_record(&inst.record);
             return Err(e);
+        }
+        if fronted && let Some(p) = inst.port {
+            self.set_front(name, crate::tcpfwd::FrontState::To(p));
         }
         if let Some(p) = &proxy {
             p.set_upstream(Some(Upstream {
@@ -761,6 +806,7 @@ impl Supervisor {
                                 "`{name}` exited with code {code} (devstack logs {name})"
                             )));
                         }
+                        me.set_front(&name, crate::tcpfwd::FrontState::Refuse);
                         me.set_status(&name, Status::Exited { exit_code: code });
                         // A tool may be closed on purpose; everything else
                         // that runs for good comes back.
@@ -813,6 +859,9 @@ impl Supervisor {
             if let Some(port) = inst.as_ref().and_then(|i| i.port) {
                 p.drain(port, Duration::from_secs(2));
             }
+        }
+        if self.served_by().is_none() && !self.restarting.lock().unwrap().contains(name) {
+            self.set_front(name, crate::tcpfwd::FrontState::Refuse);
         }
         if let Some(mut i) = inst {
             i.tree.stop(Duration::from_secs(20));

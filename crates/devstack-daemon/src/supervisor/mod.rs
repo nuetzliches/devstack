@@ -166,6 +166,15 @@ pub struct Supervisor {
     /// Main lane only: TCP forwards on the ports of services without the HTTP
     /// proxy (dev servers) while a lane serves the main ports.
     forwards: Mutex<BTreeMap<String, crate::tcpfwd::Forward>>,
+    /// A dev server's fixed port, held and forwarded to its instance
+    /// (ADR-0043): bound at its first start, kept for the daemon's life.
+    fronts: Mutex<BTreeMap<String, crate::tcpfwd::Front>>,
+    /// Main lane only: fronted dev servers whose fixed port forwards to a
+    /// lane now (`promote --lane`).
+    fronts_to_lane: Mutex<BTreeSet<String>>,
+    /// Fronted dev servers being restarted: their front holds new
+    /// connections across the stop instead of refusing them (ADR-0043).
+    restarting: Mutex<BTreeSet<String>>,
     /// Main lane only: the builds the lanes need kept (`Lanes::pins`).
     lane_pins: Mutex<Option<LanePins>>,
     /// Set when a lane is removed: its sampler threads end.
@@ -437,6 +446,9 @@ impl Supervisor {
             hot: Mutex::new(BTreeSet::new()),
             main_owner,
             forwards: Mutex::new(BTreeMap::new()),
+            fronts: Mutex::new(BTreeMap::new()),
+            fronts_to_lane: Mutex::new(BTreeSet::new()),
+            restarting: Mutex::new(BTreeSet::new()),
             lane_pins: Mutex::new(None),
             closed: std::sync::atomic::AtomicBool::new(false),
             fresh_done: std::sync::atomic::AtomicBool::new(false),
@@ -542,7 +554,13 @@ impl Supervisor {
             .values()
             .map(|s| {
                 let mut v = s.view.clone();
-                v.proxy = proxies.get(&v.name).map(Proxy::view);
+                v.proxy = proxies.get(&v.name).map(Proxy::view).or_else(|| {
+                    self.fronts
+                        .lock()
+                        .unwrap()
+                        .get(&v.name)
+                        .map(crate::tcpfwd::Front::view)
+                });
                 v
             })
             .collect();

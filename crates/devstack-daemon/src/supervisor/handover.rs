@@ -44,6 +44,9 @@ impl Supervisor {
         for (_, f) in std::mem::take(&mut *self.forwards.lock().unwrap()) {
             f.close();
         }
+        for (_, f) in std::mem::take(&mut *self.fronts.lock().unwrap()) {
+            f.close();
+        }
     }
 
     pub(crate) fn closed(&self) -> bool {
@@ -99,6 +102,28 @@ impl Supervisor {
     /// returns, so the port can be bound again at once.
     pub fn tcp_forward(&self, name: &str, target: Option<u16>) -> Result<(), String> {
         let svc = self.service(name)?.clone();
+        // A fronted dev server's port is devstack's already (ADR-0043): its
+        // front points at the lane, or refuses until the main tree's own
+        // instance is back.
+        if let Some(f) = self.fronts.lock().unwrap().get(name) {
+            let mut to_lane = self.fronts_to_lane.lock().unwrap();
+            match target {
+                Some(t) => {
+                    f.set(crate::tcpfwd::FrontState::To(t));
+                    to_lane.insert(name.to_string());
+                }
+                None => {
+                    f.set(crate::tcpfwd::FrontState::Refuse);
+                    to_lane.remove(name);
+                }
+            }
+            return Ok(());
+        }
+        if svc.fronted() && target.is_some() {
+            // Never started here, so never bound: bind it now, for the lane.
+            self.ensure_front(name, &svc)?;
+            return self.tcp_forward(name, target);
+        }
         let mut fw = self.forwards.lock().unwrap();
         if let Some(old) = fw.remove(name) {
             old.close();
@@ -113,7 +138,9 @@ impl Supervisor {
 
     /// Main lane: the services whose fixed port forwards to a lane now.
     pub fn forwarded_services(&self) -> Vec<String> {
-        self.forwards.lock().unwrap().keys().cloned().collect()
+        let mut v: Vec<String> = self.forwards.lock().unwrap().keys().cloned().collect();
+        v.extend(self.fronts_to_lane.lock().unwrap().iter().cloned());
+        v
     }
 
     /// Running services that have worker switches (ADR-0008).
@@ -134,7 +161,10 @@ impl Supervisor {
     /// the main ports, or while they move to one (ADR-0008: the workers
     /// would run in both trees): why not.
     pub(super) fn main_ports_elsewhere(&self, name: &str, svc: &Service) -> Option<String> {
-        if !svc.proxied() && !self.forwards.lock().unwrap().contains_key(name) {
+        if !svc.proxied()
+            && !self.forwards.lock().unwrap().contains_key(name)
+            && !self.fronts_to_lane.lock().unwrap().contains(name)
+        {
             return None;
         }
         if let Some(lane) = self.served_by() {

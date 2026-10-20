@@ -505,11 +505,18 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
             c.err(format!("{p}.health"), "a tool has no health check");
         }
         if svc.proxy == Some(true)
-            && (!matches!(svc.kind, Kind::Service | Kind::Static) || svc.port.is_none())
+            && (!matches!(svc.kind, Kind::Service | Kind::Static | Kind::Devserver)
+                || svc.port.is_none())
         {
             c.err(
                 format!("{p}.proxy"),
-                "only a long-running service with a `port` can sit behind the proxy",
+                "only a long-running service or a dev server with a `port` can sit behind the proxy",
+            );
+        }
+        if svc.proxy == Some(true) && svc.kind == Kind::Devserver && !svc.run.contains("{port}") {
+            c.err(
+                format!("{p}.proxy"),
+                "a dev server behind devstack's forward runs on a port of its own: its `run` needs `{port}` (ADR-0043)",
             );
         }
         if svc.health.is_some() && svc.port.is_none() {

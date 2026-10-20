@@ -26,7 +26,25 @@ impl Supervisor {
     /// over without dropping a request; otherwise a restart in place, from
     /// the artifact just built.
     pub fn restart(self: &Arc<Self>, name: &str) -> Result<(), String> {
+        // A fronted dev server keeps its address across the stop: new
+        // connections wait for the new instance (ADR-0043).
+        let svc = self.service(name)?.clone();
+        let fronted = svc.fronted();
+        if fronted {
+            let hold = svc
+                .health
+                .as_ref()
+                .map_or(std::time::Duration::from_secs(60), |h| h.timeout);
+            self.restarting.lock().unwrap().insert(name.to_string());
+            self.set_front(name, crate::tcpfwd::FrontState::Hold(hold));
+        }
         let result = self.restart_inner(name);
+        if fronted {
+            self.restarting.lock().unwrap().remove(name);
+            if result.is_err() && !self.service_running(name) {
+                self.set_front(name, crate::tcpfwd::FrontState::Refuse);
+            }
+        }
         if let Some(s) = self.slots.lock().unwrap().get_mut(name) {
             s.in_flight = None;
         }
