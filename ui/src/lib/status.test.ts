@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Candidate, ContainerView, ServiceView, Status } from '@/api/types';
-import { candidateLook, candidateSummary, containerBucket, containerLook, containerRefuses,kindIcon, kindLabel, parseComposeMember, statusBucket, statusLook } from './status';
+import { candidateLook, candidateSummary, containerBucket, containerLook, containerRefuses,kindIcon, kindLabel, parseComposeMember, rebuildLook, rebuildSummary, statusBucket, statusLook } from './status';
 
 const cand = (state: string): Candidate => ({ state, build_id: null, since: 0, reason: null });
 const svc = (kind: string): ServiceView => ({ kind }) as unknown as ServiceView;
@@ -73,5 +73,22 @@ describe('containers', () => {
     expect(parseComposeMember('compose.infra.db')).toEqual(['infra', 'db']);
     expect(parseComposeMember('compose.infra.db.replica')).toEqual(['infra', 'db.replica']);
     expect(parseComposeMember('api')).toBeNull();
+  });
+});
+
+describe('rebuild (ADR-0042)', () => {
+  const r = (state: string, ms?: number) => ({ state, since: 0, ms, tool: 'angular' });
+  it('says how a dev server rebuilds', () => {
+    expect(rebuildSummary(r('rebuilding'))).toBe('rebuilding');
+    expect(rebuildSummary(r('ok', 11934))).toBe('rebuilt in 11.9 s');
+    expect(rebuildSummary(r('ok', 412))).toBe('rebuilt in 412 ms');
+    expect(rebuildSummary(r('ok'))).toBe('rebuilt');
+    expect(rebuildSummary(r('failed', 523))).toBe('rebuild failed in 523 ms');
+  });
+  it('looks like a build', () => {
+    expect(rebuildLook(r('rebuilding'))).toMatchObject({ tone: 'accent', busy: true });
+    expect(rebuildLook(r('ok'))).toMatchObject({ tone: 'ok', busy: false });
+    expect(rebuildLook(r('failed'))).toMatchObject({ tone: 'danger', label: 'Rebuild failed' });
+    expect(rebuildLook(r('later'))).toMatchObject({ tone: 'neutral' });
   });
 });

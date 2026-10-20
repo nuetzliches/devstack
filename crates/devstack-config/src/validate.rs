@@ -531,6 +531,47 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         }
         c.globs(&format!("{p}.watch"), &svc.watch);
         c.globs(&format!("{p}.restart_on"), &svc.restart_on);
+        if let Some(r) = &svc.rebuild {
+            let rp = format!("{p}.rebuild");
+            if svc.kind != Kind::Devserver {
+                c.err(
+                    &rp,
+                    "only a dev server (`kind = \"devserver\"`) rebuilds by itself",
+                );
+            }
+            match r {
+                crate::model::Rebuild::Named(n) => {
+                    if n != "auto"
+                        && n != "none"
+                        && !crate::model::REBUILD_TOOLS.contains(&n.as_str())
+                    {
+                        c.err(
+                            &rp,
+                            format!(
+                                "`{n}`: expected `auto`, `none` or one of {}",
+                                crate::model::REBUILD_TOOLS.join(", ")
+                            ),
+                        );
+                    }
+                }
+                crate::model::Rebuild::Lines(l) => {
+                    for (k, re) in [
+                        ("start", l.start.as_deref()),
+                        ("ok", Some(l.ok.as_str())),
+                        ("failed", Some(l.failed.as_str())),
+                    ] {
+                        if let Some(re) = re
+                            && let Err(e) = regex::Regex::new(re)
+                        {
+                            c.err(
+                                format!("{rp}.{k}"),
+                                format!("not a regular expression: {e}"),
+                            );
+                        }
+                    }
+                }
+            }
+        }
         if let Some(pr) = &svc.promote {
             c.globs(&format!("{p}.promote.hold_if_changed"), &pr.hold_if_changed);
         }

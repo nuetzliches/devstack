@@ -180,6 +180,7 @@ type ServiceView = {
   instance_port: number | null;          // internal port behind the proxy
   proxy: ProxyView | null;
   candidate: Candidate | null;           // a newer build on its way, or why it did not arrive
+  rebuild?: Rebuild;                     // a dev server's last rebuild, from its output (ADR-0042): {state: rebuilding|ok|failed, since, ms?, tool, errors?}; an ok one for a minute, a failed one until the next
   hot_reload: boolean;                   // the toolchain's watcher runs it now
   hot_reload_available: boolean;         // the stack file has `hot_reload` for it
 };
@@ -227,6 +228,7 @@ type Event = { seq: number; at: number } & (
   | { type: "snapshot"; stack: StackView }
   | { type: "service"; service: string; status: Status; build_id: string | null }
   | { type: "candidate"; service: string; candidate: Candidate | null }
+  | { type: "devserver_rebuild"; service: string; rebuild: Rebuild | null } // started, over, or gone from the view (ADR-0042)
   | { type: "infra"; group: string; message: string }        // a container changed: fetch /v1/stack once
   | { type: "command"; command: string; run: number; status: "running" | "succeeded" | "failed" }
   | { type: "config"; changed: boolean }   // the stack file changed since start (true) or back (false)

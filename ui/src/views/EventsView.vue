@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { clock, shortBuild } from '@/lib/format';
-import { candidateLook, candidateSummary, statusLook, type Tone } from '@/lib/status';
+import { candidateLook, candidateSummary, rebuildLook, rebuildSummary, statusLook, type Tone } from '@/lib/status';
 import { useStack, type TimelineEvent } from '@/stores/stack';
 import Icon from '@/components/icons/Icon.vue';
 import type { IconName } from '@/components/icons/icons';
@@ -11,18 +11,20 @@ const stack = useStack();
 const types: { v: Type; label: string }[] = [
   { v: 'service', label: 'Service' },
   { v: 'candidate', label: 'Candidate' },
+  { v: 'devserver_rebuild', label: 'Rebuild' },
   { v: 'infra', label: 'Infra' },
   { v: 'command', label: 'Command' },
   { v: 'config', label: 'Stack file' },
   { v: 'snapshot', label: 'Connect' },
 ];
-const enabled = ref<Record<Type, boolean>>({ service: true, candidate: true, infra: true, command: true, config: true, snapshot: true });
+const enabled = ref<Record<Type, boolean>>({ service: true, candidate: true, devserver_rebuild: true, infra: true, command: true, config: true, snapshot: true });
 const subject = ref('');
 
 function subjectOf(e: TimelineEvent): string {
   switch (e.type) {
     case 'service':
     case 'candidate':
+    case 'devserver_rebuild':
       return e.service;
     case 'infra':
       return e.group;
@@ -64,6 +66,11 @@ function describe(e: TimelineEvent): Desc {
         text: `${candidateSummary(e.candidate)}${e.candidate.build_id ? ` · ${shortBuild(e.candidate.build_id)}` : ''}`,
         detail: e.candidate.reason,
       };
+    }
+    case 'devserver_rebuild': {
+      if (!e.rebuild) return { icon: 'checkCircle', tone: 'neutral', title: e.service, text: 'Rebuild shown no longer' };
+      const l = rebuildLook(e.rebuild);
+      return { icon: l.icon, tone: l.tone, title: e.service, text: `${rebuildSummary(e.rebuild)} · ${e.rebuild.tool}`, detail: e.rebuild.errors?.join('\n') ?? null };
     }
     case 'infra':
       return { icon: 'box', tone: 'info', title: e.group, text: e.message };

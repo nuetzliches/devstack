@@ -11,6 +11,17 @@ and listed with their assets on the
 
 ### Added
 
+- **A dev server's rebuilds show like builds**
+  ([ADR-0042](docs/adr/0042-a-dev-servers-rebuilds-show-like-builds.md)).
+  devstack reads a dev server's output (and a service's in hot-reload mode)
+  for its rebuilds: the service row and page show "rebuilding", "rebuilt in
+  11.9 s" or "rebuild failed" with the dev server's error lines, as a built
+  service shows its candidate; a failed rebuild is no longer hidden behind
+  "healthy". The tool is recognised from its lines (Angular CLI, Vite,
+  webpack's dev server, Next.js, `dotnet watch`, `tsc --watch`); `rebuild`
+  in the stack file names one, turns it off or gives a tool's own lines.
+  Each finished rebuild is a `devserver_rebuild` line with `ms` and
+  `result`, in `daemon.log` and the pool's telemetry.
 - **A node's own lines reach the pool's telemetry** (ADR-0037 point 3): a
   lease admitted or refused (with the reason), a lane started on it (with
   its time) or not started (with the phase and the reason), stopped, its

@@ -385,6 +385,16 @@ export const useStack = defineStore('stack', () => {
         save();
         break;
       }
+      case 'devserver_rebuild': {
+        const s = svc(ev.service);
+        if (s) {
+          const before = s.rebuild;
+          s.rebuild = ev.rebuild;
+          if (ev.rebuild?.state === 'failed' && before?.state !== 'failed') ui.toast('error', `${ev.service}: rebuild failed`, ev.rebuild.errors?.[0] ?? 'See the service for the output.');
+        } else scheduleRefetch();
+        save();
+        break;
+      }
       case 'infra':
         scheduleRefetch();
         break;

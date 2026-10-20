@@ -580,3 +580,55 @@ members = ["compose.app.web", "api", "compose.app.worker"]
     );
     assert!(s.group_containers("nope").is_empty());
 }
+
+#[test]
+fn a_dev_server_says_how_it_rebuilds() {
+    use devstack_config::model::Rebuild;
+    let dev = |rebuild: &str| {
+        format!(
+            "{MINIMAL}[services.web]\nkind = \"devserver\"\nrun = \"npm start\"\nport = 4200\n{rebuild}\n"
+        )
+    };
+    let stack = from_str(&dev(""), Path::new("t")).unwrap();
+    assert_eq!(stack.services["web"].rebuild, None, "auto by default");
+    for named in [
+        "auto",
+        "none",
+        "angular",
+        "vite",
+        "webpack",
+        "next",
+        "dotnet-watch",
+        "tsc",
+    ] {
+        from_str(&dev(&format!("rebuild = \"{named}\"")), Path::new("t"))
+            .unwrap_or_else(|e| panic!("{named}: {e}"));
+    }
+    // Its own lines, as TOML literal strings: a backslash stays one.
+    let own = from_str(
+        &dev(r"rebuild = { start = '^rebuild', ok = '^done in (?P<ms>\d+)', failed = '^broken' }"),
+        Path::new("t"),
+    )
+    .unwrap();
+    match &own.services["web"].rebuild {
+        Some(Rebuild::Lines(l)) => assert_eq!(l.ok, r"^done in (?P<ms>\d+)"),
+        other => panic!("{other:?}"),
+    }
+    let issues = invalid(&dev("rebuild = \"gulp\""));
+    assert!(
+        issues.iter().any(|i| i.contains("`gulp`: expected")),
+        "{issues:?}"
+    );
+    let issues = invalid(&dev("rebuild = { ok = '(unclosed', failed = 'x' }"));
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.contains("rebuild.ok") && i.contains("not a regular expression")),
+        "{issues:?}"
+    );
+    let issues = invalid(&MINIMAL.replace("port = 5000", "port = 5000\nrebuild = \"auto\""));
+    assert!(
+        issues.iter().any(|i| i.contains("only a dev server")),
+        "{issues:?}"
+    );
+}

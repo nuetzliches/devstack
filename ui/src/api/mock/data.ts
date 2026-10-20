@@ -157,7 +157,24 @@ export function crmSeed(now: number): MockStackSeed {
       repo,
       now,
     ),
-    service({ name: 'portal', kind: 'devserver', groups: ['edge'], port: 3000 }, repo, now),
+    service(
+      {
+        name: 'portal',
+        kind: 'devserver',
+        groups: ['edge'],
+        port: 3000,
+        // A dev server whose last rebuild failed (ADR-0042).
+        rebuild: {
+          state: 'failed',
+          since: now - 2 * MIN,
+          ms: 523,
+          tool: 'angular',
+          errors: ["✘ [ERROR] TS2322: Type 'string' is not assignable to type 'number'. [plugin angular-compiler]", '    src/app/app.component.ts:12:2:'],
+        },
+      },
+      repo,
+      now,
+    ),
   ];
   const infra: InfraView[] = [
     {
