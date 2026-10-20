@@ -728,6 +728,8 @@ impl Lanes {
             let mut added = false;
             let mut moved = false;
             for w in &trees {
+                // Its path stays on this machine (ADR-0037 point 4).
+                crate::diag::add_root(&w.path, "<worktree>");
                 if let Some(k) = known
                     .values_mut()
                     .find(|k| same_tree(&k.entry.path, &w.path))
