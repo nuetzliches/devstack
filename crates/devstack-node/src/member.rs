@@ -415,6 +415,13 @@ impl Local {
         Ok(())
     }
 
+    /// `DELETE` a coordinator path as this member; the answer is not read.
+    pub fn delete(&self, path: &str) -> Result<()> {
+        let (m, a) = self.client()?;
+        body(a.delete(&format!("{}{path}", m.coordinator)).call()?)?;
+        Ok(())
+    }
+
     /// The pool's CA, this member's certificate and key, PEM (for a client
     /// that talks to a node).
     pub fn pems(&self) -> Result<(String, String, String)> {
@@ -561,6 +568,12 @@ impl Local {
     pub fn admin_update(&self, id: &str, req: &crate::coordinator::UpdateRequest) -> Result<()> {
         self.post::<serde_json::Value>(&format!("/v1/admin/nodes/{id}/update"), req)?;
         Ok(())
+    }
+
+    /// Withdraw the update ordered for node `id` while it waits for its
+    /// lanes (admins only, ADR-0039).
+    pub fn admin_update_cancel(&self, id: &str) -> Result<()> {
+        self.delete(&format!("/v1/admin/nodes/{id}/update"))
     }
 
     /// Have node `id` remove the stopped lanes it keeps (admins only,
