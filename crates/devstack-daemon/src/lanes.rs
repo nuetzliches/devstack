@@ -2364,7 +2364,10 @@ mod tests {
     #[test]
     fn a_steps_text_names_its_phase() {
         assert_eq!(phase_of("sync: comparing 7177 files"), "sync");
-        assert_eq!(phase_of("sync: 3 of 40 changed files sent (12 KiB)"), "sync");
+        assert_eq!(
+            phase_of("sync: 3 of 40 changed files sent (12 KiB)"),
+            "sync"
+        );
         assert_eq!(
             phase_of("on n1: infrastructure: app: starting containers"),
             "infrastructure: app: starting containers"
