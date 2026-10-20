@@ -230,8 +230,12 @@ that node, for the member, repository and lane, so the next start of the
 lane there syncs only what changed, builds warm and finds its databases.
 The node keeps a stopped lane a week if it is dedicated, a day otherwise
 (`keep_lanes_hours` in its policy), and at most 20 GiB of one member's kept
-lanes (`keep_lanes_gib`; the least recently used goes first); it removes
-them at once when the pool no longer lists the member. A stack with `[lanes]
+lanes, mirrors, builds and volumes together (`keep_lanes_gib`; the least
+recently used goes first); it removes them at once when the pool no longer
+lists the member. The images Compose built for a lane go with its slot, and
+the lane images built from `[lanes] dockerfile` with the member, or when the
+node has less than 10 GiB free. A node with less than 5 GiB free where it
+keeps lanes takes no lane. A stack with `[lanes]
 keep_data = false` keeps nothing. A move to another node is a cold start
 there: data never moves between nodes. It runs without background workers unless it holds the
 main ports. When its lease ends (an admin ends it, the node goes away for
@@ -332,6 +336,15 @@ devstack node agent --pool customer --listen ...
 The dashboard shows a tab per pool; lanes start and move to the nodes of all
 of them. The first pool is `default`.
 
+A machine that is a node of two pools runs an agent for each, usually on the
+same Docker engine. Each agent labels its lane containers and lane images
+`devstack.agent=<tag>` (8 hex digits of its own secret) and names its network
+rules `ds-<tag>-<lease>-f`/`-i`; it only ever removes what carries its own
+tag. Update the agents on one engine together: what an agent of an earlier
+release left (containers labelled `devstack.lease` only, chains
+`dsl-<lease>-f`/`-i`) the updated agent whose lane it was removes, an
+earlier-release agent beside it would still remove the other's.
+
 ## Capacity and telemetry
 
 The pool area shows what the pool has, offers and its lanes use, GPUs
@@ -417,7 +430,11 @@ to its next report (the coordinator never calls a node). The node takes no
 new lane, waits until the lanes it runs have ended, installs the latest
 release (from GitHub, checked against its `SHA256SUMS`, as `devstack
 update` does) and starts its agent again on it; the version column says how
-far it got, or why it failed. A node refuses when its own `policy.json` says
+far it got, or why it failed. It waits at most eight hours for its lanes,
+then gives up and takes lanes again; while it waits, **Cancel update**
+withdraws the order (so does a coordinator restart: orders are kept in
+memory). When the new release does not start, the agent goes on with the
+one it runs and says so. A node refuses when its own `policy.json` says
 `"remote_update": false`, when its agent runs in a container (update its
 image), and an older release than it runs unless the order says
 `downgrade`. Run a server's agent under systemd so it comes back whatever
@@ -447,7 +464,7 @@ What the node agent sets in a lane container, for the `devstack` daemon in it
 | `DEVSTACK_LISTEN` | `0.0.0.0:7600`: the daemon's API on the lane's network, for the agent (token and `Host` checked) |
 | `DEVSTACK_PORT_OFFSET` | the lane's port offset on the requester; the lane runs on those ports in the container too |
 | `DEVSTACK_DISPLAY_ROOT` | where the requester has the lane's files, so paths in compiler messages and logs show as the developer's |
-| `DEVSTACK_EXTERNAL_INFRA` | the file (`/src/.devstack/external-infra.json`) in which the agent describes the lane's containers, which it started itself; it writes their states, health and load (`cpu`, `memory`, `at`) into it every 5 s, and answers the lane's container routes (`/v1/infra/{group}/{service}/logs`, `logs/stream`, `start`/`stop`/`restart`) itself, for the lane's owner, since the lane has no Docker; the service routes that name containers (`/v1/services/app.web/restart`, a group's restart) it acts on before it passes them to the daemon ([dashboard-api.md](dashboard-api.md#actions)) |
+| `DEVSTACK_EXTERNAL_INFRA` | the file (`/src/.devstack/external-infra.json`) in which the agent describes the lane's containers, which it started itself; it writes their states, health and load (`cpu`, `memory`, `at`) into it every 5 s, and answers the lane's container routes (`/v1/infra/{group}/{service}/logs`, `logs/stream`, `start`/`stop`/`restart`) itself, for the lane's owner, since the lane has no Docker (at most 16 `logs/stream` at once per member, `429` beyond); the service routes that name containers (`/v1/services/app.web/restart`, a group's restart) it acts on before it passes them to the daemon ([dashboard-api.md](dashboard-api.md#actions)) |
 
 On the node, `DEVSTACK_NODE_CONTAINER` (the agent's container name, when it
 runs in one) and `DEVSTACK_NODE_COMPOSE_IMAGE` (the image it reads Compose

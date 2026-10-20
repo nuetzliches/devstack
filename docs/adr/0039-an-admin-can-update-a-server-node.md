@@ -1,6 +1,6 @@
 # ADR-0039: An admin can have a server node update its devstack, from the dashboard
 
-- **Status:** Accepted (2026-10-19)
+- **Status:** Accepted (2026-10-19); amended 2026-10-20 (a drain ends, and can be withdrawn)
 - **Date:** 2026-10-19
 - **Deciders:** project owner
 - **Related:** [ADR-0031](0031-a-coordinator-places-lanes.md) (point 8: versions in a pool), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md) (extended here), [ADR-0033](0033-a-node-decides-what-runs-on-it.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md) (point 4: dedicated nodes), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md)
@@ -126,3 +126,23 @@ Where it will live:
 is given: its report's `no_update` names why (its own policy, an agent in a
 container, no way to install), and the dashboard disables **Update** with
 that reason. A refusal is logged (`node_update_refused`).
+
+## Addendum 2026-10-20: a drain ends, and can be withdrawn
+
+Point 3's drain had no end: a node whose lanes never stopped took no lane
+again, and the admin could not take the order back. As amended:
+
+- A node waits at most eight hours for its lanes (`DRAIN_FOR`). Then the
+  update fails (`failed`, with why) and the node takes lanes again; the
+  admin orders it again, or without draining.
+- An admin withdraws an order the node has not begun to install
+  (`DELETE /v1/admin/nodes/{id}/update`, the hub's
+  `DELETE /hub/pool/nodes/{id}/update`, **Cancel update** in the pool area,
+  logged as `update cancelled`). The coordinator no longer sends it; a
+  draining node whose report is answered without its order stops waiting,
+  reports `cancelled` and takes lanes again. A coordinator that restarted
+  forgot its orders (they are kept in memory), with the same effect.
+  `409` once the node installs.
+- Point 5, as built: when starting the new binary fails, the agent goes on
+  with the release it runs and reports `failed` (it no longer exits). There
+  is still no rollback of the installed binary.

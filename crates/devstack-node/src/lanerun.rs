@@ -132,6 +132,13 @@ pub(crate) fn secret_name(secret: &str, parts: &[&str]) -> String {
     h.finalize().to_hex()[..24].to_string()
 }
 
+/// What tells this agent's lane containers, images and network rules from
+/// another agent's on the same Docker engine (one agent per pool,
+/// ADR-0034): 8 hex digits of its secret, the `devstack.agent` label.
+pub(crate) fn owner_tag(secret: &str) -> String {
+    secret_name(secret, &["agent"])[..8].to_string()
+}
+
 /// Groups in the order they start (`after`).
 fn order(stack: &devstack_config::Stack) -> Vec<String> {
     fn visit(
@@ -267,7 +274,13 @@ impl LaneRun {
             std::fs::write(&file, &text).map_err(|e| RunError::Io(file.clone(), e))?;
             let file = file.to_string_lossy().into_owned();
             let base = base.to_string_lossy().into_owned();
-            let mut a = vec!["build", "-q", "-t", &tag, "-f", &file];
+            // This agent's and the member's: removed with the member, or
+            // under pressure (`node::remove_lane_images`).
+            let owner = format!("devstack.agent={}", owner_tag(&self.secret));
+            let member = format!("devstack.member={}", self.member);
+            let mut a = vec![
+                "build", "-q", "-t", &tag, "--label", &owner, "--label", &member, "-f", &file,
+            ];
             if self.network != Network::Lan {
                 a.extend(["--network", "none"]);
             }
@@ -381,8 +394,14 @@ impl LaneRun {
             networks.push(own);
         }
         if self.network != Network::Lan {
-            crate::egress::apply(&self.state(), &self.id, &bridges(&networks), self.network)
-                .map_err(RunError::Docker)?;
+            crate::egress::apply(
+                &self.state(),
+                &owner_tag(&self.secret),
+                &self.id,
+                &bridges(&networks),
+                self.network,
+            )
+            .map_err(RunError::Docker)?;
         }
 
         let mut infra = BTreeMap::new();
@@ -488,6 +507,7 @@ impl LaneRun {
             self.display_root.as_deref().unwrap_or("")
         );
         let label = format!("devstack.lease={}", self.id);
+        let owner = format!("devstack.agent={}", owner_tag(&self.secret));
         // The lane runs as the agent's own user: what it writes into the
         // mirror (its state, its token, build output) stays the agent's to
         // read and to clean up. Its home (toolchain caches) is the lane's too.
@@ -505,6 +525,8 @@ impl LaneRun {
             &name,
             "--label",
             &label,
+            "--label",
+            &owner,
             // No privilege it could gain (ADR-0027 point 5).
             "--cap-drop",
             "ALL",
@@ -709,7 +731,7 @@ impl LaneRun {
             let _ = docker(&["network", "disconnect", "-f", &own, me]);
         }
         let _ = docker(&["network", "rm", &own]);
-        crate::egress::remove(&self.state(), &self.id);
+        crate::egress::remove(&self.state(), &owner_tag(&self.secret), &self.id);
         let Ok(stack) = self.stack() else { return };
         let dc = Docker::default();
         for name in order(&stack).into_iter().rev() {

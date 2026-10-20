@@ -449,7 +449,10 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/pool/nodes/{id}/pause", post(pool::pause))
         .route("/hub/pool/nodes/{id}/resume", post(pool::resume))
         .route("/hub/pool/leases/{id}/end", post(pool::end))
-        .route("/hub/pool/nodes/{id}/update", post(pool::update))
+        .route(
+            "/hub/pool/nodes/{id}/update",
+            post(pool::update).delete(pool::update_cancel),
+        )
         .route("/hub/pool/nodes/{id}/prune", post(pool::prune))
         .route("/hub/pool/members/{id}/tags", post(pool::tags))
         .route("/hub/pool/members/{id}/node", post(pool::node))

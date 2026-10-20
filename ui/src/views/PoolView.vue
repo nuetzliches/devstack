@@ -501,7 +501,7 @@ function policyText(id: string) {
                   {{ n.report.devstack?.version ?? 'older' }}
                 </span>
                 <span
-                  v-if="n.report?.update && n.report.update.state !== 'done'"
+                  v-if="n.report?.update && !['done', 'cancelled'].includes(n.report.update.state)"
                   class="pill sm"
                   :class="['failed', 'refused'].includes(n.report.update.state) ? 'danger' : 'info'"
                   :title="n.report.update.error ?? `update to ${n.report.update.target ?? 'the latest release'}`"
@@ -520,7 +520,7 @@ function policyText(id: string) {
                 <span
                   v-if="n.report?.kept?.lanes"
                   class="faint small"
-                  :title="`${n.report.kept.lanes} stopped lane(s) kept there for their next start: mirrors, builds, caches (volumes not counted)`"
+                  :title="`${n.report.kept.lanes} stopped lane(s) kept there for their next start: mirrors, builds, caches and volumes`"
                   data-testid="pool-node-kept"
                 >· {{ n.report.kept.lanes }} kept, {{ bytes(n.report.kept.bytes) }}</span>
               </td>
@@ -557,6 +557,16 @@ function policyText(id: string) {
                   @click="pool.updateNode(n.id, n.name)"
                 >
                   <Icon name="download" :size="13" /> Update
+                </button>
+                <button
+                  v-if="n.report?.update?.state === 'draining'"
+                  type="button"
+                  class="btn btn-xs"
+                  title="Withdraw the update: it stops waiting for its lanes and takes new ones again"
+                  data-testid="pool-update-cancel"
+                  @click="pool.cancelUpdate(n.id, n.name)"
+                >
+                  Cancel update
                 </button>
                 <button
                   v-if="n.online && n.report?.kept?.lanes"

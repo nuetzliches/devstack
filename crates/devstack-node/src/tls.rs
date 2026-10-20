@@ -91,6 +91,12 @@ pub struct Peer {
     pub addr: std::net::SocketAddr,
 }
 
+/// How many connections a pool server holds at once: lanes' tunnels and
+/// streams are long-lived, so the limit is generous.
+const MAX_CONNECTIONS: usize = 1024;
+/// How long a connection may take to send a request's head.
+const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Serve `app` over TLS on `listener` until `stop` resolves; every request
 /// carries its connection's [`Peer`] as an extension.
 pub async fn serve(
@@ -100,8 +106,17 @@ pub async fn serve(
     stop: impl std::future::Future<Output = ()>,
 ) {
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+    // Connections at once: past this, the next waits until one closes.
+    let open = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     tokio::pin!(stop);
     loop {
+        let permit = tokio::select! {
+            p = open.clone().acquire_owned() => match p {
+                Ok(p) => p,
+                Err(_) => return,
+            },
+            () = &mut stop => return,
+        };
         let (tcp, addr) = tokio::select! {
             a = listener.accept() => match a {
                 Ok(a) => a,
@@ -118,6 +133,7 @@ pub async fn serve(
         let acceptor = acceptor.clone();
         let app = app.clone();
         tokio::spawn(async move {
+            let _permit = permit;
             let Ok(Ok(tls)) =
                 tokio::time::timeout(Duration::from_secs(10), acceptor.accept(tcp)).await
             else {
@@ -135,7 +151,11 @@ pub async fn serve(
                 addr,
             };
             let svc = hyper_util::service::TowerToHyperService::new(app.layer(Extension(peer)));
+            // A request's head arrives within this, or the connection goes:
+            // a caller that sends nothing holds nothing for long.
             let _ = hyper::server::conn::http1::Builder::new()
+                .timer(hyper_util::rt::TokioTimer::new())
+                .header_read_timeout(HEADER_READ_TIMEOUT)
                 .serve_connection(hyper_util::rt::TokioIo::new(tls), svc)
                 .with_upgrades()
                 .await;
