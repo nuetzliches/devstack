@@ -1186,7 +1186,7 @@ fn containers_need(
             } else {
                 Named::Groups
             };
-            (!named(stack, route, name, action).is_empty()).then_some("0.11.2")
+            (!named(stack, route, name, action).is_empty()).then_some("0.12.0")
         }
         _ => None,
     }
@@ -1458,7 +1458,7 @@ members = ["api"]
             "/v1/services/server/restart",
             "/v1/groups/server/restart",
         ] {
-            assert_eq!(need(&Method::POST, p), Some("0.11.2"), "{p}");
+            assert_eq!(need(&Method::POST, p), Some("0.12.0"), "{p}");
         }
         for (m, p) in [
             (Method::POST, "/v1/services/api/restart"),
