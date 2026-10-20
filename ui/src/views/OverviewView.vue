@@ -207,7 +207,7 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
             </button>
             <RowUsage :series-key="`grp:${card.key}`" :load="groupLoad(card.key)" />
             <span class="grow" />
-            <div v-if="card.key !== '__other' && card.key !== '__pinned' && card.members.some((m) => m.kind === 'service')" class="group-actions" role="group" :aria-label="`Actions for ${card.label}`">
+            <div v-if="!stack.readOnly && card.key !== '__other' && card.key !== '__pinned' && card.members.some((m) => m.kind === 'service')" class="group-actions" role="group" :aria-label="`Actions for ${card.label}`">
               <button
                 v-for="a in groupActions"
                 :key="a.action"
@@ -246,7 +246,7 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
         <h2>No state seen for this stack yet</h2>
         <p v-if="stack.entry && !stack.running">Start it to see its services, infrastructure and commands.</p>
         <p v-else-if="stack.running">Waiting for the first snapshot…</p>
-        <button v-if="stack.entry && !stack.running" type="button" class="btn btn-primary" :disabled="starting" @click="stack.startStack()">
+        <button v-if="stack.entry && !stack.running && !stack.readOnly" type="button" class="btn btn-primary" :disabled="starting" @click="stack.startStack()">
           <span v-if="starting" class="spinner" /><Icon v-else name="play" /> Start stack
         </button>
       </div>

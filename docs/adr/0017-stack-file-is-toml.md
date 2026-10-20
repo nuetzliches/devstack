@@ -1,6 +1,6 @@
 # ADR-0017: The stack file is TOML, without profiles in version 1
 
-- **Status:** Accepted (confirmed 2026-10-15 after the reference stack ran end to end; compatibility: [ADR-0023](0023-stack-file-compatibility.md))
+- **Status:** Accepted (confirmed 2026-10-15 after the reference stack ran end to end; compatibility: [ADR-0023](0023-stack-file-compatibility.md)); amended 2026-10-20 (`[profiles]` of [ADR-0041](0041-a-profile-says-how-a-lane-runs-for-a-purpose.md) are not the environments ruled out here)
 - **Date:** 2026-10-14
 - **Deciders:** project owner
 - **Related:** plan §4, [ADR-0004](0004-infrastructure-is-delegated-to-compose.md), [ADR-0014](0014-native-services-take-their-configuration-from-compose.md), [ADR-0015](0015-devstack-is-optional.md)
@@ -81,6 +81,18 @@ migration path. After that, a change of format ships with a converter.
 eleven services, eight commands) is written in it and runs end to end; nothing
 asked for another format. When a change needs a converter is decided by
 [ADR-0023](0023-stack-file-compatibility.md).
+
+*Amended 2026-10-20.* Version 1 has a `[profiles.<name>]` table since
+[ADR-0041](0041-a-profile-says-how-a-lane-runs-for-a-purpose.md) (0.11.0).
+It is not what "No profiles in version 1" ruled out: an ADR-0041 profile
+says how the one stack runs **for a purpose** (an acceptance run: static
+frontends, workers on, a seed command), chosen when a lane or the main tree
+starts, and it may only adjust services the file already declares. It does
+not describe a second environment (other hosts, other Compose files, other
+secrets). That stays as decided above: a second environment would be an
+additional stack file layered over the first, and no one needs one yet. The
+schema version stays 1: a file without `[profiles]` reads as before, and
+one with them says so with `[stack] requires = "0.11.0"`.
 
 ## Enforced by
 

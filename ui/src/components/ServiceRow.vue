@@ -65,7 +65,7 @@ function open(e: MouseEvent) {
         <Icon name="pin" :size="14" />
       </button>
       <StatusPill class="row-pill" :tone="look.tone" :label="look.label" :busy="look.busy" :title="look.detail ?? `since ${ago(service.since, now)}`" />
-      <div class="actions">
+      <div v-if="!stack.readOnly" class="actions">
         <button
           v-if="isStopped"
           type="button"

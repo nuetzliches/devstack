@@ -66,7 +66,13 @@ pub fn run(check_only: bool, version: Option<&str>) -> Result<()> {
         );
     }
     println!("installing devstack {target} ...");
-    let installed = install(&target, &exe)?;
+    // Where the installers put devstack, or the running copy if it lives
+    // elsewhere.
+    let into = crate::selfcmd::install_dir()
+        .map(|d| d.join(EXE))
+        .filter(|p| p.is_file())
+        .unwrap_or_else(|| exe.clone());
+    let installed = install(&target, &into)?;
 
     // The hub runs the old binary: stop it, start the new one.
     let _ = crate::hubcmd::stop();
@@ -118,7 +124,7 @@ pub fn for_node(
             "{target} is older than the {current} this node runs: an admin orders a downgrade explicitly"
         ));
     }
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = undeleted(std::env::current_exe().map_err(|e| e.to_string())?);
     if crate::integration::is_dev_build(&exe) {
         return Err(format!(
             "this agent is a build from source ({})",
@@ -131,15 +137,27 @@ pub fn for_node(
             exe.display()
         ));
     }
+    // The binary the agent runs, wherever it is: its service unit starts that
+    // path again (`ExecStart`), so replacing another copy (the installers'
+    // `~/.local/bin`) would bring the old version back on the next restart.
     install(&target, &exe)
         .map(Some)
         .map_err(|e| format!("{e:#}"))
 }
 
-/// Download, check and put release `version` in place; returns the path of
-/// the new binary: where the installers put devstack, or `running` if it
-/// lives elsewhere.
-fn install(version: &str, running: &Path) -> Result<PathBuf> {
+/// The path a running binary was started from. Linux names a binary that was
+/// replaced since it started (`devstack update` in a shell, while the agent
+/// runs) `<path> (deleted)`; the new file is at `<path>`.
+fn undeleted(exe: PathBuf) -> PathBuf {
+    match exe.to_str().and_then(|s| s.strip_suffix(" (deleted)")) {
+        Some(p) if cfg!(target_os = "linux") => PathBuf::from(p),
+        _ => exe,
+    }
+}
+
+/// Download, check and put release `version` in place of `target`; returns
+/// `target`, the path of the new binary.
+fn install(version: &str, target: &Path) -> Result<PathBuf> {
     if !cfg!(any(windows, target_os = "linux")) || !cfg!(target_arch = "x86_64") {
         bail!("there is no release build for this platform; build devstack from source");
     }
@@ -155,13 +173,9 @@ fn install(version: &str, running: &Path) -> Result<PathBuf> {
         bail!("checksum mismatch for {ASSET}: expected {expected}, got {actual}");
     }
     let binary = unpack(&archive)?;
-    let target = crate::selfcmd::install_dir()
-        .map(|d| d.join(EXE))
-        .filter(|p| p.is_file())
-        .unwrap_or_else(|| running.to_path_buf());
     println!("  [3/3] installing to {}", target.display());
-    replace(&target, &binary)?;
-    Ok(target)
+    replace(target, &binary)?;
+    Ok(target.to_path_buf())
 }
 
 fn get(url: &str) -> Result<Vec<u8>> {
@@ -359,5 +373,18 @@ mod tests {
         };
         assert!(is_cargo_install(Path::new(home)));
         assert!(!is_cargo_install(Path::new("/home/u/.local/bin/devstack")));
+    }
+
+    #[test]
+    fn a_replaced_running_binary_is_found_at_its_path() {
+        let gone = PathBuf::from("/usr/local/bin/devstack (deleted)");
+        let want = if cfg!(target_os = "linux") {
+            PathBuf::from("/usr/local/bin/devstack")
+        } else {
+            gone.clone()
+        };
+        assert_eq!(undeleted(gone), want);
+        let here = PathBuf::from("/usr/local/bin/devstack");
+        assert_eq!(undeleted(here.clone()), here);
     }
 }

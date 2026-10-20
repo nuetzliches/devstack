@@ -54,7 +54,7 @@ the coordinator from the certificate), `service.name` (`devstack-daemon`,
    older build than the members: `git tag --contains <commit>`).
 
 5. **Write the findings to a local, untracked file** (e.g.
-   `TELEMETRY-<date>.local.md`, listed in `.git/info/exclude`): the data names
+   `TELEMETRY-<date>.local.md`; `.gitignore` ignores `*.local.md`): the data names
    members, repositories and services of downstream stacks and must not be
    committed (AGENTS.md, public-repository hygiene). Per finding: what was
    seen (time, member, version, numbers), the cause in the code if found
