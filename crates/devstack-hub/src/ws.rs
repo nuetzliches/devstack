@@ -66,7 +66,7 @@ pub(crate) async fn ws(
         .strip_prefix("/hub/pool/shared/")
         .and_then(|r| r.split_once("/api/"))
     {
-        // A lane shared with this machine to view (ADR-0040), through its node.
+        // A lane shared with this machine, viewed (ADR-0040) through its node.
         let (rest, query) = rest
             .split_once('?')
             .map_or((rest, None), |(r, q)| (r, Some(q)));

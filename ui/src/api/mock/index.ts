@@ -99,8 +99,7 @@ function seedRuns(shop: MockStack, crm: MockStack): void {
   crm.seedRun('reindex', 70 * 60_000, 'succeeded', ['Reindexing 18,204 contacts', 'done in 1.9 s']);
 }
 
-/** The scripted timeline of the "shop" stack: a change that goes live, a superseded build, a failed build, a held one. */
-/** A lane shared to view (ADR-0040) reads like the mock's crm stack. */
+/** A lane shared with this machine (ADR-0040) reads like the mock's crm stack. */
 function viewedAs(path: string): string {
   const m = /^\/hub\/pool\/shared\/[^/]+\/api(\/[^?]*)(\?.*)?$/.exec(path);
   if (!m) return path;
@@ -108,6 +107,7 @@ function viewedAs(path: string): string {
   return `/hub/stacks/crm-81c0d2/api${m[1]}${q}`;
 }
 
+/** The scripted timeline of the "shop" stack: a change that goes live, a superseded build, a failed build, a held one. */
 async function shopScript(s: MockStack): Promise<void> {
   for (;;) {
     try {
@@ -264,7 +264,6 @@ export class MockTransport implements Transport {
                   { name: 'api', port: 5000, scheme: 'http', here: 5100 },
                   { name: 'web', port: 4200, scheme: 'https', here: 4300 },
                 ],
-                view: true,
               },
             ],
       );

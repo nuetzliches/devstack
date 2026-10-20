@@ -11,9 +11,10 @@
 //!   this machine, or does not say which (ADR-0031, amended 2026-10-19).
 //!
 //! - `GET /hub/pool/shared/{lease}/api/<path>`: a lane shared with this
-//!   machine to view (ADR-0040), read through its node: the lane daemon's
+//!   machine, viewed (ADR-0040), read through its node: the lane daemon's
 //!   `<path>` (state, events, logs, usage), streams passed through. The node
-//!   checks that this machine may view it, and that `<path>` only reads.
+//!   checks that the lane is shared with this machine, and that `<path>`
+//!   only reads.
 //!
 //! All take `?pool=<name>` (ADR-0034).
 
@@ -79,7 +80,7 @@ fn listed() -> &'static Listed {
     L.get_or_init(Default::default)
 }
 
-/// The lane `lease` shared with this machine to view, and the membership
+/// The lane `lease` shared with this machine, and the membership
 /// to reach its node with; the answer to give otherwise.
 #[allow(clippy::result_large_err)] // the error is the answer itself
 async fn viewable(q: &PoolQuery, lease: &str) -> Result<(Local, SharedLane), Response> {
@@ -114,15 +115,6 @@ async fn viewable(q: &PoolQuery, lease: &str) -> Result<(Local, SharedLane), Res
             format!("no lane `{lease}` is shared with this machine"),
         ));
     };
-    if !lane.view {
-        return Err(error(
-            StatusCode::FORBIDDEN,
-            format!(
-                "lane `{}` is shared with this machine to use, not to view",
-                lane.lane
-            ),
-        ));
-    }
     Ok((local, lane))
 }
 
@@ -392,7 +384,7 @@ mod tests {
             },
             services: Vec::new(),
             owner_devstack: owner,
-            view: false,
+            legacy_view: true,
         }
     }
 

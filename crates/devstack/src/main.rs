@@ -394,18 +394,14 @@ enum LaneAction {
         to: String,
     },
     /// Share a lane on a node with others in its pool (ADR-0035): they see
-    /// it in their dashboard and open its services. Without `--with`: with
-    /// nobody again.
+    /// it in their dashboard, open its services and view its state, logs,
+    /// events and usage, read only (ADR-0040). Logs show what the services
+    /// print: ask before. Without `--with`: with nobody again.
     Share {
         name: String,
         /// A member id or a tag (`team:qa`), or `*` for every member; repeat.
         #[arg(long)]
         with: Vec<String>,
-        /// Who may also view it (ADR-0040): its state, logs, events and
-        /// usage, read only; a member id, a tag or `*`; repeat. Logs show
-        /// what the services print: ask before.
-        #[arg(long)]
-        view: Vec<String>,
     },
 }
 

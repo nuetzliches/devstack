@@ -121,10 +121,10 @@ describe('stack store', () => {
     expect(lane.closed).toBe(true);
   });
 
-  it('a lane shared to view is read through its node, and changes nothing (ADR-0040)', async () => {
+  it('a shared lane is read through its node, and changes nothing (ADR-0040)', async () => {
     fake.on('/hub/session', ok({ version: '0.9.8' }));
     fake.on('/hub/pools', ok([{ name: 'default', joined: true, state: 'approved', coordinator: 'https://c' }]));
-    fake.on('/hub/pool/shared', ok([{ lease: 'ab12', repo: 'crm', lane: 'fix', owner: 'o', owner_name: 'anna', node: { id: 'n', name: 'build', api: 'https://n' }, services: [], view: true }]));
+    fake.on('/hub/pool/shared', ok([{ lease: 'ab12', repo: 'crm', lane: 'fix', owner: 'o', owner_name: 'anna', node: { id: 'n', name: 'build', api: 'https://n' }, services: [] }]));
     const hub = useHub();
     await hub.init();
     fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [] });

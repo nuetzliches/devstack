@@ -20,6 +20,25 @@ and listed with their assets on the
   its `error`, in `daemon.log` and the telemetry alike: a `409` alone
   explained nothing afterwards.
 
+### Changed
+
+- **Breaking (CLI, API, MCP): sharing a lane includes viewing it**
+  ([ADR-0040](docs/adr/0040-a-shared-lane-can-be-watched-like-ones-own.md),
+  amended 2026-10-20). Whoever a lane is shared with opens its services and
+  views it read only (state, logs, events, command runs, usage; never its
+  environment). The separate grant is gone: `devstack lane share --view`,
+  `view` in `POST /v1/lanes/{lane}/share` (ignored now), `view` on the MCP
+  `lane_share` and `viewed_by` in `LaneView`. Viewers a 0.11 owner kept
+  apart (`lane-views.json`) join the lane's sharing once. An owner still
+  sends its list as `view` too, and the coordinator still lists shared lanes
+  with `view: true`, so 0.11 coordinators, nodes and dashboards in the same
+  pool let them view as well.
+- **A shared lane looks like your own stacks in the sidebar.** Under
+  "Shared with you" each one is a row as a stack is (`repo · lane`, its
+  owner faint); a click opens its pages, read only. Its services open from
+  there and from the pool area, where the lane's name links to it too. The
+  share menu says what they see.
+
 ### Fixed
 
 - **A server that cannot update itself says so** (ADR-0039): a node agent

@@ -1,6 +1,6 @@
 # ADR-0040: A shared lane can be shared for viewing, and is then shown as one's own lane is
 
-- **Status:** Accepted (2026-10-19)
+- **Status:** Accepted (2026-10-19), amended 2026-10-20 (sharing a lane includes viewing it: no separate `view` grant; points 1, 4 and 5)
 - **Date:** 2026-10-19
 - **Deciders:** project owner
 - **Related:** [ADR-0035](0035-lanes-can-be-shared-with-the-pool.md) (point 4 extended here), [ADR-0025](0025-a-lane-can-run-on-another-node.md) (point 6: a lane's API through its requester), [ADR-0027](0027-trust-between-nodes.md), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md), [ADR-0033](0033-a-node-decides-what-runs-on-it.md) (tags)
@@ -26,7 +26,8 @@ containers, usage). The node lets only the lane's owner reach it
 
 ## Decision
 
-1. **Sharing gets a level.** A lane is shared with someone to **use** it
+1. *Amended 2026-10-20, see below: there is no level any more.*
+   **Sharing gets a level.** A lane is shared with someone to **use** it
    (what ADR-0035 has: open its shared services) or to **view** it as
    well. `view` includes `use`. The owner sets the level when sharing (in
    the dashboard, `devstack lane share <lane> --with team:qa --view`, the
@@ -49,7 +50,7 @@ containers, usage). The node lets only the lane's owner reach it
    removing a member, holds from the next request, and a stream the caller
    may no longer view is cut. The container routes the node answers itself
    are allowed for viewers only in their reading form (logs, not actions).
-4. **The coordinator keeps the level** with the share (`PUT
+4. *Amended 2026-10-20, see below.* **The coordinator keeps the level** with the share (`PUT
    /v1/leases/{id}/share` gets `view`), and `GET /v1/shared` tells each
    member whether it may view, so the dashboard knows which to offer.
 5. **The dashboard shows a viewable lane as its own lanes are shown.**
@@ -63,6 +64,32 @@ containers, usage). The node lets only the lane's owner reach it
    - The hub reaches the node through `/hub/pool/shared/{lease}/api/{*rest}`
      with this machine's certificate, as it does for the pool.
    - A lane shared to be used only stays as it is: its services as buttons.
+
+*Amended 2026-10-20, before any other user.* Sharing for viewing as a level
+of its own (point 1) proved superfluous and confusing in use: the owner had
+two lists to keep for one intent, and a lane shared without `view` showed up
+as a row of buttons that led nowhere a reviewer wanted to go. **Whoever a
+lane is shared with may view it**, read only, as point 2 has it, and open its
+services, as ADR-0035 has it. What viewing shows, and that it never shows the
+environment or the stack file, stays as point 2 says; the node enforces it as
+point 3 says, admitting exactly the members the lane is shared with.
+
+- Point 1: there is no level. `devstack lane share <lane> --with <...>`, the
+  share menu and the MCP `lane_share` take one list; `--view` and `view` are
+  gone. `[lanes] share` in the stack file shares to view as well.
+- Point 4: the coordinator keeps one list (`with`). An owner still sends it
+  as `view` too, and `GET /v1/shared` still says `view: true`, so that
+  devstack 0.11 coordinators, nodes, hubs and dashboards in the same pool let
+  those members view; read, `view` only widens `with` (whom a 0.11 owner let
+  view could use the lane too). A 0.11 owner's separate viewers
+  (`lane-views.json`) are added to the lane's sharing once.
+- Point 5: every shared lane is listed under "Shared with you" as one's own
+  stacks are listed, its owner named faintly, and a click opens its pages.
+  Its services open from there (and from the pool area).
+- The first alternative below, rejected on 2026-10-19 because owners had
+  shared lanes on the understanding that their logs stay theirs, is the
+  decision now: those owners are this project's maintainers, and the share
+  menu says that whoever a lane is shared with sees its logs.
 
 ## Alternatives considered
 
@@ -102,11 +129,12 @@ Where it will live:
   and per member, told to the coordinator.
 - `crates/devstack-hub/src/shared.rs`: `/hub/pool/shared/{lease}/api/{*rest}`.
 - `crates/devstack/src/main.rs`: `lane share --view`; `mcp.rs`: `view` on
-  `lane_share`.
+  `lane_share` (both gone with the amendment of 2026-10-20).
 - `ui/src/router.ts`, `ui/src/stores/stack.ts`: a stack store for a shared
   lane (its API base, no actions); `ui/src/components/Sidebar.vue`.
 - `crates/devstack-node/tests/node.rs`: a viewer reads, a user does not, a
-  change is refused, unsharing holds at the next request.
+  change is refused, unsharing holds at the next request (since 2026-10-20:
+  not shared, not viewed; shared, viewed; unshared, not viewed again).
 - `docs/pool.md`, `docs/dashboard-api.md`.
 
 ## What this ADR does not say

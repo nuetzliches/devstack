@@ -2118,7 +2118,7 @@ async fn may_view(s: &Shared, l: &NodeLease, who: &str) -> ApiResult<()> {
                 .get(who)
                 .cloned()
                 .unwrap_or_default();
-            let ok = sharing.is_some_and(|sh| sh.admits_view(who, &tags));
+            let ok = sharing.is_some_and(|sh| sh.admits(who, &tags));
             s.views_ok.lock().unwrap().insert(key, (Instant::now(), ok));
             ok
         }
@@ -2128,7 +2128,7 @@ async fn may_view(s: &Shared, l: &NodeLease, who: &str) -> ApiResult<()> {
     } else {
         Err(err(
             StatusCode::FORBIDDEN,
-            "that lane is not shared with you to view",
+            "that lane is not shared with you",
         ))
     }
 }

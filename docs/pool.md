@@ -202,28 +202,29 @@ devstack lane share login-fix --with team:qa    # or --with '*'; without --with:
 
 or with the lane's **share** button in the dashboard; `[lanes] share = [...]`
 in the stack file sets the default. Members it is shared with see it under
-**Shared with you** (sidebar and pool area, by node) and open its services:
+**Shared with you** (in the sidebar listed as your stacks are, and in the
+pool area) and open its services:
 
 ```sh
 devstack pool shared
 devstack open login-fix web                     # a forward on your machine, then the browser
 ```
 
-They reach its services, nothing else: no logs, no restart, no stop. Its
-services are those with a `port` and the Compose containers the dashboard
+Its services are those with a `port` and the Compose containers the dashboard
 links as a web page (a `urls` entry with `http`/`https`, or a published port
 without an entry); `urls = { db = "" }` in `[compose.<group>]` keeps a
 container out, a database, say. The node
 checks every connection against the coordinator, so unsharing holds from the
 next one.
 
-To let them **view** it as well ([ADR-0040](adr/0040-a-shared-lane-can-be-watched-like-ones-own.md)),
-share it with `--view` (`devstack lane share login-fix --view team:qa`, or
-"may also view it" in the dashboard): they see its state, its services' and
-containers' logs, its events, its command runs and its usage, read only, never
-its environment, and change nothing. Logs show what the services print: share
-to view only where that is fine. The node asks the coordinator at least every
-5 seconds whether a viewer still may.
+They also **view** it ([ADR-0040](adr/0040-a-shared-lane-can-be-watched-like-ones-own.md),
+amended 2026-10-20): a click on it opens the same pages as one's own lane,
+read only. They see its state, its services' and containers' logs, its
+events, its command runs and its usage, never its environment, and change
+nothing: no restart, no stop. Logs show what the services print: share a
+lane only where that is fine. The node asks the coordinator at least every
+5 seconds whether a viewer still may. (Up to 0.11.1 viewing was a separate
+grant, `--view`; it is gone, sharing includes viewing.)
 
 ## Administer
 

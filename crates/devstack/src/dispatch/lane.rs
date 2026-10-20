@@ -20,6 +20,6 @@ pub(crate) fn run(file: &Path, action: LaneAction) -> Result<()> {
             dry_run,
         } => client::lane_prune(file, older_than.as_deref(), dry_run),
         LaneAction::Move { name, to } => client::lane_move(file, &name, &to),
-        LaneAction::Share { name, with, view } => client::lane_share(file, &name, &with, &view),
+        LaneAction::Share { name, with } => client::lane_share(file, &name, &with),
     }
 }

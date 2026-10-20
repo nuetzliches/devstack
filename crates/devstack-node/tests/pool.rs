@@ -272,16 +272,15 @@ fn the_pool_knows_which_devstack_each_party_runs() {
     owner
         .share_lease(
             &offer.id,
-            Some(&Sharing {
-                with: vec!["*".into()],
-                services: vec![SharedService {
+            Some(&Sharing::new(
+                vec!["*".into()],
+                vec![SharedService {
                     name: "web".into(),
                     port: 8080,
                     scheme: "http".into(),
                     here: 8180,
                 }],
-                view: Vec::new(),
-            }),
+            )),
         )
         .unwrap();
     let shared = viewer.shared().unwrap();
