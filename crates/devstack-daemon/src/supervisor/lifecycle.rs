@@ -340,7 +340,7 @@ impl Supervisor {
         }
         let port = svc.port.expect("proxied services have a port");
         if port_in_use(port) {
-            return Err(format!("port {port} is already in use by another process"));
+            return Err(super::port_taken(port));
         }
         let p =
             Proxy::bind(name, port, &self.rt).map_err(|e| format!("proxy on port {port}: {e}"))?;
@@ -405,7 +405,7 @@ impl Supervisor {
             if let Some(port) = svc.port
                 && port_in_use(port)
             {
-                return Err(format!("port {port} is already in use by another process"));
+                return Err(super::port_taken(port));
             }
             None
         };

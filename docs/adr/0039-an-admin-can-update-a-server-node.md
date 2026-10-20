@@ -121,3 +121,8 @@ Where it will live:
 
 - That nodes update without an order. They do not.
 - How the coordinator is updated. Its host is still operated by hand.
+
+*Noted 2026-10-20.* A node that would refuse an order says so before one
+is given: its report's `no_update` names why (its own policy, an agent in a
+container, no way to install), and the dashboard disables **Update** with
+that reason. A refusal is logged (`node_update_refused`).

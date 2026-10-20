@@ -301,6 +301,8 @@ export type PoolNode = {
     kept?: { lanes: number; bytes: number };
     /** How the last update an admin ordered goes (ADR-0039). */
     update?: { at: number; state: 'draining' | 'installing' | 'restarting' | 'done' | 'refused' | 'failed' | (string & {}); target?: string; error?: string };
+    /** Why it would refuse an ordered update (in a container its image is updated instead); absent: it updates itself. */
+    no_update?: string;
     /** The devstack it runs; absent from a release before version reporting. */
     devstack?: PoolRelease;
   };

@@ -159,6 +159,11 @@ pub struct Report {
     /// How the last update an admin ordered goes (ADR-0039).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update: Option<UpdateReport>,
+    /// Why it would refuse an update an admin orders, if it would (in a
+    /// container its image is updated instead): the dashboard says so
+    /// rather than offer the order. Absent: it updates itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_update: Option<String>,
 }
 
 /// An admin's order that a server update its devstack (ADR-0039).

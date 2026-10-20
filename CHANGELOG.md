@@ -9,6 +9,32 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **A node's own lines reach the pool's telemetry** (ADR-0037 point 3): a
+  lease admitted or refused (with the reason), a lane started on it (with
+  its time) or not started (with the phase and the reason), stopped, its
+  lease ended, an update refused or failed. Before, a node sent only its
+  capacity, and why a lane did not start there was in nobody's log.
+- A request a daemon or the hub refuses is logged with the first line of
+  its `error`, in `daemon.log` and the telemetry alike: a `409` alone
+  explained nothing afterwards.
+
+### Fixed
+
+- **A server that cannot update itself says so** (ADR-0039): a node agent
+  in a container, with `remote_update = false` in its policy or without a
+  way to install reports why in `no_update`; the dashboard disables its
+  **Update** and names the reason. Before, the order was accepted, refused
+  by the node and shown as "update refused" only, and the refusal was in no
+  log.
+- A port another process holds names that process (`port 8091 is already
+  in use by another process (node.exe, pid 4711)`, from `netstat`/`tasklist`,
+  `ss` or `lsof`): a leftover of an earlier run is told apart from another
+  program.
+- A node sends its capacity every minute on average; it drifted to every
+  67 s.
+
 ## [0.11.1] - 2026-10-19
 
 ### Fixed

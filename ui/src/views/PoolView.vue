@@ -518,8 +518,9 @@ function policyText(id: string) {
                   v-if="n.kind === 'server' && n.online"
                   type="button"
                   class="btn btn-xs"
-                  :class="{ 'btn-primary': hub.newer || releaseClass(n.report?.devstack, true) === 'warn' }"
-                  title="Have this server install the latest devstack once its lanes have ended (ADR-0039)"
+                  :class="{ 'btn-primary': !n.report?.no_update && (hub.newer || releaseClass(n.report?.devstack, true) === 'warn') }"
+                  :disabled="!!n.report?.no_update"
+                  :title="n.report?.no_update ? `It does not update itself: ${n.report.no_update}` : 'Have this server install the latest devstack once its lanes have ended (ADR-0039)'"
                   data-testid="pool-update"
                   @click="pool.updateNode(n.id, n.name)"
                 >

@@ -62,7 +62,13 @@ the coordinator from the certificate), `service.name` (`devstack-daemon`,
 
 ## What to look at
 
-- Warnings and errors, failed requests (status >= 400, 502 from the hub).
+- Warnings and errors, failed requests (status >= 400, 502 from the hub;
+  since 0.11.2 with the first line of their `error`).
+- The node's own lines (`service.name` `devstack-node`, since 0.11.2):
+  `node_lease_admitted|refused`, `node_lane_started|not_started` (phase,
+  reason), `node_lane_stopped`, `node_lease_ended`,
+  `node_update_refused|failed`. A remote start that failed is explained
+  there when the requester's line is not enough.
 - Durations: lane starts, syncs, moves; service start times from `service`
   state changes (`starting` -> `running`/`healthy`/`completed`).
 - Candidates: which changed paths triggered builds (generated files that
