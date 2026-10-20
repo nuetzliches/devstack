@@ -280,7 +280,7 @@ export class MockTransport implements Transport {
         me: { id: 'c0ffee0123456789', name: 'dev-pc', state: 'approved', role: 'member', coordinator: 'https://172.20.1.5:4260' },
         nodes: [
           { id: 'c0ffee0123456789', name: 'dev-pc', online: true, seen: 3, kind: 'machine', report: { sharing: false, cpus: 0, memory: 0 } },
-          { id: 'feedbeef00112233', name: 'gpu-box', online: true, seen: 5, kind: 'server', report: { sharing: true, cpus: 24, memory: 96 * 2 ** 30, api: 'https://172.20.1.9:4261' } },
+          { id: 'feedbeef00112233', name: 'gpu-box', online: true, seen: 5, kind: 'server', report: { sharing: true, cpus: 24, memory: 96 * 2 ** 30, api: 'https://172.20.1.9:4261', no_update: 'the agent runs in a container: update its image' } },
         ],
         leases: [],
         members: [

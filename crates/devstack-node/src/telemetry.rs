@@ -193,6 +193,60 @@ fn attrs(labels: &[(String, String)]) -> Vec<Value> {
         .collect()
 }
 
+/// A node agent's diagnostic lines since its last send (ADR-0037 point 3:
+/// what concerns the pool's lanes): bounded, dropped when nobody takes
+/// them. The agent has no `daemon.log`; these are what it says on stderr.
+static NODE_LOG: std::sync::Mutex<Vec<Value>> = std::sync::Mutex::new(Vec::new());
+const NODE_LOG_MAX: usize = 2000;
+
+/// Keep a node agent's line for its next send: `level` is `info`, `warn`
+/// or `error`, `event` its name; each text is cut to its first line before
+/// it is kept, as a daemon's are before they leave the machine.
+pub fn node_log(level: &str, event: &str, fields: &[(&str, String)]) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let (num, text) = match level {
+        "error" => (17, "ERROR"),
+        "warn" => (13, "WARN"),
+        _ => (9, "INFO"),
+    };
+    let attributes: Vec<Value> = fields
+        .iter()
+        .map(|(k, v)| {
+            let v = match v.split_once('\n') {
+                Some((first, _)) => format!("{} …", first.trim_end()),
+                None => v.clone(),
+            };
+            json!({ "key": format!("devstack.{k}"), "value": { "stringValue": v } })
+        })
+        .collect();
+    let mut log = NODE_LOG.lock().unwrap();
+    if log.len() < NODE_LOG_MAX {
+        log.push(json!({
+            "timeUnixNano": now.to_string(),
+            "observedTimeUnixNano": now.to_string(),
+            "severityNumber": num,
+            "severityText": text,
+            "body": { "stringValue": event },
+            "attributes": attributes,
+        }));
+    }
+}
+
+/// The node agent's lines since the last call, as an OTLP/JSON
+/// `ExportLogsServiceRequest` for `service`; `None` when there are none.
+/// Taken either way: lines nobody takes are dropped.
+pub fn node_logs_body(service: &str) -> Option<Value> {
+    let records = std::mem::take(&mut *NODE_LOG.lock().unwrap());
+    (!records.is_empty()).then(|| {
+        json!({ "resourceLogs": [{
+            "resource": resource(service),
+            "scopeLogs": [{ "scope": { "name": "devstack" }, "logRecords": records }],
+        }]})
+    })
+}
+
 /// A gauge's value now, with its labels.
 pub struct Gauge {
     pub name: String,

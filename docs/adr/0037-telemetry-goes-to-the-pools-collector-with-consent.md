@@ -118,3 +118,11 @@ them), and masks user names in home paths (`C:\Users\~`, `/home/~`) and
 credentials in URLs (`https://***@host`) in every text; `daemon.log`
 keeps all.
 `crates/devstack-daemon/src/telemetry.rs` and `diag.rs` enforce it.
+
+*Noted 2026-10-20.* A node sends its own lines too, not only its capacity
+(point 3: what concerns the pool's lanes): `node_lease_admitted`,
+`node_lease_refused`, `node_lane_started`, `node_lane_not_started` (phase,
+first line of the reason), `node_lane_stopped`, `node_lease_ended`,
+`node_update_refused`, `node_update_failed` (`node_log` in
+`crates/devstack-node/src/telemetry.rs`). A refused request's log line
+carries the first line of its `error`.

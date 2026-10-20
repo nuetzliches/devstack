@@ -900,6 +900,130 @@ pub fn port_in_use(port: u16) -> bool {
         || taken(std::net::TcpListener::bind(("::1", port)))
 }
 
+/// "port N is already in use by another process", with that process when
+/// the system says which (`node.exe, pid 4711`): a leftover of an earlier
+/// run is told apart from another program.
+pub fn port_taken(port: u16) -> String {
+    match port_holder(port) {
+        Some(who) => format!("port {port} is already in use by another process ({who})"),
+        None => format!("port {port} is already in use by another process"),
+    }
+}
+
+/// The process listening on TCP `port` here, as `name, pid N`, if the
+/// system's tools say (a few seconds at most).
+pub fn port_holder(port: u16) -> Option<String> {
+    let run = |cmd: &str, args: &[&str]| -> Option<String> {
+        let mut c = std::process::Command::new(cmd);
+        c.args(args);
+        devstack_compose::no_window(&mut c);
+        let out = devstack_compose::output_within(c, std::time::Duration::from_secs(3))
+            .ok()
+            .flatten()?;
+        Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    if cfg!(windows) {
+        let pid = netstat_pid(&run("netstat", &["-ano", "-p", "TCP"])?, port).or_else(|| {
+            netstat_pid(
+                &run("netstat", &["-ano", "-p", "TCPv6"]).unwrap_or_default(),
+                port,
+            )
+        })?;
+        let filter = format!("PID eq {pid}");
+        let name =
+            run("tasklist", &["/FI", &filter, "/FO", "CSV", "/NH"]).and_then(|t| tasklist_name(&t));
+        Some(match name {
+            Some(n) => format!("{n}, pid {pid}"),
+            None => format!("pid {pid}"),
+        })
+    } else if cfg!(target_os = "macos") {
+        let spec = format!("-iTCP:{port}");
+        lsof_holder(&run("lsof", &["-nP", &spec, "-sTCP:LISTEN", "-Fpc"])?)
+    } else {
+        let filter = format!("sport = :{port}");
+        ss_holder(&run("ss", &["-Hltnp", &filter])?)
+    }
+}
+
+/// The pid listening on `port` in `netstat -ano` (Windows). A listening row
+/// has no remote end (`0.0.0.0:0`, `[::]:0`); its state is written in the
+/// system's language (`LISTENING`, `ABHÖREN`), so it is not read.
+fn netstat_pid(text: &str, port: u16) -> Option<u32> {
+    let suffix = format!(":{port}");
+    text.lines().find_map(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        (f.len() >= 5
+            && f[0] == "TCP"
+            && f[1].ends_with(&suffix)
+            && matches!(f[2], "0.0.0.0:0" | "[::]:0"))
+        .then(|| f[4].parse().ok())
+        .flatten()
+    })
+}
+
+/// The image name in `tasklist /FO CSV /NH` (`"node.exe","4711",...`).
+fn tasklist_name(text: &str) -> Option<String> {
+    let first = text.lines().next()?.strip_prefix('"')?;
+    let name = first.split('"').next()?;
+    (!name.is_empty() && !name.starts_with("INFO:")).then(|| name.to_string())
+}
+
+/// `name, pid N` from `ss -Hltnp` (`users:(("node",pid=4711,fd=20))`).
+fn ss_holder(text: &str) -> Option<String> {
+    let users = text
+        .lines()
+        .find_map(|l| l.split_once("users:((").map(|(_, u)| u))?;
+    let name = users.strip_prefix('"')?.split('"').next()?;
+    let pid = users
+        .split("pid=")
+        .nth(1)?
+        .split(|c: char| !c.is_ascii_digit())
+        .next()?;
+    Some(format!("{name}, pid {pid}"))
+}
+
+/// `name, pid N` from `lsof -Fpc` (`p4711` then `cnode`).
+fn lsof_holder(text: &str) -> Option<String> {
+    let pid = text.lines().find_map(|l| l.strip_prefix('p'))?;
+    match text.lines().find_map(|l| l.strip_prefix('c')) {
+        Some(name) => Some(format!("{name}, pid {pid}")),
+        None => Some(format!("pid {pid}")),
+    }
+}
+
+#[cfg(test)]
+mod holder_tests {
+    use super::*;
+
+    #[test]
+    fn the_holder_of_a_port_is_read_from_the_systems_tools() {
+        let netstat = "\r\nActive Connections\r\n\r\n  Proto  Local Address          Foreign Address        State           PID\r\n  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1180\r\n  TCP    127.0.0.1:8091         0.0.0.0:0              LISTENING       4711\r\n  TCP    127.0.0.1:8091         127.0.0.1:50000        ESTABLISHED     4711\r\n";
+        assert_eq!(netstat_pid(netstat, 8091), Some(4711));
+        let german =
+            "  TCP    [::1]:8091             [::]:0                 ABHÖREN         4712\r\n";
+        assert_eq!(netstat_pid(german, 8091), Some(4712));
+        assert_eq!(netstat_pid(netstat, 18091), None);
+        assert_eq!(netstat_pid(netstat, 809), None);
+        assert_eq!(
+            tasklist_name("\"node.exe\",\"4711\",\"Console\",\"1\",\"52.312 K\"\r\n").as_deref(),
+            Some("node.exe")
+        );
+        assert_eq!(
+            tasklist_name("INFO: No tasks are running which match the specified criteria.\r\n"),
+            None
+        );
+        assert_eq!(
+            ss_holder("LISTEN 0 511 127.0.0.1:8091 0.0.0.0:* users:((\"node\",pid=4711,fd=20))\n")
+                .as_deref(),
+            Some("node, pid 4711")
+        );
+        assert_eq!(
+            lsof_holder("p4711\ncnode\n").as_deref(),
+            Some("node, pid 4711")
+        );
+    }
+}
+
 #[cfg(test)]
 mod port_tests {
     #[test]

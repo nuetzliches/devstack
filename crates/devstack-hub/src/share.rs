@@ -190,6 +190,7 @@ fn report(
             devstack: Some(devstack_node::version::Release::this()),
             kept: None,
             update: None,
+            no_update: None,
             leases: Vec::new(),
             total: Some(total),
             used: None,

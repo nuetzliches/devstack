@@ -153,6 +153,18 @@ def events(logs: list[dict]) -> str:
     return table(["member", "service", "severity", "event", "count"], [[*k, n] for k, n in sorted(c.items(), key=lambda x: -x[1])])
 
 
+def text_of(a: dict) -> str:
+    """What a warning says: its error, reason or message, in the shape of
+    0.11 (dotted, `status.reason`) and before (JSON in `status`)."""
+    for k in ("error", "status.reason", "warning", "message", "why"):
+        if a.get(k):
+            return str(a[k])
+    status = nested(a.get("status"))
+    if isinstance(status, dict) and status.get("reason"):
+        return str(status["reason"])
+    return ""
+
+
 def problems(logs: list[dict]) -> str:
     """Warnings and errors, grouped by what they say."""
     groups: dict[tuple, list] = defaultdict(list)
@@ -160,9 +172,11 @@ def problems(logs: list[dict]) -> str:
         if d.get("severity_number", 0) < 13:
             continue
         a = attrs(d)
-        detail = a.get("error") or a.get("message") or a.get("why") or ""
+        detail = text_of(a)
         if "path" in a:
             detail = f"{a.get('method', '')} {path_shape(a['path'])} -> {a.get('status', '')}"
+            if a.get("error"):
+                detail += f": {a['error']}"
         key = (member(d), res(d, "service.name"), res(d, "service.version"), d.get("body", {}).get("text", "-"), str(detail)[:200])
         groups[key].append(ts(d))
     rows = [[*k, len(t), when(min(t)), when(max(t))] for k, t in sorted(groups.items(), key=lambda x: min(x[1]))]
@@ -179,11 +193,13 @@ def requests(logs: list[dict]) -> str:
         s = int(a["status"])
         status[(res(d, "service.name"), s)] += 1
         if s >= FAILED or s == 502:
-            failed[(member(d), res(d, "service.name"), a.get("method", ""), path_shape(a.get("path", "")), s)].append(ts(d))
+            key = (member(d), res(d, "service.name"), a.get("method", ""), path_shape(a.get("path", "")), s,
+                   str(a.get("error", ""))[:160])
+            failed[key].append(ts(d))
     out = table(["service", "status", "count"], [[*k, n] for k, n in sorted(status.items())])
     out += "\nFailed requests:\n\n"
     out += table(
-        ["member", "service", "method", "path", "status", "count", "first", "last"],
+        ["member", "service", "method", "path", "status", "error", "count", "first", "last"],
         [[*k, len(t), when(min(t)), when(max(t))] for k, t in sorted(failed.items(), key=lambda x: min(x[1]))],
     )
     return out
@@ -298,7 +314,22 @@ def member_lanes(metrics: list[dict]) -> str:
 
 
 def quality(logs: list[dict], metrics: list[dict]) -> str:
-    """Checks on the telemetry itself."""
+    """Checks on the telemetry itself, per devstack version: an old sender's
+    shortcomings do not hide what a new one does right."""
+    out = []
+    versions = sorted({res(d, "service.version") for d in logs + metrics}, key=version_key, reverse=True)
+    for v in versions:
+        rows = quality_rows([d for d in logs if res(d, "service.version") == v],
+                            [d for d in metrics if res(d, "service.version") == v])
+        out.append(f"**{v}**\n\n" + table(["check", "count", "which"], rows))
+    return "\n".join(out)
+
+
+def version_key(v: str) -> tuple:
+    return tuple(int(x) if x.isdigit() else -1 for x in v.split("."))
+
+
+def quality_rows(logs: list[dict], metrics: list[dict]) -> list[list]:
     rows = []
     anon = [d for d in logs + metrics if member(d) == "-"]
     if anon:
@@ -310,9 +341,11 @@ def quality(logs: list[dict], metrics: list[dict]) -> str:
     no_os = [d for d in logs if res(d, "os.type") == "-"]
     if no_os:
         rows.append(["log records without `os.type`", len(no_os), ""])
-    no_repo = [d for d in logs if "repository" not in attrs(d)]
+    # A hub serves every stack: its lines name none.
+    no_repo = [d for d in logs if "repository" not in attrs(d) and res(d, "service.name") == "devstack-daemon"]
     if no_repo:
-        rows.append(["log records without `devstack.repository`", len(no_repo), ""])
+        rows.append(["daemon log records without `devstack.repository`", len(no_repo),
+                     ", ".join(sorted({d.get("body", {}).get("text", "-") for d in no_repo}))])
     strings = Counter(k for d in logs for k, v in attrs(d).items() if isinstance(v, str) and v.startswith(("{", "[")))
     if strings:
         rows.append(["attributes holding JSON as a string", sum(strings.values()), ", ".join(f"{k} ({n})" for k, n in strings.most_common())])
@@ -325,7 +358,11 @@ def quality(logs: list[dict], metrics: list[dict]) -> str:
     observed = [d for d in logs if str(d.get("observed_timestamp", "")) in ("0", "0.0")]
     if observed:
         rows.append(["log records with `observed_timestamp` 0", len(observed), ""])
-    return table(["check", "count", "which"], rows)
+    refused = [d for d in logs if d.get("body", {}).get("text") == "request"
+               and int(attrs(d).get("status", 0)) >= 400 and not attrs(d).get("error")]
+    if refused:
+        rows.append(["refused requests without their error", len(refused), ""])
+    return rows
 
 
 def main() -> None:

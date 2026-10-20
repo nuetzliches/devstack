@@ -506,6 +506,28 @@ impl Inner {
         self.changed.notify_one();
     }
 
+    /// Why this agent refuses an update an admin orders, if it does: its
+    /// own policy says so, it runs in a container (its image is updated
+    /// instead), or it was started without a way to install one.
+    fn no_update(&self) -> Option<String> {
+        if self
+            .local_policy
+            .as_ref()
+            .is_some_and(|p| p.remote_update == Some(false))
+        {
+            return Some(
+                "this node's own policy refuses remote updates (`remote_update = false`)".into(),
+            );
+        }
+        if self.container.is_some() {
+            return Some("the agent runs in a container: update its image".into());
+        }
+        if self.on_update.is_none() {
+            return Some("this agent cannot update itself".into());
+        }
+        None
+    }
+
     /// Carry out an update an admin ordered (ADR-0039): refused by this
     /// node's own policy or in a container; else, by default, once its lanes
     /// have ended (no new one admitted meanwhile), the release installed and
@@ -513,21 +535,17 @@ impl Inner {
     fn carry_out(self: Arc<Self>, order: crate::coordinator::UpdateOrder) {
         let at = order.at;
         let target = order.version.clone();
-        let refuse = |why: &str| self.update_state(at, "refused", target.clone(), Some(why.into()));
-        if self
-            .local_policy
-            .as_ref()
-            .is_some_and(|p| p.remote_update == Some(false))
-        {
-            return refuse(
-                "this node's own policy refuses remote updates (`remote_update = false`)",
+        if let Some(why) = self.no_update() {
+            eprintln!("node agent: {} orders an update, refused: {why}", order.by);
+            crate::telemetry::node_log(
+                "warn",
+                "node_update_refused",
+                &[("by", order.by.clone()), ("error", why.clone())],
             );
-        }
-        if self.container.is_some() {
-            return refuse("the agent runs in a container: update its image");
+            return self.update_state(at, "refused", target, Some(why));
         }
         let Some(install) = self.on_update.clone() else {
-            return refuse("this agent cannot update itself");
+            return;
         };
         eprintln!(
             "node agent: {} orders an update to {}",
@@ -553,6 +571,7 @@ impl Inner {
                 self.draining
                     .store(false, std::sync::atomic::Ordering::SeqCst);
                 eprintln!("node agent: the update failed: {e}");
+                crate::telemetry::node_log("warn", "node_update_failed", &[("error", e.clone())]);
                 self.update_state(at, "failed", target, Some(e));
             }
             Ok(Some(binary)) => {
@@ -727,6 +746,19 @@ impl Inner {
     /// of an older agent takes its directory along. Off the caller's
     /// thread, Docker takes its time; the slot is busy until it is done.
     fn drop_lease(self: &Arc<Self>, l: NodeLease) {
+        crate::telemetry::node_log(
+            "info",
+            "node_lease_ended",
+            &[
+                ("lease", l.id.clone()),
+                ("repository", l.repo.clone()),
+                ("lane", l.lane.clone()),
+                (
+                    "held_s",
+                    crate::store::now().saturating_sub(l.admitted).to_string(),
+                ),
+            ],
+        );
         self.daemons.lock().unwrap().remove(&l.id);
         self.phase_times.lock().unwrap().remove(&l.id);
         // What it needed is on offer again: the coordinator hears it now.
@@ -832,7 +864,7 @@ fn lease_of(s: &Inner, id: &str, member: &str) -> ApiResult<NodeLease> {
 fn router(s: Shared) -> Router {
     Router::new()
         .route("/v1/node", get(node))
-        .route("/v1/leases", post(admit))
+        .route("/v1/leases", post(admit_logged))
         .route("/v1/leases/{id}", delete(release))
         .route("/v1/leases/{id}/renew", post(renew))
         .route(
@@ -934,6 +966,42 @@ async fn node(
         leases,
         devstack: Some(crate::version::Release::this()),
     }))
+}
+
+/// [`admit`], with a refusal in the node's log: the requester sees it, the
+/// pool's operator did not (ADR-0037).
+async fn admit_logged(
+    st: AxState<Shared>,
+    peer: Extension<Peer>,
+    a: Json<Admit>,
+) -> ApiResult<(StatusCode, Json<NodeLease>)> {
+    let id = a.id.clone();
+    let r = admit(st, peer, a).await;
+    match &r {
+        Ok((StatusCode::CREATED, Json(l))) => crate::telemetry::node_log(
+            "info",
+            "node_lease_admitted",
+            &[
+                ("lease", l.id.clone()),
+                ("repository", l.repo.clone()),
+                ("lane", l.lane.clone()),
+                ("cpus", format!("{:.2}", l.need.cpus)),
+                ("memory_mib", (l.need.memory >> 20).to_string()),
+                ("kept", l.kept.is_some().to_string()),
+            ],
+        ),
+        Err((status, e)) => crate::telemetry::node_log(
+            "warn",
+            "node_lease_refused",
+            &[
+                ("lease", id),
+                ("status", status.as_u16().to_string()),
+                ("error", e.clone()),
+            ],
+        ),
+        Ok(_) => {}
+    }
+    r
 }
 
 async fn admit(
@@ -1577,13 +1645,40 @@ async fn start(
         // The last phase's time is in before the requester can see the
         // start over.
         let last = s2.starting.lock().unwrap().get(&lid).cloned();
-        s2.phase_over(&lid, last);
+        s2.phase_over(&lid, last.clone());
+        let ms = s2
+            .phase_times
+            .lock()
+            .unwrap()
+            .get(&lid)
+            .map_or(0, |(_, t0)| t0.elapsed().as_millis())
+            .to_string();
+        let what = |extra: Vec<(&'static str, String)>| {
+            let mut f = vec![
+                ("lease", lid.clone()),
+                ("repository", l.repo.clone()),
+                ("lane", l.lane.clone()),
+                ("ms", ms.clone()),
+            ];
+            f.extend(extra);
+            f
+        };
         match result {
             Ok(addr) => {
+                crate::telemetry::node_log("info", "node_lane_started", &what(Vec::new()));
                 s2.daemons.lock().unwrap().insert(lid.clone(), addr);
                 s2.starting.lock().unwrap().remove(&lid);
             }
             Err(e) => {
+                let phase = match &last {
+                    Some(Ok(p)) => p.clone(),
+                    _ => String::new(),
+                };
+                crate::telemetry::node_log(
+                    "warn",
+                    "node_lane_not_started",
+                    &what(vec![("phase", phase), ("error", e.to_string())]),
+                );
                 s2.starting.lock().unwrap().insert(lid, Err(e.to_string()));
             }
         }
@@ -1605,9 +1700,21 @@ async fn stop(
     let l = lease_of(&s, &id, &who)?;
     s.daemons.lock().unwrap().remove(&id);
     let s2 = s.clone();
+    let t0 = std::time::Instant::now();
+    let (repo, lane) = (l.repo.clone(), l.lane.clone());
     tokio::task::spawn_blocking(move || s2.run(&l).stop(s2.container.as_deref()))
         .await
         .map_err(internal)?;
+    crate::telemetry::node_log(
+        "info",
+        "node_lane_stopped",
+        &[
+            ("lease", id.clone()),
+            ("repository", repo),
+            ("lane", lane),
+            ("ms", t0.elapsed().as_millis().to_string()),
+        ],
+    );
     Ok(Json(LaneState {
         started: true,
         ..LaneState::default()
@@ -2438,7 +2545,10 @@ async fn background(s: Shared) {
         // A node sends what concerns the pool's lanes with the coordinator's
         // setting alone (ADR-0037 point 3): its capacity, every minute.
         if sent.elapsed() >= Duration::from_secs(60) {
-            sent = Instant::now();
+            // Every minute on average: a round comes every `EVERY`, so a
+            // send waits up to that long; the next is due a minute after
+            // this one was, not after it went (one per round at most).
+            sent = (sent + Duration::from_secs(60)).max(Instant::now() - EVERY);
             if collects.is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(600)) {
                 let s2 = s.clone();
                 // Only an answer is kept: a coordinator that does not answer
@@ -2459,10 +2569,18 @@ async fn background(s: Shared) {
                     &gpus,
                     s.leases.lock().unwrap().len(),
                 );
+                let logs = crate::telemetry::node_logs_body("devstack-node");
                 let s2 = s.clone();
-                let _ =
-                    tokio::task::spawn_blocking(move || s2.local.telemetry_send("metrics", &body))
-                        .await;
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Some(logs) = logs {
+                        let _ = s2.local.telemetry_send("logs", &logs);
+                    }
+                    s2.local.telemetry_send("metrics", &body)
+                })
+                .await;
+            } else {
+                // Nobody takes them: they go.
+                let _ = crate::telemetry::node_logs_body("devstack-node");
             }
         }
         let report = Report {
@@ -2477,6 +2595,7 @@ async fn background(s: Shared) {
             devstack: Some(crate::version::Release::this()),
             kept: *s.kept_use.lock().unwrap(),
             update: s.update.lock().unwrap().clone(),
+            no_update: s.no_update(),
             leases: s
                 .leases
                 .lock()

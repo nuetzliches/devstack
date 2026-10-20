@@ -319,6 +319,11 @@ A daemon or the hub keeps its lines from its start until its first round
 (after ten seconds) has asked its pools: they are sent only if a pool
 collects and this machine agreed, else dropped.
 
+A node sends what concerns the pool's lanes on the coordinator's setting
+alone: its capacity every minute and its own lines (a lease admitted or
+refused, a lane started, not started with its phase and reason, stopped, an
+update refused or failed).
+
 Never sent: file contents, environment values, command lines, service output.
 Every text of a log line is cut to its first line before it leaves the
 machine (a failed job's reason keeps its process output in `daemon.log`
