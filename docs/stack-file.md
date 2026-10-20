@@ -159,9 +159,12 @@ devstack builds the bundle into an artifact like any service and serves its
 files itself (no `run`), behind the proxy, with candidates: a test run against
 `:4300` knows the build id it ran against (`x-devstack-build`). Paths without a
 file extension get `index.html` (client-side routes) unless `spa = false`;
-`index.html` is sent with `no-cache`. The API the bundle calls must be
-reachable from the browser as the bundle expects it (an absolute URL, or the
-same origin through your own proxy setup).
+a file whose name carries its content hash (`index-Bd3x9_kQ.js`,
+`main.3f2a1b9c.css`) may be cached for a year, every other file
+(`index.html`, `config.json`, a manifest) is sent with `no-cache` and an
+`ETag`, so a promoted build shows at the next load. The API the bundle
+calls must be reachable from the browser as the bundle expects it (an
+absolute URL, or the same origin through your own proxy setup).
 
 ### Builds and artifacts ([ADR-0002](adr/0002-processes-run-from-immutable-artifacts.md))
 
