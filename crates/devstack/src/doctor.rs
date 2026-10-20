@@ -73,7 +73,7 @@ pub fn run(stack_file: &Path) -> Vec<Finding> {
         None
     };
 
-    out.extend(docker(stack.as_ref().is_none_or(|s| !s.compose.is_empty())));
+    out.extend(docker(stack.as_ref().map(|s| !s.compose.is_empty())));
     if let Some(s) = &stack {
         out.push(tools(s));
         out.extend(ports(s, stack_file));
@@ -89,15 +89,25 @@ pub fn run(stack_file: &Path) -> Vec<Finding> {
     out
 }
 
-fn docker(needed: bool) -> Vec<Finding> {
-    let lvl = if needed { Level::Fail } else { Level::Info };
+/// Docker as this stack needs it: `Some(true)` it has Compose groups, `None`
+/// no stack file to tell (most stacks need it: a warning, not a failure).
+fn docker(needed: Option<bool>) -> Vec<Finding> {
+    let lvl = match needed {
+        Some(true) => Level::Fail,
+        None => Level::Warn,
+        Some(false) => Level::Info,
+    };
     match engine::status("docker") {
         Engine::Missing => vec![f(
             lvl,
             "Docker: no `docker` on PATH; install Docker Desktop (Windows, Linux) or Docker Engine (Linux)",
         )],
         Engine::Stopped { hint, starter } => vec![f(
-            if needed { Level::Warn } else { Level::Info },
+            if needed == Some(true) {
+                Level::Warn
+            } else {
+                Level::Info
+            },
             if starter.is_some() {
                 format!("Docker: the engine is not running; `devstack up` starts it ({hint})")
             } else {

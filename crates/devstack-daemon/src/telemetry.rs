@@ -186,7 +186,7 @@ fn run(service: &str) {
         wait = EVERY;
         round += 1;
         let mut pending = false;
-        let targets: Vec<Local> = devstack_node::member::pools(&state_dir())
+        let targets: Vec<(PathBuf, Local)> = devstack_node::member::pools(&state_dir())
             .into_iter()
             .filter(|(_, dir)| Consent::load(dir).enabled)
             .filter_map(|(_, dir)| {
@@ -215,7 +215,7 @@ fn run(service: &str) {
                         false
                     }
                 });
-                on.then_some(local)
+                on.then_some((dir, local))
             })
             .collect();
         let (state, what) = decide(
@@ -243,13 +243,27 @@ fn run(service: &str) {
         let mut durations = durations(repo, &lines);
         durations.extend(tunnel_durations(repo, &tunnels));
         let metrics = metrics_body(service, &gauges, &durations);
-        for t in &targets {
-            if let Some(l) = &logs {
-                let _ = t.telemetry_send("logs", l);
+        for (dir, t) in &targets {
+            let sent = match &logs {
+                Some(l) => t.telemetry_send("logs", l),
+                None => Ok(()),
             }
-            let _ = t.telemetry_send("metrics", &metrics);
+            .and_then(|()| t.telemetry_send("metrics", &metrics));
+            // A coordinator that stopped collecting answers 404 (ADR-0037):
+            // stop sending to it now, not when it is asked again.
+            if stopped_collecting(&sent) {
+                collects.insert(dir.clone(), (Instant::now(), false));
+            }
         }
     }
+}
+
+/// Whether a send's answer says the coordinator no longer collects.
+fn stopped_collecting(sent: &devstack_node::member::Result<()>) -> bool {
+    matches!(
+        sent,
+        Err(devstack_node::member::MemberError::Status(404, _))
+    )
 }
 
 /// The labels a duration is counted by: its event, the process's
@@ -480,6 +494,20 @@ mod tests {
             .lock()
             .unwrap()
             .retain(|l| l["event"] != "telemetry_test_early");
+    }
+
+    #[test]
+    fn a_collector_that_answers_404_stopped_collecting() {
+        use devstack_node::member::MemberError;
+        assert!(stopped_collecting(&Err(MemberError::Status(
+            404,
+            "not found".into()
+        ))));
+        assert!(!stopped_collecting(&Err(MemberError::Status(
+            503,
+            "busy".into()
+        ))));
+        assert!(!stopped_collecting(&Ok(())));
     }
 
     #[test]

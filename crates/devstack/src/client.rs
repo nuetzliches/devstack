@@ -422,6 +422,46 @@ pub(crate) fn pid_alive(pid: u32) -> bool {
     }
 }
 
+/// End the process `pid` (a daemon that does not answer): Windows
+/// terminates it, which closes its job objects and with them every process
+/// tree it owns (ADR-0009); elsewhere `SIGTERM`, then `SIGKILL` after 5 s.
+fn end_process(pid: u32) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_TERMINATE, TerminateProcess,
+        };
+        // SAFETY: plain Win32 calls on a handle we open and close here.
+        unsafe {
+            let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if h.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            let ok = TerminateProcess(h, 1) != 0;
+            let err = std::io::Error::last_os_error();
+            CloseHandle(h);
+            if ok { Ok(()) } else { Err(err) }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        // SAFETY: a signal to one process id.
+        if unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let t0 = Instant::now();
+        while pid_alive(pid) && t0.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if pid_alive(pid) {
+            // SAFETY: as above.
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        }
+        Ok(())
+    }
+}
+
 /// Nothing listens (yet): the connection was refused, unlike a daemon that
 /// accepted and did not answer.
 fn is_refused(e: &anyhow::Error) -> bool {
@@ -495,11 +535,15 @@ pub fn ensure_daemon_with(
         match exited {
             // Another `up` may have started a daemon at the same moment, and
             // ours gave up on the state lock: give that one a few seconds.
-            // While that one's process lives, it is still starting.
+            // While that one's process lives, or something holds the state
+            // lock (a daemon that has not written `daemon.json` yet: a slow
+            // Docker engine), it is still starting: waited for up to the
+            // limit below.
             Some((at, status))
                 if at.elapsed() > EXITED_GRACE
                     && !devstack_daemon::read_info(state_dir)
-                        .is_some_and(|i| i.pid != child.id() && pid_alive(i.pid)) =>
+                        .is_some_and(|i| i.pid != child.id() && pid_alive(i.pid))
+                    && devstack_proc::StateLock::acquire(state_dir).is_ok() =>
             {
                 bail!(
                     "the daemon exited ({status}):\n{}",
@@ -1400,7 +1444,7 @@ pub fn lane_share(stack_file: &Path, name: &str, with: &[String]) -> Result<()> 
         println!("lane `{name}` is shared with nobody");
     } else {
         println!(
-            "lane `{name}` is shared with {} (while it runs on a node of the pool):              they open its services and see its state, logs and events, read only",
+            "lane `{name}` is shared with {} (while it runs on a node of the pool): they open its services and see its state, logs and events, read only",
             with.join(", ")
         );
     }
@@ -1426,17 +1470,22 @@ pub struct StartedLane {
     pub name: String,
     pub file: PathBuf,
     pub warning: Option<String>,
+    /// What its `--profile` asks (its command), checked before it started.
+    pub wanted: Option<ProfileStart>,
 }
 
 /// Start the lane `name` (its name or branch, see `lane list`) of this
 /// repository, here or on a node (`on`), from the main working tree or any
 /// worktree: the daemon is started if it does not run. `step` hears a start
-/// on a node step by step.
+/// on a node step by step. `profile` (and with `run` its command) is
+/// checked against the lane's own stack file before anything starts.
+#[allow(clippy::too_many_arguments)]
 pub fn start_lane(
     stack_file: &Path,
     name: &str,
     on: Option<&str>,
     profile: Option<&str>,
+    run: bool,
     within: Option<Duration>,
     step: impl FnMut(&Value),
 ) -> Result<StartedLane> {
@@ -1473,6 +1522,8 @@ pub fn start_lane(
         .map(|f| path.join(f))
         .filter(|f| f.is_file())
         .unwrap_or_else(|| main_file.clone());
+    // Its branch's profiles, before it starts (ADR-0041).
+    let wanted = profile_start(&file, profile, run)?;
     let wt = Worktree {
         path,
         main_file: main_file.clone(),
@@ -1490,6 +1541,7 @@ pub fn start_lane(
         name,
         file,
         warning,
+        wanted,
     })
 }
 
@@ -1505,7 +1557,7 @@ pub fn lane_start(
     if let Some(node) = on {
         println!("leasing, syncing and starting the lane on {node}...");
     }
-    let started = start_lane(stack_file, name, on, profile, None, |m| {
+    let started = start_lane(stack_file, name, on, profile, run, None, |m| {
         if m["step"] != 0 {
             println!("{}", step_line(m));
         }
@@ -1513,8 +1565,7 @@ pub fn lane_start(
     if let Some(w) = &started.warning {
         eprintln!("warning: {w}");
     }
-    // Its command, from the lane's own stack file (its branch's profiles).
-    let wanted = profile_start(&started.file, profile, run)?;
+    let wanted = started.wanted.as_ref();
     println!("lane `{}` started", started.name);
     let t0 = Instant::now();
     let outcome = start_and_wait(&started.client, &started.file, None, |name, st| {
@@ -1524,7 +1575,7 @@ pub fn lane_start(
         UpOutcome::Ready(stack) => {
             println!();
             print!("{}", status_text(&stack));
-            if run && let Some(cmd) = wanted.as_ref().and_then(|p| p.command.as_deref()) {
+            if run && let Some(cmd) = wanted.and_then(|p| p.command.as_deref()) {
                 println!(
                     "\nrunning `{cmd}` in lane `{}`, the profile's command",
                     started.name
@@ -1729,6 +1780,7 @@ pub fn follow_logs(c: &Client, name: &str, tail: usize, grep: Option<&str>) -> R
     };
     let needle = grep.map(str::to_lowercase);
     use std::io::Write as _;
+    let mut closed = false;
     c.stream(&path, |ev| {
         let mut out = std::io::stdout().lock();
         let ok = match ev["type"].as_str() {
@@ -1751,9 +1803,13 @@ pub fn follow_logs(c: &Client, name: &str, tail: usize, grep: Option<&str>) -> R
             .is_ok(),
             _ => true,
         };
-        ok && out.flush().is_ok() // a closed pipe (`| head`) ends it
+        // A closed pipe (`| head`) ends it.
+        closed = !(ok && out.flush().is_ok());
+        !closed
     })?;
-    eprintln!("the daemon ended the log stream (stopped?)");
+    if !closed {
+        eprintln!("the daemon ended the log stream (stopped?)");
+    }
     Ok(())
 }
 
@@ -1815,9 +1871,15 @@ pub fn run_command_on(c: &Client, name: &str, yes: bool) -> Result<String> {
 
 pub fn down(stack_file: &Path, infra: bool, all: bool) -> Result<()> {
     let sd = state_dir(stack_file)?;
-    let Some(c) = Client::connect(&sd) else {
-        println!("no daemon is running for this stack");
-        return Ok(());
+    let c = match Client::probe(&sd) {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            println!("no daemon is running for this stack");
+            return Ok(());
+        }
+        // It runs but refuses (a token that changed since it started) or
+        // hangs: end it by its pid, or nothing could.
+        Err(e) => return end_unanswering_daemon(&sd, e, all),
     };
     if c.lane() == Some("-") {
         println!("this worktree's lane is not started: nothing to stop");
@@ -1847,7 +1909,25 @@ pub fn down(stack_file: &Path, infra: bool, all: bool) -> Result<()> {
         );
         return Ok(());
     }
-    let _ = c.post("/v1/shutdown", None);
+    // A lane started since `/v1/down` answered keeps the daemon (ADR-0024),
+    // unless `--all` says otherwise.
+    let path = if all {
+        "/v1/shutdown"
+    } else {
+        "/v1/shutdown?unless_lanes=true"
+    };
+    // A daemon on its way out may close the connection before it answers.
+    if let Ok((409, body)) = c.post(path, None) {
+        let lanes = serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|v| serde_json::from_value::<Vec<String>>(v["lanes"].clone()).ok())
+            .unwrap_or_default();
+        println!(
+            "main working tree stopped; a lane started meanwhile and keeps running: {} (`devstack down --all` stops it too)",
+            lanes.join(", ")
+        );
+        return Ok(());
+    }
     let t0 = Instant::now();
     while devstack_daemon::read_info(&sd).is_some() && t0.elapsed() < Duration::from_secs(30) {
         std::thread::sleep(Duration::from_millis(200));
@@ -1861,6 +1941,50 @@ pub fn down(stack_file: &Path, infra: bool, all: bool) -> Result<()> {
         } else {
             "; infrastructure keeps running (`down --infra` to stop it)"
         }
+    );
+    Ok(())
+}
+
+/// `down` when the stack's daemon runs but does not answer (`why`): it
+/// refuses the token (replaced since it started) or hangs. Its process is
+/// the one `daemon.json` names and it holds the stack's lock, so it is ours
+/// to end: with `--all` from the main working tree (the lanes in it end with
+/// it), else the error says how.
+fn end_unanswering_daemon(state_dir: &Path, why: anyhow::Error, all: bool) -> Result<()> {
+    let Some(info) = devstack_daemon::read_info(state_dir) else {
+        return Err(why);
+    };
+    if worktree().is_some() {
+        bail!(
+            "{why:#}\nthe daemon lives in the main working tree: `devstack down --all` there ends it (pid {}), with every lane in it",
+            info.pid
+        );
+    }
+    if !all {
+        bail!(
+            "{why:#}\n`devstack down --all` ends it by its pid ({}), with every lane in it; its infrastructure stays",
+            info.pid
+        );
+    }
+    // Nobody holds the lock: that pid is not this stack's daemon (any more).
+    if devstack_proc::StateLock::acquire(state_dir).is_ok() {
+        println!("no daemon is running for this stack");
+        return Ok(());
+    }
+    eprintln!("{why:#}");
+    println!("ending the daemon by its pid ({})", info.pid);
+    end_process(info.pid).with_context(|| format!("cannot end process {}", info.pid))?;
+    let t0 = Instant::now();
+    while pid_alive(info.pid) && t0.elapsed() < Duration::from_secs(15) {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    if pid_alive(info.pid) {
+        bail!("process {} is still there after 15 s", info.pid);
+    }
+    // It had no chance to say it is gone.
+    let _ = std::fs::remove_file(devstack_daemon::info_path(state_dir));
+    println!(
+        "stopped; its services ended with it, its infrastructure keeps running (`devstack up`, then `devstack down --infra`, stops it)"
     );
     Ok(())
 }

@@ -7,8 +7,12 @@ pub(crate) fn run(cmd: Cmd) -> Result<()> {
     match cmd {
         Cmd::Update { check, version } => update::run(check, version.as_deref()),
         Cmd::Myself {
-            action: SelfAction::Uninstall { yes },
-        } => selfcmd::uninstall(yes),
+            action:
+                SelfAction::Uninstall {
+                    yes,
+                    with_coordinator,
+                },
+        } => selfcmd::uninstall(yes, with_coordinator),
         _ => super::misrouted(),
     }
 }

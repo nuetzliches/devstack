@@ -59,16 +59,22 @@ fn hub_get(path: &str) -> Result<Value> {
     Ok(v)
 }
 
-fn pool_query(pool: Option<&str>) -> String {
-    pool.filter(|p| *p != "default")
-        .map(|p| format!("?pool={p}"))
-        .unwrap_or_default()
+/// `?pool=<name>` for a pool other than the default one; a name that is no
+/// pool's (ADR-0034) is refused before it goes into a URL.
+fn pool_query(pool: Option<&str>) -> Result<String> {
+    let Some(p) = pool.filter(|p| *p != devstack_node::member::DEFAULT_POOL) else {
+        return Ok(String::new());
+    };
+    if !devstack_node::member::valid_pool_name(p) {
+        bail!("--pool {p}: a-z, 0-9, `-` and `_`, at most 32");
+    }
+    Ok(format!("?pool={p}"))
 }
 
 /// `devstack pool shared`: the lanes others share with this machine
 /// (ADR-0035).
 pub fn shared(pool: Option<&str>) -> Result<()> {
-    let v = hub_get(&format!("/hub/pool/shared{}", pool_query(pool)))?;
+    let v = hub_get(&format!("/hub/pool/shared{}", pool_query(pool)?))?;
     let lanes = v.as_array().cloned().unwrap_or_default();
     if lanes.is_empty() {
         println!("nobody shares a lane with this machine");
@@ -100,7 +106,7 @@ pub fn shared(pool: Option<&str>) -> Result<()> {
 /// `devstack open <lane> [service]`: open a service of a lane someone shares
 /// with this machine, through a forward the hub keeps (ADR-0035 point 3).
 pub fn open_shared(lane: &str, service: Option<&str>, pool: Option<&str>) -> Result<()> {
-    let q = pool_query(pool);
+    let q = pool_query(pool)?;
     let v = hub_get(&format!("/hub/pool/shared{q}"))?;
     let lanes = v.as_array().cloned().unwrap_or_default();
     let found: Vec<&Value> = lanes
@@ -129,6 +135,9 @@ pub fn open_shared(lane: &str, service: Option<&str>, pool: Option<&str>) -> Res
     };
     let port = devstack_hub::ensure_running().map_err(|e| anyhow!(e))?;
     let lease = l["lease"].as_str().unwrap_or("");
+    if lease.is_empty() || !lease.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        bail!("the hub names no usable lease for `{lane}`");
+    }
     let mut r = agent()
         .post(&format!(
             "http://127.0.0.1:{port}/hub/pool/shared/{lease}/open{q}"

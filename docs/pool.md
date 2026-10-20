@@ -427,8 +427,11 @@ Never sent: file contents, environment values, command lines, service output.
 Every text of a log line is cut to its first line before it leaves the
 machine (a failed job's reason keeps its process output in `daemon.log`
 only); fields with a command line, an environment, process output or a path
-on the machine stay in `daemon.log`, and user names in home paths and
-credentials in URLs are masked.
+on the machine stay in `daemon.log`; in every text the repository's path
+goes out as `<repo>`, a lane's worktree as `<worktree>`, devstack's state
+as `<devstack>` and the home directory as `~`, and user names in other home
+paths and credentials in URLs are masked. A collector that is switched off
+answers `404`, and the member stops sending at once.
 
 To read what a pool collected when the collector writes to Elasticsearch
 (the OpenTelemetry collector's `elasticsearch` exporter), `scripts/telemetry/`

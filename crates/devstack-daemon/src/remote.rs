@@ -31,14 +31,23 @@ const STATE_EVERY: Duration = Duration::from_secs(5);
 pub struct RemoteState {
     pub running: usize,
     pub services: usize,
-    /// The last thing that went wrong (a failed sync or renewal), until it
-    /// works again.
-    pub error: Option<String>,
+    /// What goes wrong now, by what it concerns (`sync`, `renew`,
+    /// `sharing`, `port 3000`, `lease`), each until that works again: a
+    /// sync that works does not hide a port that is not forwarded.
+    pub errors: std::collections::BTreeMap<String, String>,
     /// The lease is over (an admin ended it, or it expired): the lane no
     /// longer runs there.
     pub ended: bool,
     /// Its services that run now (healthy or running), by name.
     pub active: Vec<String>,
+}
+
+impl RemoteState {
+    /// What goes wrong now, in one text (`None`: nothing).
+    pub fn error(&self) -> Option<String> {
+        (!self.errors.is_empty())
+            .then(|| self.errors.values().cloned().collect::<Vec<_>>().join("; "))
+    }
 }
 
 pub struct RemoteLane {
@@ -648,12 +657,12 @@ impl RemoteLane {
             });
         }
         if let Some(e) = unwritten.into_inner().unwrap() {
-            lane.trouble(Some(format!("sync: {e}")));
+            lane.trouble("sync", Some(format!("sync: {e}")));
         }
         if sharing.is_some()
             && let Err(e) = lane.share(sharing)
         {
-            lane.trouble(Some(format!("sharing: {e}")));
+            lane.trouble("sharing", Some(format!("sharing: {e}")));
         }
         if forward {
             lane.start_forwarding(rt);
@@ -714,6 +723,9 @@ impl RemoteLane {
             .share_lease(&self.lease, sharing.as_ref())
             .map_err(|e| e.to_string());
         *self.sharing.lock().unwrap() = sharing;
+        if r.is_ok() {
+            self.trouble("sharing", None);
+        }
         r
     }
 
@@ -727,8 +739,13 @@ impl RemoteLane {
             .unwrap_or_default()
     }
 
-    fn trouble(&self, what: Option<String>) {
-        self.state.lock().unwrap().error = what;
+    /// What goes wrong with `about` now (`None`: it works again).
+    fn trouble(&self, about: &str, what: Option<String>) {
+        let mut st = self.state.lock().unwrap();
+        match what {
+            Some(w) => st.errors.insert(about.to_string(), w),
+            None => st.errors.remove(about),
+        };
     }
 
     /// A sync that failed, in part or in full, goes to the diagnostic log
@@ -826,26 +843,26 @@ impl RemoteLane {
                                 }
                                 if s.failed.is_empty() {
                                     seen = Some(fp);
-                                    self.trouble(None);
+                                    self.trouble("sync", None);
                                 } else {
                                     // The rest landed; these are tried
                                     // again with the next change or the
                                     // next full sync, not every tick.
                                     let e = not_written(&s.failed);
                                     self.sync_failed(&e);
-                                    self.trouble(Some(format!("sync: {e}")));
+                                    self.trouble("sync", Some(format!("sync: {e}")));
                                 }
                             }
                             Err(e) => {
                                 // Tried again at the next tick.
                                 self.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
                                 self.sync_failed(&e.to_string());
-                                self.trouble(Some(format!("sync: {e}")));
+                                self.trouble("sync", Some(format!("sync: {e}")));
                             }
                         }
                     }
                 }
-                Ok(Err(e)) => self.trouble(Some(format!("listing the worktree: {e}"))),
+                Ok(Err(e)) => self.trouble("sync", Some(format!("listing the worktree: {e}"))),
                 Err(_) => {}
             }
         }
@@ -857,7 +874,7 @@ impl RemoteLane {
         {
             let mut st = self.state.lock().unwrap();
             st.ended = true;
-            st.error = Some(why);
+            st.errors.insert("lease".into(), why);
         }
         self.listening.send_replace(false);
         self.gone.send_replace(true);
@@ -878,6 +895,7 @@ impl RemoteLane {
             match self.client.renew(&self.lease).await {
                 Ok(_) => {
                     renewed = Instant::now();
+                    self.trouble("renew", None);
                     if self.owns_main() {
                         let _ = self
                             .client
@@ -892,10 +910,13 @@ impl RemoteLane {
                     let sharing = self.sharing.lock().unwrap().clone();
                     if let Some(sh) = sharing {
                         let (pool, lease) = (self.pool.clone(), self.lease.clone());
-                        let _ = tokio::task::spawn_blocking(move || {
+                        let shared = tokio::task::spawn_blocking(move || {
                             local_member(&pool).share_lease(&lease, Some(&sh))
                         })
                         .await;
+                        if matches!(shared, Ok(Ok(_))) {
+                            self.trouble("sharing", None);
+                        }
                     }
                 }
                 Err(devstack_node::nodeclient::ClientError::Status(404, _)) => {
@@ -909,7 +930,7 @@ impl RemoteLane {
                     );
                 }
                 Err(e) => {
-                    self.trouble(Some(format!("renewing the lease: {e}")));
+                    self.trouble("renew", Some(format!("renewing the lease: {e}")));
                     // Not renewed for longer than a lease lives: the node let
                     // it go, or cannot be reached; either way the lane is
                     // gone for this machine.
@@ -1037,20 +1058,16 @@ impl RemoteLane {
             match tokio::net::TcpListener::bind(("127.0.0.1", here)).await {
                 Ok(l) => {
                     listeners.push(l);
-                    let mut st = self.state.lock().unwrap();
-                    if st
-                        .error
-                        .as_deref()
-                        .is_some_and(|e| e.starts_with(&format!("port {here} here")))
-                    {
-                        st.error = None;
-                    }
+                    self.trouble(&format!("port {here}"), None);
                     break;
                 }
                 Err(e) => {
-                    self.trouble(Some(format!(
-                        "port {here} here: {e} (something else holds it; tried again until it is free)"
-                    )));
+                    self.trouble(
+                        &format!("port {here}"),
+                        Some(format!(
+                            "port {here} here: {e} (something else holds it; tried again until it is free)"
+                        )),
+                    );
                     let wait = if t0.elapsed() < Duration::from_secs(30) {
                         Duration::from_secs(1)
                     } else {
@@ -1322,7 +1339,22 @@ pub fn readiness(view: &serde_json::Value, expected: &[String]) -> Option<Result
 
 #[cfg(test)]
 mod tests {
-    use super::{NodeRef, Release, release_warning, tunnel_error, version};
+    use super::{NodeRef, Release, RemoteState, release_warning, tunnel_error, version};
+
+    #[test]
+    fn a_sync_that_works_does_not_hide_a_port_that_is_not_forwarded() {
+        let mut st = RemoteState::default();
+        assert_eq!(st.error(), None);
+        st.errors
+            .insert("port 3000".into(), "port 3000 here: in use".into());
+        st.errors.insert("sync".into(), "sync: refused".into());
+        assert_eq!(
+            st.error().as_deref(),
+            Some("port 3000 here: in use; sync: refused")
+        );
+        st.errors.remove("sync");
+        assert_eq!(st.error().as_deref(), Some("port 3000 here: in use"));
+    }
 
     fn offer(
         node: Option<Release>,

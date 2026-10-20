@@ -44,9 +44,9 @@ pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Build { service, lane } => {
+        Cmd::Build { service } => {
             let stack = load(file);
-            crate::buildcmd::run(&stack, &repo_of(file)?, &service, &lane)
+            crate::buildcmd::run(&stack, &repo_of(file)?, &service)
         }
         Cmd::Env {
             service,
