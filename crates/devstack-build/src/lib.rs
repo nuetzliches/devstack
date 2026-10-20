@@ -264,6 +264,12 @@ pub enum Outcome {
     Cancelled {
         id: String,
     },
+    /// The build command succeeded, but its inputs changed while it ran
+    /// ([`Builder::poll_checked`]): the output is not what its id says, and
+    /// nothing was published (ADR-0002).
+    Stale {
+        id: String,
+    },
 }
 
 /// A build in progress.
@@ -387,15 +393,27 @@ impl Builder {
     /// Non-blocking: the outcome once the build's root has exited (ADR-0020:
     /// that, not an empty job, is the end of a build), published if it succeeded.
     pub fn poll(&self, r: &mut Running) -> Result<Option<Outcome>> {
+        self.poll_checked(r, &|| true)
+    }
+
+    /// [`Self::poll`], publishing only while `fresh` says the build's inputs
+    /// are still the ones it started from; asked right before the artifact
+    /// takes its id, so an id another builder can see is never one whose
+    /// content is wrong ([`Outcome::Stale`] otherwise).
+    pub fn poll_checked(
+        &self,
+        r: &mut Running,
+        fresh: &dyn Fn() -> bool,
+    ) -> Result<Option<Outcome>> {
         match r.build.try_exit_code() {
             None => Ok(None),
-            Some(code) => self.finish(r, code).map(Some),
+            Some(code) => self.finish(r, code, fresh).map(Some),
         }
     }
 
     pub fn wait(&self, r: &mut Running) -> Result<Outcome> {
         let code = r.build.wait()?;
-        self.finish(r, code)
+        self.finish(r, code, &|| true)
     }
 
     /// Superseded (ADR-0003): kill the build's tree, publish nothing.
@@ -404,7 +422,7 @@ impl Builder {
         Outcome::Cancelled { id: r.id.clone() }
     }
 
-    fn finish(&self, r: &Running, code: i32) -> Result<Outcome> {
+    fn finish(&self, r: &Running, code: i32, fresh: &dyn Fn() -> bool) -> Result<Outcome> {
         if code != 0 {
             return Ok(Outcome::Failed {
                 id: r.id.clone(),
@@ -412,7 +430,9 @@ impl Builder {
                 log: r.log.clone(),
             });
         }
-        let dir = self.publish(r)?;
+        let Some(dir) = self.publish(r, fresh)? else {
+            return Ok(Outcome::Stale { id: r.id.clone() });
+        };
         Ok(Outcome::Published {
             id: r.id.clone(),
             dir,
@@ -422,7 +442,10 @@ impl Builder {
 
     /// Copy the output into `.tmp-<id>`, write the metadata, rename into place.
     /// An artifact directory is therefore complete or absent (ADR-0002).
-    fn publish(&self, r: &Running) -> Result<PathBuf> {
+    /// `None` when `fresh` says the inputs changed: nothing is published, and
+    /// an artifact of the same id that exists is left alone (it is another
+    /// build's, of the inputs its id says).
+    fn publish(&self, r: &Running, fresh: &dyn Fn() -> bool) -> Result<Option<PathBuf>> {
         if !r.output.is_dir() {
             return Err(BuildError::Other(format!(
                 "build of `{}` succeeded but its output `{}` does not exist",
@@ -432,7 +455,9 @@ impl Builder {
         }
         let fin = self.layout.artifact(&r.service, &r.id);
         if self.artifact(&r.service, &r.id).is_some() {
-            return Ok(fin); // same inputs, already published
+            // Same inputs, already published; this build's output is not
+            // needed (and not the tree as it is now, if that changed).
+            return Ok(fresh().then_some(fin));
         }
         // A directory without metadata is no artifact (a prune that stopped
         // halfway): it goes, and the build is published afresh.
@@ -460,11 +485,15 @@ impl Builder {
             serde_json::to_vec_pretty(&meta).expect("meta serialises"),
         )
         .map_err(|e| BuildError::io("write artifact meta", e))?;
+        if !fresh() {
+            let _ = fs::remove_dir_all(&tmp);
+            return Ok(None);
+        }
         match rename_dir(&tmp, &fin) {
-            Ok(()) => Ok(fin),
+            Ok(()) => Ok(Some(fin)),
             Err(_) if fin.exists() => {
                 let _ = fs::remove_dir_all(&tmp); // published concurrently with the same id
-                Ok(fin)
+                Ok(Some(fin))
             }
             Err(e) => Err(BuildError::io(format!("publish {}", fin.display()), e)),
         }

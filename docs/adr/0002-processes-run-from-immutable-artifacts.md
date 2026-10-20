@@ -1,6 +1,6 @@
 # ADR-0002: Processes run from immutable artifacts, never from the build output of the source tree
 
-- **Status:** Accepted (2026-10-14), amended 2026-10-18 (services without `build`; a build whose inputs changed meanwhile is discarded)
+- **Status:** Accepted (2026-10-14), amended 2026-10-18 (services without `build`; a build whose inputs changed meanwhile is discarded; since 2026-10-20 before it is published)
 - **Date:** 2026-10-14
 - **Deciders:** project owner
 - **Related:** [problem statement, root cause A](../problem-statement.md#root-cause-a-building-and-running-share-one-output-directory), [plan §3.2](../plan.md#32-change--candidate--main)
@@ -117,3 +117,9 @@ build's sync changed while it ran is not published under its id: the daemon
 compares the inputs' id after the build with the one it built for, discards
 the artifact if they differ (`build_discarded` in the daemon log) and builds
 again.
+
+*Amended 2026-10-20.* The comparison runs before the artifact takes its id
+(`Builder::poll_checked`), not after: a build whose inputs changed is never
+renamed into place. Discarding it after publishing left a moment in which
+another tree's supervisor, sharing the store, could find the id and start what
+was then deleted under it.

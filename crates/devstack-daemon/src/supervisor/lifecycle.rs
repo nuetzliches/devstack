@@ -200,7 +200,8 @@ impl Supervisor {
     /// `name` exited by itself after running `ran`: start it again from the
     /// same build after a backoff, unless something else touched it
     /// meanwhile (a stop, a start, a switch); `Failed` after [`MAX_EXITS`]
-    /// times in a row.
+    /// times in a row. A change seen while it was down follows as a
+    /// candidate once it runs again (ADR-0003; `resume_changes`).
     fn restart_exited(
         self: &Arc<Self>,
         name: &str,
@@ -325,10 +326,20 @@ impl Supervisor {
                 slot.view.pid = None;
                 slot.view.instance_port = None;
             }
+            if result.is_ok() && svc.kind == Kind::Job {
+                slot.ran_since = Some(requested);
+            }
         }
         if let Err(e) = &result {
             self.set_status(name, Status::Failed { reason: e.clone() });
+            return result;
         }
+        // Only a start that succeeded uses up the restore (ADR-0016): one
+        // that failed for a passing reason (a port still held, infra not
+        // reachable yet) restores again, it does not build the tree.
+        self.started.lock().unwrap().insert(name.to_string());
+        drop(_op);
+        self.resume_changes(name);
         result
     }
 
@@ -388,7 +399,7 @@ impl Supervisor {
         epoch: u64,
     ) -> Result<(), String> {
         let cancel = || self.stopped_since(name, epoch);
-        let first = self.started.lock().unwrap().insert(name.to_string());
+        let first = !self.started.lock().unwrap().contains(name);
         // 1. The artifact (services and jobs with `build`): the one given; at
         //    the first start after a daemon start the last promoted one
         //    (ADR-0016); else built from the tree.
@@ -412,7 +423,7 @@ impl Supervisor {
                 }
                 None => {
                     built = true;
-                    Some(self.build_locked(name, svc, &cancel)?)
+                    Some(self.build_locked(name, svc, &cancel, epoch)?)
                 }
             },
         };
@@ -830,10 +841,27 @@ impl Supervisor {
                             Ok(()) => Status::Healthy,
                             Err(reason) => Status::Unhealthy { reason },
                         };
+                        let s = me.with_workers_note(&name, generation, s);
                         me.set_status_of(&name, Some(generation), s);
                     }
                 }
             });
+    }
+
+    /// A passing health check of an instance that serves without its
+    /// background workers (the relay's second start failed) still says so:
+    /// the dashboard and `status` must not show it as healthy (ADR-0008).
+    fn with_workers_note(&self, name: &str, generation: u64, status: Status) -> Status {
+        if status != Status::Healthy {
+            return status;
+        }
+        let slots = self.slots.lock().unwrap();
+        match slots.get(name).and_then(|s| s.without_workers.as_ref()) {
+            Some((g, reason)) if *g == generation => Status::Unhealthy {
+                reason: reason.clone(),
+            },
+            _ => status,
+        }
     }
 
     /// Graceful stop, then kill (ADR-0009). Behind the proxy, requests are

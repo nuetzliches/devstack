@@ -69,6 +69,7 @@ pub fn run(stack: &Stack, repo: &Path, name: &str, lane: &str) -> Result<()> {
             )
         }
         Outcome::Cancelled { .. } => bail!("build of `{name}` was cancelled"),
+        Outcome::Stale { .. } => bail!("the sources of `{name}` changed while it built; try again"),
     }
 }
 
