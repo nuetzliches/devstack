@@ -1,0 +1,42 @@
+# Frozen for 0.10.0: a job with its own `timeout`, a lane's ignored files
+# taken along (`[lanes] sync`) and shared with the pool by default (`share`).
+version = 1
+
+[stack]
+name = "shop"
+requires = "0.10.0"
+
+[lanes]
+port_step = 100
+image = "registry.example/shop-lane:1"
+sync = ["web/certs/*.pem"]
+share = ["team:qa"]
+
+[compose.app]
+project = "shop"
+files = ["deploy/compose.yml"]
+services = ["db"]
+
+[services.migrate]
+kind = "job"
+build = "dotnet build src/Migrate/Migrate.csproj -c Debug"
+output = "src/Migrate/bin/Debug/net10.0"
+run = "dotnet {artifact}/Migrate.dll"
+after = ["compose.app.db"]
+timeout = "10m"
+
+[services.api]
+build = "dotnet build src/Api/Api.csproj -c Debug"
+output = "src/Api/bin/Debug/net10.0"
+run = "dotnet {artifact}/Api.dll"
+port = 5000
+after = ["migrate"]
+health = { http = "/health", timeout = "60s" }
+
+[commands.seed]
+description = "seed the database"
+requires = ["api"]
+steps = [
+  { exec = "dotnet run --project tools/Seed", cwd = ".", timeout = "5m" },
+  { http = "POST {service.api.url}/dev/seed", timeout = "60s" },
+]

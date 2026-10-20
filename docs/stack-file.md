@@ -46,16 +46,24 @@ schema version says so, not which of its keys is unknown.
   Windows reserves for devices (`con`, `prn`, `aux`, `nul`, `com1`-`com9`,
   `lpt1`-`lpt9`): they become directory names.
 - **Paths** in `env_files`, `[compose.<group>] files` and `env_files`,
-  `[lanes] dockerfile` and `sync` are relative to the repository and stay
+  `[lanes] dockerfile` and `sync`, and a service's `cwd`, `output`,
+  `prepare.cwd` and `hot_reload.cwd` are relative to the repository and stay
   inside it: no absolute path, no drive (`C:`), no `..`, judged the same on
-  every platform.
+  every platform. `output` may start with `{repo}`; where `${VAR}` makes it
+  absolute, the build fails unless it is in the snapshot.
 - **Env files** are read in Compose's dialect: `KEY=VALUE` lines, `#`
   comments, an optional `export `; an unquoted value ends at ` #`; a
   `"double-quoted"` one may span lines and knows the escapes `\n`, `\r`,
   `\t`, `\\`, `\"`, `\$`, and `$$` for a `$`; a `'single-quoted'` one is
   taken as written. `${VAR}`, `${VAR:-default}`, `${VAR-default}` and `$VAR`
   in an unquoted or double-quoted value come from the process environment,
-  then from what the files set before; an unknown one is empty.
+  then from what the files set before; an unknown one is empty. A default
+  may hold another reference (`${A:-${B}}`); `${VAR:+alt}` and
+  `${VAR+alt}` give `alt` when the variable is set (`:+`: and not empty).
+  Unlike Compose, `${VAR:?message}` and `${VAR?message}` do not fail: they
+  read as `${VAR}`. A byte order mark at the start of the file is skipped.
+  (The stack file's own `${VAR}` knows `${VAR}` and `${VAR:-default}`
+  only; see "Placeholders".)
 
 ## `[compose.<group>]`: the infra plane
 
@@ -187,8 +195,10 @@ What goes into the build id:
   yarn), `tsconfig.json` / `tsconfig.base.json`, `Cargo.toml`/`.lock`,
   `go.mod`/`.sum`, `pyproject.toml`, `pom.xml`, Gradle build and settings
   files. A change to one starts candidates like a watched file;
-- the `build` command, `output`, `cwd` and `prepare` (`run`, `cwd`,
-  `inputs`, and the content of the files `inputs` matches).
+- the `build` command and `output` as the build runs them (a `${VAR}` in
+  them with its value, `{repo}` as written, so lanes share the id), `cwd`
+  and `prepare` (`run`, `cwd`, `inputs`, and the content of the files
+  `inputs` matches).
 
 Not in it: ignored files (they are not in the snapshot either), the SDK and
 anything outside the repository. When one of those changed, `devstack restart
@@ -260,7 +270,8 @@ health = { http = "/health/ready", timeout = "180s", insecure_tls = true }
   **readiness** endpoint that checks what the service needs (database), not a
   bare liveness probe: devstack switches traffic to a candidate only once it is
   healthy.
-- `timeout`: how long a start may take until it counts as failed.
+- `timeout`: how long a start may take until it counts as failed; more
+  than 0.
 - `insecure_tls` (default `false`): the service speaks HTTPS with a
   self-signed certificate. The service's URL (`{service.x.url}`, the
   dashboard link) then uses `https`.
@@ -399,7 +410,10 @@ keep_data  = true                             # the default: such a lane keeps i
 
 `port_step` is 1-10000. `dockerfile` and `sync` stay inside the repository
 (see "Names, paths, env files"); `sync` holds globs; `image`, if set, is
-not empty.
+not empty. Two services whose ports differ by a multiple of `port_step`
+(`api = 5000`, `web = 5100`, step 100) collide in a lane: the daemon skips
+those lane numbers, and `devstack check` warns where that hits one of the
+first three lanes.
 
 Every `git worktree` of the repository is a **lane** of the main tree's
 daemon, the moment git creates it; the dashboard shows it under the stack,
@@ -528,12 +542,18 @@ devstack lane start <lane> --profile acceptance --run  # from the main tree
 
 - **What it may set:** `workers`, `data` (`keep`, the default, or
   `fresh`), `env` (for every service and every command's `exec` steps, with
-  the usual placeholders), `autostart`, `command` (one of `[commands]`), and
+  the placeholders a command has: no `{port}`, `{artifact}` or
+  `{is_main}`), `autostart`, `command` (one of `[commands]`), and
   per service `kind`, `build`, `output`, `run`, `spa`, `cwd`, `health` and
   `env`. A service it does not name runs as the file says. Its `env` is
-  added to every service's, a service's own `env` in the profile on top;
-  `kind = "static"` clears the service's `run` unless the profile gives
-  one. `watch`, `port` and the other keys stay as the file says.
+  added to every service's, a service's own `env` in the profile on top.
+  `watch`, `port` and the other keys stay as the file says.
+- **Another `kind` drops what only the old one takes:** a dev server made
+  `static` loses its `run` (unless the profile gives one), `rebuild` and
+  `restart_on`; a `devserver` or `tool` loses `build` and `output`; `spa`
+  stays with `static` only, `hot_reload` with `service`, `timeout` with
+  `job`; a `job` or `tool` loses `health` and `proxy`. What the profile sets
+  itself comes on top.
 - **Its name** uses letters, digits, `-` and `_`; `description` is optional,
   shown where a profile is chosen.
 - **Checked like the rest of the file:** each profile's result must be a

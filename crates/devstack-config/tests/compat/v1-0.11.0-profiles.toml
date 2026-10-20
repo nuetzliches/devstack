@@ -1,0 +1,62 @@
+# Frozen for 0.11.0: a profile (ADR-0041) that runs the stack for an
+# acceptance run, a Compose service's dashboard link (`urls`), a lane on a
+# node that keeps no data (`keep_data`).
+version = 1
+
+[stack]
+name = "shop"
+requires = "0.11.0"
+
+[lanes]
+port_step = 100
+dockerfile = "dev/lane.Dockerfile"
+keep_data = false
+
+[compose.app]
+project = "shop"
+files = ["deploy/compose.yml"]
+services = ["db", "scheduler"]
+urls = { scheduler = "http://localhost:4000/ui", db = "" }
+
+[services.api]
+build = "dotnet build src/Api/Api.csproj -c Debug"
+output = "src/Api/bin/Debug/net10.0"
+run = "dotnet {artifact}/Api.dll"
+port = 5000
+after = ["compose.app.db"]
+env = { Mode = "dev" }
+workers = { env = { Workers__Enabled = "{is_main}" } }
+
+[services.web]
+kind = "static"
+cwd = "web"
+build = "npm run build -- --configuration development"
+output = "web/dist/web/browser"
+port = 4300
+
+[services.worker]
+build = "dotnet build src/Worker/Worker.csproj -c Debug"
+output = "src/Worker/bin/Debug/net10.0"
+run = "dotnet {artifact}/Worker.dll"
+autostart = false
+
+[commands.e2e]
+description = "the end-to-end suite"
+requires = ["api", "web"]
+steps = [{ exec = "npx playwright test", cwd = "web" }]
+
+[profiles.acceptance]
+description = "the end-to-end suite on a build"
+workers = true
+data = "fresh"
+autostart = ["api", "web", "worker"]
+env = { BASE_URL = "{service.web.url}", JOBS_URL = "{compose.app.scheduler.4000}" }
+command = "e2e"
+
+[profiles.acceptance.services.web]
+build = "npm run build -- --configuration e2e"
+spa = true
+
+[profiles.acceptance.services.api]
+env = { Mode = "e2e" }
+health = { http = "/health/ready", timeout = "120s" }
