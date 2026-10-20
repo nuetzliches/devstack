@@ -215,6 +215,14 @@ anything outside the repository. When one of those changed, `devstack restart
   hot-reload mode is read the same way (`auto`).
 - `proxy = false`: no proxy; a restart happens in place on the fixed port (a
   short gap). Only for services the proxy cannot carry.
+- A dev server whose `run` takes `{port}` runs on a port of its own, and
+  devstack holds its fixed port and forwards it byte for byte (TLS,
+  WebSockets and HMR pass unchanged;
+  [ADR-0043](adr/0043-a-dev-servers-fixed-port-is-devstacks.md)): a restart
+  keeps the address (new connections wait for the new instance), and
+  `promote --lane` switches the forward. `proxy = false` makes it bind the
+  fixed port itself, as does a `run` without `{port}`. The dev server prints
+  its own port in its log; the address to open is the fixed one.
 
 Generated directories never count as changes: `bin`, `obj`, `node_modules`,
 `target`, `.git`, `.devstack`, and the caches of frontend tools (`.angular`,

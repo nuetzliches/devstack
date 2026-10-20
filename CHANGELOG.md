@@ -9,6 +9,19 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **A dev server's fixed port is devstack's**
+  ([ADR-0043](docs/adr/0043-a-dev-servers-fixed-port-is-devstacks.md)). A
+  dev server whose `run` takes `{port}` runs on a port of its own; devstack
+  holds the fixed port and forwards it byte for byte (TLS, WebSockets, HMR
+  unchanged). A restart (`restart_on`, the restart button) keeps the
+  address: a request made meanwhile waits for the new instance instead of
+  being refused; `promote --lane` switches the forward instead of binding
+  the port anew; a stale process can block an instance port only. The view
+  shows the fixed and the instance port, as for a proxied service.
+  `proxy = false` keeps the dev server on the fixed port.
+
 ### Fixed
 
 - A failed rebuild of a dev server is logged once (`devserver_rebuild` with

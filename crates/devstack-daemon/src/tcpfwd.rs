@@ -4,8 +4,11 @@
 //! dev server pass unchanged (ADR-0024).
 
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::watch;
 
 /// Forwarding while it lives; dropping it stops the listeners a moment later,
 /// `close` before it returns (open connections end on their own).
@@ -88,6 +91,172 @@ pub fn start_to(port: u16, addr: String, rt: &tokio::runtime::Handle) -> std::io
     Ok(Forward { tasks: vec![task] })
 }
 
+/// What a [`Front`] does with a new connection (ADR-0043).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FrontState {
+    /// Wait up to this long until there is a target (the dev server starts).
+    Hold(Duration),
+    /// Forward to this port.
+    To(u16),
+    /// Close it at once (the dev server is stopped).
+    Refuse,
+}
+
+/// A dev server's fixed port, held by devstack and forwarded byte for byte
+/// to its instance's port (ADR-0043): it holds new connections while the
+/// dev server starts, forwards them while it runs and refuses them while it
+/// is stopped. Switched without closing its listener.
+pub struct Front {
+    port: u16,
+    state: Arc<watch::Sender<FrontState>>,
+    active: Arc<AtomicUsize>,
+    served: Arc<AtomicU64>,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+impl Front {
+    /// Listen on `port` (127.0.0.1, and ::1 where it can), refusing until
+    /// told otherwise.
+    pub fn bind(port: u16, rt: &tokio::runtime::Handle) -> std::io::Result<Front> {
+        let v4 = rt.block_on(TcpListener::bind(("127.0.0.1", port)))?;
+        let v6 = rt.block_on(TcpListener::bind(("::1", port))).ok();
+        let (tx, _) = watch::channel(FrontState::Refuse);
+        let state = Arc::new(tx);
+        let active = Arc::new(AtomicUsize::new(0));
+        let served = Arc::new(AtomicU64::new(0));
+        let mut tasks = Vec::new();
+        for l in std::iter::once(v4).chain(v6) {
+            tasks.push(rt.spawn(front_accept(
+                l,
+                port,
+                state.clone(),
+                active.clone(),
+                served.clone(),
+            )));
+        }
+        Ok(Front {
+            port,
+            state,
+            active,
+            served,
+            tasks,
+        })
+    }
+
+    pub fn set(&self, state: FrontState) {
+        self.state.send_replace(state);
+    }
+
+    pub fn state(&self) -> FrontState {
+        self.state.borrow().clone()
+    }
+
+    /// As a proxy's view shows it: fixed port, instance port, connections.
+    pub fn view(&self) -> crate::proxy::ProxyView {
+        crate::proxy::ProxyView {
+            port: self.port,
+            upstream: match self.state() {
+                FrontState::To(p) => Some(p),
+                _ => None,
+            },
+            build: None,
+            pending: None,
+            active: self.active.load(Ordering::SeqCst),
+            served: self.served.load(Ordering::SeqCst),
+            last_error: None,
+        }
+    }
+
+    /// Stop listening, and wait until the port is free again.
+    pub fn close(mut self) {
+        let tasks = std::mem::take(&mut self.tasks);
+        for t in &tasks {
+            t.abort();
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !tasks.iter().all(|t| t.is_finished()) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+impl Drop for Front {
+    fn drop(&mut self) {
+        for t in &self.tasks {
+            t.abort();
+        }
+    }
+}
+
+async fn front_accept(
+    listener: TcpListener,
+    port: u16,
+    state: Arc<watch::Sender<FrontState>>,
+    active: Arc<AtomicUsize>,
+    served: Arc<AtomicU64>,
+) {
+    loop {
+        let mut inbound = match listener.accept().await {
+            Ok((c, _)) => {
+                let _ = c.set_nodelay(true);
+                c
+            }
+            Err(e) => {
+                crate::diag::warn_limited(
+                    &format!("forward_accept_failed:{port}"),
+                    "forward_accept_failed",
+                    serde_json::json!({ "port": port, "error": e.to_string() }),
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
+        let mut rx = state.subscribe();
+        let (active, served) = (active.clone(), served.clone());
+        tokio::spawn(async move {
+            let Some(target) = target_of(&mut rx).await else {
+                return; // refused: dropped, the client sees it closed
+            };
+            // The instance may still be binding its port: a few tries.
+            let mut outbound = None;
+            for _ in 0..20 {
+                if let Some(s) = connect(target).await {
+                    outbound = Some(s);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            let Some(mut outbound) = outbound else {
+                return;
+            };
+            active.fetch_add(1, Ordering::SeqCst);
+            served.fetch_add(1, Ordering::SeqCst);
+            let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+            active.fetch_sub(1, Ordering::SeqCst);
+        });
+    }
+}
+
+/// Where a new connection goes: the target now, or once there is one while
+/// held; `None` when refused or held past its deadline.
+async fn target_of(rx: &mut watch::Receiver<FrontState>) -> Option<u16> {
+    let mut until: Option<tokio::time::Instant> = None;
+    loop {
+        let now = rx.borrow_and_update().clone();
+        match now {
+            FrontState::To(p) => return Some(p),
+            FrontState::Refuse => return None,
+            FrontState::Hold(d) => {
+                let deadline = *until.get_or_insert_with(|| tokio::time::Instant::now() + d);
+                match tokio::time::timeout_at(deadline, rx.changed()).await {
+                    Ok(Ok(())) => continue,
+                    _ => return None,
+                }
+            }
+        }
+    }
+}
+
 async fn accept(listener: TcpListener, port: u16, target: u16) {
     loop {
         let (mut inbound, _) = match listener.accept().await {
@@ -158,6 +327,66 @@ mod tests {
         c.read_exact(&mut back).unwrap();
         assert_eq!(&back, b"hello");
         fwd.close();
+        assert!(
+            std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(),
+            "port released"
+        );
+    }
+
+    fn echo() -> u16 {
+        let echo = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let target = echo.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for s in echo.incoming().flatten() {
+                let mut s = s;
+                let mut b = [0u8; 5];
+                if s.read_exact(&mut b).is_ok() {
+                    let _ = s.write_all(&b);
+                }
+            }
+        });
+        target
+    }
+
+    fn free() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    #[test]
+    fn a_front_holds_forwards_switches_and_refuses() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let port = free();
+        let front = Front::bind(port, rt.handle()).unwrap();
+        let ask = move || {
+            let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let _ = c.write_all(b"hello");
+            let mut back = [0u8; 5];
+            c.read_exact(&mut back).map(|_| back)
+        };
+        // Refused: closed at once.
+        assert!(ask().is_err());
+        // Held: the connection waits for its target, then goes through.
+        front.set(FrontState::Hold(Duration::from_secs(10)));
+        let a = echo();
+        let waiting = std::thread::spawn(ask);
+        std::thread::sleep(Duration::from_millis(300));
+        front.set(FrontState::To(a));
+        assert_eq!(&waiting.join().unwrap().unwrap(), b"hello");
+        // Switched to another instance, the listener stays.
+        let b = echo();
+        front.set(FrontState::To(b));
+        assert_eq!(&ask().unwrap(), b"hello");
+        assert_eq!(front.view().upstream, Some(b));
+        assert_eq!(front.view().served, 2);
+        // Held past its deadline: closed.
+        front.set(FrontState::Hold(Duration::from_millis(200)));
+        assert!(ask().is_err());
+        front.close();
         assert!(
             std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(),
             "port released"

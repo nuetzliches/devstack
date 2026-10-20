@@ -632,3 +632,27 @@ fn a_dev_server_says_how_it_rebuilds() {
         "{issues:?}"
     );
 }
+
+#[test]
+fn a_dev_server_with_a_port_of_its_own_is_fronted() {
+    let dev = |run: &str, extra: &str| {
+        format!(
+            "{MINIMAL}[services.web]\nkind = \"devserver\"\nrun = \"{run}\"\nport = 4200\n{extra}\n"
+        )
+    };
+    let fronted = |text: String| from_str(&text, Path::new("t")).unwrap().services["web"].fronted();
+    assert!(
+        fronted(dev("ng serve --port {port}", "")),
+        "default with `{{port}}`"
+    );
+    assert!(
+        !fronted(dev("ng serve", "")),
+        "it binds the fixed port itself"
+    );
+    assert!(!fronted(dev("ng serve --port {port}", "proxy = false")));
+    let issues = invalid(&dev("ng serve", "proxy = true"));
+    assert!(
+        issues.iter().any(|i| i.contains("needs `{port}`")),
+        "{issues:?}"
+    );
+}

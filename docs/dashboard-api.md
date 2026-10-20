@@ -178,7 +178,7 @@ type ServiceView = {
   status: Status; build_id: string | null; pid: number | null;
   since: number; log: string | null;
   instance_port: number | null;          // internal port behind the proxy
-  proxy: ProxyView | null;
+  proxy: ProxyView | null;               // a dev server's forward too (ADR-0043): port, upstream (its instance's port), active, served
   candidate: Candidate | null;           // a newer build on its way, or why it did not arrive
   rebuild?: Rebuild;                     // a dev server's last rebuild, from its output (ADR-0042): {state: rebuilding|ok|failed, since, ms?, tool, errors?}; an ok one for a minute, a failed one until the next
   hot_reload: boolean;                   // the toolchain's watcher runs it now

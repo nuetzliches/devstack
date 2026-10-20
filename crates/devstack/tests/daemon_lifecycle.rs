@@ -1532,6 +1532,44 @@ fn a_worktree_runs_as_a_lane() {
         "the main tree's dev server answers\n{}",
         s.diag()
     );
+    // Its fixed port is devstack's, forwarded to an instance port of its
+    // own (ADR-0043); a restart keeps the address: a request made while it
+    // restarts waits and is answered.
+    let web = s.service_view("web");
+    assert_eq!(web["proxy"]["port"], web_port, "{web}");
+    assert!(
+        web["instance_port"]
+            .as_u64()
+            .is_some_and(|p| p != u64::from(web_port)),
+        "{web}"
+    );
+    let restarting = std::thread::spawn({
+        let bin = BIN.to_string();
+        let file = s.file();
+        let home = s.token_home.path().to_path_buf();
+        move || {
+            Command::new(bin)
+                .args(["restart", "web", "-f"])
+                .arg(file)
+                .env("LOCALAPPDATA", &home)
+                .env("XDG_STATE_HOME", &home)
+                .env("DEVSTACK_NO_HUB", "1")
+                .output()
+                .unwrap()
+        }
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        get_on(web_port, "/").is_some_and(|b| b.contains("static site")),
+        "answered across the restart\n{}",
+        s.diag()
+    );
+    let out = restarting.join().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let git = |dir: &Path, args: &[&str]| {
         let out = Command::new("git")
             .args(["-c", "user.name=t", "-c", "user.email=t@t"])

@@ -124,3 +124,7 @@ health checks go to the instance's own port, condition 1; `proxy = false`
 restarts in place on the fixed port, condition 3), `tcpfwd.rs` (the TCP
 forward `promote --lane` uses for dev servers), and the integration test
 `edits_become_candidates` (no failed request across a switch).
+
+*Noted 2026-10-20.* Dev servers sit behind devstack too, with a forward of
+bytes instead of the HTTP proxy (TLS, WebSockets, HTTP/2 pass unchanged):
+[ADR-0043](0043-a-dev-servers-fixed-port-is-devstacks.md).

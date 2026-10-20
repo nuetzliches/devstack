@@ -153,7 +153,7 @@ const kv = computed(() => {
         <div class="side">
           <section v-if="svc.proxy" class="card" data-testid="proxy-card">
             <header class="card-header">
-              <h2>Proxy</h2>
+              <h2>{{ svc.kind === 'devserver' ? 'Forward' : 'Proxy' }}</h2>
               <span class="count">:{{ svc.proxy.port }} → {{ svc.proxy.upstream ?? '—' }}</span>
             </header>
             <div class="card-body">
@@ -169,7 +169,7 @@ const kv = computed(() => {
               <dl class="kv proxy-kv">
                 <dt>Active connections</dt>
                 <dd class="tabular">{{ svc.proxy.active }}</dd>
-                <dt>Requests served</dt>
+                <dt>{{ svc.kind === 'devserver' ? 'Connections served' : 'Requests served' }}</dt>
                 <dd class="tabular">{{ svc.proxy.served.toLocaleString() }}</dd>
                 <dt>Last error</dt>
                 <dd :class="svc.proxy.last_error ? 'err' : 'faint'">{{ svc.proxy.last_error ?? 'none' }}</dd>

@@ -561,7 +561,8 @@ pub struct Service {
     /// Serve the fixed port through devstack's proxy (ADR-0010): instances run
     /// on internal ports and a new one takes over without dropped requests.
     /// Default on for long-running services with a port; `false` restarts in
-    /// place on the fixed port.
+    /// place on the fixed port. For a dev server: its fixed port forwarded
+    /// to its instance (ADR-0043), default on where `run` takes `{port}`.
     pub proxy: Option<bool>,
     /// The command for hot-reload mode (plan §3.4a): `devstack hot-reload
     /// <service> on` runs it from the source tree instead of the build, until
@@ -805,5 +806,15 @@ impl Service {
         matches!(self.kind, Kind::Service | Kind::Static)
             && self.port.is_some()
             && self.proxy.unwrap_or(true)
+    }
+
+    /// A dev server whose fixed port devstack holds and forwards to its
+    /// instance (ADR-0043): one with a `port` whose `run` takes `{port}`,
+    /// unless `proxy = false`.
+    pub fn fronted(&self) -> bool {
+        self.kind == Kind::Devserver
+            && self.port.is_some()
+            && self.proxy.unwrap_or(true)
+            && self.run.contains("{port}")
     }
 }
