@@ -335,7 +335,8 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     node_is_clear();
 }
 
-/// No lane container is left on the node.
+/// No lane container is left on the node, and no container of a lane's
+/// Compose project (`devstack-fixture-<slot>`, the slot 24 hex digits).
 fn node_is_clear() {
     let until = Instant::now() + Duration::from_secs(60);
     loop {
@@ -343,10 +344,32 @@ fn node_is_clear() {
             .args(["ps", "-aq", "--filter", "label=devstack.lease"])
             .output()
             .unwrap();
-        if ps.stdout.is_empty() {
+        let projects = Command::new("docker")
+            .args([
+                "ps",
+                "-a",
+                "--filter",
+                "label=com.docker.compose.project",
+                "--format",
+                "{{.Label \"com.docker.compose.project\"}}",
+            ])
+            .output()
+            .unwrap();
+        let lanes: Vec<String> = String::from_utf8_lossy(&projects.stdout)
+            .lines()
+            .filter(|p| {
+                p.strip_prefix("devstack-fixture-")
+                    .is_some_and(|s| s.len() == 24 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+            })
+            .map(str::to_string)
+            .collect();
+        if ps.stdout.is_empty() && lanes.is_empty() {
             return;
         }
-        assert!(Instant::now() < until, "a lane container stays on the node");
+        assert!(
+            Instant::now() < until,
+            "a lane container stays on the node: {lanes:?}"
+        );
         std::thread::sleep(Duration::from_secs(1));
     }
 }

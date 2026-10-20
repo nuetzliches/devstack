@@ -8,14 +8,17 @@
 //! The mirror is the requester's, and the lane's own code writes into it:
 //! everything the agent reads or writes there goes through [`crate::safefs`]
 //! (no symlink is followed), and what the Compose files ask of the node is
-//! checked first ([`crate::confine`]).
+//! checked first ([`crate::confine`]). Compose on the node then runs the
+//! model the agent checked, from `compose/` beside the mirror, never the
+//! lane's files: nothing the lane changes after the check reaches it.
 //!
-//! Everything here calls the Docker CLI and blocks.
+//! Everything here calls the Docker CLI and blocks, with only what Docker
+//! needs of the agent's environment ([`devstack_compose::clean_env`]).
 
 use crate::policy::Network;
 use crate::safefs;
 use devstack_compose::{Docker, Group, Model, budget};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -89,6 +92,7 @@ pub struct DaemonAddr {
 fn docker_for(args: &[&str], within: Duration) -> Result<String> {
     let mut cmd = Command::new("docker");
     cmd.args(args);
+    devstack_compose::clean_env(&mut cmd);
     let out = devstack_compose::output_within(cmd, within)
         .map_err(|e| RunError::Docker(format!("run docker: {e}")))?
         .ok_or_else(|| {
@@ -160,6 +164,78 @@ fn order(stack: &devstack_config::Stack) -> Vec<String> {
 /// What the lane's daemon writes and the agent reads back: its token.
 const TOKEN: &str = ".devstack/xdg/devstack/token";
 
+/// The Compose projects of a lane, in [`LaneRun::compose_dir`].
+const PROJECTS: &str = "projects.json";
+
+/// A Compose project of a lane: what the agent takes down at its end.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Project {
+    project: String,
+    /// The group's own fixed-name networks (`[compose.<group>] networks`).
+    #[serde(default)]
+    networks: Vec<String>,
+}
+
+/// The ids of the containers of Compose project `project`, by Compose's
+/// label: whatever files made them.
+fn project_containers(project: &str) -> Vec<String> {
+    by_label(&["ps", "-aq"], project)
+}
+
+/// `docker <ls> --filter label=com.docker.compose.project=<project>`, one
+/// name or id a line.
+fn by_label(ls: &[&str], project: &str) -> Vec<String> {
+    let label = format!("label=com.docker.compose.project={project}");
+    let mut args = ls.to_vec();
+    args.extend(["--filter", &label]);
+    docker(&args)
+        .map(|t| {
+            t.lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Stop the containers of `p` (they stay, with their volumes).
+fn stop_project(p: &Project) {
+    let ids = project_containers(&p.project);
+    if !ids.is_empty() {
+        let mut a = vec!["stop", "--timeout", "10"];
+        a.extend(ids.iter().map(String::as_str));
+        let _ = docker_for(&a, budget::STOP);
+    }
+}
+
+/// Remove `p`'s containers and networks, as `compose down` does, by
+/// Compose's labels: what the lane started, whatever its files say now.
+/// `volumes`: its volumes and its own fixed-name networks too.
+fn remove_project(p: &Project, volumes: bool) {
+    let ids = project_containers(&p.project);
+    if !ids.is_empty() {
+        stop_project(p);
+        let mut a = vec!["rm", "-f"];
+        if volumes {
+            a.push("-v");
+        }
+        a.extend(ids.iter().map(String::as_str));
+        let _ = docker_for(&a, budget::STOP);
+    }
+    for n in by_label(&["network", "ls", "-q"], &p.project) {
+        let _ = docker(&["network", "rm", &n]);
+    }
+    if volumes {
+        for v in by_label(&["volume", "ls", "-q"], &p.project) {
+            let _ = docker(&["volume", "rm", "-f", &v]);
+        }
+        for n in &p.networks {
+            let _ = docker(&["network", "rm", n]);
+        }
+    }
+}
+
 impl LaneRun {
     pub fn src(&self) -> PathBuf {
         self.dir.join("src")
@@ -188,37 +264,100 @@ impl LaneRun {
             .map_err(|e| RunError::Config(e.to_string()))
     }
 
-    /// The lane's copy of a group: its own project, its own fixed-name
-    /// networks, nothing shared (ADR-0025 point 3), the node overlay once it
-    /// is written.
-    fn group(&self, stack: &devstack_config::Stack, name: &str) -> Group {
+    /// Where the agent keeps what it runs of the lane's groups: beside the
+    /// mirror, where the lane does not write.
+    fn compose_dir(&self) -> PathBuf {
+        self.dir.join("compose")
+    }
+
+    /// A group's project on this node, and its own fixed-name networks:
+    /// nothing shared (ADR-0025 point 3).
+    fn project(&self, stack: &devstack_config::Stack, name: &str) -> Project {
         let cfg = &stack.compose[name];
-        let mut g = Group::from_config(name, cfg, &self.src());
-        g.project = format!("{}-{}", cfg.project, self.slot);
-        g.networks = cfg
-            .networks
-            .iter()
-            .map(|n| format!("{n}-{}", self.slot))
-            .collect();
-        let overlay = self.overlay(name);
-        if overlay.is_file() {
-            g.files.push(overlay);
+        Project {
+            project: format!("{}-{}", cfg.project, self.slot),
+            networks: cfg
+                .networks
+                .iter()
+                .map(|n| format!("{n}-{}", self.slot))
+                .collect(),
         }
+    }
+
+    /// A group as the lane's files have it: what `config` reads, in a
+    /// container that sees the mirror only.
+    fn mirror_group(&self, stack: &devstack_config::Stack, name: &str) -> Group {
+        let p = self.project(stack, name);
+        let mut g = Group::from_config(name, &stack.compose[name], &self.src());
+        g.project = p.project;
+        g.networks = p.networks;
         g
     }
 
-    fn overlay(&self, group: &str) -> PathBuf {
-        self.dir.join("compose").join(format!("{group}.yml"))
+    /// A group as the node runs it: the model the agent checked and its
+    /// overlay, both in [`LaneRun::compose_dir`], nothing of the mirror.
+    fn group(&self, stack: &devstack_config::Stack, name: &str) -> Group {
+        let p = self.project(stack, name);
+        let dir = self.compose_dir();
+        Group {
+            name: name.to_string(),
+            project: p.project,
+            files: vec![
+                dir.join(format!("{name}.json")),
+                dir.join(format!("{name}.yml")),
+            ],
+            env_files: Vec::new(),
+            networks: p.networks,
+            services: stack.compose[name].services.clone(),
+            dir,
+        }
     }
 
-    /// The group's model as `docker compose config` reads it in a container
-    /// that sees the mirror only ([`crate::confine`]).
-    fn config(&self, g: &Group, flags: &[&str]) -> Result<Model> {
+    /// The Compose projects of this lane the agent knows of: each it ever
+    /// started here (recorded in [`LaneRun::compose_dir`]: the lane's stack
+    /// file may name others by now) and each `stack` names.
+    fn projects(&self, stack: Option<&devstack_config::Stack>) -> Vec<Project> {
+        let mut out: Vec<Project> = std::fs::read(self.compose_dir().join(PROJECTS))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        if let Some(stack) = stack {
+            for name in order(stack) {
+                let p = self.project(stack, &name);
+                if !out.iter().any(|o| o.project == p.project) {
+                    out.push(p);
+                }
+            }
+        }
+        out
+    }
+
+    /// Note `p` among the projects of this lane, before anything of it is
+    /// created.
+    fn record(&self, p: &Project) -> Result<()> {
+        let file = self.compose_dir().join(PROJECTS);
+        let mut all: Vec<Project> = std::fs::read(&file)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        if !all.contains(p) {
+            all.push(p.clone());
+            let text = serde_json::to_vec_pretty(&all).expect("projects serialise");
+            std::fs::write(&file, text).map_err(|e| RunError::Io(file.clone(), e))?;
+        }
+        Ok(())
+    }
+
+    /// The group's model as `docker compose config` writes it in a
+    /// container that sees the mirror only ([`crate::confine`]), without
+    /// values left for the node's environment to fill in.
+    fn config(&self, g: &Group) -> Result<serde_json::Value> {
         let image = crate::confine::config_image();
         ensure_image(&image)?;
-        let args = crate::confine::config_args(g, &self.src(), &image, flags);
+        let args = crate::confine::config_args(g, &self.src(), &image, &[]);
         let mut cmd = Command::new("docker");
         cmd.args(&args);
+        devstack_compose::clean_env(&mut cmd);
         let out = devstack_compose::output_within(cmd, budget::QUICK)
             .map_err(|e| RunError::Docker(format!("run docker: {e}")))?
             .ok_or_else(|| RunError::Docker("`compose config` did not finish".into()))?;
@@ -229,8 +368,10 @@ impl LaneRun {
                 String::from_utf8_lossy(&out.stderr).trim()
             )));
         }
-        devstack_compose::parse_config(&String::from_utf8_lossy(&out.stdout))
-            .map_err(|e| RunError::Config(format!("compose group `{}`: {e}", g.name)))
+        let mut raw: serde_json::Value = serde_json::from_slice(&out.stdout)
+            .map_err(|e| RunError::Config(format!("compose group `{}`: {e}", g.name)))?;
+        crate::confine::strip_unset(&mut raw);
+        Ok(raw)
     }
 
     /// The image the lane runs in: the stack's `[lanes] image`, pulled if the
@@ -287,7 +428,7 @@ impl LaneRun {
         if self.network != Network::Lan {
             flags.push("--ipv6=false");
         }
-        Docker::default()
+        Docker::clean()
             .ensure_network(&self.dir, name, &flags)
             .map_err(RunError::from)
     }
@@ -303,28 +444,64 @@ impl LaneRun {
         agent: Option<&str>,
         phase: &dyn Fn(&str),
     ) -> Result<DaemonAddr> {
-        // Nothing of the lane runs while the agent reads its files.
+        // Nothing of the lane runs while the agent reads its files: not its
+        // container, not the containers of an earlier start (one of them
+        // could change the mirror between the check and the start).
         let _ = docker(&["rm", "-f", &self.container()]);
         let stack = self.stack()?;
+        for p in self.projects(Some(&stack)) {
+            stop_project(&p);
+        }
         phase("lane image: pulled or built once, then kept");
         let image = self.image(&stack)?;
-        let dc = Docker::default();
+        let dc = Docker::clean();
         let src = self.src();
+        let compose_dir = self.compose_dir();
+        std::fs::create_dir_all(&compose_dir).map_err(|e| RunError::Io(compose_dir.clone(), e))?;
+        // A profile with `data = "fresh"` (ADR-0041): its slot's volumes go
+        // before its containers are made (ADR-0038 keeps them otherwise).
+        let fresh = self
+            .profile
+            .as_ref()
+            .and_then(|p| stack.profiles.get(p))
+            .is_some_and(|p| p.data == Some(devstack_config::model::DataMode::Fresh));
 
-        // Every group checked, its overlay written and its containers
-        // created; nothing runs yet, so the network rules go in first.
+        // Every group checked, the model the node runs and its overlay
+        // written, its containers created; nothing runs yet, so the network
+        // rules go in first.
         let mut groups: Vec<(String, Group, Model)> = Vec::new();
         for name in order(&stack) {
             phase(&format!("infrastructure: {name}: checking"));
-            let overlay = self.overlay(&name);
-            let _ = std::fs::remove_file(&overlay);
-            let g = self.group(&stack, &name);
-            crate::confine::check_group(&g, &src).map_err(RunError::Config)?;
+            let mirror = self.mirror_group(&stack, &name);
+            for f in [format!("{name}.json"), format!("{name}.yml")] {
+                let _ = std::fs::remove_file(compose_dir.join(f));
+            }
+            crate::confine::check_group(&mirror, &src).map_err(RunError::Config)?;
             let own = &stack.compose[&name].networks;
-            let paths = self.config(&g, &["--no-env-resolution"])?;
-            crate::confine::check_model(&name, &paths, &src, self.network, own, &g.services)
-                .map_err(RunError::Config)?;
-            let model = self.config(&g, &[])?;
+            let raw = self.config(&mirror)?;
+            let model: Model = serde_json::from_value(raw.clone())
+                .map_err(|e| RunError::Config(format!("compose group `{name}`: {e}")))?;
+            crate::confine::check(
+                &name,
+                &raw,
+                &model,
+                &src,
+                self.network,
+                own,
+                &mirror.services,
+            )
+            .map_err(RunError::Config)?;
+            // What Compose runs from here on: the model just checked.
+            let rendered = crate::confine::render(
+                raw,
+                &model,
+                &src,
+                &mirror.services,
+                &compose_dir.join("files").join(&name),
+            )
+            .map_err(|e| RunError::Config(format!("compose group `{name}`: {e}")))?;
+            let file = compose_dir.join(format!("{name}.json"));
+            std::fs::write(&file, rendered).map_err(|e| RunError::Io(file.clone(), e))?;
             let options = devstack_compose::NodeOptions {
                 own_networks: own.clone(),
                 isolated: self.network == Network::None,
@@ -342,17 +519,25 @@ impl LaneRun {
                             svc.clone(),
                             format!(
                                 "devstack-build-{}",
-                                secret_name(&self.secret, &[&self.member, &g.project, svc])
+                                secret_name(&self.secret, &[&self.member, &mirror.project, svc])
                             ),
                         )
                     })
                     .collect(),
             };
-            let text = devstack_compose::node_overlay(&model, &g.project, &self.slot, &options)
-                .map_err(|e| RunError::Config(format!("compose group `{name}`: {e}")))?;
-            std::fs::create_dir_all(overlay.parent().expect("has a parent"))
-                .map_err(|e| RunError::Io(overlay.clone(), e))?;
+            let text =
+                devstack_compose::node_overlay(&model, &mirror.project, &self.slot, &options)
+                    .map_err(|e| RunError::Config(format!("compose group `{name}`: {e}")))?;
+            let overlay = compose_dir.join(format!("{name}.yml"));
             std::fs::write(&overlay, text).map_err(|e| RunError::Io(overlay.clone(), e))?;
+            let project = self.project(&stack, &name);
+            self.record(&project)?;
+            if fresh {
+                phase(&format!(
+                    "infrastructure: {name}: its data goes (a fresh start)"
+                ));
+                remove_project(&project, true);
+            }
             let g = self.group(&stack, &name);
             for n in &g.networks {
                 self.own_network_create(n)?;
@@ -367,7 +552,7 @@ impl LaneRun {
         }
         let mut networks = Vec::new();
         for (_, g, _) in &groups {
-            for n in project_networks(g) {
+            for n in project_networks(&g.project, &g.networks) {
                 if !networks.contains(&n) {
                     networks.push(n);
                 }
@@ -387,20 +572,7 @@ impl LaneRun {
 
         let mut infra = BTreeMap::new();
         let mut infra_ports = Vec::new();
-        // A profile with `data = "fresh"` (ADR-0041): its slot's volumes go
-        // before its containers start (ADR-0038 keeps them otherwise).
-        let fresh = self
-            .profile
-            .as_ref()
-            .and_then(|p| stack.profiles.get(p))
-            .is_some_and(|p| p.data == Some(devstack_config::model::DataMode::Fresh));
         for (name, g, model) in &groups {
-            if fresh {
-                phase(&format!(
-                    "infrastructure: {name}: its data goes (a fresh start)"
-                ));
-                let _ = dc.remove(g);
-            }
             // Started, then waited for, as two phases: a slow container
             // start and a slow health check are told apart.
             phase(&format!("infrastructure: {name}: starting containers"));
@@ -702,6 +874,9 @@ impl LaneRun {
         self.stack().map_or(true, |s| s.lanes.keep_data)
     }
 
+    /// Its container, then every Compose project it started here (by
+    /// Compose's labels, not by its files: a stack file the lane changed or
+    /// broke takes nothing along), the newest first.
     fn take_down(&self, agent: Option<&str>, volumes: bool) {
         let _ = docker(&["rm", "-f", &self.container()]);
         let own = self.own_network();
@@ -710,22 +885,16 @@ impl LaneRun {
         }
         let _ = docker(&["network", "rm", &own]);
         crate::egress::remove(&self.state(), &self.id);
-        let Ok(stack) = self.stack() else { return };
-        let dc = Docker::default();
-        for name in order(&stack).into_iter().rev() {
-            let g = self.group(&stack, &name);
-            // Compose reads the files again: only those inside the mirror.
-            if crate::confine::check_group(&g, &self.src()).is_err() {
-                continue;
-            }
+        let stack = self.stack().ok();
+        for p in self.projects(stack.as_ref()).iter().rev() {
             // The agent leaves the lane's networks first: Docker does not
             // remove a network something is still on.
             if let Some(me) = agent {
-                for n in project_networks(&g) {
+                for n in project_networks(&p.project, &p.networks) {
                     let _ = docker(&["network", "disconnect", "-f", &n, me]);
                 }
             }
-            let _ = if volumes { dc.remove(&g) } else { dc.down(&g) };
+            remove_project(p, volumes);
         }
     }
 }
@@ -789,19 +958,9 @@ fn own_user() -> Option<String> {
 
 /// The networks of a group's Compose project (by Compose's project label),
 /// and the group's own fixed-name networks: what a lane container joins.
-fn project_networks(g: &Group) -> Vec<String> {
-    let label = format!("label=com.docker.compose.project={}", g.project);
-    let mut out: Vec<String> =
-        docker(&["network", "ls", "--filter", &label, "--format", "{{.Name}}"])
-            .map(|t| {
-                t.lines()
-                    .map(str::trim)
-                    .filter(|l| !l.is_empty())
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
-    for n in &g.networks {
+fn project_networks(project: &str, own: &[String]) -> Vec<String> {
+    let mut out = by_label(&["network", "ls", "--format", "{{.Name}}"], project);
+    for n in own {
         if !out.contains(n) {
             out.push(n.clone());
         }

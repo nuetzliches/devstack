@@ -132,12 +132,22 @@ A pool is a group of machines that trust each other to a stated degree
   what a lane may ask:
   - a lane's Compose model is read in a throwaway container that sees only
     the lane's mirror, then refused if a service is privileged, adds
-    capabilities or devices, shares a host namespace (`pid`, `ipc`, `uts`,
-    `cgroup`, `network_mode`), sets `userns_mode`, `cgroup_parent`,
-    `security_opt` or `sysctls`, uses `volumes_from` a container, or mounts,
-    builds from or reads an env file outside the mirror; external volumes,
-    volume `driver_opts`, foreign external networks and non-`bridge` drivers
-    are refused too;
+    capabilities or devices other than GPUs, shares a host namespace (`pid`,
+    `ipc`, `uts`, `cgroup`, `network_mode`), sets `userns_mode`,
+    `cgroup_parent`, `security_opt`, `sysctls` or `oom_kill_disable`, uses
+    `volumes_from` a container, `use_api_socket`, a `provider` or a logging
+    driver that sends elsewhere, or mounts, builds from or reads an env file
+    outside the mirror; build `tags`, `cache_to` and local `cache_from`,
+    secrets and configs from the environment, external volumes, volume
+    `driver_opts`, foreign external networks, non-`bridge` drivers and
+    service keys the node does not know are refused too;
+  - the node runs the model it checked, written outside the mirror, never
+    the lane's files again; bind mounts of the mirror become `subpath`
+    mounts of a volume bound to it (Docker refuses a link out of it at every
+    container start), secret and config files are copied, values left unset
+    stay unset, and Compose runs with only what Docker needs of the agent's
+    environment; no sync is taken while a lane starts, and whatever of the
+    lane still runs is stopped before the check;
   - compose files, env files, the lane Dockerfile and the stack file must
     resolve beneath the mirror; the mirror sync never follows a symbolic link
     (a link in the way is replaced), so a lane's own code cannot make the
