@@ -201,6 +201,18 @@ anything outside the repository. When one of those changed, `devstack restart
   A failed build or health check leaves the running instance alone.
 - `restart_on` (dev servers): restart in place, for files hot reload does not
   pick up (`tsconfig.json`, `angular.json`).
+- `rebuild` (dev servers, [ADR-0042](adr/0042-a-dev-servers-rebuilds-show-like-builds.md)):
+  how devstack reads a dev server's rebuilds from its output, to show them
+  as a built service's build (rebuilding, rebuilt in how long, failed with
+  its error lines). Absent or `"auto"`: the tool is recognised from its
+  lines: the Angular CLI, Vite (and Nuxt, SvelteKit, Astro), webpack's dev
+  server, Next.js, `dotnet watch`, `tsc --watch`. A tool by name
+  (`"angular"`, `"vite"`, `"webpack"`, `"next"`, `"dotnet-watch"`,
+  `"tsc"`), `"none"`, or its own lines as regular expressions:
+  `rebuild = { start = '^rebuild: start', ok = '^rebuild: done in (?P<ms>\d+)', failed = '^rebuild: broken' }`
+  (TOML literal strings, so a backslash stays one; `start` optional; a group
+  `ms` or `s` in `ok` is its time). A service in
+  hot-reload mode is read the same way (`auto`).
 - `proxy = false`: no proxy; a restart happens in place on the fixed port (a
   short gap). Only for services the proxy cannot carry.
 

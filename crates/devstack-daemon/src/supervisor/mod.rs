@@ -30,6 +30,7 @@ mod handover;
 mod infra;
 pub use infra::ContainerTarget;
 mod lifecycle;
+mod rebuilds;
 mod replace;
 
 /// One running process of a service.
@@ -207,8 +208,9 @@ fn record(body: &EventBody, lane: &str, extra: Option<serde_json::Map<String, se
             .to_string()
     };
     let bad = ["failed", "unhealthy", "exited"];
-    let warn =
-        bad.contains(&state_of("status").as_str()) || bad.contains(&state_of("candidate").as_str());
+    let warn = bad.contains(&state_of("status").as_str())
+        || bad.contains(&state_of("candidate").as_str())
+        || bad.contains(&state_of("rebuild").as_str());
     // The main working tree is the lane `main` (the log says so).
     v.insert("lane".into(), serde_json::Value::String(lane.into()));
     v.extend(extra.unwrap_or_default());
@@ -355,6 +357,7 @@ impl Supervisor {
                         instance_port: None,
                         proxy: None,
                         candidate: None,
+                        rebuild: None,
                         hot_reload: false,
                         hot_reload_available: svc.hot_reload.is_some(),
                     },
@@ -460,6 +463,16 @@ impl Supervisor {
     }
 
     /// [`Self::emit`], with fields the diagnostic line has beyond the event.
+    /// [`Self::emit`] without a diagnostic line: what only the dashboard
+    /// needs to hear.
+    fn emit_quiet(&self, body: EventBody) {
+        let _ = self.events.send(Event {
+            seq: self.seq.fetch_add(1, Ordering::SeqCst),
+            at: now_ms(),
+            body,
+        });
+    }
+
     fn emit_with(
         &self,
         body: EventBody,

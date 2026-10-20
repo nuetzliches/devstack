@@ -3,7 +3,7 @@ import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import type { ServiceView } from '@/api/types';
 import { ago, serviceUrl, shortBuild, useNow } from '@/lib/format';
-import { candidateLook, candidateSummary, kindIcon, kindLabel, statusLook } from '@/lib/status';
+import { candidateLook, candidateSummary, kindIcon, kindLabel, rebuildLook, rebuildSummary, statusLook } from '@/lib/status';
 import { useStack } from '@/stores/stack';
 import StatusPill from './StatusPill.vue';
 import ErrorLine from './ErrorLine.vue';
@@ -21,6 +21,9 @@ const now = useNow();
 const look = computed(() => statusLook(props.service.status));
 const cand = computed(() => props.service.candidate);
 const candLook = computed(() => (cand.value ? candidateLook(cand.value) : null));
+// A dev server's own rebuild (ADR-0042), where a built service shows its candidate.
+const reb = computed(() => (cand.value ? null : (props.service.rebuild ?? null)));
+const rebLook = computed(() => (reb.value ? rebuildLook(reb.value) : null));
 const busy = computed(() => stack.busy[`svc:${props.service.name}`]);
 const isStopped = computed(() => ['stopped', 'completed', 'exited', 'failed'].includes(props.service.status.state));
 const to = computed(() => ({ name: 'service', params: { stack: stack.id ?? '', name: props.service.name } }));
@@ -110,6 +113,16 @@ function open(e: MouseEvent) {
       <span v-if="cand.build_id" class="cl-build">→ {{ shortBuild(cand.build_id) }}</span>
       <span class="grow" />
       <span class="cl-ago">{{ ago(cand.since, now) }}</span>
+      <Icon name="chevronRight" :size="14" />
+    </RouterLink>
+    <RouterLink v-else-if="reb && rebLook" :to="to" class="cand-line" :class="`tone-${rebLook.tone === 'ok' ? 'neutral' : rebLook.tone}`" data-testid="rebuild-line" :data-state="reb.state">
+      <span v-if="rebLook.busy" class="spinner sm" aria-hidden="true" />
+      <Icon v-else :name="rebLook.icon" :size="14" />
+      <span class="cl-label">Dev server:</span>
+      <span class="cl-state">{{ rebuildSummary(reb) }}</span>
+      <span v-if="reb.state === 'failed' && reb.errors?.length" class="cl-err" :title="reb.errors.join('\n')">{{ reb.errors[0] }}</span>
+      <span class="grow" />
+      <span class="cl-ago">{{ ago(reb.since, now) }}</span>
       <Icon name="chevronRight" :size="14" />
     </RouterLink>
   </li>
@@ -241,6 +254,14 @@ function open(e: MouseEvent) {
 .cl-build {
   font-family: var(--font-mono);
   font-size: 11.5px;
+}
+.cl-err {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .cl-ago {
   font-size: 11.5px;

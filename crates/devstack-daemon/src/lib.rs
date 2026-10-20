@@ -11,6 +11,7 @@ pub mod health;
 pub mod lanes;
 pub mod logfiles;
 pub mod proxy;
+pub mod rebuild;
 pub mod registry;
 pub mod remote;
 pub mod state;
@@ -265,6 +266,8 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     let usage = usage::Sampler::start(sup.clone());
     // Kept for the daemon's lifetime; changes become candidates (ADR-0003).
     let _watcher = watch::start(sup.clone());
+    // A dev server's rebuilds, from its output (ADR-0042).
+    sup.follow_rebuilds();
 
     let served = rt.block_on(async move {
         let listener = match listen_addr()? {

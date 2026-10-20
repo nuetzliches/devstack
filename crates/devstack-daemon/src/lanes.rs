@@ -1211,6 +1211,7 @@ impl Lanes {
             lanes: None,
         });
         let watcher = crate::watch::start(sup.clone());
+        sup.follow_rebuilds();
         Ok(Arc::new(Lane {
             entry: entry.clone(),
             sup,

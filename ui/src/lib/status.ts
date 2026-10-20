@@ -1,4 +1,4 @@
-import type { Candidate, CandidateState, ContainerView, KnownCandidateState, KnownServiceKind, ServiceView, Status } from '@/api/types';
+import type { Candidate, CandidateState, Rebuild, ContainerView, KnownCandidateState, KnownServiceKind, ServiceView, Status } from '@/api/types';
 import type { IconName } from '@/components/icons/icons';
 
 export type Tone = 'ok' | 'warn' | 'danger' | 'info' | 'accent' | 'neutral';
@@ -153,4 +153,33 @@ export function parseComposeMember(m: string): [string, string] | null {
   const dot = rest.indexOf('.');
   if (dot < 0) return null;
   return [rest.slice(0, dot), rest.slice(dot + 1)];
+}
+
+/** How a dev server's rebuild looks (ADR-0042), like a candidate's. */
+export function rebuildLook(r: Rebuild): CandidateLook {
+  switch (r.state) {
+    case 'rebuilding':
+      return { label: 'Rebuilding', tone: 'accent', busy: true, icon: 'wrench', explain: 'The dev server saw a change and rebuilds. It keeps serving the last build meanwhile.' };
+    case 'ok':
+      return { label: 'Rebuilt', tone: 'ok', busy: false, icon: 'checkCircle', explain: 'The dev server rebuilt; the browser gets the change by hot reload or a reload.' };
+    case 'failed':
+      return { label: 'Rebuild failed', tone: 'danger', busy: false, icon: 'xCircle', explain: 'The dev server could not build the change. It still serves its last build, and stays "healthy".' };
+    default:
+      return { label: cap(r.state || 'unknown'), tone: 'neutral', busy: false, icon: 'history', explain: `The daemon reports "${r.state}", which this dashboard does not know yet.` };
+  }
+}
+
+/** One line: "rebuilding", "rebuilt in 11.9 s", "rebuild failed". */
+export function rebuildSummary(r: Rebuild): string {
+  const took = r.ms !== undefined ? ` in ${r.ms >= 1000 ? `${(r.ms / 1000).toFixed(1)} s` : `${r.ms} ms`}` : '';
+  switch (r.state) {
+    case 'rebuilding':
+      return 'rebuilding';
+    case 'ok':
+      return `rebuilt${took}`;
+    case 'failed':
+      return `rebuild failed${took}`;
+    default:
+      return r.state || 'unknown';
+  }
 }

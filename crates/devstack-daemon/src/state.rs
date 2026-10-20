@@ -75,6 +75,10 @@ pub struct ServiceView {
     pub proxy: Option<crate::proxy::ProxyView>,
     /// A newer build on its way into the main slot, or why it did not arrive.
     pub candidate: Option<Candidate>,
+    /// A dev server's last rebuild, read from its output (ADR-0042): under
+    /// way, done (for a minute) or failed (until the next).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rebuild: Option<crate::rebuild::RebuildView>,
     /// Runs in hot-reload mode: the toolchain's watcher from the source tree
     /// instead of a build (plan §3.4a).
     pub hot_reload: bool,
@@ -240,6 +244,12 @@ pub enum EventBody {
     Candidate {
         service: String,
         candidate: Option<Candidate>,
+    },
+    /// A dev server's rebuild started, ended or is gone from its view
+    /// (ADR-0042); its diagnostic line, once over, has `ms` and `result`.
+    DevserverRebuild {
+        service: String,
+        rebuild: Option<crate::rebuild::RebuildView>,
     },
     /// The stack file changed since the daemon started (`true`), or was changed back.
     Config {

@@ -8,6 +8,7 @@ import { useStack } from '@/stores/stack';
 import StatusPill from '@/components/StatusPill.vue';
 import ErrorLine from '@/components/ErrorLine.vue';
 import CandidatePanel from '@/components/CandidatePanel.vue';
+import RebuildPanel from '@/components/RebuildPanel.vue';
 import LogView from '@/components/LogView.vue';
 import BuildLogModal from '@/components/BuildLogModal.vue';
 import KeptLogsModal from '@/components/KeptLogsModal.vue';
@@ -20,6 +21,7 @@ const route = useRoute();
 const stack = useStack();
 const now = useNow();
 const showBuildLog = ref(false);
+const logCard = ref<HTMLElement | null>(null);
 const showKeptLogs = ref(false);
 
 const name = computed(() => route.params.name as string);
@@ -128,6 +130,7 @@ const kv = computed(() => {
       </div>
 
       <CandidatePanel v-if="svc.candidate" class="stale-dim" :service="svc" @build-log="showBuildLog = true" />
+      <RebuildPanel v-else-if="svc.rebuild" class="stale-dim" :rebuild="svc.rebuild" @log="logCard?.scrollIntoView({ behavior: 'smooth', block: 'start' })" />
       <div v-else class="live-line" data-testid="live-line">
         <Icon name="checkCircle" :size="16" />
         <span v-if="svc.build_id">The latest build <span class="mono">{{ shortBuild(svc.build_id) }}</span> is the one running. No change is on its way.</span>
@@ -203,7 +206,7 @@ const kv = computed(() => {
 
       <BuildTimeline v-if="svc.build_id || svc.candidate" class="stale-dim" :service="svc.name" :build="svc.build_id" :candidate-state="svc.candidate?.state ?? null" />
 
-      <section class="card log-card">
+      <section ref="logCard" class="card log-card">
         <header class="card-header">
           <h2>Log</h2>
           <span class="count">current instance, live</span>

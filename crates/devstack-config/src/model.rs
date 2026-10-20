@@ -468,6 +468,33 @@ impl Platform {
     }
 }
 
+/// A dev server's rebuilds, read from its output (ADR-0042).
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum Rebuild {
+    /// `auto`, `none`, or a known tool: `angular`, `vite`, `webpack`,
+    /// `next`, `dotnet-watch`, `tsc`.
+    Named(String),
+    /// The tool's own lines, as regular expressions.
+    Lines(RebuildLines),
+}
+
+/// A tool's lines for a rebuild (ADR-0042 point 3).
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RebuildLines {
+    /// A rebuild starts; optional (some tools say only when one is done).
+    #[serde(default)]
+    pub start: Option<String>,
+    /// A rebuild is done; a capture group `ms` or `s` gives its time.
+    pub ok: String,
+    /// A rebuild failed.
+    pub failed: String,
+}
+
+/// The tools [`Rebuild::Named`] knows, besides `auto` and `none`.
+pub const REBUILD_TOOLS: &[&str] = &["angular", "vite", "webpack", "next", "dotnet-watch", "tsc"];
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Service {
@@ -492,6 +519,11 @@ pub struct Service {
     /// Paths whose change restarts a dev server.
     #[serde(default)]
     pub restart_on: Vec<String>,
+    /// How devstack reads a dev server's rebuilds from its output
+    /// (ADR-0042): absent or `"auto"`, the tool recognised from its lines;
+    /// a known tool by name; `"none"`; or its own lines.
+    #[serde(default)]
+    pub rebuild: Option<Rebuild>,
     /// Fixed port of the main slot.
     pub port: Option<u16>,
     pub health: Option<Health>,

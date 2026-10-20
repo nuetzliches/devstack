@@ -73,6 +73,17 @@ export type Candidate = {
   reason: string | null;
 };
 
+/** A dev server's last rebuild, read from its output (ADR-0042). */
+export type Rebuild = {
+  state: 'rebuilding' | 'ok' | 'failed' | (string & {});
+  /** Unix ms: when it started (or ended, for one the tool reports only when done). */
+  since: number;
+  ms?: number;
+  /** `angular`, `vite`, `webpack`, `next`, `dotnet-watch`, `tsc`, `custom`. */
+  tool: string;
+  errors?: string[];
+};
+
 export type ProxyView = {
   port: number;
   upstream: number | null;
@@ -141,6 +152,8 @@ export type ServiceView = {
   instance_port: number | null;
   proxy: ProxyView | null;
   candidate: Candidate | null;
+  /** A dev server's last rebuild (ADR-0042); older daemons omit it. */
+  rebuild?: Rebuild | null;
   /** Runs the toolchain's watcher from the source tree instead of a build (older daemons omit it). */
   hot_reload?: boolean;
   /** The stack file gives the service a hot-reload mode. */
@@ -220,6 +233,7 @@ export type StackEventBody =
   | { type: 'snapshot'; stack: StackView }
   | { type: 'service'; service: string; status: Status; build_id: string | null }
   | { type: 'candidate'; service: string; candidate: Candidate | null }
+  | { type: 'devserver_rebuild'; service: string; rebuild: Rebuild | null }
   | { type: 'infra'; group: string; message: string }
   | { type: 'command'; command: string; run: number; status: RunStatus }
   | { type: 'config'; changed: boolean }
