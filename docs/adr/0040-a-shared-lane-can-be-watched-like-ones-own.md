@@ -140,11 +140,13 @@ Where it will live:
 *Paths as built, noted 2026-10-20.* The node's route is `view` in
 `crates/devstack-node/src/node.rs`, with the allowlist in `viewable` and the
 check in `may_view`; the hub's in `crates/devstack-hub/src/shared.rs`
-(`view`, `view_get`). Not built: **containers' logs for a viewer** (point 3).
-The allowlist passes a lane's `/v1/stack`, `/v1/events`, `/v1/usage`,
-`/v1/logs`, a service's logs, log streams, log files, builds and build log,
-and command runs; a container's logs (`/v1/infra/...`) are refused with
-`403`.
+(`view`, `view_get`). The allowlist passes a lane's `/v1/stack`,
+`/v1/events`, `/v1/usage`, `/v1/logs`, a service's logs, log streams, log
+files, builds and build log, and command runs to the lane's daemon. A
+container's logs and log stream (`GET /v1/infra/<group>/<service>/logs`,
+`.../logs/stream`, point 3) the node answers itself, before the allowlist,
+as it does for the lane's owner (`InfraRoute`); a container's `start`,
+`stop` and `restart` are refused with `403`.
 
 ## What this ADR does not say
 

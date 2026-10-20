@@ -3524,6 +3524,29 @@ mod tests {
     }
 
     #[test]
+    fn a_viewer_reads_a_lanes_container_logs_but_acts_on_none() {
+        use hyper::Method;
+        // `view` answers what parses as a container route itself, before
+        // `viewable`: the logs and their stream, as for the owner; an action
+        // is refused (and never parses for a GET).
+        for p in ["v1/infra/app/db/logs", "v1/infra/app/db/logs/stream"] {
+            assert!(
+                matches!(
+                    InfraRoute::parse(&Method::GET, p),
+                    Some(InfraRoute::Logs { .. } | InfraRoute::Stream { .. })
+                ),
+                "{p}"
+            );
+            assert!(!viewable(p), "{p} is the node's, not the daemon's");
+        }
+        assert_eq!(
+            InfraRoute::parse(&Method::GET, "v1/infra/app/db/restart"),
+            None
+        );
+        assert!(!viewable("v1/infra/app/db/restart"));
+    }
+
+    #[test]
     fn the_node_answers_a_lanes_container_routes_only() {
         use hyper::Method;
         let r = |m: &Method, p: &str| InfraRoute::parse(m, p);

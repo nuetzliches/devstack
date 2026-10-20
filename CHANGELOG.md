@@ -9,6 +9,12 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- Docs: a viewer of a shared lane reads its containers' logs, as it has
+  since 0.11.0 (the node answers them itself); the docs and notes of 0.15.0
+  said otherwise.
+
 ## [0.15.0] - 2026-10-21
 
 A release of fixes from a review of the whole code base: the pool node runs
@@ -78,8 +84,7 @@ maintainers yet, so there is no migration.
 - Docs: SECURITY.md says that a lane's uploads and data outlive its lease
   (ADR-0038), that releases are checked by checksum, not signature (ADR-0039,
   amended), and that the Windows binary is not code-signed. ADR-0017 is
-  amended for ADR-0041's profiles. A viewer of a shared lane reads no
-  container logs (the 0.11.0 notes said otherwise). `docs/pool.md` says that
+  amended for ADR-0041's profiles. `docs/pool.md` says that
   images a node pulls are pulled with its credentials and can be run by any
   lane there.
 
@@ -406,13 +411,13 @@ fixed; 0.14.0 was tagged but never published.
   start is fresh (`devstack lane reset`).
 - **A lane shared with you to view looks like your own** (ADR-0040). Under
   "Shared with you" it is a row like your lanes; it opens the same pages
-  (overview, services with their logs, containers, infrastructure,
+  (overview, services and containers with their logs, infrastructure,
   commands' runs, events, usage), live, read through its node, with its
   owner and node named and nothing that would change it.
 - **A shared lane can be shared to view** ([ADR-0040](docs/adr/0040-a-shared-lane-can-be-watched-like-ones-own.md)).
   `devstack lane share <lane> --view <member|tag|*>` (API: `view` beside
   `with`; MCP `lane_share` with `view`) lets them read the lane as its
-  owner does: its state, events, services' logs, command
+  owner does: its state, events, services' and containers' logs, command
   runs and usage, never its environment, changing nothing. The node lets
   only those reads through (`GET /v1/leases/{id}/view/…`), checked with the
   coordinator at least every 5 s; the hub reads through it
