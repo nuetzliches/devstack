@@ -7,7 +7,9 @@ use devstack_build::{Builder, Layout, Outcome, Snapshot, build_id};
 use devstack_config::Stack;
 use std::path::Path;
 
-pub fn run(stack: &Stack, repo: &Path, name: &str, lane: &str) -> Result<()> {
+pub fn run(stack: &Stack, repo: &Path, name: &str) -> Result<()> {
+    // The main working tree's snapshot; a lane builds in its daemon.
+    let lane = "main";
     let svc = stack
         .services
         .get(name)
@@ -17,10 +19,6 @@ pub fn run(stack: &Stack, repo: &Path, name: &str, lane: &str) -> Result<()> {
     }
     warn_if_state_is_not_ignored(repo);
     let layout = Layout::new(repo.join(".devstack"));
-    // Lanes other than `main` come with worktree support (phase 3).
-    if lane != "main" {
-        bail!("only the `main` lane exists so far");
-    }
     let mut snap = Snapshot::open(repo, &layout.lane(lane))?;
     let s = snap.sync()?;
     eprintln!(

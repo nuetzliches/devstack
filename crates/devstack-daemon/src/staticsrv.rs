@@ -5,7 +5,7 @@
 //! service, and an end-to-end run pins a build id.
 
 use axum::body::Body;
-use axum::http::{HeaderValue, Response, StatusCode, Uri, header};
+use axum::http::{HeaderMap, HeaderValue, Response, StatusCode, Uri, header};
 use std::path::{Component, Path, PathBuf};
 
 fn content_type(path: &Path) -> &'static str {
@@ -92,15 +92,55 @@ pub fn serve(root: PathBuf, port: u16, spa: bool) -> Result<(), String> {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
             .await
             .map_err(|e| format!("port {port}: {e}"))?;
-        let app = axum::Router::new().fallback(move |uri: Uri| {
+        let app = axum::Router::new().fallback(move |uri: Uri, headers: HeaderMap| {
             let root = root.clone();
-            async move { file(&root, uri.path(), spa).await }
+            async move {
+                let tag = headers
+                    .get(header::IF_NONE_MATCH)
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                file(&root, uri.path(), spa, tag.as_deref()).await
+            }
         });
         axum::serve(listener, app).await.map_err(|e| e.to_string())
     })
 }
 
-async fn file(root: &Path, path: &str, spa: bool) -> Response<Body> {
+/// Whether a file's name carries a hash of its content (`main-3f2a1b9c.js`,
+/// `index.Bd3x9_kQ.css`), so a changed file has a new name: the last part of
+/// its stem, after `-` or `.`, 8 to 32 letters, digits or `_`, with a digit.
+fn content_hashed(path: &Path) -> bool {
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    let Some((_, last)) = stem.rsplit_once(['-', '.']) else {
+        return false;
+    };
+    (8..=32).contains(&last.len())
+        && last.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && last.chars().any(|c| c.is_ascii_digit())
+}
+
+/// How a file may be cached: one whose name has its content hash for a year;
+/// any other (`index.html`, `config.json`, a manifest) asked again each time,
+/// answered `304` while its `ETag` holds, so a new build shows at once.
+fn cache_control(path: &Path) -> &'static str {
+    if content_hashed(path) {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    }
+}
+
+/// Whether `If-None-Match` names `etag` (or `*`).
+fn matches_etag(if_none_match: &str, etag: &str) -> bool {
+    if_none_match
+        .split(',')
+        .map(|t| t.trim().trim_start_matches("W/"))
+        .any(|t| t == etag || t == "*")
+}
+
+async fn file(root: &Path, path: &str, spa: bool, if_none_match: Option<&str>) -> Response<Body> {
     let Some(p) = resolve(root, path, spa) else {
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
@@ -113,19 +153,27 @@ async fn file(root: &Path, path: &str, spa: bool) -> Response<Body> {
     };
     match read.unwrap_or_else(|e| Err(std::io::Error::other(e))) {
         Ok(bytes) => {
-            let mut r = Response::new(Body::from(bytes));
-            r.headers_mut().insert(
+            let etag = format!("\"{}\"", &blake3::hash(&bytes).to_hex()[..32]);
+            let fresh = if_none_match.is_some_and(|t| matches_etag(t, &etag));
+            let mut r = if fresh {
+                let mut r = Response::new(Body::empty());
+                *r.status_mut() = StatusCode::NOT_MODIFIED;
+                r
+            } else {
+                Response::new(Body::from(bytes))
+            };
+            let h = r.headers_mut();
+            h.insert(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static(content_type(&p)),
             );
-            // index.html names the hashed bundles of this build: never cache it.
-            let cache = if p.file_name().is_some_and(|n| n == "index.html") {
-                "no-cache"
-            } else {
-                "public, max-age=3600"
-            };
-            r.headers_mut()
-                .insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+            h.insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static(cache_control(&p)),
+            );
+            if let Ok(v) = HeaderValue::from_str(&etag) {
+                h.insert(header::ETAG, v);
+            }
             r
         }
         Err(_) => Response::builder()
@@ -165,5 +213,48 @@ mod tests {
         assert_eq!(resolve(r, "/../secret.txt", true), None);
         assert_eq!(resolve(r, "/%2e%2e/secret.txt", true), None);
         assert_eq!(content_type(Path::new("a.woff2")), "font/woff2");
+    }
+
+    #[test]
+    fn only_content_hashed_names_are_cached_for_long() {
+        for hashed in [
+            "assets/index-Bd3x9_kQ.js",
+            "main.3f2a1b9c.js",
+            "chunk-1a2b3c4d5e6f.css",
+        ] {
+            assert_eq!(
+                cache_control(Path::new(hashed)),
+                "public, max-age=31536000, immutable",
+                "{hashed}"
+            );
+        }
+        for plain in [
+            "index.html",
+            "assets/config.json",
+            "manifest.webmanifest",
+            "i18n/de.json",
+            "polyfills.js",
+            "chunk-vendors.js",
+            "favicon.ico",
+        ] {
+            assert_eq!(cache_control(Path::new(plain)), "no-cache", "{plain}");
+        }
+        assert!(matches_etag("\"a\", W/\"b\"", "\"b\""));
+        assert!(matches_etag("*", "\"b\""));
+        assert!(!matches_etag("\"a\"", "\"b\""));
+    }
+
+    #[tokio::test]
+    async fn an_unchanged_file_is_not_sent_again() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("config.json"), "{}").unwrap();
+        let r = file(d.path(), "/config.json", false, None).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        let etag = r.headers()[header::ETAG].to_str().unwrap().to_string();
+        let r = file(d.path(), "/config.json", false, Some(&etag)).await;
+        assert_eq!(r.status(), StatusCode::NOT_MODIFIED);
+        std::fs::write(d.path().join("config.json"), "{\"a\":1}").unwrap();
+        let r = file(d.path(), "/config.json", false, Some(&etag)).await;
+        assert_eq!(r.status(), StatusCode::OK, "changed: sent again");
     }
 }

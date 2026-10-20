@@ -27,7 +27,11 @@
 //! line, then the output of a build, a job or a service (which may hold a
 //! connection string); only the first line goes out. Command lines,
 //! environments, process output and paths on this machine stay in the file
-//! ([`LOCAL_ONLY`]); user names in home paths and URL credentials are masked.
+//! ([`LOCAL_ONLY`]); a path on this machine in a text (an error, a reason)
+//! goes out with its root replaced (the repository as `<repo>`, a lane's
+//! worktree as `<worktree>`, devstack's state as `<devstack>`, the home
+//! directory as `~`, see [`add_root`]); user names in other home paths and
+//! URL credentials are masked.
 //! The file keeps all. A nested value goes out as dotted attributes (`status` `{"state":…}` as
 //! `devstack.status.state`), each record with the repository it concerns.
 
@@ -127,10 +131,10 @@ pub const LOCAL_ONLY: &[&str] = &[
 ];
 
 /// A line as it may leave the machine: the [`LOCAL_ONLY`] fields left out,
-/// every text cut to its first line (ADR-0037: never service output), a
-/// user's name in a home directory path (`C:\Users\<name>`, `/home/<name>`)
-/// replaced by `~`, and the credentials of a URL (`scheme://user:pw@host`)
-/// by `***`.
+/// every text cut to its first line (ADR-0037: never service output), the
+/// roots [`add_root`] knows replaced by their names, a user's name in a home
+/// directory path (`C:\Users\<name>`, `/home/<name>`) replaced by `~`, and
+/// the credentials of a URL (`scheme://user:pw@host`) by `***`.
 pub fn outbound(line: &Map<String, Value>) -> Map<String, Value> {
     fn clean(v: &Value) -> Value {
         match v {
@@ -155,15 +159,94 @@ pub fn outbound(line: &Map<String, Value>) -> Map<String, Value> {
     fields(line)
 }
 
-/// A text without user names in home directories and without credentials
-/// in URLs (see [`outbound`]).
-fn scrub(s: &str) -> String {
+/// Paths on this machine whose text never leaves it: each spelling of a
+/// root and the name it goes out as, longest first.
+static ROOTS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// Know `path` as a root on this machine: in a text that leaves it (see
+/// [`outbound`]), the path goes out as `name` (`<repo>`, `<worktree>`), with
+/// what follows it inside the root (`<repo>\src\a.json`). A root too short
+/// to be one (`C:\`, `/`) is ignored.
+pub fn add_root(path: &Path, name: &str) {
+    let text = path.to_string_lossy();
+    let text = text.strip_prefix(r"\\?\").unwrap_or(&text);
+    let text = text.trim_end_matches(['\\', '/']);
+    if text.len() < 4 || !text.contains(['\\', '/']) {
+        return;
+    }
+    // As written, with either separator, and as `{:?}` writes it (an
+    // error's `about ["D:\\src"]`).
+    let slashes = text.replace('\\', "/");
+    let spellings = [
+        text.to_string(),
+        slashes.clone(),
+        slashes.replace('/', "\\"),
+        slashes.replace('/', "\\\\"),
+    ];
+    let mut roots = ROOTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for sp in spellings {
+        if !roots.iter().any(|(r, _)| r.eq_ignore_ascii_case(&sp)) {
+            roots.push((sp, name.to_string()));
+        }
+    }
+    roots.sort_by_key(|(r, _)| std::cmp::Reverse(r.len()));
+}
+
+/// `s` with each known root (see [`add_root`]) replaced by its name, where
+/// it ends a path component (`D:\src\shop` is no root of `D:\src\shop-fix`).
+/// ASCII case is ignored, as Windows paths do.
+fn replace_roots(s: &str) -> String {
+    let roots = ROOTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut s = s.to_string();
+    for (root, name) in roots.iter() {
+        let needle = root.to_ascii_lowercase();
+        let mut from = 0;
+        // ASCII lowercase keeps the byte offsets.
+        while let Some(i) = s[from..].to_ascii_lowercase().find(&needle) {
+            let start = from + i;
+            let end = start + needle.len();
+            let whole = s[end..]
+                .chars()
+                .next()
+                .is_none_or(|c| !(c.is_alphanumeric() || matches!(c, '-' | '_' | '.')));
+            if whole {
+                s.replace_range(start..end, name);
+                from = start + name.len();
+            } else {
+                from = end;
+            }
+            if from >= s.len() {
+                break;
+            }
+        }
+    }
+    s
+}
+
+/// A text without the roots on this machine, user names in home
+/// directories and credentials in URLs (see [`outbound`]).
+fn scrub(s: &str) -> String {
+    let mut s = replace_roots(s);
     // ASCII lowercase keeps the byte offsets.
     for marker in ["\\users\\", "/users/", "/home/"] {
         let mut from = 0;
         while let Some(i) = s[from..].to_ascii_lowercase().find(marker) {
-            let start = from + i + marker.len();
+            let at = from + i;
+            // A path's start (`C:\Users`, ` /home`, `"/Users`, `file:///Users`),
+            // not a segment of a URL or a longer path (`https://x.example/users/42`).
+            let starts = s[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '%')));
+            if !starts {
+                from = at + 1;
+                continue;
+            }
+            let start = at + marker.len();
             let end = s[start..]
                 .find(|c: char| matches!(c, '\\' | '/' | '"' | '\'') || c.is_whitespace())
                 .map_or(s.len(), |e| start + e);
@@ -239,6 +322,19 @@ pub fn init(path: impl Into<PathBuf>) -> &'static DiagLog {
             .ok()?;
         Some(tx)
     });
+    // devstack's state goes as itself, though it is below the home directory.
+    if let Some(state) = crate::token::token_path().parent() {
+        add_root(state, "<devstack>");
+    }
+    for var in ["USERPROFILE", "HOME"] {
+        if let Some(home) = std::env::var_os(var).filter(|h| !h.is_empty()) {
+            add_root(Path::new(&home), "~");
+        }
+    }
+    // The stacks this machine knows (the hub's lines name them too).
+    for stack in crate::registry::list() {
+        add_root(&stack.repo, "<repo>");
+    }
     crate::telemetry::start(service);
     GLOBAL.get_or_init(|| DiagLog::open(path))
 }
@@ -530,6 +626,45 @@ mod tests {
         let d = DiagLog::open(dir.path().join("daemon.log"));
         d.write("info", "prepare", json!({ "run": "npm ci" }));
         assert!(tail(d.path(), 1, None)[0].contains("npm ci"));
+    }
+
+    #[test]
+    fn roots_on_this_machine_do_not_leave_it() {
+        // Roots no other test has: the list is the process's.
+        add_root(Path::new(r"Q:\Work\diagtest"), "<repo>");
+        add_root(Path::new(r"Q:\Work\diagtest-fix"), "<worktree>");
+        add_root(Path::new("/srv/diagtest"), "<repo>");
+        add_root(Path::new(r"C:\"), "<none>");
+        let line = json!({
+            "event": "remote_lane_unwatched",
+            "error": r#"Io error: denied about ["Q:\\Work\\diagtest-fix\\src"]"#,
+            "reason": r"q:\work\diagtest\a.json is gone; Q:/Work/diagtest/b; Q:\Work\diagtestx\c",
+            "other": "/srv/diagtest/x and /srv/diagtest",
+            "drive": r"C:\x",
+        });
+        let out = Value::Object(outbound(line.as_object().unwrap()));
+        assert_eq!(
+            out["error"],
+            r#"Io error: denied about ["<worktree>\\src"]"#
+        );
+        assert_eq!(
+            out["reason"],
+            r"<repo>\a.json is gone; <repo>/b; Q:\Work\diagtestx\c"
+        );
+        assert_eq!(out["other"], "<repo>/x and <repo>");
+        assert_eq!(out["drive"], r"C:\x");
+    }
+
+    #[test]
+    fn a_url_with_a_users_segment_stays_as_it_was() {
+        let line = json!({
+            "reason": "GET https://api.example/users/42/orders failed; file:///Users/jane/x",
+        });
+        let out = Value::Object(outbound(line.as_object().unwrap()));
+        assert_eq!(
+            out["reason"],
+            "GET https://api.example/users/42/orders failed; file:///Users/~/x"
+        );
     }
 
     #[test]
