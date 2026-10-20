@@ -134,6 +134,10 @@ export type LaneMove = {
   since: number;
   error?: string;
   failed_at?: number;
+  /** The phases over so far, with their time (older daemons omit it). */
+  phases?: { phase: string; ms: number }[];
+  /** Unix ms the current phase began. */
+  phase_since?: number;
 };
 
 export type ServiceView = {

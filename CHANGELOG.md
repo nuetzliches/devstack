@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **A lane's start on a node shows its phases**: while it has no pages yet
+  (its daemon does not run on the node before its infrastructure is up),
+  its start lists each phase over so far with its time (lease, sync, lane
+  image, each Compose group's images, containers and health, the lane's
+  daemon) and the current one with its time running. `moving` carries
+  `phases` and `phase_since`.
+- **Where to start a lane shows how busy each node is**: free CPU and
+  memory, what its lanes use of what it has (with the last hour), its
+  lanes, kept lanes and GPUs, and which node the pool would pick.
+
 ### Fixed
 
 - A node's `node_lane_started` carries the start's whole time; it said `0`

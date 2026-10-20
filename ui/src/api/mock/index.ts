@@ -20,6 +20,32 @@ type Route = { stop(): void } | null;
 
 /** Where a mock lane was moved to (`local` or a node). */
 const laneNodes = new Map<string, string>();
+/** Lanes starting on a node, since when (ms): the mock plays the phases. */
+const remoteStarts = new Map<string, number>();
+const START_PHASES: [number, string, string][] = [
+  [1, 'lease', 'lease'],
+  [2, 'sync: comparing 7177 files', 'sync'],
+  [3, 'on {n}: lane image: pulled or built once, then kept', 'lane image: pulled or built once, then kept'],
+  [3, 'on {n}: infrastructure: app: images (pull, build) and containers', 'infrastructure: app: images (pull, build) and containers'],
+  [3, 'on {n}: infrastructure: app: waiting until healthy', 'infrastructure: app: waiting until healthy'],
+  [3, "on {n}: the lane's daemon", "the lane's daemon"],
+];
+/** A start on a node as the daemon reports it while it runs (40 s here). */
+function startMove(to: string, t0: number) {
+  const each = 40_000 / START_PHASES.length;
+  const i = Math.min(START_PHASES.length - 1, Math.floor((Date.now() - t0) / each));
+  const [step, what] = START_PHASES[i];
+  return {
+    kind: 'start' as const,
+    to,
+    step,
+    steps: 3,
+    what: what.replace('{n}', to),
+    since: t0,
+    phases: START_PHASES.slice(0, i).map(([, , phase]) => ({ phase, ms: Math.round(each) })),
+    phase_since: t0 + i * each,
+  };
+}
 
 class MockHub {
   stacks: MockStack[] = [];
@@ -400,6 +426,10 @@ export class MockTransport implements Transport {
             { name: '1333', path: 'C:\\work\\_wt\\1333', branch: 'agent/i18n-de', number: 4, port_offset: 400 },
             { name: 'bisect', path: 'C:\\work\\shop-bisect', branch: null, number: 5, port_offset: 500 },
           ].map((l) => {
+            const t0 = remoteStarts.get(l.name);
+            if (t0 !== undefined && Date.now() - t0 < 40_000) {
+              return { ...l, active: false, running: 0, services: 5, moving: startMove(laneNodes.get(l.name) ?? 'build-server', t0) };
+            }
             const active = l.name === 'agent-login-fix' || s.startedLanes.has(l.name);
             const owns = l.name === 'agent-login-fix' && s.laneOwnsMain;
             // review-cart runs on a node of the pool once started (ADR-0025);
@@ -416,11 +446,13 @@ export class MockTransport implements Transport {
       if (!l) return json(409, { error: 'no worktree there' });
       s.startedLanes.add(l.name);
       // `on`: a node, or `pool` (the coordinator picks build-server here).
-      if (body?.on) laneNodes.set(l.name, body.on === 'pool' ? 'build-server' : String(body.on));
-      else laneNodes.set(l.name, 'local');
+      if (body?.on) {
+        laneNodes.set(l.name, body.on === 'pool' ? 'build-server' : String(body.on));
+        remoteStarts.set(l.name, Date.now());
+      } else laneNodes.set(l.name, 'local');
       // On a node the daemon answers 202 and goes on in the background; here
       // it has already started by the time the dashboard looks.
-      return json(body?.on ? 202 : 201, { ...l, active: true, running: 5 });
+      return json(body?.on ? 202 : 201, body?.on ? { ...l, active: false } : { ...l, active: true, running: 5 });
     }
     const lm = /^\/v1\/lanes\/([^/]+)\/main$/.exec(p);
     if (lm && method === 'POST') {

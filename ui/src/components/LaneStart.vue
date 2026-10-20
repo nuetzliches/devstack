@@ -6,10 +6,12 @@
 // navigating away and back.
 import { computed, onBeforeUnmount, ref } from 'vue';
 import type { LaneView } from '@/api/types';
+import { duration, useNow } from '@/lib/format';
 import { laneLabel } from '@/lib/lanes';
 import { usePool } from '@/stores/pool';
 import { useStack } from '@/stores/stack';
 import Icon from './icons/Icon.vue';
+import NodeLoad from './NodeLoad.vue';
 
 const props = defineProps<{ lane: LaneView }>();
 const stack = useStack();
@@ -23,6 +25,25 @@ const m = computed(() => props.lane.moving ?? null);
 const running = computed(() => !!m.value && !m.value.error && m.value.kind === 'start');
 const failed = computed(() => (m.value?.error && m.value.kind === 'start' ? m.value : null));
 const placeName = (to: string) => (to === 'pool' ? 'the pool' : pool.pools.some((p) => p.name === to) ? `the pool ${to}` : to);
+const now = useNow();
+/** The current phase: the step's text without the node's name. */
+const current = computed(() => {
+  const w = m.value?.what ?? '';
+  if (w.startsWith('sync:')) return w;
+  const i = w.startsWith('on ') ? w.indexOf(': ') : -1;
+  return i >= 0 ? w.slice(i + 2) : w;
+});
+/** Lanes running on a node now, of its pool's leases. */
+const lanesOn = (poolName: string, node: string) => (pool.overviews[poolName]?.leases ?? []).filter((l) => l.node === node).length;
+/** The node the coordinator would pick in a pool: the most free memory (ADR-0031 point 4). */
+const pick = computed(() => {
+  const best: Record<string, string> = {};
+  for (const t of nodes.value) {
+    const cur = nodes.value.find((x) => x.on === best[t.pool]);
+    if (!cur || (t.node.report?.memory ?? 0) > (cur.node.report?.memory ?? 0)) best[t.pool] = t.on;
+  }
+  return new Set(Object.values(best));
+});
 
 /** The stack file's profiles (ADR-0041): how the lane runs for a purpose. */
 const profiles = computed(() => stack.view?.profiles ?? []);
@@ -51,12 +72,30 @@ function start(on?: string) {
       <div v-if="running && m" class="progress" data-testid="lane-start-progress">
         <span class="bar"><span :style="{ width: `${(100 * m.step) / m.steps}%` }" /></span>
         <span>
-          Starting on <strong>{{ placeName(m.to) }}</strong> · step {{ m.step }} of {{ m.steps }}: {{ m.what }}
+          Starting on <strong>{{ placeName(m.to) }}</strong> · step {{ m.step }} of {{ m.steps }} · {{ duration(now - m.since) }}
         </span>
       </div>
       <p v-else-if="failed" class="err" data-testid="lane-start-failed">
         <Icon name="alert" :size="14" /> Starting on {{ placeName(failed.to) }} failed: {{ failed.error }}
       </p>
+      <!-- Its phases: the lane has no pages until its daemon runs on the node. -->
+      <ol v-if="m && (m.phases?.length || running)" class="phases" data-testid="lane-start-phases">
+        <li v-for="(p, i) in m.phases ?? []" :key="i" class="done">
+          <Icon name="checkCircle" :size="13" />
+          <span class="ph">{{ p.phase }}</span>
+          <span class="t tabular">{{ duration(p.ms) }}</span>
+        </li>
+        <li v-if="running" class="now">
+          <span class="spinner sm" aria-hidden="true" />
+          <span class="ph">{{ current }}</span>
+          <span class="t tabular">{{ duration(now - (m.phase_since ?? m.since)) }}</span>
+        </li>
+        <li v-else-if="failed" class="failed">
+          <Icon name="xCircle" :size="13" />
+          <span class="ph">{{ current }}</span>
+        </li>
+      </ol>
+      <p v-if="running" class="faint small">The lane's pages open once its daemon runs on the node; its services show their own start there.</p>
 
       <label v-if="profiles.length" class="profile" data-testid="lane-start-profile">
         <span>Profile</span>
@@ -92,17 +131,22 @@ function start(on?: string) {
         >
           <Icon name="server" :size="14" /> Start in the pool{{ p.pool === 'default' ? '' : ` ${p.pool}` }}
         </button>
+      </div>
+      <div v-if="nodes.length" class="targets" data-testid="lane-start-targets">
         <button
           v-for="n in nodes"
           :key="n.on"
           type="button"
-          class="btn"
+          class="target"
           :disabled="busy || running"
-          :title="`${n.node.report!.cpus.toFixed(1)} CPU free`"
           data-testid="lane-start-node"
           @click="start(n.on)"
         >
-          on {{ n.label }}
+          <span class="tname">
+            <Icon name="server" :size="14" /> on <strong>{{ n.label }}</strong>
+            <span v-if="pick.has(n.on)" class="pill sm info" title="The coordinator picks the node with the most free memory">pool's pick</span>
+          </span>
+          <NodeLoad :pool="n.pool" :node="n.node" :lanes="lanesOn(n.pool, n.node.id)" />
         </button>
       </div>
       <p v-if="!pool.joinedAny" class="muted small">
@@ -166,5 +210,73 @@ function start(on?: string) {
 }
 .profile select {
   max-width: 360px;
+}
+.phases {
+  list-style: none;
+  margin: 10px 0 4px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12.5px;
+}
+.phases li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.phases .done {
+  color: var(--text-muted);
+}
+.phases .done :deep(svg) {
+  color: var(--ok);
+}
+.phases .now .ph {
+  font-weight: 600;
+}
+.phases .failed {
+  color: var(--danger);
+}
+.phases .t {
+  margin-left: auto;
+  color: var(--text-muted);
+}
+.phases .ph {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.targets {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.target {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.target:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--surface-hover);
+}
+.target:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.tname {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 </style>

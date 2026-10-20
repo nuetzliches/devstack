@@ -114,6 +114,34 @@ pub struct LaneMove {
     /// until the lane runs there and says it itself.
     #[serde(skip)]
     pub warning: Option<String>,
+    /// The phases over so far, each with its time as seen here: what the
+    /// start view lists while the lane has no pages yet.
+    pub phases: Vec<MovePhase>,
+    /// Unix ms the current phase began.
+    pub phase_since: u128,
+    /// The current phase, as [`phase_of`] names it.
+    #[serde(skip)]
+    phase: String,
+}
+
+/// A phase of a start or move that is over.
+#[derive(Debug, Clone, Serialize)]
+pub struct MovePhase {
+    pub phase: String,
+    pub ms: u64,
+}
+
+/// The phase a step's text belongs to: a sync's progress (`sync: 3 of 40
+/// changed files sent`) is one phase, `sync`; a node's phase without the
+/// node's name (`on n1: infrastructure: app: starting containers`).
+fn phase_of(what: &str) -> String {
+    if what.starts_with("sync:") {
+        return "sync".into();
+    }
+    match what.strip_prefix("on ").and_then(|r| r.split_once(": ")) {
+        Some((_, p)) => p.to_string(),
+        None => what.to_string(),
+    }
 }
 
 /// What [`Lanes::activate_remote`] did with a lane: named.
@@ -1740,6 +1768,9 @@ impl Lanes {
                 error: None,
                 failed_at: None,
                 warning: None,
+                phases: Vec::new(),
+                phase_since: since,
+                phase: "preparing".into(),
             },
         );
         self.announce();
@@ -1752,6 +1783,16 @@ impl Lanes {
             if let Some(m) = self.moves.lock().unwrap().get_mut(&name) {
                 if m.step == step && m.what == what {
                     return;
+                }
+                let phase = phase_of(what);
+                if phase != m.phase {
+                    let now = crate::state::now_ms();
+                    let done = std::mem::replace(&mut m.phase, phase);
+                    m.phases.push(MovePhase {
+                        phase: done,
+                        ms: now.saturating_sub(m.phase_since) as u64,
+                    });
+                    m.phase_since = now;
                 }
                 m.step = step;
                 m.what = what.to_string();
@@ -2318,6 +2359,21 @@ mod tests {
         assert_eq!(l.services["api"].port, Some(5200));
         assert_eq!(l.services["job"].port, None);
         assert!(lane_stack(&stack, 65000).is_err());
+    }
+
+    #[test]
+    fn a_steps_text_names_its_phase() {
+        assert_eq!(phase_of("sync: comparing 7177 files"), "sync");
+        assert_eq!(
+            phase_of("sync: 3 of 40 changed files sent (12 KiB)"),
+            "sync"
+        );
+        assert_eq!(
+            phase_of("on n1: infrastructure: app: starting containers"),
+            "infrastructure: app: starting containers"
+        );
+        assert_eq!(phase_of("on n1: starting"), "starting");
+        assert_eq!(phase_of("preparing"), "preparing");
     }
 
     #[test]
