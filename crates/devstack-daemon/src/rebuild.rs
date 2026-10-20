@@ -137,6 +137,8 @@ pub struct Tracker {
     /// Error-looking lines since the rebuild started.
     errors: Vec<String>,
     started: Option<u128>,
+    /// A failed rebuild's errors are only its marker line so far.
+    marker_only: bool,
 }
 
 impl Tracker {
@@ -166,6 +168,7 @@ impl Tracker {
             current: None,
             errors: Vec::new(),
             started: None,
+            marker_only: false,
         })
     }
 
@@ -197,6 +200,10 @@ impl Tracker {
         let rules = self.rules()?;
         let name = rules.name;
         if rules.start.iter().any(|r| r.is_match(&line)) {
+            // Said twice (Angular does): the first start counts.
+            if self.started.is_some() {
+                return None;
+            }
             self.errors.clear();
             self.started = Some(now);
             return self.set(RebuildView {
@@ -209,9 +216,12 @@ impl Tracker {
         }
         if let Some(caps) = rules.failed.iter().find_map(|r| r.captures(&line)) {
             let ms = took(&caps).or_else(|| self.elapsed(now));
+            // The marker until the error lines follow (Angular prints them
+            // after it); replaced by the first of them.
             let mut errors = std::mem::take(&mut self.errors);
             if errors.is_empty() {
                 errors.push(line.trim().to_string());
+                self.marker_only = true;
             }
             let since = self.started.take().unwrap_or(now);
             return self.set(RebuildView {
@@ -242,6 +252,9 @@ impl Tracker {
             let text = line.trim().to_string();
             match &mut self.current {
                 Some(c) if c.state == "failed" && self.started.is_none() => {
+                    if std::mem::take(&mut self.marker_only) {
+                        c.errors.clear();
+                    }
                     if c.errors.len() < MAX_ERRORS && !c.errors.contains(&text) {
                         c.errors.push(text);
                         return self.current.clone();
@@ -336,6 +349,33 @@ Application bundle generation failed. [0.523 seconds] - 2026-10-20T09:22:01.001Z
                 "✘ [ERROR] TS2322: Type 'string' is not assignable to type 'number'. [plugin angular-compiler]"
             ]
         );
+    }
+
+    #[test]
+    fn angular_on_windows() {
+        // Windows: `X` for `✘`, the errors after the marker, the start
+        // line twice.
+        let out = "> Changes detected. Rebuilding...
+> Changes detected. Rebuilding...
+Application bundle generation failed. [9.016 seconds] - 2026-10-20T09:26:54.405Z
+
+X [ERROR] TS7008: Member 'flags' implicitly has an 'any' type. [plugin angular-compiler]
+
+    src/app/x.component.ts:12:2:
+X [ERROR] TS2729: Property 'flags' is used before its initialization. [plugin angular-compiler]
+";
+        let v = run(None, out);
+        assert_eq!(states(&v)[0], ("rebuilding", None));
+        let last = v.last().unwrap();
+        assert_eq!((last.state.as_str(), last.ms), ("failed", Some(9016)));
+        assert_eq!(
+            last.errors,
+            [
+                "X [ERROR] TS7008: Member 'flags' implicitly has an 'any' type. [plugin angular-compiler]",
+                "X [ERROR] TS2729: Property 'flags' is used before its initialization. [plugin angular-compiler]",
+            ]
+        );
+        assert_eq!(v.iter().filter(|r| r.state == "rebuilding").count(), 1);
     }
 
     #[test]
