@@ -45,7 +45,7 @@ async function repairAll() {
         <strong>{{ unreachable.length }} container{{ unreachable.length === 1 ? '' : 's' }} not reachable from this machine</strong>
         ({{ unreachable.map((c) => c.service).join(', ') }}): Docker lost the port forward. A restart repairs it.
       </span>
-      <button type="button" class="btn btn-sm" :disabled="repairing || stack.stale" data-testid="action-repair-forwards" @click="repairAll">
+      <button v-if="!stack.readOnly" type="button" class="btn btn-sm" :disabled="repairing || stack.stale" data-testid="action-repair-forwards" @click="repairAll">
         <span v-if="repairing" class="spinner" /><Icon v-else name="restart" :size="14" /> Restart {{ unreachable.length === 1 ? 'it' : 'them' }}
       </button>
     </div>

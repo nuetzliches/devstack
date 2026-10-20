@@ -70,7 +70,7 @@ const kv = computed(() => {
           </div>
         </div>
       </div>
-      <div class="btn-group">
+      <div v-if="!stack.readOnly" class="btn-group">
         <button v-if="!running" type="button" class="btn btn-primary" :disabled="!!busy || stack.stale || !!refuses" :title="refuses ?? undefined" data-testid="action-container-start" @click="stack.containerAction(group, service, 'start')">
           <span v-if="busy === 'start'" class="spinner" /><Icon v-else name="play" /> Start
         </button>
