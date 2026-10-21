@@ -37,6 +37,15 @@ and listed with their assets on the
 
 ### Added
 
+- **Links to a stack's or a lane's dashboard page, for agents to hand on**:
+  `devstack status`, `devstack up` and `devstack lane start` end with
+  `dashboard: http://127.0.0.1:4250/#/s/<id>?lane=<lane>`; the MCP tools
+  `status`, `up` and `lane_start` too, and `lanes` names each lane's page.
+  `devstack ui` opens the dashboard on the stack it runs in, in a worktree on
+  its lane (`--lane <name>` for another); `devstack ui --link` prints the page
+  and the `devstack://open` link that pairs the browser first. The `devstack`
+  skill tells agents to give the user that page after starting a stack or a
+  lane, or creating a worktree (run `devstack skills install` again).
 - **Open a stack's folder from the dashboard**
   ([ADR-0046](docs/adr/0046-the-hub-opens-a-worktree-in-the-users-programs.md)):
   the path in the stack header is a menu. It copies the path, or opens the

@@ -3,10 +3,16 @@
 
 use crate::{Cmd, HubAction, NotifyAction, hubcmd, integration};
 use anyhow::Result;
+use std::path::Path;
 
-pub(crate) fn run(cmd: Cmd) -> Result<()> {
+pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
     match cmd {
-        Cmd::Ui { print, browser } => hubcmd::ui(print, browser.as_deref()),
+        Cmd::Ui {
+            lane,
+            link,
+            print,
+            browser,
+        } => hubcmd::ui(file, lane.as_deref(), link, print, browser.as_deref()),
         Cmd::Hub { action } => hub(action),
         Cmd::OpenUrl { url } => integration::open_url(&url),
         _ => super::misrouted(),

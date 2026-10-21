@@ -197,7 +197,7 @@ Every command and flag: `devstack --help`, `devstack <command> --help`.
 | `devstack builds <service>`, `logs`, `top`, `env <service> [--export dotenv]` | what ran, what it printed, what it uses, what it gets |
 | `devstack run <command>` | a command of the stack file |
 | `devstack lane list\|start\|stop\|reset\|prune\|move\|share` | the lanes (worktrees), see above; `reset` throws a stopped lane's data away, `prune` removes what gone lanes left behind |
-| `devstack ui [--browser <name\|path>] [--print]` | open and pair the dashboard; the browser is `--browser`, else `DEVSTACK_BROWSER`, else `BROWSER`, else the system's default |
+| `devstack ui [--lane <name>] [--browser <name\|path>] [--link\|--print]` | open and pair the dashboard, on this stack (in a worktree on its lane, or on `--lane`); the browser is `--browser`, else `DEVSTACK_BROWSER`, else `BROWSER`, else the system's default. `--link` prints the lasting links to the stack or lane instead (the page, and the `devstack://open` link that pairs first); `--print` the one-time pairing link. `status`, `up` and `lane start` end with the page as `dashboard: <url>` |
 | `devstack hub [status\|stop\|start\|install\|uninstall]` | the hub that serves the dashboard: without an action in the foreground; `stop` leaves the stacks running; `install` registers it at logon and the `devstack://` link (`--no-autostart`: the link only), `uninstall` removes both, and `devstack up` then leaves them alone |
 | `devstack skills install [--dir] [--force]`, `skills check` | write the agent skills; check that they match this devstack and stack file (exits 1 when not) |
 | `devstack mcp` | the MCP server (above) |

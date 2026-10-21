@@ -465,6 +465,12 @@ fn checked(status: u16, body: String) -> Result<String> {
     Ok(body)
 }
 
+/// `dashboard: <page>` for the stack of `file`, on `lane` (`None`: the main
+/// working tree): the line an agent hands the user on.
+fn dashboard_line(file: &Path, lane: Option<&str>) -> String {
+    crate::hubcmd::dashboard_line(&client::daemon_file(file), lane)
+}
+
 fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
     match name {
         "status" => {
@@ -476,6 +482,8 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             if let Some(n) = crate::skills::outdated_note(file) {
                 text.push_str(&format!("\n{n}\n"));
             }
+            let lane = c.lane().filter(|l| *l != "-");
+            text.push_str(&format!("\n{}\n", dashboard_line(file, lane)));
             Ok(text)
         }
         "up" => {
@@ -551,7 +559,11 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             }
             match client::start_and_wait(&c, file, Some(left()), |_, _| {})? {
                 UpOutcome::Ready(stack) => {
-                    let mut text = format!("{notes}ready\n\n{}", client::status_text(&stack));
+                    let mut text = format!(
+                        "{notes}ready\n\n{}\n{}\n",
+                        client::status_text(&stack),
+                        dashboard_line(file, c.lane().filter(|l| *l != "-"))
+                    );
                     if args["run"] == true
                         && let Some(cmd) = wanted.as_ref().and_then(|p| p.command.as_deref())
                     {
@@ -654,7 +666,11 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             match client::start_and_wait(&started.client, &started.file, Some(timeout), |_, _| {})?
             {
                 UpOutcome::Ready(stack) => {
-                    let mut text = format!("{notes}ready\n\n{}", client::status_text(&stack));
+                    let mut text = format!(
+                        "{notes}ready\n\n{}\n{}\n",
+                        client::status_text(&stack),
+                        dashboard_line(file, Some(&started.name))
+                    );
                     if run && let Some(cmd) = wanted.and_then(|p| p.command.as_deref()) {
                         let log = client::run_command_on(&started.client, cmd, false)?;
                         text.push_str(&format!(
@@ -735,9 +751,9 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 } else {
                     format!("{}/{} running", l["running"], l["services"])
                 };
+                let name = l["name"].as_str().unwrap_or("");
                 out.push_str(&format!(
-                    "{} (branch {}): ports +{}, {running}, {}{}\n",
-                    l["name"].as_str().unwrap_or(""),
+                    "{name} (branch {}): ports +{}, {running}, {}{}; dashboard {}\n",
                     l["branch"].as_str().unwrap_or("detached"),
                     l["port_offset"],
                     l["path"].as_str().unwrap_or(""),
@@ -745,7 +761,8 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                         ", serves the main ports"
                     } else {
                         ""
-                    }
+                    },
+                    crate::hubcmd::dashboard_links(&client::daemon_file(file), Some(name)).page
                 ));
             }
             Ok(out)
