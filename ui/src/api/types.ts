@@ -144,6 +144,10 @@ export type LaneView = {
   node_warning?: string;
   /** A start on a node or a move under way (step of steps), or one that failed lately. */
   moving?: LaneMove;
+  /** Its worktree is gone: it stops and its data goes (ADR-0024 point 7); it leaves the list after. */
+  removing?: boolean;
+  /** The dashboard's own: the daemon no longer lists it, it is shown as it was last. */
+  gone?: boolean;
 };
 
 export type LaneMove = {

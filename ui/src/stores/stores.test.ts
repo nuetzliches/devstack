@@ -258,20 +258,28 @@ describe('stack store', () => {
     expect(fake.requests.some((r) => r.path.includes('/branches') || r.path.includes('/worktrees'))).toBe(false);
   });
 
-  it('a lane removed while shown gives way to the main tree', async () => {
+  it('a lane whose worktree is removed while shown stays shown, read only, until left', async () => {
     const stack = await shownStack();
-    const feat = { name: 'feat', path: '/src/feat', number: 1, active: true, port_offset: 100, owns_main: false, running: 2, services: 3 };
+    const feat = { name: 'feat', path: '/src/feat', branch: 'feat', number: 1, active: true, port_offset: 100, owns_main: false, running: 2, services: 3 };
     fake.stream('/hub/stacks/shop/api/v1/events').handlers.onMessage({ type: 'lanes', lanes: [feat] });
     stack.selectLane('feat');
     const own = fake.stream('/hub/stacks/shop/api/v1/lanes/feat/v1/events');
-    // Its worktree is removed: its own stream breaks, and the main tree no
-    // longer lists it (the main tree's stream, which says so, is not followed).
+    // Its worktree is removed: the daemon says so on its stream, while it stops it.
+    own.handlers.onMessage({ type: 'lanes', lanes: [{ ...feat, active: false, running: 0, removing: true }] });
+    expect(stack.ending?.removing).toBe(true);
+    expect(stack.readOnly).toBe(true);
+    expect(own.closed).toBe(false);
+    // Then its stream ends, and the main tree no longer lists it (the main
+    // tree's stream, which says so, is not followed).
     fake.on('/hub/stacks/shop/api/v1/lanes', ok([]));
     own.handlers.onState?.('error');
-    await vi.waitFor(() => expect(stack.lane).toBeNull());
-    expect(stack.apiLane).toBeNull();
+    await vi.waitFor(() => expect(stack.ending?.gone).toBe(true));
+    expect(stack.lane).toBe('feat');
+    expect(stack.shownLane?.branch).toBe('feat');
     expect(own.closed).toBe(true);
-    expect(useUi().toasts.some((x) => x.title === 'Lane feat is gone')).toBe(true);
+    stack.selectLane(null);
+    expect(stack.ending).toBeNull();
+    expect(stack.readOnly).toBe(false);
   });
 
   it('a lane stopped stays shown, with its start', async () => {

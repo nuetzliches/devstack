@@ -39,8 +39,19 @@ watch(
 /** The shown lane, when it is not started: its start options instead of its views. */
 const idleLane = computed(() => {
   const l = stack.lanes.find((x) => x.name === stack.lane);
-  return l && l.active === false ? l : null;
+  return l && l.active === false && !l.removing ? l : null;
 });
+/** The shown lane's worktree is gone: made again on its branch, if the branch is still there. */
+const restorable = computed(() => {
+  const l = stack.ending;
+  return !!l?.gone && !!l.branch && hub.reachable && !!stack.branches?.branches.some((b) => b.name === l.branch && !b.worktree);
+});
+watch(
+  () => stack.ending?.gone,
+  (gone) => {
+    if (gone) void stack.loadBranches();
+  },
+);
 const hubDown = computed(() => hub.status === 'unreachable' || hub.stream === 'error');
 const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 const unknown = computed(() => hub.fresh && !stack.entry && !stack.view);
@@ -54,7 +65,7 @@ const daemonOutdated = computed(() => {
 const restartReason = computed(() => {
   if (!stack.running) return null;
   if (daemonOutdated.value) return 'version';
-  if (stack.view?.config_changed) return 'config';
+  if (stack.view?.config_changed && !stack.ending) return 'config';
   return null;
 });
 /** Docker is down and this stack has containers (or we do not know yet). */
@@ -167,6 +178,29 @@ function isActive(name: string) {
           <span v-if="starting" class="spinner" /><Icon v-else name="play" :size="14" />
           {{ starting ? 'Starting…' : 'Start stack' }}
         </button>
+      </div>
+      <div v-else-if="stack.ending" class="banner warn" data-testid="lane-ending">
+        <span v-if="stack.ending.removing" class="spinner" /><Icon v-else name="trash" :size="18" />
+        <span class="grow">
+          <template v-if="stack.ending.removing">
+            <strong>The worktree of {{ stack.ending.branch ?? stack.ending.name }} was removed.</strong> devstack stops its lane and removes its containers and data.
+          </template>
+          <template v-else>
+            <strong>The worktree of {{ stack.ending.branch ?? stack.ending.name }} was removed, and its lane with it.</strong> Showing the lane as it was last<template v-if="stack.viewAt"> ({{ ago(stack.viewAt, now) }})</template>.
+          </template>
+        </span>
+        <button
+          v-if="restorable"
+          type="button"
+          class="btn btn-sm"
+          :disabled="!!stack.busy.branches"
+          :title="`A new worktree on ${stack.ending.branch}, and its lane: it starts fresh, its data was removed`"
+          data-testid="lane-restore"
+          @click="stack.newLane(stack.ending.branch!)"
+        >
+          <span v-if="stack.busy.branches" class="spinner" /><Icon v-else name="rollback" :size="14" /> Restore worktree
+        </button>
+        <button type="button" class="btn btn-primary btn-sm" data-testid="lane-ending-main" @click="stack.selectLane(null)">Main working tree</button>
       </div>
       <div v-else-if="!hubDown && stack.running && !stack.live" class="banner info" data-testid="stack-connecting">
         <span class="spinner" />

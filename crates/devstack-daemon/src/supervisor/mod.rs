@@ -488,6 +488,11 @@ impl Supervisor {
     /// The watcher saw the stack file change: compare with what this daemon
     /// read at start and tell the clients when the answer flips.
     pub fn stack_file_touched(&self) {
+        // Gone is no change a restart applies: a lane's worktree being
+        // removed takes its stack file first, and the lane after.
+        if !self.stack_file.is_file() {
+            return;
+        }
         let changed = stack_file_hash(&self.stack_file) != self.stack_file_hash;
         if self.config_changed.swap(changed, Ordering::SeqCst) != changed {
             self.emit(EventBody::Config { changed });

@@ -1,6 +1,6 @@
 # ADR-0024: A lane is a supervisor in the main working tree's daemon
 
-- **Status:** Accepted, amended 2026-10-15 twice (the lanes are the worktrees; git owns them, lanes run from a copy); point 4 replaced by [ADR-0030](0030-each-lane-has-its-own-infrastructure.md) (2026-10-16); point 1's "devstack never creates or removes one" replaced for the hub by [ADR-0047](0047-the-dashboard-makes-a-lane-from-a-branch.md) (2026-10-21)
+- **Status:** Accepted, amended 2026-10-15 twice (the lanes are the worktrees; git owns them, lanes run from a copy); point 4 replaced by [ADR-0030](0030-each-lane-has-its-own-infrastructure.md) (2026-10-16); point 1's "devstack never creates or removes one" replaced for the hub by [ADR-0047](0047-the-dashboard-makes-a-lane-from-a-branch.md) (2026-10-21); point 7 amended 2026-10-21 (the removal is shown while it runs)
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** plan §3.5, [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0010](0010-promotion-mechanism.md), [ADR-0012](0012-shared-infrastructure-between-lanes.md), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md) to [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) (remote lanes, accepted 2026-10-16); [ADR-0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) (prepared directories linked into the worktree)
@@ -77,6 +77,18 @@ names (the containers of one tree served the other), workers twice.
 7. **A worktree removed takes its lane along**: the lane stops and its state
    (snapshot, logs) is deleted; its builds stay in the shared store until
    pruned.
+
+   *Amended 2026-10-21.* Stopping it and removing its containers and volumes
+   takes a while (twenty seconds for a lane with a database and a few
+   services); meanwhile the dashboard showed it as running, and the stack
+   file the removal took first as "changed, applies after a restart". Now
+   the lane is listed with `removing` from the moment its removal begins, a
+   stack file that is gone is no change, and the dashboard keeps showing a
+   lane removed while shown, as it was last and read only, until the user
+   leaves it, instead of switching to the main tree: who removed the
+   worktree elsewhere sees what became of it. It offers to make the
+   worktree again on its branch (ADR-0047) when the branch is still there;
+   that lane starts fresh, its data went with the old one.
 
 *Amended 2026-10-15, before any other user.* The first version made a worktree
 a lane only on `devstack up` in it or `devstack lane add <path>`, and kept

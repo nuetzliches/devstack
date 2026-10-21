@@ -1308,7 +1308,9 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
     );
     let mut troubles = Vec::new();
     for l in lanes {
-        let running = if l["active"] == false {
+        let running = if l["removing"] == true {
+            "removing".to_string()
+        } else if l["active"] == false {
             "stopped".to_string()
         } else {
             format!("{}/{}", l["running"], l["services"])
@@ -1319,6 +1321,11 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
         }
         if let Some(e) = l["node_error"].as_str() {
             troubles.push(format!("{name}: {e}"));
+        }
+        if l["removing"] == true {
+            troubles.push(format!(
+                "{name}: its worktree is gone; the lane stops and its data is removed"
+            ));
         }
         // A start on a node or a move under way, or one that failed lately.
         let m = &l["moving"];
