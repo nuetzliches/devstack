@@ -281,12 +281,9 @@ function openWith(o: Opener) {
             >
               <Icon :name="openerIcon[o.kind] ?? 'external'" :size="14" class="muted" /><span class="grow">{{ o.label }}</span>
             </button>
-            <template v-if="hub.openers?.length">
-              <div class="sep" />
-              <button type="button" class="opt" role="menuitem" data-testid="path-manage" @click="manage">
-                <Icon name="wrench" :size="14" class="muted" /><span class="grow">Manage…</span>
-              </button>
-            </template>
+            <div v-if="hub.openers?.length" class="menu-foot">
+              <button type="button" class="link-btn" role="menuitem" data-testid="path-manage" @click="manage">Manage programs…</button>
+            </div>
           </template>
         </div>
         <OpenersDialog :open="managing" :openers="hub.openers ?? []" @close="managing = false" />
@@ -414,6 +411,23 @@ h1 {
   height: 1px;
   background: var(--border);
   opacity: 0.6;
+}
+.menu-foot {
+  margin: 4px -6px -6px;
+  padding: 7px 14px;
+  border-top: 1px solid var(--border);
+}
+.link-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.link-btn:hover {
+  text-decoration: underline;
 }
 .menu-note {
   padding: 6px 8px;

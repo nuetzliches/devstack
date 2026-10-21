@@ -267,6 +267,7 @@ function create() {
   display: flex;
   align-items: center;
   gap: 2px;
+  padding-right: 4px;
   border-radius: 8px;
 }
 .row:hover {
@@ -303,10 +304,15 @@ function create() {
   cursor: pointer;
   opacity: 0;
 }
-/* "New branch from" is always there, faint; removing shows on hover only. */
+/* "New branch from" is always there, as a ghost button; removing shows on hover only. */
 .icon-btn.ghost {
   opacity: 1;
   color: var(--text-faint);
+  border: 1px solid var(--border);
+  padding: 4px;
+}
+.icon-btn.ghost:hover {
+  border-color: var(--border-strong);
 }
 .row:hover .icon-btn,
 .icon-btn:focus-visible {

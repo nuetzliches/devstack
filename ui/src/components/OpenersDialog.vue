@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Arranging the path menu's programs (ADR-0046): their order, and which it
 // lists. In this browser only; a change applies at once.
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 import type { Opener } from '@/api/types';
 import { arrange, useOpenerPrefs } from '@/lib/openers';
 import Icon from './icons/Icon.vue';
@@ -29,34 +29,20 @@ function toggle(o: Opener) {
 function reset() {
   save({ order: [], hidden: [] });
 }
-
-// Dragging a row by its handle onto another's place.
-const dragging = ref<number | null>(null);
-const over = ref<number | null>(null);
-function drop(i: number) {
-  if (dragging.value !== null) move(dragging.value, i);
-  dragging.value = over.value = null;
-}
 </script>
 
 <template>
   <Modal :open="open" title="Programs in the path menu" size="sm" testid="openers-dialog" @close="$emit('close')">
-    <p class="muted small intro">Drag them, or move them with the arrows; the ones unchecked are not listed. Kept in this browser.</p>
+    <p class="muted small intro">Move them with the arrows; the ones unchecked are not listed. Kept in this browser.</p>
     <ul class="list">
       <li
         v-for="(o, i) in list"
         :key="o.id"
         class="row"
-        :class="{ off: prefs.hidden.includes(o.id), over: over === i && dragging !== i, dragged: dragging === i }"
+        :class="{ off: prefs.hidden.includes(o.id) }"
         data-testid="opener-row"
         :data-id="o.id"
-        @dragover.prevent="over = i"
-        @dragleave="over === i && (over = null)"
-        @drop.prevent="drop(i)"
       >
-        <span class="handle" draggable="true" title="Drag to move" @dragstart="dragging = i" @dragend="dragging = over = null">
-          <Icon name="arrowUpDown" :size="13" />
-        </span>
         <label class="grow pick">
           <input type="checkbox" :checked="!prefs.hidden.includes(o.id)" data-testid="opener-shown" @change="toggle(o)" />
           <Icon :name="kindIcon[o.kind] ?? 'external'" :size="14" class="muted" />
@@ -94,27 +80,14 @@ function drop(i: number) {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 4px;
-  border: 1px solid transparent;
+  padding: 2px 4px 2px 8px;
   border-radius: 8px;
 }
 .row:hover {
   background: var(--surface-hover);
 }
-.row.over {
-  border-color: var(--accent);
-}
-.row.dragged {
-  opacity: 0.5;
-}
 .row.off .pick > :not(input) {
   opacity: 0.5;
-}
-.handle {
-  display: inline-flex;
-  padding: 4px;
-  color: var(--text-faint);
-  cursor: grab;
 }
 .pick {
   display: flex;
