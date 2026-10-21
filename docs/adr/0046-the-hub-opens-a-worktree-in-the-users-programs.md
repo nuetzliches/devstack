@@ -1,6 +1,6 @@
 # ADR-0046: The hub opens a stack's worktree in the user's own programs, from a fixed list
 
-- **Status:** Accepted (2026-10-21), amended 2026-10-21 (the program opens in front on Windows; GitHub Desktop)
+- **Status:** Accepted (2026-10-21), amended 2026-10-21 (the program opens in front on Windows; GitHub Desktop), amended 2026-10-22 (an agent started with a prompt the hub writes)
 - **Date:** 2026-10-21
 - **Deciders:** project owner
 - **Related:** [ADR-0011](0011-platform-windows-native-first.md), [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0040](0040-a-shared-lane-can-be-watched-like-ones-own.md)
@@ -88,6 +88,48 @@ folder is opened by the program itself with `--cli-open=<path>`, as its own
 `github` command does, through the launcher in its install folder, which
 starts the version installed last. GitHub publishes no Linux build.
 
+## Amendment 2026-10-22: an agent started with a prompt the hub writes
+
+The dashboard hands work to a coding agent in a few places: set a
+repository up (its stack file), repair a stack file that does not load,
+bring a repository set up with an older devstack up to date, find out why a
+stack does not start. A prompt to copy works with any agent; the agents the
+list already knows can also be started with it, in the right folder.
+
+1. **The page names a prompt, the hub writes it.** `GET /hub/prompt` and
+   `POST /hub/agent` take a prompt *kind* and its target, never text:
+
+   | kind | target | what the hub puts in |
+   |---|---|---|
+   | `setup` | a folder | the stack file reference of this devstack; whether a draft is there |
+   | `fix-file` | a folder with a stack file | why it does not load (`devstack_config::load`) |
+   | `upgrade` | a stack | the devstack its agent skills name and this one (`/hub/stacks/{id}/skills`) |
+   | `start-failed` | a stack | the end of the last failed `devstack up` the hub ran, and its log file |
+
+   A prompt the page wrote would make an agent one XSS away from running
+   anything, as a command line would make the hub (point 3 above). What the
+   hub reads itself (a load error, `up`'s output) comes from the user's own
+   repository, where the agent works anyway.
+2. **The target, as for opening.** A stack's target is its repository. A
+   folder (`setup`, `fix-file`, from "Add a stack", before anything is
+   registered) passes the checks of `/hub/inspect`: absolute, on this
+   machine, not a network path; it must exist.
+3. **Only agents that take a prompt.** `GET /hub/openers` says per
+   program whether it does (`prompt`), and how:
+
+   | id | Started as | `prompt` |
+   |---|---|---|
+   | `claude` | `claude://code/new?folder=<path>&q=<prompt>` | `prefill` |
+   | `claude-cli` | `claude-cli://open?cwd=<path>&q=<prompt>` | `prefill` |
+   | `orca` | as above, then `orca agent launch --agent claude --worktree path:<path> --prompt <prompt> --focus` | `send` |
+
+   `prefill`: the agent shows the prompt, the user sends it. `send`: it
+   starts working at once; the page asks first. A program without
+   `prompt` is refused (`400`).
+4. **Short enough for every link.** Claude Code takes up to 5,000
+   characters in `q`; what the hub quotes (a load error, `up`'s output) is
+   cut so that a prompt stays below that.
+
 ## Consequences
 
 - The hub starts programs on request of the page. Narrowed by point 3: a
@@ -114,7 +156,10 @@ starts the version installed last. GitHub publishes no Linux build.
   `/hub/openers` and `/hub/open` in `crates/devstack-hub/src/lib.rs`.
 - `crates/devstack-daemon/src/lanes.rs` (`worktree_of`).
 - `ui/src/components/StackHeader.vue` (the path's menu).
-- `docs/dashboard-api.md` (`/hub/openers`, `/hub/open`).
+- `docs/dashboard-api.md` (`/hub/openers`, `/hub/open`, `/hub/prompt`,
+  `/hub/agent`).
+- `crates/devstack-hub/src/prompts.rs` (the prompts), `ui/src/components/AgentPrompt.vue`
+  (copy, show, start).
 
 ## What this ADR does not say
 

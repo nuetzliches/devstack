@@ -1,21 +1,21 @@
 <script setup lang="ts">
 // Add a stack: the user pastes a folder (a browser never reveals a picked
 // folder's absolute path). A folder with devstack.toml is registered; without
-// one, the hub can write a first draft (`devstack init`), or the user hands a
-// ready prompt to a coding agent that writes the file with devstack's tools.
+// one, the hub can write a first draft (`devstack init`), or a coding agent
+// writes it with devstack's tools, from the hub's prompt (copied, or the agent
+// started with it); a file that does not load, the same for repairing it.
 import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { api, paths } from '@/api';
 import { act } from '@/lib/actions';
-import { useHub } from '@/stores/hub';
 import { useUi } from '@/stores/ui';
+import AgentPrompt from './AgentPrompt.vue';
 import Modal from './Modal.vue';
 import Icon from './icons/Icon.vue';
 import ScanStacks from './ScanStacks.vue';
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ close: [] }>();
-const hub = useHub();
 const ui = useUi();
 const router = useRouter();
 
@@ -122,27 +122,6 @@ async function draft() {
   if (res.ok && res.body) drafted.value = res.body;
 }
 
-const docs = computed(() => `https://github.com/nuetzliches/devstack/blob/v${hub.version ?? 'main'}/docs/stack-file.md`);
-const prompt = computed(
-  () => `Set up devstack for the repository at ${info.value?.repo ?? path.value.trim()}.
-
-devstack (https://github.com/nuetzliches/devstack) runs a local development stack from a devstack.toml in the repository root: containers from the Compose files, native services built in the background, a change goes live once it is healthy.
-
-1. Read the stack file reference: ${docs.value}
-2. ${drafted.value ? 'A draft devstack.toml exists (from `devstack init`).' : 'Run `devstack init` in the repository for a draft (it detects Compose files, .NET, Node, Go, Python and Spring Boot apps).'} Work through every TODO in it: which containers run in development (infrastructure only; what runs natively stays out), build/output/run/watch of each service, ports (the process listens on {port}), a readiness health endpoint, the environment (from a Compose service with \`compose = {...}\`), background workers (\`workers\`), and commands such as seed or reset (with \`confirm\` when they delete data).
-3. Validate with \`devstack check\` (and \`devstack check --compose\`), then \`devstack doctor\`.
-4. Run \`devstack skills install\`, so later sessions have the devstack skills.
-5. Start with \`devstack up\` and fix what fails. Ask me before running anything that deletes data, and before committing.`,
-);
-
-async function copyPrompt() {
-  try {
-    await navigator.clipboard.writeText(prompt.value);
-    ui.toast('success', 'Prompt copied', 'Paste it into your coding agent, in any folder.');
-  } catch {
-    ui.toast('warning', 'Copy failed', 'Select the text and copy it yourself.');
-  }
-}
 </script>
 
 <template>
@@ -182,9 +161,13 @@ async function copyPrompt() {
 
     <div v-else-if="state === 'has-file'" class="note ok" data-testid="add-stack-found">
       <p><strong>devstack.toml found.</strong> <template v-if="info!.valid?.Err">It does not load yet: <code class="err">{{ info!.valid.Err }}</code></template></p>
-      <button type="button" class="btn btn-primary" :disabled="busy || !!info!.valid?.Err" data-testid="add-stack-add" @click="add">
+      <button v-if="!info!.valid?.Err" type="button" class="btn btn-primary" :disabled="busy" data-testid="add-stack-add" @click="add">
         <Icon name="plus" :size="14" /> Add to the list
       </button>
+      <template v-else>
+        <p class="muted">A coding agent can repair it with the reference; then check again.</p>
+        <AgentPrompt kind="fix-file" :target="{ path: info!.repo }" />
+      </template>
     </div>
 
     <template v-else-if="state === 'no-file'">
@@ -199,7 +182,7 @@ async function copyPrompt() {
         <div class="choice">
           <h3><Icon name="terminal" :size="15" /> Let a coding agent do it</h3>
           <p class="muted">A prompt for Claude Code, Codex or similar: it runs <code>devstack init</code>, works through the TODOs with the reference, validates and starts the stack.</p>
-          <button type="button" class="btn" data-testid="add-stack-prompt" @click="copyPrompt"><Icon name="copy" :size="14" /> Copy prompt</button>
+          <AgentPrompt kind="setup" :target="{ path: info!.repo }" />
         </div>
       </div>
       <div v-else class="note ok" data-testid="add-stack-drafted">
@@ -208,15 +191,12 @@ async function copyPrompt() {
           {{ drafted.compose_files.length }} Compose file(s), <strong>{{ drafted.todos }} TODO(s)</strong> to work through.
         </p>
         <p class="muted">Then <code>devstack check</code> and <code>devstack up</code> in the folder<template v-if="!drafted.id">; the stack appears here once its file loads</template>.</p>
-        <div class="row">
-          <button type="button" class="btn" @click="copyPrompt"><Icon name="copy" :size="14" /> Copy a prompt to finish it with an agent</button>
-          <button v-if="drafted.id" type="button" class="btn btn-primary" @click="openStack(drafted.id)">Open the stack</button>
+        <p class="muted">Or let a coding agent finish it:</p>
+        <AgentPrompt kind="setup" :target="{ path: info!.repo }" />
+        <div v-if="drafted.id" class="row">
+          <button type="button" class="btn btn-primary" @click="openStack(drafted.id)">Open the stack</button>
         </div>
       </div>
-      <details class="prompt">
-        <summary>Show the prompt</summary>
-        <pre>{{ prompt }}</pre>
-      </details>
     </template>
     </template>
   </Modal>
@@ -286,17 +266,5 @@ async function copyPrompt() {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-}
-.prompt {
-  margin-top: 12px;
-}
-.prompt pre {
-  white-space: pre-wrap;
-  font-size: 12px;
-  max-height: 240px;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px;
 }
 </style>

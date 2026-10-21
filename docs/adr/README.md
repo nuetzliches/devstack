@@ -94,7 +94,7 @@ stay.
 | [0043](0043-a-dev-servers-fixed-port-is-devstacks.md) | A dev server's fixed port is devstack's, forwarded to its instance | Accepted |
 | [0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) | A lane's prepared directories can be linked into its worktree | Accepted |
 | [0045](0045-the-hub-notifies-the-desktop.md) | The hub notifies the desktop of what needs attention, without a tray | Accepted, amended 2026-10-21 (`guest_lane`) |
-| [0046](0046-the-hub-opens-a-worktree-in-the-users-programs.md) | The hub opens a stack's worktree in the user's own programs, from a fixed list | Accepted, amended 2026-10-21 (the program opens in front on Windows; GitHub Desktop) |
+| [0046](0046-the-hub-opens-a-worktree-in-the-users-programs.md) | The hub opens a stack's worktree in the user's own programs, from a fixed list | Accepted, amended 2026-10-21 (the program opens in front on Windows; GitHub Desktop), 2026-10-22 (an agent started with a prompt the hub writes) |
 | [0047](0047-the-dashboard-makes-a-lane-from-a-branch.md) | The dashboard makes a lane from a branch; the main tree's checkout stays the user's | Accepted |
 | [0048](0048-a-containers-main-port-can-move-with-the-main-slot.md) | A container's main port can be devstack's, and then moves with the main slot | Accepted |
 | [0049](0049-a-lanes-need-is-measured-disk-included.md) | A lane's need is measured where it ran, disk included; the stack file sets a floor | Accepted, amended 2026-10-21 (point 9: what a lane here checks) |

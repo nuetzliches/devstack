@@ -1088,3 +1088,93 @@ fn a_service_that_keeps_exiting_is_one_notice() {
         std::thread::sleep(Duration::from_millis(200));
     }
 }
+
+#[test]
+fn the_hub_writes_the_prompts_and_starts_only_agents_with_them() {
+    let h = start();
+    let p = h.port;
+    let with = format!(
+        "Cookie: {}\r\nSec-Fetch-Site: same-origin\r\n",
+        paired_cookie(&h)
+    );
+    let post = |path: &str, body: &str| {
+        http(
+            p,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\n{with}Origin: http://127.0.0.1:{p}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+    };
+    let text = |body: &str| {
+        serde_json::from_str::<serde_json::Value>(body).unwrap()["text"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    // A folder without a stack file: the setup prompt.
+    let crm = h.home.path().join("crm");
+    std::fs::create_dir_all(&crm).unwrap();
+    let dir = enc(&crm.to_string_lossy());
+    let (s, _, body) = get(p, &format!("/hub/prompt?kind=setup&path={dir}"), &with);
+    assert_eq!(s, 200, "{body}");
+    assert!(text(&body).contains("Run `devstack init`"), "{body}");
+    let (s, _, _) = get(p, &format!("/hub/prompt?kind=fix-file&path={dir}"), &with);
+    assert_eq!(s, 409, "no stack file to fix");
+
+    // One that does not load: why, in the prompt.
+    std::fs::write(
+        crm.join("devstack.toml"),
+        "version = 1\n[stack]\nnmae = \"crm\"\n",
+    )
+    .unwrap();
+    let (s, _, body) = get(p, &format!("/hub/prompt?kind=fix-file&path={dir}"), &with);
+    assert_eq!(s, 200, "{body}");
+    assert!(text(&body).contains("nmae"), "{body}");
+
+    // A stack: upgrade; a start that did not fail has no prompt.
+    let shop = h.home.path().join("shop");
+    std::fs::create_dir_all(&shop).unwrap();
+    std::fs::write(
+        shop.join("devstack.toml"),
+        "version = 1\n[stack]\nname = \"shop\"\n",
+    )
+    .unwrap();
+    let (s, _, body) = post(
+        "/hub/stacks/add",
+        &format!(
+            "{{\"path\":{}}}",
+            serde_json::to_string(&shop.to_string_lossy()).unwrap()
+        ),
+    );
+    assert_eq!(s, 200, "{body}");
+    let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (s, _, body) = get(p, &format!("/hub/prompt?kind=upgrade&stack={id}"), &with);
+    assert_eq!(s, 200, "{body}");
+    assert!(
+        text(&body).contains("an earlier devstack"),
+        "no skills, no version: {body}"
+    );
+    let (s, _, _) = get(
+        p,
+        &format!("/hub/prompt?kind=start-failed&stack={id}"),
+        &with,
+    );
+    assert_eq!(s, 409);
+    let (s, _, _) = get(p, "/hub/prompt?kind=whatever&stack=x", &with);
+    assert_eq!(s, 400);
+
+    // The page never sends text, and only an agent that takes a prompt is
+    // started: a folder opener or a program not found is refused.
+    for opener in ["files", "nosuch"] {
+        let (s, _, body) = post(
+            "/hub/agent",
+            &format!("{{\"kind\":\"upgrade\",\"stack\":\"{id}\",\"with\":\"{opener}\"}}"),
+        );
+        assert_eq!(s, 400, "{opener}: {body}");
+    }
+}
