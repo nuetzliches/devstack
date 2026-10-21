@@ -116,7 +116,7 @@ function isActive(name: string) {
         <Icon :name="restartReason === 'version' ? 'alert' : 'file'" :size="18" />
         <span v-if="restartReason === 'version'" class="grow">
           <strong>{{ stack.entry?.name ?? 'This stack' }} runs devstack {{ daemonOutdated?.daemon }}, devstack {{ daemonOutdated?.hub }} is installed.</strong>
-          <template v-if="stack.runningLanes.length">The daemon stays for its running lanes ({{ stack.runningLanes.join(', ') }}): it switches over once you stop them and restart the stack.</template>
+          {{ ' ' }}<template v-if="stack.runningLanes.length">The daemon stays for its running lanes ({{ stack.runningLanes.join(', ') }}): it switches over once you stop them and restart the stack.</template>
           <template v-else>A restart of the stack switches it over<template v-if="stack.view?.config_changed"> and applies the changed stack file</template>.</template>
         </span>
         <span v-else class="grow"><strong>The stack file changed since {{ stack.entry?.name ?? 'the stack' }} started.</strong> It applies after a restart.</span>
