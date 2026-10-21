@@ -32,7 +32,8 @@ const EVERY: Duration = Duration::from_secs(15);
 /// machine offers nothing, so the pool shows no capacity nobody can use.
 const UNAVAILABLE: Option<&str> = if cfg!(windows) {
     Some(
-        "Windows does not run the pool's lanes yet: they are Linux containers, which an agent on Windows cannot provide (#168).          This machine can still start its lanes in the pool.",
+        "Windows does not run the pool's lanes yet: they are Linux containers, which an agent on Windows cannot provide (#168). \
+         This machine can still start its lanes in the pool.",
     )
 } else {
     None

@@ -858,6 +858,7 @@ fn sharing_is_refused_on_windows_with_the_reason() {
     assert_eq!(s, 200, "{body}");
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["unavailable"].is_string(), cfg!(windows), "{v}");
+    assert!(!v["unavailable"].as_str().unwrap_or("").contains("  "), "{v}");
     let put = |body: &str| {
         http(
             p,
