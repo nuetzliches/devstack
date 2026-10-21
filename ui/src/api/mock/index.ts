@@ -433,6 +433,17 @@ export class MockTransport implements Transport {
       return empty(202);
     }
     if (p === '/hub/pick-folder' && method === 'POST') return json(200, { path: 'C:\\src\\new-shop' });
+    if (p === '/hub/openers' && method === 'GET')
+      return json(200, [
+        { id: 'files', label: 'Explorer', kind: 'files' },
+        { id: 'wt', label: 'Windows Terminal', kind: 'terminal' },
+        { id: 'powershell', label: 'PowerShell', kind: 'terminal' },
+        { id: 'vscode', label: 'VS Code', kind: 'editor' },
+        { id: 'claude', label: 'Claude Desktop', kind: 'agent' },
+        { id: 'claude-cli', label: 'Claude Code', kind: 'agent' },
+        { id: 'orca', label: 'Orca', kind: 'agent' },
+      ]);
+    if (p === '/hub/open' && method === 'POST') return empty(204);
     if (p === '/hub/stacks/add' && method === 'POST') return json(200, { id: hub.stacks[0].entry.id, name: hub.stacks[0].entry.name });
     if (p === '/hub/stacks/init' && method === 'POST')
       return json(200, { file: `${String(body?.path)}\\devstack.toml`, services: ['api', 'web'], compose_files: ['deploy/compose.yml'], todos: 9, id: null });

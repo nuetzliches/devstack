@@ -6,10 +6,11 @@ import { computed, onBeforeUnmount, ref } from 'vue';
 import { duration, ago, useNow } from '@/lib/format';
 import { laneLabel, orderLanes, nodeLabel } from '@/lib/lanes';
 import { usePopover } from '@/lib/popover';
-import type { LaneView } from '@/api/types';
+import type { LaneView, Opener } from '@/api/types';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import { usePool } from '@/stores/pool';
+import { useUi } from '@/stores/ui';
 import Icon from './icons/Icon.vue';
 
 const hub = useHub();
@@ -92,6 +93,33 @@ function shareTags() {
 function moveTo(to: string) {
   moveClose();
   if (current.value) void stack.moveLane(current.value.name, to);
+}
+
+// The path's menu (ADR-0046): copy it, or open the tree with a program the
+// hub found. A lane shared with us lives on another machine: copy only.
+const ui = useUi();
+const pathRoot = ref<HTMLElement | null>(null);
+const pathTrigger = ref<HTMLButtonElement | null>(null);
+const { open: pathOpen, close: pathClose } = usePopover(pathRoot, pathTrigger);
+const canOpen = computed(() => !hubAway.value && !stack.sharedLane && !!stack.id);
+const openers = computed(() => (canOpen.value ? (hub.openers ?? []) : []));
+const openerIcon = { files: 'folder', terminal: 'terminal', editor: 'file', agent: 'zap' } as const;
+function togglePath() {
+  pathOpen.value = !pathOpen.value;
+  if (pathOpen.value && canOpen.value) void hub.loadOpeners();
+}
+async function copyPath() {
+  pathClose();
+  try {
+    await navigator.clipboard.writeText(path.value);
+    ui.toast('info', 'Copied', path.value);
+  } catch {
+    ui.toast('info', path.value, 'Copying is not allowed here.');
+  }
+}
+function openWith(o: Opener) {
+  pathClose();
+  if (stack.id) void hub.openWith(stack.id, path.value, o);
 }
 
 const root = ref<HTMLElement | null>(null);
@@ -214,7 +242,42 @@ function pick(l: LaneView | null) {
       </template>
     </div>
     <div class="line2">
-      <span class="path truncate mono" :title="path">{{ path }}</span>
+      <div v-if="path" ref="pathRoot" class="picker path-picker">
+        <button
+          ref="pathTrigger"
+          type="button"
+          class="path-btn truncate mono"
+          :aria-expanded="pathOpen"
+          aria-haspopup="menu"
+          :title="`${path}: copy, or open in another program`"
+          data-testid="path-menu"
+          @click="togglePath"
+        >
+          {{ path }}
+        </button>
+        <div v-if="pathOpen" class="menu" role="menu" aria-label="Open the folder" data-testid="path-menu-list">
+          <button type="button" class="opt" role="menuitem" data-testid="path-copy" @click="copyPath">
+            <Icon name="copy" :size="14" class="muted" /><span class="grow">Copy path</span>
+          </button>
+          <template v-if="canOpen">
+            <div class="sep" />
+            <span v-if="!hub.openers" class="faint small menu-note"><span class="spinner" /> Looking for programs…</span>
+            <span v-else-if="!openers.length" class="faint small menu-note">No program to open it with on this machine.</span>
+            <button
+              v-for="(o, i) in openers"
+              :key="o.id"
+              type="button"
+              class="opt"
+              :class="{ 'group-start': i > 0 && openers[i - 1].kind !== o.kind }"
+              role="menuitem"
+              data-testid="path-open"
+              @click="openWith(o)"
+            >
+              <Icon :name="openerIcon[o.kind] ?? 'external'" :size="14" class="muted" /><span class="grow">{{ o.label }}</span>
+            </button>
+          </template>
+        </div>
+      </div>
       <div ref="root" class="picker">
         <button
           ref="trigger"
@@ -318,10 +381,54 @@ h1 {
   margin: 0;
   min-width: 0;
 }
-.path {
-  font-size: 12.5px;
-  color: var(--text-2);
+.path-picker {
+  min-width: 0;
   max-width: 48ch;
+}
+.path-btn {
+  display: block;
+  max-width: 100%;
+  padding: 2px 4px;
+  margin-left: -4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.path-btn:hover,
+.path-btn[aria-expanded='true'] {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.path-picker .menu {
+  min-width: 220px;
+}
+.sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border);
+}
+.group-start {
+  margin-top: 5px;
+  position: relative;
+}
+.group-start::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: 8px;
+  right: 8px;
+  height: 1px;
+  background: var(--border);
+  opacity: 0.6;
+}
+.menu-note {
+  padding: 6px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .err {
   color: var(--danger);

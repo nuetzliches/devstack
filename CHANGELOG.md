@@ -46,6 +46,16 @@ and listed with their assets on the
   and the `devstack://open` link that pairs the browser first. The `devstack`
   skill tells agents to give the user that page after starting a stack or a
   lane, or creating a worktree (run `devstack skills install` again).
+- **Open a stack's folder from the dashboard**
+  ([ADR-0046](docs/adr/0046-the-hub-opens-a-worktree-in-the-users-programs.md)):
+  the path in the stack header is a menu. It copies the path, or opens the
+  shown tree (the main working tree or a lane's worktree) in Explorer or the
+  file manager, Windows Terminal, PowerShell or a terminal, VS Code, Cursor,
+  Windsurf, Zed, Claude Desktop, Claude Code or Orca: whichever of them the
+  hub finds on this machine (an editor or agent by the URL scheme it
+  registered). The hub opens only a registered stack's own trees, with a
+  program from that list (`GET /hub/openers`, `POST /hub/open`). A lane
+  shared with you offers the copy only.
 - **winget**: `winget install nuetzliches.devstack` (once winget's catalogue
   has the release). Each release submits its manifests
   (`packaging/winget/`) to `microsoft/winget-pkgs`; the release workflow
