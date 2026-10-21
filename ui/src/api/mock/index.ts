@@ -5,6 +5,9 @@
 //   ?mock=empty      no stack registered (a fresh install)
 //   ?mock=configchanged  the shop stack's file changed since it started
 //   ?mock=newer      a newer release (0.5.0) is out
+//   ?mock=skills     shop was set up with an older devstack, crm's agent skills miss a stack file change
+//   ?mock=startfailed  the docs stack's last start from the dashboard failed
+//   Add a stack with a path containing "broken": a stack file that does not load
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
@@ -98,6 +101,7 @@ class MockHub {
     this.unpaired = q.includes('unpaired');
     if (q.includes('newer')) this.newer = '0.5.0';
     if (q.includes('configchanged')) shop.view.config_changed = true;
+    if (q.includes('startfailed')) docs.entry.start_error = 'Error: port 4000 (site) is taken by another process (node.exe, pid 4242)\n  devstack doctor names it; stop it or change the port in devstack.toml';
     // `?mock=skills`: shop was set up with an older devstack, crm's stack file changed since.
     this.skills[shop.entry.id] = q.includes('skills') ? { from: '0.1.4', outdated: true } : { from: MOCK_VERSION, outdated: false };
     this.skills[crm.entry.id] = { from: MOCK_VERSION, outdated: q.includes('skills') };
@@ -431,7 +435,9 @@ export class MockTransport implements Transport {
       const path = url.searchParams.get('path') ?? '';
       if (!/^([a-z]:\\|\/)/i.test(path)) return json(400, { error: 'an absolute path, e.g. C:\\src\\shop or /home/me/src/shop' });
       const has = !/empty|new/i.test(path);
-      return json(200, { repo: path, is_dir: !/missing/i.test(path), has_stack_file: has, valid: has ? { Ok: null } : null, registered: null, id: 'b1a2c3d4e5f6' });
+      // A path with "broken" in it has a stack file that does not load.
+      const valid = /broken/i.test(path) ? { Err: `${path}\\devstack.toml: 1 problem(s)\n  - stack.nmae: unknown key` } : { Ok: null };
+      return json(200, { repo: path, is_dir: !/missing/i.test(path), has_stack_file: has, valid: has ? valid : null, registered: null, id: 'b1a2c3d4e5f6' });
     }
     if (p === '/hub/stacks/scan' && method === 'POST') {
       await sleep(600);
@@ -475,11 +481,32 @@ export class MockTransport implements Transport {
         { id: 'powershell', label: 'PowerShell', kind: 'terminal' },
         { id: 'vscode', label: 'VS Code', kind: 'editor' },
         { id: 'github-desktop', label: 'GitHub Desktop', kind: 'git' },
-        { id: 'claude', label: 'Claude Desktop', kind: 'agent' },
-        { id: 'claude-cli', label: 'Claude Code', kind: 'agent' },
-        { id: 'orca', label: 'Orca', kind: 'agent' },
+        { id: 'claude', label: 'Claude Desktop', kind: 'agent', prompt: 'prefill' },
+        { id: 'claude-cli', label: 'Claude Code', kind: 'agent', prompt: 'prefill' },
+        { id: 'orca', label: 'Orca', kind: 'agent', prompt: 'send' },
       ]);
     if (p === '/hub/open' && method === 'POST') return empty(204);
+    // The hub writes the prompts (ADR-0046, amendment 2026-10-22); the mock's are short.
+    if (p === '/hub/prompt' && method === 'GET') {
+      const kind = url.searchParams.get('kind');
+      const target = url.searchParams.get('stack') ?? url.searchParams.get('path');
+      const what: Record<string, string> = {
+        setup: `Set up devstack for the repository at ${target}.`,
+        'fix-file': `The devstack stack file in ${target} does not load.`,
+        upgrade: `Bring the devstack setup of ${target} up to devstack ${MOCK_VERSION}.`,
+        'start-failed': `The devstack stack ${target} does not start.`,
+      };
+      if (!kind || !what[kind]) return json(400, { error: `no prompt \`${kind}\`` });
+      return json(200, { text: `${what[kind]}
+
+1. Read the stack file reference.
+2. Run \`devstack check\` and \`devstack doctor\`.
+3. Ask me before committing.`, path: target });
+    }
+    if (p === '/hub/agent' && method === 'POST') {
+      await sleep(400);
+      return empty(204);
+    }
     if (p === '/hub/stacks/add' && method === 'POST') return json(200, { id: hub.stacks[0].entry.id, name: hub.stacks[0].entry.name });
     if (p === '/hub/stacks/init' && method === 'POST')
       return json(200, { file: `${String(body?.path)}\\devstack.toml`, services: ['api', 'web'], compose_files: ['deploy/compose.yml'], todos: 9, id: null });

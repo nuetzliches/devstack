@@ -1,5 +1,6 @@
 //! Opening a stack's tree in the user's own programs (ADR-0046):
-//! `GET /hub/openers`, `POST /hub/open`.
+//! `GET /hub/openers`, `POST /hub/open`, and an agent started with a prompt
+//! the hub wrote (`POST /hub/agent`, amendment 2026-10-22).
 //!
 //! A fixed list. Each program is found the way it makes itself known: an
 //! editor or agent by the URL scheme it registered (`vscode`, `claude`, ...),
@@ -21,12 +22,25 @@ pub enum Kind {
     Agent,
 }
 
+/// How an agent takes a prompt it is started with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptMode {
+    /// Shown in its input; the user sends it.
+    Prefill,
+    /// Sent at once: the agent starts working.
+    Send,
+}
+
 /// One entry of `GET /hub/openers`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Opener {
     pub id: &'static str,
     pub label: &'static str,
     pub kind: Kind,
+    /// Whether, and how, it can be started with a prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<PromptMode>,
 }
 
 /// A program found, and how it is started.
@@ -84,6 +98,7 @@ pub fn found() -> Vec<Found> {
                     id: scheme,
                     label,
                     kind,
+                    prompt: (kind == Kind::Agent).then_some(PromptMode::Prefill),
                 },
                 how: How::Link(scheme),
             });
@@ -95,6 +110,7 @@ pub fn found() -> Vec<Found> {
                 id: "github-desktop",
                 label: "GitHub Desktop",
                 kind: Kind::Git,
+                prompt: None,
             },
             how: How::GitHubDesktop(exe),
         });
@@ -105,6 +121,7 @@ pub fn found() -> Vec<Found> {
                 id: "orca",
                 label: "Orca",
                 kind: Kind::Agent,
+                prompt: Some(PromptMode::Send),
             },
             how: How::Orca(orca),
         });
@@ -119,6 +136,8 @@ pub fn found() -> Vec<Found> {
 #[derive(Debug)]
 pub enum OpenError {
     Unknown,
+    /// Found, but it is not started with a prompt.
+    NoPrompt,
     Failed(String),
 }
 
@@ -147,9 +166,59 @@ pub fn open(id: &str, tree: &Path, repo: &Path, stack_file: &Path) -> Result<(),
     .map_err(OpenError::Failed)
 }
 
+/// Start the agent `id` in `tree` with `prompt` (written by the hub, never by
+/// the page): a link that fills its input, or Orca's agent, which starts on
+/// it at once.
+pub fn agent(
+    id: &str,
+    tree: &Path,
+    repo: &Path,
+    stack_file: &Path,
+    prompt: &str,
+) -> Result<(), OpenError> {
+    let f = found()
+        .into_iter()
+        .find(|f| f.opener.id == id)
+        .ok_or(OpenError::Unknown)?;
+    if f.opener.prompt.is_none() {
+        return Err(OpenError::NoPrompt);
+    }
+    let path = display(tree);
+    #[cfg(windows)]
+    let _front = crate::foreground::Front::take();
+    match &f.how {
+        How::Link(scheme) => imp::shell_open(&prompt_link(scheme, &path, prompt)),
+        How::Orca(exe) => orca(exe, &path, &display(repo), stack_file).and_then(|()| {
+            let tree = format!("path:{path}");
+            orca_run(
+                exe,
+                &[
+                    "agent",
+                    "launch",
+                    "--agent",
+                    "claude",
+                    "--worktree",
+                    &tree,
+                    "--prompt",
+                    prompt,
+                    "--focus",
+                ],
+            )
+            .map_err(|e| e.1)
+        }),
+        _ => return Err(OpenError::NoPrompt),
+    }
+    .map_err(OpenError::Failed)
+}
+
+/// The agent link for `path`, its input filled with `prompt`.
+fn prompt_link(scheme: &str, path: &str, prompt: &str) -> String {
+    format!("{}&q={}", link(scheme, path), encode(prompt, b""))
+}
+
 /// A path as the programs take it: the platform's separators, without the
 /// `\\?\` prefix.
-fn display(p: &Path) -> String {
+pub(crate) fn display(p: &Path) -> String {
     let s = p.to_string_lossy();
     let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
     if cfg!(windows) {
@@ -190,33 +259,7 @@ fn encode(s: &str, keep: &[u8]) -> String {
 /// Orca: start it if it does not run, bring its window to the tree with the
 /// stack file open; a repository Orca does not know yet is added first.
 fn orca(exe: &Path, path: &str, repo: &str, stack_file: &Path) -> Result<(), String> {
-    // Err: Orca's error code (`selector_not_found`) and what to say.
-    let run = |args: &[&str]| -> Result<(), (String, String)> {
-        let mut cmd = std::process::Command::new(exe);
-        cmd.args(args)
-            .arg("--json")
-            .stdin(std::process::Stdio::null());
-        crate::no_window(&mut cmd);
-        let out = cmd
-            .output()
-            .map_err(|e| (String::new(), format!("run orca: {e}")))?;
-        if out.status.success() {
-            return Ok(());
-        }
-        let answer = serde_json::from_slice::<serde_json::Value>(&out.stdout).ok();
-        let at = |p: &str| {
-            answer
-                .as_ref()
-                .and_then(|v| v.pointer(p))
-                .and_then(|m| m.as_str())
-                .map(String::from)
-        };
-        let code = at("/error/code").unwrap_or_default();
-        let why = at("/error/data/nextSteps/0")
-            .or_else(|| at("/error/message"))
-            .unwrap_or_else(|| String::from_utf8_lossy(&out.stderr).trim().to_string());
-        Err((code, format!("orca {}: {why}", args[0])))
-    };
+    let run = |args: &[&str]| orca_run(exe, args);
     run(&["open"]).map_err(|e| e.1)?;
     let tree = format!("path:{path}");
     let file = stack_file.to_string_lossy();
@@ -234,6 +277,35 @@ fn orca(exe: &Path, path: &str, repo: &str, stack_file: &Path) -> Result<(), Str
         }
         r => r.map_err(|e| e.1),
     }
+}
+
+/// Run Orca's CLI. Err: Orca's error code (`selector_not_found`) and what to
+/// say.
+fn orca_run(exe: &Path, args: &[&str]) -> Result<(), (String, String)> {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(args)
+        .arg("--json")
+        .stdin(std::process::Stdio::null());
+    crate::no_window(&mut cmd);
+    let out = cmd
+        .output()
+        .map_err(|e| (String::new(), format!("run orca: {e}")))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let answer = serde_json::from_slice::<serde_json::Value>(&out.stdout).ok();
+    let at = |p: &str| {
+        answer
+            .as_ref()
+            .and_then(|v| v.pointer(p))
+            .and_then(|m| m.as_str())
+            .map(String::from)
+    };
+    let code = at("/error/code").unwrap_or_default();
+    let why = at("/error/data/nextSteps/0")
+        .or_else(|| at("/error/message"))
+        .unwrap_or_else(|| String::from_utf8_lossy(&out.stderr).trim().to_string());
+    Err((code, format!("orca {}: {why}", args[0])))
 }
 
 /// Where `name` is on `PATH`, as a program (`.exe` added on Windows).
@@ -265,6 +337,7 @@ mod imp {
                 id: "files",
                 label: "Explorer",
                 kind: Kind::Files,
+                prompt: None,
             },
             how: How::Folder,
         }];
@@ -274,6 +347,7 @@ mod imp {
                     id: "wt",
                     label: "Windows Terminal",
                     kind: Kind::Terminal,
+                    prompt: None,
                 },
                 how: How::Wt(wt),
             });
@@ -291,6 +365,7 @@ mod imp {
                     id: "powershell",
                     label: "PowerShell",
                     kind: Kind::Terminal,
+                    prompt: None,
                 },
                 how: How::Console(ps),
             });
@@ -455,6 +530,7 @@ mod imp {
                     id: "files",
                     label: "Files",
                     kind: Kind::Files,
+                    prompt: None,
                 },
                 how: How::Folder,
             });
@@ -469,6 +545,7 @@ mod imp {
                     id: "terminal",
                     label: "Terminal",
                     kind: Kind::Terminal,
+                    prompt: None,
                 },
                 how: How::Terminal(t),
             });
@@ -606,6 +683,15 @@ mod tests {
             link("claude-cli", "/home/me/a&b"),
             "claude-cli://open?cwd=%2Fhome%2Fme%2Fa%26b"
         );
+    }
+
+    #[test]
+    fn a_prompt_goes_into_the_link_as_one_value() {
+        assert_eq!(
+            prompt_link("claude-cli", r"D:\src\app", "Fix it & go\n1. `a`"),
+            "claude-cli://open?cwd=D%3A%5Csrc%5Capp&q=Fix%20it%20%26%20go%0A1.%20%60a%60"
+        );
+        assert!(prompt_link("claude", "/a", "x").starts_with("claude://code/new?folder=%2Fa&q=x"));
     }
 
     #[test]

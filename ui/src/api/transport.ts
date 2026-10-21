@@ -58,6 +58,9 @@ export const paths = {
   pickFolder: '/hub/pick-folder',
   openers: '/hub/openers',
   open: '/hub/open',
+  prompt: (kind: string, target: { stack: string } | { path: string }) =>
+    `/hub/prompt?kind=${encodeURIComponent(kind)}&${'stack' in target ? `stack=${encodeURIComponent(target.stack)}` : `path=${encodeURIComponent(target.path)}`}`,
+  agent: '/hub/agent',
   scanStacks: '/hub/stacks/scan',
   stackInit: '/hub/stacks/init',
   up: (stack: string) => `/hub/stacks/${enc(stack)}/up`,

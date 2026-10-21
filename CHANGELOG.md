@@ -21,6 +21,15 @@ and listed with their assets on the
   only no longer match the stack file get the refresh alone; skills a newer
   devstack wrote are left as they are. New in the hub's API:
   `GET`/`POST /hub/stacks/{id}/skills`.
+- **A coding agent started with the dashboard's prompt** (ADR-0046,
+  amended). Where the dashboard has a prompt, it also offers the agents it
+  found that take one: Claude Desktop and Claude Code open in the folder
+  with the prompt filled in (you send it), Orca starts on it at once (asked
+  first). The hub writes every prompt; the page only names which. New
+  prompts: a stack file that does not load ("Add a stack"), and a stack
+  whose start from the dashboard failed (with the end of `devstack up`'s
+  output and its log). New in the hub's API: `GET /hub/prompt`,
+  `POST /hub/agent`, and `prompt` in `GET /hub/openers`.
 
 ### Changed
 

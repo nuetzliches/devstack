@@ -8,6 +8,7 @@ import Icon from '@/components/icons/Icon.vue';
 import StackHeader from '@/components/StackHeader.vue';
 import LaneStart from '@/components/LaneStart.vue';
 import SkillsBanner from '@/components/SkillsBanner.vue';
+import AgentPrompt from '@/components/AgentPrompt.vue';
 import type { IconName } from '@/components/icons/icons';
 
 const route = useRoute();
@@ -186,6 +187,7 @@ function isActive(name: string) {
               <button v-if="hub.newer" type="button" class="btn btn-sm" :disabled="hub.updating" @click="hub.installUpdate()">Update to {{ hub.newer }}</button>
               <template v-else>Run <code>devstack update</code>.</template>
             </span>
+            <AgentPrompt v-if="!stack.readOnly && stack.id" kind="start-failed" :target="{ stack: stack.id }" />
           </template>
         </span>
         <button v-if="!stack.readOnly" type="button" class="btn btn-primary btn-sm" :disabled="starting" data-testid="action-start-stack" @click="stack.startStack()">

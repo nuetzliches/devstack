@@ -522,7 +522,18 @@ export type CapacityPoint = {
 };
 
 /** A program this machine can open a stack's folder with (`GET /hub/openers`, ADR-0046). */
-export type Opener = { id: string; label: string; kind: 'files' | 'terminal' | 'editor' | 'git' | 'agent' };
+export type Opener = {
+  id: string;
+  label: string;
+  kind: 'files' | 'terminal' | 'editor' | 'git' | 'agent';
+  /** An agent started with a prompt the hub writes: shown for the user to send, or sent at once. */
+  prompt?: 'prefill' | 'send';
+};
+
+/** The prompts the hub writes for a coding agent (`GET /hub/prompt`, ADR-0046 amendment 2026-10-22). */
+export type PromptKind = 'setup' | 'fix-file' | 'upgrade' | 'start-failed';
+/** What a prompt is about: a registered stack, or a folder before it is one. */
+export type PromptTarget = { stack: string } | { path: string };
 
 /** A kind of desktop notification and whether it is on (ADR-0045). */
 export type NotifyKind = { kind: string; label: string; on: boolean; default: boolean };

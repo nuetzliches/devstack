@@ -42,6 +42,7 @@ mod notice;
 mod notify;
 mod open;
 mod pool;
+mod prompts;
 pub mod release;
 mod share;
 mod shared;
@@ -459,6 +460,8 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/pick-folder", post(pick_folder))
         .route("/hub/openers", get(openers))
         .route("/hub/open", post(open_tree))
+        .route("/hub/prompt", get(prompt))
+        .route("/hub/agent", post(agent))
         .route("/hub/stacks/add", post(stack_add))
         .route("/hub/stacks/init", post(stack_init))
         .route("/hub/stacks/scan", post(stack_scan))
@@ -1657,7 +1660,7 @@ async fn open_tree(State(s): State<AppState>, Json(q): Json<OpenQuery>) -> Respo
             .map(|rel| tree.join(rel))
             .unwrap_or_else(|_| e.file.clone());
         open::open(&q.with, &tree, &e.repo, &file).map_err(|e| match e {
-            open::OpenError::Unknown => (
+            open::OpenError::Unknown | open::OpenError::NoPrompt => (
                 StatusCode::BAD_REQUEST,
                 format!(
                     "{} is not a program this machine opens folders with",
@@ -1672,6 +1675,169 @@ async fn open_tree(State(s): State<AppState>, Json(q): Json<OpenQuery>) -> Respo
         Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
         Ok(Err((status, msg))) => {
             diag::warn("open_failed", serde_json::json!({ "error": msg }));
+            err(status, msg)
+        }
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+// ------------------------------------------------- a prompt for an agent
+//
+// The page names a prompt and its target; the hub writes it (ADR-0046,
+// amendment 2026-10-22). Copied by the user, or given to an agent the hub
+// starts in the target's folder.
+
+#[derive(Deserialize)]
+struct PromptQuery {
+    kind: String,
+    /// The stack a prompt is about (`upgrade`, `start-failed`).
+    #[serde(default)]
+    stack: Option<String>,
+    /// The folder a prompt is about (`setup`, `fix-file`), before it is a stack.
+    #[serde(default)]
+    path: Option<String>,
+}
+
+/// A prompt written, and where its agent works: the repository and its stack
+/// file.
+struct Written {
+    text: String,
+    repo: PathBuf,
+    file: PathBuf,
+}
+
+type Refusal = (StatusCode, String);
+
+fn write_prompt(s: &AppState, q: &PromptQuery) -> Result<Written, Refusal> {
+    use prompts::Prompt;
+    let bad = |m: String| (StatusCode::BAD_REQUEST, m);
+    let folder = || -> Result<(PathBuf, PathBuf), Refusal> {
+        let p = q
+            .path
+            .as_deref()
+            .ok_or_else(|| bad(format!("`{}` needs `path`", q.kind)))?;
+        let (repo, file) = stack_paths(p).map_err(bad)?;
+        if !repo.is_dir() {
+            return Err(bad(format!("{} is not a folder", repo.display())));
+        }
+        Ok((repo, file))
+    };
+    let stack = || -> Result<StackEntry, Refusal> {
+        let id = q
+            .stack
+            .as_deref()
+            .ok_or_else(|| bad(format!("`{}` needs `stack`", q.kind)))?;
+        entry(s, id).ok_or_else(|| (StatusCode::NOT_FOUND, "no such stack".to_string()))
+    };
+    let (text, repo, file) = match q.kind.as_str() {
+        "setup" => {
+            let (repo, file) = folder()?;
+            let drafted = file.is_file();
+            (
+                prompts::text(&Prompt::Setup {
+                    repo: &repo,
+                    drafted,
+                }),
+                repo,
+                file,
+            )
+        }
+        "fix-file" => {
+            let (repo, file) = folder()?;
+            if !file.is_file() {
+                return Err((
+                    StatusCode::CONFLICT,
+                    format!("no devstack.toml in {}", repo.display()),
+                ));
+            }
+            let error = match devstack_config::load(&file) {
+                Ok(_) => return Err((StatusCode::CONFLICT, "the stack file loads".to_string())),
+                Err(e) => e.to_string(),
+            };
+            let text = prompts::text(&Prompt::FixFile {
+                repo: &repo,
+                file: &file,
+                error: &error,
+            });
+            (text, repo, file)
+        }
+        "upgrade" => {
+            let e = stack()?;
+            let i = devstack_skills::installed(&e.file);
+            let text = prompts::text(&Prompt::Upgrade {
+                repo: &e.repo,
+                file: &e.file,
+                from: i.from.as_deref(),
+                current: devstack_config::VERSION,
+            });
+            (text, e.repo, e.file)
+        }
+        "start-failed" => {
+            let e = stack()?;
+            let Some(output) = s.start_errors.lock().unwrap().get(&e.id).cloned() else {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "its last start did not fail".to_string(),
+                ));
+            };
+            let log = state_dir().join(format!("up-{}.log", e.id));
+            let text = prompts::text(&Prompt::StartFailed {
+                name: &e.name,
+                repo: &e.repo,
+                file: &e.file,
+                output: &output,
+                log: &log,
+            });
+            (text, e.repo, e.file)
+        }
+        other => return Err(bad(format!("no prompt `{other}`"))),
+    };
+    Ok(Written { text, repo, file })
+}
+
+/// `GET /hub/prompt?kind=&stack=|path=`: the prompt, to show and copy.
+async fn prompt(State(s): State<AppState>, Query(q): Query<PromptQuery>) -> Response {
+    match tokio::task::spawn_blocking(move || write_prompt(&s, &q)).await {
+        Ok(Ok(w)) => Json(serde_json::json!({ "text": w.text, "path": w.repo })).into_response(),
+        Ok(Err((status, msg))) => err(status, msg),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct AgentQuery {
+    #[serde(flatten)]
+    prompt: PromptQuery,
+    with: String,
+}
+
+/// `POST /hub/agent {kind, stack | path, with}`: start the agent `with` in
+/// the target's folder with the prompt (filled in, or, Orca, sent).
+async fn agent(State(s): State<AppState>, Json(q): Json<AgentQuery>) -> Response {
+    let started = tokio::task::spawn_blocking(move || {
+        let w = write_prompt(&s, &q.prompt)?;
+        open::agent(&q.with, &w.repo, &w.repo, &w.file, &w.text).map_err(|e| match e {
+            open::OpenError::Unknown => (
+                StatusCode::BAD_REQUEST,
+                format!("{} is not a program this machine has", q.with),
+            ),
+            open::OpenError::NoPrompt => (
+                StatusCode::BAD_REQUEST,
+                format!("{} is not started with a prompt", q.with),
+            ),
+            open::OpenError::Failed(why) => (StatusCode::BAD_GATEWAY, why),
+        })?;
+        diag::info(
+            "agent_started",
+            serde_json::json!({ "with": q.with, "kind": q.prompt.kind, "repo": w.repo }),
+        );
+        Ok::<_, Refusal>(())
+    })
+    .await;
+    match started {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err((status, msg))) => {
+            diag::warn("agent_failed", serde_json::json!({ "error": msg }));
             err(status, msg)
         }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
