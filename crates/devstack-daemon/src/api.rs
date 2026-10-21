@@ -244,7 +244,12 @@ async fn down(State(s): State<AppState>, Query(q): Query<DownQuery>) -> Response
     let lanes = s.lanes.as_ref().map(|l| l.active()).unwrap_or_default();
     let infra = q.infra && lanes.is_empty();
     let sup = s.sup.clone();
-    match tokio::task::spawn_blocking(move || sup.down(infra)).await {
+    let result = tokio::task::spawn_blocking(move || sup.down(infra)).await;
+    // The stack stopped: a lane's start or move that failed before is over.
+    if let Some(l) = &s.lanes {
+        l.forget_failed(None);
+    }
+    match result {
         Ok(failed) if !failed.is_empty() => err(
             StatusCode::CONFLICT,
             format!(

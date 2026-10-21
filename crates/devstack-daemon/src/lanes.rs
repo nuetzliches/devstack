@@ -917,6 +917,7 @@ impl Lanes {
             .spawn(move || {
                 let mut last = fingerprint(&dir);
                 let mut since = std::time::Instant::now();
+                let mut shown = Vec::new();
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(1));
                     let Some(me) = weak.upgrade() else { return };
@@ -924,6 +925,14 @@ impl Lanes {
                         return;
                     }
                     me.main_slot_check();
+                    // What changes without a call here: a lane's services
+                    // starting and stopping, a lane on a node as read every
+                    // few seconds, a failed start that expired.
+                    let now = me.shown();
+                    if now != shown {
+                        shown = now;
+                        me.announce();
+                    }
                     let now = fingerprint(&dir);
                     if now != last || since.elapsed() >= std::time::Duration::from_secs(30) {
                         last = now;
@@ -932,6 +941,22 @@ impl Lanes {
                     }
                 }
             });
+    }
+
+    /// Of each lane, what the lists show that changes on its own.
+    fn shown(&self) -> Vec<(String, usize, usize, Option<String>, bool)> {
+        self.views()
+            .into_iter()
+            .map(|v| {
+                (
+                    v.name,
+                    v.running,
+                    v.services,
+                    v.node_error,
+                    v.moving.is_some(),
+                )
+            })
+            .collect()
     }
 
     /// A lane on a node that serves the main ports and is gone (its lease
@@ -1553,6 +1578,8 @@ impl Lanes {
         })();
         self.pending.lock().unwrap().remove(&name);
         if result.is_ok() {
+            // Started here: a start on a node that failed before is over.
+            self.forget_failed(Some(&name));
             self.announce();
         }
         result
@@ -1570,6 +1597,8 @@ impl Lanes {
         let t0 = std::time::Instant::now();
         // A profile holds while the lane runs (ADR-0041).
         self.profiles.lock().unwrap().remove(name);
+        // Stopped: a start or move that failed before is no longer news.
+        self.forget_failed(Some(name));
         let remote = self.remote.lock().unwrap().remove(name);
         if let Some(r) = remote {
             let node = r.node.name.clone();
@@ -1948,6 +1977,20 @@ impl Lanes {
             }
         }
         self.announce();
+    }
+
+    /// Forget the start or move of `name` (`None`: of every lane) that
+    /// failed: the lane started another way, or it or the stack stopped.
+    pub fn forget_failed(&self, name: Option<&str>) {
+        let gone = {
+            let mut moves = self.moves.lock().unwrap();
+            let before = moves.len();
+            moves.retain(|n, m| m.error.is_none() || name.is_some_and(|x| x != n));
+            moves.len() != before
+        };
+        if gone {
+            self.announce();
+        }
     }
 
     /// Release a lane on a node, on a thread of its own: the call blocks on

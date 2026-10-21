@@ -282,10 +282,9 @@ export const useStack = defineStore('stack', () => {
       path: daemonPath(id.value, v1.laneStop(name)),
       success: `Lane ${name} stopped`,
     });
-    if (res.ok) {
-      if (lane.value === name) selectLane(null);
-      await loadLanes();
-    }
+    // The lane stays shown, with its start: the eyes are on the button that
+    // stopped it, and "Stop stack" there would be the main tree's.
+    if (res.ok) await loadLanes();
   }
 
   /** Throw a stopped lane's data away, here and on its nodes (ADR-0038): its next start is fresh. */
@@ -306,15 +305,27 @@ export const useStack = defineStore('stack', () => {
   // of a page) streams from its own API, which does not carry the lanes:
   // they are read now, as `reset` would have.
   watch(running, (r) => {
-    if (r && !sub) {
-      connect();
-      if (lanesOf.value !== id.value) void loadLanes();
+    if (r) {
+      if (!sub) {
+        connect();
+        if (lanesOf.value !== id.value) void loadLanes();
+      }
+      return;
     }
-    if (!r && sub) {
+    if (sub) {
       disconnect();
       if (viewAt.value === null && view.value) viewAt.value = Date.now();
     }
+    // A start under way, or one that failed, lived in the daemon that is gone.
+    if (lanes.value.some((l) => l.moving)) lanes.value = lanes.value.map((l) => ({ ...l, moving: undefined }));
+    // Its services went with it (ADR-0009), after its API: it never said so.
+    if (view.value?.services.some(ran)) {
+      view.value = { ...view.value, services: view.value.services.map((s) => (ran(s) ? { ...s, status: { state: 'stopped' }, pid: null, instance_port: null } : s)) };
+      if (id.value && !lane.value) persist.saveStack(id.value, { view: view.value, at: viewAt.value ?? Date.now() });
+    }
   });
+  /** A service that runs, or is on its way to. */
+  const ran = (s: ServiceView) => !['idle', 'failed'].includes(statusBucket(s.status));
 
   function connect() {
     if (!id.value) return;

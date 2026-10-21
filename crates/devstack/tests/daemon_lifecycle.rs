@@ -1962,10 +1962,26 @@ fn a_worktree_runs_as_a_lane() {
         "{list}"
     );
 
+    // A start on a node that failed (there is no pool here) is said with
+    // the lane until it is stopped, or started another way.
+    let failed = || {
+        s.daemon_get("/v1/lanes")
+            .as_array()
+            .and_then(|a| a.iter().find(|l| l["name"] == lane.as_str()).cloned())
+            .is_some_and(|l| l["moving"]["error"].is_string())
+    };
+    let on = wt_cli(&["up", "--on", "nowhere"]);
+    assert!(failed(), "{on}");
+    wt_cli(&["lane", "stop", &lane]);
+    assert!(!failed(), "gone once the lane is stopped");
+    let on = wt_cli(&["up", "--on", "nowhere"]);
+    assert!(failed(), "{on}");
+
     // 2. `up` in the worktree starts it: on its own ports, no workers.
     std::fs::write(wt.join("src/Site/index.html"), "<p>lane site</p>").unwrap();
     let up = wt_cli(&["up"]);
     assert!(up.contains(&format!("lane `{lane}`")), "{up}");
+    assert!(!failed(), "gone once the lane started here");
     // Its ports are moved by 100 per lane number; a taken range is skipped.
     let list = s.ok(&["lane", "list"]);
     let offset: u16 = list
