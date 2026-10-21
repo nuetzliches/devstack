@@ -1,6 +1,6 @@
 # ADR-0025: A lane can run on another node, as a Linux container with its own infrastructure
 
-- **Status:** Accepted (2026-10-16), point 10 amended and accepted (2026-10-16); amended 2026-10-19 (a start on a node answers once leased, and its phases are timed); points 5 and 7 amended by [ADR-0038](0038-a-lanes-data-outlives-its-lease.md) (2026-10-19: a lane's mirror and data outlive its lease, for a while); placement and trust in detail: ADR-0026 to ADR-0031
+- **Status:** Accepted (2026-10-16), point 10 amended and accepted (2026-10-16); amended 2026-10-19 (a start on a node answers once leased, and its phases are timed); noted 2026-10-21 (its daemon starts first, its containers come up under it, #164); points 5 and 7 amended by [ADR-0038](0038-a-lanes-data-outlives-its-lease.md) (2026-10-19: a lane's mirror and data outlive its lease, for a while); placement and trust in detail: ADR-0026 to ADR-0031
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** plan §3.5, §9, [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (local lanes, built in 0.5.0), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0004](0004-infrastructure-is-delegated-to-compose.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0011](0011-platform-windows-native-first.md), [ADR-0012](0012-shared-infrastructure-between-lanes.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md), [ADR-0027](0027-trust-between-nodes.md), [ADR-0028](0028-lane-images.md), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md)
@@ -172,6 +172,43 @@ than the release that does this, rather than pass it on. Built in
 (`proxy`, `act_named`), `crates/devstack-daemon/src/supervisor/infra.rs`
 (`container_action`, `NODE_DID_NOT_ACT`), `lifecycle.rs` (`group_action`),
 `api.rs` (`service_action`, `lane_forward`) and `remote.rs` (`too_old_for`).
+
+*Noted 2026-10-21 (#164), on the start of 2026-10-19.* **A lane's daemon
+starts first; its containers come up under it.** The start on a node ended
+with the lane's daemon: image, each Compose group checked, its containers
+started and waited for until healthy, the file the daemon reads
+(`DEVSTACK_EXTERNAL_INFRA`) written from what they reported, the lane
+container last. Until then the lane had no pages, and a container that did
+not get healthy failed the start dialog instead of showing on the lane's
+page with its output, as a local lane's does. Now the node checks each
+group, writes the model and its overlay, pulls and builds the images and
+creates the containers, sets the network rules as before; then writes the
+file from the checked model (environments, addresses, the ports the
+requester forwards) with every group and container `created`, starts the
+lane container and answers the start once its daemon answers. `moving`
+ends there and the lane is `active`. After answering, the agent starts each
+group and waits until it is healthy (300 s, as a local start), in order,
+and writes each group's `state` into the file (`starting`, `up`, `failed`
+with its `error`, the groups after a failed one not started); the 5 s
+refresh carries the containers' states with it. The daemon's `up` waits for
+the file to say each group is up, with the events a local start has, before
+it starts the services; a failed group stops it there and shows its error,
+as a local one. Who runs Compose is unchanged: the node, never the daemon
+(point 2, and the note of 2026-10-20). A file without a group `state` (a
+node of an earlier release, which still answers after `up`) is up, so the
+requester needs nothing new for one. A stop, a lease's end or a new start
+of the lane ends the containers' start first (Compose is ended, nothing
+more of it starts), and an agent that restarted meanwhile marks what its
+predecessor was still starting as failed. What this means for what the
+lane may change meanwhile is [ADR-0033](0033-a-node-decides-what-runs-on-it.md)'s
+note of the same day. Built in `crates/devstack-node/src/lanerun.rs`
+(`initial_infra`, `Started`, `InfraUp::run`), `laneinfra.rs` (`set_group`,
+`interrupted`), `node.rs` (`start`, `end_bring_up`),
+`crates/devstack-compose/src/lib.rs` (`start_created`, `output_until`),
+`crates/devstack-daemon/src/external.rs` (`ExternalGroup::phase`),
+`supervisor/infra.rs` (`node_infra_up`, `NodeBringUp`), and tested in
+`crates/devstack/tests/remote_lane.rs` (the daemon answers before the db is
+healthy, the API starts after).
 
 ## Alternatives considered
 

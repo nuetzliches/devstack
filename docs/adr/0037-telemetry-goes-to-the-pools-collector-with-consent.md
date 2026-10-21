@@ -125,7 +125,10 @@ keeps all.
 first line of the reason), `node_lane_stopped`, `node_lease_ended`,
 `node_update_refused`, `node_update_failed` (`node_log` in
 `crates/devstack-node/src/telemetry.rs`). A refused request's log line
-carries the first line of its `error`.
+carries the first line of its `error`. *Noted 2026-10-21 (#164):* also
+`node_lane_infra_up` and `node_lane_infra_failed`, a lane's Compose group
+brought up after its daemon answered, or not (`group`, `ms`, and the last
+line of Compose's reason, not the command and paths of its first).
 
 *Noted 2026-10-20, later.* Point 4's "never paths outside the repository"
 did not hold for texts: an error's message names the paths it concerns (a

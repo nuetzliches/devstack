@@ -97,10 +97,9 @@ impl Supervisor {
     }
 
     pub fn infra_up(&self) -> Result<(), String> {
-        if self.external_infra().is_some() {
-            // The node's agent started it before this daemon (ADR-0025).
-            self.refresh_infra();
-            return Ok(());
+        if let Some(file) = self.external_infra() {
+            // The node's agent starts it, after this daemon (ADR-0025, #164).
+            return self.node_infra_up(&file);
         }
         for g in self.group_order() {
             self.emit(EventBody::Infra {
@@ -133,6 +132,48 @@ impl Supervisor {
         }
         self.refresh_infra();
         Ok(())
+    }
+
+    /// In a lane on a node: wait until its agent says every group is up, or
+    /// one failed, as it brings them up after this daemon answered (#164),
+    /// with the events a local start has. A node that says nothing new for
+    /// [`NODE_GROUP_WAIT`] counts as failed. A file of an older agent,
+    /// written once everything was up, says so at once.
+    fn node_infra_up(&self, file: &Path) -> Result<(), String> {
+        let order = self.group_order();
+        let mut follow = NodeBringUp::default();
+        let mut moved = Instant::now();
+        loop {
+            self.refresh_external(file);
+            // A file being written, or not there yet: read again.
+            if let Ok(ext) = crate::external::read(file) {
+                let (events, done) = follow.step(&order, &ext);
+                if !events.is_empty() {
+                    moved = Instant::now();
+                }
+                for (group, message) in events {
+                    self.emit(EventBody::Infra { group, message });
+                }
+                if let Some(done) = done {
+                    return done;
+                }
+            }
+            if moved.elapsed() > NODE_GROUP_WAIT {
+                let g = follow
+                    .pending(&order)
+                    .unwrap_or_else(|| order.first().cloned().unwrap_or_default());
+                let msg = format!(
+                    "its node said nothing of it for {} s (is the node's agent running?)",
+                    NODE_GROUP_WAIT.as_secs()
+                );
+                self.emit(EventBody::Infra {
+                    group: g.clone(),
+                    message: format!("failed: {msg}"),
+                });
+                return Err(format!("compose group `{g}`: {msg}"));
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
     }
 
     /// Where the dashboard links a container to: the group's `urls` entry for
@@ -824,6 +865,11 @@ impl Supervisor {
                 Ok(ext) => {
                     let eg = ext.groups.get(&g).cloned().unwrap_or_default();
                     view.project = eg.project.clone();
+                    // Its node could not bring it up (#164): shown as a
+                    // local group that failed, its containers beside.
+                    if let crate::external::GroupPhase::Failed(e) = eg.phase() {
+                        view.error = Some(e);
+                    }
                     for (svc, s) in eg.services {
                         for (port, addr) in &s.ports {
                             // A published container is reached on loopback,
@@ -909,6 +955,78 @@ impl Supervisor {
         for (group, message) in changes {
             self.emit(EventBody::Infra { group, message });
         }
+    }
+}
+
+/// How long a lane on a node waits for its agent to say anything new of
+/// its groups: the agent gives a group's containers 300 s to be healthy
+/// once started (`lanerun::HEALTHY_WITHIN`, as a local start does), and
+/// starting them takes a while on top.
+const NODE_GROUP_WAIT: Duration = Duration::from_secs(300 + 120);
+
+/// An `Infra` event: the group, the message.
+type GroupEvent = (String, String);
+
+/// What a lane on a node was told of its groups so far, as its agent
+/// brings them up (#164).
+#[derive(Debug, Default)]
+struct NodeBringUp {
+    /// Each group said to start, and whether it was said ready.
+    told: BTreeMap<String, bool>,
+}
+
+impl NodeBringUp {
+    /// The events of what the agent's file says now, as a local start has
+    /// them (`starting`, `ready`, `failed: …`), each once; and the outcome
+    /// once every group is up (`Ok`) or one failed (the first in `order`).
+    fn step(
+        &mut self,
+        order: &[String],
+        ext: &crate::external::ExternalInfra,
+    ) -> (Vec<GroupEvent>, Option<Result<(), String>>) {
+        use crate::external::GroupPhase;
+        let mut events = Vec::new();
+        let mut failed = None;
+        let mut all_up = true;
+        for g in order {
+            // A group the agent did not write (the stack file changed since
+            // it started the lane) has nothing to wait for.
+            let phase = ext.groups.get(g).map_or(GroupPhase::Up, |eg| eg.phase());
+            if phase == GroupPhase::Created {
+                all_up = false;
+                continue;
+            }
+            if !self.told.contains_key(g) {
+                self.told.insert(g.clone(), false);
+                events.push((g.clone(), "starting".to_string()));
+            }
+            match phase {
+                GroupPhase::Up => {
+                    if !self.told[g] {
+                        self.told.insert(g.clone(), true);
+                        events.push((g.clone(), "ready".to_string()));
+                    }
+                }
+                GroupPhase::Failed(e) => {
+                    all_up = false;
+                    if failed.is_none() {
+                        events.push((g.clone(), format!("failed: {e}")));
+                        failed = Some(Err(format!("compose group `{g}`: {e}")));
+                    }
+                }
+                _ => all_up = false,
+            }
+        }
+        let done = failed.or_else(|| all_up.then_some(Ok(())));
+        (events, done)
+    }
+
+    /// The first group of `order` not said ready yet.
+    fn pending(&self, order: &[String]) -> Option<String> {
+        order
+            .iter()
+            .find(|g| self.told.get(*g) != Some(&true))
+            .cloned()
     }
 }
 
@@ -1081,6 +1199,89 @@ mod tests {
         assert!(f.restart_now(t0));
         assert!(!f.restart_now(t0 + Duration::from_secs(60)));
         assert!(f.restart_now(t0 + FORWARD_RESTART_EVERY));
+    }
+
+    fn ext(json: &str) -> crate::external::ExternalInfra {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn a_lane_on_a_node_waits_for_its_groups_as_the_node_brings_them_up() {
+        let order = ["db".to_string(), "app".to_string()];
+        let mut f = NodeBringUp::default();
+        let s = |f: &mut NodeBringUp, db: &str, app: &str| {
+            f.step(
+                &order,
+                &ext(&format!(
+                    r#"{{"groups":{{"db":{{"state":"{db}"}},"app":{{"state":"{app}"}}}}}}"#
+                )),
+            )
+        };
+        let ev = |v: &[(&str, &str)]| -> Vec<(String, String)> {
+            v.iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect()
+        };
+        // Created: nothing to say, nothing done.
+        assert_eq!(s(&mut f, "created", "created"), (Vec::new(), None));
+        assert_eq!(
+            s(&mut f, "starting", "created"),
+            (ev(&[("db", "starting")]), None)
+        );
+        assert_eq!(s(&mut f, "starting", "created"), (Vec::new(), None), "once");
+        assert_eq!(f.pending(&order).as_deref(), Some("db"));
+        // `app` went from created to up between two reads: both said.
+        assert_eq!(
+            s(&mut f, "up", "up"),
+            (
+                ev(&[("db", "ready"), ("app", "starting"), ("app", "ready")]),
+                Some(Ok(()))
+            )
+        );
+        assert_eq!(f.pending(&order), None);
+    }
+
+    #[test]
+    fn a_group_its_node_could_not_bring_up_fails_the_start() {
+        let order = ["db".to_string(), "app".to_string()];
+        let mut f = NodeBringUp::default();
+        let (events, done) = f.step(
+            &order,
+            &ext(
+                r#"{"groups":{"db":{"state":"failed","error":"container shop-db-1 is unhealthy"},
+                    "app":{"state":"failed","error":"not started: compose group `db` failed"}}}"#,
+            ),
+        );
+        assert_eq!(events[0], ("db".into(), "starting".into()));
+        assert_eq!(
+            events[1],
+            (
+                "db".into(),
+                "failed: container shop-db-1 is unhealthy".into()
+            )
+        );
+        assert!(
+            !events.iter().any(|(_, m)| m.contains("not started")),
+            "only the first failure is said: {events:?}"
+        );
+        assert_eq!(
+            done,
+            Some(Err(
+                "compose group `db`: container shop-db-1 is unhealthy".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn an_older_nodes_file_is_up_at_once() {
+        // Written after `up`, without a group's state (before #164).
+        let order = ["db".to_string(), "tools".to_string()];
+        let (events, done) = NodeBringUp::default().step(
+            &order,
+            &ext(r#"{"groups":{"db":{"project":"shop-ab12","services":{}}}}"#),
+        );
+        assert_eq!(done, Some(Ok(())));
+        assert_eq!(events.len(), 4, "starting and ready, for each: {events:?}");
     }
 
     /// A container as `compose ps` reports it, through the parser.

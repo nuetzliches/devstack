@@ -161,7 +161,7 @@ Register it once (project `.mcp.json` or user configuration):
 | a job `failed` after a long wait | jobs end after 30 minutes unless the stack file sets `timeout`; read its log, then ask the user before raising it (skill `devstack-config`) |
 | `devstack down` names services that did not stop | they still run: `devstack status`, then `devstack stop <service>`; ask before ending a process yourself |
 | `devstack up --on`: the node refuses the lane | the message names what the lane's Compose files ask that a node does not allow (privileged, host mounts, devices, build `tags`, a service key the node does not know, ...) or that the pool has not granted that node; the lane can still run here (`devstack up`) |
-| `devstack up --on` (or the MCP `up` with `on`) was interrupted or timed out while the lane started on the node | the start goes on there: `devstack lane list` shows its step; the same `devstack up --on <node>` again follows it to the end. A first start can take minutes (images pulled and built, containers waited for until healthy) |
+| `devstack up --on` (or the MCP `up` with `on`) was interrupted or timed out while the lane started on the node | the start goes on there: `devstack lane list` shows its step; the same `devstack up --on <node>` again follows it to the end. A first start can take minutes (images pulled and built). It ends when the lane's daemon answers; its containers come up after, and its services start once those are healthy. A container that does not get healthy shows in `devstack status` with its group's error; `devstack logs <container>` has its output |
 
 ## 7. Problems in devstack itself
 

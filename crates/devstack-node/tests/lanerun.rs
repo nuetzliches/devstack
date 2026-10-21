@@ -87,14 +87,35 @@ volumes:
     let project = format!("dsltest-{tag}");
     let label = format!("label=com.docker.compose.project={project}");
     let started = run.start(&bin, None, &|p| eprintln!("phase: {p}"));
-    let addr = match started {
+    let started = match started {
         Ok(a) => a,
         Err(e) => {
             run.purge(None);
             panic!("start: {e}");
         }
     };
-    assert_eq!(addr.token, "0123abcd");
+    assert_eq!(started.addr.token, "0123abcd");
+    // The daemon answers before its containers run (#164): it reads them
+    // as created, and the agent brings them up after.
+    let lane_file = || -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(src.join(".devstack/external-infra.json")).unwrap())
+            .unwrap()
+    };
+    let infra = lane_file();
+    assert_eq!(infra["groups"]["app"]["state"], "created", "{infra}");
+    assert_eq!(infra["groups"]["app"]["services"]["db"]["state"], "created");
+    assert_eq!(
+        docker(&["ps", "-q", "--filter", &label]),
+        "",
+        "nothing runs yet"
+    );
+    if let Err(e) = started.infra.run(&run, &|| false, &|_, _, _| {}) {
+        run.purge(None);
+        panic!("bringing up: {e}");
+    }
+    let infra = lane_file();
+    assert_eq!(infra["groups"]["app"]["state"], "up", "{infra}");
+    assert_eq!(infra["groups"]["app"]["services"]["db"]["state"], "running");
     let db = docker(&["ps", "-q", "--filter", &label]);
     assert!(!db.is_empty(), "the lane's db runs");
     // The mirror is mounted as a subpath of a volume, never as a bind
@@ -118,8 +139,20 @@ volumes:
     );
     assert!(!docker(&["volume", "ls", "-q", "--filter", &label]).is_empty());
 
-    // Started again and purged: nothing of it is left on the engine.
-    run.start(&bin, None, &|_| {}).unwrap();
+    // Started again, stopped while its containers come up: none of them
+    // starts after the stop (#164).
+    let again = run.start(&bin, None, &|_| {}).unwrap();
+    let stopped = std::sync::atomic::AtomicBool::new(true);
+    again
+        .infra
+        .run(
+            &run,
+            &|| stopped.load(std::sync::atomic::Ordering::SeqCst),
+            &|_, _, _| {},
+        )
+        .unwrap();
+    assert_eq!(docker(&["ps", "-q", "--filter", &label]), "");
+    // And purged: nothing of it is left on the engine.
     run.purge(None);
     for what in [
         &["ps", "-aq", "--filter", &label][..],
