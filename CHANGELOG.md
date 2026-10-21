@@ -9,6 +9,22 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **A lane started on a node opens its pages as soon as its daemon runs
+  there** (#164, ADR-0025 noted 2026-10-21): the node creates the lane's
+  containers, starts the lane container and answers, then brings the
+  containers up under the running daemon, a Compose group at a time. The
+  lane's page shows them created, starting and healthy, and its services
+  start once their infrastructure is up, as on this machine. A container
+  that does not get healthy within 300 s shows on the lane's page with its
+  output and its group's error instead of failing the start.
+- While a lane's containers come up on a node, its worktree syncs again;
+  Compose builds nothing then (`--no-build`), since images are built before
+  the lane runs (ADR-0033, noted 2026-10-21).
+- `devstack node run-lane` waits for the lane's services past their
+  infrastructure, and stops on a Compose group that failed.
+
 ### Added
 
 - **Desktop notifications** ([ADR-0045](docs/adr/0045-the-hub-notifies-the-desktop.md), #156):
@@ -27,6 +43,16 @@ and listed with their assets on the
 - A `devstack://open?stack=…&lane=…&service=…` link opens the dashboard
   there, paired; `/auth` takes `next`, a dashboard route, and keeps the
   session of a browser that is paired already.
+- The node's pool telemetry reports each Compose group of a lane brought up
+  or failed (`node_lane_infra_up`, `node_lane_infra_failed`, with its
+  duration and Compose's reason).
+- **`prepare.link`** (ADR-0044, #159): directories `prepare` installs in a
+  lane's copy (`link = ["web/node_modules"]`) are linked into the lane's
+  worktree, a junction on Windows, so git hooks there (`npx eslint` in a
+  pre-commit hook) find them without a second `npm ci`. Only where the
+  worktree has nothing of that name; only when git ignores the link (write
+  `node_modules`, not `node_modules/`); removed when the lane stops. Stop the
+  lane before `git worktree remove`, which on Windows trips over a junction.
 
 ### Fixed
 
@@ -34,7 +60,9 @@ and listed with their assets on the
   there by `cmd` (none had one before `/auth?…&next=`).
 - The dashboard, opened on a lane before it knew whether the stack runs (a
   link, a first visit), showed the lane without its list of lanes.
-
+- The daemon log says why a lane whose worktree went is not removed at once:
+  `lane_forget_deferred` said "it is being started" also when a removal of
+  the same lane was under way already, or a move.
 - Docs: a viewer of a shared lane reads its containers' logs, as it has
   since 0.11.0 (the node answers them itself); the docs and notes of 0.15.0
   said otherwise.

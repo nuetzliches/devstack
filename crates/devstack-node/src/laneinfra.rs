@@ -22,6 +22,100 @@ pub const LANE_FILE: &str = ".devstack/external-infra.json";
 /// How often the agent writes states and load into it.
 pub const EVERY: Duration = Duration::from_secs(5);
 
+/// A Compose group's `state` in both files (#164): the lane's daemon answers
+/// before its containers run, and waits for each group as the agent brings
+/// it up. A group without one (an older agent, which wrote the files once
+/// everything was up) is up.
+pub const CREATED: &str = "created";
+/// Its containers are being started and waited for until healthy.
+pub const STARTING: &str = "starting";
+/// Running and healthy.
+pub const UP: &str = "up";
+/// Not up: its `error` says why.
+pub const FAILED: &str = "failed";
+
+/// Write the agent's own file whole, never half: the 5 s refresh reads it
+/// while the containers come up.
+pub(crate) fn write_agent_file(dir: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = dir.join(format!("{AGENT_FILE}.tmp"));
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, dir.join(AGENT_FILE))
+}
+
+/// `infra` with group `group` in `state`, and `error` (removed for `None`).
+fn with_group(infra: &mut serde_json::Value, group: &str, state: &str, error: Option<&str>) {
+    let Some(g) = infra
+        .get_mut("groups")
+        .and_then(|g| g.get_mut(group))
+        .and_then(|g| g.as_object_mut())
+    else {
+        return;
+    };
+    g.insert("state".into(), state.into());
+    match error {
+        Some(e) => g.insert("error".into(), e.into()),
+        None => g.remove("error"),
+    };
+}
+
+/// Group `group` of the lease under `dir` is in `state` now: written into
+/// the agent's file, and at once into the lane's (`src` the mirror) with
+/// its containers' states, so the daemon waiting for it sees both together.
+pub fn set_group(
+    dir: &Path,
+    src: &Path,
+    group: &str,
+    state: &str,
+    error: Option<&str>,
+) -> Result<(), String> {
+    let text = std::fs::read(dir.join(AGENT_FILE)).map_err(|e| e.to_string())?;
+    let mut infra: serde_json::Value = serde_json::from_slice(&text).map_err(|e| e.to_string())?;
+    with_group(&mut infra, group, state, error);
+    let json = serde_json::to_vec_pretty(&infra).expect("infra serialises");
+    write_agent_file(dir, &json).map_err(|e| e.to_string())?;
+    refresh(dir, src)
+}
+
+/// What the agent says of a group it was bringing up when it ended.
+const INTERRUPTED: &str = "the node's agent restarted while it started this group's containers: restart the lane (`devstack lane stop`, then `devstack up --on`) or its containers";
+
+/// `infra` with every group that was still being brought up failed.
+fn interrupted_in(infra: &mut serde_json::Value) -> bool {
+    let pending: Vec<String> = infra
+        .get("groups")
+        .and_then(|g| g.as_object())
+        .map(|groups| {
+            groups
+                .iter()
+                .filter(|(_, g)| matches!(g["state"].as_str(), Some(CREATED | STARTING)))
+                .map(|(k, _)| k.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    for g in &pending {
+        with_group(infra, g, FAILED, Some(INTERRUPTED));
+    }
+    !pending.is_empty()
+}
+
+/// A lane found running by an agent that did not start it (it restarted):
+/// the groups its predecessor was still bringing up never come up, and the
+/// daemon waiting for them hears so instead of waiting out its time.
+pub fn interrupted(dir: &Path, src: &Path) {
+    let Ok(text) = std::fs::read(dir.join(AGENT_FILE)) else {
+        return;
+    };
+    let Ok(mut infra) = serde_json::from_slice::<serde_json::Value>(&text) else {
+        return;
+    };
+    if interrupted_in(&mut infra) {
+        let json = serde_json::to_vec_pretty(&infra).expect("infra serialises");
+        if write_agent_file(dir, &json).is_ok() {
+            let _ = refresh(dir, src);
+        }
+    }
+}
+
 /// One container of a lane's Compose project.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Container {
@@ -477,5 +571,57 @@ members = ["compose.app.db", "compose.app.web", "api"]
         assert!(s["api"].get("cpu").is_none());
         assert_eq!(s["seed"]["state"], "", "a parked service stays parked");
         assert_eq!(v["at"], 42);
+    }
+
+    #[test]
+    fn a_groups_state_goes_into_the_file_and_stays_with_the_refresh() {
+        let mut infra = serde_json::json!({ "groups": {
+            "app": { "project": "shop-ab12", "state": "created", "services": {} },
+            "tools": { "project": "tools-ab12", "state": "created", "services": {} },
+        } });
+        with_group(&mut infra, "app", FAILED, Some("db is unhealthy"));
+        assert_eq!(infra["groups"]["app"]["state"], FAILED);
+        assert_eq!(infra["groups"]["app"]["error"], "db is unhealthy");
+        with_group(&mut infra, "app", UP, None);
+        assert!(infra["groups"]["app"].get("error").is_none(), "{infra}");
+        with_group(&mut infra, "nope", UP, None);
+        assert!(infra["groups"].get("nope").is_none(), "no group is made up");
+        // The refresh writes what the agent's file says of each group.
+        let v = current(&infra, &BTreeMap::new(), &BTreeMap::new(), 1);
+        assert_eq!(v["groups"]["app"]["state"], UP);
+        assert_eq!(v["groups"]["tools"]["state"], CREATED);
+    }
+
+    #[test]
+    fn groups_an_agent_was_bringing_up_fail_when_it_restarted() {
+        let mut infra = serde_json::json!({ "groups": {
+            "app": { "state": "up" },
+            "tools": { "state": "starting" },
+            "mail": { "state": "created" },
+            "old": {},
+        } });
+        assert!(interrupted_in(&mut infra));
+        let g = &infra["groups"];
+        assert_eq!(g["app"]["state"], UP);
+        assert_eq!(g["tools"]["state"], FAILED);
+        assert_eq!(g["mail"]["state"], FAILED);
+        assert!(g["mail"]["error"].as_str().unwrap().contains("restarted"));
+        assert!(
+            g["old"].get("state").is_none(),
+            "an older agent's group is up"
+        );
+        assert!(!interrupted_in(&mut infra), "nothing left to fail");
+    }
+
+    #[test]
+    fn the_agents_file_is_written_whole() {
+        let d = tempfile::tempdir().unwrap();
+        write_agent_file(d.path(), b"{\"groups\":{}}").unwrap();
+        write_agent_file(d.path(), b"{\"groups\":{\"app\":{}}}").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.path().join(AGENT_FILE)).unwrap(),
+            "{\"groups\":{\"app\":{}}}"
+        );
+        assert!(!d.path().join(format!("{AGENT_FILE}.tmp")).exists());
     }
 }

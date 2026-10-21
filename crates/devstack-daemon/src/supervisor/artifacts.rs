@@ -165,6 +165,7 @@ impl Supervisor {
                 self.run_prepare(name, job, cancel)?;
                 snap = self.snapshot.lock().unwrap();
             }
+            self.link_prepared(name, svc);
             let t0 = Instant::now();
             let mut running = self
                 .builder

@@ -161,6 +161,15 @@ every 30 s besides), starts it there and forwards its ports to your machine:
 The dashboard shows where each lane runs, its start step by step, and offers
 **Start here / on a node / in the pool** for a lane that is not started.
 
+**Its daemon starts first.** The node checks the lane's Compose files, pulls
+and builds their images, creates its containers and starts the lane
+container; the lane runs once its daemon answers, and its page opens. Its
+containers then come up under it, a compose group at a time, as a local
+lane's do: the page shows them created, starting, healthy, and its services
+start once their infrastructure is up. A container that does not get
+healthy within 300 s shows as such, with its output, and its group's error
+(Compose's reason) instead of a failed start.
+
 **Its containers** are the lane's own, on the node, in its Compose project
 `<project>-<lane slot>` (they never touch the main tree's). From the worktree
 you control them as a local lane's: `devstack restart app.web` (also
@@ -225,7 +234,10 @@ container); its secrets' and configs' files are copied. A variable a service
 or build leaves without a value (`environment: [NAME]`) stays unset: nothing
 of the node's environment reaches a lane, and Compose on the node runs with
 only what Docker needs (`PATH`, `HOME`, `DOCKER_*`). While a lane starts,
-the node takes no sync for it (`409`; the lane's own start syncs before).
+the node takes no sync for it (`409`; the lane's own start syncs before),
+until its daemon answers: its containers start after that from what the
+node checked and built, and Compose builds nothing then (the lane runs by
+that time, and its files are its own to change).
 Before it checks, it stops whatever of the lane still runs; `devstack lane
 stop`, the end of a lease and the removal of a member remove every container
 of the lane's Compose projects, whatever its files say by then.
@@ -420,8 +432,9 @@ collects and this machine agreed, else dropped.
 
 A node sends what concerns the pool's lanes on the coordinator's setting
 alone: its capacity every minute and its own lines (a lease admitted or
-refused, a lane started, not started with its phase and reason, stopped, an
-update refused or failed).
+refused, a lane started, not started with its phase and reason, a compose
+group of it up or failed with how long it took, stopped, an update refused
+or failed).
 
 Never sent: file contents, environment values, command lines, service output.
 Every text of a log line is cut to its first line before it leaves the
@@ -508,7 +521,7 @@ What the node agent sets in a lane container, for the `devstack` daemon in it
 | `DEVSTACK_LISTEN` | `0.0.0.0:7600`: the daemon's API on the lane's network, for the agent (token and `Host` checked) |
 | `DEVSTACK_PORT_OFFSET` | the lane's port offset on the requester; the lane runs on those ports in the container too |
 | `DEVSTACK_DISPLAY_ROOT` | where the requester has the lane's files, so paths in compiler messages and logs show as the developer's |
-| `DEVSTACK_EXTERNAL_INFRA` | the file (`/src/.devstack/external-infra.json`) in which the agent describes the lane's containers, which it started itself; it writes their states, health and load (`cpu`, `memory`, `at`) into it every 5 s, and answers the lane's container routes (`/v1/infra/{group}/{service}/logs`, `logs/stream`, `start`/`stop`/`restart`) itself, for the lane's owner, since the lane has no Docker (at most 16 `logs/stream` at once per member, `429` beyond); the service routes that name containers (`/v1/services/app.web/restart`, a group's restart) it acts on before it passes them to the daemon ([dashboard-api.md](dashboard-api.md#actions)) |
+| `DEVSTACK_EXTERNAL_INFRA` | the file (`/src/.devstack/external-infra.json`) in which the agent describes the lane's containers, which it starts itself; it writes it before the lane container starts, each compose group `created`, then each group's `state` as it brings them up after the daemon answered (`starting`, `up`, `failed` with an `error`; no `state`: an agent of an earlier release, which wrote the file once all were up), which the daemon's `up` waits for; it writes their states, health and load (`cpu`, `memory`, `at`) into it every 5 s, and answers the lane's container routes (`/v1/infra/{group}/{service}/logs`, `logs/stream`, `start`/`stop`/`restart`) itself, for the lane's owner, since the lane has no Docker (at most 16 `logs/stream` at once per member, `429` beyond); the service routes that name containers (`/v1/services/app.web/restart`, a group's restart) it acts on before it passes them to the daemon ([dashboard-api.md](dashboard-api.md#actions)) |
 
 On the node, `DEVSTACK_NODE_CONTAINER` (the agent's container name, when it
 runs in one) and `DEVSTACK_NODE_COMPOSE_IMAGE` (the image it reads Compose

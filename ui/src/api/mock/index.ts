@@ -29,7 +29,8 @@ const START_PHASES: [number, string, string][] = [
   [2, 'sync: comparing 7177 files', 'sync'],
   [3, 'on {n}: lane image: pulled or built once, then kept', 'lane image: pulled or built once, then kept'],
   [3, 'on {n}: infrastructure: app: images (pull, build) and containers', 'infrastructure: app: images (pull, build) and containers'],
-  [3, 'on {n}: infrastructure: app: waiting until healthy', 'infrastructure: app: waiting until healthy'],
+  [3, 'on {n}: lane container', 'lane container'],
+  // The start ends with the lane's daemon; its containers come up under it (#164).
   [3, "on {n}: the lane's daemon", "the lane's daemon"],
 ];
 /** A start on a node as the daemon reports it while it runs (40 s here). */

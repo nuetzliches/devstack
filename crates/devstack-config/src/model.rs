@@ -618,6 +618,12 @@ pub struct Prepare {
     /// empty: once per copy.
     #[serde(default)]
     pub inputs: Vec<String>,
+    /// Directories it installs that a lane's worktree gets linked to, e.g.
+    /// `["web/node_modules"]` (ADR-0044): the worktree's git hooks and
+    /// editor find them there. Relative to the repository; only where the
+    /// worktree has nothing of that name, and removed when the lane stops.
+    #[serde(default)]
+    pub link: Vec<String>,
 }
 
 /// Hot-reload mode of a built service: the toolchain's own watcher, from

@@ -1,6 +1,6 @@
 # ADR-0033: A node decides who runs lanes on it, and what a lane there may do
 
-- **Status:** Accepted (2026-10-16), amended 2026-10-17 (what a lane's Compose files may ask; limits on every container; the node's own policy), amended 2026-10-20 (the node runs the model it checked; known keys only; a lane's projects end with it)
+- **Status:** Accepted (2026-10-16), amended 2026-10-17 (what a lane's Compose files may ask; limits on every container; the node's own policy), amended 2026-10-20 (the node runs the model it checked; known keys only; a lane's projects end with it); noted 2026-10-21 (what holds while a lane's containers start under its running daemon, #164)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md) (point 4: the node admits), [ADR-0027](0027-trust-between-nodes.md), [ADR-0031](0031-a-coordinator-places-lanes.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md)
@@ -118,6 +118,21 @@ learnt since (`use_api_socket`, `provider`) were not refused. So:
     project it creates for a lane, and takes them down by Compose's labels
     when the lane stops, its lease ends or its slot is purged, whatever the
     lane's files say by then.
+
+*Noted 2026-10-21 (#164), on point 11.* The lane's daemon now starts
+before its containers do ([ADR-0025](0025-a-lane-can-run-on-another-node.md),
+noted the same day): the lane runs, and may change its files, while the
+node starts them. Point 11 holds: everything the check covers is used
+before the lane container starts. The model and its overlay are written,
+the images pulled and built and the containers created (`compose create`)
+first; after the daemon answered, Compose starts what was created and
+builds nothing (`up --no-build`: a build context is the lane's to change by
+then). Bind mounts stay subpaths of the mirror's volume, resolved at every
+start; secrets and configs are copies. "While it starts" in point 11 ends
+when the daemon answers: from then on the node takes syncs again, which
+change nothing Compose still reads. A stop, the lease's end or a new start
+ends the containers' start before the lane's containers are taken down or
+its files read again (point 13).
 
 Images a node pulls (`[lanes] image`, a service's `image:`) are pulled with
 the node's credentials and can be run by any lane there by name; only images

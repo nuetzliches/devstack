@@ -1840,7 +1840,7 @@ fn a_worktree_runs_as_a_lane() {
     let tray_port = free_port();
     let mut toml = std::fs::read_to_string(s.file()).unwrap();
     toml.push_str(&format!(
-        "\n[services.web]\nkind = \"devserver\"\nrun = '\"{BIN}\" serve-static src/Site --port {{port}}'\nport = {web_port}\nprepare = {{ run = \"echo x>>prepared.count\" }}\n"
+        "\n[services.web]\nkind = \"devserver\"\nrun = '\"{BIN}\" serve-static src/Site --port {{port}}'\nport = {web_port}\nprepare = {{ run = \"mkdir deps && echo x>>prepared.count\" }}\n"
     ));
     toml.push_str(&format!(
         "\n[services.tray]\nkind = \"tool\"\nlanes = false\nrun = '\"{BIN}\" serve-static src/Site --port {{port}}'\nport = {tray_port}\n"
@@ -1908,7 +1908,8 @@ fn a_worktree_runs_as_a_lane() {
     };
     std::fs::write(
         s.dir.path().join(".gitignore"),
-        ".devstack/\nprep.count\nprepared.count\n",
+        // `deps` without a slash: git ignores the link to it too (ADR-0044).
+        ".devstack/\nprep.count\nprepared.count\ndeps\n",
     )
     .unwrap();
     // Checkouts as the files are (no CRLF on Windows), so main and worktree hash alike.
@@ -2187,7 +2188,16 @@ fn a_worktree_runs_as_a_lane() {
         "the lane stopped with its worktree\n{}",
         s.diag()
     );
-    assert!(!s.ok(&["lane", "list"]).contains(&lane));
+    // Its services stop first; it leaves the list once its containers are
+    // gone too, which takes a moment longer.
+    assert!(
+        wait_for(
+            || !s.ok(&["lane", "list"]).contains(&lane),
+            Duration::from_secs(30)
+        ),
+        "the lane is forgotten with its worktree\n{}",
+        s.diag()
+    );
     assert!(s.api("/health").is_some(), "main still runs");
 
     // 6. A worktree added with git is a lane at once: the daemon notices it
@@ -2224,6 +2234,17 @@ fn a_worktree_runs_as_a_lane() {
         status.contains("lanes: 1 worktree(s), 0 started"),
         "{status}"
     );
+    // This lane links what `prepare` made (ADR-0044); the one of step 5 does
+    // not: its worktree is removed while it runs, which a link gets in the
+    // way of.
+    let file = extra.join("devstack.toml");
+    let toml = std::fs::read_to_string(&file).unwrap();
+    let toml = toml.replace(
+        "echo x>>prepared.count\" }",
+        "echo x>>prepared.count\", link = [\"deps\"] }",
+    );
+    assert!(toml.contains("link = [\"deps\"]"), "{toml}");
+    std::fs::write(&file, toml).unwrap();
     let out = s.cli(&["lane", "start", &extra_name], None); // `broken` fails, the rest runs
     let started = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(
@@ -2246,8 +2267,28 @@ fn a_worktree_runs_as_a_lane() {
         s.ok(&["status"])
             .contains(&format!("1 started ({extra_name})"))
     );
+    // What `prepare` made is linked into the worktree while the lane runs,
+    // for its git hooks (ADR-0044); `lane stop` takes the link, not the copy's.
+    let linked = extra.join("deps");
+    let is_link = || std::fs::symlink_metadata(&linked).is_ok_and(|m| m.file_type().is_symlink());
+    assert!(
+        wait_for(is_link, Duration::from_secs(30)),
+        "prepare's directory is linked into the worktree\n{}",
+        s.diag()
+    );
     s.ok(&["lane", "stop", &extra_name]);
     assert!(row(&extra_name).contains("stopped"), "{}", row(&extra_name));
+    assert!(
+        std::fs::symlink_metadata(&linked).is_err(),
+        "the link goes with the lane"
+    );
+    let extra_copy = s
+        .dir
+        .path()
+        .join(".devstack")
+        .join(format!("lane-{extra_name}"))
+        .join("lanes/main/src/deps");
+    assert!(extra_copy.is_dir(), "the copy keeps what prepare made");
 
     // 8. A profile from the lane's own stack file (ADR-0041): its branch adds
     //    one; it says what starts, and `--run` runs its command in the lane.

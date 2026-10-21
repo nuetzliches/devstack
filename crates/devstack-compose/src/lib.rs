@@ -33,6 +33,9 @@ pub enum ComposeError {
     Timeout { command: String, secs: u64 },
     #[error("cannot read the output of `{command}`: {message}")]
     Parse { command: String, message: String },
+    /// Ended by its caller before it finished ([`output_until`]).
+    #[error("`{command}` was ended: the lane stops or starts afresh")]
+    Stopped { command: String },
 }
 
 pub type Result<T> = std::result::Result<T, ComposeError>;
@@ -376,7 +379,17 @@ pub fn no_window(cmd: &mut Command) {
 /// would otherwise go on and hold the pipes). Its streams are read while it
 /// runs, so a chatty child cannot block on a full pipe. On Windows it runs
 /// without a console window.
-pub fn output_within(mut cmd: Command, budget: Duration) -> std::io::Result<Option<Output>> {
+pub fn output_within(cmd: Command, budget: Duration) -> std::io::Result<Option<Output>> {
+    output_until(cmd, budget, &|| false)
+}
+
+/// [`output_within`], ended early as well (`None`) once `stop` says so: a
+/// lane's containers started on a node while the lane stops (#164).
+pub fn output_until(
+    mut cmd: Command,
+    budget: Duration,
+    stop: &dyn Fn() -> bool,
+) -> std::io::Result<Option<Output>> {
     use std::io::Read;
     use std::process::Stdio;
     cmd.stdin(Stdio::null())
@@ -399,7 +412,7 @@ pub fn output_within(mut cmd: Command, budget: Duration) -> std::io::Result<Opti
         if let Some(s) = call.child().try_wait()? {
             break s;
         }
-        if t0.elapsed() >= budget {
+        if t0.elapsed() >= budget || stop() {
             call.kill();
             // With the tree gone the pipes close and the readers end. A
             // process that left the tree (a daemon it started) could still
@@ -512,14 +525,32 @@ impl Docker {
     }
 
     fn run(&self, dir: &Path, args: &[OsString], budget: Duration) -> Result<Output> {
-        let out = output_within(self.command(dir, args), budget)
+        self.run_until(dir, args, budget, &|| false)
+    }
+
+    fn run_until(
+        &self,
+        dir: &Path,
+        args: &[OsString],
+        budget: Duration,
+        stop: &dyn Fn() -> bool,
+    ) -> Result<Output> {
+        let out = output_until(self.command(dir, args), budget, stop)
             .map_err(|source| ComposeError::Spawn {
                 program: self.program.clone(),
                 source,
             })?
-            .ok_or_else(|| ComposeError::Timeout {
-                command: describe(&self.program, args),
-                secs: budget.as_secs(),
+            .ok_or_else(|| {
+                if stop() {
+                    ComposeError::Stopped {
+                        command: describe(&self.program, args),
+                    }
+                } else {
+                    ComposeError::Timeout {
+                        command: describe(&self.program, args),
+                        secs: budget.as_secs(),
+                    }
+                }
             })?;
         if !out.status.success() {
             let text = format!(
@@ -628,6 +659,33 @@ impl Docker {
         ]);
         a.extend(g.services.iter().map(OsString::from));
         self.run(&g.dir, &a, budget::PULL + timeout).map(|_| ())
+    }
+
+    /// Start the group's created services as they are, without building
+    /// anything (`--no-build`: their images were built with
+    /// [`Docker::create`]), ended early once `stop` says so. `wait`: and
+    /// wait until they are running and healthy, at most that long. On a
+    /// node, where the lane runs by then and could change its build
+    /// contexts (#164, ADR-0033 point 11).
+    pub fn start_created(
+        &self,
+        g: &Group,
+        wait: Option<Duration>,
+        stop: &dyn Fn() -> bool,
+    ) -> Result<()> {
+        let mut a = g.base_args();
+        a.extend(["up".into(), "-d".into()]);
+        if let Some(t) = wait {
+            a.extend([
+                "--wait".into(),
+                "--wait-timeout".into(),
+                t.as_secs().max(1).to_string().into(),
+            ]);
+        }
+        a.extend(["--no-deps".into(), "--no-build".into()]);
+        a.extend(g.services.iter().map(OsString::from));
+        let budget = budget::PULL + wait.unwrap_or_default();
+        self.run_until(&g.dir, &a, budget, stop).map(|_| ())
     }
 
     pub fn ps(&self, g: &Group) -> Result<Vec<Container>> {

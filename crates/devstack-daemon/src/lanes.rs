@@ -257,8 +257,11 @@ pub struct Lanes {
     remote: Mutex<BTreeMap<String, Arc<RemoteLane>>>,
     /// Starts on a node and moves under way, or failed lately.
     moves: Mutex<BTreeMap<String, LaneMove>>,
-    /// Lanes being started right now, so one is not started twice.
+    /// Lanes being started, moved or forgotten right now, so one is not
+    /// started twice.
     pending: Mutex<BTreeSet<String>>,
+    /// Of `pending`, the lanes being forgotten: what a second forget says.
+    forgetting: Mutex<BTreeSet<String>>,
     /// Whom each lane is shared with, where its owner said so (ADR-0035);
     /// else `[lanes] share`. They may view it too (ADR-0040, amended
     /// 2026-10-20). Kept in `.devstack/lane-shares.json`.
@@ -693,6 +696,7 @@ impl Lanes {
             remote: Mutex::new(BTreeMap::new()),
             moves: Mutex::new(BTreeMap::new()),
             pending: Mutex::new(BTreeSet::new()),
+            forgetting: Mutex::new(BTreeSet::new()),
             shares: Mutex::new(shares),
             profiles: Mutex::new(BTreeMap::new()),
             handover: Mutex::new(Handover::default()),
@@ -979,13 +983,21 @@ impl Lanes {
         // Held for the whole of it: a start that comes in meanwhile is
         // refused ("is being started"), and finds the lane gone after.
         if !self.pending.lock().unwrap().insert(name.to_string()) {
+            // `pending` is a start's, a move's or another forget's: say whose.
+            let busy = if self.forgetting.lock().unwrap().contains(name) {
+                "it is being removed already"
+            } else {
+                "it is being started or moved"
+            };
             crate::diag::info(
                 "lane_forget_deferred",
-                serde_json::json!({ "lane": name, "why": "it is being started" }),
+                serde_json::json!({ "lane": name, "why": busy }),
             );
             return;
         }
+        self.forgetting.lock().unwrap().insert(name.to_string());
         self.forget_claimed(name, why);
+        self.forgetting.lock().unwrap().remove(name);
         self.pending.lock().unwrap().remove(name);
         self.announce();
     }
@@ -1832,6 +1844,7 @@ impl Lanes {
         let lanes: Vec<Arc<Lane>> = self.map.lock().unwrap().values().cloned().collect();
         for l in lanes {
             l.sup.down(false);
+            l.sup.unlink_prepared();
         }
         // A daemon that stops releases its lanes on nodes (ADR-0025 point 7).
         let remote: Vec<Arc<RemoteLane>> = std::mem::take(&mut *self.remote.lock().unwrap())

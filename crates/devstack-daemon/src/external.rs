@@ -5,7 +5,9 @@
 //! asking Docker: every Compose service's environment (ADR-0014), the address
 //! at which each of its ports is reached from the lane container (a name on
 //! the lane's Compose network, `db:5432`, not a port published on a host), and
-//! its state.
+//! its state. The agent writes it before the daemon starts and brings the
+//! containers up after it answered, saying how far each group got (#164);
+//! `up` waits for that.
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -27,6 +29,44 @@ pub struct ExternalGroup {
     pub project: String,
     #[serde(default)]
     pub services: BTreeMap<String, ExternalService>,
+    /// How far the agent brought the group up (#164): `created`,
+    /// `starting`, `up` or `failed`. An agent from before writes the file
+    /// once everything is up, without it.
+    #[serde(default)]
+    pub state: Option<String>,
+    /// Why it is `failed`.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// What the daemon makes of a group's [`ExternalGroup::state`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GroupPhase {
+    /// Its containers are created; the agent has not started them yet.
+    Created,
+    /// The agent starts them and waits until they are healthy.
+    Starting,
+    /// Running and healthy: what comes after it may start.
+    Up,
+    Failed(String),
+}
+
+impl ExternalGroup {
+    pub fn phase(&self) -> GroupPhase {
+        match self.state.as_deref() {
+            Some("created") => GroupPhase::Created,
+            Some("starting") => GroupPhase::Starting,
+            Some("failed") => GroupPhase::Failed(
+                self.error
+                    .clone()
+                    .filter(|e| !e.trim().is_empty())
+                    .unwrap_or_else(|| "its node could not start it".into()),
+            ),
+            // None: an older agent, which wrote the file once it was up; a
+            // state this daemon does not know holds nothing back either.
+            _ => GroupPhase::Up,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -69,6 +109,35 @@ pub fn read(path: &Path) -> Result<ExternalInfra, String> {
 
 #[cfg(test)]
 mod tests {
+    use super::GroupPhase;
+
+    #[test]
+    fn a_groups_state_says_how_far_its_node_brought_it_up() {
+        let x: super::ExternalInfra = serde_json::from_str(
+            r#"{"groups":{
+                "old":{"services":{}},
+                "app":{"state":"created"},
+                "cache":{"state":"starting"},
+                "db":{"state":"up"},
+                "mail":{"state":"failed","error":"db is unhealthy"},
+                "bare":{"state":"failed"},
+                "next":{"state":"paused-for-a-newer-reason"}}}"#,
+        )
+        .unwrap();
+        let p = |g: &str| x.groups[g].phase();
+        assert_eq!(p("old"), GroupPhase::Up, "an older node's file: up");
+        assert_eq!(p("app"), GroupPhase::Created);
+        assert_eq!(p("cache"), GroupPhase::Starting);
+        assert_eq!(p("db"), GroupPhase::Up);
+        assert_eq!(p("mail"), GroupPhase::Failed("db is unhealthy".into()));
+        assert!(matches!(p("bare"), GroupPhase::Failed(e) if !e.is_empty()));
+        assert_eq!(
+            p("next"),
+            GroupPhase::Up,
+            "an unknown state holds nothing back"
+        );
+    }
+
     #[test]
     fn the_agents_file_reads() {
         let x: super::ExternalInfra = serde_json::from_str(
