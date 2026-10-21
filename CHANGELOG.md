@@ -9,6 +9,32 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Removed
+
+- **The share switch is gone from the dashboard** (sidebar and pool area):
+  it reported capacity but never started a node agent, so no member could
+  start a lane on a machine that only switched it on; on Windows none can
+  run at all (#168). The hub reports the machine (online, what it has, its
+  devstack) and offers nothing; `PUT /hub/pool/share` is gone, `GET` says why
+  (`unavailable`). A machine runs other members' lanes with `devstack node
+  agent`, granted by an admin; a switch that starts it is #171.
+
+### Changed
+
+- **A lane started on a node opens its pages as soon as its daemon runs
+  there** (#164, ADR-0025 noted 2026-10-21): the node creates the lane's
+  containers, starts the lane container and answers, then brings the
+  containers up under the running daemon, a Compose group at a time. The
+  lane's page shows them created, starting and healthy, and its services
+  start once their infrastructure is up, as on this machine. A container
+  that does not get healthy within 300 s shows on the lane's page with its
+  output and its group's error instead of failing the start.
+- While a lane's containers come up on a node, its worktree syncs again;
+  Compose builds nothing then (`--no-build`), since images are built before
+  the lane runs (ADR-0033, noted 2026-10-21).
+- `devstack node run-lane` waits for the lane's services past their
+  infrastructure, and stops on a Compose group that failed.
+
 ### Added
 
 - **winget**: `winget install nuetzliches.devstack` (once winget's catalogue
@@ -19,7 +45,31 @@ and listed with their assets on the
   moving the running binary out of winget's way first, since winget cannot
   replace a file that runs; `devstack self uninstall` leaves that binary to
   `winget uninstall`.
-
+- **Desktop notifications** ([ADR-0045](docs/adr/0045-the-hub-notifies-the-desktop.md), #156):
+  the hub follows every running stack and each of its started lanes (on a
+  node too) and tells the desktop when a build failed, a candidate is held
+  for `promote`, a service exited by itself or failed to start, or a lane's
+  start or move on a node failed; on request also when a lane took the main
+  ports or a candidate went live. Only changes notify, and the same thing for
+  the same service once in five minutes (a crash loop is one notification).
+  Windows shows a toast, Linux uses the desktop's notification service over
+  D-Bus (the binary stays static; without a desktop session nothing shows).
+  A click opens the dashboard on that stack, lane and service. Each kind on
+  or off, and a mute per stack or lane, behind the bell in the dashboard's
+  top bar or with `devstack hub notify [on|off <kind>…|test]`;
+  `DEVSTACK_NO_NOTIFY` switches them off.
+- **Lanes of other members on this machine are shown**: a banner below the
+  dashboard's top bar (hidden until a lane comes or goes), a tile in the
+  sidebar, and *On this machine* in the pool area (whose, repository,
+  since when, what it reserved); a lane that starts running here notifies
+  (`guest_lane`, on by default). The hub reads them from the pool's leases
+  every 15 s and sends them on `/hub/events` (`guests`).
+- A `devstack://open?stack=…&lane=…&service=…` link opens the dashboard
+  there, paired; `/auth` takes `next`, a dashboard route, and keeps the
+  session of a browser that is paired already.
+- The node's pool telemetry reports each Compose group of a lane brought up
+  or failed (`node_lane_infra_up`, `node_lane_infra_failed`, with its
+  duration and Compose's reason).
 - **`prepare.link`** (ADR-0044, #159): directories `prepare` installs in a
   lane's copy (`link = ["web/node_modules"]`) are linked into the lane's
   worktree, a junction on Windows, so git hooks there (`npx eslint` in a
@@ -30,6 +80,28 @@ and listed with their assets on the
 
 ### Fixed
 
+- A lane on a node no longer stops syncing when a file goes while it is
+  sent (a package manager rewriting `node_modules`): the file is left out
+  and the next sync sends what is there then.
+- A browser or dev server closing a connection through a lane's tunnel is
+  no longer a warning in the diagnostic log (Windows reports it as
+  "aborted", 10053).
+- Files of a write in progress no longer show among the paths that made a
+  candidate: atomic writes of editors and agents' tools
+  (`db.rs.tmp.<pid>.<hex>`), `sed -i`'s `sedXXXXXX`, vim's `4913` and swap
+  files, Emacs' `.#` and `~` files.
+- A dev server's failed rebuild goes to the diagnostic log with its error
+  lines, not only with its tool's last line: Angular on Windows prints them
+  after that line, and the log line now waits for them (2 s at most after
+  the last).
+
+- `--browser` / `DEVSTACK_BROWSER` on Windows: an address with `&` was cut
+  there by `cmd` (none had one before `/auth?…&next=`).
+- The dashboard, opened on a lane before it knew whether the stack runs (a
+  link, a first visit), showed the lane without its list of lanes.
+- The daemon log says why a lane whose worktree went is not removed at once:
+  `lane_forget_deferred` said "it is being started" also when a removal of
+  the same lane was under way already, or a move.
 - Docs: a viewer of a shared lane reads its containers' logs, as it has
   since 0.11.0 (the node answers them itself); the docs and notes of 0.15.0
   said otherwise.

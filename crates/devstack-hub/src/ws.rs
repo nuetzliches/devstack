@@ -150,7 +150,7 @@ const MISSED_PINGS: u32 = 2;
 
 /// The `data` of each server-sent event in a body; comments (keep-alives)
 /// and other fields are dropped, multi-line data joined with `\n`.
-fn sse_data<S, E>(body: S) -> impl Stream<Item = String> + Send
+pub(crate) fn sse_data<S, E>(body: S) -> impl Stream<Item = String> + Send
 where
     S: Stream<Item = Result<Bytes, E>> + Send + 'static,
     E: Send + 'static,

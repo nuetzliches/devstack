@@ -34,6 +34,8 @@ use tokio_stream::StreamExt;
 static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 
 mod dialog;
+mod guests;
+mod notify;
 mod pool;
 pub mod release;
 mod share;
@@ -122,7 +124,7 @@ struct AppState {
     token: Arc<String>,
     /// blake3 of each session cookie -> created (ms); persisted, see `Sessions`.
     sessions: Arc<Mutex<Sessions>>,
-    codes: Arc<Mutex<HashMap<String, Instant>>>,
+    codes: Codes,
     stacks: watch::Receiver<Vec<StackEntry>>,
     /// The Docker engine as last seen, see `watch_engine`.
     engine: watch::Receiver<Engine>,
@@ -139,6 +141,8 @@ struct AppState {
     /// Until when (ms) to look at the engine every 2 s: after a start request.
     engine_fast_until: Arc<std::sync::atomic::AtomicU64>,
     shutdown: Arc<tokio::sync::Notify>,
+    /// Desktop notifications (ADR-0045).
+    notify: Arc<notify::Center>,
 }
 
 fn now_ms() -> u128 {
@@ -362,11 +366,24 @@ pub fn serve() -> Result<(), String> {
         let (newer_rx, release_poke) = watch_release();
 
         let shutdown = Arc::new(tokio::sync::Notify::new());
+        let codes: Codes = Arc::new(Mutex::new(HashMap::new()));
+        notify::register();
+        let open = {
+            let codes = codes.clone();
+            Arc::new(move |t: &notify::Target| open_dashboard(port, &codes, &t.path()))
+        };
+        let notify = Arc::new(notify::Center::new(&dir, notify::platform_sink(port, open)));
+        {
+            let notify = notify.clone();
+            guests::on_started(move |g| {
+                notify.guest_started(g);
+            });
+        }
         let state = AppState {
             port,
             token: Arc::new(token),
             sessions: Arc::new(Mutex::new(Sessions::load(dir.join(SESSIONS_FILE)))),
-            codes: Arc::new(Mutex::new(HashMap::new())),
+            codes,
             stacks: rx,
             engine: engine_rx,
             newer: newer_rx,
@@ -376,7 +393,9 @@ pub fn serve() -> Result<(), String> {
             phases: Phases::default(),
             engine_fast_until,
             shutdown: shutdown.clone(),
+            notify,
         };
+        notify::start(state.clone());
         let app = router(state);
         if let Some(v6) = v6 {
             let app6 = app.clone();
@@ -429,6 +448,8 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/ws", get(ws::ws))
         .route("/hub/update", post(update))
         .route("/hub/update/check", post(update_check))
+        .route("/hub/notify", get(notify::get).put(notify::put))
+        .route("/hub/notify/test", post(notify::test))
         .route("/hub/inspect", get(inspect))
         .route("/hub/pick-folder", post(pick_folder))
         .route("/hub/stacks/add", post(stack_add))
@@ -439,7 +460,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/stacks/{id}", delete(forget))
         .route("/hub/stacks/{id}/api/{*rest}", any(forward))
         .route("/hub/pool", get(pool::overview))
-        .route("/hub/pool/share", get(share::get).put(share::put))
+        .route("/hub/pool/share", get(share::get))
         .route("/hub/pool/shared", get(shared::list))
         .route("/hub/pool/shared/{lease}/open", post(shared::open))
         .route("/hub/pool/shared/{lease}/api/{*rest}", get(shared::view))
@@ -661,10 +682,35 @@ fn from_own_page(h: &HeaderMap, method: &Method, path: &str, own: &[String]) -> 
 #[derive(Deserialize)]
 struct CodeQuery {
     code: String,
+    /// Where to go once paired: a dashboard route (`/#/s/<id>?lane=`), the
+    /// stack a notification is about (ADR-0045). Anything else goes home.
+    next: Option<String>,
 }
 
-/// Exchange a one-time code (60 s, single use) for the session cookie.
-async fn auth(State(s): State<AppState>, Query(q): Query<CodeQuery>) -> Response {
+/// A dashboard route `/auth` may send the browser on to: the hub's own
+/// page with a hash route, in characters of a path and a query only.
+fn dashboard_route(next: Option<&str>) -> &str {
+    match next {
+        Some(n)
+            if n.starts_with("/#/")
+                && n.len() <= 512
+                && n.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"/#?=&%-._~".contains(&b)) =>
+        {
+            n
+        }
+        _ => "/",
+    }
+}
+
+/// Exchange a one-time code (60 s, single use) for the session cookie. A
+/// browser that is paired already keeps its session: a link from a
+/// notification pairs again each time, and need not add one each time.
+async fn auth(
+    State(s): State<AppState>,
+    Query(q): Query<CodeQuery>,
+    headers: HeaderMap,
+) -> Response {
     let valid = s
         .codes
         .lock()
@@ -684,15 +730,20 @@ async fn auth(State(s): State<AppState>, Query(q): Query<CodeQuery>) -> Response
         )
             .into_response();
     }
+    let next = dashboard_route(q.next.as_deref()).to_string();
+    let paired = {
+        let mut sessions = s.sessions.lock().unwrap();
+        cookie_sessions(&headers).any(|c| sessions.contains(c))
+    };
+    if paired {
+        return (StatusCode::SEE_OTHER, [(header::LOCATION, next)]).into_response();
+    }
     let id = random_hex();
     s.sessions.lock().unwrap().add(&id);
     let cookie = format!("{COOKIE}={id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000");
     (
         StatusCode::SEE_OTHER,
-        [
-            (header::SET_COOKIE, cookie),
-            (header::LOCATION, "/".to_string()),
-        ],
+        [(header::SET_COOKIE, cookie), (header::LOCATION, next)],
     )
         .into_response()
 }
@@ -700,16 +751,65 @@ async fn auth(State(s): State<AppState>, Query(q): Query<CodeQuery>) -> Response
 /// How long a pairing code works.
 const CODE_LIFETIME: Duration = Duration::from_secs(60);
 
-async fn pair(State(s): State<AppState>) -> Response {
+/// One-time pairing codes -> when they were made.
+type Codes = Arc<Mutex<HashMap<String, Instant>>>;
+
+fn new_code(codes: &Codes) -> String {
     let code = random_hex();
-    {
-        let mut codes = s.codes.lock().unwrap();
-        // Codes nobody used are dropped once expired, not kept for the hub's life.
-        codes.retain(|_, t| t.elapsed() < CODE_LIFETIME);
-        codes.insert(code.clone(), Instant::now());
-    }
+    let mut codes = codes.lock().unwrap();
+    // Codes nobody used are dropped once expired, not kept for the hub's life.
+    codes.retain(|_, t| t.elapsed() < CODE_LIFETIME);
+    codes.insert(code.clone(), Instant::now());
+    code
+}
+
+async fn pair(State(s): State<AppState>) -> Response {
+    let code = new_code(&s.codes);
     let url = format!("http://127.0.0.1:{}/auth?code={code}", s.port);
     Json(serde_json::json!({ "code": code, "url": url })).into_response()
+}
+
+/// Open the dashboard at `route` in the default browser, paired: what a
+/// click on a notification the hub hears itself does (Linux, ADR-0045).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn open_dashboard(port: u16, codes: &Codes, route: &str) {
+    let code = new_code(codes);
+    let url = format!(
+        "http://127.0.0.1:{port}/auth?code={code}&next={}",
+        next_param(route)
+    );
+    #[cfg(target_os = "linux")]
+    if let Err(e) = std::process::Command::new("xdg-open")
+        .arg(&url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        diag::warn(
+            "open_dashboard_failed",
+            serde_json::json!({ "error": e.to_string() }),
+        );
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = url;
+}
+
+/// `route` as the value of `/auth`'s `next`.
+pub fn next_param(route: &str) -> String {
+    route
+        .bytes()
+        .map(|b| match b {
+            b'#' | b'?' | b'&' | b'=' | b'%' | b'+' => format!("%{b:02X}"),
+            _ => (b as char).to_string(),
+        })
+        .collect()
+}
+
+/// Remove what the hub registered with the system for its notifications
+/// (`devstack self uninstall`).
+pub fn unregister_notifications() {
+    notify::unregister();
 }
 
 async fn shutdown(State(s): State<AppState>) -> Response {
@@ -1228,7 +1328,13 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
         .map(|engine| serde_json::json!({ "type": "docker", "docker": engine }));
     let release = tokio_stream::wrappers::WatchStream::new(s.newer.clone())
         .map(|newer| serde_json::json!({ "type": "release", "current": VERSION, "newer": newer }));
-    stacks.merge(docker).merge(release).merge(update)
+    let guests = tokio_stream::wrappers::WatchStream::new(guests::subscribe())
+        .map(|guests| serde_json::json!({ "type": "guests", "guests": guests }));
+    stacks
+        .merge(docker)
+        .merge(release)
+        .merge(update)
+        .merge(guests)
 }
 
 fn entry(s: &AppState, id: &str) -> Option<StackEntry> {
@@ -2357,6 +2463,28 @@ mod scan_tests {
 #[cfg(test)]
 mod guard_tests {
     use super::*;
+
+    #[test]
+    fn auth_sends_on_to_dashboard_routes_only() {
+        let route = "/#/s/ab12/services/api?lane=feat-x";
+        assert_eq!(dashboard_route(Some(route)), route);
+        // What `next_param` makes of it comes back as it was.
+        let uri: axum::http::Uri = format!("/auth?code=c&next={}", next_param(route))
+            .parse()
+            .unwrap();
+        let Query(q) = Query::<CodeQuery>::try_from_uri(&uri).unwrap();
+        assert_eq!(q.next.as_deref(), Some(route));
+        for bad in [
+            None,
+            Some("https://evil.example/"),
+            Some("//evil.example/#/"),
+            Some(r"/#/s/x\evil"),
+            Some("/#/s/<script>"),
+            Some("/hub/shutdown"),
+        ] {
+            assert_eq!(dashboard_route(bad), "/", "{bad:?}");
+        }
+    }
 
     #[test]
     fn network_paths_are_refused() {

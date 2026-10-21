@@ -8,7 +8,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { DockerEngine, HubEvent, ShareSettings, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
+import type { DockerEngine, Guest, HubEvent, NotifySettings, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -29,7 +29,8 @@ const START_PHASES: [number, string, string][] = [
   [2, 'sync: comparing 7177 files', 'sync'],
   [3, 'on {n}: lane image: pulled or built once, then kept', 'lane image: pulled or built once, then kept'],
   [3, 'on {n}: infrastructure: app: images (pull, build) and containers', 'infrastructure: app: images (pull, build) and containers'],
-  [3, 'on {n}: infrastructure: app: waiting until healthy', 'infrastructure: app: waiting until healthy'],
+  [3, 'on {n}: lane container', 'lane container'],
+  // The start ends with the lane's daemon; its containers come up under it (#164).
   [3, "on {n}: the lane's daemon", "the lane's daemon"],
 ];
 /** A start on a node as the daemon reports it while it runs (40 s here). */
@@ -52,6 +53,11 @@ function startMove(to: string, t0: number) {
 class MockHub {
   stacks: MockStack[] = [];
   hubSubs = new Set<Listener<HubEvent>>();
+  /** A lane of laptop-anna's runs here, a second one is admitted. */
+  guests: Guest[] = [
+    { pool: 'default', lease: 'l-7f3a', member: '1122334455667788', owner: 'laptop-anna', repo: 'shop', lane: 'feat-cart', state: 'running', since: Math.floor(Date.now() / 1000) - 2400, cpus: 2, memory: 4 * 2 ** 30 },
+    { pool: 'default', lease: 'l-91c2', member: '1122334455667788', owner: 'laptop-anna', repo: 'crm', lane: 'agent-1242', state: 'offered', since: Math.floor(Date.now() / 1000) - 20, cpus: 1.5, memory: 3 * 2 ** 30 },
+  ];
   hubDown = false;
   unpaired = false;
   empty = false;
@@ -205,6 +211,22 @@ async function crmScript(s: MockStack): Promise<void> {
 }
 
 
+/** The hub's notification settings (ADR-0045), as a fresh install has them. */
+const notify: NotifySettings = {
+  available: true,
+  unavailable: null,
+  kinds: [
+    { kind: 'build_failed', label: 'A build failed', on: true, default: true },
+    { kind: 'held', label: 'A candidate is held and waits for promote', on: true, default: true },
+    { kind: 'service_failed', label: 'A service exited by itself or failed to start', on: true, default: true },
+    { kind: 'lane_failed', label: "A lane's start or move on a node failed", on: true, default: true },
+    { kind: 'main_ports', label: 'A lane took or gave back the main ports', on: false, default: false },
+    { kind: 'live', label: 'A candidate went live', on: false, default: false },
+    { kind: 'guest_lane', label: 'A lane of another member started on this machine', on: true, default: true },
+  ],
+  muted: [],
+};
+
 function json<T>(status: number, body: T): Response<T> {
   return { status, ok: status >= 200 && status < 300, body: JSON.parse(JSON.stringify(body)) as T };
 }
@@ -336,7 +358,6 @@ export class MockTransport implements Transport {
       });
     if (p === '/hub/pool' && method === 'GET') return json(200, hub.pool.overview());
     if (p === '/hub/pool/share' && method === 'GET') return json(200, hub.pool.share());
-    if (p === '/hub/pool/share' && method === 'PUT') return json(200, hub.pool.setShare(body as unknown as ShareSettings));
     const pn = /^\/hub\/pool\/nodes\/([^/]+)\/(pause|resume)$/.exec(p);
     if (pn && method === 'POST') {
       const r = hub.pool.pause(decodeURIComponent(pn[1]), pn[2] === 'pause');
@@ -388,6 +409,18 @@ export class MockTransport implements Transport {
       ]);
     }
     if (p === '/hub/update/check' && method === 'POST') return json(200, { current: '0.2.0', newer: hub.newer });
+    if (p === '/hub/notify' && method === 'GET') return json(200, notify);
+    if (p === '/hub/notify' && method === 'PUT') {
+      const b = (body ?? {}) as { kinds?: Record<string, boolean>; muted?: string[] };
+      for (const [k, on] of Object.entries(b.kinds ?? {})) {
+        const kind = notify.kinds.find((x) => x.kind === k);
+        if (!kind) return json(400, { error: `no kind of notification \`${k}\`` });
+        kind.on = on;
+      }
+      if (b.muted) notify.muted = [...b.muted].sort();
+      return json(200, notify);
+    }
+    if (p === '/hub/notify/test' && method === 'POST') return empty(204);
     if (p === '/hub/update' && method === 'POST') {
       // As if installed: the hub would restart on the new version.
       const send = (ev: HubEvent) => hub.hubSubs.forEach((l) => l.send(ev));
@@ -713,6 +746,7 @@ export class MockTransport implements Transport {
       l.send({ type: 'stacks', stacks: hub.entries() });
       l.send({ type: 'docker', docker: hub.docker });
       l.send({ type: 'release', current: '0.4.0', newer: hub.newer });
+      l.send({ type: 'guests', guests: hub.guests });
       hub.hubSubs.add(l);
       return { stop: () => hub.hubSubs.delete(l) };
     }

@@ -281,6 +281,12 @@ impl Tracker {
 
     /// The last rebuild, as the view shows it at `now`: a finished one for
     /// [`SHOWN_MS`], a failed one until the next.
+    /// Does the rebuild that failed last show only its marker so far, its
+    /// error lines still to come?
+    pub fn waits_for_errors(&self) -> bool {
+        self.marker_only
+    }
+
     pub fn view(&self, now: u128) -> Option<RebuildView> {
         self.current.clone().filter(|c| {
             c.state != "ok" || now.saturating_sub(c.since) < SHOWN_MS + c.ms.unwrap_or(0) as u128
@@ -376,6 +382,21 @@ X [ERROR] TS2729: Property 'flags' is used before its initialization. [plugin an
             ]
         );
         assert_eq!(v.iter().filter(|r| r.state == "rebuilding").count(), 1);
+    }
+
+    #[test]
+    fn a_failure_waits_for_its_error_lines() {
+        // What the diagnostic line waits for (`supervisor::rebuilds`): the
+        // marker alone, then its first error line.
+        let mut t = Tracker::new(None).unwrap();
+        t.feed("> Changes detected. Rebuilding...", 1);
+        t.feed("Application bundle generation failed. [9.016 seconds]", 2);
+        assert!(t.waits_for_errors());
+        t.feed(
+            "X [ERROR] TS7008: Member 'flags' implicitly has an 'any' type.",
+            3,
+        );
+        assert!(!t.waits_for_errors());
     }
 
     #[test]

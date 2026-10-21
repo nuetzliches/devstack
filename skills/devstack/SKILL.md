@@ -76,6 +76,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack run <command>` | a command of the stack file (list below) |
 | `devstack top` | CPU, memory, disk per service, container, group and lane |
 | `devstack ui` | dashboard in the browser (pairs the browser once); `--browser chrome\|edge\|firefox\|brave\|<path>`, else `DEVSTACK_BROWSER`, else `BROWSER` picks the browser, `--print` only prints the link |
+| `devstack hub notify` | the desktop notifications the hub shows (a build failed, a candidate held, a service crashed, a lane's start on a node failed) and whether they show; `on\|off <kind>…\|all`, `test`. The user's own choice: change it only when asked |
 | `devstack update` | install the newest devstack (`--check` only asks); stacks switch at their next restart |
 | `devstack down` | stop the services and the daemon; containers keep running. `down --infra` removes them too. In the main tree, lanes that run keep the daemon and the infrastructure (only the main tree's services stop); `down --all` stops the lanes too: ask first, they may be someone else's |
 
@@ -162,7 +163,7 @@ Register it once (project `.mcp.json` or user configuration):
 | a job `failed` after a long wait | jobs end after 30 minutes unless the stack file sets `timeout`; read its log, then ask the user before raising it (skill `devstack-config`) |
 | `devstack down` names services that did not stop | they still run: `devstack status`, then `devstack stop <service>`; ask before ending a process yourself |
 | `devstack up --on`: the node refuses the lane | the message names what the lane's Compose files ask that a node does not allow (privileged, host mounts, devices, build `tags`, a service key the node does not know, ...) or that the pool has not granted that node; the lane can still run here (`devstack up`) |
-| `devstack up --on` (or the MCP `up` with `on`) was interrupted or timed out while the lane started on the node | the start goes on there: `devstack lane list` shows its step; the same `devstack up --on <node>` again follows it to the end. A first start can take minutes (images pulled and built, containers waited for until healthy) |
+| `devstack up --on` (or the MCP `up` with `on`) was interrupted or timed out while the lane started on the node | the start goes on there: `devstack lane list` shows its step; the same `devstack up --on <node>` again follows it to the end. A first start can take minutes (images pulled and built). It ends when the lane's daemon answers; its containers come up after, and its services start once those are healthy. A container that does not get healthy shows in `devstack status` with its group's error; `devstack logs <container>` has its output |
 
 ## 7. Problems in devstack itself
 

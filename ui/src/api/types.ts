@@ -31,7 +31,27 @@ export type HubEvent =
   /** A newer release than the hub (`newer`), or none. */
   | { type: 'release'; current: string; newer: string | null }
   /** The dashboard's update (`POST /hub/update`): running, or how the last one ended. Older hubs never send it. */
-  | { type: 'update'; update: UpdateState };
+  | { type: 'update'; update: UpdateState }
+  /** Lanes of other members that run on this machine, every pool; older hubs never send it. */
+  | { type: 'guests'; guests: Guest[] };
+
+/** A lane of another member on this machine (a lease whose node is this machine). */
+export type Guest = {
+  pool: string;
+  lease: string;
+  member: string;
+  /** How the pool names the member. */
+  owner: string;
+  repo: string;
+  lane: string;
+  /** `offered`: admitted, not started yet. */
+  state: 'offered' | 'running' | (string & {});
+  /** Unix seconds. */
+  since: number;
+  /** What it asked for. */
+  cpus: number;
+  memory: number;
+};
 
 /**
  * The dashboard's update. A successful one stops the hub that started it; the
@@ -370,13 +390,10 @@ export type PoolRelease = { version: string; protocol: number };
 
 /** CPU cores and memory (bytes). */
 export type PoolAmount = { cpus: number; memory: number };
-export type ShareSettings = { enabled: boolean; max_cpus?: number; max_memory?: number };
 /** `GET /hub/pool/share`: what this machine shares (ADR-0031 point 3). */
 export type ShareStatus = {
-  settings: ShareSettings;
   total: PoolAmount;
   free: PoolAmount;
-  offer: PoolAmount;
   /** An approved member of a pool: only then is anything reported. */
   member: boolean;
   /** Unix ms of the last report that reached the coordinator. */
@@ -384,6 +401,8 @@ export type ShareStatus = {
   error: string | null;
   /** The devstack the coordinator runs, from its answer to the last report; absent from an older one. */
   coordinator?: PoolRelease;
+  /** Why this machine offers the pool nothing (a node agent runs lanes; #171, on Windows #168). */
+  unavailable: string;
 };
 
 /** A pool this machine belongs to or asked to join (ADR-0034), `GET /hub/pools`. */
@@ -427,4 +446,17 @@ export type CapacityPoint = {
   gpu_load: number;
   gpu_memory: number;
   gpu_memory_used: number;
+};
+
+/** A kind of desktop notification and whether it is on (ADR-0045). */
+export type NotifyKind = { kind: string; label: string; on: boolean; default: boolean };
+
+/** `GET /hub/notify`: what notifies, and whether the desktop shows it. */
+export type NotifySettings = {
+  available: boolean;
+  /** Why nothing shows (no desktop session, switched off in the system's settings). */
+  unavailable: string | null;
+  kinds: NotifyKind[];
+  /** Stack ids, and `<stack id>/<lane>`. */
+  muted: string[];
 };

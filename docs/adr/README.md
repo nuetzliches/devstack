@@ -66,22 +66,22 @@ stay.
 | [0015](0015-devstack-is-optional.md) | devstack accelerates a stack, it is never required to run one | Accepted |
 | [0016](0016-a-daemon-restart-is-a-clean-restart.md) | A daemon restart is a clean restart from the last promoted artifacts | Accepted |
 | [0017](0017-stack-file-is-toml.md) | The stack file is TOML, without profiles in version 1 | Accepted, amended 2026-10-20 (ADR-0041's profiles are not the environments ruled out) |
-| [0018](0018-dashboard-is-a-browser-page.md) | The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper | Accepted; who serves it amended by ADR-0021; the tray is not built |
+| [0018](0018-dashboard-is-a-browser-page.md) | The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper | Accepted; who serves it amended by ADR-0021; the tray is not built; notifications from the hub by ADR-0045 |
 | [0019](0019-control-api-security.md) | The control API trusts the user's own processes, never a web page | Accepted, amended (own page for reads too; the hub proves itself; IPv4 loopback and `DEVSTACK_LISTEN`; the cookie is the hub's, no `token rotate`) |
 | [0020](0020-builds-share-one-long-lived-build-job.md) | Builds share one long-lived build job; a cancel ends only the cancelled build's tree | Accepted |
 | [0021](0021-a-hub-serves-the-dashboard.md) | A hub on a fixed port serves the dashboard for every stack | Accepted, amended (streams over WebSocket; the pool area polls) |
 | [0022](0022-network-egress-sandbox.md) | Outbound network calls of supervised services are visible and need an allow rule | Proposed |
 | [0023](0023-stack-file-compatibility.md) | Stack files stay readable; migrations once devstack has outside users | Accepted |
 | [0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) | A lane is a supervisor in the main working tree's daemon | Accepted, amended twice (lanes are the worktrees, run from a copy); point 4 replaced by ADR-0030 |
-| [0025](0025-a-lane-can-run-on-another-node.md) | A lane can run on another node, as a Linux container with its own infrastructure | Accepted; point 10 (showing and moving a lane) amended; amended 2026-10-19 (a start on a node answers once leased; its phases are timed); points 5 and 7 amended by ADR-0038 |
+| [0025](0025-a-lane-can-run-on-another-node.md) | A lane can run on another node, as a Linux container with its own infrastructure | Accepted; point 10 (showing and moving a lane) amended; amended 2026-10-19 (a start on a node answers once leased; its phases are timed); noted 2026-10-21 (its daemon starts first, its containers come up under it); points 5 and 7 amended by ADR-0038 |
 | [0026](0026-placement-by-the-requester-admission-by-the-node.md) | The requester places a lane; the node admits it, under a lease | Accepted; points 1, 3 replaced by ADR-0031 |
 | [0027](0027-trust-between-nodes.md) | Nodes and requesters trust each other by pinned keys, never by network location | Accepted; points 1, 2 replaced by ADR-0031; point 5 amended |
 | [0028](0028-lane-images.md) | A remote lane runs in a stack-provided toolchain image; the node supplies devstack | Accepted, amended (a Dockerfile the node builds) |
 | [0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) | A remote lane works on a mirror of the requester's tree; ports and API come back over one connection | Accepted; point 2 amended (`[lanes] sync`); Consequences built by ADR-0038 |
 | [0030](0030-each-lane-has-its-own-infrastructure.md) | Each lane has its own infrastructure | Accepted |
-| [0031](0031-a-coordinator-places-lanes.md) | A coordinator places lanes and admits members; nodes admit leases; data goes directly | Accepted, amended (one binary: `devstack node`), amended 2026-10-19 (versions in the pool) |
+| [0031](0031-a-coordinator-places-lanes.md) | A coordinator places lanes and admits members; nodes admit leases; data goes directly | Accepted, amended (one binary: `devstack node`), amended 2026-10-19 (versions in the pool), amended 2026-10-21 (no share switch) |
 | [0032](0032-the-pool-is-administered-in-the-dashboard.md) | The pool is administered in the dashboard, by members with the admin role | Accepted, amended (admins grant nodes); extended by ADR-0039 (updating a server) |
-| [0033](0033-a-node-decides-what-runs-on-it.md) | A node decides who runs lanes on it, and what a lane there may do | Accepted, amended (what Compose files may ask; limits; the node's own policy; amended 2026-10-20: the node runs the model it checked, known keys only, a lane's projects end with it) |
+| [0033](0033-a-node-decides-what-runs-on-it.md) | A node decides who runs lanes on it, and what a lane there may do | Accepted, amended (what Compose files may ask; limits; the node's own policy; amended 2026-10-20: the node runs the model it checked, known keys only, a lane's projects end with it; noted 2026-10-21: what holds while a lane's containers start under its running daemon) |
 | [0034](0034-a-machine-can-belong-to-several-pools.md) | A machine can belong to several pools; pools do not trust each other | Accepted; noted 2026-10-20 (several agents on one Docker engine) |
 | [0035](0035-lanes-can-be-shared-with-the-pool.md) | The pool sees the lanes its members share, and can use them | Accepted; point 4 extended by ADR-0040 (sharing for viewing; since 2026-10-20 sharing includes viewing) |
 | [0036](0036-the-pool-shows-its-capacity-over-time.md) | The pool shows its capacity, GPUs included, and how it changed | Accepted |
@@ -93,3 +93,4 @@ stay.
 | [0042](0042-a-dev-servers-rebuilds-show-like-builds.md) | A dev server's rebuilds show like builds, read from its output | Accepted |
 | [0043](0043-a-dev-servers-fixed-port-is-devstacks.md) | A dev server's fixed port is devstack's, forwarded to its instance | Accepted |
 | [0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) | A lane's prepared directories can be linked into its worktree | Accepted |
+| [0045](0045-the-hub-notifies-the-desktop.md) | The hub notifies the desktop of what needs attention, without a tray | Accepted, amended 2026-10-21 (`guest_lane`) |

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, paths, Unreachable, type StreamState, type Subscription } from '@/api';
-import type { DockerEngine, HubEvent, HubSession, StackEntry, UpdateState } from '@/api/types';
+import type { DockerEngine, Guest, HubEvent, HubSession, StackEntry, UpdateState } from '@/api/types';
 import { act } from '@/lib/actions';
 import { checkForAppUpdate } from '@/lib/app-update';
 import { persist } from '@/lib/persist';
@@ -35,6 +35,8 @@ export const useHub = defineStore('hub', () => {
   /** The last "Check for updates" of this page: when, and what it found or why not. */
   const lastCheck = ref<{ at: number; newer: string | null; error: string | null } | null>(null);
   const checkingUpdate = ref(false);
+  /** Lanes of other members running (or about to) on this machine. */
+  const guests = ref<Guest[]>([]);
   let sub: Subscription | null = null;
   let hadBreak = false;
   let checking: Promise<void> | null = null;
@@ -100,6 +102,10 @@ export const useHub = defineStore('hub', () => {
         }
         if (ev.type === 'update') {
           onUpdate(ev.update);
+          return;
+        }
+        if (ev.type === 'guests') {
+          guests.value = ev.guests;
           return;
         }
         if (ev.type === 'docker') {
@@ -197,6 +203,7 @@ export const useHub = defineStore('hub', () => {
     docker,
     dockerStarting,
     newer,
+    guests,
     updating,
     lastCheck,
     checkingUpdate,

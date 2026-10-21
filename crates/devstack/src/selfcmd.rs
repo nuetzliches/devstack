@@ -1,7 +1,8 @@
 //! `devstack self uninstall`: take devstack off this machine for this user.
 //!
 //! Removes what the installer and devstack itself put into the user's profile:
-//! the hub (stopped), its autostart and `devstack://` link, the per-user state
+//! the hub (stopped), its autostart and `devstack://` link, the name its
+//! notifications show under (Windows, ADR-0045), the per-user state
 //! (token, registry of stacks, hub log and sessions), the PATH entry and the
 //! installed binary. It leaves the repositories alone: each keeps its
 //! `.devstack/` directory (artifacts, logs) until someone deletes it, and the
@@ -194,6 +195,7 @@ pub fn uninstall(yes: bool, with_coordinator: bool) -> Result<()> {
     }
     std::thread::sleep(std::time::Duration::from_millis(500));
     crate::integration::uninstall()?;
+    devstack_hub::unregister_notifications();
     // The marker of `integration` lives in the state root too; all of it goes.
     let removed = remove_dir(&root);
     if ours {

@@ -6,10 +6,10 @@
 // role does not allow.
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { ago, bytes } from '@/lib/format';
+import { guestsReserved } from '@/lib/guests';
 import { usePool } from '@/stores/pool';
 import { sharedId } from '@/api';
 import Icon from '@/components/icons/Icon.vue';
-import ShareSwitch from '@/components/ShareSwitch.vue';
 import CapacityChart from '@/components/CapacityChart.vue';
 import type { PoolLease, PoolMember, PoolRelease } from '@/api/types';
 import { useUi } from '@/stores/ui';
@@ -28,6 +28,9 @@ const me = computed(() => o.value?.me);
 const members = computed(() => (o.value?.members ?? []).filter((m) => m.state === 'approved'));
 const removed = computed(() => (o.value?.members ?? []).filter((m) => m.state === 'removed').length);
 const nodes = computed(() => o.value?.nodes ?? []);
+/** Lanes of other members on this machine, every pool (the hub's `guests`). */
+const guests = computed(() => hub.guests);
+const guestPools = computed(() => new Set(guests.value.map((g) => g.pool)).size > 1);
 const audit = computed(() => (o.value?.audit ?? []).slice(0, 50));
 const showRemoved = ref(false);
 const removedList = computed(() => (o.value?.members ?? []).filter((m) => m.state === 'removed'));
@@ -311,12 +314,42 @@ function policyText(id: string) {
       </div>
     </section>
 
-    <section v-if="me?.state === 'approved' && !addingPool" class="card" data-testid="pool-share">
+    <section v-if="!addingPool && guests.length" class="card guests-card" data-testid="pool-guests">
       <header class="card-header">
-        <Icon name="power" :size="18" />
-        <h2>This machine shares</h2>
+        <Icon name="server" :size="18" />
+        <h2>On this machine</h2>
+        <span class="faint small">{{ guests.length === 1 ? '1 lane of another member' : `${guests.length} lanes of other members` }} · {{ guestsReserved(guests) }} reserved</span>
       </header>
-      <div class="card-body"><ShareSwitch /></div>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Lane</th>
+            <th>Repository</th>
+            <th>Of</th>
+            <th v-if="guestPools">Pool</th>
+            <th>State</th>
+            <th>Since</th>
+            <th>Reserved</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="g in guests" :key="`${g.pool}/${g.lease}`" :data-lease="g.lease">
+            <td><strong>{{ g.lane }}</strong></td>
+            <td>{{ g.repo }}</td>
+            <td>{{ g.owner }}</td>
+            <td v-if="guestPools">{{ g.pool }}</td>
+            <td>
+              <span class="pill sm" :class="g.state === 'running' ? 'ok' : 'outline'">{{ g.state === 'running' ? 'running' : 'starting' }}</span>
+            </td>
+            <td>{{ ago(g.since * 1000, now) }}</td>
+            <td class="tabular">{{ g.cpus }} CPU · {{ bytes(g.memory) }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="card-foot muted small">
+        They run in containers of this machine's Docker, as this node's policy allows. An admin's <em>Pause</em> on this node in the list below takes
+        no new lanes; those running stay until their owners stop them.
+      </p>
     </section>
 
     <section v-if="!addingPool && me?.state === 'approved'" class="card" data-testid="pool-default-on">
@@ -743,6 +776,13 @@ function policyText(id: string) {
 </template>
 
 <style scoped>
+.card-foot {
+  margin: 0;
+  padding: 10px var(--space-4, 16px) 12px;
+}
+.guests-card .card-header .small {
+  margin-left: auto;
+}
 .pool {
   display: flex;
   flex-direction: column;
