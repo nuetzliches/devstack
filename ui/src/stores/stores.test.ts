@@ -75,6 +75,17 @@ describe('hub store', () => {
     expect(hub.status).toBe('unpaired');
   });
 
+  it('asks once what it opens folders with, and names a tree and a program only (ADR-0046)', async () => {
+    fake.on('/hub/openers', ok([{ id: 'vscode', label: 'VS Code', kind: 'editor' }]));
+    fake.on('/hub/open', ok(null));
+    const hub = useHub();
+    await hub.loadOpeners();
+    await hub.loadOpeners();
+    expect(fake.requests.filter((r) => r.path === '/hub/openers')).toHaveLength(1);
+    await hub.openWith('shop', '/src/shop', hub.openers![0]);
+    expect(fake.requests.find((r) => r.path === '/hub/open')?.body).toEqual({ stack: 'shop', path: '/src/shop', with: 'vscode' });
+  });
+
   it('clears "starting" when the hub reports a failed start', async () => {
     fake.on('/hub/session', ok({ version: '0.9.8' }));
     const hub = useHub();

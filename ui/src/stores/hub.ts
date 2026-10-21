@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, paths, Unreachable, type StreamState, type Subscription } from '@/api';
-import type { DockerEngine, Guest, HubEvent, HubSession, StackEntry, UpdateState } from '@/api/types';
+import type { DockerEngine, Guest, HubEvent, HubSession, Opener, StackEntry, UpdateState } from '@/api/types';
 import { act } from '@/lib/actions';
 import { checkForAppUpdate } from '@/lib/app-update';
 import { persist } from '@/lib/persist';
@@ -37,6 +37,8 @@ export const useHub = defineStore('hub', () => {
   const checkingUpdate = ref(false);
   /** Lanes of other members running (or about to) on this machine. */
   const guests = ref<Guest[]>([]);
+  /** What this machine opens a stack's folder with (ADR-0046); null until asked. */
+  const openers = ref<Opener[] | null>(null);
   let sub: Subscription | null = null;
   let hadBreak = false;
   let checking: Promise<void> | null = null;
@@ -192,6 +194,22 @@ export const useHub = defineStore('hub', () => {
     }
   }
 
+  /** Ask the hub once what it can open folders with; an older hub knows nothing. */
+  async function loadOpeners() {
+    if (openers.value) return;
+    try {
+      const res = await api().request<Opener[]>('GET', paths.openers);
+      openers.value = res.ok && Array.isArray(res.body) ? res.body : [];
+    } catch {
+      openers.value = null;
+    }
+  }
+
+  /** Open one of a stack's trees with a program the hub found. */
+  async function openWith(stack: string, path: string, o: Opener) {
+    await act({ label: `Open in ${o.label}`, path: paths.open, body: { stack, path, with: o.id }, success: false });
+  }
+
   return {
     status,
     version,
@@ -207,12 +225,15 @@ export const useHub = defineStore('hub', () => {
     updating,
     lastCheck,
     checkingUpdate,
+    openers,
     reachable,
     init,
     checkSession,
     startDocker,
     installUpdate,
     checkUpdate,
+    loadOpeners,
+    openWith,
     entry,
     save,
   };
