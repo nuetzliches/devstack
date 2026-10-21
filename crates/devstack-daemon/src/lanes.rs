@@ -1663,7 +1663,7 @@ impl Lanes {
         // Taking it would change the owner and move nothing (#184).
         if !main.main_slot_moves() {
             return Err(
-                "this stack has no services on main ports: Compose containers keep their own ports, so the main slot cannot move them"
+                "this stack has no services on main ports: Compose containers keep their own ports unless `[compose.<group>] main_ports` names them (ADR-0048)"
                     .into(),
             );
         }
@@ -1786,6 +1786,9 @@ impl Lanes {
             });
         }
 
+        // The containers' fixed ports devstack holds go too (ADR-0048).
+        main.hold_for_lane(Some(offset));
+
         // 3. The new owner, and the workers with it.
         main.set_main_owner(Some(t.clone()));
         if let Some(p) = &prev {
@@ -1844,6 +1847,7 @@ impl Lanes {
             let _ = main.tcp_forward(&s, None);
         }
         main.set_main_owner(None);
+        main.hold_for_lane(None);
         for s in main.proxied_services() {
             let _ = main.forward(&s, None);
         }
@@ -2191,7 +2195,7 @@ impl Lanes {
             &self.main.stack,
             offset,
             &entry.name,
-            &self.main.published_ports(),
+            &self.main.published_fixed(),
         );
         Some(devstack_node::coordinator::Sharing::new(with, services))
     }

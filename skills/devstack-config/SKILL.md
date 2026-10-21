@@ -88,6 +88,11 @@ without a stack file starts from `devstack init` (a draft with TODOs).
 - **Container links** in the dashboard default to `http://localhost:<port>` per
   published port; set `urls = { <service> = "https://localhost:9443/ui" }` (or
   `""` for none) in the Compose group where that is wrong.
+- **Main ports for containers.** `promote --lane` moves the fixed ports of
+  `[services.*]` only, unless the Compose group names containers in
+  `main_ports = ["web", "api"]`: devstack then holds their published TCP
+  ports and points them at the lane. Name what the developer reaches directly
+  from the host (UI, the API the browser calls), not what those use.
 - **Paths** are relative to the repository root; use `{repo}` where a process
   needs an absolute one. Generated directories (`bin`, `obj`, `node_modules`,
   `target`, `.git`, `.devstack`) never count as changes. Compose files, env

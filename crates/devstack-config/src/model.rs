@@ -444,6 +444,12 @@ pub struct ComposeGroup {
     /// their published ports; containers of a lane do not see them by name.
     #[serde(default)]
     pub shared: Vec<String>,
+    /// Of `services`, those whose published TCP ports are devstack's in the
+    /// main tree (ADR-0048): held with a forward on the fixed port, which
+    /// `promote --lane` points at the lane's. For what the developer reaches
+    /// directly from the host (a UI, the API the browser calls).
+    #[serde(default)]
+    pub main_ports: Vec<String>,
     /// Groups that must be healthy first.
     #[serde(default)]
     pub after: Vec<String>,

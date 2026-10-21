@@ -208,6 +208,8 @@ type InfraView = { group: string; project: string; containers: ContainerView[]; 
 type ContainerView = { service: string; name: string; state: string; health: string; exit_code: number; ports: string[];
   urls: string[];                        // see below
   unreachable: string[];                 // published ports Docker no longer forwards
+  held?: { port: number; upstream: number | null; active: number; served: number }[];
+                                         // its fixed ports devstack holds (`main_ports`, ADR-0048): `upstream` the container's instance port, or the lane's port while a lane serves the main ports; `ports` then names the fixed port
   managed: boolean };                    // the group starts it (in its `services`); false: another container of the project
 type GroupView = { name: string; label: string; order: number | null; members: string[] };
   // members: "<service>", "compose.<group>.<service>", "command.<name>"

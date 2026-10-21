@@ -850,6 +850,90 @@ pub fn lane_overlay(
     Ok(overlay(model, project, lane, Some(offset), keep, own)?.render(lane))
 }
 
+/// A port of a main-tree container that devstack holds (ADR-0048): the
+/// Compose files publish `target` on `fixed` (on `host_ip`; every interface
+/// without one), and devstack listens there instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldPort {
+    pub service: String,
+    pub target: u16,
+    pub fixed: u16,
+    pub host_ip: Option<String>,
+}
+
+/// The main tree's overlay for a group's `main_ports` (ADR-0048): each TCP
+/// port of those services that the Compose files publish on a fixed host
+/// port is published on a loopback port Docker assigns instead, which
+/// devstack forwards the fixed one to. Their UDP ports, port ranges and
+/// ports Docker assigns stay as they are. `None` when nothing is held.
+pub fn main_overlay(
+    model: &Model,
+    services: &[String],
+) -> std::result::Result<Option<(String, Vec<HeldPort>)>, String> {
+    let mut o = Overlay::default();
+    let mut held = Vec::new();
+    for name in services {
+        let Some(svc) = model.services.get(name) else {
+            return Err(format!(
+                "`main_ports` names `{name}`, which the Compose files do not have"
+            ));
+        };
+        let mut body = vec!["    ports: !override".to_string()];
+        let mut moved = false;
+        for port in &svc.ports {
+            let tcp = port.protocol.as_deref().is_none_or(|p| p == "tcp");
+            let fixed = port
+                .published
+                .as_deref()
+                .and_then(|p| p.trim().parse::<u16>().ok());
+            let spec = match fixed {
+                Some(fixed) if tcp => {
+                    moved = true;
+                    held.push(HeldPort {
+                        service: name.clone(),
+                        target: port.target,
+                        fixed,
+                        host_ip: port.host_ip.clone().filter(|ip| !ip.is_empty()),
+                    });
+                    format!("127.0.0.1::{}", port.target)
+                }
+                _ => port_spec(port),
+            };
+            body.push(format!("      - {}", quote(&spec)));
+        }
+        if moved {
+            o.services.insert(name.clone(), body);
+        }
+    }
+    if held.is_empty() {
+        return Ok(None);
+    }
+    let text = o.render_with(
+        "# Written by devstack for the main working tree (ADR-0048): devstack holds\n# these services' fixed ports. Do not edit; it is written again at every start.\n"
+            .to_string(),
+    );
+    Ok(Some((text, held)))
+}
+
+/// A published port in Compose's short syntax, as the files have it.
+fn port_spec(port: &PortModel) -> String {
+    let mut spec = String::new();
+    if let Some(published) = &port.published {
+        if let Some(ip) = port.host_ip.as_deref().filter(|ip| !ip.is_empty()) {
+            spec.push_str(ip);
+            spec.push(':');
+        }
+        spec.push_str(published);
+        spec.push(':');
+    }
+    spec.push_str(&port.target.to_string());
+    if let Some(proto) = port.protocol.as_deref().filter(|p| *p != "tcp") {
+        spec.push('/');
+        spec.push_str(proto);
+    }
+    spec
+}
+
 /// What a node adds to a lane's overlay (ADR-0033).
 #[derive(Debug, Clone, Default)]
 pub struct NodeOptions {
@@ -953,9 +1037,13 @@ struct Overlay {
 
 impl Overlay {
     fn render(&self, lane: &str) -> String {
-        let mut out = format!(
+        self.render_with(format!(
             "# Written by devstack for lane `{lane}` (ADR-0030): its own ports, names,\n# networks and volumes. Do not edit; it is written again at every start.\n"
-        );
+        ))
+    }
+
+    fn render_with(&self, header: String) -> String {
+        let mut out = header;
         for (kind, items) in [
             ("services", &self.services),
             ("networks", &self.networks),
@@ -1377,6 +1465,52 @@ mod tests {
             1,
             "missing .env must be skipped: {a:?}"
         );
+    }
+
+    #[test]
+    fn the_main_overlay_holds_the_tcp_ports_of_main_ports_only() {
+        let model = parse_config(
+            r#"{
+              "services": {
+                "web": {"ports": [{"target": 80, "published": "8290", "protocol": "tcp"},
+                                  {"target": 81, "published": "8291", "host_ip": "127.0.0.1"},
+                                  {"target": 53, "published": "5353", "protocol": "udp"},
+                                  {"target": 9000}]},
+                "db": {"ports": [{"target": 3306, "published": "3306"}]},
+                "worker": {}
+              }
+            }"#,
+        )
+        .unwrap();
+        let (y, held) = main_overlay(&model, &["web".to_string(), "worker".to_string()])
+            .unwrap()
+            .unwrap();
+        assert!(
+            y.contains("\"web\":\n    ports: !override\n      - \"127.0.0.1::80\"\n      - \"127.0.0.1::81\"\n      - \"5353:53/udp\"\n      - \"9000\""),
+            "{y}"
+        );
+        // Not named: Docker's, as the files say.
+        assert!(!y.contains("db") && !y.contains("worker"), "{y}");
+        assert_eq!(
+            held,
+            vec![
+                HeldPort {
+                    service: "web".into(),
+                    target: 80,
+                    fixed: 8290,
+                    host_ip: None
+                },
+                HeldPort {
+                    service: "web".into(),
+                    target: 81,
+                    fixed: 8291,
+                    host_ip: Some("127.0.0.1".into())
+                },
+            ]
+        );
+        // Nothing to hold: no overlay.
+        assert_eq!(main_overlay(&model, &["worker".to_string()]).unwrap(), None);
+        assert!(main_overlay(&model, &["nope".to_string()]).is_err());
     }
 
     #[test]

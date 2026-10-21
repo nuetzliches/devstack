@@ -64,6 +64,9 @@ const kv = computed(() => {
           </div>
           <div class="subtitle">
             container · {{ group }}
+            <template v-for="h in container?.held ?? []" :key="h.port">
+              · <span class="mono" data-testid="container-held" :title="`devstack holds :${h.port} (main_ports, ADR-0048) and forwards it ${h.upstream ? `to :${h.upstream}` : 'nowhere now (the container is down)'}`">:{{ h.port }} → {{ h.upstream ? `:${h.upstream}` : '—' }}</span>
+            </template>
             <template v-for="u in (container?.urls ?? []).filter((x) => webUrl(x))" :key="u">
               · <a :href="u" @click="stack.followLink($event, u)" @auxclick="stack.followLink($event, u)" target="_blank" rel="noopener" data-testid="container-url">{{ u.replace(/^https?:\/\//, '') }} <Icon name="external" :size="12" /></a>
             </template>

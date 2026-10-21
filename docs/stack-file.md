@@ -82,7 +82,20 @@ after     = ["search"]                                   # other groups that mus
 restart_on = { db = ["deploy/dev/db/init/**"] }          # a change restarts that container
 urls      = { scheduler = "http://localhost:5100/ui", db = "" }   # dashboard links (below)
 shared    = ["mailbox"]                                  # lanes use the main tree's (see [lanes])
+main_ports = ["web"]                                     # their fixed ports move with `promote --lane` (below)
 ```
+
+`main_ports` names the services whose published TCP ports devstack holds in
+the main tree ([ADR-0048](adr/0048-a-containers-main-port-can-move-with-the-main-slot.md)):
+the main tree's container is published on a loopback port Docker assigns, and
+devstack listens on the fixed port the Compose files name (on their address:
+every interface without one) and forwards it there. `devstack promote --lane
+<name>` points it at the lane's container (the fixed port plus the lane's
+offset), `--lane main` back; the main tree's container keeps running, and the
+main tree's services still reach it. Name what you reach directly from the
+host (the UI, the API the browser calls), not what those use. The port answers
+only while the stack's daemon runs. UDP ports stay Docker's and do not move
+([#192](https://github.com/nuetzliches/devstack/issues/192)).
 
 The dashboard links every published port of a container to
 `http://localhost:<port>`, as Docker Desktop does. `urls` sets the link of a
@@ -106,7 +119,8 @@ Rules `devstack check` enforces:
   `compose.<group>.<service>` splits on); `networks` may also have `.`.
   Each starts with a letter or digit (a leading `-` would be a flag to
   `docker`).
-- `shared`, `restart_on` and `urls` name services of `services`; `urls`
+- `shared`, `main_ports`, `restart_on` and `urls` name services of
+  `services`; `main_ports` none of `shared`; `urls`
   are `http://` or `https://` addresses or `""`; `restart_on` holds globs.
 - `after` names other groups, without cycles.
 
@@ -489,10 +503,11 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
   fixed port is the main tree's).
 - `devstack promote --lane <name>` lets a lane's services answer on the main
   ports (dev servers through a TCP forward); `--lane main` gives them back.
-  The main ports are the fixed ports of `[services.*]`: a Compose
-  container's published port is Docker's and stays with the main tree's
-  container, so a stack of containers only has nothing to move, and
-  `promote --lane` refuses it.
+  The main ports are the fixed ports of `[services.*]` and of the
+  containers `[compose.<group>] main_ports` names; any other container's
+  published port is Docker's and stays with the main tree's container, so a
+  stack with nothing of either has nothing to move, and `promote --lane`
+  refuses it.
 - `devstack lane list`; `devstack lane start <name>` starts a lane from
   anywhere in the repository, as `devstack up` in its worktree does;
   `devstack lane stop <name>` stops a lane (its builds stay, the worktree

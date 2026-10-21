@@ -127,6 +127,12 @@ pub struct ContainerView {
     /// container may look healthy. A restart of the container fixes it.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub unreachable: Vec<String>,
+    /// Its fixed ports devstack holds (`main_ports`, ADR-0048): `port` the
+    /// fixed one, `upstream` where it forwards now (the container's
+    /// instance port, or a lane's port while that serves the main ports).
+    /// `ports` then names the fixed port.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub held: Vec<crate::proxy::ProxyView>,
     /// The Compose group starts it (its service is in the group's
     /// `services`). `false` for any other container of the project that
     /// `compose ps` reports (started by hand, a service of a profile, an

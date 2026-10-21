@@ -16,11 +16,181 @@ const NODE_TOO_OLD: &str = "the node runs this lane's containers, and its devsta
 /// one that could not read the lane's stack file.
 pub(crate) const NODE_DID_NOT_ACT: &str = "the node runs this lane's containers and did not start, stop or restart them: its devstack is too old (update devstack on the node), or it could not read the lane's stack file";
 
+/// How long a held port keeps a new connection waiting while its container
+/// is created or restarts (ADR-0048).
+const HELD_WAIT: Duration = Duration::from_secs(60);
+
+/// A fixed port of a `main_ports` container that devstack holds (ADR-0048).
+pub(crate) struct HeldFront {
+    fixed: u16,
+    host_ip: Option<String>,
+    front: crate::tcpfwd::Front,
+}
+
 impl Supervisor {
     /// The published address of every Compose port, `(group, service,
-    /// container port) -> host:port`, as last seen (`{compose.…}`).
+    /// container port) -> host:port`, as last seen (`{compose.…}`). A held
+    /// port (ADR-0048) is its container's own: the main tree's services
+    /// reach the main tree's container, whichever lane serves the main ports.
     pub(crate) fn published_ports(&self) -> BTreeMap<(String, String, u16), String> {
         self.infra.lock().unwrap().published.clone()
+    }
+
+    /// As [`Self::published_ports`], but a held port as the fixed one the
+    /// Compose files name: what a lane moves by its offset (ADR-0030), and
+    /// what its range must not meet.
+    pub(crate) fn published_fixed(&self) -> BTreeMap<(String, String, u16), String> {
+        let mut p = self.published_ports();
+        for (k, h) in self.held_ports.lock().unwrap().iter() {
+            p.insert(k.clone(), format!("127.0.0.1:{}", h.fixed));
+        }
+        p
+    }
+
+    fn main_overlay_file(&self, group: &str) -> PathBuf {
+        self.state_dir
+            .join("compose")
+            .join(format!("{group}.main.yml"))
+    }
+
+    /// The main tree's overlay for `group`'s `main_ports` (ADR-0048), written
+    /// from its Compose files as they stand now: the ports it holds.
+    fn write_main_overlay(&self, group: &str) -> Result<Vec<devstack_compose::HeldPort>, String> {
+        let file = self.main_overlay_file(group);
+        let _ = std::fs::remove_file(&file);
+        let names = &self.stack.compose[group].main_ports;
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let g = self.compose_group(group);
+        let model = self.docker.config(&g).map_err(|e| e.to_string())?;
+        // devstack forwards TCP only (#192): a UDP port stays Docker's.
+        for name in names {
+            for p in model.services.get(name).map_or(&[][..], |s| &s.ports[..]) {
+                let proto = p.protocol.as_deref().unwrap_or("tcp");
+                if let (Some(published), false) = (&p.published, proto == "tcp") {
+                    self.emit(EventBody::Infra {
+                        group: group.to_string(),
+                        message: format!(
+                            "{name}: {published}/{proto} stays Docker's and does not move with the main ports (TCP only, #192)"
+                        ),
+                    });
+                }
+            }
+        }
+        let Some((text, held)) = devstack_compose::main_overlay(&model, names)
+            .map_err(|e| format!("compose group `{group}`: {e}"))?
+        else {
+            return Ok(Vec::new());
+        };
+        std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;
+        std::fs::write(&file, text).map_err(|e| e.to_string())?;
+        Ok(held)
+    }
+
+    /// Hold `group`'s fixed ports (ADR-0048) once its containers let them
+    /// go: a front on each, kept across restarts of the stack; one the stack
+    /// file no longer names is let go. What could not be bound is said.
+    fn hold_ports(&self, group: &str, held: &[devstack_compose::HeldPort]) {
+        let mut failed = Vec::new();
+        {
+            let mut fronts = self.held_ports.lock().unwrap();
+            let gone: Vec<_> = fronts
+                .keys()
+                .filter(|(g, s, t)| {
+                    g == group && !held.iter().any(|h| &h.service == s && h.target == *t)
+                })
+                .cloned()
+                .collect();
+            for k in gone {
+                if let Some(h) = fronts.remove(&k) {
+                    h.front.close();
+                }
+            }
+            for h in held {
+                let key = (group.to_string(), h.service.clone(), h.target);
+                if fronts
+                    .get(&key)
+                    .is_some_and(|f| f.fixed == h.fixed && f.host_ip == h.host_ip)
+                {
+                    continue;
+                }
+                if let Some(old) = fronts.remove(&key) {
+                    old.front.close();
+                }
+                match crate::tcpfwd::Front::bind_at(h.host_ip.as_deref(), h.fixed, &self.rt) {
+                    Ok(front) => {
+                        fronts.insert(
+                            key,
+                            HeldFront {
+                                fixed: h.fixed,
+                                host_ip: h.host_ip.clone(),
+                                front,
+                            },
+                        );
+                    }
+                    Err(e) => failed.push(format!("{}: port {} not held: {e}", h.service, h.fixed)),
+                }
+            }
+        }
+        for message in failed {
+            self.emit(EventBody::Infra {
+                group: group.to_string(),
+                message,
+            });
+        }
+    }
+
+    /// The held ports forward to the lane `offset` names (`promote --lane`),
+    /// or to the main tree's containers again (`None`).
+    pub(crate) fn hold_for_lane(&self, offset: Option<u16>) {
+        *self.held_to_lane.lock().unwrap() = offset;
+        self.sync_held();
+    }
+
+    /// Point every held port where it goes now (ADR-0048): a lane's port
+    /// (the fixed one plus its offset) while it serves the main ports, else
+    /// the container's instance port while it runs; new connections wait
+    /// while it is created or restarts, and are refused while it is down.
+    pub(crate) fn sync_held(&self) {
+        if !self.lane.is_empty() {
+            return;
+        }
+        let to_lane = *self.held_to_lane.lock().unwrap();
+        let (published, states) = {
+            let c = self.infra.lock().unwrap();
+            let states: BTreeMap<(String, String), String> = c
+                .views
+                .iter()
+                .flat_map(|v| {
+                    v.containers
+                        .iter()
+                        .map(|c| ((v.group.clone(), c.service.clone()), c.state.clone()))
+                })
+                .collect();
+            (c.published.clone(), states)
+        };
+        use crate::tcpfwd::FrontState;
+        let fronts = self.held_ports.lock().unwrap();
+        for ((g, s, t), h) in fronts.iter() {
+            let next = match to_lane {
+                Some(off) => h
+                    .fixed
+                    .checked_add(off)
+                    .map_or(FrontState::Refuse, FrontState::To),
+                None => match states.get(&(g.clone(), s.clone())).map(String::as_str) {
+                    Some("running") => published
+                        .get(&(g.clone(), s.clone(), *t))
+                        .and_then(|a| a.rsplit(':').next()?.parse().ok())
+                        .map_or(FrontState::Hold(HELD_WAIT), FrontState::To),
+                    Some("created" | "restarting") => FrontState::Hold(HELD_WAIT),
+                    _ => FrontState::Refuse,
+                },
+            };
+            if h.front.state() != next {
+                h.front.set(next);
+            }
+        }
     }
 
     /// A Compose group as this supervisor runs it. In a lane (ADR-0030): its
@@ -31,6 +201,10 @@ impl Supervisor {
         let cfg = &self.stack.compose[name];
         let mut g = Group::from_config(name, cfg, &self.repo);
         if self.lane.is_empty() {
+            let overlay = self.main_overlay_file(name);
+            if !cfg.main_ports.is_empty() && overlay.is_file() {
+                g.files.push(overlay);
+            }
             return g;
         }
         g.project = format!("{}-{}", cfg.project, self.lane);
@@ -76,10 +250,7 @@ impl Supervisor {
     /// The host ports the main tree's containers publish: a lane's range
     /// must not meet them either.
     pub fn infra_host_ports(&self) -> Vec<u16> {
-        self.infra
-            .lock()
-            .unwrap()
-            .published
+        self.published_fixed()
             .values()
             .filter_map(|a| a.rsplit(':').next()?.parse().ok())
             .collect()
@@ -115,6 +286,20 @@ impl Supervisor {
                 });
                 return Err(e);
             }
+            let held = if self.lane.is_empty() {
+                match self.write_main_overlay(&g) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        self.emit(EventBody::Infra {
+                            group: g.clone(),
+                            message: format!("failed: {e}"),
+                        });
+                        return Err(e);
+                    }
+                }
+            } else {
+                Vec::new()
+            };
             let group = self.compose_group(&g);
             if let Err(e) = self.docker.up(&group, Duration::from_secs(300)) {
                 let msg = e.to_string();
@@ -124,6 +309,10 @@ impl Supervisor {
                 });
                 self.refresh_infra();
                 return Err(format!("compose group `{g}`: {msg}"));
+            }
+            // Its containers let the fixed ports go: devstack holds them now.
+            if self.lane.is_empty() {
+                self.hold_ports(&g, &held);
             }
             self.emit(EventBody::Infra {
                 group: g.clone(),
@@ -204,19 +393,29 @@ impl Supervisor {
         c: Container,
         published: &mut BTreeMap<(String, String, u16), String>,
     ) -> ContainerView {
+        let fronts = self.held_ports.lock().unwrap();
         let mut ports = Vec::new();
         for p in &c.publishers {
             if let Some(addr) = c.published(p.target_port) {
-                published.insert(
-                    (group.to_string(), c.service.clone(), p.target_port),
-                    addr.clone(),
-                );
-                let s = format!("{}->{addr}", p.target_port);
+                let key = (group.to_string(), c.service.clone(), p.target_port);
+                // A held port shows as the fixed one: that is its address.
+                let shown = match fronts.get(&key) {
+                    Some(h) => format!("{}:{}", h.host_ip.as_deref().unwrap_or("0.0.0.0"), h.fixed),
+                    None => addr.clone(),
+                };
+                published.insert(key, addr);
+                let s = format!("{}->{shown}", p.target_port);
                 if !ports.contains(&s) {
                     ports.push(s);
                 }
             }
         }
+        let held = fronts
+            .iter()
+            .filter(|((g, s, _), _)| g == group && *s == c.service)
+            .map(|(_, h)| h.front.view())
+            .collect();
+        drop(fronts);
         ContainerView {
             managed: self.starts(group, &c.service),
             service: c.service.clone(),
@@ -227,6 +426,7 @@ impl Supervisor {
             urls: self.container_urls(group, &c.service, &ports),
             ports,
             unreachable: Vec::new(),
+            held,
         }
     }
 
@@ -303,6 +503,7 @@ impl Supervisor {
                 });
             }
         }
+        self.sync_held();
     }
 
     /// Re-read Compose: environments of every service (also parked ones) and
@@ -369,6 +570,7 @@ impl Supervisor {
             cache.views.push(view);
         }
         *self.infra.lock().unwrap() = cache;
+        self.sync_held();
     }
 
     /// Follow one container's output (`docker compose logs --follow`); in a
@@ -911,6 +1113,7 @@ impl Supervisor {
                                 urls: self.container_urls(&g, &svc, &here),
                                 ports,
                                 unreachable: Vec::new(),
+                                held: Vec::new(),
                                 managed: true,
                             });
                         }
@@ -1296,6 +1499,7 @@ mod tests {
             ports: Vec::new(),
             urls: Vec::new(),
             unreachable: Vec::new(),
+            held: Vec::new(),
             managed,
         }
     }

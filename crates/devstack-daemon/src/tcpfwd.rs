@@ -120,12 +120,52 @@ impl Front {
     pub fn bind(port: u16, rt: &tokio::runtime::Handle) -> std::io::Result<Front> {
         let v4 = rt.block_on(TcpListener::bind(("127.0.0.1", port)))?;
         let v6 = rt.block_on(TcpListener::bind(("::1", port))).ok();
+        Ok(Self::serve(port, std::iter::once(v4).chain(v6), rt))
+    }
+
+    /// Listen on `port` where Docker would publish it (ADR-0048): every
+    /// interface without a `host` (IPv4, and IPv6 where it can), loopback
+    /// for `127.0.0.1` (and `::1`), else that address. A container just let
+    /// the port go: the OS may need a moment.
+    pub fn bind_at(
+        host: Option<&str>,
+        port: u16,
+        rt: &tokio::runtime::Handle,
+    ) -> std::io::Result<Front> {
+        let (first, second) = match host {
+            None | Some("0.0.0.0") => ("0.0.0.0", Some("::")),
+            Some("127.0.0.1") | Some("localhost") => ("127.0.0.1", Some("::1")),
+            Some(h) => (h, None),
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let main = loop {
+            match rt.block_on(TcpListener::bind((first, port))) {
+                Ok(l) => break l,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::AddrInUse && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => return Err(e),
+            }
+        };
+        // IPv6 beside IPv4: where the OS binds both on one socket, this one
+        // is taken already, and the first serves both.
+        let other = second.and_then(|h| rt.block_on(TcpListener::bind((h, port))).ok());
+        Ok(Self::serve(port, std::iter::once(main).chain(other), rt))
+    }
+
+    fn serve(
+        port: u16,
+        listeners: impl Iterator<Item = TcpListener>,
+        rt: &tokio::runtime::Handle,
+    ) -> Front {
         let (tx, _) = watch::channel(FrontState::Refuse);
         let state = Arc::new(tx);
         let active = Arc::new(AtomicUsize::new(0));
         let served = Arc::new(AtomicU64::new(0));
         let mut tasks = Vec::new();
-        for l in std::iter::once(v4).chain(v6) {
+        for l in listeners {
             tasks.push(rt.spawn(front_accept(
                 l,
                 port,
@@ -134,13 +174,13 @@ impl Front {
                 served.clone(),
             )));
         }
-        Ok(Front {
+        Front {
             port,
             state,
             active,
             served,
             tasks,
-        })
+        }
     }
 
     pub fn set(&self, state: FrontState) {

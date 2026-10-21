@@ -11,6 +11,13 @@ and listed with their assets on the
 
 ### Added
 
+- **Containers can serve the main ports** (ADR-0048, #184):
+  `[compose.<group>] main_ports = ["web"]` names containers whose published
+  TCP ports devstack holds in the main tree. The main tree's container moves
+  to a loopback port Docker assigns, devstack listens on the fixed port (on
+  the Compose file's address) and forwards it there, and `promote --lane`
+  points it at the lane's container. A stack of containers only can serve
+  its main ports from a lane now. UDP ports stay Docker's (#192).
 - **Open a tree in GitHub Desktop** (Windows, ADR-0046): the path's menu
   in the stack header lists it when it is installed, in a group of its own
   for Git clients. A repository it does not know yet is added to its list.
