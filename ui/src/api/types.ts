@@ -428,3 +428,16 @@ export type CapacityPoint = {
   gpu_memory: number;
   gpu_memory_used: number;
 };
+
+/** A kind of desktop notification and whether it is on (ADR-0045). */
+export type NotifyKind = { kind: string; label: string; on: boolean; default: boolean };
+
+/** `GET /hub/notify`: what notifies, and whether the desktop shows it. */
+export type NotifySettings = {
+  available: boolean;
+  /** Why nothing shows (no desktop session, switched off in the system's settings). */
+  unavailable: string | null;
+  kinds: NotifyKind[];
+  /** Stack ids, and `<stack id>/<lane>`. */
+  muted: string[];
+};

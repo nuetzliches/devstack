@@ -411,6 +411,8 @@ checks ([ADR-0019](adr/0019-control-api-security.md)).
 
 Delivery: a browser page served by the daemon, opened with `devstack ui`; status
 icon and notifications through a tray in the daemon binary ([ADR-0018](adr/0018-dashboard-is-a-browser-page.md)).
+The notifications came without the tray, from the hub
+([ADR-0045](adr/0045-the-hub-notifies-the-desktop.md)).
 
 - **Overview by group** (§4.4a): one panel per group, ungrouped members under
   "Other", a member shown in every group it belongs to. Per member: state,
@@ -885,6 +887,6 @@ What is open, roughly in the order it pays off, and where it comes from.
 | Remove the downstream stack's old orchestrator once its team works without it | phase 4 | downstream |
 | `devstack init` checked against a second real repository per language (Go, Python, Spring Boot are detected; .NET and Node came from the reference stack) | §13 | small |
 | `devstack migrate`, once devstack has outside users | [ADR-0023](adr/0023-stack-file-compatibility.md) | medium |
-| Tray icon with status and notifications (deferred) | §6, ADR-0018, [#1](https://github.com/nuetzliches/devstack/issues/1) | medium |
+| Tray icon with status (deferred; the notifications are the hub's since ADR-0045) | §6, ADR-0018, [#1](https://github.com/nuetzliches/devstack/issues/1) | medium |
 | Network egress sandbox, stage 1 (cooperative proxy) | [ADR-0022](adr/0022-network-egress-sandbox.md) (proposed) | medium |
 | Confine file writes of services to the repository (deferred) | [#2](https://github.com/nuetzliches/devstack/issues/2) | medium |
