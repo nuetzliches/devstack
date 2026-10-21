@@ -1,6 +1,6 @@
 # ADR-0050: What no request reports reaches the dashboard as a notice
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-21)
 - **Date:** 2026-10-21
 - **Deciders:** project owner
 - **Related:** [ADR-0021](0021-a-hub-serves-the-dashboard.md) (event streams, no polling), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (lanes), [ADR-0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) (links into the worktree), [ADR-0045](0045-the-hub-notifies-the-desktop.md) (desktop notifications), plan §11 (the diagnostic log)
