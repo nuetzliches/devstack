@@ -315,7 +315,7 @@ async function copyPath(s: StackEntry) {
             >
               <span class="dot" :class="mainDot(s)" aria-hidden="true" />
               <span class="label truncate">main</span>
-              <span v-if="servedBy(s)" class="faint small" title="A lane serves the main ports">ports → lane</span>
+              <span v-if="!servedBy(s)" class="pill sm ok" title="The main working tree serves the main ports" data-testid="sidebar-main-ports">main ports</span>
             </button>
           </li>
           <li v-for="l in lanesOf(s)" :key="l.name">
@@ -332,7 +332,7 @@ async function copyPath(s: StackEntry) {
               <span v-else class="dot" :class="laneDot(s, l)" aria-hidden="true" />
               <span class="label truncate">{{ laneLabel(l) }}</span>
               <span v-if="l.node" class="pill sm info" data-testid="sidebar-lane-node">{{ nodeLabel(l) }}</span>
-              <span v-if="l.owns_main" class="pill sm ok">main ports</span>
+              <span v-if="l.owns_main" class="pill sm ok" title="This lane serves the main ports" data-testid="sidebar-main-ports">main ports</span>
             </button>
           </li>
         </ul>
@@ -529,6 +529,10 @@ ul {
 .label {
   flex: 1;
   min-width: 0;
+}
+/* The branch is cut, not what holds the main ports. */
+.lane .pill {
+  flex: none;
 }
 .small {
   font-size: 11px;
