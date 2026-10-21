@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **`devstack down --all --infra` removes every container**, the lanes' and
+  the main tree's (and `POST /hub/stacks/{id}/down?infra=true&all=true`).
+  It stopped the lanes but left all containers running ("lanes were using
+  it"): the containers were judged while the lanes still ran. The lanes now
+  stop first, each with its own containers (a lane on the main ports gives
+  them back first, a lane on a node is released), then the main tree's
+  containers go (`POST /v1/down?infra=true&all=true`).
+
 ## [0.17.0] - 2026-10-21
 
 The dashboard makes a lane from a branch, and the main working tree's
