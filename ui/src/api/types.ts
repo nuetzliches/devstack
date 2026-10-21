@@ -33,7 +33,13 @@ export type HubEvent =
   /** The dashboard's update (`POST /hub/update`): running, or how the last one ended. Older hubs never send it. */
   | { type: 'update'; update: UpdateState }
   /** Lanes of other members that run on this machine, every pool; older hubs never send it. */
-  | { type: 'guests'; guests: Guest[] };
+  | { type: 'guests'; guests: Guest[] }
+  /** Something happened once in the hub that no request reports (ADR-0050): a toast. */
+  | { type: 'notice'; level: NoticeLevel; text: string };
+
+export type NoticeLevel = 'warn' | 'error';
+/** A condition the user should know of that no request reports, while it holds (ADR-0050). */
+export type Notice = { id: string; level: NoticeLevel; text: string; since: number };
 
 /** A lane of another member on this machine (a lease whose node is this machine). */
 export type Guest = {
@@ -148,6 +154,8 @@ export type LaneView = {
   removing?: boolean;
   /** The dashboard's own: the daemon no longer lists it, it is shown as it was last. */
   gone?: boolean;
+  /** Its notices (ADR-0050): its tree's while it runs here, and what the main tree knows of it (`worktree_missing`). */
+  notices?: Notice[];
 };
 
 export type LaneMove = {
@@ -235,6 +243,8 @@ export type StackView = {
   no_main_ports?: boolean;
   /** The file watcher could not be set up, or lost events: edits make no candidates (or every built service got one). */
   watcher_error?: string | null;
+  /** What no request reports, while it holds (ADR-0050). Older daemons omit it. */
+  notices?: Notice[];
 };
 
 /** A branch of a stack's repository (ADR-0047), `GET /hub/stacks/{id}/branches`. */
@@ -294,6 +304,10 @@ export type StackEventBody =
   | { type: 'config'; changed: boolean }
   /** The file watcher failed or lost events, or works again (`null`). */
   | { type: 'watcher'; error: string | null }
+  /** This tree's notices changed: all of them (ADR-0050). */
+  | { type: 'notices'; notices: Notice[] }
+  /** Something happened once that no request reports (ADR-0050): a toast. */
+  | { type: 'notice'; level: NoticeLevel; text: string }
   /** A worktree added or removed, a branch checked out, a lane started or stopped, the main ports moved. */
   | { type: 'lanes'; lanes: LaneView[] }
   | ({ type: 'usage' } & UsageReport);

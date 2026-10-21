@@ -167,6 +167,27 @@ pub struct CommandView {
     pub requires: Vec<String>,
 }
 
+/// A condition the user should know of that no request reports, while it
+/// holds (ADR-0050).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Notice {
+    /// What it is about, the same while it holds (`copy`,
+    /// `prepare.web.node_modules`).
+    pub id: String,
+    pub level: NoticeLevel,
+    /// What is wrong and what follows from it, for a person.
+    pub text: String,
+    /// When it began, unix ms.
+    pub since: u128,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeLevel {
+    Warn,
+    Error,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StackView {
     pub name: String,
@@ -199,6 +220,10 @@ pub struct StackView {
     /// OS dropped its events): edits then make no candidates until it does.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub watcher_error: Option<String>,
+    /// What the user should know of this tree and no request reports
+    /// (ADR-0050), while it holds.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notices: Vec<Notice>,
     /// The profile this tree runs with (ADR-0041).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
@@ -265,6 +290,16 @@ pub enum EventBody {
     /// The stack file changed since the daemon started (`true`), or was changed back.
     Config {
         changed: bool,
+    },
+    /// This tree's notices changed (ADR-0050): all of them, as they are now.
+    Notices {
+        notices: Vec<Notice>,
+    },
+    /// Something happened once that no request reports (ADR-0050 point 3):
+    /// the dashboard shows it as a toast.
+    Notice {
+        level: NoticeLevel,
+        text: String,
     },
     /// The file watcher failed or lost events (`error`), or works again
     /// (`None`): the same as the stack's `watcher_error`.

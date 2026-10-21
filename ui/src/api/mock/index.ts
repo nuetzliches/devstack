@@ -65,6 +65,8 @@ class MockHub {
   empty = false;
   docker: DockerEngine = { state: 'running', version: '28.4.0' };
   newer: string | null = null;
+  /** `?mock=notices`: a lane whose worktree is missing (ADR-0050). */
+  laneNotices = false;
   pool = new MockPool(new URLSearchParams(location.search).get('mock') ?? '');
   private streams = new Set<{ reconnect(): void }>();
 
@@ -91,6 +93,17 @@ class MockHub {
     this.unpaired = q.includes('unpaired');
     if (q.includes('newer')) this.newer = '0.5.0';
     if (q.includes('configchanged')) shop.view.config_changed = true;
+    if (q.includes('notices')) {
+      this.laneNotices = true;
+      shop.view.notices = [
+        {
+          id: 'no_ports.C:/work/_wt/1400',
+          level: 'warn',
+          text: "The worktree C:/work/_wt/1400 gets no lane: no lane number up to 199 moves the stack's ports to ones free of the other lanes and below 65536 (`[lanes] port_step` is 100). Remove a worktree no longer needed, or lower `port_step`.",
+          since: Date.now() - 4 * 60_000,
+        },
+      ];
+    }
     if (q.includes('watcher')) shop.view.watcher_error = 'the file watcher lost events (overflow); every built service was rebuilt as a candidate';
     if (q.includes('laneremoved')) laneRemoval = { lane: 'agent-login-fix', at: Date.now() + 8000 };
     // A fresh install: no stack registered yet (the welcome page with the scan).
@@ -548,7 +561,20 @@ export class MockTransport implements Transport {
             // a lane moved goes where it was moved.
             const placed = laneNodes.get(l.name) ?? (l.name === 'review-cart' ? 'build-server' : 'local');
             const node = active && placed !== 'local' ? { node: placed } : {};
-            return { ...l, active, owns_main: owns, running: active ? (l.name === 'agent-login-fix' ? 3 : 5) : 0, services: 5, ...node };
+            const notices =
+              this.hub.laneNotices && l.name === '1242'
+                ? {
+                    notices: [
+                      {
+                        id: 'worktree_missing',
+                        level: 'error' as const,
+                        text: `Its worktree ${l.path} is not there, though git still lists it. Unless it is back within 10 minutes, the lane goes, with its containers and volumes.`,
+                        since: Date.now() - 2 * 60_000,
+                      },
+                    ],
+                  }
+                : {};
+            return { ...l, active, owns_main: owns, running: active ? (l.name === 'agent-login-fix' ? 3 : 5) : 0, services: 5, ...node, ...notices };
           })
           .filter((l) => l !== null)
         : [];

@@ -184,7 +184,12 @@ type StackView = {
   main_served_by?: string;              // the lane that serves the main ports, if not the main tree
   no_main_ports?: true;                 // nothing moves with the main slot (no service on a port, none with workers: Compose containers only): serving the main ports is refused
   watcher_error?: string;               // the file watcher could not be set up, or lost events: edits make no candidates (or every built service got one)
+  notices?: Notice[];                   // what the user should know of this tree and no request reports, while it holds (ADR-0050)
 };
+// A condition, listed while it holds (ADR-0050). Ids so far: `copy` (a lane's copy not brought
+// up to date), `prepare.<service>.<path>` (not linked into the worktree), `worktree_missing`
+// (a lane's, which goes after 10 min), `no_ports.<worktree>` (in the main tree: a worktree without a lane).
+type Notice = { id: string; level: "warn" | "error"; text: string; since: number };
 type ServiceView = {
   name: string; kind: "service" | "job" | "devserver" | "tool" | "static";
   groups: string[]; port: number | null; autostart: boolean;
@@ -235,6 +240,7 @@ type LaneView = {
              phases?: { phase: string; ms: number }[]; phase_since?: number;
              error?: string; failed_at?: number };  // a start on a node or a move under way, or failed lately
   removing?: boolean;                    // its worktree is gone: it stops and its data goes (ADR-0024 point 7); gone from the list after
+  notices?: Notice[];                    // its tree's while it runs here, and what the main tree knows of it (`worktree_missing`)
 };
 ```
 
@@ -251,7 +257,9 @@ type Event = { seq: number; at: number } & (
   | { type: "command"; command: string; run: number; status: "running" | "succeeded" | "failed" }
   | { type: "config"; changed: boolean }   // the stack file changed since start (true) or back (false); a stack file gone is neither
   | { type: "watcher"; error: string | null } // the file watcher failed or lost events, or works again (null): StackView.watcher_error
-  | { type: "lanes"; lanes: LaneView[] }  // a worktree added or removed, a branch checked out, a lane started or stopped, the main ports moved
+  | { type: "lanes"; lanes: LaneView[] }  // a worktree added or removed, a branch checked out, a lane started or stopped, the main ports moved, a lane's notices changed
+  | { type: "notices"; notices: Notice[] } // this tree's notices changed: all of them (ADR-0050)
+  | { type: "notice"; level: "warn" | "error"; text: string } // something happened once that no request reports (the main ports taken back from a lane that is gone): a toast
   | { type: "usage" } & UsageReport                           // every 2 s, without history
 );
 ```

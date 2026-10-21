@@ -68,6 +68,13 @@ describe('hub store', () => {
     expect(hub.guests).toEqual([]);
   });
 
+  it("the hub's notices are toasts (ADR-0050)", async () => {
+    fake.on('/hub/session', ok({ version: '0.9.8' }));
+    await useHub().init();
+    fake.stream('/hub/events').handlers.onMessage({ type: 'notice', level: 'warn', text: 'A desktop notification could not be shown.' });
+    expect(useUi().toasts.map((t) => [t.kind, t.title])).toEqual([['warning', 'A desktop notification could not be shown.']]);
+  });
+
   it('says so when the browser is not paired', async () => {
     fake.on('/hub/session', { status: 401, ok: false, body: { error: 'not paired' } });
     const hub = useHub();
@@ -321,6 +328,22 @@ describe('stack store', () => {
     expect(stack.view?.watcher_error).toBe('the file watcher lost events (overflow)');
     events.handlers.onMessage({ type: 'watcher', error: null } as never);
     expect(stack.view?.watcher_error).toBeNull();
+  });
+
+  it("a tree's notices replace each other, and what happened once is a toast (ADR-0050)", async () => {
+    const stack = await shownStack();
+    const events = fake.stream('/hub/stacks/shop/api/v1/events');
+    const view = { name: 'shop', repo: '/src/shop', version: '0.9.8', services: [], infra: [], groups: [], commands: [] };
+    events.handlers.onMessage({ type: 'snapshot', stack: view } as never);
+    const copy = { id: 'copy', level: 'warn', text: 'The copy is behind.', since: 1 };
+    events.handlers.onMessage({ type: 'notices', notices: [copy] } as never);
+    expect(stack.view?.notices).toEqual([copy]);
+    events.handlers.onMessage({ type: 'notices', notices: [] } as never);
+    expect(stack.view?.notices).toEqual([]);
+    expect(stack.events.map((e) => e.type)).not.toContain('notices');
+    events.handlers.onMessage({ type: 'notice', level: 'error', text: 'Lane x is gone.' } as never);
+    expect(useUi().toasts.map((t) => [t.kind, t.title])).toEqual([['error', 'Lane x is gone.']]);
+    expect(stack.events[0].type).toBe('notice');
   });
 
   it('shows the services stopped once the daemon is gone', async () => {

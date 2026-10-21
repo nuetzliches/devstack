@@ -9,6 +9,22 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **Notices: what no request reports reaches the dashboard**
+  ([ADR-0050](docs/adr/0050-what-no-request-reports-reaches-the-dashboard-as-a-notice.md)).
+  A condition the user should know of is listed in the tree's `notices`
+  while it holds, shown as a banner, marked on the lane in the sidebar, and
+  printed by `devstack status`: a lane's worktree missing (the lane goes
+  after 10 minutes, with its containers and volumes), a worktree that gets
+  no lane for want of ports, a lane's copy not brought up to date (its dev
+  servers run old code), and `prepare` paths not linked into the worktree.
+  Something that happened once is a toast and an entry on the Events page:
+  the main ports taken back from a lane that is gone (and which services
+  did not start again), a shared lane's tunnel refused, a desktop
+  notification not shown. Before, all of these were only in the diagnostic
+  log. The log stays as it is; the dashboard does not show it.
+
 ### Fixed
 
 - **`devstack down --all --infra` removes every container**, the lanes' and

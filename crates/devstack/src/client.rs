@@ -713,6 +713,12 @@ pub fn status_text(stack: &Value) -> String {
     if let Some(e) = stack["watcher_error"].as_str() {
         let _ = writeln!(out, "! {e}\n");
     }
+    // What no request reports (ADR-0050).
+    for n in stack["notices"].as_array().into_iter().flatten() {
+        if let Some(t) = n["text"].as_str() {
+            let _ = writeln!(out, "! {t}\n");
+        }
+    }
     let _ = writeln!(
         out,
         "{:<22} {:<38} {:<17} {:>6} {:>7}",
@@ -2256,6 +2262,14 @@ data: {\"type\":\"line\",\"text\":\"c\"}\n\n";
         let stack = serde_json::json!({ "services": [], "watcher_error": "the file watcher lost events (overflow)" });
         assert!(status_text(&stack).starts_with("! the file watcher lost events (overflow)\n"));
         assert!(!status_text(&serde_json::json!({ "services": [] })).contains('!'));
+    }
+
+    #[test]
+    fn the_status_lists_the_trees_notices() {
+        let stack = serde_json::json!({ "services": [], "notices": [
+            { "id": "copy", "level": "warn", "text": "The lane's copy is behind.", "since": 1 }
+        ] });
+        assert!(status_text(&stack).starts_with("! The lane's copy is behind.\n"));
     }
 
     #[test]

@@ -38,6 +38,7 @@ mod dialog;
 #[cfg(windows)]
 mod foreground;
 mod guests;
+mod notice;
 mod notify;
 mod open;
 mod pool;
@@ -1340,11 +1341,15 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
         .map(|newer| serde_json::json!({ "type": "release", "current": VERSION, "newer": newer }));
     let guests = tokio_stream::wrappers::WatchStream::new(guests::subscribe())
         .map(|guests| serde_json::json!({ "type": "guests", "guests": guests }));
+    // A dashboard that fell behind misses a toast, nothing it shows.
+    let notices =
+        tokio_stream::wrappers::BroadcastStream::new(notice::subscribe()).filter_map(|n| n.ok());
     stacks
         .merge(docker)
         .merge(release)
         .merge(update)
         .merge(guests)
+        .merge(notices)
 }
 
 fn entry(s: &AppState, id: &str) -> Option<StackEntry> {

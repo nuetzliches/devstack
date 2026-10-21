@@ -333,6 +333,14 @@ async function copyPath(s: StackEntry) {
               <span class="label truncate">{{ laneLabel(l) }}</span>
               <span v-if="l.node" class="pill sm info" data-testid="sidebar-lane-node">{{ nodeLabel(l) }}</span>
               <span v-if="l.owns_main" class="pill sm ok" title="This lane serves the main ports" data-testid="sidebar-main-ports">main ports</span>
+              <span
+                v-if="l.notices?.length"
+                class="pill sm"
+                :class="l.notices.some((n) => n.level === 'error') ? 'danger' : 'warn'"
+                :title="l.notices.map((n) => n.text).join('\n\n')"
+                data-testid="sidebar-lane-notices"
+                >!</span
+              >
             </button>
           </li>
         </ul>

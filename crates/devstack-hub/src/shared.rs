@@ -306,6 +306,10 @@ pub async fn open(
                                 devstack_daemon::remote::tunnel_error(&other.to_string(), "", &node)
                             }
                         };
+                        crate::notice::tell(
+                            "error",
+                            format!("The shared lane's port {there} could not be reached: {error}"),
+                        );
                         devstack_daemon::diag::warn(
                             "shared_lane_tunnel",
                             json!({ "lease": lease, "port": there, "error": error,

@@ -170,6 +170,7 @@ Register it once (project `.mcp.json` or user configuration):
 | `failed` candidate | the old build keeps running; `devstack status` shows the reason, the build log is in `.devstack/logs/<service>/build-<id>.log` |
 | `held` candidate | waits for `devstack promote <service>` after the user agreed |
 | `devstack status`: "the stack file changed since the daemon started" | the daemon reads the file once: `devstack down` + `devstack up` (ask first if others use the stack) |
+| `devstack status`: another `!` line (a lane's worktree missing, a worktree without a lane, a lane's copy behind, `prepare` not linked, the file watcher) | a condition that holds until it is fixed; the line says what follows from it. Tell the user; `devstack logs --daemon --grep <lane>` has the details |
 | a service exits right after start | `devstack logs <service> -n 200`; every start has its own log in `.devstack/logs/<service>/run-*.log` |
 | dashboard: "hub not reachable" | `devstack ui` (or the "Start hub" button once `devstack hub install` ran) |
 | this skill says it is outdated | `devstack skills install` refreshes it from the installed devstack and this stack file |

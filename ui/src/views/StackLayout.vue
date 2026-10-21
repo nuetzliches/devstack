@@ -68,6 +68,14 @@ const restartReason = computed(() => {
   if (stack.view?.config_changed && !stack.ending) return 'config';
   return null;
 });
+/** What no request reports (ADR-0050): this tree's own, and what the main
+ * tree knows of the lane shown (its worktree missing). */
+const notices = computed(() => {
+  if (!stack.running) return [];
+  const own = stack.view?.notices ?? [];
+  const lane = stack.lane ? (stack.lanes.find((l) => l.name === stack.lane)?.notices ?? []) : [];
+  return [...own, ...lane.filter((n) => !own.some((o) => o.id === n.id))];
+});
 /** Docker is down and this stack has containers (or we do not know yet). */
 const dockerDown = computed(() => {
   const d = hub.docker;
@@ -153,6 +161,10 @@ function isActive(name: string) {
       <div v-if="!hubDown && stack.running && stack.view?.watcher_error" class="banner warn" data-testid="watcher-error">
         <Icon name="alert" :size="18" />
         <span class="grow"><strong>The file watcher does not see every edit.</strong> {{ stack.view.watcher_error }}</span>
+      </div>
+      <div v-for="n in hubDown ? [] : notices" :key="n.id" class="banner notice" :class="n.level === 'error' ? 'danger' : 'warn'" data-testid="notice" :data-notice="n.id">
+        <Icon name="alert" :size="18" />
+        <span class="grow">{{ n.text }} <span class="faint">({{ ago(n.since, now) }})</span></span>
       </div>
       <div v-if="unknown" class="banner neutral">
         <Icon name="info" :size="18" />
@@ -295,6 +307,10 @@ function isActive(name: string) {
 }
 .banners .banner {
   flex-wrap: wrap;
+}
+/* No button to wrap: its text stays beside the icon. */
+.banners .banner.notice {
+  flex-wrap: nowrap;
 }
 .start-error-head {
   display: block;
