@@ -64,13 +64,14 @@ The dashboard's **Pool** area does the same with a
 form. `devstack pool` then lists the machines, what each offers, and which
 lanes run where.
 
-A member that only asks for lanes needs nothing else. The **share switch**
-(sidebar, pool area) lets the pool run other members' lanes on your machine:
-half of what is free, never more than the caps you set; off by default.
-On Windows the switch stays off and says why: a lane is a Linux container
-that a Windows machine cannot run yet
-([#168](https://github.com/nuetzliches/devstack/issues/168)); it still starts
-its own lanes in the pool.
+A member that only asks for lanes needs nothing else. A machine runs other
+members' lanes only with a node agent, below. The dashboard has no switch for
+that: the share switch it had only reported capacity, never started an agent,
+and is gone until it does
+([#171](https://github.com/nuetzliches/devstack/issues/171); on Windows,
+which cannot run the Linux lanes yet,
+[#168](https://github.com/nuetzliches/devstack/issues/168)). The hub reports
+the machine (online, what it has, its devstack) and offers nothing.
 
 ## Run a node
 

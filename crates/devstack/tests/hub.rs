@@ -847,35 +847,29 @@ fn down_then_up_at_once_runs_again() {
     }
 }
 
-/// #168: a Windows machine cannot run the pool's lanes, so its switch stays
-/// off and says why; elsewhere nothing changes.
+/// #169: the hub offers the pool nothing and says why; the share switch is
+/// gone until it starts a node agent (#171).
 #[test]
-fn sharing_is_refused_on_windows_with_the_reason() {
+fn the_hub_offers_the_pool_nothing_and_says_why() {
     let h = start();
     let p = h.port;
     let bearer = format!("Authorization: Bearer {}\r\n", token(&h));
     let (s, _, body) = get(p, "/hub/pool/share", &bearer);
     assert_eq!(s, 200, "{body}");
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(v["unavailable"].is_string(), cfg!(windows), "{v}");
-    assert!(!v["unavailable"].as_str().unwrap_or("").contains("  "), "{v}");
-    let put = |body: &str| {
-        http(
-            p,
-            &format!(
-                "PUT /hub/pool/share HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\n{bearer}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            ),
-        )
-    };
-    let (s, _, body) = put(r#"{"enabled":true}"#);
-    if cfg!(windows) {
-        assert_eq!(s, 409, "{body}");
-        assert!(body.contains("#168"), "{body}");
-    } else {
-        assert_eq!(s, 200, "{body}");
-    }
-    // Switching it off (or setting caps) is always fine.
-    let (s, _, body) = put(r#"{"enabled":false,"max_cpus":2}"#);
-    assert_eq!(s, 200, "{body}");
+    let why = v["unavailable"].as_str().unwrap_or("");
+    assert!(why.contains("#171") && !why.contains("  "), "{v}");
+    assert!(
+        v.get("settings").is_none() && v.get("offer").is_none(),
+        "{v}"
+    );
+    let body = r#"{"enabled":true}"#;
+    let (s, _, _) = http(
+        p,
+        &format!(
+            "PUT /hub/pool/share HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\n{bearer}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    assert_eq!(s, 405, "no switch to turn on");
 }

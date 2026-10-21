@@ -439,7 +439,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/stacks/{id}", delete(forget))
         .route("/hub/stacks/{id}/api/{*rest}", any(forward))
         .route("/hub/pool", get(pool::overview))
-        .route("/hub/pool/share", get(share::get).put(share::put))
+        .route("/hub/pool/share", get(share::get))
         .route("/hub/pool/shared", get(shared::list))
         .route("/hub/pool/shared/{lease}/open", post(shared::open))
         .route("/hub/pool/shared/{lease}/api/{*rest}", get(shared::view))
