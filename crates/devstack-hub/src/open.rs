@@ -114,6 +114,10 @@ pub fn open(id: &str, tree: &Path, repo: &Path, stack_file: &Path) -> Result<(),
         .find(|f| f.opener.id == id)
         .ok_or(OpenError::Unknown)?;
     let path = display(tree);
+    // Windows: the hub is in the background, the program would open behind
+    // the browser; held until it is started or handed the link.
+    #[cfg(windows)]
+    let _front = crate::foreground::Front::take();
     match &f.how {
         How::Folder => imp::shell_open(&path),
         How::Link(scheme) => imp::shell_open(&link(scheme, &path)),
