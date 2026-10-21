@@ -220,6 +220,7 @@ jobs:
             $out = winget validate --manifest $env:MANIFESTS --disable-interactivity 2>&1 | Out-String
             $out
             if ($LASTEXITCODE -ne 0 -and $out -notmatch 'succeeded with warnings') { exit 1 }
+            exit 0 # the step would end with winget's exit code otherwise
           } else {
             "::notice::no winget on this runner; wingetcreate checks the manifests when it submits them"
           }
