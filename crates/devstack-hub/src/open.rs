@@ -4,19 +4,20 @@
 //! A fixed list. Each program is found the way it makes itself known: an
 //! editor or agent by the URL scheme it registered (`vscode`, `claude`, ...),
 //! started by a link of that scheme, as the shell opens it; a terminal and
-//! Orca by their program on `PATH`. The page never names a program or a
+//! Orca by their program on `PATH`; GitHub Desktop by its install folder. The page never names a program or a
 //! command line, only one of the ids found here.
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-/// What a program is for, to group the menu.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// What a program is for, to group the menu, in menu order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     Files,
     Terminal,
     Editor,
+    Git,
     Agent,
 }
 
@@ -52,6 +53,10 @@ enum How {
     Terminal(PathBuf),
     /// Orca's CLI.
     Orca(PathBuf),
+    /// GitHub Desktop: `--cli-open=<path>`, what its own `github` command
+    /// runs.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    GitHubDesktop(PathBuf),
 }
 
 /// The programs found by their registered scheme, in menu order.
@@ -66,7 +71,7 @@ const LINKS: &[(&str, &str, Kind)] = &[
 ];
 
 /// What this machine can open a folder with, in menu order: files,
-/// terminals, editors, agents. Nothing without a desktop.
+/// terminals, editors, Git clients, agents. Nothing without a desktop.
 pub fn found() -> Vec<Found> {
     let mut out = imp::files_and_terminals();
     if out.is_empty() {
@@ -84,6 +89,16 @@ pub fn found() -> Vec<Found> {
             });
         }
     }
+    if let Some(exe) = imp::github_desktop() {
+        out.push(Found {
+            opener: Opener {
+                id: "github-desktop",
+                label: "GitHub Desktop",
+                kind: Kind::Git,
+            },
+            how: How::GitHubDesktop(exe),
+        });
+    }
     if let Some(orca) = imp::orca() {
         out.push(Found {
             opener: Opener {
@@ -94,6 +109,8 @@ pub fn found() -> Vec<Found> {
             how: How::Orca(orca),
         });
     }
+    // Stable: within a kind, the order above.
+    out.sort_by_key(|f| f.opener.kind);
     out
 }
 
@@ -125,6 +142,7 @@ pub fn open(id: &str, tree: &Path, repo: &Path, stack_file: &Path) -> Result<(),
         How::Console(exe) => imp::console(exe, tree),
         How::Terminal(exe) => imp::terminal(exe, tree),
         How::Orca(exe) => orca(exe, &path, &display(repo), stack_file),
+        How::GitHubDesktop(exe) => imp::github_desktop_open(exe, &path),
     }
     .map_err(OpenError::Failed)
 }
@@ -310,6 +328,27 @@ mod imp {
         }
     }
 
+    /// Its launcher in its (per-user) install folder, which starts the
+    /// version installed last with the arguments it is given.
+    pub fn github_desktop() -> Option<PathBuf> {
+        let p = PathBuf::from(std::env::var_os("LOCALAPPDATA")?)
+            .join(r"GitHubDesktop\GitHubDesktop.exe");
+        p.is_file().then_some(p)
+    }
+
+    /// The repository at `path` in GitHub Desktop, added to its list if it
+    /// is not there yet.
+    pub fn github_desktop_open(exe: &Path, path: &str) -> Result<(), String> {
+        std::process::Command::new(exe)
+            .arg(format!("--cli-open={path}"))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(drop)
+            .map_err(|e| format!("start GitHub Desktop: {e}"))
+    }
+
     pub fn orca() -> Option<PathBuf> {
         on_path("orca").or_else(|| {
             let p = PathBuf::from(std::env::var_os("LOCALAPPDATA")?)
@@ -451,6 +490,15 @@ mod imp {
         on_path("orca")
     }
 
+    /// GitHub publishes no Linux build.
+    pub fn github_desktop() -> Option<PathBuf> {
+        None
+    }
+
+    pub fn github_desktop_open(_exe: &Path, _path: &str) -> Result<(), String> {
+        Err("no GitHub Desktop on Linux".into())
+    }
+
     /// Start `cmd` and let it go; a thread waits for it, so it leaves no
     /// zombie behind.
     fn detach(mut cmd: std::process::Command, what: &str) -> Result<(), String> {
@@ -515,6 +563,12 @@ mod imp {
     pub fn orca() -> Option<PathBuf> {
         None
     }
+    pub fn github_desktop() -> Option<PathBuf> {
+        None
+    }
+    pub fn github_desktop_open(_exe: &Path, _path: &str) -> Result<(), String> {
+        Err("not supported on this platform".into())
+    }
     pub fn shell_open(_target: &str) -> Result<(), String> {
         Err("not supported on this platform".into())
     }
@@ -558,6 +612,12 @@ mod tests {
     fn a_link_cannot_be_given_more_parameters_by_a_path() {
         let l = link("vscode", "/x?windowId=_blank#y");
         assert_eq!(l, "vscode://file/x%3FwindowId%3D_blank%23y");
+    }
+
+    #[test]
+    fn git_clients_come_after_the_editors_before_the_agents() {
+        assert!(Kind::Editor < Kind::Git && Kind::Git < Kind::Agent);
+        assert_eq!(serde_json::to_value(Kind::Git).unwrap(), "git");
     }
 
     #[test]
