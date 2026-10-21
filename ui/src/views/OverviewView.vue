@@ -427,8 +427,8 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
   flex-direction: column;
   gap: var(--space-3);
   position: sticky;
-  top: calc(var(--topbar-h) + 12px);
-  max-height: calc(100vh - var(--topbar-h) - 24px);
+  top: calc(var(--topbar-h) + var(--banners-h) + 12px);
+  max-height: calc(100vh - var(--topbar-h) - var(--banners-h) - 24px);
   overflow-y: auto;
   padding-right: 2px;
 }
