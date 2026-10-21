@@ -3438,6 +3438,10 @@ async fn background(s: Shared) {
                 let _ = crate::telemetry::node_logs_body("devstack-node");
             }
         }
+        // Taken one at a time: a guard in the literal below would live to
+        // its end, and `leases` is locked there (`runs` after `leases`).
+        let runs = s.runs.lock().unwrap().report();
+        let disk_room = s.disk_room();
         let report = Report {
             total: Some(total),
             used: Some(used),
@@ -3461,8 +3465,8 @@ async fn background(s: Shared) {
                 })
                 .collect(),
             disk_free: devstack_proc::disk_free(&s.root),
-            disk_room: s.disk_room(),
-            runs: s.runs.lock().unwrap().report(),
+            disk_room,
+            runs,
             leases: s
                 .leases
                 .lock()
