@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref, shallowRef, triggerRef, watch } from 'vue';
 import { api, paths, sharedRef, v1, type GroupAction, type ServiceAction, type StreamState, type Subscription } from '@/api';
-import type { Branches, LaneView, Point, Run, ServiceView, StackEvent, StackView, UsageReport } from '@/api/types';
+import type { Branches, LaneView, Point, Pruned, Run, ServiceView, StackEvent, StackView, UsageReport } from '@/api/types';
 import { samePath } from '@/lib/lanes';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
@@ -373,14 +373,19 @@ export const useStack = defineStore('stack', () => {
 
   async function resetLane(name: string) {
     if (!id.value) return;
-    await act({
+    const r = await act<Pruned[]>({
       label: `Discard the data of lane ${name}`,
       path: daemonPath(id.value, v1.laneReset(name)),
       confirmText: 'Its containers and volumes go, here and on the nodes it ran on: its databases are seeded again at its next start. The worktree and its builds stay.',
       confirmLabel: 'Discard data',
       danger: true,
-      success: `Lane ${name} starts fresh next time`,
+      success: false,
     });
+    if (!r.ok) return;
+    // Removed everywhere, or where it was not: those places keep its data.
+    const failed = (r.body ?? []).filter((p) => !p.removed);
+    if (!failed.length) ui.toast('success', `Lane ${name} starts fresh next time`);
+    else ui.toast('error', `Lane ${name}: not all of its data went`, failed.map((p) => `${p.place}: ${p.error ?? 'not removed'}`).join('; '));
   }
 
   // Follow the hub: connect when the stack starts, drop the stream when it stops.
@@ -503,6 +508,10 @@ export const useStack = defineStore('stack', () => {
         break;
       case 'config':
         if (view.value) view.value.config_changed = ev.changed;
+        save();
+        break;
+      case 'watcher':
+        if (view.value) view.value.watcher_error = ev.error;
         save();
         break;
       case 'usage':

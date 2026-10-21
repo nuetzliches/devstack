@@ -710,6 +710,9 @@ pub fn status_text(stack: &Value) -> String {
             "! the stack file changed since the daemon started; it applies with `devstack down` + `devstack up`\n"
         );
     }
+    if let Some(e) = stack["watcher_error"].as_str() {
+        let _ = writeln!(out, "! {e}\n");
+    }
     let _ = writeln!(
         out,
         "{:<22} {:<38} {:<17} {:>6} {:>7}",
@@ -2239,6 +2242,13 @@ data: {\"type\":\"line\",\"text\":\"c\"}\n\n";
         assert_eq!(seen[0]["text"], "a");
         assert_eq!(seen[1]["build_id"], "x", "multi-line data");
         assert_eq!(seen[2]["text"], "b", "an unparsable event is skipped");
+    }
+
+    #[test]
+    fn the_status_says_when_the_file_watcher_misses_edits() {
+        let stack = serde_json::json!({ "services": [], "watcher_error": "the file watcher lost events (overflow)" });
+        assert!(status_text(&stack).starts_with("! the file watcher lost events (overflow)\n"));
+        assert!(!status_text(&serde_json::json!({ "services": [] })).contains('!'));
     }
 
     #[test]
