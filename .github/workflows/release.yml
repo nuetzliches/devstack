@@ -231,6 +231,17 @@ jobs:
           WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
         run: |
           if ($env:HAS_TOKEN -ne 'true') { "::warning::no WINGET_TOKEN: not submitted to winget"; exit 0 }
+          # The pull request comes from the token owner's fork of winget-pkgs;
+          # wingetcreate fails on a fork far behind ("Sync your fork"), and
+          # winget-pkgs moves thousands of commits a day: bring it up first.
+          $env:GH_TOKEN = $env:WINGET_CREATE_GITHUB_TOKEN
+          $owner = gh api user --jq .login
+          gh api "repos/$owner/winget-pkgs" --silent 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh api -X POST "repos/$owner/winget-pkgs/merge-upstream" -f branch=master --jq .message
+            if ($LASTEXITCODE -ne 0) { "::warning::could not sync $owner/winget-pkgs with microsoft/winget-pkgs" }
+          }
+          $global:LASTEXITCODE = 0
           Invoke-WebRequest "https://github.com/microsoft/winget-create/releases/download/v$env:WINGETCREATE_VERSION/wingetcreate.exe" -OutFile wingetcreate.exe
           $hash = (Get-FileHash wingetcreate.exe -Algorithm SHA256).Hash
           if ($hash -ne $env:WINGETCREATE_SHA256) { throw "wingetcreate.exe: checksum $hash, expected $env:WINGETCREATE_SHA256" }
