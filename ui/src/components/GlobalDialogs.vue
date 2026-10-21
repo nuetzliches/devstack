@@ -33,6 +33,13 @@ async function copy(text: string) {
       <Icon :name="req?.danger ? 'alert' : 'info'" :size="20" />
     </template>
     <p class="confirm-text" data-testid="confirm-text">{{ req?.text }}</p>
+    <label v-if="req?.option" class="confirm-option" data-testid="confirm-option">
+      <input v-model="req.option.checked" type="checkbox" />
+      <span>
+        {{ req.option.label }}
+        <span v-if="req.option.hint" class="faint small">{{ req.option.hint }}</span>
+      </span>
+    </label>
     <template #footer>
       <button type="button" class="btn" data-testid="confirm-cancel" @click="req?.resolve(false)">Cancel</button>
       <button
@@ -68,5 +75,19 @@ async function copy(text: string) {
   font-size: 14px;
   line-height: 1.55;
   white-space: pre-wrap;
+}
+.confirm-option {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-top: 12px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.confirm-option input {
+  margin-top: 3px;
+}
+.confirm-option .faint {
+  display: block;
 }
 </style>

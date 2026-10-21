@@ -10,8 +10,12 @@ export type ConfirmRequest = {
   text: string;
   confirmLabel: string;
   danger: boolean;
+  /** A choice that goes with it; the dialog sets `checked`. */
+  option?: ConfirmOption;
   resolve(ok: boolean): void;
 };
+
+export type ConfirmOption = { label: string; hint?: string; checked: boolean };
 
 export type ProblemRequest = { title: string; message: string; hint?: string };
 
@@ -64,7 +68,7 @@ export const useUi = defineStore('ui', () => {
 
   // ---------------------------------------------------------- dialogs
   const confirmRequest = ref<ConfirmRequest | null>(null);
-  function confirm(opts: { title: string; text: string; confirmLabel?: string; danger?: boolean }): Promise<boolean> {
+  function confirm(opts: { title: string; text: string; confirmLabel?: string; danger?: boolean; option?: ConfirmOption }): Promise<boolean> {
     confirmRequest.value?.resolve(false);
     return new Promise((resolve) => {
       confirmRequest.value = {
@@ -72,6 +76,7 @@ export const useUi = defineStore('ui', () => {
         text: opts.text,
         confirmLabel: opts.confirmLabel ?? 'Continue',
         danger: opts.danger ?? false,
+        option: opts.option,
         resolve: (ok) => {
           confirmRequest.value = null;
           resolve(ok);

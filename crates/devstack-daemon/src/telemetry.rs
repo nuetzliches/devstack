@@ -47,6 +47,10 @@ static TUNNELS_OPEN: AtomicU64 = AtomicU64::new(0);
 static REPOSITORY: OnceLock<String> = OnceLock::new();
 type GaugeFn = Box<dyn Fn() -> Vec<Gauge> + Send + Sync>;
 static GAUGES: OnceLock<GaugeFn> = OnceLock::new();
+/// The process's name as a sender (`devstack-daemon`), once started.
+static SERVICE: OnceLock<&'static str> = OnceLock::new();
+/// The pools the last round sent to: where [`flush`] sends.
+static TARGETS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 /// Whether diagnostic lines are kept now: a pool takes them, or none was
 /// asked yet.
@@ -143,6 +147,7 @@ pub fn start(service: &'static str) {
         return;
     }
     STATE.store(UNDECIDED, Ordering::Relaxed);
+    let _ = SERVICE.set(service);
     let spawned = std::thread::Builder::new()
         .name("telemetry".into())
         .spawn(move || run(service));
@@ -234,27 +239,73 @@ fn run(service: &str) {
             }
             Round::Send => {}
         }
-        let lines = std::mem::take(&mut *BUFFER.lock().unwrap());
-        let tunnels = std::mem::take(&mut *TUNNELS.lock().unwrap());
-        let repo = repository();
-        let logs = (!lines.is_empty()).then(|| crate::diag::otlp_body(service, repo, &lines));
-        let mut gauges = GAUGES.get().map(|f| f()).unwrap_or_default();
-        gauges.extend(tunnel_gauges(repo, &tunnels));
-        let mut durations = durations(repo, &lines);
-        durations.extend(tunnel_durations(repo, &tunnels));
-        let metrics = metrics_body(service, &gauges, &durations);
-        for (dir, t) in &targets {
-            let sent = match &logs {
-                Some(l) => t.telemetry_send("logs", l),
-                None => Ok(()),
-            }
-            .and_then(|()| t.telemetry_send("metrics", &metrics));
+        *TARGETS.lock().unwrap() = targets.iter().map(|(dir, _)| dir.clone()).collect();
+        for dir in send(service, &targets, true) {
             // A coordinator that stopped collecting answers 404 (ADR-0037):
             // stop sending to it now, not when it is asked again.
-            if stopped_collecting(&sent) {
-                collects.insert(dir.clone(), (Instant::now(), false));
-            }
+            collects.insert(dir, (Instant::now(), false));
         }
+    }
+}
+
+/// Send what was kept since the last round to `targets`, with the gauges
+/// when `gauges`; the pools whose coordinator no longer collects.
+fn send(service: &str, targets: &[(PathBuf, Local)], gauges: bool) -> Vec<PathBuf> {
+    let lines = std::mem::take(&mut *BUFFER.lock().unwrap());
+    let tunnels = std::mem::take(&mut *TUNNELS.lock().unwrap());
+    let repo = repository();
+    let logs = (!lines.is_empty()).then(|| crate::diag::otlp_body(service, repo, &lines));
+    let mut measured = if gauges {
+        GAUGES.get().map(|f| f()).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    measured.extend(tunnel_gauges(repo, &tunnels));
+    let mut durations = durations(repo, &lines);
+    durations.extend(tunnel_durations(repo, &tunnels));
+    let metrics = metrics_body(service, &measured, &durations);
+    let mut stopped = Vec::new();
+    for (dir, t) in targets {
+        let sent = match &logs {
+            Some(l) => t.telemetry_send("logs", l),
+            None => Ok(()),
+        }
+        .and_then(|()| t.telemetry_send("metrics", &metrics));
+        if stopped_collecting(&sent) {
+            stopped.push(dir.clone());
+        }
+    }
+    stopped
+}
+
+/// The process is about to exit: send what was kept since the last round
+/// to the pools that took it, waiting `within` at most. Without it, a
+/// daemon's stop (and whatever went wrong while it stopped) never left.
+pub fn flush(within: Duration) {
+    if STATE.load(Ordering::Relaxed) != ON || BUFFER.lock().unwrap().is_empty() {
+        return;
+    }
+    let Some(service) = SERVICE.get().copied() else {
+        return;
+    };
+    let dirs = TARGETS.lock().unwrap().clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("telemetry-flush".into())
+        .spawn(move || {
+            let targets: Vec<(PathBuf, Local)> = dirs
+                .into_iter()
+                .map(|dir| {
+                    let local = Local::new(&dir);
+                    (dir, local)
+                })
+                .collect();
+            // The gauges read the process's state, which is being torn down.
+            send(service, &targets, false);
+            let _ = tx.send(());
+        });
+    if spawned.is_ok() {
+        let _ = rx.recv_timeout(within);
     }
 }
 
@@ -357,6 +408,9 @@ fn tunnel_gauges(repo: Option<&str>, tunnels: &[TunnelClosed]) -> Vec<Gauge> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Held by the tests that change the module's state and buffer.
+    static GLOBALS: Mutex<()> = Mutex::new(());
 
     #[test]
     fn a_command_run_is_counted_by_its_name_and_result() {
@@ -481,6 +535,7 @@ mod tests {
             m
         };
         let has = |n: &str| BUFFER.lock().unwrap().iter().any(|l| l["event"] == n);
+        let _g = GLOBALS.lock().unwrap_or_else(|e| e.into_inner());
         STATE.store(UNDECIDED, Ordering::Relaxed);
         record(&line("telemetry_test_early"));
         assert!(has("telemetry_test_early"));
@@ -494,6 +549,37 @@ mod tests {
             .lock()
             .unwrap()
             .retain(|l| l["event"] != "telemetry_test_early");
+    }
+
+    #[test]
+    fn an_exit_sends_what_was_kept_and_waits_no_longer_than_it_may() {
+        let _g = GLOBALS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut line = serde_json::Map::new();
+        line.insert("event".into(), Value::String("telemetry_test_exit".into()));
+        let kept = || {
+            BUFFER
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|l| l["event"] == "telemetry_test_exit")
+        };
+        // Not sending: kept as it is.
+        STATE.store(UNDECIDED, Ordering::Relaxed);
+        record(&line);
+        flush(Duration::from_secs(2));
+        assert!(kept());
+        // Sending: taken and sent to the pools of the last round (one
+        // without a membership here refuses at once).
+        let _ = SERVICE.set("devstack-daemon");
+        let pool = tempfile::tempdir().unwrap();
+        *TARGETS.lock().unwrap() = vec![pool.path().to_path_buf()];
+        STATE.store(ON, Ordering::Relaxed);
+        let t0 = Instant::now();
+        flush(Duration::from_secs(2));
+        assert!(!kept());
+        assert!(t0.elapsed() < Duration::from_secs(3));
+        STATE.store(IDLE, Ordering::Relaxed);
+        TARGETS.lock().unwrap().clear();
     }
 
     #[test]

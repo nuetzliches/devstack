@@ -214,13 +214,15 @@ async function stopStack(s: StackEntry) {
   closeMenu();
   // The shown stack's own stop knows its lanes and says what stays.
   if (isCurrent(s)) return void stack.stopStack();
+  const option = stack.stopContainers(false);
   const ok = await ui.confirm({
     title: `Stop ${s.name}`,
-    text: 'Its services stop. Infrastructure containers keep running.',
+    text: 'Its services stop. Lanes that still run keep its daemon and the containers they share.',
     confirmLabel: 'Stop stack',
     danger: true,
+    option,
   });
-  if (ok) await act({ label: `Stop ${s.name}`, path: paths.down(s.id, false), success: 'Stopping the stack…' });
+  if (ok) await act({ label: `Stop ${s.name}`, path: paths.down(s.id, option.checked), success: 'Stopping the stack…' });
 }
 async function removeStack(s: StackEntry) {
   closeMenu();
