@@ -706,10 +706,14 @@ pub fn run_lane(file: &Path, on: &str, lane: &str, keep: bool) -> Result<()> {
         node,
         repo: stack.stack.name.clone(),
         lane: lane.into(),
-        need: devstack_node::share::Amount {
+        need: devstack_node::share::Need {
             cpus: 0.5,
             memory: 1 << 30,
+            ..Default::default()
         },
+        need_from: Some("a default (`devstack node run-lane`)".into()),
+        floor: devstack_daemon::remote::floor_of(&stack.lane_need(None)),
+        profile: None,
         devstack: Some(devstack_node::version::Release::this()),
     })?;
     println!(

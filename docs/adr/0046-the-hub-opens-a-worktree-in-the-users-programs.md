@@ -1,6 +1,6 @@
 # ADR-0046: The hub opens a stack's worktree in the user's own programs, from a fixed list
 
-- **Status:** Accepted (2026-10-21), amended 2026-10-21 (the program opens in front on Windows)
+- **Status:** Accepted (2026-10-21), amended 2026-10-21 (the program opens in front on Windows; GitHub Desktop)
 - **Date:** 2026-10-21
 - **Deciders:** project owner
 - **Related:** [ADR-0011](0011-platform-windows-native-first.md), [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0040](0040-a-shared-lane-can-be-watched-like-ones-own.md)
@@ -40,6 +40,7 @@ Windows Terminal is the `wt.exe` app alias on `PATH`.
    | `powershell` | PowerShell | always (Windows); `pwsh` before `powershell` | a new console in the folder |
    | `terminal` | Terminal (Linux) | `$TERMINAL`, `x-terminal-emulator`, then common ones | the terminal in the folder |
    | `vscode`, `vscode-insiders`, `cursor`, `windsurf`, `zed` | the editor | its scheme is registered | `<scheme>://file/<path>` |
+   | `github-desktop` | GitHub Desktop (Windows) | `%LOCALAPPDATA%\GitHubDesktop\GitHubDesktop.exe` | `GitHubDesktop.exe --cli-open=<path>` (added 2026-10-21, see below) |
    | `claude` | Claude (desktop, Code) | `claude` is registered | `claude://code/new?folder=<path>` |
    | `claude-cli` | Claude Code (terminal) | `claude-cli` is registered | `claude-cli://open?cwd=<path>` |
    | `orca` | Orca | `orca` on `PATH` or in its install folder | `orca file open <stack file> --worktree path:<path> --focus` (the repository added to Orca first, if Orca does not know it) |
@@ -77,6 +78,15 @@ Windows Terminal is the `wt.exe` app alias on `PATH`.
   platform. Orca has no scheme, so it is the one exception.
 - **The file manager by `explorer.exe <path>`.** It exits with 1 when it
   worked; the shell's `open` verb says what happened.
+
+*Amended 2026-10-21: GitHub Desktop.* The commits, branches and pushes of
+a tree are a Git client's, not devstack's; the menu offers the one most
+installed on Windows, in a group of its own (`kind: "git"`, between the
+editors and the agents). It registers `x-github-client`, but that scheme's
+only action for a repository (`openRepo/<url>`) clones from a remote. A
+folder is opened by the program itself with `--cli-open=<path>`, as its own
+`github` command does, through the launcher in its install folder, which
+starts the version installed last. GitHub publishes no Linux build.
 
 ## Consequences
 

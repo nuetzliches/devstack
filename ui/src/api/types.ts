@@ -449,8 +449,18 @@ export type SharedLane = {
   owner_devstack?: PoolRelease;
 };
 
-/** Where the coordinator would start a lane, best first (ADR-0026 point 3), `GET /hub/pool/placement`. */
-export type Placement = { node: string; name: string; eligible: boolean; why: string; cpus: number; memory: number };
+/** Where the coordinator would start a lane, best first (ADR-0026 point 3), `GET /hub/pool/placement`.
+ * `disk`: what the lane needs there beyond what is there already, `disk_room`: what the node has for lanes (ADR-0049). */
+export type Placement = {
+  node: string;
+  name: string;
+  eligible: boolean;
+  why: string;
+  cpus: number;
+  memory: number;
+  disk?: number;
+  disk_room?: number;
+};
 
 /** A node's or the pool's capacity at one moment (ADR-0036), `GET /hub/pool/history`. */
 export type CapacityPoint = {
@@ -469,7 +479,7 @@ export type CapacityPoint = {
 };
 
 /** A program this machine can open a stack's folder with (`GET /hub/openers`, ADR-0046). */
-export type Opener = { id: string; label: string; kind: 'files' | 'terminal' | 'editor' | 'agent' };
+export type Opener = { id: string; label: string; kind: 'files' | 'terminal' | 'editor' | 'git' | 'agent' };
 
 /** A kind of desktop notification and whether it is on (ADR-0045). */
 export type NotifyKind = { kind: string; label: string; on: boolean; default: boolean };

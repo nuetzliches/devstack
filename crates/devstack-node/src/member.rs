@@ -442,12 +442,14 @@ impl Local {
         self.get("/v1/me")
     }
 
-    /// Where a lane of this machine's would go in the pool, best first.
+    /// Where a lane of this machine's would go in the pool, best first:
+    /// with `profile`, by what its runs took (ADR-0049).
     pub fn placement(
         &self,
         repo: &str,
         lane: &str,
-        need: crate::share::Amount,
+        need: crate::share::Need,
+        profile: Option<&str>,
     ) -> Result<Vec<crate::coordinator::Placement>> {
         let enc = |s: &str| {
             s.bytes()
@@ -459,12 +461,14 @@ impl Local {
                 })
                 .collect::<String>()
         };
+        let profile = profile.map_or(String::new(), |p| format!("&profile={}", enc(p)));
         self.get(&format!(
-            "/v1/placement?repo={}&lane={}&cpus={}&memory={}",
+            "/v1/placement?repo={}&lane={}&cpus={}&memory={}&disk={}{profile}",
             enc(repo),
             enc(lane),
             need.cpus,
-            need.memory
+            need.memory,
+            need.disk_lane
         ))
     }
 

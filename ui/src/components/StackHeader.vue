@@ -103,7 +103,7 @@ const pathTrigger = ref<HTMLButtonElement | null>(null);
 const { open: pathOpen, close: pathClose } = usePopover(pathRoot, pathTrigger);
 const canOpen = computed(() => !hubAway.value && !stack.sharedLane && !!stack.id);
 const openers = computed(() => (canOpen.value ? (hub.openers ?? []) : []));
-const openerIcon = { files: 'folder', terminal: 'terminal', editor: 'file', agent: 'zap' } as const;
+const openerIcon = { files: 'folder', terminal: 'terminal', editor: 'file', git: 'gitBranch', agent: 'zap' } as const;
 function togglePath() {
   pathOpen.value = !pathOpen.value;
   if (pathOpen.value && canOpen.value) void hub.loadOpeners();
