@@ -9,6 +9,15 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-21
+
+The dashboard makes a lane from a branch, and the main working tree's
+checkout is never changed (ADR-0047); containers can serve the main ports,
+so a lane of a stack of containers can take them over (ADR-0048); a lane's
+need is measured where it ran, disk included (ADR-0049). A tree opens in
+GitHub Desktop, and programs the dashboard opens come to the front on
+Windows; a shared lane's links open its services.
+
 ### Added
 
 - **A lane from a branch, in the dashboard** (ADR-0047): the branch in the
@@ -53,10 +62,11 @@ and listed with their assets on the
 
 ### Fixed
 
-- **Serving the main ports refuses a stack of Compose containers only**
-  (#184): it answered that the lane served them and moved nothing, as a
-  container's published port is Docker's, not devstack's. It now says so
-  (`409`), in the dashboard too.
+- **Serving the main ports refuses a stack with nothing to move** (#184): a
+  stack of Compose containers only answered that the lane served the main
+  ports and moved nothing, as a container's published port is Docker's
+  unless `main_ports` names it. It now says so (`409`), in the dashboard
+  too.
 - A link to a service or container of a lane shared with you (its port, in
   the list and on its page) opens it: a click opens the forward to it on
   your machine, as **Open** in the pool area does, and keeps the link's
@@ -1060,7 +1070,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/nuetzliches/devstack/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/nuetzliches/devstack/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/nuetzliches/devstack/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/nuetzliches/devstack/compare/v0.14.0...v0.14.1
