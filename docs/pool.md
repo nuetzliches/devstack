@@ -69,8 +69,8 @@ A member that only asks for lanes needs nothing else. The **share switch**
 half of what is free, never more than the caps you set; off by default.
 
 Lanes of other members on your machine always show: a banner below the
-dashboard's top bar (it can be hidden until a lane comes or goes), the share
-tile in the sidebar, and **On this machine** in the pool area, with whose lane
+dashboard's top bar (it can be hidden until a lane comes or goes), a tile in
+the sidebar, and **On this machine** in the pool area, with whose lane
 it is, its repository, since when and what it reserved. A lane that starts
 running here also notifies the desktop (`guest_lane`,
 [ADR-0045](adr/0045-the-hub-notifies-the-desktop.md)). The hub reads them from

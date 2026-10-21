@@ -41,8 +41,8 @@ and listed with their assets on the
   top bar or with `devstack hub notify [on|off <kind>…|test]`;
   `DEVSTACK_NO_NOTIFY` switches them off.
 - **Lanes of other members on this machine are shown**: a banner below the
-  dashboard's top bar (hidden until a lane comes or goes), the share tile in
-  the sidebar, and *On this machine* in the pool area (whose, repository,
+  dashboard's top bar (hidden until a lane comes or goes), a tile in the
+  sidebar, and *On this machine* in the pool area (whose, repository,
   since when, what it reserved); a lane that starts running here notifies
   (`guest_lane`, on by default). The hub reads them from the pool's leases
   every 15 s and sends them on `/hub/events` (`guests`).

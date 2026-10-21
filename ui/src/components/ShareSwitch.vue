@@ -6,15 +6,9 @@
 import { computed, ref, watch } from 'vue';
 import { bytes } from '@/lib/format';
 import { usePool } from '@/stores/pool';
-import { useHub } from '@/stores/hub';
-import { guestLabel, guestsReserved } from '@/lib/guests';
 
 const props = defineProps<{ compact?: boolean }>();
 const pool = usePool();
-const hub = useHub();
-/** Lanes of other members on this machine, a few by name. */
-const guests = computed(() => hub.guests);
-const guestsShown = computed(() => guests.value.slice(0, 3));
 const s = computed(() => pool.share);
 const on = computed(() => !!s.value?.settings.enabled);
 const busy = ref(false);
@@ -68,7 +62,7 @@ const reported = computed(() => {
 </script>
 
 <template>
-  <div v-if="s && (s.member || !props.compact)" class="share" :class="{ compact: props.compact, on, hosting: props.compact && guests.length }" data-testid="share">
+  <div v-if="s && (s.member || !props.compact)" class="share" :class="{ compact: props.compact, on }" data-testid="share">
     <div class="row">
       <button
         type="button"
@@ -88,14 +82,6 @@ const reported = computed(() => {
         <span v-if="on" class="faint small tabular" data-testid="share-offer">{{ offerText }}</span>
       </span>
     </div>
-    <RouterLink v-if="props.compact && guests.length" :to="{ name: 'pool' }" class="guests" title="Lanes of other members on this machine" data-testid="share-guests">
-      <strong>{{ guests.length === 1 ? '1 guest lane' : `${guests.length} guest lanes` }}</strong>
-      <span class="small tabular">{{ guestsReserved(guests) }} reserved</span>
-      <span v-for="g in guestsShown" :key="g.lease" class="small truncate">
-        {{ guestLabel(g) }}<template v-if="g.state !== 'running'"> (starting)</template>
-      </span>
-      <span v-if="guests.length > guestsShown.length" class="small">and {{ guests.length - guestsShown.length }} more</span>
-    </RouterLink>
     <template v-if="!props.compact">
       <p class="muted small">
         With sharing on, the pool may run other members' lanes on this machine: half of the memory and CPU free right now, recomputed every 15 s,
@@ -136,30 +122,6 @@ const reported = computed(() => {
 }
 .share.compact.on {
   background: color-mix(in srgb, var(--ok) 14%, transparent);
-}
-.share.compact.hosting {
-  background: var(--info-soft);
-}
-.guests {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid color-mix(in srgb, var(--info) 25%, transparent);
-  color: var(--info-text);
-  font-size: 12px;
-  text-decoration: none;
-  min-width: 0;
-}
-.guests:hover {
-  text-decoration: none;
-  opacity: 0.85;
-}
-.truncate {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .row {
   display: flex;
