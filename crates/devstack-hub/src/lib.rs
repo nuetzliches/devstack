@@ -2002,7 +2002,13 @@ async fn stack_down(
         // from before this does not know `unless_lanes` and exits.
         let shutdown = || daemon_request(port, &token, Method::POST, "/v1/shutdown");
         let exits = if q.infra {
-            let path = "/v1/down?infra=true";
+            // With `all`, the lanes stop first, their containers too, so the
+            // main tree's go as well.
+            let path = if q.all {
+                "/v1/down?infra=true&all=true"
+            } else {
+                "/v1/down?infra=true"
+            };
             let kept = daemon_request(port, &token, Method::POST, path).await == Ok(200);
             (q.all || !kept) && shutdown().await.is_ok()
         } else {

@@ -233,14 +233,28 @@ async fn up(State(s): State<AppState>) -> Response {
 struct DownQuery {
     #[serde(default)]
     infra: bool,
+    /// The lanes first (`down --all`): each stops with its own containers
+    /// (a lane on the main ports gives them back first), so `infra` then
+    /// applies to the main tree's too.
+    #[serde(default)]
+    all: bool,
 }
 
 /// `204` once every service (and with `infra` every Compose group) stopped;
 /// `409` naming what did not. In the main tree, lanes that still run keep the
 /// infrastructure their `shared` services use (ADR-0030), and the daemon they
 /// live in (ADR-0024): then `200` with `{"lanes": [...]}`, and `infra` is not
-/// done.
+/// done. With `all` the lanes stop first (`Lanes::stop_all`), so it is.
 async fn down(State(s): State<AppState>, Query(q): Query<DownQuery>) -> Response {
+    let mut lanes_failed = Vec::new();
+    if q.all
+        && let Some(l) = s.lanes.clone()
+    {
+        match tokio::task::spawn_blocking(move || l.stop_all()).await {
+            Ok(f) => lanes_failed = f,
+            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        }
+    }
     let lanes = s.lanes.as_ref().map(|l| l.active()).unwrap_or_default();
     let infra = q.infra && lanes.is_empty();
     let sup = s.sup.clone();
@@ -249,7 +263,7 @@ async fn down(State(s): State<AppState>, Query(q): Query<DownQuery>) -> Response
     if let Some(l) = &s.lanes {
         l.forget_failed(None);
     }
-    match result {
+    match result.map(|f| [lanes_failed, f].concat()) {
         Ok(failed) if !failed.is_empty() => err(
             StatusCode::CONFLICT,
             format!(

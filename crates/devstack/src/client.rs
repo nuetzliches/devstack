@@ -1920,7 +1920,13 @@ pub fn down(stack_file: &Path, infra: bool, all: bool) -> Result<()> {
         println!("lane `{lane}` stopped");
         return Ok(());
     }
-    let (status, body) = c.post(&format!("/v1/down?infra={infra}"), None)?;
+    // `--all --infra`: the lanes stop first, their containers too, so the
+    // main tree's go as well (a daemon before 0.17.1 ignores it). Without
+    // `--infra` every container stays, the lanes' too.
+    let (status, body) = c.post(
+        &format!("/v1/down?infra={infra}&all={}", all && infra),
+        None,
+    )?;
     if status >= 400 {
         bail!("{}", error_text(&body));
     }

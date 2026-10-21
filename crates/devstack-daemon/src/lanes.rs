@@ -1899,6 +1899,24 @@ impl Lanes {
         names.into_iter().collect()
     }
 
+    /// Stop every lane (`down --all`): the one on the main ports gives them
+    /// back first, then each stops as [`Self::stop`] does, its containers
+    /// too, a lane on a node released. What did not stop, said.
+    pub fn stop_all(&self) -> Vec<String> {
+        let mut failed = Vec::new();
+        if self.main.served_by().is_some()
+            && let Err(e) = self.take_main("main")
+        {
+            failed.push(format!("the main ports: {e}"));
+        }
+        for name in self.active() {
+            if let Err(e) = self.stop(&name) {
+                failed.push(format!("lane `{name}`: {e}"));
+            }
+        }
+        failed
+    }
+
     /// Stop every lane's services (the daemon is stopping).
     pub fn down_all(&self) {
         self.closing
