@@ -219,14 +219,15 @@ impl Supervisor {
 
 /// What `promote --lane` moves in the main tree: the fixed ports of its
 /// services (proxied, or forwarded byte for byte) and their workers
-/// (ADR-0008). A Compose container's published port is Docker's, not
-/// devstack's: a stack of containers only has nothing to move (#184).
+/// (ADR-0008), and the containers' ports devstack holds (`main_ports`,
+/// ADR-0048). Any other container's published port is Docker's: a stack of
+/// such containers only has nothing to move (#184).
 pub(crate) fn moves_main_slot(stack: &devstack_config::Stack) -> bool {
     stack.services.values().any(|s| {
         s.lanes
             && super::on_this_platform(s)
             && ((s.port.is_some() && s.kind != Kind::Job) || s.workers.is_some())
-    })
+    }) || stack.compose.values().any(|g| !g.main_ports.is_empty())
 }
 
 #[cfg(test)]
@@ -253,6 +254,25 @@ name = \"s\"
 run = \"x\"
 port = 9001
 lanes = false
+"
+        )));
+    }
+
+    #[test]
+    fn containers_named_in_main_ports_move() {
+        assert!(moves_main_slot(&stack(
+            "[compose.app]
+project = \"p\"
+files = [\"c.yml\"]
+services = [\"web\"]
+main_ports = [\"web\"]
+"
+        )));
+        assert!(!moves_main_slot(&stack(
+            "[compose.app]
+project = \"p\"
+files = [\"c.yml\"]
+services = [\"web\"]
 "
         )));
     }

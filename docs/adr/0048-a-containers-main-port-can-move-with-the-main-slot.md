@@ -126,6 +126,15 @@ Where it will live:
   loopback only).
 - `docs/dashboard-api.md` (`InfraView`: fixed and instance port).
 
+*Paths as built, noted 2026-10-21.* As named; the main tree's overlay is
+`.devstack/compose/<group>.main.yml`, its fronts bind once `compose up` let
+the fixed ports go (`Supervisor::hold_ports`), and `sync_held` points them
+after every refresh. The view's `ContainerView.held` (fixed and upstream
+port) beside `ports`, which names the fixed port. A lane's shared ports and
+its range are counted from the fixed ports (`published_fixed`); the main
+tree's own services keep reaching the main tree's container. The UDP note
+is an infra event at the start, not a word from `promote --lane`.
+
 ## What this ADR does not say
 
 - Nothing about `[services.*]`: their main ports work as before.
