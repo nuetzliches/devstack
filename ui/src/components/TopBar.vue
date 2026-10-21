@@ -171,9 +171,12 @@ const mismatch = computed(() => {
   background: color-mix(in srgb, var(--bg-elev) 88%, transparent);
   backdrop-filter: saturate(1.4) blur(10px);
   border-bottom: 1px solid var(--border);
+  /* The border counts: the sticky parts below it are `100vh - --topbar-h`
+     tall, and one pixel more here made the page scroll by one. */
+  height: var(--topbar-h);
 }
 .topbar-inner {
-  height: var(--topbar-h);
+  height: 100%;
   display: flex;
   align-items: center;
   gap: 10px;
