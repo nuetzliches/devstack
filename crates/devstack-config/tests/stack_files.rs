@@ -803,3 +803,19 @@ gpus = {{ memory = "16G" }}
     .to_string();
     assert!(err.contains("invalid size"), "{err}");
 }
+
+#[test]
+fn main_ports_name_started_services_a_lane_runs_itself() {
+    let group = |extra: &str| {
+        format!(
+            "{MINIMAL}\n[compose.ui]\nproject = \"ui-dev\"\nfiles = [\"c.yml\"]\nservices = [\"web\", \"mail\"]\nshared = [\"mail\"]\n{extra}"
+        )
+    };
+    from_str(&group("main_ports = [\"web\"]\n"), Path::new("t")).unwrap();
+    let all = invalid(&group("main_ports = [\"nope\", \"mail\"]\n")).join("\n");
+    assert!(
+        all.contains("`nope` is not in this group's `services`"),
+        "{all}"
+    );
+    assert!(all.contains("`mail` is `shared`"), "{all}");
+}

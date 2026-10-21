@@ -384,6 +384,22 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                 );
             }
         }
+        for svc in &group.main_ports {
+            if !group.services.contains(svc) {
+                c.err(
+                    format!("{p}.main_ports"),
+                    format!("`{svc}` is not in this group's `services`"),
+                );
+            } else if group.shared.contains(svc) {
+                // A lane has none of its own: there is nothing to move to.
+                c.err(
+                    format!("{p}.main_ports"),
+                    format!(
+                        "`{svc}` is `shared`: lanes use the main tree's, so its ports never move"
+                    ),
+                );
+            }
+        }
         for (svc, globs) in &group.restart_on {
             if !group.services.contains(svc) {
                 c.err(

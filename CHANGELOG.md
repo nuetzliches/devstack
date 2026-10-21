@@ -24,6 +24,13 @@ and listed with their assets on the
   before.
 - **Serve main ports** is not offered for a stack with nothing on main
   ports (#184): `StackView` says `no_main_ports`.
+- **Containers can serve the main ports** (ADR-0048, #184):
+  `[compose.<group>] main_ports = ["web"]` names containers whose published
+  TCP ports devstack holds in the main tree. The main tree's container moves
+  to a loopback port Docker assigns, devstack listens on the fixed port (on
+  the Compose file's address) and forwards it there, and `promote --lane`
+  points it at the lane's container. A stack of containers only can serve
+  its main ports from a lane now. UDP ports stay Docker's (#192).
 - **A lane's need is measured where it ran, disk included** (ADR-0049).
   A node measures each lane it runs (the peak of its memory, of its CPU
   over a minute, of its slot and of its images) and the coordinator keeps

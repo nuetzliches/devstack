@@ -198,6 +198,8 @@ export type ContainerView = {
   urls?: string[];
   /** The group starts it (in its `services`); false: another container of the project, which can only be stopped. Older daemons omit it. */
   managed?: boolean;
+  /** Its fixed ports devstack holds (`main_ports`, ADR-0048): `upstream` the instance port, or the lane's while a lane serves the main ports. */
+  held?: { port: number; upstream: number | null; active: number; served: number }[];
 };
 
 export type InfraView = { group: string; project: string; containers: ContainerView[]; error: string | null };

@@ -182,6 +182,13 @@ pub struct Supervisor {
     /// Main lane only: fronted dev servers whose fixed port forwards to a
     /// lane now (`promote --lane`).
     fronts_to_lane: Mutex<BTreeSet<String>>,
+    /// Main lane only: the fixed ports of `main_ports` containers devstack
+    /// holds (ADR-0048), by (group, service, container port); bound once
+    /// their container was moved off them, kept for the daemon's life.
+    held_ports: Mutex<BTreeMap<(String, String, u16), infra::HeldFront>>,
+    /// Main lane only: the offset of the lane the held ports forward to
+    /// (`promote --lane`); `None`: the main tree's containers.
+    held_to_lane: Mutex<Option<u16>>,
     /// Fronted dev servers being restarted: their front holds new
     /// connections across the stop instead of refusing them (ADR-0043).
     restarting: Mutex<BTreeSet<String>>,
@@ -463,6 +470,8 @@ impl Supervisor {
             forwards: Mutex::new(BTreeMap::new()),
             fronts: Mutex::new(BTreeMap::new()),
             fronts_to_lane: Mutex::new(BTreeSet::new()),
+            held_ports: Mutex::new(BTreeMap::new()),
+            held_to_lane: Mutex::new(None),
             restarting: Mutex::new(BTreeSet::new()),
             lane_pins: Mutex::new(None),
             closed: std::sync::atomic::AtomicBool::new(false),
