@@ -34,6 +34,9 @@ and listed with their assets on the
   the lane runs (ADR-0033, noted 2026-10-21).
 - `devstack node run-lane` waits for the lane's services past their
   infrastructure, and stops on a Compose group that failed.
+- Dashboard: the overview's state filters are small badges above the list
+  instead of a row of tiles; the detail pane shows the lane's CPU, memory and
+  disk as the usage page does, with a link to it.
 
 ### Added
 

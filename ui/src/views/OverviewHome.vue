@@ -1,12 +1,14 @@
 <script setup lang="ts">
 // The detail pane of the overview when nothing is picked: what needs
 // attention (held or failed candidates, Compose errors, containers Docker
-// lost the port forward of), changes on their way, else a hint.
+// lost the port forward of), changes on their way, what the shown lane
+// costs, else a hint.
 import { computed, ref } from 'vue';
 import { useStack } from '@/stores/stack';
 import CandidatePanel from '@/components/CandidatePanel.vue';
 import BuildLogModal from '@/components/BuildLogModal.vue';
 import ErrorLine from '@/components/ErrorLine.vue';
+import LaneUsage from '@/components/LaneUsage.vue';
 import Icon from '@/components/icons/Icon.vue';
 
 const stack = useStack();
@@ -15,6 +17,8 @@ const repairing = ref(false);
 
 const attention = computed(() => stack.pending.filter((s) => s.candidate && (s.candidate.state === 'held' || s.candidate.state === 'failed')));
 const inFlight = computed(() => stack.pending.length - attention.value.length);
+/** The shown lane in total: its services, containers and builds. */
+const lane = computed(() => stack.usage?.lanes.find((l) => l.name === (stack.lane ?? 'main')) ?? stack.usage?.lanes[0] ?? null);
 const infraErrors = computed(() => stack.view?.infra.filter((g) => g.error) ?? []);
 /** Running containers this machine cannot reach (Docker Desktop lost the forward). */
 const unreachable = computed(() =>
@@ -58,6 +62,8 @@ async function repairAll() {
       </div>
     </section>
     <p v-if="inFlight" class="inflight muted"><span class="spinner" /> {{ inFlight }} change{{ inFlight === 1 ? '' : 's' }} on the way; the running instances keep serving until the new builds are healthy.</p>
+
+    <LaneUsage v-if="lane" class="stale-dim" :lane="lane" link />
 
     <div v-if="!attention.length && !infraErrors.length && !unreachable.length" class="card">
       <div class="empty">
