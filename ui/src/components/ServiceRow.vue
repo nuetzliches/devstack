@@ -190,6 +190,7 @@ function open(e: MouseEvent) {
   display: inline-flex;
   align-items: center;
   gap: 2px;
+  white-space: nowrap;
 }
 .port-link {
   color: inherit;

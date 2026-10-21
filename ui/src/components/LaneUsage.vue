@@ -149,6 +149,7 @@ function diskTotal(d: LaneDisk) {
 }
 .lv {
   margin-left: auto;
+  white-space: nowrap;
   color: var(--text-muted);
 }
 </style>

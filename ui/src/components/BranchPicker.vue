@@ -20,7 +20,8 @@ const now = useNow();
 
 const current = computed(() => stack.lanes.find((l) => l.name === stack.lane) ?? null);
 const branch = computed(() => (current.value ? current.value.branch : stack.view?.branch) ?? null);
-const tree = computed(() => (current.value ? laneLabel(current.value) : 'main working tree'));
+/** A lane is named by its branch (shown already): only what kind of tree it is. */
+const tree = computed(() => (current.value ? 'lane' : 'main working tree'));
 /** Someone else's lane, or no hub: the branch is shown, nothing more. */
 const canPick = computed(() => !stack.readOnly && hub.reachable && !!stack.id);
 const busy = computed(() => stack.busy.branches);
@@ -42,15 +43,26 @@ function toggle() {
   }
 }
 
-type Row = { b: BranchView; lane: LaneView | null };
+type Row = { i: number; b: BranchView; lane: LaneView | null };
 /** At most this many of a group are listed; the filter finds the others. */
 const SHOWN = 40;
+
+/**
+ * The main tree's branch, then the started lanes, then the other worktrees,
+ * then the branches without one; in the hub's order (newest first) within.
+ */
+function rank(r: Row): number {
+  if (r.b.main) return 0;
+  if (r.lane && r.lane.active !== false) return 1;
+  return r.b.worktree ? 2 : 3;
+}
 
 const rows = computed<Row[]>(() => {
   const q = filter.value.trim().toLowerCase();
   return (stack.branches?.branches ?? [])
     .filter((b) => !q || b.name.toLowerCase().includes(q))
-    .map((b) => ({ b, lane: b.worktree && !b.main ? (stack.lanes.find((l) => samePath(l.path, b.worktree!)) ?? null) : null }));
+    .map((b, i) => ({ i, b, lane: b.worktree && !b.main ? (stack.lanes.find((l) => samePath(l.path, b.worktree!)) ?? null) : null }))
+    .sort((x, y) => rank(x) - rank(y) || x.i - y.i);
 });
 const local = computed(() => rows.value.filter((r) => !r.b.remote));
 const remote = computed(() => rows.value.filter((r) => r.b.remote));
@@ -123,7 +135,7 @@ function create() {
       @click="toggle"
     >
       <Icon name="gitBranch" :size="13" />
-      <span class="branch">{{ branch ?? 'detached' }}</span>
+      <span class="branch">{{ branch ?? (current ? laneLabel(current) : 'detached') }}</span>
       <span class="muted">· {{ tree }}</span>
       <span v-if="current" class="muted">· ports +{{ current.port_offset }}</span>
       <Icon v-if="canPick" name="chevronDown" :size="13" class="muted" />
