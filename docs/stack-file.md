@@ -407,8 +407,10 @@ worktree has nothing of that name: your own `npm ci` there wins. Git has to
 ignore the link: write `node_modules` in `.gitignore`, not `node_modules/`,
 which on Linux and macOS ignores directories only (the daemon log says
 `prepare_not_linked` with why). `devstack lane stop` removes the links again;
-**stop the lane before `git worktree remove`**, which on Windows follows a
-junction and empties the copy's directory (the next start prepares it again).
+**stop the lane before `git worktree remove`**: on Windows, depending on the
+Git version, it follows the junction and empties the copy's directory (the
+next start prepares it again), or leaves the worktree behind with the junction
+in it.
 The main tree and lanes on a node make no links.
 
 ## `[lanes]`: other worktrees ([ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0030](adr/0030-each-lane-has-its-own-infrastructure.md); on other machines [ADR-0025](adr/0025-a-lane-can-run-on-another-node.md), [ADR-0028](adr/0028-lane-images.md), [ADR-0029](adr/0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0035](adr/0035-lanes-can-be-shared-with-the-pool.md), and [pool.md](pool.md))

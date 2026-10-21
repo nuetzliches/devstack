@@ -17,7 +17,7 @@ and listed with their assets on the
   pre-commit hook) find them without a second `npm ci`. Only where the
   worktree has nothing of that name; only when git ignores the link (write
   `node_modules`, not `node_modules/`); removed when the lane stops. Stop the
-  lane before `git worktree remove`: on Windows it follows a junction.
+  lane before `git worktree remove`, which on Windows trips over a junction.
 
 ### Fixed
 

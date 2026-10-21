@@ -1840,7 +1840,7 @@ fn a_worktree_runs_as_a_lane() {
     let tray_port = free_port();
     let mut toml = std::fs::read_to_string(s.file()).unwrap();
     toml.push_str(&format!(
-        "\n[services.web]\nkind = \"devserver\"\nrun = '\"{BIN}\" serve-static src/Site --port {{port}}'\nport = {web_port}\nprepare = {{ run = \"mkdir deps && echo x>>prepared.count\", link = [\"deps\"] }}\n"
+        "\n[services.web]\nkind = \"devserver\"\nrun = '\"{BIN}\" serve-static src/Site --port {{port}}'\nport = {web_port}\nprepare = {{ run = \"mkdir deps && echo x>>prepared.count\" }}\n"
     ));
     toml.push_str(&format!(
         "\n[services.tray]\nkind = \"tool\"\nlanes = false\nrun = '\"{BIN}\" serve-static src/Site --port {{port}}'\nport = {tray_port}\n"
@@ -2225,6 +2225,17 @@ fn a_worktree_runs_as_a_lane() {
         status.contains("lanes: 1 worktree(s), 0 started"),
         "{status}"
     );
+    // This lane links what `prepare` made (ADR-0044); the one of step 5 does
+    // not: its worktree is removed while it runs, which a link gets in the
+    // way of.
+    let file = extra.join("devstack.toml");
+    let toml = std::fs::read_to_string(&file).unwrap();
+    let toml = toml.replace(
+        "echo x>>prepared.count\" }",
+        "echo x>>prepared.count\", link = [\"deps\"] }",
+    );
+    assert!(toml.contains("link = [\"deps\"]"), "{toml}");
+    std::fs::write(&file, toml).unwrap();
     let out = s.cli(&["lane", "start", &extra_name], None); // `broken` fails, the rest runs
     let started = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(

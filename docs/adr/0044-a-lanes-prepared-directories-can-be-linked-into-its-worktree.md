@@ -65,12 +65,13 @@ which needs no privilege, a symbolic link elsewhere.
 
 ## Consequences
 
-- A `git worktree remove` *while the lane runs* follows the junction (on
-  Windows) and empties the copy's directory: the running dev server loses
-  it, and on Windows the removal can fail on files the dev server holds.
-  Point 4 repairs the copy at the next start. The opt-in `link` is what
-  makes this possible: without it the worktree holds nothing of the lane.
-  The docs say: `devstack lane stop` before removing the worktree.
+- A `git worktree remove` *while the lane runs* no longer works cleanly on
+  Windows. Git 2.43 follows the junction and empties the copy's directory
+  (the running dev server loses it; point 4 repairs the copy at the next
+  start). A newer Git for Windows (CI's runner) reported success and left
+  the worktree directory behind, the junction still in it. The opt-in `link`
+  is what makes this possible: without it the worktree holds nothing of the
+  lane. The docs say: `devstack lane stop` before removing the worktree.
 - A daemon that is killed leaves its links; the next start of the lane
   finds them (point 1) and its stop removes them.
 - On Linux and macOS a `node_modules/` rule does not ignore the link:
