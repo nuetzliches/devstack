@@ -30,7 +30,17 @@ struct Run {
     /// The finished rebuild last logged (its start): error lines that follow
     /// it update the view, not the log.
     logged: Option<u128>,
+    /// A failed rebuild whose error lines have not come yet (Angular prints
+    /// them after its marker on Windows): its start, when it last changed and
+    /// its diagnostic fields, logged [`HOLD`] after its last error line came,
+    /// or when the next rebuild starts.
+    held: Option<Held>,
 }
+
+type Held = (u128, u128, serde_json::Map<String, serde_json::Value>);
+
+/// How long a failed rebuild's diagnostic line waits for more error lines.
+const HOLD: u128 = 2_000;
 
 impl Supervisor {
     /// Follow every dev server's log for its rebuilds, as long as this
@@ -102,6 +112,7 @@ impl Supervisor {
                             tracker: Tracker::new(svc.rebuild.as_ref()),
                             live: false,
                             logged: None,
+                            held: None,
                         },
                     );
                     runs.get_mut(name).expect("inserted")
@@ -119,11 +130,18 @@ impl Supervisor {
                 if let Some(v) = tracker.feed(&line, now)
                     && was_live
                 {
+                    if run
+                        .held
+                        .as_ref()
+                        .is_some_and(|(since, _, _)| *since != v.since)
+                    {
+                        self.log_held(name, &mut run.held);
+                    }
                     let finished = v.state != "rebuilding" && run.logged != Some(v.since);
                     if finished {
                         run.logged = Some(v.since);
                     }
-                    let done = finished.then(|| {
+                    let mut done = finished.then(|| {
                         let mut extra = serde_json::Map::new();
                         if let Some(ms) = v.ms {
                             extra.insert("ms".into(), ms.into());
@@ -134,8 +152,26 @@ impl Supervisor {
                         );
                         extra
                     });
+                    if tracker.waits_for_errors() {
+                        // Its error lines follow: the log waits for them.
+                        if let Some(extra) = done.take() {
+                            run.held = Some((v.since, now, extra));
+                        }
+                    } else if let Some((since, at, _)) = run.held.as_mut()
+                        && *since == v.since
+                    {
+                        // One more of its error lines: the next may follow.
+                        *at = now;
+                    }
                     self.set_rebuild(name, Some(v), done);
                 }
+            }
+            if run
+                .held
+                .as_ref()
+                .is_some_and(|(_, at, _)| now_ms().saturating_sub(*at) >= HOLD)
+            {
+                self.log_held(name, &mut run.held);
             }
             if !was_live {
                 continue;
@@ -152,6 +188,27 @@ impl Supervisor {
                 self.set_rebuild(name, None, None);
             }
         }
+    }
+
+    /// A held failed rebuild to the diagnostic log, as the view has it now
+    /// (with what error lines came).
+    fn log_held(&self, name: &str, held: &mut Option<Held>) {
+        let Some((_, _, extra)) = held.take() else {
+            return;
+        };
+        let rebuild = self
+            .slots
+            .lock()
+            .unwrap()
+            .get(name)
+            .and_then(|s| s.view.rebuild.clone());
+        self.emit_with(
+            EventBody::DevserverRebuild {
+                service: name.into(),
+                rebuild,
+            },
+            Some(extra),
+        );
     }
 
     /// The service's rebuild on its view and to the dashboard; `extra` (the

@@ -1,6 +1,6 @@
 # ADR-0031: A coordinator places lanes and admits members; nodes admit leases; data goes directly
 
-- **Status:** Accepted (2026-10-16), amended 2026-10-16 (one binary: `devstack node`), amended 2026-10-19 (point 8: which devstack each party runs)
+- **Status:** Accepted (2026-10-16), amended 2026-10-16 (one binary: `devstack node`), amended 2026-10-19 (point 8: which devstack each party runs), amended 2026-10-21 (point 3: no share switch)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md) (points 1 and 3 replaced here), [ADR-0027](0027-trust-between-nodes.md) (points 1 and 2 replaced here), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md) (point 2 extended there: admins in the dashboard, nodes granted)
@@ -144,3 +144,10 @@ with a slot of this lane (its kept data, ADR-0038), then one with a slot of
 the repository (its images and builds), then free capacity for the need.
 Nodes report their slots and their free disk; the lease offer says `why`;
 `GET /v1/placement` gives the order to the dashboard.
+
+*Amended 2026-10-21.* Point 3's share switch is removed from the dashboard.
+It reported capacity but never started a node agent, so no lane ever ran on
+a machine that only switched it on (on Windows none can, #168). A machine
+shares by running a node agent an admin granted (ADR-0032); the hub reports
+the machine and offers nothing (`crates/devstack-hub/src/share.rs`). A
+switch that starts the agent is #171, and comes with its own ADR.

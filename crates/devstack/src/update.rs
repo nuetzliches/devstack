@@ -7,6 +7,9 @@
 //! shell environment: Windows PowerShell 5.1 started from PowerShell 7 finds
 //! the wrong modules and has no `Get-FileHash` (#12).
 //!
+//! A devstack winget installed is updated by winget (`winget_upgrade`), so
+//! its record of the version stays true.
+//!
 //! Running stacks keep their daemon (and its version) until they restart; the
 //! dashboard offers that ("Restart stack"), the CLI says it.
 
@@ -66,13 +69,17 @@ pub fn run(check_only: bool, version: Option<&str>) -> Result<()> {
         );
     }
     println!("installing devstack {target} ...");
-    // Where the installers put devstack, or the running copy if it lives
-    // elsewhere.
-    let into = crate::selfcmd::install_dir()
-        .map(|d| d.join(EXE))
-        .filter(|p| p.is_file())
-        .unwrap_or_else(|| exe.clone());
-    let installed = install(&target, &into)?;
+    let installed = if is_winget_install(&exe) {
+        winget_upgrade(&exe, version.map(|_| target.as_str()))?
+    } else {
+        // Where the installers put devstack, or the running copy if it lives
+        // elsewhere.
+        let into = crate::selfcmd::install_dir()
+            .map(|d| d.join(EXE))
+            .filter(|p| p.is_file())
+            .unwrap_or_else(|| exe.clone());
+        install(&target, &into)?
+    };
 
     // The hub runs the old binary: stop it, start the new one.
     let _ = crate::hubcmd::stop();
@@ -261,6 +268,83 @@ fn is_cargo_install(exe: &Path) -> bool {
         && parts.next().is_some_and(|c| c.as_os_str() == ".cargo")
 }
 
+/// The package winget installs devstack as (`packaging/winget/`).
+pub(crate) const WINGET_ID: &str = "nuetzliches.devstack";
+
+/// winget keeps a portable package in `...\WinGet\Packages\<id>_<source>\`
+/// and puts a link to it in `...\WinGet\Links\` (per user under
+/// `%LOCALAPPDATA%\Microsoft`, for the machine under `%ProgramFiles%`).
+/// Replacing that binary behind winget's back leaves winget with the old
+/// version on record.
+pub(crate) fn is_winget_install(exe: &Path) -> bool {
+    let path = exe
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    path.contains(r"\winget\packages\") || path.contains(r"\winget\links\")
+}
+
+/// Update a devstack winget installed, through winget, so winget keeps the
+/// version on record. winget cannot replace a binary that runs (the hub,
+/// every stack's daemon): `remove_all: Access is denied`, measured with
+/// winget 1.29. So the running file moves out of winget's directory first,
+/// as `replace` does for the installers' copy (a running executable can be
+/// moved on its volume, not overwritten), and back again when winget did
+/// not put a new one there. Returns the path of the new binary.
+fn winget_upgrade(exe: &Path, version: Option<&str>) -> Result<PathBuf> {
+    // The file itself, not winget's link to it.
+    let real = plain(std::fs::canonicalize(exe)?);
+    let aside_dir = devstack_daemon::token::token_path()
+        .parent()
+        .expect("token path has a parent")
+        .join("replaced");
+    std::fs::create_dir_all(&aside_dir)?;
+    for e in std::fs::read_dir(&aside_dir)?.flatten() {
+        let _ = std::fs::remove_file(e.path()); // still running: next time
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let aside = aside_dir.join(format!("devstack-{stamp}.exe"));
+    if let Err(e) = std::fs::rename(&real, &aside) {
+        bail!(
+            "cannot move the running {} out of winget's way ({e}); stop the hub (`devstack hub stop`) \
+             and every stack (`devstack down`), then run `winget upgrade {WINGET_ID}`",
+            real.display()
+        );
+    }
+    let mut cmd = std::process::Command::new("winget");
+    cmd.args(["upgrade", "--id", WINGET_ID, "--exact", "--silent"])
+        .args(["--accept-package-agreements", "--accept-source-agreements"])
+        .arg("--disable-interactivity");
+    if let Some(v) = version {
+        cmd.args(["--version", v]);
+    }
+    let ran = cmd.status();
+    if ran.as_ref().is_ok_and(|s| s.success()) && real.is_file() {
+        return Ok(real);
+    }
+    if !real.exists() {
+        let _ = std::fs::rename(&aside, &real);
+    }
+    match ran {
+        Err(e) => bail!("cannot run winget ({e}); devstack is unchanged"),
+        Ok(_) => bail!(
+            "winget did not upgrade devstack (see above); it is unchanged. A release reaches winget's \
+             catalogue a few days after GitHub: `winget upgrade {WINGET_ID}` later picks it up"
+        ),
+    }
+}
+
+/// `\\?\C:\...` (what `canonicalize` gives on Windows) as `C:\...`, which
+/// every program understands.
+fn plain(p: PathBuf) -> PathBuf {
+    match p.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(rest) if !rest.starts_with("UNC\\") => PathBuf::from(rest),
+        _ => p,
+    }
+}
+
 /// Write `binary` to `path` and make sure it is on disk before it is used.
 fn write_synced(path: &Path, binary: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
@@ -373,6 +457,30 @@ mod tests {
         };
         assert!(is_cargo_install(Path::new(home)));
         assert!(!is_cargo_install(Path::new("/home/u/.local/bin/devstack")));
+    }
+
+    #[test]
+    fn a_winget_install_is_recognised() {
+        for winget in [
+            r"C:\Users\u\AppData\Local\Microsoft\WinGet\Packages\nuetzliches.devstack_Microsoft.Winget.Source_8wekyb3d8bbwe\devstack.exe",
+            r"C:\Users\u\AppData\Local\Microsoft\WinGet\Links\devstack.exe",
+            r"C:\Program Files\WinGet\Packages\nuetzliches.devstack_Microsoft.Winget.Source_8wekyb3d8bbwe\devstack.exe",
+        ] {
+            assert!(is_winget_install(Path::new(winget)), "{winget}");
+        }
+        for not in [
+            r"C:\Users\u\AppData\Local\Programs\devstack\devstack.exe",
+            r"C:\src\winget-packages\devstack.exe",
+            "/home/u/.local/bin/devstack",
+        ] {
+            assert!(!is_winget_install(Path::new(not)), "{not}");
+        }
+        assert_eq!(
+            plain(PathBuf::from(r"\\?\C:\Users\u\devstack.exe")),
+            PathBuf::from(r"C:\Users\u\devstack.exe")
+        );
+        let unc = PathBuf::from(r"\\?\UNC\host\share\devstack.exe");
+        assert_eq!(plain(unc.clone()), unc);
     }
 
     #[test]

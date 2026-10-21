@@ -10,7 +10,6 @@ import { guestsReserved } from '@/lib/guests';
 import { usePool } from '@/stores/pool';
 import { sharedId } from '@/api';
 import Icon from '@/components/icons/Icon.vue';
-import ShareSwitch from '@/components/ShareSwitch.vue';
 import CapacityChart from '@/components/CapacityChart.vue';
 import type { PoolLease, PoolMember, PoolRelease } from '@/api/types';
 import { useUi } from '@/stores/ui';
@@ -351,14 +350,6 @@ function policyText(id: string) {
         They run in containers of this machine's Docker, as this node's policy allows. An admin's <em>Pause</em> on this node in the list below takes
         no new lanes; those running stay until their owners stop them.
       </p>
-    </section>
-
-    <section v-if="me?.state === 'approved' && !addingPool" class="card" data-testid="pool-share">
-      <header class="card-header">
-        <Icon name="power" :size="18" />
-        <h2>This machine shares</h2>
-      </header>
-      <div class="card-body"><ShareSwitch /></div>
     </section>
 
     <section v-if="!addingPool && me?.state === 'approved'" class="card" data-testid="pool-default-on">

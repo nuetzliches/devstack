@@ -6,7 +6,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, paths, Unreachable } from '@/api';
-import type { NodePolicy, PoolEntry, PoolNode, PoolOverview, PoolRole, ShareSettings, SharedLane, ShareStatus } from '@/api/types';
+import type { NodePolicy, PoolEntry, PoolNode, PoolOverview, PoolRole, SharedLane, ShareStatus } from '@/api/types';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
 import { webUrl } from '@/lib/format';
@@ -307,19 +307,6 @@ export const usePool = defineStore('pool', () => {
     return r.ok;
   }
 
-  /** Change the switch or the caps; the hub reports at once. */
-  async function setShare(next: ShareSettings) {
-    const r = await act<ShareStatus>({
-      label: next.enabled ? 'Share this machine' : 'Stop sharing this machine',
-      method: 'PUT',
-      path: at(paths.poolShare),
-      body: next as unknown as Record<string, unknown>,
-      success: false,
-    });
-    if (r.ok && r.body) share.value = r.body;
-    setTimeout(() => void load(), 1500);
-  }
-
   /** The nodes of every pool that can take a lane now, but this machine. */
   const targets = computed<LaneTarget[]>(() =>
     pools.value.flatMap((p) => {
@@ -389,7 +376,6 @@ export const usePool = defineStore('pool', () => {
     approve,
     remove,
     setRole,
-    setShare,
     setPaused,
     updateNode,
     cancelUpdate,

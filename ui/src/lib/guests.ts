@@ -1,5 +1,5 @@
 // Lanes of other members on this machine ("guest lanes"), as the banner, the
-// share tile and the pool area show them.
+// sidebar tile and the pool area show them.
 import type { Guest } from '@/api/types';
 import { bytes } from '@/lib/format';
 
