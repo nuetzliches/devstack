@@ -213,8 +213,13 @@ jobs:
         shell: pwsh
         run: |
           if (Get-Command winget -ErrorAction SilentlyContinue) {
-            winget validate --manifest $env:MANIFESTS --disable-interactivity
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            "winget $(winget --version)"
+            # An older winget on the runner warns about a newer schema in the
+            # header comment, and exits non-zero for that too: only a failed
+            # validation fails the job.
+            $out = winget validate --manifest $env:MANIFESTS --disable-interactivity 2>&1 | Out-String
+            $out
+            if ($LASTEXITCODE -ne 0 -and $out -notmatch 'succeeded with warnings') { exit 1 }
           } else {
             "::notice::no winget on this runner; wingetcreate checks the manifests when it submits them"
           }
