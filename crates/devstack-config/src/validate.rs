@@ -493,6 +493,19 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                 c.repo_path(&format!("{p}.prepare.cwd"), d);
             }
             c.globs(&format!("{p}.prepare.inputs"), &prep.inputs);
+            for l in &prep.link {
+                let at = format!("{p}.prepare.link");
+                c.literal(&at, l);
+                c.repo_path(&at, l);
+                if l.trim_matches(['/', '\\', '.']).is_empty() {
+                    c.err(
+                        &at,
+                        format!(
+                            "`{l}`: a directory below the repository, not the repository itself"
+                        ),
+                    );
+                }
+            }
         }
         if svc.kind == Kind::Job && (svc.port.is_some() || svc.health.is_some()) {
             c.err(

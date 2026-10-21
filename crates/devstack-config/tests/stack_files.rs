@@ -665,6 +665,39 @@ fn a_dev_server_with_a_port_of_its_own_is_fronted() {
 }
 
 #[test]
+fn prepare_links_are_directories_inside_the_repository() {
+    let ok = MINIMAL.replace(
+        "port = 5000",
+        "port = 5000
+prepare = { run = \"npm ci\", link = [\"web/node_modules\"] }",
+    );
+    let stack = from_str(&ok, Path::new("test.toml")).expect("loads");
+    let link = &stack.services["api"].prepare.as_ref().unwrap().link;
+    assert_eq!(link, &["web/node_modules"]);
+    for bad in [
+        "../node_modules",
+        "/abs",
+        "C:/x",
+        ".",
+        "{repo}/node_modules",
+    ] {
+        let issues = invalid(&MINIMAL.replace(
+            "port = 5000",
+            &format!(
+                "port = 5000
+prepare = {{ run = \"npm ci\", link = [\"{bad}\"] }}"
+            ),
+        ));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.contains("services.api.prepare.link")),
+            "{bad}: {issues:?}"
+        );
+    }
+}
+
+#[test]
 fn working_directories_and_the_output_stay_inside_the_repository() {
     let issues = invalid(&format!(
         "{MINIMAL}cwd = \"../outside\"\n[services.api.prepare]\nrun = \"npm ci\"\ncwd = \"/abs\"\n[services.api.hot_reload]\nrun = \"dotnet watch run\"\ncwd = \"C:/elsewhere\"\n"

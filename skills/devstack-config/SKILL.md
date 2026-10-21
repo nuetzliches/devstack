@@ -54,6 +54,10 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   per lane (a telemetry dashboard, a fake SMTP server) can stay shared:
   `[compose.<group>] shared = ["mailbox"]`. A dev server's `run` needs
   `{port}` to run in a lane.
+- **A lane's worktree has no `node_modules`**: the lane runs from a copy,
+  where `prepare` installs. When git hooks need it (`npx eslint` in a
+  pre-commit hook), `prepare.link = ["web/node_modules"]` links it into the
+  worktree; `.gitignore` then needs `node_modules` without a trailing slash.
 - **Lanes on other machines** (`devstack up --on <node>`) run in a Linux
   container: `[lanes] image` (a toolchain image) or `[lanes] dockerfile`. Files
   git ignores do not go there unless `[lanes] sync` names them (a dev

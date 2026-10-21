@@ -6,7 +6,7 @@ use devstack_build::Snapshot;
 use devstack_config::model::Service;
 use devstack_proc::Spec;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -58,7 +58,11 @@ impl Supervisor {
         }
         let key = h.finalize().to_hex().to_string();
         let mark = self.layout.lane("main").join("prepared").join(name);
-        if std::fs::read_to_string(&mark).is_ok_and(|k| k == key) {
+        // A linked directory that is gone (a `git worktree remove` followed
+        // the link into it, ADR-0044) is prepared again.
+        let linked_there =
+            !self.links_prepared() || p.link.iter().all(|l| snap.dir.join(l).is_dir());
+        if linked_there && std::fs::read_to_string(&mark).is_ok_and(|k| k == key) {
             return Ok(None);
         }
         Ok(Some(PrepareJob {
@@ -132,9 +136,99 @@ impl Supervisor {
             snap.sync().map_err(|e| e.to_string())?;
             self.prepare_job(name, svc, &snap)?
         };
-        match job {
-            Some(job) => self.run_prepare(name, job, cancel),
-            None => Ok(()),
+        if let Some(job) = job {
+            self.run_prepare(name, job, cancel)?;
+        }
+        self.link_prepared(name, svc);
+        Ok(())
+    }
+
+    /// Whether what `prepare` installs is linked into the worktree
+    /// (ADR-0044): in a lane on this machine. The main tree runs in place
+    /// with its own; a lane on a node has no worktree there.
+    fn links_prepared(&self) -> bool {
+        !self.lane.is_empty() && !crate::remote_lane()
+    }
+
+    /// After `prepare` of `svc`: each of its `link` paths the worktree does
+    /// not have, linked to the prepared directory in the copy (a junction on
+    /// Windows, which needs no privilege), so the worktree's git hooks find
+    /// it (ADR-0044). What the worktree has already, a developer's own
+    /// install or a link of before, stays as it is. A link git does not
+    /// ignore is taken away again: `git add -A` would commit it.
+    pub(super) fn link_prepared(&self, name: &str, svc: &Service) {
+        let Some(p) = &svc.prepare else {
+            return;
+        };
+        if !self.links_prepared() {
+            return;
+        }
+        let copy = self.run_root();
+        for rel in &p.link {
+            let (link, target) = (self.repo.join(rel), copy.join(rel));
+            if std::fs::symlink_metadata(&link).is_ok() {
+                continue;
+            }
+            let not_linked = |why: String| {
+                crate::diag::warn(
+                    "prepare_not_linked",
+                    serde_json::json!({ "lane": self.lane, "service": name, "path": rel, "why": why }),
+                );
+            };
+            if !target.is_dir() {
+                not_linked(format!(
+                    "`prepare` made no directory `{rel}` in the lane's copy"
+                ));
+                continue;
+            }
+            if !link.parent().is_some_and(Path::is_dir) {
+                not_linked("its parent directory is not in the worktree".into());
+                continue;
+            }
+            if let Err(e) = make_link(&target, &link) {
+                not_linked(e.to_string());
+                continue;
+            }
+            if !git_ignores(&self.repo, rel) {
+                let _ = remove_link(&link);
+                not_linked(format!(
+                    "git does not ignore `{rel}` as a link: ignore it without a trailing slash (`node_modules`, not `node_modules/`)"
+                ));
+                continue;
+            }
+            crate::diag::info(
+                "prepare_linked",
+                serde_json::json!({ "lane": self.lane, "service": name, "path": rel }),
+            );
+        }
+    }
+
+    /// The links [`Self::link_prepared`] made, removed: a lane that stops
+    /// leaves no link in its worktree for `git worktree remove` to follow
+    /// into its copy (ADR-0044). Only links to the copy; anything else at
+    /// those paths is the developer's.
+    pub(crate) fn unlink_prepared(&self) {
+        if !self.links_prepared() {
+            return;
+        }
+        let copy = self.run_root();
+        for rel in self
+            .stack
+            .services
+            .values()
+            .filter_map(|s| s.prepare.as_ref())
+            .flat_map(|p| &p.link)
+        {
+            let link = self.repo.join(rel);
+            if !links_to(&link, &copy.join(rel)) {
+                continue;
+            }
+            let r = remove_link(&link);
+            crate::diag::info(
+                "prepare_unlinked",
+                serde_json::json!({ "lane": self.lane, "path": rel,
+                    "error": r.err().map(|e| e.to_string()) }),
+            );
         }
     }
 
@@ -209,4 +303,89 @@ pub(super) struct PrepareJob {
     mark: PathBuf,
     cwd: PathBuf,
     run: String,
+}
+
+/// A directory link at `link` to `target`: a junction on Windows (no
+/// privilege needed, unlike a symbolic link), a symbolic link elsewhere.
+fn make_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    return junction::create(target, link);
+    #[cfg(not(windows))]
+    return std::os::unix::fs::symlink(target, link);
+}
+
+/// Removes the link itself, never what it points to.
+fn remove_link(link: &Path) -> std::io::Result<()> {
+    // A junction is a directory to Windows; removing it leaves its target.
+    if cfg!(windows) {
+        std::fs::remove_dir(link)
+    } else {
+        std::fs::remove_file(link)
+    }
+}
+
+/// Is `link` a link (a junction on Windows) to `target`?
+fn links_to(link: &Path, target: &Path) -> bool {
+    let is_link = std::fs::symlink_metadata(link).is_ok_and(|m| m.file_type().is_symlink());
+    let norm = |p: &Path| {
+        let s = p.to_string_lossy().replace('\\', "/");
+        let s = s
+            .strip_prefix("//?/")
+            .or_else(|| s.strip_prefix("/??/"))
+            .unwrap_or(&s)
+            .trim_end_matches('/')
+            .to_string();
+        if cfg!(windows) { s.to_lowercase() } else { s }
+    };
+    is_link && std::fs::read_link(link).is_ok_and(|t| norm(&t) == norm(target))
+}
+
+/// Does git ignore `rel` in `repo` as it is now? Unknown counts as no.
+fn git_ignores(repo: &Path, rel: &str) -> bool {
+    std::process::Command::new("git")
+        .args(["ls-files", "-o", "--exclude-standard", "-z", "--", rel])
+        .current_dir(repo)
+        .output()
+        .is_ok_and(|o| o.status.success() && o.stdout.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_link_points_at_its_target_and_goes_without_it() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("copy").join("node_modules");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("x.js"), "1").unwrap();
+        let link = d.path().join("node_modules");
+        make_link(&target, &link).unwrap();
+        assert!(link.join("x.js").is_file());
+        assert!(links_to(&link, &target));
+        assert!(!links_to(&link, &d.path().join("elsewhere")));
+        assert!(!links_to(&target, &target), "a directory is no link");
+        remove_link(&link).unwrap();
+        assert!(std::fs::symlink_metadata(&link).is_err());
+        assert!(target.join("x.js").is_file(), "the target stays");
+    }
+
+    #[test]
+    fn a_link_git_does_not_ignore_is_seen() {
+        let d = tempfile::tempdir().unwrap();
+        let (repo, target) = (d.path().join("repo"), d.path().join("copy"));
+        std::fs::create_dir_all(repo.join("web")).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("x.js"), "1").unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(init.success());
+        make_link(&target, &repo.join("web/node_modules")).unwrap();
+        assert!(!git_ignores(&repo, "web/node_modules"));
+        std::fs::write(repo.join(".gitignore"), "node_modules\n").unwrap();
+        assert!(git_ignores(&repo, "web/node_modules"));
+    }
 }

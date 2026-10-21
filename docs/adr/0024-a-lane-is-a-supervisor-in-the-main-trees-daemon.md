@@ -3,7 +3,7 @@
 - **Status:** Accepted, amended 2026-10-15 twice (the lanes are the worktrees; git owns them, lanes run from a copy); point 4 replaced by [ADR-0030](0030-each-lane-has-its-own-infrastructure.md) (2026-10-16)
 - **Date:** 2026-10-15
 - **Deciders:** project owner
-- **Related:** plan §3.5, [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0010](0010-promotion-mechanism.md), [ADR-0012](0012-shared-infrastructure-between-lanes.md), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md) to [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) (remote lanes, accepted 2026-10-16)
+- **Related:** plan §3.5, [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0010](0010-promotion-mechanism.md), [ADR-0012](0012-shared-infrastructure-between-lanes.md), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md) to [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) (remote lanes, accepted 2026-10-16); [ADR-0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) (prepared directories linked into the worktree, proposed)
 
 ## Context
 

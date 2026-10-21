@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **`prepare.link`** (ADR-0044, #159): directories `prepare` installs in a
+  lane's copy (`link = ["web/node_modules"]`) are linked into the lane's
+  worktree, a junction on Windows, so git hooks there (`npx eslint` in a
+  pre-commit hook) find them without a second `npm ci`. Only where the
+  worktree has nothing of that name; only when git ignores the link (write
+  `node_modules`, not `node_modules/`); removed when the lane stops. Stop the
+  lane before `git worktree remove`: on Windows it follows a junction.
+
 ### Fixed
 
 - Docs: a viewer of a shared lane reads its containers' logs, as it has

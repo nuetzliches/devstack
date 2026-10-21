@@ -395,8 +395,21 @@ kind    = "devserver"
 cwd     = "web"
 run     = "npx ng serve --port {port}"
 port    = 4200
-prepare = { run = "npm ci", inputs = ["web/package-lock.json"] }
+prepare = { run = "npm ci", inputs = ["web/package-lock.json"], link = ["web/node_modules"] }
 ```
+
+`link` ([ADR-0044](adr/0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md))
+makes what `prepare` installed usable in a lane's worktree, where git runs its
+hooks (a pre-commit hook with `npx eslint`): each directory, relative to the
+repository, is linked from the worktree to the lane's copy (a junction on
+Windows, a symbolic link elsewhere) once `prepare` ran. Only where the
+worktree has nothing of that name: your own `npm ci` there wins. Git has to
+ignore the link: write `node_modules` in `.gitignore`, not `node_modules/`,
+which on Linux and macOS ignores directories only (the daemon log says
+`prepare_not_linked` with why). `devstack lane stop` removes the links again;
+**stop the lane before `git worktree remove`**, which on Windows follows a
+junction and empties the copy's directory (the next start prepares it again).
+The main tree and lanes on a node make no links.
 
 ## `[lanes]`: other worktrees ([ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0030](adr/0030-each-lane-has-its-own-infrastructure.md); on other machines [ADR-0025](adr/0025-a-lane-can-run-on-another-node.md), [ADR-0028](adr/0028-lane-images.md), [ADR-0029](adr/0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0035](adr/0035-lanes-can-be-shared-with-the-pool.md), and [pool.md](pool.md))
 
@@ -431,8 +444,9 @@ and nothing of a lane runs inside its worktree. Builds run in the lane's
 snapshot, and so do its dev servers, tools and hot-reload mode; the snapshot
 follows the worktree within moments of a change (hot module replacement keeps
 working), and `{repo}` is the snapshot for them. So `git worktree remove`
-works while the lane runs, and the lane stops with it. Ignored files are not
-in the snapshot: `prepare` installs what is missing.
+works while the lane runs, and the lane stops with it (with `prepare.link`,
+stop the lane first: see `prepare`). Ignored files are not in the snapshot:
+`prepare` installs what is missing.
 
 - A lane's containers are a Compose project of their own,
   `<project>-<lane>`, from its worktree's Compose files, with an overlay
