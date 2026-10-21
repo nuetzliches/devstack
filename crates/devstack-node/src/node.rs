@@ -279,6 +279,10 @@ struct Inner {
     /// begun before it are done (the agent checks the lane's files, and
     /// nothing may change them meanwhile).
     applying: Mutex<HashMap<String, usize>>,
+    /// Leases whose start is under way or whose containers are still being
+    /// brought up after their daemon answered (#164): a stop, a lease's end
+    /// or a new start ends that first ([`Inner::end_bring_up`]).
+    bringing: Mutex<HashMap<String, Arc<Bringing>>>,
     /// The phases of each lane's last start that are over, with how long
     /// each took (`LaneState::phases`), and when the current one began.
     phase_times: Mutex<HashMap<String, (Vec<PhaseTime>, std::time::Instant)>>,
@@ -287,6 +291,23 @@ struct Inner {
     /// that still counts a released lease refuses a lane the node has room
     /// for.
     changed: tokio::sync::Notify,
+}
+
+/// A lane's containers being brought up in the background (#164).
+#[derive(Default)]
+struct Bringing {
+    /// The lane stops or starts afresh: Compose ends, nothing more starts.
+    ended: std::sync::atomic::AtomicBool,
+    /// Held while the containers are brought up: whoever ends it waits on
+    /// it, so nothing of the lane starts after its containers were taken
+    /// down.
+    running: Mutex<()>,
+}
+
+impl Bringing {
+    fn ended(&self) -> bool {
+        self.ended.load(std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 type Shared = Arc<Inner>;
@@ -872,6 +893,17 @@ impl Inner {
         }
     }
 
+    /// End the bringing up of lease `id`'s containers, if it goes on, and
+    /// return once it stopped: the caller takes them down, or starts the
+    /// lane afresh, after it (#164). Blocking (Compose ends within a moment).
+    fn end_bring_up(&self, id: &str) {
+        let b = self.bringing.lock().unwrap().remove(id);
+        if let Some(b) = b {
+            b.ended.store(true, std::sync::atomic::Ordering::SeqCst);
+            drop(b.running.lock().unwrap_or_else(|e| e.into_inner()));
+        }
+    }
+
     /// The phase `previous` of lease `id`'s start is over (another began,
     /// or the start ended): how long it took goes into its `phases`.
     fn phase_over(&self, id: &str, previous: Option<Result<String, String>>) {
@@ -918,6 +950,8 @@ impl Inner {
         }
         let s = self.clone();
         std::thread::spawn(move || {
+            // Nothing of it starts once it is taken down.
+            s.end_bring_up(&l.id);
             let run = s.run(&l);
             match &l.slot {
                 Some(slot) => {
@@ -1823,6 +1857,14 @@ async fn start(
         while s2.applying.lock().unwrap().contains_key(&lid) {
             std::thread::sleep(Duration::from_millis(50));
         }
+        // The containers of its last start, if they still come up, stop
+        // coming up before this one reads the lane's files.
+        s2.end_bring_up(&lid);
+        let bringing = Arc::new(Bringing::default());
+        s2.bringing
+            .lock()
+            .unwrap()
+            .insert(lid.clone(), bringing.clone());
         let mut run = s2.run(&l);
         run.display_root = display_root;
         run.port_offset = port_offset;
@@ -1860,13 +1902,58 @@ async fn start(
             f.extend(extra);
             f
         };
+        let forget = || {
+            let mut b = s2.bringing.lock().unwrap();
+            if b.get(&lid).is_some_and(|x| Arc::ptr_eq(x, &bringing)) {
+                b.remove(&lid);
+            }
+        };
         match result {
-            Ok(addr) => {
+            Ok(started) => {
                 crate::telemetry::node_log("info", "node_lane_started", &what(Vec::new()));
-                s2.daemons.lock().unwrap().insert(lid.clone(), addr);
+                let running = bringing.running.lock().unwrap();
+                if bringing.ended() {
+                    // Stopped, or its lease ended, while it started: what
+                    // the start made after that goes too.
+                    drop(running);
+                    s2.starting.lock().unwrap().remove(&lid);
+                    run.stop(s2.container.as_deref());
+                    return;
+                }
+                // Its daemon answers: the requester sees the lane run, and
+                // its containers come up under the daemon (#164).
+                s2.daemons.lock().unwrap().insert(lid.clone(), started.addr);
                 s2.starting.lock().unwrap().remove(&lid);
+                let up = started
+                    .infra
+                    .run(&run, &|| bringing.ended(), &|group, took, e| {
+                        let mut f = vec![
+                            ("lease", lid.clone()),
+                            ("repository", l.repo.clone()),
+                            ("lane", l.lane.clone()),
+                            ("group", group.to_string()),
+                            ("ms", took.as_millis().to_string()),
+                        ];
+                        match e {
+                            Some(e) => {
+                                // Compose's reason, its last line: the
+                                // first names the command and the node's
+                                // paths.
+                                let why = e.lines().rev().find(|l| !l.trim().is_empty());
+                                f.push(("error", why.unwrap_or(e).trim().to_string()));
+                                crate::telemetry::node_log("warn", "node_lane_infra_failed", &f);
+                            }
+                            None => crate::telemetry::node_log("info", "node_lane_infra_up", &f),
+                        }
+                    });
+                if let Err(e) = up {
+                    eprintln!("lane {} of {}: {e}", l.lane, l.member);
+                }
+                drop(running);
+                forget();
             }
             Err(e) => {
+                forget();
                 let phase = match &last {
                     Some(Ok(p)) => p.clone(),
                     _ => String::new(),
@@ -1899,9 +1986,12 @@ async fn stop(
     let s2 = s.clone();
     let t0 = std::time::Instant::now();
     let (repo, lane) = (l.repo.clone(), l.lane.clone());
-    tokio::task::spawn_blocking(move || s2.run(&l).stop(s2.container.as_deref()))
-        .await
-        .map_err(internal)?;
+    tokio::task::spawn_blocking(move || {
+        s2.end_bring_up(&l.id);
+        s2.run(&l).stop(s2.container.as_deref())
+    })
+    .await
+    .map_err(internal)?;
     crate::telemetry::node_log(
         "info",
         "node_lane_stopped",
@@ -1985,10 +2075,19 @@ async fn daemon_of(s: &Shared, l: NodeLease) -> ApiResult<DaemonAddr> {
     }
     let s2 = s.clone();
     let id = l.id.clone();
-    let d = tokio::task::spawn_blocking(move || s2.run(&l).attach(s2.container.as_deref()))
-        .await
-        .map_err(internal)?
-        .map_err(|e| err(StatusCode::CONFLICT, e.to_string()))?;
+    let d = tokio::task::spawn_blocking(move || {
+        let run = s2.run(&l);
+        let d = run.attach(s2.container.as_deref())?;
+        // Found running, not started by this agent (it restarted): what its
+        // predecessor was still bringing up never comes up (#164).
+        if !s2.bringing.lock().unwrap().contains_key(&l.id) {
+            crate::laneinfra::interrupted(&run.dir, &run.src());
+        }
+        Ok::<_, crate::lanerun::RunError>(d)
+    })
+    .await
+    .map_err(internal)?
+    .map_err(|e| err(StatusCode::CONFLICT, e.to_string()))?;
     s.daemons.lock().unwrap().insert(id, d.clone());
     Ok(d)
 }
@@ -3359,6 +3458,7 @@ pub async fn serve(
         daemons: Mutex::new(HashMap::new()),
         starting: Mutex::new(HashMap::new()),
         applying: Mutex::new(HashMap::new()),
+        bringing: Mutex::new(HashMap::new()),
         phase_times: Mutex::new(HashMap::new()),
         changed: tokio::sync::Notify::new(),
     });

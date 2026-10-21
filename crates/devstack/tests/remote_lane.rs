@@ -196,6 +196,7 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     let main = repo.path().join("main");
     let wt = repo.path().join("wt");
     copy_fixture(&main);
+    slow_db(&main);
     git(&main, &["init", "-q"]);
     git(&main, &["add", "-A"]);
     git(
@@ -240,18 +241,101 @@ fn a_lane_runs_on_a_node_of_the_pool() {
         both
     };
     // The daemon answers 202 once leased; `up` follows the start on the
-    // node step by step and ends when the lane runs there.
-    let up = cli(&wt, &["up", "--on", "ci-node"]);
+    // node step by step, which ends when the lane's daemon answers there,
+    // then the lane's services as they start.
+    let mut child = Command::new(BIN)
+        .args(["up", "--on", "ci-node"])
+        .current_dir(&wt)
+        .env("DEVSTACK_POOL_DIR", me.path())
+        .env("XDG_STATE_HOME", state.path())
+        .env("DEVSTACK_NO_HUB", "1")
+        .env("DEVSTACK_NO_UPDATE_CHECK", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let drain = |p: Option<Box<dyn std::io::Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut s = String::new();
+            if let Some(mut p) = p {
+                let _ = p.read_to_string(&mut s);
+            }
+            s
+        })
+    };
+    let out = drain(child.stdout.take().map(|p| Box::new(p) as _));
+    let err = drain(child.stderr.take().map(|p| Box::new(p) as _));
+    let api = |path: &str| api_get(&main, state.path(), path);
+    // The lane runs there once its daemon answers (#164): its containers
+    // come up after, under it. The fixture's db here is healthy 20 s after
+    // it starts (`slow_db`), so the daemon answers well before.
+    let until = Instant::now() + Duration::from_secs(900);
+    loop {
+        let lane = api("/v1/lanes")
+            .and_then(|v| v.as_array()?.iter().find(|l| l["name"] == "wt").cloned());
+        if lane
+            .as_ref()
+            .is_some_and(|l| l["active"] == true && l["moving"].is_null())
+        {
+            break;
+        }
+        if let Some(st) = child.try_wait().unwrap() {
+            panic!(
+                "`up --on` ended ({st}) before the lane ran:\n{}{}",
+                out.join().unwrap(),
+                err.join().unwrap()
+            );
+        }
+        assert!(Instant::now() < until, "the lane never ran: {lane:?}");
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    let health = lane_db("{{.State.Health.Status}}");
+    assert_ne!(
+        health, "healthy",
+        "the lane's daemon answered only once its db was healthy"
+    );
+    // Its services start only once its infrastructure is up, as a local
+    // lane's: `api` leaves `stopped` with the db healthy.
+    let until = Instant::now() + Duration::from_secs(600);
+    loop {
+        let api_state = api("/v1/lanes/wt/v1/stack").and_then(|v| {
+            v["services"]
+                .as_array()?
+                .iter()
+                .find(|s| s["name"] == "api")
+                .and_then(|s| s["status"]["state"].as_str().map(str::to_string))
+        });
+        if let Some(st) = api_state.filter(|s| s != "stopped") {
+            assert_eq!(
+                lane_db("{{.State.Health.Status}}"),
+                "healthy",
+                "api is {st} before the db is healthy"
+            );
+            break;
+        }
+        assert!(
+            child.try_wait().unwrap().is_none() && Instant::now() < until,
+            "api never started"
+        );
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    let status = child.wait().unwrap();
+    let up = format!("{}{}", out.join().unwrap(), err.join().unwrap());
+    assert!(status.success(), "devstack up --on ci-node: {up}");
     assert!(up.contains("on ci-node"), "{up}");
     assert!(up.contains("[3/3] on ci-node: "), "{up}");
     assert!(up.contains("healthy"), "{up}");
+    assert!(
+        !up.contains("waiting until healthy"),
+        "the start waits for no container: {up}"
+    );
     // Each phase of the start is timed (B1).
     let log =
         std::fs::read_to_string(main.join(".devstack").join("daemon.log")).unwrap_or_default();
     for phase in [
         "\"lease\"",
         "\"sync\"",
-        "waiting until healthy",
+        "images (pull, build) and containers",
         "the lane's daemon",
     ] {
         assert!(
@@ -413,6 +497,89 @@ fn lane_db_started() -> String {
         .output()
         .unwrap();
     String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// `docker inspect -f <format>` of the lane's `db` container on the node
+/// (of a project `devstack-fixture-<slot>`, running or not); empty while
+/// there is none.
+fn lane_db(format: &str) -> String {
+    let out = Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            "label=com.docker.compose.service=db",
+            "--format",
+            "{{.Names}}\t{{.Label \"com.docker.compose.project\"}}",
+        ])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let Some(name) = text
+        .lines()
+        .filter_map(|l| l.split_once('\t'))
+        .find(|(_, p)| p.starts_with("devstack-fixture-"))
+        .map(|(n, _)| n.to_string())
+    else {
+        return String::new();
+    };
+    let out = Command::new("docker")
+        .args(["inspect", "-f", format, &name])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// The fixture's db made slow: healthy 20 s after it starts, so a lane's
+/// daemon that waited for its containers would answer after that (#164).
+fn slow_db(main: &Path) {
+    std::fs::write(
+        main.join("dev/compose.dev.yml"),
+        r#"services:
+  api:
+    profiles: [container-app]
+    depends_on: !override
+      db: { condition: service_started, required: false }
+      cache: { condition: service_started, required: false }
+  db:
+    ports: ["127.0.0.1:15432:5432"]
+    command: ["sh", "-c", "echo db ready; (sleep 20; touch /tmp/healthy) & trap 'exit 0' TERM; while true; do sleep 1; done"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/healthy"]
+      interval: 1s
+      start_period: 120s
+      start_interval: 1s
+  cache:
+    ports: ["127.0.0.1::6379"]
+"#,
+    )
+    .unwrap();
+}
+
+/// `GET <path>` of the requester's daemon (the main tree's), as its JSON;
+/// `None` while it does not answer.
+fn api_get(main: &Path, state: &Path, path: &str) -> Option<serde_json::Value> {
+    use std::io::{Read, Write};
+    let info: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(main.join(".devstack/daemon.json")).ok()?).ok()?;
+    let port = info["port"].as_u64()? as u16;
+    let token = std::fs::read_to_string(state.join("devstack/token")).ok()?;
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
+    s.set_read_timeout(Some(Duration::from_secs(30))).ok()?;
+    // HTTP/1.0: the body comes whole, not in chunks.
+    write!(
+        s,
+        "GET {path} HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {}\r\n\r\n",
+        token.trim()
+    )
+    .ok()?;
+    let mut out = String::new();
+    let _ = s.read_to_string(&mut out);
+    let (head, body) = out.split_once("\r\n\r\n")?;
+    if !head.lines().next()?.contains(" 200") {
+        return None;
+    }
+    serde_json::from_str(body).ok()
 }
 
 /// The fixture stack's files (not its local build output) into `to`.

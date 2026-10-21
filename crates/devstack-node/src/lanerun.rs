@@ -3,7 +3,8 @@
 //! engine, and one lane container from the stack's lane image, in which the
 //! node's own static Linux `devstack` runs the lane's daemon from the mirror.
 //! The daemon there has no Docker: the agent describes the infrastructure to
-//! it in a file (`DEVSTACK_EXTERNAL_INFRA`, spike M0).
+//! it in a file (`DEVSTACK_EXTERNAL_INFRA`, spike M0). The daemon starts
+//! first; the agent starts the containers under it once it answered (#164).
 //!
 //! The mirror is the requester's, and the lane's own code writes into it:
 //! everything the agent reads or writes there goes through [`crate::safefs`]
@@ -87,6 +88,144 @@ pub struct DaemonAddr {
     /// (the Compose files' host ports moved by the lane's offset): the
     /// requester forwards them like the services' (ADR-0029 point 4).
     pub infra_ports: Vec<u16>,
+}
+
+/// A lane whose daemon answers: where it is, and what is left of its start.
+pub struct Started {
+    pub addr: DaemonAddr,
+    pub infra: InfraUp,
+}
+
+/// What a start leaves for after the lane's daemon answered (#164): its
+/// Compose groups' containers, created and checked, started and waited for
+/// in order, as a local lane's daemon does. The daemon waits for them.
+pub struct InfraUp {
+    groups: Vec<(String, Group)>,
+}
+
+/// How long a group's containers may take to be healthy once started.
+pub const HEALTHY_WITHIN: Duration = Duration::from_secs(300);
+
+impl InfraUp {
+    /// The groups, in the order they start.
+    pub fn groups(&self) -> Vec<String> {
+        self.groups.iter().map(|(n, _)| n.clone()).collect()
+    }
+
+    /// Start each group and wait until it is healthy, in order, its state
+    /// written into the lane's files as it goes (`laneinfra`). A group that
+    /// fails is written as failed with its error, the groups after it as
+    /// not started, and returned. `stop`: the lane stops or starts afresh
+    /// (Compose ends at once, nothing more is written); `done` hears each
+    /// group's outcome and how long it took.
+    pub fn run(
+        &self,
+        lane: &LaneRun,
+        stop: &dyn Fn() -> bool,
+        done: &dyn Fn(&str, Duration, Option<&str>),
+    ) -> std::result::Result<(), String> {
+        let dc = Docker::clean();
+        let src = lane.src();
+        let set = |group: &str, state: &str, error: Option<&str>| {
+            if let Err(e) = crate::laneinfra::set_group(&lane.dir, &src, group, state, error) {
+                eprintln!("lane {}: compose group `{group}`: {e}", lane.id);
+            }
+        };
+        for (i, (name, g)) in self.groups.iter().enumerate() {
+            if stop() {
+                return Ok(());
+            }
+            let t = std::time::Instant::now();
+            set(name, crate::laneinfra::STARTING, None);
+            // Nothing is built here: the lane runs by now, and its build
+            // contexts are its to change (ADR-0033 point 11).
+            let started = dc.start_created(g, Some(HEALTHY_WITHIN), stop);
+            if stop() {
+                return Ok(());
+            }
+            match started {
+                Ok(()) => {
+                    set(name, crate::laneinfra::UP, None);
+                    done(name, t.elapsed(), None);
+                }
+                Err(e) => {
+                    let e = e.to_string();
+                    set(name, crate::laneinfra::FAILED, Some(&e));
+                    done(name, t.elapsed(), Some(&e));
+                    let why = format!("not started: compose group `{name}` failed");
+                    for (rest, _) in &self.groups[i + 1..] {
+                        set(rest, crate::laneinfra::FAILED, Some(&why));
+                    }
+                    return Err(format!("compose group `{name}`: {e}"));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// What the lane's daemon reads of its infrastructure before anything of it
+/// runs (#164): each group `created`, each service's environment and the
+/// addresses of its ports as the stack file's Compose files have them
+/// (`model`, read before the overlay that publishes nothing): the lane
+/// container reaches every target port by the service's name. And the ports
+/// the requester forwards: where a local lane would publish them.
+fn initial_infra(
+    groups: &[(String, Group, Model)],
+    port_offset: u16,
+) -> (serde_json::Value, Vec<u16>) {
+    let mut infra = BTreeMap::new();
+    let mut infra_ports = Vec::new();
+    for (name, g, model) in groups {
+        let services: BTreeMap<String, serde_json::Value> = model
+            .services
+            .iter()
+            .map(|(svc, m)| {
+                // What the group starts; the rest is parked (an environment
+                // source only), without a state.
+                let starts = g.services.is_empty() || g.services.contains(svc);
+                let ports: BTreeMap<String, String> = m
+                    .ports
+                    .iter()
+                    .map(|p| (p.target.to_string(), format!("{svc}:{}", p.target)))
+                    .collect();
+                // Where a local lane would publish each port: the host port
+                // of the Compose files, moved by the lane's offset.
+                let published: BTreeMap<String, u16> = m
+                    .ports
+                    .iter()
+                    .filter_map(|p| {
+                        let host: u16 = p.published.as_deref()?.trim().parse().ok()?;
+                        Some((p.target.to_string(), host.checked_add(port_offset)?))
+                    })
+                    .collect();
+                if starts {
+                    infra_ports.extend(published.values().copied());
+                }
+                (
+                    svc.clone(),
+                    serde_json::json!({
+                        "environment": m.environment,
+                        "ports": ports,
+                        "published": published,
+                        "state": if starts { "created" } else { "" },
+                        "health": "",
+                    }),
+                )
+            })
+            .collect();
+        infra.insert(
+            name.clone(),
+            serde_json::json!({
+                "project": g.project,
+                "state": crate::laneinfra::CREATED,
+                "services": services,
+            }),
+        );
+    }
+    infra_ports.sort_unstable();
+    infra_ports.dedup();
+    (serde_json::json!({ "groups": infra }), infra_ports)
 }
 
 fn docker_for(args: &[&str], within: Duration) -> Result<String> {
@@ -446,17 +585,14 @@ impl LaneRun {
             .map_err(RunError::from)
     }
 
-    /// Start the lane: infrastructure, its description for the daemon, the
-    /// lane container. `bin` is a static Linux `devstack` the container
-    /// mounts; `agent`, the agent's own container when it runs in one (it
-    /// joins the lane's network to reach the daemon).
+    /// Start the lane: its infrastructure checked, its images and containers
+    /// made, their description for the daemon, the lane container; once its
+    /// daemon answers, the containers are left to start ([`Started::infra`],
+    /// #164). `bin` is a static Linux `devstack` the container mounts;
+    /// `agent`, the agent's own container when it runs in one (it joins the
+    /// lane's network to reach the daemon).
     /// `phase` hears what it does now ("image", "infrastructure: app", ...).
-    pub fn start(
-        &self,
-        bin: &Path,
-        agent: Option<&str>,
-        phase: &dyn Fn(&str),
-    ) -> Result<DaemonAddr> {
+    pub fn start(&self, bin: &Path, agent: Option<&str>, phase: &dyn Fn(&str)) -> Result<Started> {
         // Nothing of the lane runs while the agent reads its files: not its
         // container, not the containers of an earlier start (one of them
         // could change the mirror between the check and the start).
@@ -592,76 +728,23 @@ impl LaneRun {
             .map_err(RunError::Docker)?;
         }
 
-        let mut infra = BTreeMap::new();
-        let mut infra_ports = Vec::new();
-        for (name, g, model) in &groups {
-            // Started, then waited for, as two phases: a slow container
-            // start and a slow health check are told apart.
-            phase(&format!("infrastructure: {name}: starting containers"));
-            dc.up_detached(g)?;
-            phase(&format!("infrastructure: {name}: waiting until healthy"));
-            dc.up(g, Duration::from_secs(300))?;
-            // Ports and environments as the stack file's Compose files have them
-            // (`model`, read before the overlay that publishes nothing): the lane
-            // container reaches every target port by the service's name.
-            let ps = dc.ps(g)?;
-            let services: BTreeMap<String, serde_json::Value> = model
-                .services
-                .iter()
-                .map(|(svc, m)| {
-                    let c = ps.iter().find(|c| &c.service == svc);
-                    let ports: BTreeMap<String, String> = m
-                        .ports
-                        .iter()
-                        .map(|p| (p.target.to_string(), format!("{svc}:{}", p.target)))
-                        .collect();
-                    // Where a local lane would publish each port: the host
-                    // port of the Compose files, moved by the lane's offset.
-                    let published: BTreeMap<String, u16> = m
-                        .ports
-                        .iter()
-                        .filter_map(|p| {
-                            let host: u16 = p.published.as_deref()?.trim().parse().ok()?;
-                            Some((p.target.to_string(), host.checked_add(self.port_offset)?))
-                        })
-                        .collect();
-                    if !c.map(|c| c.state.clone()).unwrap_or_default().is_empty() {
-                        infra_ports.extend(published.values().copied());
-                    }
-                    (
-                        svc.clone(),
-                        serde_json::json!({
-                            "environment": m.environment,
-                            "ports": ports,
-                            "published": published,
-                            "state": c.map(|c| c.state.clone()).unwrap_or_default(),
-                            "health": c.map(|c| c.health.clone()).unwrap_or_default(),
-                        }),
-                    )
-                })
-                .collect();
-            infra.insert(
-                name.clone(),
-                serde_json::json!({ "project": g.project, "services": services }),
-            );
-        }
+        // The lane's daemon starts before its containers do (#164): it
+        // reads them as created, and waits for each group as the agent
+        // brings it up after answering ([`InfraUp::run`]).
+        let (infra, infra_ports) = initial_infra(&groups, self.port_offset);
         let io = |p: &str| {
             let p = src.join(p);
             move |e| RunError::Io(p, e)
         };
-        let infra_json = serde_json::to_vec_pretty(&serde_json::json!({ "groups": infra }))
-            .expect("infra serialises");
-        safefs::write_beneath(
-            &src,
-            Path::new(".devstack/external-infra.json"),
-            0o644,
-            |f| std::io::Write::write_all(f, &infra_json),
-        )
-        .map_err(io(".devstack/external-infra.json"))?;
+        let infra_json = serde_json::to_vec_pretty(&infra).expect("infra serialises");
+        safefs::write_beneath(&src, Path::new(crate::laneinfra::LANE_FILE), 0o644, |f| {
+            std::io::Write::write_all(f, &infra_json)
+        })
+        .map_err(io(crate::laneinfra::LANE_FILE))?;
         // The agent's own copy, beside the mirror where the lane cannot
-        // write: the projects it started, and what it refreshes the
-        // daemon's file from (`laneinfra`).
-        std::fs::write(self.dir.join(crate::laneinfra::AGENT_FILE), &infra_json)
+        // write: the projects it started, their groups' states, and what it
+        // refreshes the daemon's file from (`laneinfra`).
+        crate::laneinfra::write_agent_file(&self.dir, &infra_json)
             .map_err(|e| RunError::Io(self.dir.join(crate::laneinfra::AGENT_FILE), e))?;
         // The daemon's state directory, and no token of an earlier start.
         safefs::write_beneath(&src, Path::new(".devstack/xdg/.keep"), 0o644, |_| Ok(()))
@@ -771,12 +854,15 @@ impl LaneRun {
         let addr = self.address(&networks, agent)?;
         phase("the lane's daemon");
         let token = self.wait_token(Duration::from_secs(60))?;
-        infra_ports.sort_unstable();
-        infra_ports.dedup();
-        Ok(DaemonAddr {
-            addr,
-            token,
-            infra_ports,
+        Ok(Started {
+            addr: DaemonAddr {
+                addr,
+                token,
+                infra_ports,
+            },
+            infra: InfraUp {
+                groups: groups.into_iter().map(|(n, g, _)| (n, g)).collect(),
+            },
         })
     }
 
@@ -1009,6 +1095,41 @@ mod tests {
             [("10.9.0.0/24".to_string(), "lane0".to_string())]
         );
         assert!(parse_bridges("").is_empty());
+    }
+
+    #[test]
+    fn the_daemon_reads_its_infrastructure_as_created_before_it_runs() {
+        let model = devstack_compose::parse_config(
+            r#"{"name":"shop","services":{
+                "db":{"image":"postgres","environment":{"POSTGRES_DB":"app"},
+                      "ports":[{"target":5432,"published":"15432"}]},
+                "cache":{"image":"redis","ports":[{"target":6379}]},
+                "seed":{"image":"busybox","ports":[{"target":80,"published":"8080"}]}}}"#,
+        )
+        .unwrap();
+        let g = Group {
+            name: "app".into(),
+            project: "shop-ab12".into(),
+            files: Vec::new(),
+            env_files: Vec::new(),
+            networks: Vec::new(),
+            services: vec!["db".into(), "cache".into()],
+            dir: PathBuf::from("/compose"),
+        };
+        let (infra, ports) = initial_infra(&[("app".into(), g, model)], 100);
+        let app = &infra["groups"]["app"];
+        assert_eq!(app["state"], crate::laneinfra::CREATED);
+        assert_eq!(app["project"], "shop-ab12");
+        let db = &app["services"]["db"];
+        assert_eq!(db["state"], "created");
+        assert_eq!(db["environment"]["POSTGRES_DB"], "app");
+        assert_eq!(db["ports"]["5432"], "db:5432");
+        assert_eq!(db["published"]["5432"], 15532, "moved by the lane's offset");
+        assert_eq!(app["services"]["cache"]["ports"]["6379"], "cache:6379");
+        // Parked: an environment source only, without a state, its port not
+        // forwarded.
+        assert_eq!(app["services"]["seed"]["state"], "");
+        assert_eq!(ports, [15532], "only what the group starts is forwarded");
     }
 
     #[test]

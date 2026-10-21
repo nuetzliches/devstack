@@ -113,7 +113,7 @@ function start(on?: string) {
           <span class="ph">{{ current }}</span>
         </li>
       </ol>
-      <p v-if="running" class="faint small">The lane's pages open once its daemon runs on the node; its services show their own start there.</p>
+      <p v-if="running" class="faint small">The lane's pages open once its daemon runs on the node; its containers and services show their own start there.</p>
 
       <label v-if="profiles.length" class="profile" data-testid="lane-start-profile">
         <span>Profile</span>

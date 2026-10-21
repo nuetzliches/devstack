@@ -762,6 +762,10 @@ pub fn run_lane(file: &Path, on: &str, lane: &str, keep: bool) -> Result<()> {
         }
         let until = std::time::Instant::now() + Duration::from_secs(600);
         let mut last = String::new();
+        // Its services start once its containers are up, which the node
+        // brings up after the daemon answered (#164): until one of them
+        // moves, every service is still `stopped`.
+        let mut moved = false;
         loop {
             tokio::time::sleep(Duration::from_secs(3)).await;
             client.renew(&id).await?;
@@ -788,9 +792,27 @@ pub fn run_lane(file: &Path, on: &str, lane: &str, keep: bool) -> Result<()> {
                 println!("[{:>4} s] {line}", (t0.elapsed().as_secs()));
                 last = line;
             }
-            let settled = states.iter().all(|s| {
-                s.ends_with("=healthy") || s.ends_with("=failed") || s.ends_with("=stopped")
-            });
+            let failed: Vec<String> = v["infra"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|g| {
+                    Some(format!(
+                        "{}: {}",
+                        g["group"].as_str()?,
+                        g["error"].as_str()?
+                    ))
+                })
+                .collect();
+            if !failed.is_empty() {
+                println!("compose group failed: {}", failed.join("; "));
+                break;
+            }
+            moved |= states.iter().any(|s| !s.ends_with("=stopped"));
+            let settled = moved
+                && states.iter().all(|s| {
+                    s.ends_with("=healthy") || s.ends_with("=failed") || s.ends_with("=stopped")
+                });
             if settled || std::time::Instant::now() > until {
                 break;
             }
