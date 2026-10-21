@@ -72,7 +72,7 @@ stay.
 | [0021](0021-a-hub-serves-the-dashboard.md) | A hub on a fixed port serves the dashboard for every stack | Accepted, amended (streams over WebSocket; the pool area polls) |
 | [0022](0022-network-egress-sandbox.md) | Outbound network calls of supervised services are visible and need an allow rule | Proposed |
 | [0023](0023-stack-file-compatibility.md) | Stack files stay readable; migrations once devstack has outside users | Accepted |
-| [0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) | A lane is a supervisor in the main working tree's daemon | Accepted, amended twice (lanes are the worktrees, run from a copy); point 4 replaced by ADR-0030 |
+| [0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) | A lane is a supervisor in the main working tree's daemon | Accepted, amended twice (lanes are the worktrees, run from a copy); point 4 replaced by ADR-0030; point 1 replaced in part for the hub by ADR-0047 |
 | [0025](0025-a-lane-can-run-on-another-node.md) | A lane can run on another node, as a Linux container with its own infrastructure | Accepted; point 10 (showing and moving a lane) amended; amended 2026-10-19 (a start on a node answers once leased; its phases are timed); noted 2026-10-21 (its daemon starts first, its containers come up under it); points 5 and 7 amended by ADR-0038 |
 | [0026](0026-placement-by-the-requester-admission-by-the-node.md) | The requester places a lane; the node admits it, under a lease | Accepted; points 1, 3 replaced by ADR-0031 |
 | [0027](0027-trust-between-nodes.md) | Nodes and requesters trust each other by pinned keys, never by network location | Accepted; points 1, 2 replaced by ADR-0031; point 5 amended |
@@ -95,3 +95,4 @@ stay.
 | [0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) | A lane's prepared directories can be linked into its worktree | Accepted |
 | [0045](0045-the-hub-notifies-the-desktop.md) | The hub notifies the desktop of what needs attention, without a tray | Accepted, amended 2026-10-21 (`guest_lane`) |
 | [0046](0046-the-hub-opens-a-worktree-in-the-users-programs.md) | The hub opens a stack's worktree in the user's own programs, from a fixed list | Accepted, amended 2026-10-21 (the program opens in front on Windows; GitHub Desktop) |
+| [0047](0047-the-dashboard-makes-a-lane-from-a-branch.md) | The dashboard makes a lane from a branch; the main tree's checkout stays the user's | Accepted |

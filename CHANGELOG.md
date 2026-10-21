@@ -17,6 +17,10 @@ and listed with their assets on the
 
 ### Fixed
 
+- **Serving the main ports refuses a stack of Compose containers only**
+  (#184): it answered that the lane served them and moved nothing, as a
+  container's published port is Docker's, not devstack's. It now says so
+  (`409`), in the dashboard too.
 - A link to a service or container of a lane shared with you (its port, in
   the list and on its page) opens it: a click opens the forward to it on
   your machine, as **Open** in the pool area does, and keeps the link's

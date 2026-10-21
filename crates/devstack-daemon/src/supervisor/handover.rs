@@ -98,6 +98,11 @@ impl Supervisor {
             .collect()
     }
 
+    /// The main slot moves something in this stack: see [`moves_main_slot`].
+    pub fn main_slot_moves(&self) -> bool {
+        moves_main_slot(&self.stack)
+    }
+
     /// Main lane: forward the fixed port of `name` to `target` (`None` ends
     /// the forward). The previous forward's listener is closed before this
     /// returns, so the port can be bound again at once.
@@ -209,5 +214,62 @@ impl Supervisor {
             }
         }
         Ok(())
+    }
+}
+
+/// What `promote --lane` moves in the main tree: the fixed ports of its
+/// services (proxied, or forwarded byte for byte) and their workers
+/// (ADR-0008). A Compose container's published port is Docker's, not
+/// devstack's: a stack of containers only has nothing to move (#184).
+pub(crate) fn moves_main_slot(stack: &devstack_config::Stack) -> bool {
+    stack.services.values().any(|s| {
+        s.lanes
+            && super::on_this_platform(s)
+            && ((s.port.is_some() && s.kind != Kind::Job) || s.workers.is_some())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::moves_main_slot;
+    use std::path::Path;
+
+    fn stack(services: &str) -> devstack_config::Stack {
+        let text = format!(
+            "version = 1
+[stack]
+name = \"s\"
+{services}"
+        );
+        devstack_config::from_str(&text, Path::new("devstack.toml")).unwrap()
+    }
+
+    #[test]
+    fn a_stack_of_containers_only_moves_nothing() {
+        assert!(!moves_main_slot(&stack("")));
+        // A service kept out of lanes stays in the main tree.
+        assert!(!moves_main_slot(&stack(
+            "[services.once]
+run = \"x\"
+port = 9001
+lanes = false
+"
+        )));
+    }
+
+    #[test]
+    fn a_service_on_a_port_or_with_workers_moves() {
+        assert!(moves_main_slot(&stack(
+            "[services.api]
+run = \"x\"
+port = 8080
+"
+        )));
+        assert!(moves_main_slot(&stack(
+            "[services.worker]
+run = \"x\"
+workers = { env = { WORKERS = \"{is_main}\" } }
+"
+        )));
     }
 }

@@ -212,7 +212,7 @@ machine ([SECURITY.md](../SECURITY.md#the-pools-trust-model)).
 ```sh
 devstack lane list                      # RUNS ON: local, build-server, customer:gpu-box
 devstack lane move login-fix --to local # a cold start there, takes over once ready
-devstack promote --lane login-fix       # it answers on the main ports (dedicated nodes only)
+devstack promote --lane login-fix       # its services answer on the main ports (dedicated nodes only)
 devstack promote --lane main            # back to the main working tree
 ```
 
