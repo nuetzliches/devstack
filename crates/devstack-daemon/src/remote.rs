@@ -304,7 +304,7 @@ pub struct RemoteSpec<'a> {
     pub on: &'a str,
     /// What the lane is expected to take, as this machine estimates it.
     pub need: &'a Expected,
-    /// What its stack file declares it needs at least (ADR-0048 point 5).
+    /// What its stack file declares it needs at least (ADR-0049 point 5).
     pub floor: Option<devstack_node::share::Need>,
     /// A directory of this daemon's for the lane.
     pub scratch: &'a Path,
@@ -325,7 +325,7 @@ pub struct RemoteSpec<'a> {
     pub profile: Option<&'a str>,
 }
 
-/// What a lane is expected to need as this machine estimates it (ADR-0048
+/// What a lane is expected to need as this machine estimates it (ADR-0049
 /// point 4), and from what; the coordinator takes what the lane's
 /// repository took in the pool first.
 #[derive(Debug, Clone, Default)]
@@ -424,7 +424,7 @@ impl RemoteLane {
         // Another release, or one that does not say, is a warning
         // (ADR-0031 point 8).
         let warning = release_warning(&offer).map_err(|e| format!("lane `{}`: {e}", spec.name))?;
-        // What the lease holds, and from what (ADR-0048 point 10).
+        // What the lease holds, and from what (ADR-0049 point 10).
         if let Some(n) = &offer.need {
             let from = offer.need_from.as_deref().unwrap_or("");
             crate::diag::info(
@@ -947,7 +947,7 @@ impl RemoteLane {
                 Ok(l) => {
                     renewed = Instant::now();
                     self.trouble("renew", None);
-                    // The node is short of disk (ADR-0048 point 8): shown
+                    // The node is short of disk (ADR-0049 point 8): shown
                     // with the lane while it is, logged when it begins.
                     let short = self.state.lock().unwrap().errors.contains_key("disk");
                     if let Some(w) = &l.warning

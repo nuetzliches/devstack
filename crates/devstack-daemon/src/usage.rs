@@ -170,7 +170,7 @@ impl Series {
     }
 
     /// The most it took over its history: CPU in cores, averaged per
-    /// minute (as a node measures a lane, ADR-0048 point 2), and memory.
+    /// minute (as a node measures a lane, ADR-0049 point 2), and memory.
     fn peak(&self) -> (f64, u64) {
         let mut minutes: BTreeMap<u128, (f64, u32)> = BTreeMap::new();
         for p in &self.history {
@@ -217,7 +217,7 @@ pub struct Sampler {
     tree: Mutex<Option<(Instant, u64)>>,
 }
 
-/// What a lane of this tree is expected to take (ADR-0048 point 4),
+/// What a lane of this tree is expected to take (ADR-0049 point 4),
 /// estimated from the tree.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Estimate {

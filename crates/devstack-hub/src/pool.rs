@@ -359,7 +359,7 @@ pub async fn history(Query(h): Query<HistoryQuery>) -> Response {
 /// `GET /hub/pool/placement?pool=&repo=&lane=&cpus=&memory=&profile=`:
 /// where the coordinator would start a lane of this machine's, best first,
 /// with why (ADR-0026 point 3), by what the lane's runs with `profile`
-/// took (ADR-0048): what the dashboard shows beside the nodes.
+/// took (ADR-0049): what the dashboard shows beside the nodes.
 pub async fn placement(Query(q): Query<PlacementQuery>) -> Response {
     let p = PoolQuery { pool: q.pool };
     let need = devstack_node::share::Need {

@@ -168,7 +168,7 @@ start and in `daemon.log` (`remote_lane_placed`); the dashboard shows the
 order and the reasons beside the nodes to start on.
 
 **What a lane needs**
-([ADR-0048](adr/0048-a-lanes-need-is-measured-disk-included.md)): CPU,
+([ADR-0049](adr/0049-a-lanes-need-is-measured-disk-included.md)): CPU,
 memory, disk and GPUs. A node measures each lane it runs: the peak of its
 memory, of its CPU averaged over a minute, of its slot (mirror, caches,
 builds, volumes) and of the images its containers run, and reports it with

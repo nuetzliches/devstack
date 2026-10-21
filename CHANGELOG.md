@@ -11,7 +11,7 @@ and listed with their assets on the
 
 ### Added
 
-- **A lane's need is measured where it ran, disk included** (ADR-0048).
+- **A lane's need is measured where it ran, disk included** (ADR-0049).
   A node measures each lane it runs (the peak of its memory, of its CPU
   over a minute, of its slot and of its images) and the coordinator keeps
   the last five runs per repository and profile: a lane is placed by the

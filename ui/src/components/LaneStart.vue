@@ -42,7 +42,7 @@ const profile = ref('');
 const chosen = computed(() => profiles.value.find((p) => p.name === profile.value) ?? null);
 /** Where each pool's coordinator would start this lane, best first, with why
  * (ADR-0026 point 3): its own order, not one guessed here; by what the
- * lane's runs with the chosen profile took (ADR-0048). */
+ * lane's runs with the chosen profile took (ADR-0049). */
 const placement = ref<Record<string, Placement[]>>({});
 async function loadPlacement() {
   const repo = stack.view?.name;

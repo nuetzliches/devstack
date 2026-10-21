@@ -171,14 +171,14 @@ pub struct Report {
     /// Bytes free where it keeps lanes; absent from an older node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disk_free: Option<u64>,
-    /// What a new lane can take of its disk (ADR-0048 point 6): free, and
+    /// What a new lane can take of its disk (ADR-0049 point 6): free, and
     /// what it could free (kept lanes no lease uses), less what its
     /// running lanes are still expected to write. Absent from an older
     /// node: `disk_free` stands for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disk_room: Option<u64>,
     /// What its lanes took, each lease's run so far and those that ended
-    /// since its last report (ADR-0048 point 2).
+    /// since its last report (ADR-0049 point 2).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runs: Vec<crate::footprint::Run>,
 }
@@ -200,7 +200,7 @@ pub struct SlotRef {
 
 /// Less free disk than this where a node keeps lanes: it takes none (a
 /// lane's images, mirror and volumes need room). Beyond a lane's disk need
-/// (ADR-0048), the margin that stays free.
+/// (ADR-0049), the margin that stays free.
 pub const MIN_DISK_FREE: u64 = 5 << 30;
 
 fn is_zero(v: &u64) -> bool {
@@ -230,7 +230,7 @@ pub struct Placement {
     pub cpus: f64,
     pub memory: u64,
     /// The disk the lane needs there beyond what is there already
-    /// (ADR-0048 point 6), and what it has for lanes; absent from an
+    /// (ADR-0049 point 6), and what it has for lanes; absent from an
     /// older coordinator.
     #[serde(default)]
     pub disk: u64,
@@ -246,7 +246,7 @@ pub struct Placement {
 /// of free memory and free CPU, each over the need). `nodes` are the
 /// candidates already granted, online and admitted by their policy, with
 /// their last report. The disk a node needs room for is what the lane
-/// does not have there yet (ADR-0048 point 6), and GPUs it asks for are
+/// does not have there yet (ADR-0049 point 6), and GPUs it asks for are
 /// GPUs the node offers.
 pub fn rank(
     nodes: &[(&str, &str, &Report)],
@@ -603,7 +603,7 @@ pub struct LeaseRequest {
     pub repo: String,
     pub lane: String,
     /// What the lane is expected to need: the requester's estimate, or a
-    /// default (ADR-0048 point 4); what the lane's repository took in the
+    /// default (ADR-0049 point 4); what the lane's repository took in the
     /// pool comes first.
     #[serde(default)]
     pub need: crate::share::Need,
@@ -612,7 +612,7 @@ pub struct LeaseRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub need_from: Option<String>,
     /// What the stack file declares (`[lanes.need]`, the profile's): a
-    /// floor on each part of the need (ADR-0048 point 5).
+    /// floor on each part of the need (ADR-0049 point 5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub floor: Option<crate::share::Need>,
     /// The profile the lane runs with (ADR-0041): its footprint is its own.
@@ -653,7 +653,7 @@ pub struct LeaseOffer {
     /// requester named it, and from an older coordinator.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
-    /// The need the lease holds, and where it comes from (ADR-0048 point
+    /// The need the lease holds, and where it comes from (ADR-0049 point
     /// 10); absent from an older coordinator.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub need: Option<crate::share::Need>,
@@ -671,7 +671,7 @@ pub struct Lease {
     pub lane: String,
     pub need: crate::share::Need,
     /// The disk it needs on its node beyond what is there already
-    /// (ADR-0048 point 6): held there while it is offered.
+    /// (ADR-0049 point 6): held there while it is offered.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub disk: u64,
     /// `offered` (created, not yet admitted by the node) or `running`.
@@ -974,7 +974,7 @@ struct Inner {
     /// Leases by id, with their token and when they were offered.
     leases: Mutex<HashMap<String, (Lease, String, std::time::Instant)>>,
     store: Store,
-    /// What each repository's lanes took where they ran (ADR-0048).
+    /// What each repository's lanes took where they ran (ADR-0049).
     footprints: crate::footprint::Footprints,
     ca_pem: String,
     reports: Mutex<HashMap<String, (std::time::Instant, Report)>>,
@@ -1237,7 +1237,7 @@ async fn report(
             );
         }
     }
-    // What its lanes took (ADR-0048 point 2): runs of leases on this node
+    // What its lanes took (ADR-0049 point 2): runs of leases on this node
     // only, before those that ended are let go below.
     if m.node && !r.runs.is_empty() {
         let ours: HashMap<String, String> = s
@@ -1339,7 +1339,7 @@ async fn nodes(
     ))
 }
 
-/// The need a lease of `r` holds (ADR-0048 point 4), and where it comes
+/// The need a lease of `r` holds (ADR-0049 point 4), and where it comes
 /// from: what the repository's lanes with its profile took in the pool,
 /// else the requester's estimate; each part at least what the stack file
 /// declares, and at least the least (ADR-0033 point 4).
@@ -1463,7 +1463,7 @@ async fn lease_create(
     crate::policy::valid_lease_names(&r.repo, &r.lane).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     // What the lane's repository took in the pool, at least what its stack
     // file declares, and at least the least, whatever the requester claims
-    // (ADR-0048 point 4, ADR-0033 point 4).
+    // (ADR-0049 point 4, ADR-0033 point 4).
     if r.profile.as_ref().is_some_and(|p| p.len() > 64) {
         return Err((StatusCode::BAD_REQUEST, "not a profile's name".into()));
     }

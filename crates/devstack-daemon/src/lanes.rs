@@ -2266,7 +2266,7 @@ impl Lanes {
         let scratch = self.state_dir(&entry.name).join("remote");
         let profile = self.profiles.lock().unwrap().get(&entry.name).cloned();
         // What the lane's own stack file declares it needs at least, with
-        // its profile (ADR-0048 point 5); the main tree's where it does not
+        // its profile (ADR-0049 point 5); the main tree's where it does not
         // load.
         let declared = devstack_config::load(&entry.path.join(&stack_file))
             .map(|s| s.lane_need(profile.as_deref()))

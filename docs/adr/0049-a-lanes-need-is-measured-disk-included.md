@@ -1,4 +1,4 @@
-# ADR-0048: A lane's need is measured where it ran, disk included; the stack file sets a floor
+# ADR-0049: A lane's need is measured where it ran, disk included; the stack file sets a floor
 
 - **Status:** Accepted (2026-10-21), amended 2026-10-21 (point 9: what a lane here checks)
 - **Date:** 2026-10-21

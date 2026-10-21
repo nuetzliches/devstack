@@ -26,7 +26,7 @@ pub struct Amount {
     pub memory: u64,
 }
 
-/// What a lane needs (ADR-0048 point 1): CPU cores, memory, disk (bytes)
+/// What a lane needs (ADR-0049 point 1): CPU cores, memory, disk (bytes)
 /// and GPUs. A superset of [`Amount`] on the wire: a peer that knows only
 /// that reads the CPU and memory of it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -41,7 +41,7 @@ pub struct Need {
     /// volumes, ADR-0038).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub disk_lane: u64,
-    /// GPUs it asks for; declared only, never measured (ADR-0048 point 5).
+    /// GPUs it asks for; declared only, never measured (ADR-0049 point 5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpus: Option<GpuNeed>,
 }
@@ -67,7 +67,7 @@ impl Need {
     /// The disk it needs on a node beyond what is there already: nothing
     /// where the lane has a slot (`kept`), its own part where the
     /// repository has one (`warm`: its images are there), else both
-    /// (ADR-0048 point 6).
+    /// (ADR-0049 point 6).
     pub fn disk_on(&self, kept: bool, warm: bool) -> u64 {
         if kept {
             0
@@ -95,7 +95,7 @@ impl Need {
         }
     }
 
-    /// Raised to `floor` (what a stack file declares, ADR-0048 point 5):
+    /// Raised to `floor` (what a stack file declares, ADR-0049 point 5):
     /// CPU, memory and GPUs each at least the floor's, the disk at least
     /// the floor's in all, the difference added to the lane's part.
     /// Whether the floor raised anything is the second value.

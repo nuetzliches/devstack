@@ -425,7 +425,7 @@ sync       = ["web/certs/*.pem"]              # ignored files such a lane needs 
 share      = ["team:qa"]                      # whom such a lane is shared with by default (`*`: everyone); none: nobody
 keep_data  = true                             # the default: such a lane keeps its data on its node for its next start there (ADR-0038)
 
-[lanes.need]                                  # what a lane needs at least (ADR-0048): a floor, never an override
+[lanes.need]                                  # what a lane needs at least (ADR-0049): a floor, never an override
 cpus   = 2
 memory = "6G"                                 # sizes: 512M, 6G, 25GiB (powers of 1024); a bare number is bytes
 disk   = "25G"                                # in all: images, source, dependencies, builds, volumes
@@ -473,7 +473,7 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
   view it read only: its state, logs and events (ADR-0040, never its
   environment); they do not control it. A group's `shared` containers are the main tree's and
   never shared.
-- `need` ([ADR-0048](adr/0048-a-lanes-need-is-measured-disk-included.md)):
+- `need` ([ADR-0049](adr/0049-a-lanes-need-is-measured-disk-included.md)):
   what a lane needs **at least**. The pool places a lane by what the
   repository's lanes took where they ran (the most of each part over the
   last five runs, measured by the nodes), or, before any ran there, by what
@@ -568,7 +568,7 @@ data      = "fresh"                      # the tree's own volumes go first: seed
 autostart = ["api", "web", "worker"]     # these start, instead of each service's autostart
 env       = { BASE_URL = "{service.web.url}", JOBS_URL = "{compose.app.scheduler.4000}" }
 command   = "e2e"                        # `up --profile acceptance --run` runs it once ready
-need      = { memory = "8G" }            # a lane with it needs at least this, over [lanes.need] (ADR-0048)
+need      = { memory = "8G" }            # a lane with it needs at least this, over [lanes.need] (ADR-0049)
 
 [profiles.acceptance.services.web]
 kind   = "static"                        # a build served as files instead of a dev server

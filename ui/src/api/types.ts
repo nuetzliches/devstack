@@ -430,7 +430,7 @@ export type SharedLane = {
 };
 
 /** Where the coordinator would start a lane, best first (ADR-0026 point 3), `GET /hub/pool/placement`.
- * `disk`: what the lane needs there beyond what is there already, `disk_room`: what the node has for lanes (ADR-0048). */
+ * `disk`: what the lane needs there beyond what is there already, `disk_room`: what the node has for lanes (ADR-0049). */
 export type Placement = {
   node: string;
   name: string;

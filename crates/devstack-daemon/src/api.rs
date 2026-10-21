@@ -455,7 +455,7 @@ fn lane_need(main: &crate::supervisor::Supervisor, usage: &crate::usage::Sampler
 }
 
 /// What a lane on a node is expected to need, as this machine estimates it
-/// from the main tree (ADR-0048 point 4): the most it took over the last
+/// from the main tree (ADR-0049 point 4): the most it took over the last
 /// ten minutes, and the disk its tree, state, volumes and images take.
 /// A default where the main tree takes nothing yet.
 fn lane_estimate(
@@ -487,7 +487,7 @@ fn lane_estimate(
     crate::remote::Expected { need, from }
 }
 
-/// A lane here takes disk of its own (ADR-0048 point 9): its snapshot,
+/// A lane here takes disk of its own (ADR-0049 point 9): its snapshot,
 /// artifacts and logs, and its own Compose volumes (ADR-0030), about what
 /// the main tree's take; its worktree is there already, and it shares the
 /// images. Refuse when the drive of its worktree does not have that, with

@@ -1,4 +1,4 @@
-//! What a repository's lanes took where they ran (ADR-0048 points 2 and 3).
+//! What a repository's lanes took where they ran (ADR-0049 points 2 and 3).
 //! A node measures each lease's run and reports it; the coordinator keeps
 //! the last [`RUNS`] runs per repository and profile in `footprints.json`
 //! of its directory, and a lane's need is the most each part took in them.

@@ -1,5 +1,5 @@
 //! What each lease's lane takes on a node, measured while it runs
-//! (ADR-0048 point 2): the peak of its memory, of its CPU averaged over a
+//! (ADR-0049 point 2): the peak of its memory, of its CPU averaged over a
 //! minute, of its slot (mirror, caches, builds, volumes) and of the images
 //! its containers run. The node reports the runs with its report, those
 //! that ended once more after their end, and the coordinator keeps the

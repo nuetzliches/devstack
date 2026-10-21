@@ -63,7 +63,7 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   git ignores do not go there unless `[lanes] sync` names them (a dev
   certificate); `prepare` installs what the copy lacks (`npm ci`).
   `[lanes] share` says whom such a lane is shared with by default. The pool
-  places a lane by what its runs took there (ADR-0048); `[lanes.need]`
+  places a lane by what its runs took there (ADR-0049); `[lanes.need]`
   (`cpus`, `memory = "6G"`, `disk = "25G"`, `gpus = { count, memory }`) is a
   floor only: set it where the first runs would be placed too small, or for
   a GPU. A profile's `need` raises it for that profile.

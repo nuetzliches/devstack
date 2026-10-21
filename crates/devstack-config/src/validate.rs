@@ -918,7 +918,7 @@ fn find_cycle<'a>(edges: impl Iterator<Item = (&'a str, Vec<&'a str>)>) -> Optio
     None
 }
 
-/// `[lanes.need]`, a profile's `need` (ADR-0048 point 5).
+/// `[lanes.need]`, a profile's `need` (ADR-0049 point 5).
 fn check_need(c: &mut Check<'_>, path: &str, n: &crate::model::Need) {
     if let Some(cpus) = n.cpus
         && !(cpus.is_finite() && cpus > 0.0)

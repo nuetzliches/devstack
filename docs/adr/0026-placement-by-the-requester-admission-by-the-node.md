@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-10-16); points 1 and 3 replaced by [ADR-0031](0031-a-coordinator-places-lanes.md) (a coordinator places), the rest stands
 - **Date:** 2026-10-15
 - **Deciders:** project owner
-- **Related:** [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md), [ADR-0028](0028-lane-images.md), plan §12, [ADR-0033](0033-a-node-decides-what-runs-on-it.md) (point 4 detailed there: what a node admits), [ADR-0048](0048-a-lanes-need-is-measured-disk-included.md) (point 3's expected need detailed there: measured, disk included)
+- **Related:** [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md), [ADR-0028](0028-lane-images.md), plan §12, [ADR-0033](0033-a-node-decides-what-runs-on-it.md) (point 4 detailed there: what a node admits), [ADR-0049](0049-a-lanes-need-is-measured-disk-included.md) (point 3's expected need detailed there: measured, disk included)
 
 ## Context
 

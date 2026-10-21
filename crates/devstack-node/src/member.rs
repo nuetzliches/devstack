@@ -443,7 +443,7 @@ impl Local {
     }
 
     /// Where a lane of this machine's would go in the pool, best first:
-    /// with `profile`, by what its runs took (ADR-0048).
+    /// with `profile`, by what its runs took (ADR-0049).
     pub fn placement(
         &self,
         repo: &str,

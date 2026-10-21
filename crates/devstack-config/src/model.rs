@@ -75,7 +75,7 @@ pub struct Profile {
     #[serde(default)]
     pub command: Option<String>,
     /// What a lane with this profile needs at least, over `[lanes.need]`
-    /// (ADR-0048 point 5).
+    /// (ADR-0049 point 5).
     #[serde(default)]
     pub need: Need,
 }
@@ -118,7 +118,7 @@ pub struct Active {
 impl Stack {
     /// The stack as profile `name` runs it (ADR-0041), checked like a stack
     /// file; the issues name the profile's keys.
-    /// What a lane needs at least with `profile` (ADR-0048 point 5):
+    /// What a lane needs at least with `profile` (ADR-0049 point 5):
     /// `[lanes.need]`, raised by the profile's.
     pub fn lane_need(&self, profile: Option<&str>) -> Need {
         match profile.and_then(|p| self.profiles.get(p)) {
@@ -300,7 +300,7 @@ pub struct Lanes {
     /// it keeps them.
     #[serde(default = "yes")]
     pub keep_data: bool,
-    /// What a lane needs at least (ADR-0048 point 5): a floor on what the
+    /// What a lane needs at least (ADR-0049 point 5): a floor on what the
     /// pool measured or this machine estimates, never an override.
     #[serde(default)]
     pub need: Need,
@@ -320,7 +320,7 @@ impl Default for Lanes {
     }
 }
 
-/// `[lanes.need]`, `[profiles.<name>.need]` (ADR-0048 point 5): what a lane
+/// `[lanes.need]`, `[profiles.<name>.need]` (ADR-0049 point 5): what a lane
 /// needs at least. Sizes are `512M`, `6G`, `25GiB`.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
