@@ -85,6 +85,16 @@ and listed with their assets on the
   (`devstack down`) or starting the lane here clears it, and the dashboard
   drops it once the stack's daemon is gone. Before, it stayed ten minutes
   whatever happened.
+- After **Stop stack** the dashboard shows the stack's services stopped.
+  They did stop, but the daemon closes its API before it stops them and
+  exits, so the page kept showing them as running.
+- Stopping a lane keeps it shown, with its start, instead of switching to
+  the main working tree, where the same button is "Stop stack". A lane whose
+  worktree was removed still gives way to the main tree.
+- A lane's dot in the sidebar follows its services: the daemon announces
+  the lanes when their counts change (a lane on a node is read every 5 s),
+  and the shown lane counts from its own stream. Before, a lane started on
+  a node stayed yellow until the page switched to another tree.
 - A lane on a node no longer stops syncing when a file goes while it is
   sent (a package manager rewriting `node_modules`): the file is left out
   and the next sync sends what is there then.

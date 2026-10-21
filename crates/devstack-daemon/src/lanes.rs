@@ -903,6 +903,7 @@ impl Lanes {
             .spawn(move || {
                 let mut last = fingerprint(&dir);
                 let mut since = std::time::Instant::now();
+                let mut shown = Vec::new();
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(1));
                     let Some(me) = weak.upgrade() else { return };
@@ -910,6 +911,14 @@ impl Lanes {
                         return;
                     }
                     me.main_slot_check();
+                    // What changes without a call here: a lane's services
+                    // starting and stopping, a lane on a node as read every
+                    // few seconds, a failed start that expired.
+                    let now = me.shown();
+                    if now != shown {
+                        shown = now;
+                        me.announce();
+                    }
                     let now = fingerprint(&dir);
                     if now != last || since.elapsed() >= std::time::Duration::from_secs(30) {
                         last = now;
@@ -918,6 +927,22 @@ impl Lanes {
                     }
                 }
             });
+    }
+
+    /// Of each lane, what the lists show that changes on its own.
+    fn shown(&self) -> Vec<(String, usize, usize, Option<String>, bool)> {
+        self.views()
+            .into_iter()
+            .map(|v| {
+                (
+                    v.name,
+                    v.running,
+                    v.services,
+                    v.node_error,
+                    v.moving.is_some(),
+                )
+            })
+            .collect()
     }
 
     /// A lane on a node that serves the main ports and is gone (its lease
