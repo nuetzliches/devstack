@@ -560,6 +560,34 @@ export const useStack = defineStore('stack', () => {
     return true;
   }
 
+  /**
+   * A click on a link of the lane shown. A shared lane's links name its ports
+   * on the node, where nothing on this machine listens: the click opens a
+   * forward here to the service on that port instead (ADR-0035), the link's
+   * path kept. A link of one's own stack is followed as it is.
+   */
+  function followLink(e: MouseEvent, url: string) {
+    const r = shared.value;
+    // The context menu's "open in new tab" is not caught: it gets the link as it is.
+    if (!r || e.button > 1) return;
+    e.preventDefault();
+    let u: URL;
+    try {
+      u = new URL(url);
+    } catch {
+      return;
+    }
+    const port = Number(u.port) || (u.protocol === 'https:' ? 443 : 80);
+    const l = sharedLane.value;
+    const svc = l?.services.find((s) => (s.here || s.port) === port);
+    if (!l || !svc) {
+      useUi().toast('error', `Not opening ${u.host}`, `${l ? `${l.owner_name} shares` : 'This lane shares'} nothing on port ${port}.`);
+      return;
+    }
+    const path = u.pathname === '/' && !u.search && !u.hash ? '' : u.pathname + u.search + u.hash;
+    void usePool().openShared(r.pool, r.lease, svc.name, path);
+  }
+
   async function runCommand(name: string): Promise<number | null> {
     if (refuseReadOnly()) return null;
     if (!id.value) return null;
@@ -768,6 +796,7 @@ export const useStack = defineStore('stack', () => {
     running,
     readOnly,
     sharedLane,
+    followLink,
     runningLanes,
     mainIdle,
     events,

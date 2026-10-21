@@ -101,7 +101,7 @@ const kv = computed(() => {
             <div class="subtitle">
               {{ kindLabel(svc) }}
               <template v-if="svc.build_id"> · running build <span class="mono">{{ shortBuild(svc.build_id) }}</span></template>
-              <template v-if="svc.port"> · <a :href="serviceUrl(svc)" target="_blank" rel="noopener" data-testid="service-url">{{ serviceUrl(svc).replace(/^https?:\/\//, '') }} <Icon name="external" :size="12" /></a></template>
+              <template v-if="svc.port"> · <a :href="serviceUrl(svc)" @click="stack.followLink($event, serviceUrl(svc))" @auxclick="stack.followLink($event, serviceUrl(svc))" target="_blank" rel="noopener" data-testid="service-url">{{ serviceUrl(svc).replace(/^https?:\/\//, '') }} <Icon name="external" :size="12" /></a></template>
             </div>
           </div>
         </div>
