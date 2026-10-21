@@ -4,15 +4,18 @@
 //! reaches. Set by an admin, kept with the node's member record, enforced
 //! by the node when it admits a lease and by the coordinator when it places.
 
-use crate::share::Amount;
+use crate::share::Need;
 use serde::{Deserialize, Serialize};
 
 /// The least a lane is taken to need, whatever its requester says: a lease
 /// that claims nothing would otherwise fit every node (and its limits,
 /// derived from it, would be the smallest).
-pub const MIN_NEED: Amount = Amount {
+pub const MIN_NEED: Need = Need {
     cpus: 0.25,
     memory: 256 << 20,
+    disk_repo: 0,
+    disk_lane: 0,
+    gpus: None,
 };
 
 /// A lease's repository (`[stack] name`) and lane as a requester names
@@ -38,14 +41,15 @@ pub fn valid_lease_names(repo: &str, lane: &str) -> Result<(), String> {
 }
 
 /// `need`, at least [`MIN_NEED`].
-pub fn floor_need(need: Amount) -> Amount {
-    Amount {
+pub fn floor_need(need: Need) -> Need {
+    Need {
         cpus: if need.cpus.is_finite() {
             need.cpus.max(MIN_NEED.cpus)
         } else {
             MIN_NEED.cpus
         },
         memory: need.memory.max(MIN_NEED.memory),
+        ..need
     }
 }
 
@@ -221,15 +225,13 @@ mod tests {
             NodePolicy::strictest(&[&node, &none]).unwrap().network,
             Network::None
         );
-        let n = floor_need(Amount {
-            cpus: 0.0,
-            memory: 0,
-        });
+        let n = floor_need(Need::default());
         assert_eq!((n.cpus, n.memory), (0.25, 256 << 20));
         assert_eq!(
-            floor_need(Amount {
+            floor_need(Need {
                 cpus: 4.0,
-                memory: 8 << 30
+                memory: 8 << 30,
+                ..Need::default()
             })
             .memory,
             8 << 30

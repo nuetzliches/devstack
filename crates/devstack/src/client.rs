@@ -2093,7 +2093,7 @@ pub fn placement(stack_file: &Path, lane: &str) -> Result<Value> {
         // its nodes' reports, without their policies (it says so).
         let mut computed_here = false;
         let order = local
-            .placement(&repo, lane, devstack_node::share::Amount::default())
+            .placement(&repo, lane, devstack_node::share::Need::default(), None)
             .or_else(|e| {
                 if !e.to_string().starts_with("404") {
                     return Err(e.to_string());
@@ -2111,7 +2111,7 @@ pub fn placement(stack_file: &Path, lane: &str) -> Result<Value> {
                     &me.id,
                     &repo,
                     lane,
-                    devstack_node::policy::floor_need(devstack_node::share::Amount::default()),
+                    devstack_node::policy::floor_need(devstack_node::share::Need::default()),
                     Some(&devstack_node::version::Release::this()),
                 ))
             });

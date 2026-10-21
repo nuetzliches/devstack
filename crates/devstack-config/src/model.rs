@@ -74,6 +74,10 @@ pub struct Profile {
     /// `devstack up --profile <name> --run` runs it once the tree is ready.
     #[serde(default)]
     pub command: Option<String>,
+    /// What a lane with this profile needs at least, over `[lanes.need]`
+    /// (ADR-0049 point 5).
+    #[serde(default)]
+    pub need: Need,
 }
 
 /// `fresh` or `keep` (the default).
@@ -114,6 +118,15 @@ pub struct Active {
 impl Stack {
     /// The stack as profile `name` runs it (ADR-0041), checked like a stack
     /// file; the issues name the profile's keys.
+    /// What a lane needs at least with `profile` (ADR-0049 point 5):
+    /// `[lanes.need]`, raised by the profile's.
+    pub fn lane_need(&self, profile: Option<&str>) -> Need {
+        match profile.and_then(|p| self.profiles.get(p)) {
+            Some(p) => self.lanes.need.max(&p.need),
+            None => self.lanes.need.clone(),
+        }
+    }
+
     pub fn with_profile(&self, name: &str) -> Result<Stack, Vec<crate::Issue>> {
         let s = self.apply_profile(name)?;
         let issues = crate::validate::validate(&s);
@@ -287,6 +300,10 @@ pub struct Lanes {
     /// it keeps them.
     #[serde(default = "yes")]
     pub keep_data: bool,
+    /// What a lane needs at least (ADR-0049 point 5): a floor on what the
+    /// pool measured or this machine estimates, never an override.
+    #[serde(default)]
+    pub need: Need,
 }
 
 impl Default for Lanes {
@@ -298,7 +315,75 @@ impl Default for Lanes {
             sync: Vec::new(),
             share: Vec::new(),
             keep_data: true,
+            need: Need::default(),
         }
+    }
+}
+
+/// `[lanes.need]`, `[profiles.<name>.need]` (ADR-0049 point 5): what a lane
+/// needs at least. Sizes are `512M`, `6G`, `25GiB`.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Need {
+    /// CPU cores.
+    #[serde(default)]
+    pub cpus: Option<f64>,
+    /// Memory.
+    #[serde(default, deserialize_with = "opt_size")]
+    #[schemars(with = "Option<String>")]
+    pub memory: Option<u64>,
+    /// Disk, in all: the lane's images, its source and dependencies, its
+    /// builds and its volumes.
+    #[serde(default, deserialize_with = "opt_size")]
+    #[schemars(with = "Option<String>")]
+    pub disk: Option<u64>,
+    /// GPUs: a lane in the pool goes only to a node that offers them.
+    #[serde(default)]
+    pub gpus: Option<GpuNeed>,
+}
+
+/// `gpus = { count = 1, memory = "16G" }`
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GpuNeed {
+    /// How many; 1 if not given.
+    #[serde(default = "one")]
+    pub count: u32,
+    /// The memory each must have, at least.
+    #[serde(default, deserialize_with = "opt_size")]
+    #[schemars(with = "Option<String>")]
+    pub memory: Option<u64>,
+}
+
+fn one() -> u32 {
+    1
+}
+
+impl Need {
+    /// Each part the larger of the two.
+    pub fn max(&self, o: &Need) -> Need {
+        fn most<T: PartialOrd + Copy>(a: Option<T>, b: Option<T>) -> Option<T> {
+            match (a, b) {
+                (Some(x), Some(y)) => Some(if y > x { y } else { x }),
+                (x, y) => x.or(y),
+            }
+        }
+        Need {
+            cpus: most(self.cpus, o.cpus),
+            memory: most(self.memory, o.memory),
+            disk: most(self.disk, o.disk),
+            gpus: match (&self.gpus, &o.gpus) {
+                (Some(a), Some(b)) => Some(GpuNeed {
+                    count: a.count.max(b.count),
+                    memory: most(a.memory, b.memory),
+                }),
+                (a, b) => a.clone().or_else(|| b.clone()),
+            },
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Need::default()
     }
 }
 
@@ -783,6 +868,52 @@ impl Step {
             _ => Err(set),
         }
     }
+}
+
+// ------------------------------------------------------------------ sizes
+
+/// `512M`, `6G`, `6GiB`, `1.5T`; `k`/`M`/`G`/`T` with or without `B`/`iB`
+/// are powers of 1024; a bare number is bytes.
+pub fn parse_size(s: &str) -> Result<u64, String> {
+    let t = s.trim();
+    let split = t
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(t.len());
+    let (num, unit) = t.split_at(split);
+    let bad = || format!("invalid size `{s}` (expected e.g. `512M`, `6G`, `25GiB`)");
+    let n: f64 = num.parse().map_err(|_| bad())?;
+    let unit = unit.trim().to_ascii_lowercase();
+    let unit = unit
+        .strip_suffix("ib")
+        .or_else(|| unit.strip_suffix('b'))
+        .unwrap_or(&unit);
+    let factor: u64 = match unit {
+        "" => 1,
+        "k" => 1 << 10,
+        "m" => 1 << 20,
+        "g" => 1 << 30,
+        "t" => 1 << 40,
+        _ => return Err(bad()),
+    };
+    let v = n * factor as f64;
+    if !v.is_finite() || v < 0.0 || v > u64::MAX as f64 {
+        return Err(bad());
+    }
+    Ok(v as u64)
+}
+
+fn opt_size<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Size {
+        Text(String),
+        Bytes(u64),
+    }
+    Ok(match Option::<Size>::deserialize(d)? {
+        None => None,
+        Some(Size::Bytes(b)) => Some(b),
+        Some(Size::Text(t)) => Some(parse_size(&t).map_err(serde::de::Error::custom)?),
+    })
 }
 
 // ------------------------------------------------------------------ durations

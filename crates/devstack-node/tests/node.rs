@@ -6,7 +6,7 @@ use devstack_node::coordinator::{self, LeaseRequest, NodeRef};
 use devstack_node::member::Local;
 use devstack_node::node::{self, NodeConfig};
 use devstack_node::nodeclient::{ClientError, NodeClient};
-use devstack_node::share::{Amount, Settings};
+use devstack_node::share::{Need, Settings};
 use devstack_node::store::{SHELL, Store};
 use std::path::Path;
 use std::time::Duration;
@@ -130,7 +130,10 @@ fn a_lane_is_leased_admitted_and_synced() {
         node: "node-pc".into(),
         repo: "shop".into(),
         lane: "early".into(),
-        need: Amount::default(),
+        need: Need::default(),
+        need_from: None,
+        floor: None,
+        profile: None,
         devstack: None,
     });
     assert!(not_yet.unwrap_err().to_string().starts_with("409"));
@@ -140,7 +143,10 @@ fn a_lane_is_leased_admitted_and_synced() {
                 node: "pool".into(),
                 repo: "shop".into(),
                 lane: "early".into(),
-                need: Amount::default(),
+                need: Need::default(),
+                need_from: None,
+                floor: None,
+                profile: None,
                 devstack: None,
             })
             .is_err(),
@@ -167,10 +173,14 @@ fn a_lane_is_leased_admitted_and_synced() {
         node: "node-pc".into(),
         repo: "shop".into(),
         lane: "big".into(),
-        need: Amount {
+        need: Need {
             cpus: 64.0,
             memory: 1 << 40,
+            ..Need::default()
         },
+        need_from: None,
+        floor: None,
+        profile: None,
         devstack: None,
     });
     assert!(too_much.unwrap_err().to_string().starts_with("409"));
@@ -182,10 +192,14 @@ fn a_lane_is_leased_admitted_and_synced() {
             node: "pool".into(),
             repo: "shop".into(),
             lane: "placed".into(),
-            need: Amount {
+            need: Need {
                 cpus: 0.1,
                 memory: 64 << 20,
+                ..Need::default()
             },
+            need_from: None,
+            floor: None,
+            profile: None,
             devstack: None,
         })
         .unwrap();
@@ -196,10 +210,14 @@ fn a_lane_is_leased_admitted_and_synced() {
             node: "node-pc".into(),
             repo: "shop".into(),
             lane: "login-fix".into(),
-            need: Amount {
+            need: Need {
                 cpus: 0.1,
                 memory: 64 << 20,
+                ..Need::default()
             },
+            need_from: None,
+            floor: None,
+            profile: None,
             devstack: None,
         })
         .unwrap();
@@ -397,10 +415,14 @@ fn a_lane_is_leased_admitted_and_synced() {
             node: "node-pc".into(),
             repo: "shop".into(),
             lane: "login-fix".into(),
-            need: Amount {
+            need: Need {
                 cpus: 0.1,
                 memory: 64 << 20,
+                ..Need::default()
             },
+            need_from: None,
+            floor: None,
+            profile: None,
             devstack: None,
         })
         .unwrap();
@@ -444,10 +466,14 @@ fn a_lane_is_leased_admitted_and_synced() {
             node: "node-pc".into(),
             repo: "shop".into(),
             lane: "login-fix".into(),
-            need: Amount {
+            need: Need {
                 cpus: 0.1,
                 memory: 64 << 20,
+                ..Need::default()
             },
+            need_from: None,
+            floor: None,
+            profile: None,
             devstack: None,
         })
         .unwrap();
@@ -531,10 +557,14 @@ fn an_admin_pauses_a_node_and_ends_a_lease() {
             node: "node-pc".into(),
             repo: "shop".into(),
             lane: "fix".into(),
-            need: Amount {
+            need: Need {
                 cpus: 0.1,
                 memory: 64 << 20,
+                ..Need::default()
             },
+            need_from: None,
+            floor: None,
+            profile: None,
             devstack: None,
         })
     };
