@@ -49,10 +49,10 @@ function reset() {
           <span class="grow truncate">{{ o.label }}</span>
           <span class="faint small">{{ kindLabel[o.kind] ?? o.kind }}</span>
         </label>
-        <button type="button" class="btn btn-ghost btn-xs btn-icon" :disabled="i === 0" :aria-label="`Move ${o.label} up`" data-testid="opener-up" @click="move(i, i - 1)">
+        <button type="button" class="move" :disabled="i === 0" :aria-label="`Move ${o.label} up`" data-testid="opener-up" @click="move(i, i - 1)">
           <Icon name="arrowUp" :size="13" />
         </button>
-        <button type="button" class="btn btn-ghost btn-xs btn-icon" :disabled="i === list.length - 1" :aria-label="`Move ${o.label} down`" data-testid="opener-down" @click="move(i, i + 1)">
+        <button type="button" class="move" :disabled="i === list.length - 1" :aria-label="`Move ${o.label} down`" data-testid="opener-down" @click="move(i, i + 1)">
           <Icon name="arrowDown" :size="13" />
         </button>
       </li>
@@ -79,9 +79,27 @@ function reset() {
 .row {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 4px 2px 8px;
+  gap: 6px;
+  padding: 2px 8px;
   border-radius: 8px;
+}
+/* Ghost buttons, as the branch picker's "+". */
+.move {
+  display: inline-flex;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.move:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.move:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 .row:hover {
   background: var(--surface-hover);
