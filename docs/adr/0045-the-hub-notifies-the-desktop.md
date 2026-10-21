@@ -1,6 +1,6 @@
 # ADR-0045: The hub notifies the desktop of what needs attention, without a tray
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-21)
 - **Date:** 2026-10-21
 - **Deciders:** project owner
 - **Related:** [#156](https://github.com/nuetzliches/devstack/issues/156), [#1](https://github.com/nuetzliches/devstack/issues/1) (the tray), [ADR-0018](0018-dashboard-is-a-browser-page.md) (point 2 amended here), [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md)

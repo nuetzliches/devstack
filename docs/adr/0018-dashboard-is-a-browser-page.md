@@ -1,6 +1,6 @@
 # ADR-0018: The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper
 
-- **Status:** Accepted (2026-10-14); who serves the dashboard amended by [ADR-0021](0021-a-hub-serves-the-dashboard.md) (the hub); the tray is not built yet; point 2's notifications come from the hub, without a tray ([ADR-0045](0045-the-hub-notifies-the-desktop.md), proposed)
+- **Status:** Accepted (2026-10-14); who serves the dashboard amended by [ADR-0021](0021-a-hub-serves-the-dashboard.md) (the hub); the tray is not built yet; point 2's notifications come from the hub, without a tray ([ADR-0045](0045-the-hub-notifies-the-desktop.md))
 - **Date:** 2026-10-14
 - **Deciders:** project owner
 - **Related:** [ADR-0006](0006-dashboard-vue-same-origin.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md), plan §6
