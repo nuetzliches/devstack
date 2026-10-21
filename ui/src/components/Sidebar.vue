@@ -112,8 +112,10 @@ watch(
   { immediate: true },
 );
 type Dot = 'on' | 'off' | 'warn' | 'err' | 'unknown';
+/** Its daemon runs but nothing else: the main tree idle, no lane started. */
+const stackIdle = (s: StackEntry) => s.running && mainActive.value[s.id] === false && !(known.value[s.id] ?? []).some(started);
 function stackDot(s: StackEntry): Dot {
-  return !hub.reachable ? 'unknown' : s.running ? 'on' : 'off';
+  return !hub.reachable ? 'unknown' : s.running && !stackIdle(s) ? 'on' : 'off';
 }
 function mainDot(s: StackEntry): Dot {
   if (!hub.reachable) return 'unknown';
@@ -278,7 +280,7 @@ async function copyPath(s: StackEntry) {
             type="button"
             class="item"
             :class="{ active: isCurrent(s) && !stack.lane && !hasLanes(s) }"
-            :title="`${s.repo}\n${s.running ? 'running' : 'offline'} · right click for more`"
+            :title="`${s.repo}\n${stackIdle(s) ? 'nothing runs, its daemon is up' : s.running ? 'running' : 'offline'} · right click for more`"
             data-testid="sidebar-stack"
             @click="openStack(s)"
           >
