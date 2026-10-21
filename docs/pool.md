@@ -158,14 +158,41 @@ With `pool` the coordinator places the lane
 ([ADR-0026](adr/0026-placement-by-the-requester-admission-by-the-node.md)
 point 3): of the granted, online, sharing nodes that are not paused, admit
 the lane by their policy, run a devstack of the same pool protocol, offer
-what the lane needs and have at least 5 GiB of disk free, it takes, among
-those with room to spare (half as much again as the need), one that keeps
+what the lane needs, have the disk it needs there with 5 GiB to spare, and
+offer the GPUs it asks for, it takes, among those with room to spare (half as much again as the need), one that keeps
 this lane's data (a start from its mirror, builds and volumes), then one the
 repository ran on (its images and builds are there); otherwise, and among
 equals, the one with the most free capacity for the need (the lower of free
 memory and free CPU, each over the need). The lease says why, in the lane's
 start and in `daemon.log` (`remote_lane_placed`); the dashboard shows the
 order and the reasons beside the nodes to start on.
+
+**What a lane needs**
+([ADR-0049](adr/0049-a-lanes-need-is-measured-disk-included.md)): CPU,
+memory, disk and GPUs. A node measures each lane it runs: the peak of its
+memory, of its CPU averaged over a minute, of its slot (mirror, caches,
+builds, volumes) and of the images its containers run, and reports it with
+its report; a run counts once its lane ran for three minutes. The
+coordinator keeps the last five runs of each repository and profile
+(`footprints.json` in its directory), and a lane's need is the most each
+part took in them. Before any ran in the pool, the requester's estimate
+from its main tree stands for them: the most its services, builds and
+containers each took over the last ten minutes, and as disk its tree
+(without `.git` and its state), its snapshot, artifacts, logs and volumes,
+and its Compose images; with nothing running, 0.5 CPU, 1 GiB and 10 GiB of
+disk. `[lanes.need]` and the profile's `need` in the stack file raise each
+part to what they say. The lease says the need and where it came from, in
+the lane's start and in `daemon.log` (`remote_lane_need`).
+
+Disk counts per node: one that keeps this lane's data needs nothing more,
+one the repository ran on (its images are there) the lane's own part, any
+other both. A node reports what a new lane can take of its disk
+(`disk_room`): what is free, and what its kept lanes no lease uses take,
+less what its running lanes are still expected to write; it removes kept
+lanes, the least recently used first, before a lane that needs their room
+starts. A node short of disk (less than 5 GiB free) says so with every
+renewal of its leases; the lane goes on, and its requester logs
+`remote_lane_disk`.
 
 devstack leases the lane, syncs the worktree to the node (by content, only
 what changed: a change within two seconds of saving, and everything compared
@@ -288,8 +315,8 @@ lanes, mirrors, builds and volumes together (`keep_lanes_gib`; the least
 recently used goes first); it removes them at once when the pool no longer
 lists the member. The images Compose built for a lane go with its slot, and
 the lane images built from `[lanes] dockerfile` with the member, or when the
-node has less than 10 GiB free. A node with less than 5 GiB free where it
-keeps lanes takes no lane. A stack with `[lanes]
+node has less than 10 GiB free. A node takes no lane without the disk it
+needs there and 5 GiB to spare (see "What a lane needs"). A stack with `[lanes]
 keep_data = false` keeps nothing. `devstack lane reset <lane>` throws a
 stopped lane's data away, here and on the nodes it ran on;
 `devstack lane prune [--older-than 7d]` removes what this repository's
@@ -374,7 +401,7 @@ Compose `build`) are built without a network: `RUN` steps that download
 need a `lan` node, or a prebuilt `[lanes] image`.
 
 A lane is taken to need at least 0.25 CPU and 256 MiB, whatever it asks
-for. The coordinator places by the policy and the node admits by it, and by
+for, and its GPUs are GPUs the node has. The coordinator places by the policy and the node admits by it, and by
 its own `policy.json`. An admin can
 also pause a node (no new lanes) and end a lease; every change is in the
 admin log.

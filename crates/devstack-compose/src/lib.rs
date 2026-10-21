@@ -1231,6 +1231,47 @@ impl Docker {
             }
         })
     }
+
+    /// The bytes the images of the Compose projects' containers take,
+    /// stopped containers too: each image once, at its logical size.
+    pub fn project_images(&self, projects: &[String]) -> Result<u64> {
+        let mut images: Vec<String> = Vec::new();
+        for p in projects {
+            let a: Vec<OsString> = vec![
+                "ps".into(),
+                "-a".into(),
+                "--filter".into(),
+                format!("label=com.docker.compose.project={p}").into(),
+                "--format".into(),
+                "{{.Image}}".into(),
+            ];
+            let out = self.run(Path::new("."), &a, budget::QUICK)?;
+            for i in String::from_utf8_lossy(&out.stdout).lines().map(str::trim) {
+                if !i.is_empty() && !images.iter().any(|x| x == i) {
+                    images.push(i.to_string());
+                }
+            }
+        }
+        let mut total = 0;
+        for i in &images {
+            let a: Vec<OsString> = vec![
+                "image".into(),
+                "inspect".into(),
+                "--format".into(),
+                "{{.Size}}".into(),
+                "--".into(),
+                i.into(),
+            ];
+            // An image removed meanwhile counts nothing.
+            if let Ok(out) = self.run(Path::new("."), &a, budget::QUICK) {
+                total += String::from_utf8_lossy(&out.stdout)
+                    .trim()
+                    .parse::<u64>()
+                    .unwrap_or(0);
+            }
+        }
+        Ok(total)
+    }
 }
 
 pub fn parse_stats(text: &str) -> std::result::Result<Vec<ContainerStats>, String> {

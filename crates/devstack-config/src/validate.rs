@@ -271,6 +271,11 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         c.repo_path(&format!("stack.env_files[{i}]"), f);
     }
 
+    check_need(&mut c, "lanes.need", &stack.lanes.need);
+    for (name, p) in stack.profiles.iter().filter(|_| stack.profile.is_none()) {
+        check_need(&mut c, &format!("profiles.{name}.need"), &p.need);
+    }
+
     let step = stack.lanes.port_step;
     if step == 0 {
         c.err(
@@ -927,4 +932,24 @@ fn find_cycle<'a>(edges: impl Iterator<Item = (&'a str, Vec<&'a str>)>) -> Optio
         }
     }
     None
+}
+
+/// `[lanes.need]`, a profile's `need` (ADR-0049 point 5).
+fn check_need(c: &mut Check<'_>, path: &str, n: &crate::model::Need) {
+    if let Some(cpus) = n.cpus
+        && !(cpus.is_finite() && cpus > 0.0)
+    {
+        c.err(
+            format!("{path}.cpus"),
+            "must be a number of CPU cores above 0",
+        );
+    }
+    if let Some(g) = &n.gpus
+        && g.count == 0
+    {
+        c.err(
+            format!("{path}.gpus.count"),
+            "must be at least 1 (leave `gpus` out for none)",
+        );
+    }
 }

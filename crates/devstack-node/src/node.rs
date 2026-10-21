@@ -19,7 +19,7 @@
 use crate::coordinator::{Lease, LeaseReport, Report};
 use crate::lanerun::{DaemonAddr, LaneRun};
 use crate::member::Local;
-use crate::share::{Amount, Settings, idle_cpus};
+use crate::share::{Amount, Need, Settings, idle_cpus};
 use crate::tls::Peer;
 use axum::extract::{DefaultBodyLimit, Path as UrlPath, State as AxState};
 use axum::http::StatusCode;
@@ -47,6 +47,10 @@ const BLOB_YOUNG: Duration = Duration::from_secs(600);
 /// How often the node looks for members the coordinator no longer lists,
 /// and for kept lanes past their time.
 const PURGE_EVERY: Duration = Duration::from_secs(600);
+/// How often the node measures what its running lanes take of its disk
+/// (ADR-0049 point 2): their slots, volumes (`docker system df -v`, slow)
+/// and images.
+const DISK_EVERY: Duration = Duration::from_secs(300);
 /// How long a stopped lane's slot stays, unless the node's policy says
 /// (ADR-0038 point 3).
 const KEEP_DEDICATED: Duration = Duration::from_secs(7 * 24 * 3600);
@@ -98,7 +102,20 @@ pub struct NodeLease {
     pub member: String,
     pub repo: String,
     pub lane: String,
-    pub need: Amount,
+    pub need: Need,
+    /// The disk it is expected to take here in all (ADR-0049 point 7):
+    /// its slot's part of the need, and the repository's when its images
+    /// were not here (`images`). What it has not written yet is held.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub disk: u64,
+    /// Its images were not here when it was admitted: what they take
+    /// counts as written by it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub images: bool,
+    /// The node is short of disk (ADR-0049 point 8): said with each renewal
+    /// while it is, never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
     /// Unix seconds.
     pub expires: u64,
     /// Unix seconds.
@@ -254,6 +271,11 @@ struct Inner {
     /// What each slot's volumes take, as the last sweep counted (counting
     /// is slow).
     volume_use: Mutex<HashMap<String, u64>>,
+    /// What each slot takes (its directory and volumes), as last counted.
+    slot_use: Mutex<HashMap<String, u64>>,
+    /// What each lease's lane took so far (ADR-0049 point 2). Locked after
+    /// `leases` where both are.
+    runs: Mutex<crate::runs::Runs>,
     /// Whether the coordinator refused this node's API (not granted to run
     /// lanes), said once.
     refused: Mutex<Option<String>>,
@@ -308,6 +330,10 @@ impl Bringing {
     fn ended(&self) -> bool {
         self.ended.load(std::sync::atomic::Ordering::SeqCst)
     }
+}
+
+fn is_zero(v: &u64) -> bool {
+    *v == 0
 }
 
 type Shared = Arc<Inner>;
@@ -391,7 +417,10 @@ impl Inner {
             member: info.member.clone(),
             repo: info.repo.clone(),
             lane: info.lane.clone(),
-            need: Amount::default(),
+            need: Need::default(),
+            disk: 0,
+            images: false,
+            warning: None,
             expires: 0,
             admitted: 0,
             stack_file: None,
@@ -433,6 +462,102 @@ impl Inner {
         self.slot_purging.lock().unwrap().remove(slot);
         self.slot_busy.lock().unwrap().remove(slot);
         true
+    }
+
+    /// What the running leases are still expected to write to disk
+    /// (ADR-0049 point 7): each its `disk`, less what its slot (and the
+    /// images it brought) take as last measured.
+    fn disk_held_in(&self, leases: &HashMap<String, NodeLease>) -> u64 {
+        let runs = self.runs.lock().unwrap();
+        leases
+            .values()
+            .map(|l| {
+                let (lane, images) = runs.written(&l.id);
+                l.disk
+                    .saturating_sub(lane.saturating_add(if l.images { images } else { 0 }))
+            })
+            .sum()
+    }
+
+    /// What the node could free: kept lanes no lease uses (ADR-0038), as
+    /// last counted, all but `except`.
+    fn could_free_in(&self, leases: &HashMap<String, NodeLease>, except: Option<&str>) -> u64 {
+        let sizes = self.slot_use.lock().unwrap();
+        self.kept()
+            .into_iter()
+            .filter(|(slot, _)| Some(slot.as_str()) != except)
+            .filter(|(slot, _)| !leases.values().any(|l| l.slot.as_deref() == Some(slot)))
+            .filter_map(|(slot, _)| sizes.get(&slot).copied())
+            .sum()
+    }
+
+    /// What a new lane can take of the disk (ADR-0049 point 6): free, and
+    /// what the node could free, less what its lanes are still expected
+    /// to write.
+    fn disk_room(&self) -> Option<u64> {
+        let free = devstack_proc::disk_free(&self.root)?;
+        let leases = self.leases.lock().unwrap();
+        let held = self.disk_held_in(&leases);
+        Some(
+            free.saturating_add(self.could_free_in(&leases, None))
+                .saturating_sub(held),
+        )
+    }
+
+    /// Kept lanes go, the least recently used first, until `want` bytes
+    /// are free or none is left; never `except`, nor one a lease uses.
+    fn make_room(&self, want: u64, except: &str) {
+        let mut kept: Vec<(String, SlotInfo)> = self
+            .kept()
+            .into_iter()
+            .filter(|(slot, _)| slot != except)
+            .collect();
+        kept.sort_by_key(|(_, i)| i.used);
+        for (slot, info) in kept {
+            if devstack_proc::disk_free(&self.root).is_none_or(|f| f >= want) {
+                return;
+            }
+            self.purge_slot(&slot, &info, "a lane starting here needs its room on disk");
+        }
+    }
+
+    /// Measure what leases `ls` take of the disk now: their slots, with
+    /// their volumes, and the images of their containers (ADR-0049 point
+    /// 2). `images` taken before, when their containers are gone by now.
+    fn measure_disk(&self, ls: &[NodeLease], images: Option<&HashMap<String, u64>>) {
+        if ls.is_empty() {
+            return;
+        }
+        let volumes = slot_volumes();
+        let measured;
+        let images = match images {
+            Some(i) => i,
+            None => {
+                measured = crate::runs::images_by(&lease_keys(ls));
+                &measured
+            }
+        };
+        let mut sizes = Vec::new();
+        for l in ls {
+            let lane = tree_size(&self.dir_of(l))
+                + l.slot
+                    .as_ref()
+                    .and_then(|sl| volumes.get(sl))
+                    .copied()
+                    .unwrap_or(0);
+            self.runs
+                .lock()
+                .unwrap()
+                .disk(&l.id, lane, images.get(&l.id).copied().unwrap_or(0));
+            if let Some(sl) = &l.slot {
+                sizes.push((sl.clone(), lane));
+            }
+        }
+        self.slot_use.lock().unwrap().extend(sizes);
+        let mut vu = self.volume_use.lock().unwrap();
+        for (slot, bytes) in volumes {
+            vu.insert(slot, bytes);
+        }
     }
 
     fn in_use(&self, slot: &str) -> bool {
@@ -506,6 +631,7 @@ impl Inner {
                 continue;
             }
             let bytes = self.slot_bytes(&slot);
+            self.slot_use.lock().unwrap().insert(slot.clone(), bytes);
             by_member
                 .entry(info.member.clone())
                 .or_default()
@@ -952,6 +1078,9 @@ impl Inner {
         std::thread::spawn(move || {
             // Nothing of it starts once it is taken down.
             s.end_bring_up(&l.id);
+            // What its run took (ADR-0049 point 2): the images while its
+            // containers are there, its slot once they stopped.
+            let images = crate::runs::images_by(&lease_keys(std::slice::from_ref(&l)));
             let run = s.run(&l);
             match &l.slot {
                 Some(slot) => {
@@ -960,6 +1089,7 @@ impl Inner {
                         if l.stack_file.is_some() {
                             run.stop(s.container.as_deref());
                         }
+                        s.measure_disk(std::slice::from_ref(&l), Some(&images));
                         s.note_slot(
                             slot,
                             &SlotInfo {
@@ -970,8 +1100,10 @@ impl Inner {
                             },
                         );
                     } else {
+                        s.measure_disk(std::slice::from_ref(&l), Some(&images));
                         run.purge(s.container.as_deref());
                         remove_built_images(slot);
+                        s.slot_use.lock().unwrap().remove(slot);
                     }
                     s.slot_busy.lock().unwrap().remove(slot);
                 }
@@ -983,6 +1115,7 @@ impl Inner {
                     let _ = std::fs::remove_dir_all(&run.dir);
                 }
             }
+            s.runs.lock().unwrap().end(&l.id);
             // Its blobs stay: the same lane started again sends only what
             // changed (#99); they go under pressure, or with the member.
         });
@@ -1284,21 +1417,6 @@ async fn admit(
     if let Err(why) = crate::policy::NodePolicy::admits_all(&all, &who, &tags, &lease.repo) {
         return Err(err(StatusCode::FORBIDDEN, format!("{}: {why}", s.name)));
     }
-    // A lane needs room on disk too: its mirror, builds, images and volumes
-    // (ADR-0038), whatever its slot keeps already.
-    if let Some(free) = devstack_proc::disk_free(&s.root)
-        && free < crate::coordinator::MIN_DISK_FREE
-    {
-        return Err(err(
-            StatusCode::CONFLICT,
-            format!(
-                "{} has {} MiB of disk free, less than {} MiB",
-                s.name,
-                free >> 20,
-                crate::coordinator::MIN_DISK_FREE >> 20
-            ),
-        ));
-    }
     // The node admits against what it has now (ADR-0031 point 4), and takes
     // a lane to need at least the least; checked below, with the lease
     // recorded in the same step.
@@ -1312,12 +1430,44 @@ async fn admit(
         .and_then(|b| serde_json::from_slice::<SlotInfo>(&b).ok())
         .filter(|_| s.slots().join(&slot).join("manifest.json").is_file())
         .map(|i| i.used);
+    // Its disk (ADR-0049 point 6): the repository's images unless a lane of
+    // it ran here, and its slot's part, less what a kept slot takes already.
+    let images = !s.kept().iter().any(|(_, i)| i.repo == lease.repo);
+    let disk = if images { lease.need.disk_repo } else { 0 }.saturating_add(lease.need.disk_lane);
+    let there = if kept.is_some() {
+        s.slot_use.lock().unwrap().get(&slot).copied().unwrap_or(0)
+    } else {
+        0
+    };
+    // GPUs it asks for are GPUs this machine has.
+    if let Some(g) = lease.need.gpus.filter(|g| g.count > 0) {
+        let fit = tokio::task::spawn_blocking(crate::share::gpus)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter(|x| x.memory >= g.memory)
+            .count();
+        if (fit as u32) < g.count {
+            return Err(err(
+                StatusCode::CONFLICT,
+                format!(
+                    "{} has {fit} GPU(s) with {} or more, the lane asks for {}",
+                    s.name,
+                    crate::coordinator::gib(g.memory),
+                    g.count
+                ),
+            ));
+        }
+    }
     let l = NodeLease {
         id: lease.id,
         member: who,
         repo: lease.repo,
         lane: lease.lane,
         need: lease.need,
+        disk,
+        images,
+        warning: None,
         expires: now + TTL.as_secs(),
         admitted: now,
         stack_file: None,
@@ -1338,6 +1488,34 @@ async fn admit(
                 l.need.memory >> 20
             ),
         ));
+    }
+    // Room on disk, with what its lanes are still to write held, and what
+    // kept lanes take counted as room: they go first (ADR-0049 points 6, 7).
+    let mut prune = None;
+    if let Some(free) = devstack_proc::disk_free(&s.root) {
+        let held = s.disk_held_in(&leases);
+        let beyond = disk.saturating_sub(there);
+        let want = beyond
+            .saturating_add(held)
+            .saturating_add(crate::coordinator::MIN_DISK_FREE);
+        let room = free.saturating_add(s.could_free_in(&leases, Some(&slot)));
+        if room < want {
+            let gib = crate::coordinator::gib;
+            return Err(err(
+                StatusCode::CONFLICT,
+                format!(
+                    "{} has {} for lanes on disk (free, and kept lanes it could remove); the lane needs {} there, its lanes are to write {} yet, and {} stay free",
+                    s.name,
+                    gib(room),
+                    gib(beyond),
+                    gib(held),
+                    gib(crate::coordinator::MIN_DISK_FREE)
+                ),
+            ));
+        }
+        if free < want {
+            prune = Some(want);
+        }
     }
     if s.slot_purging.lock().unwrap().contains(&slot) {
         return Err(err(
@@ -1370,6 +1548,13 @@ async fn admit(
     );
     leases.insert(l.id.clone(), l.clone());
     s.save(&leases);
+    s.runs.lock().unwrap().begin(&l.id, &l.repo);
+    drop(leases);
+    if let Some(want) = prune {
+        let s2 = s.clone();
+        let keep = slot.clone();
+        std::thread::spawn(move || s2.make_room(want, &keep));
+    }
     s.changed.notify_one();
     Ok((StatusCode::CREATED, Json(l)))
 }
@@ -1390,8 +1575,20 @@ async fn renew(
         ));
     };
     l.expires = crate::store::now() + TTL.as_secs();
-    let out = l.clone();
+    let mut out = l.clone();
     s.save(&leases);
+    drop(leases);
+    // Short of disk: its requester hears it with each renewal (ADR-0049
+    // point 8); the lane goes on.
+    if let Some(free) =
+        devstack_proc::disk_free(&s.root).filter(|f| *f < crate::coordinator::MIN_DISK_FREE)
+    {
+        out.warning = Some(format!(
+            "{} has only {} of disk free: the lane may fail to write",
+            s.name,
+            crate::coordinator::gib(free)
+        ));
+    }
     Ok(Json(out))
 }
 
@@ -1798,6 +1995,8 @@ async fn start(
     {
         return Err(err(StatusCode::BAD_REQUEST, "not a profile's name"));
     }
+    // Its run is the profile's (ADR-0049 point 3).
+    s.runs.lock().unwrap().profile(&id, profile.clone());
     if safe_path(&stack_file).is_none() {
         return Err(err(
             StatusCode::BAD_REQUEST,
@@ -3047,34 +3246,19 @@ fn mounts_under(name: &str, root: &Path) -> bool {
         .any(|m| !m.trim().is_empty() && Path::new(m.trim()).starts_with(root))
 }
 
-/// What the containers of the lanes `ids` use now (`docker stats`): their
-/// names carry the lease's id.
-fn lanes_use(ids: &[String]) -> Amount {
-    if ids.is_empty() {
-        return Amount::default();
-    }
-    let Ok(out) = std::process::Command::new("docker")
-        .args(["ps", "--format", "{{.Names}}"])
-        .output()
-    else {
-        return Amount::default();
-    };
-    let names: Vec<String> = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|n| ids.iter().any(|id| n.contains(id.as_str())))
-        .map(str::to_string)
-        .collect();
-    if names.is_empty() {
-        return Amount::default();
-    }
-    let stats = devstack_compose::Docker::default()
-        .stats(&names)
-        .unwrap_or_default();
-    Amount {
-        cpus: stats.iter().map(|s| s.cpu / 100.0).sum(),
-        memory: stats.iter().map(|s| s.memory).sum(),
-    }
+/// Each lease's id with the names its containers carry: the lane container
+/// its id, its infrastructure its slot's (ADR-0038).
+fn lease_keys(ls: &[NodeLease]) -> Vec<(String, Vec<String>)> {
+    ls.iter()
+        .map(|l| {
+            (
+                l.id.clone(),
+                std::iter::once(l.id.clone())
+                    .chain(l.slot.clone())
+                    .collect(),
+            )
+        })
+        .collect()
 }
 
 /// The shortest interval idle CPU is measured over: a round a lease change
@@ -3101,6 +3285,7 @@ async fn background(s: Shared) {
     let mut collects: Option<(Instant, bool)> = None;
     let mut sent = Instant::now() - Duration::from_secs(60);
     let mut purged: Option<Instant> = None;
+    let mut disk_at: Option<Instant> = None;
     loop {
         next_round(wait, &s.changed).await;
         wait = EVERY;
@@ -3132,20 +3317,38 @@ async fn background(s: Shared) {
             cpus: free_cpus,
             memory: devstack_proc::memory_available().unwrap_or(0),
         };
-        // What the pool's lanes use here now, their infrastructure included
-        // (their containers carry the lease's id).
-        // The lane containers carry the lease's id, their infrastructure its
-        // slot's (ADR-0038).
-        let ids: Vec<String> = s
-            .leases
-            .lock()
-            .unwrap()
-            .values()
-            .flat_map(|l| std::iter::once(l.id.clone()).chain(l.slot.clone()))
-            .collect();
-        let used = tokio::task::spawn_blocking(move || lanes_use(&ids))
+        // What the pool's lanes use here now, their infrastructure included,
+        // each lease's into its run (ADR-0049 point 2).
+        let keys = lease_keys(
+            &s.leases
+                .lock()
+                .unwrap()
+                .values()
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        let by = tokio::task::spawn_blocking(move || crate::runs::use_by(&keys))
             .await
             .unwrap_or_default();
+        {
+            let mut runs = s.runs.lock().unwrap();
+            for (id, a) in &by {
+                runs.load(id, *a);
+            }
+        }
+        let used = by.values().fold(Amount::default(), |a, b| Amount {
+            cpus: a.cpus + b.cpus,
+            memory: a.memory + b.memory,
+        });
+        if disk_at.is_none_or(|t| t.elapsed() >= DISK_EVERY) {
+            disk_at = Some(Instant::now());
+            let s2 = s.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let ls: Vec<NodeLease> = s2.leases.lock().unwrap().values().cloned().collect();
+                s2.measure_disk(&ls, None);
+            })
+            .await;
+        }
         let offer = Settings {
             enabled: true,
             ..s.share.clone()
@@ -3235,6 +3438,10 @@ async fn background(s: Shared) {
                 let _ = crate::telemetry::node_logs_body("devstack-node");
             }
         }
+        // Taken one at a time: a guard in the literal below would live to
+        // its end, and `leases` is locked there (`runs` after `leases`).
+        let runs = s.runs.lock().unwrap().report();
+        let disk_room = s.disk_room();
         let report = Report {
             total: Some(total),
             used: Some(used),
@@ -3258,6 +3465,8 @@ async fn background(s: Shared) {
                 })
                 .collect(),
             disk_free: devstack_proc::disk_free(&s.root),
+            disk_room,
+            runs,
             leases: s
                 .leases
                 .lock()
@@ -3273,8 +3482,12 @@ async fn background(s: Shared) {
                 })
                 .collect(),
         };
+        let sent = report.runs.clone();
         let s2 = s.clone();
         let answer = tokio::task::spawn_blocking(move || s2.local.report(&report)).await;
+        if let Ok(Ok(_)) = &answer {
+            s.runs.lock().unwrap().reported(&sent);
+        }
         // What an admin set for this node (ADR-0033); the last known holds
         // while the coordinator does not answer.
         let s3 = s.clone();
@@ -3447,6 +3660,8 @@ pub async fn serve(
         slot_purging: Mutex::new(HashSet::new()),
         kept_use: Mutex::new(None),
         volume_use: Mutex::new(HashMap::new()),
+        slot_use: Mutex::new(HashMap::new()),
+        runs: Mutex::new(crate::runs::Runs::default()),
         views_ok: Mutex::new(HashMap::new()),
         refused: Mutex::new(None),
         coordinator: Mutex::new(None),
@@ -3462,6 +3677,13 @@ pub async fn serve(
         phase_times: Mutex::new(HashMap::new()),
         changed: tokio::sync::Notify::new(),
     });
+    {
+        let leases = s.leases.lock().unwrap();
+        let mut runs = s.runs.lock().unwrap();
+        for l in leases.values() {
+            runs.begin(&l.id, &l.repo);
+        }
+    }
     let bg = tokio::spawn(background(s.clone()));
     // The containers of the running lanes: their states and load into each
     // lane's file, so its dashboard shows them (#101).

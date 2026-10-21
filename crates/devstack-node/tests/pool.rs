@@ -163,7 +163,7 @@ fn an_admin_manages_the_pool_over_the_api() {
 #[test]
 fn the_pool_knows_which_devstack_each_party_runs() {
     use devstack_node::coordinator::{LeaseReport, LeaseRequest, SharedService, Sharing};
-    use devstack_node::share::Amount;
+    use devstack_node::share::Need;
     use devstack_node::version::{PROTOCOL, Release};
 
     let coord = tempfile::tempdir().unwrap();
@@ -202,10 +202,14 @@ fn the_pool_knows_which_devstack_each_party_runs() {
             node: node.into(),
             repo: "shop".into(),
             lane: "fix".into(),
-            need: Amount {
+            need: Need {
                 cpus: 0.5,
                 memory: 1 << 30,
+                ..Need::default()
             },
+            need_from: None,
+            floor: None,
+            profile: None,
             devstack,
         })
     };

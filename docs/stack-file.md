@@ -438,6 +438,12 @@ dockerfile = "dev/lane.Dockerfile"            # or one the node builds from the 
 sync       = ["web/certs/*.pem"]              # ignored files such a lane needs all the same
 share      = ["team:qa"]                      # whom such a lane is shared with by default (`*`: everyone); none: nobody
 keep_data  = true                             # the default: such a lane keeps its data on its node for its next start there (ADR-0038)
+
+[lanes.need]                                  # what a lane needs at least (ADR-0049): a floor, never an override
+cpus   = 2
+memory = "6G"                                 # sizes: 512M, 6G, 25GiB (powers of 1024); a bare number is bytes
+disk   = "25G"                                # in all: images, source, dependencies, builds, volumes
+gpus   = { count = 1, memory = "16G" }        # a lane in the pool goes only to a node that offers them
 ```
 
 `port_step` is 1-10000. `dockerfile` and `sync` stay inside the repository
@@ -481,6 +487,17 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
   view it read only: its state, logs and events (ADR-0040, never its
   environment); they do not control it. A group's `shared` containers are the main tree's and
   never shared.
+- `need` ([ADR-0049](adr/0049-a-lanes-need-is-measured-disk-included.md)):
+  what a lane needs **at least**. The pool places a lane by what the
+  repository's lanes took where they ran (the most of each part over the
+  last five runs, measured by the nodes), or, before any ran there, by what
+  this machine estimates from the main tree; `need` raises either to what it
+  says, it never lowers them. Every key is optional; `cpus` is above 0, a
+  `gpus` table asks for `count` GPUs (1 if not given) with at least
+  `memory` each. A lane on this machine checks its disk against what the
+  main tree's snapshot, artifacts, logs and volumes take, not against
+  `need`: it shares the images, and its worktree is there already. A file
+  with `need` should say `requires = "0.17.0"` in `[stack]`.
 - `sync`: a lane on another machine gets the worktree's files without the
   ignored ones, like a local lane's snapshot. What it needs all the same, a
   TLS certificate made for `localhost` by a local CA the browser trusts, say,
@@ -566,6 +583,7 @@ data      = "fresh"                      # the tree's own volumes go first: seed
 autostart = ["api", "web", "worker"]     # these start, instead of each service's autostart
 env       = { BASE_URL = "{service.web.url}", JOBS_URL = "{compose.app.scheduler.4000}" }
 command   = "e2e"                        # `up --profile acceptance --run` runs it once ready
+need      = { memory = "8G" }            # a lane with it needs at least this, over [lanes.need] (ADR-0049)
 
 [profiles.acceptance.services.web]
 kind   = "static"                        # a build served as files instead of a dev server
@@ -581,7 +599,9 @@ devstack lane start <lane> --profile acceptance --run  # from the main tree
 - **What it may set:** `workers`, `data` (`keep`, the default, or
   `fresh`), `env` (for every service and every command's `exec` steps, with
   the placeholders a command has: no `{port}`, `{artifact}` or
-  `{is_main}`), `autostart`, `command` (one of `[commands]`), and
+  `{is_main}`), `autostart`, `command` (one of `[commands]`), `need` (as
+  `[lanes.need]`, each part the larger of the two; a lane with the profile
+  is measured on its own, its runs are the profile's), and
   per service `kind`, `build`, `output`, `run`, `spa`, `cwd`, `health` and
   `env`. A service it does not name runs as the file says. Its `env` is
   added to every service's, a service's own `env` in the profile on top.

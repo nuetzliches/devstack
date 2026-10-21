@@ -7,7 +7,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { api, paths } from '@/api';
 import type { LaneView, Placement } from '@/api/types';
-import { duration, useNow } from '@/lib/format';
+import { bytes, duration, useNow } from '@/lib/format';
 import { laneLabel } from '@/lib/lanes';
 import { usePool } from '@/stores/pool';
 import { useStack } from '@/stores/stack';
@@ -36,8 +36,13 @@ const current = computed(() => {
 });
 /** Lanes running on a node now, of its pool's leases. */
 const lanesOn = (poolName: string, node: string) => (pool.overviews[poolName]?.leases ?? []).filter((l) => l.node === node).length;
+/** The stack file's profiles (ADR-0041): how the lane runs for a purpose. */
+const profiles = computed(() => stack.view?.profiles ?? []);
+const profile = ref('');
+const chosen = computed(() => profiles.value.find((p) => p.name === profile.value) ?? null);
 /** Where each pool's coordinator would start this lane, best first, with why
- * (ADR-0026 point 3): its own order, not one guessed here. */
+ * (ADR-0026 point 3): its own order, not one guessed here; by what the
+ * lane's runs with the chosen profile took (ADR-0049). */
 const placement = ref<Record<string, Placement[]>>({});
 async function loadPlacement() {
   const repo = stack.view?.name;
@@ -45,7 +50,7 @@ async function loadPlacement() {
   const out: Record<string, Placement[]> = {};
   for (const p of pool.placeable) {
     try {
-      const r = await api().request<Placement[]>('GET', paths.poolPlacement(p.pool, repo, props.lane.name));
+      const r = await api().request<Placement[]>('GET', paths.poolPlacement(p.pool, repo, props.lane.name, profile.value || undefined));
       if (r.ok && Array.isArray(r.body)) out[p.pool] = r.body;
     } catch {
       // An older coordinator has no order to give: the cards show the numbers.
@@ -53,7 +58,7 @@ async function loadPlacement() {
   }
   placement.value = out;
 }
-watch(() => [props.lane.name, stack.view?.name, pool.placeable.map((p) => p.pool).join()], () => void loadPlacement(), { immediate: true });
+watch(() => [props.lane.name, stack.view?.name, pool.placeable.map((p) => p.pool).join(), profile.value], () => void loadPlacement(), { immediate: true });
 const placementTimer = setInterval(() => void loadPlacement(), 30_000);
 onBeforeUnmount(() => clearInterval(placementTimer));
 /** A node's place in its pool's order: its rank (1: the pick) and why. */
@@ -63,10 +68,6 @@ function placeOf(poolName: string, nodeId: string) {
   return i < 0 ? null : { rank: i + 1, pick: i === 0 && list[0].eligible, ...list[i] };
 }
 
-/** The stack file's profiles (ADR-0041): how the lane runs for a purpose. */
-const profiles = computed(() => stack.view?.profiles ?? []);
-const profile = ref('');
-const chosen = computed(() => profiles.value.find((p) => p.name === profile.value) ?? null);
 
 function start(on?: string) {
   void stack.startLane(props.lane.name, on, profile.value || undefined);
@@ -165,7 +166,8 @@ function start(on?: string) {
             <span v-if="placeOf(n.pool, n.node.id)?.pick" class="pill sm info" data-testid="lane-start-pick" :title="`The coordinator would start it here: ${placeOf(n.pool, n.node.id)?.why}`">pool's pick</span>
           </span>
           <span v-if="placeOf(n.pool, n.node.id)" class="why" :class="{ err: !placeOf(n.pool, n.node.id)?.eligible }" data-testid="lane-start-why">
-            {{ placeOf(n.pool, n.node.id)?.eligible ? `#${placeOf(n.pool, n.node.id)?.rank} · ` : 'cannot take it: ' }}{{ placeOf(n.pool, n.node.id)?.why }}
+            {{ placeOf(n.pool, n.node.id)?.eligible ? `#${placeOf(n.pool, n.node.id)?.rank} · ` : 'cannot take it: ' }}{{ placeOf(n.pool, n.node.id)?.why
+            }}<template v-if="placeOf(n.pool, n.node.id)?.eligible && placeOf(n.pool, n.node.id)?.disk"> · needs {{ bytes(placeOf(n.pool, n.node.id)?.disk) }} of disk there</template>
           </span>
           <NodeLoad :pool="n.pool" :node="n.node" :lanes="lanesOn(n.pool, n.node.id)" />
         </button>
