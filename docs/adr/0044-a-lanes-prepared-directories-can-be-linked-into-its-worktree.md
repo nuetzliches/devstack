@@ -1,6 +1,6 @@
 # ADR-0044: A lane's prepared directories can be linked into its worktree
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-21)
 - **Date:** 2026-10-21
 - **Deciders:** project owner
 - **Related:** [#159](https://github.com/nuetzliches/devstack/issues/159), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (a lane runs from a copy), plan §3.5
