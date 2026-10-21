@@ -1,6 +1,6 @@
 # ADR-0046: The hub opens a stack's worktree in the user's own programs, from a fixed list
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-21)
 - **Date:** 2026-10-21
 - **Deciders:** project owner
 - **Related:** [ADR-0011](0011-platform-windows-native-first.md), [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0040](0040-a-shared-lane-can-be-watched-like-ones-own.md)
@@ -95,7 +95,7 @@ Windows Terminal is the `wt.exe` app alias on `PATH`.
 
 - `crates/devstack-hub/src/open.rs` (the list, finding, starting), routes
   `/hub/openers` and `/hub/open` in `crates/devstack-hub/src/lib.rs`.
-- `crates/devstack-daemon/src/lanes.rs` (`worktree_paths`).
+- `crates/devstack-daemon/src/lanes.rs` (`worktree_of`).
 - `ui/src/components/StackHeader.vue` (the path's menu).
 - `docs/dashboard-api.md` (`/hub/openers`, `/hub/open`).
 
