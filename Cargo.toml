@@ -84,6 +84,7 @@ devstack-build = { path = "crates/devstack-build" }
 devstack-daemon = { path = "crates/devstack-daemon" }
 devstack-node = { path = "crates/devstack-node" }
 devstack-hub = { path = "crates/devstack-hub" }
+devstack-skills = { path = "crates/devstack-skills" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

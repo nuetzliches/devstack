@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref, shallowRef, triggerRef, watch } from 'vue';
 import { api, paths, sharedRef, v1, type GroupAction, type ServiceAction, type StreamState, type Subscription } from '@/api';
-import type { Branches, LaneView, Point, Pruned, Run, ServiceView, StackEvent, StackView, UsageReport } from '@/api/types';
+import type { Branches, LaneView, Point, Pruned, Run, ServiceView, SkillsState, StackEvent, StackView, UsageReport } from '@/api/types';
 import { samePath } from '@/lib/lanes';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
@@ -166,6 +166,8 @@ export const useStack = defineStore('stack', () => {
     lanesOf.value = null;
     goneLane.value = null;
     branches.value = null;
+    skills.value = null;
+    void loadSkills();
     persist.saveLastStack(next);
     lane.value = persist.get<string | null>(`lane.${next}`) ?? null;
     reset(next);
@@ -312,6 +314,43 @@ export const useStack = defineStore('stack', () => {
   }
 
   /** Throw a stopped lane's data away, here and on its nodes (ADR-0038): its next start is fresh. */
+  // ------------------------------------------------------------ agent skills
+
+  /** The agent skills in the stack's repository, against this devstack (`GET /hub/stacks/{id}/skills`). */
+  const skills = shallowRef<SkillsState | null>(null);
+
+  async function loadSkills() {
+    const sid = id.value;
+    if (!sid || foreign.value) return;
+    try {
+      const res = await api().request<SkillsState>('GET', paths.skills(sid));
+      const b = res.body;
+      if (sid === id.value && res.ok && b && typeof b === 'object' && Array.isArray(b.outdated)) skills.value = b;
+    } catch {
+      // nothing shown; the next visit asks again
+    }
+  }
+
+  /** `devstack skills install` in the stack's repository, by the hub. */
+  async function refreshSkills() {
+    const sid = id.value;
+    if (!sid) return;
+    busy.value.skills = 'install';
+    try {
+      const r = await act<SkillsState>({
+        label: 'Refresh the agent skills',
+        path: paths.skills(sid),
+        success: (b) =>
+          b?.kept?.length
+            ? `Skills written; ${b.kept.length} of the project's own kept`
+            : 'Skills written to .claude/skills: commit them with the repository',
+      });
+      if (r.ok && r.body && sid === id.value) skills.value = r.body;
+    } finally {
+      delete busy.value.skills;
+    }
+  }
+
   // ------------------------------------------------------------ branches
 
   /** The repository's branches (ADR-0047), loaded when the picker opens. */
@@ -924,6 +963,9 @@ export const useStack = defineStore('stack', () => {
     shownLane,
     ending,
     sharedLane,
+    skills,
+    loadSkills,
+    refreshSkills,
     branches,
     loadBranches,
     fetchBranches,

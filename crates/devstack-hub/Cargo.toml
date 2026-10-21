@@ -17,6 +17,7 @@ bytes.workspace = true
 devstack-daemon.workspace = true
 devstack-node.workspace = true
 devstack-proc.workspace = true
+devstack-skills.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true

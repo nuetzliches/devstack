@@ -221,6 +221,22 @@ export type InfraView = { group: string; project: string; containers: ContainerV
 
 export type GroupView = { name: string; label: string; order: number | null; members: string[] };
 
+/**
+ * `GET /hub/stacks/{id}/skills`: the agent skills `devstack skills install`
+ * wrote into the repository, held against what this devstack would write.
+ */
+export type SkillsState = {
+  found: string[];
+  outdated: string[];
+  /** The devstack they were written by: the one the repository was last set up with. */
+  from: string | null;
+  current: string;
+  /** Written by a newer devstack than this one: refreshing would go back. */
+  ahead: boolean;
+  /** After `POST`: skills of the same name the project wrote itself, left alone. */
+  kept?: string[];
+};
+
 export type CommandView = { name: string; description: string; confirm: string | null; requires: string[] };
 
 export type StackView = {

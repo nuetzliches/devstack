@@ -515,6 +515,31 @@ fn a_stack_is_added_or_drafted_from_the_dashboard() {
         std::thread::sleep(Duration::from_millis(200));
     }
 
+    // Its agent skills: none yet; installed from the dashboard, current.
+    let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let skills = format!("/hub/stacks/{id}/skills");
+    let (s, _, body) = get(p, &skills, &with);
+    assert_eq!(s, 200, "{body}");
+    assert!(
+        body.contains("\"found\":[]") && body.contains("\"from\":null"),
+        "{body}"
+    );
+    let (s, _, _) = post(&skills, "", false);
+    assert_eq!(s, 403, "no Origin, no change");
+    let (s, _, body) = post(&skills, "", true);
+    assert_eq!(s, 200, "{body}");
+    assert!(shop.join(".claude/skills/devstack/SKILL.md").is_file());
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        v["found"],
+        serde_json::json!(["devstack", "devstack-config"])
+    );
+    assert_eq!(v["outdated"], serde_json::json!([]));
+    assert_eq!(v["from"], v["current"]);
+
     // An empty folder: a draft is written (never over an existing file).
     let crm = h.home.path().join("crm");
     std::fs::create_dir_all(&crm).unwrap();
