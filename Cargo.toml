@@ -54,11 +54,16 @@ sha2 = "0.11"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 flate2 = "1"
 tar = "0.4"
+# WinRT toasts (ADR-0045); windows-sys has no WinRT.
+windows = { version = "0.62", features = ["Data_Xml_Dom", "Foundation", "UI_Notifications"] }
+# Desktop notifications on Linux over the session bus, pure Rust (ADR-0045).
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_ProcessStatus",
+    "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",

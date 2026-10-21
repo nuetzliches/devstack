@@ -59,6 +59,89 @@ fn hub_get(path: &str) -> Result<Value> {
     Ok(v)
 }
 
+/// `method path` on the hub with a JSON body; the answer, or its error.
+fn hub_send(method: &str, path: &str, body: Option<Value>) -> Result<Value> {
+    let port = devstack_hub::ensure_running().map_err(|e| anyhow!(e))?;
+    let url = format!("http://127.0.0.1:{port}{path}");
+    let auth = format!("Bearer {}", token()?);
+    let a = agent();
+    let mut r = match (method, body) {
+        ("PUT", Some(b)) => a
+            .put(&url)
+            .header("Authorization", &auth)
+            .header("Content-Type", "application/json")
+            .send(b.to_string())?,
+        ("POST", _) => a.post(&url).header("Authorization", &auth).send_empty()?,
+        _ => bail!("unsupported request {method} {path}"),
+    };
+    let text = r.body_mut().read_to_string()?;
+    let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    if !r.status().is_success() {
+        bail!("{}", v["error"].as_str().unwrap_or(&text));
+    }
+    Ok(v)
+}
+
+/// `devstack hub notify`: what notifies, and whether the desktop shows it.
+pub fn notify_show() -> Result<()> {
+    print_notify(&hub_get("/hub/notify")?);
+    Ok(())
+}
+
+fn print_notify(v: &Value) {
+    match v["unavailable"].as_str() {
+        None => println!("notifications: shown by the desktop"),
+        Some(why) => println!("notifications: not shown ({why})"),
+    }
+    for k in v["kinds"].as_array().into_iter().flatten() {
+        println!(
+            "  {:<3} {:<15} {}",
+            if k["on"] == true { "on" } else { "off" },
+            k["kind"].as_str().unwrap_or(""),
+            k["label"].as_str().unwrap_or("")
+        );
+    }
+    let muted: Vec<&str> = v["muted"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    if !muted.is_empty() {
+        println!("muted (stack id, or stack id/lane): {}", muted.join(", "));
+    }
+}
+
+/// `devstack hub notify on|off <kind>...|all`.
+pub fn notify_set(kinds: &[String], on: bool) -> Result<()> {
+    let names: Vec<String> = if kinds.iter().any(|k| k == "all") {
+        hub_get("/hub/notify")?["kinds"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|k| k["kind"].as_str().map(str::to_string))
+            .collect()
+    } else {
+        kinds.to_vec()
+    };
+    let map: serde_json::Map<String, Value> =
+        names.into_iter().map(|k| (k, Value::Bool(on))).collect();
+    let v = hub_send(
+        "PUT",
+        "/hub/notify",
+        Some(serde_json::json!({ "kinds": map })),
+    )?;
+    print_notify(&v);
+    Ok(())
+}
+
+/// `devstack hub notify test`.
+pub fn notify_test() -> Result<()> {
+    hub_send("POST", "/hub/notify/test", None)?;
+    println!("a test notification is on its way; a click on it opens the dashboard");
+    Ok(())
+}
+
 /// `?pool=<name>` for a pool other than the default one; a name that is no
 /// pool's (ADR-0034) is refused before it goes into a URL.
 fn pool_query(pool: Option<&str>) -> Result<String> {
@@ -179,6 +262,29 @@ pub fn pairing_url() -> Result<String> {
         .ok_or_else(|| anyhow!("no url in the hub's answer"))
 }
 
+/// Open the dashboard at `route` (a hash route, `/#/s/<id>?lane=`), paired
+/// like `devstack ui`: a click on a notification (`devstack://open`).
+pub fn open_dashboard(route: &str) -> Result<()> {
+    let url = format!(
+        "{}&next={}",
+        pairing_url()?,
+        devstack_hub::next_param(route)
+    );
+    match chosen_browser(None) {
+        Some(b) => open_in(&b, &url),
+        None => open_browser(&url),
+    }
+}
+
+/// `devstack ui` and `devstack://open` name the browser the same way.
+fn chosen_browser(explicit: Option<&str>) -> Option<String> {
+    explicit
+        .map(str::to_string)
+        .or_else(|| std::env::var("DEVSTACK_BROWSER").ok())
+        .or_else(|| std::env::var("BROWSER").ok())
+        .filter(|b| !b.trim().is_empty())
+}
+
 pub fn ui(print_only: bool, browser: Option<&str>) -> Result<()> {
     let url = pairing_url()?;
     if print_only {
@@ -187,11 +293,7 @@ pub fn ui(print_only: bool, browser: Option<&str>) -> Result<()> {
     }
     // The pairing belongs to the browser that opens the link, so it must be
     // the one you develop in, not just the system default (#9).
-    let chosen = browser
-        .map(str::to_string)
-        .or_else(|| std::env::var("DEVSTACK_BROWSER").ok())
-        .or_else(|| std::env::var("BROWSER").ok())
-        .filter(|b| !b.trim().is_empty());
+    let chosen = chosen_browser(browser);
     match &chosen {
         Some(b) => open_in(b, &url)?,
         None => open_browser(&url)?,
@@ -232,8 +334,11 @@ fn open_in(name: &str, url: &str) -> Result<()> {
         use std::os::windows::process::CommandExt;
         // `start` finds browsers by their registered name (App Paths), which
         // are rarely on PATH; the empty title keeps a quoted path a program.
+        // cmd reads the line again: the address in quotes, or an `&` in it
+        // (`/auth?code=…&next=…`) would end the command.
         let mut c = std::process::Command::new("cmd");
-        c.args(["/d", "/c", "start", "", &program, url]);
+        c.args(["/d", "/c", "start", "", &program]);
+        c.raw_arg(format!("\"{url}\""));
         c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         c
     };
@@ -258,7 +363,9 @@ fn open_in(name: &str, url: &str) -> Result<()> {
 /// handlers, and a scheme like `ms-msdt:` or `search-ms:` starts programs.
 fn web_url(url: &str) -> Result<()> {
     let lower = url.trim_start().to_ascii_lowercase();
-    if lower.starts_with("http://") || lower.starts_with("https://") {
+    if (lower.starts_with("http://") || lower.starts_with("https://"))
+        && !url.contains(['"', '\n', '\r'])
+    {
         Ok(())
     } else {
         bail!("not opening `{url}`: only http and https addresses are opened")
@@ -358,5 +465,8 @@ mod tests {
         assert!(!ok("search-ms:query=x"));
         assert!(!ok("file:///C:/Windows"));
         assert!(!ok("javascript:alert(1)"));
+        // cmd gets the address in quotes (`open_in`): it may not end them.
+        assert!(!ok("http://x/\" & calc & \""));
+        assert!(ok("http://127.0.0.1:4250/auth?code=c&next=%2F%23%2F"));
     }
 }

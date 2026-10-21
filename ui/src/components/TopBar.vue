@@ -8,6 +8,7 @@ import { useStack } from '@/stores/stack';
 import { useUi } from '@/stores/ui';
 import StackSwitcher from './StackSwitcher.vue';
 import PendingIndicator from './PendingIndicator.vue';
+import NotifyMenu from './NotifyMenu.vue';
 import Icon from './icons/Icon.vue';
 
 const hub = useHub();
@@ -88,6 +89,7 @@ const mismatch = computed(() => {
         <span class="hide-sm">{{ conn.label }}</span>
         <span class="sr-only">{{ conn.title }}</span>
       </span>
+      <NotifyMenu />
       <button type="button" class="btn btn-ghost btn-sm btn-icon" :aria-label="themeLabel" :title="themeLabel" data-testid="theme-toggle" @click="ui.cycleTheme()">
         <Icon :name="themeIcon" />
       </button>

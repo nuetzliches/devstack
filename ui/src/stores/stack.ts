@@ -302,8 +302,14 @@ export const useStack = defineStore('stack', () => {
   }
 
   // Follow the hub: connect when the stack starts, drop the stream when it stops.
+  // A lane chosen before the hub said the stack runs (a link, the first load
+  // of a page) streams from its own API, which does not carry the lanes:
+  // they are read now, as `reset` would have.
   watch(running, (r) => {
-    if (r && !sub) connect();
+    if (r && !sub) {
+      connect();
+      if (lanesOf.value !== id.value) void loadLanes();
+    }
     if (!r && sub) {
       disconnect();
       if (viewAt.value === null && view.value) viewAt.value = Date.now();

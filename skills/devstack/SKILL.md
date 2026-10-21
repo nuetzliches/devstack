@@ -75,6 +75,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack run <command>` | a command of the stack file (list below) |
 | `devstack top` | CPU, memory, disk per service, container, group and lane |
 | `devstack ui` | dashboard in the browser (pairs the browser once); `--browser chrome\|edge\|firefox\|brave\|<path>`, else `DEVSTACK_BROWSER`, else `BROWSER` picks the browser, `--print` only prints the link |
+| `devstack hub notify` | the desktop notifications the hub shows (a build failed, a candidate held, a service crashed, a lane's start on a node failed) and whether they show; `on\|off <kind>…\|all`, `test`. The user's own choice: change it only when asked |
 | `devstack update` | install the newest devstack (`--check` only asks); stacks switch at their next restart |
 | `devstack down` | stop the services and the daemon; containers keep running. `down --infra` removes them too. In the main tree, lanes that run keep the daemon and the infrastructure (only the main tree's services stop); `down --all` stops the lanes too: ask first, they may be someone else's |
 

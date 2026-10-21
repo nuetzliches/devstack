@@ -9,7 +9,31 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **Desktop notifications** ([ADR-0045](docs/adr/0045-the-hub-notifies-the-desktop.md), #156):
+  the hub follows every running stack and each of its started lanes (on a
+  node too) and tells the desktop when a build failed, a candidate is held
+  for `promote`, a service exited by itself or failed to start, or a lane's
+  start or move on a node failed; on request also when a lane took the main
+  ports or a candidate went live. Only changes notify, and the same thing for
+  the same service once in five minutes (a crash loop is one notification).
+  Windows shows a toast, Linux uses the desktop's notification service over
+  D-Bus (the binary stays static; without a desktop session nothing shows).
+  A click opens the dashboard on that stack, lane and service. Each kind on
+  or off, and a mute per stack or lane, behind the bell in the dashboard's
+  top bar or with `devstack hub notify [on|off <kind>…|test]`;
+  `DEVSTACK_NO_NOTIFY` switches them off.
+- A `devstack://open?stack=…&lane=…&service=…` link opens the dashboard
+  there, paired; `/auth` takes `next`, a dashboard route, and keeps the
+  session of a browser that is paired already.
+
 ### Fixed
+
+- `--browser` / `DEVSTACK_BROWSER` on Windows: an address with `&` was cut
+  there by `cmd` (none had one before `/auth?…&next=`).
+- The dashboard, opened on a lane before it knew whether the stack runs (a
+  link, a first visit), showed the lane without its list of lanes.
 
 - Docs: a viewer of a shared lane reads its containers' logs, as it has
   since 0.11.0 (the node answers them itself); the docs and notes of 0.15.0

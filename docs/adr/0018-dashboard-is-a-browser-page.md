@@ -1,6 +1,6 @@
 # ADR-0018: The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper
 
-- **Status:** Accepted (2026-10-14); who serves the dashboard amended by [ADR-0021](0021-a-hub-serves-the-dashboard.md) (the hub); the tray is not built yet
+- **Status:** Accepted (2026-10-14); who serves the dashboard amended by [ADR-0021](0021-a-hub-serves-the-dashboard.md) (the hub); the tray is not built yet; point 2's notifications come from the hub, without a tray ([ADR-0045](0045-the-hub-notifies-the-desktop.md), proposed)
 - **Date:** 2026-10-14
 - **Deciders:** project owner
 - **Related:** [ADR-0006](0006-dashboard-vue-same-origin.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md), plan §6
@@ -79,3 +79,8 @@ client is hand-written, not generated (`ui/src/api/`: `types.ts`,
 [dashboard-api.md](../dashboard-api.md)), and its live state comes over the
 hub's WebSocket. Point 2 is not built: there is no tray, no notification and
 no `--no-tray` yet (plan §13).
+
+*Amended 2026-10-21.* Point 2's operating-system notifications do not wait
+for the tray: the hub sends them ([ADR-0045](0045-the-hub-notifies-the-desktop.md)),
+on Windows as a toast and on Linux over the session bus, and a tray, when it
+comes, adds the icon only.
