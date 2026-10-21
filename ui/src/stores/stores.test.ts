@@ -233,6 +233,16 @@ describe('stack store', () => {
     expect(fake.requests.filter((r) => r.path === '/hub/stacks/shop/worktrees').at(-1)?.body).toEqual({ branch: 'feat/login', new: 'feat/next' });
   });
 
+  it('asks for the agent skills of the stack shown, and refreshes them', async () => {
+    const old = { found: ['devstack'], outdated: ['devstack'], from: '0.9.1', current: '0.9.8', ahead: false };
+    fake.on('/hub/stacks/shop/skills', (method) => ok(method === 'POST' ? { ...old, outdated: [], from: '0.9.8', kept: [] } : old));
+    const stack = await shownStack();
+    await vi.waitFor(() => expect(stack.skills?.from).toBe('0.9.1'));
+    await stack.refreshSkills();
+    expect(fake.requests.filter((r) => r.path === '/hub/stacks/shop/skills').map((r) => r.method)).toEqual(['GET', 'POST']);
+    expect(stack.skills).toMatchObject({ outdated: [], from: '0.9.8' });
+  });
+
   it("removing a lane's worktree asks first, and shows the main tree after", async () => {
     const stack = await shownStack();
     const lane = { name: 'feat', path: '/src/feat', number: 1, active: false, port_offset: 100, owns_main: false, running: 0, services: 3 };

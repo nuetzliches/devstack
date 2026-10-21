@@ -52,6 +52,9 @@ function startMove(to: string, t0: number) {
   };
 }
 
+/** The devstack the mock hub runs. */
+const MOCK_VERSION = '0.2.0';
+
 class MockHub {
   stacks: MockStack[] = [];
   hubSubs = new Set<Listener<HubEvent>>();
@@ -67,6 +70,8 @@ class MockHub {
   newer: string | null = null;
   /** `?mock=notices`: a lane whose worktree is missing (ADR-0050). */
   laneNotices = false;
+  /** The agent skills in each stack's repository: the devstack that wrote them, and whether they differ from what it would write now. */
+  skills: Record<string, { from: string; outdated: boolean }> = {};
   pool = new MockPool(new URLSearchParams(location.search).get('mock') ?? '');
   private streams = new Set<{ reconnect(): void }>();
 
@@ -93,6 +98,9 @@ class MockHub {
     this.unpaired = q.includes('unpaired');
     if (q.includes('newer')) this.newer = '0.5.0';
     if (q.includes('configchanged')) shop.view.config_changed = true;
+    // `?mock=skills`: shop was set up with an older devstack, crm's stack file changed since.
+    this.skills[shop.entry.id] = q.includes('skills') ? { from: '0.1.4', outdated: true } : { from: MOCK_VERSION, outdated: false };
+    this.skills[crm.entry.id] = { from: MOCK_VERSION, outdated: q.includes('skills') };
     if (q.includes('notices')) {
       this.laneNotices = true;
       shop.view.notices = [
@@ -287,7 +295,7 @@ export class MockTransport implements Transport {
     const url = new URL(path, 'http://hub');
     const p = url.pathname;
     const hub = this.hub;
-    if (p === '/hub/session') return hub.unpaired ? json(401, { error: 'not paired' }) : json(200, { version: '0.2.0' });
+    if (p === '/hub/session') return hub.unpaired ? json(401, { error: 'not paired' }) : json(200, { version: MOCK_VERSION });
     if (hub.unpaired) return json(401, { error: 'not paired' });
     if (p === '/hub/stacks' && method === 'GET') return json(200, hub.entries());
     if (p === '/hub/docker' && method === 'GET') return json(200, hub.docker);
@@ -487,6 +495,15 @@ export class MockTransport implements Transport {
     if (!stack) return json(404, { error: 'unknown stack' });
     const rest = m[2] ?? '';
 
+    if (rest === '/skills' && (method === 'GET' || method === 'POST')) {
+      if (method === 'POST') {
+        await sleep(500);
+        hub.skills[stack.entry.id] = { from: MOCK_VERSION, outdated: false };
+      }
+      const k = hub.skills[stack.entry.id];
+      const names = ['devstack', 'devstack-config'];
+      return json(200, { found: k ? names : [], outdated: k?.outdated ? names : [], from: k?.from ?? null, current: MOCK_VERSION, ahead: false, ...(method === 'POST' ? { kept: [] } : {}) });
+    }
     if (rest === '/up' && method === 'POST') {
       if (!stack.running) void stack.goUp();
       return empty(202);

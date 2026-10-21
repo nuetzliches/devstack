@@ -7,6 +7,7 @@ import { useStack } from '@/stores/stack';
 import Icon from '@/components/icons/Icon.vue';
 import StackHeader from '@/components/StackHeader.vue';
 import LaneStart from '@/components/LaneStart.vue';
+import SkillsBanner from '@/components/SkillsBanner.vue';
 import type { IconName } from '@/components/icons/icons';
 
 const route = useRoute();
@@ -166,6 +167,7 @@ function isActive(name: string) {
         <Icon name="alert" :size="18" />
         <span class="grow">{{ n.text }} <span class="faint">({{ ago(n.since, now) }})</span></span>
       </div>
+      <SkillsBanner v-if="!hubDown && stack.entry && !stack.foreign" />
       <div v-if="unknown" class="banner neutral">
         <Icon name="info" :size="18" />
         <span class="grow">This stack is not registered with the hub. It appears once its daemon starts.</span>

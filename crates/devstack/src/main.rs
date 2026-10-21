@@ -16,7 +16,7 @@ mod integration;
 mod mcp;
 mod poolcmd;
 mod selfcmd;
-mod skills;
+use devstack_skills as skills;
 mod topcmd;
 mod update;
 

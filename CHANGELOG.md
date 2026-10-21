@@ -9,6 +9,19 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **The dashboard says when a repository was set up with an older
+  devstack**, and hands a coding agent a prompt to bring it up to date. The
+  generated agent skills name the devstack that wrote them; when they no
+  longer match the one installed, a banner on the stack names both versions
+  and offers the prompt (the changelog in between, the stack file against
+  the reference, `devstack check` and `doctor`, the skills, a restart) and a
+  plain "Refresh skills" (`devstack skills install`, by the hub). Skills that
+  only no longer match the stack file get the refresh alone; skills a newer
+  devstack wrote are left as they are. New in the hub's API:
+  `GET`/`POST /hub/stacks/{id}/skills`.
+
 ### Changed
 
 - **A service's build list shows the newest ten**, the rest behind "Show

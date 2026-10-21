@@ -550,6 +550,7 @@ dependencies = [
  "devstack-hub",
  "devstack-node",
  "devstack-proc",
+ "devstack-skills",
  "flate2",
  "jiff",
  "libc",
@@ -657,6 +658,7 @@ dependencies = [
  "devstack-daemon",
  "devstack-node",
  "devstack-proc",
+ "devstack-skills",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -715,6 +717,15 @@ dependencies = [
  "tempfile",
  "thiserror",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "devstack-skills"
+version = "0.18.0"
+dependencies = [
+ "anyhow",
+ "devstack-config",
+ "tempfile",
 ]
 
 [[package]]

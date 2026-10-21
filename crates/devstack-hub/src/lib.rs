@@ -469,6 +469,10 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/stacks/{id}/worktrees", post(worktree_add))
         .route("/hub/stacks/{id}/worktrees/remove", post(worktree_remove))
         .route("/hub/stacks/{id}/fetch", post(stack_fetch))
+        .route(
+            "/hub/stacks/{id}/skills",
+            get(stack_skills).post(stack_skills_install),
+        )
         .route("/hub/stacks/{id}/api/{*rest}", any(forward))
         .route("/hub/pool", get(pool::overview))
         .route("/hub/pool/share", get(share::get))
@@ -1553,6 +1557,69 @@ async fn stack_fetch(State(s): State<AppState>, Path(id): Path<String>) -> Respo
         branches::fetch(repo).map(|()| serde_json::json!({}))
     })
     .await
+}
+
+/// The agent skills `devstack skills install` wrote into the stack's
+/// repository, held against what this devstack would write: the version they
+/// name is the one the repository was last set up with.
+fn skills_view(e: &StackEntry) -> serde_json::Value {
+    let i = devstack_skills::installed(&e.file);
+    let current = devstack_config::VERSION;
+    // Written by a newer devstack (a teammate's): installing would go back.
+    let ahead = i.from.as_deref().is_some_and(|f| {
+        devstack_config::version_order(f) > devstack_config::version_order(current)
+    });
+    serde_json::json!({
+        "found": i.found,
+        "outdated": i.outdated,
+        "from": i.from,
+        "current": current,
+        "ahead": ahead,
+    })
+}
+
+/// `GET /hub/stacks/{id}/skills`.
+async fn stack_skills(State(s): State<AppState>, Path(id): Path<String>) -> Response {
+    let Some(e) = entry(&s, &id) else {
+        return err(StatusCode::NOT_FOUND, "no such stack");
+    };
+    match tokio::task::spawn_blocking(move || skills_view(&e)).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `POST /hub/stacks/{id}/skills`: `devstack skills install` for the stack's
+/// repository (a skill the project wrote itself is kept), then the new view.
+async fn stack_skills_install(State(s): State<AppState>, Path(id): Path<String>) -> Response {
+    let Some(e) = entry(&s, &id) else {
+        return err(StatusCode::NOT_FOUND, "no such stack");
+    };
+    let done = tokio::task::spawn_blocking(move || {
+        let stack = devstack_config::load(&e.file).map_err(|err| err.to_string())?;
+        let out = devstack_skills::install(&stack, &e.file, None, false)
+            .map_err(|err| format!("{err:#}"))?;
+        let kept: Vec<_> = out
+            .iter()
+            .filter_map(|o| match o {
+                devstack_skills::Outcome::Kept(p) => Some(p.clone()),
+                _ => None,
+            })
+            .collect();
+        diag::info(
+            "skills_install",
+            serde_json::json!({ "repo": e.repo, "kept": kept }),
+        );
+        let mut view = skills_view(&e);
+        view["kept"] = serde_json::json!(kept);
+        Ok::<_, String>(view)
+    })
+    .await;
+    match done {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(m)) => err(StatusCode::CONFLICT, m),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 #[derive(Deserialize)]
