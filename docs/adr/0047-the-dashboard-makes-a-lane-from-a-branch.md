@@ -136,6 +136,16 @@ Where it will live:
   picker), `ui/src/stores/stack.ts`.
 - `docs/dashboard-api.md` (the three routes), `docs/plan.md` §3.5.
 
+*Paths as built, noted 2026-10-21.* `crates/devstack-hub/src/branches.rs` and
+the routes in `crates/devstack-hub/src/lib.rs` as named; `lanes.rs` gives the
+hub `worktree_branches` and `same_tree` besides `worktree_of`. The picker is
+`ui/src/components/BranchPicker.vue`, in `StackHeader.vue`; its calls are in
+`ui/src/stores/stack.ts`. `POST /hub/stacks/{id}/worktrees` takes `{branch,
+new?}`: with `new`, `branch` is the base, so no `base`. Fetch is a fourth
+route, `POST /hub/stacks/{id}/fetch`. The daemon's `StackView` says
+`no_main_ports` for a stack of containers only, and the header offers no
+**Serve main ports** there (#184).
+
 ## What this ADR does not say
 
 - Nothing about pull requests (checking one out by number, `gh`): a branch

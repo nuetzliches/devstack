@@ -232,6 +232,13 @@ forwarded here; it moves, is shared with others in the pool, and on a
 dedicated node takes the main ports. How to set up and use a pool:
 [pool.md](pool.md).
 
+**Built (unreleased, [ADR-0047](adr/0047-the-dashboard-makes-a-lane-from-a-branch.md)):**
+the stack header lists the repository's branches; the dashboard makes a lane
+from one (the hub runs `git worktree add`, the folder beside the
+repository's other worktrees), or from a new branch, and removes a stopped
+lane's worktree. The CLI and the MCP server still leave that to git; the
+main working tree's checkout is never changed.
+
 ### 3.6 Daemon crash, restart and update
 
 The daemon takes the whole application plane down with it and never re-attaches

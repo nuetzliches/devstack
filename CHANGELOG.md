@@ -9,6 +9,22 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **A lane from a branch, in the dashboard** (ADR-0047): the branch in the
+  stack header opens the repository's branches, local and remote, each with
+  its lane. A click shows a branch's lane, or makes one: the hub runs `git
+  worktree add`, beside the repository's other worktrees (else in
+  `<repo>.worktrees/`), and the lane shows, not started. **+** makes a new
+  branch from one, and a lane on it; a stopped lane's worktree can be removed
+  (`git worktree remove`, which refuses one with changes). **Fetch** runs
+  `git fetch --all --prune`, without a prompt. The main working tree's
+  checkout is never changed: a branch runs in a lane, which can then serve
+  the main ports. The CLI and the MCP server leave worktrees to git, as
+  before.
+- **Serve main ports** is not offered for a stack of Compose containers only
+  (#184): `StackView` says `no_main_ports`.
+
 ### Fixed
 
 - **Serving the main ports refuses a stack of Compose containers only**

@@ -489,7 +489,7 @@ fn ports(stack: &devstack_config::Stack) -> Vec<u16> {
 }
 
 /// Two spellings of one directory (`D:/x` from git, `D:\X` from a shell).
-fn same_tree(a: &Path, b: &Path) -> bool {
+pub fn same_tree(a: &Path, b: &Path) -> bool {
     let norm = |p: &Path| {
         let p = std::fs::canonicalize(p)
             .or_else(|_| std::path::absolute(p))
@@ -555,6 +555,14 @@ fn worktrees(repo: &Path) -> Option<(Vec<Worktree>, Vec<PathBuf>)> {
             .into_iter()
             .partition(|w| !w.prunable && w.path.is_dir());
     Some((here, missing.into_iter().map(|w| w.path).collect()))
+}
+
+/// The worktrees of `repo` whose directory exists, the main working tree
+/// first, each with its branch (`None`: a detached `HEAD`): what the hub
+/// marks the branches with (ADR-0047). `None` when git does not answer.
+pub fn worktree_branches(repo: &Path) -> Option<Vec<(PathBuf, Option<String>)>> {
+    let (here, _) = worktrees(repo)?;
+    Some(here.into_iter().map(|w| (w.path, w.branch)).collect())
 }
 
 /// The worktree of `repo` (the main working tree included) that `path`
