@@ -1660,6 +1660,13 @@ impl Lanes {
         let Some(t) = target else {
             return self.give_back(&mut ho);
         };
+        // Taking it would change the owner and move nothing (#184).
+        if !main.main_slot_moves() {
+            return Err(
+                "this stack has no services on main ports: Compose containers keep their own ports, so the main slot cannot move them"
+                    .into(),
+            );
+        }
         // A lane on a node (ADR-0025 point 4): on a dedicated node only; its
         // services answer here on their lane ports, forwarded to the node.
         let remote = self.remote(&t);

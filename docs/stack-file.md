@@ -506,6 +506,10 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
   fixed port is the main tree's).
 - `devstack promote --lane <name>` lets a lane's services answer on the main
   ports (dev servers through a TCP forward); `--lane main` gives them back.
+  The main ports are the fixed ports of `[services.*]`: a Compose
+  container's published port is Docker's and stays with the main tree's
+  container, so a stack of containers only has nothing to move, and
+  `promote --lane` refuses it.
 - `devstack lane list`; `devstack lane start <name>` starts a lane from
   anywhere in the repository, as `devstack up` in its worktree does;
   `devstack lane stop <name>` stops a lane (its builds stay, the worktree
