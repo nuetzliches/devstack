@@ -356,16 +356,23 @@ pub async fn history(Query(h): Query<HistoryQuery>) -> Response {
     }
 }
 
-/// `GET /hub/pool/placement?pool=&repo=&lane=&cpus=&memory=`: where the
-/// coordinator would start a lane of this machine's, best first, with why
-/// (ADR-0026 point 3): what the dashboard shows beside the nodes.
+/// `GET /hub/pool/placement?pool=&repo=&lane=&cpus=&memory=&profile=`:
+/// where the coordinator would start a lane of this machine's, best first,
+/// with why (ADR-0026 point 3), by what the lane's runs with `profile`
+/// took (ADR-0048): what the dashboard shows beside the nodes.
 pub async fn placement(Query(q): Query<PlacementQuery>) -> Response {
     let p = PoolQuery { pool: q.pool };
-    let need = devstack_node::share::Amount {
+    let need = devstack_node::share::Need {
         cpus: q.cpus.unwrap_or(0.0),
         memory: q.memory.unwrap_or(0),
+        ..Default::default()
     };
-    match blocking(&p, move |l| l.placement(&q.repo, &q.lane, need)).await {
+    let profile = q.profile.filter(|p| !p.is_empty());
+    match blocking(&p, move |l| {
+        l.placement(&q.repo, &q.lane, need, profile.as_deref())
+    })
+    .await
+    {
         Ok(v) => Json(v).into_response(),
         Err(e) => error(&e),
     }
@@ -381,6 +388,8 @@ pub struct PlacementQuery {
     cpus: Option<f64>,
     #[serde(default)]
     memory: Option<u64>,
+    #[serde(default)]
+    profile: Option<String>,
 }
 
 /// `POST /hub/pool/nodes/{id}/update` `{version?, drain?, downgrade?}`

@@ -2020,7 +2020,7 @@ impl Lanes {
         self: &Arc<Self>,
         path: &Path,
         on: &str,
-        need: devstack_node::share::Amount,
+        need: crate::remote::Expected,
         profile: Option<&str>,
     ) -> Result<RemoteStart, String> {
         let path = std::path::absolute(path).map_err(|e| e.to_string())?;
@@ -2086,7 +2086,7 @@ impl Lanes {
         self.begin_move(&name, "start", on, 3);
         let leased = {
             let step = self.step_fn(&name);
-            self.with_spec(&entry, on, need, true, &step, |spec| {
+            self.with_spec(&entry, on, &need, true, &step, |spec| {
                 RemoteLane::lease(&self.rt, &spec)
             })
         };
@@ -2126,7 +2126,7 @@ impl Lanes {
         &self,
         entry: &LaneEntry,
         on: &str,
-        need: devstack_node::share::Amount,
+        need: crate::remote::Expected,
         leased: crate::remote::Leased,
     ) {
         let name = &entry.name;
@@ -2134,7 +2134,7 @@ impl Lanes {
         self.stop_local_infra(name);
         let result = {
             let step = self.step_fn(name);
-            self.with_spec(entry, on, need, true, &step, |spec| {
+            self.with_spec(entry, on, &need, true, &step, |spec| {
                 RemoteLane::launch(&self.rt, spec, leased)
             })
         };
@@ -2231,11 +2231,11 @@ impl Lanes {
         &self,
         entry: &LaneEntry,
         on: &str,
-        need: devstack_node::share::Amount,
+        need: crate::remote::Expected,
         forward: bool,
         step: &(dyn Fn(u8, &str) + Send + Sync),
     ) -> Result<Arc<RemoteLane>, String> {
-        self.with_spec(entry, on, need, forward, step, |spec| {
+        self.with_spec(entry, on, &need, forward, step, |spec| {
             RemoteLane::start(&self.rt, spec)
         })
     }
@@ -2245,7 +2245,7 @@ impl Lanes {
         &self,
         entry: &LaneEntry,
         on: &str,
-        need: devstack_node::share::Amount,
+        need: &crate::remote::Expected,
         forward: bool,
         step: &(dyn Fn(u8, &str) + Send + Sync),
         f: impl FnOnce(crate::remote::RemoteSpec<'_>) -> Result<T, String>,
@@ -2258,6 +2258,12 @@ impl Lanes {
             .unwrap_or_else(|_| "devstack.toml".into());
         let scratch = self.state_dir(&entry.name).join("remote");
         let profile = self.profiles.lock().unwrap().get(&entry.name).cloned();
+        // What the lane's own stack file declares it needs at least, with
+        // its profile (ADR-0048 point 5); the main tree's where it does not
+        // load.
+        let declared = devstack_config::load(&entry.path.join(&stack_file))
+            .map(|s| s.lane_need(profile.as_deref()))
+            .unwrap_or_else(|_| self.main.stack.lane_need(profile.as_deref()));
         let worktree = devstack_proc::long_path(&entry.path);
         let offset = lane_offset(entry.number, self.main.stack.lanes.port_step)
             .ok_or_else(|| format!("lane `{}`: its ports are beyond 65535", entry.name))?;
@@ -2271,6 +2277,7 @@ impl Lanes {
             stack_file: &stack_file,
             on,
             need,
+            floor: crate::remote::floor_of(&declared),
             scratch: &scratch,
             // The lane runs on its lane ports there as well: the same
             // port on both ends.
@@ -2315,7 +2322,7 @@ impl Lanes {
         &self,
         name: &str,
         to: &str,
-        need: devstack_node::share::Amount,
+        need: crate::remote::Expected,
     ) -> Result<(), String> {
         let here = matches!(to, "local" | "here" | "this-machine");
         let entry = self
@@ -2380,7 +2387,7 @@ impl Lanes {
         &self,
         entry: &LaneEntry,
         to: &str,
-        need: devstack_node::share::Amount,
+        need: crate::remote::Expected,
         local: Option<Arc<Lane>>,
         remote: Option<Arc<RemoteLane>>,
         step: &(dyn Fn(u8, &str) + Send + Sync),

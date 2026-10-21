@@ -169,6 +169,29 @@ impl Series {
         self.current.unwrap_or_default()
     }
 
+    /// The most it took over its history: CPU in cores, averaged per
+    /// minute (as a node measures a lane, ADR-0048 point 2), and memory.
+    fn peak(&self) -> (f64, u64) {
+        let mut minutes: BTreeMap<u128, (f64, u32)> = BTreeMap::new();
+        for p in &self.history {
+            let m = minutes.entry(p.at / 60_000).or_default();
+            m.0 += p.cpu;
+            m.1 += 1;
+        }
+        let cpu = minutes
+            .values()
+            .map(|(sum, n)| sum / f64::from(*n))
+            .fold(0.0, f64::max);
+        let memory = self
+            .history
+            .iter()
+            .map(|p| p.memory)
+            .chain(self.current.map(|c| c.memory))
+            .max()
+            .unwrap_or(0);
+        (cpu / 100.0, memory)
+    }
+
     fn history(&self, with: bool) -> Vec<Point> {
         if with {
             self.history.iter().copied().collect()
@@ -189,7 +212,30 @@ struct Inner {
 
 pub struct Sampler {
     inner: Mutex<Inner>,
+    /// What the tree takes on disk without `.git` and its state, and when
+    /// that was counted: a walk over its dependencies takes a while.
+    tree: Mutex<Option<(Instant, u64)>>,
 }
+
+/// What a lane of this tree is expected to take (ADR-0048 point 4),
+/// estimated from the tree.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Estimate {
+    /// Cores: each service's, the builds' and each container's highest
+    /// minute over the last ten minutes, summed.
+    pub cpus: f64,
+    /// Bytes: each one's highest over the last ten minutes, summed.
+    pub memory: u64,
+    /// Bytes: the tree without `.git` and its state (its sources,
+    /// dependencies and builds), its snapshot, artifacts and logs, and its
+    /// Compose volumes.
+    pub disk_lane: u64,
+    /// Bytes: the images of its Compose projects' containers.
+    pub disk_repo: u64,
+}
+
+/// How long a count of the tree's bytes holds.
+const TREE_FRESH: Duration = Duration::from_secs(600);
 
 fn container_key(group: &str, service: &str) -> String {
     format!("container:{group}/{service}")
@@ -201,6 +247,7 @@ impl Sampler {
     pub fn start(sup: Arc<Supervisor>) -> Arc<Self> {
         let me = Arc::new(Self {
             inner: Mutex::new(Inner::default()),
+            tree: Mutex::new(None),
         });
         let (s, m) = (sup.clone(), me.clone());
         spawn("usage-native", move || {
@@ -357,6 +404,48 @@ impl Sampler {
         inner.disk_measured = true;
     }
 
+    /// What a lane of this tree is expected to take. Counts what was not
+    /// counted yet (the disk, the tree): call it off the async threads.
+    pub fn estimate(&self, sup: &Supervisor) -> Estimate {
+        if !self.inner.lock().unwrap().disk_measured {
+            self.sample_disk(sup);
+        }
+        if self.inner.lock().unwrap().disk.volumes.is_none() {
+            self.sample_volumes(sup);
+        }
+        let tree = {
+            let mut t = self.tree.lock().unwrap();
+            match *t {
+                Some((at, bytes)) if at.elapsed() < TREE_FRESH => bytes,
+                _ => {
+                    let layout = sup.layout();
+                    let bytes = dir_size_except(&sup.repo, &[layout.state.as_path()]);
+                    *t = Some((Instant::now(), bytes));
+                    bytes
+                }
+            }
+        };
+        let projects: Vec<String> = sup.view().infra.into_iter().map(|g| g.project).collect();
+        let images = if projects.is_empty() || sup.external_infra().is_some() {
+            0
+        } else {
+            sup.docker().project_images(&projects).unwrap_or(0)
+        };
+        let inner = self.inner.lock().unwrap();
+        let (cpus, memory) = inner
+            .series
+            .values()
+            .map(Series::peak)
+            .fold((0.0, 0), |(c, m), (pc, pm)| (c + pc, m + pm));
+        let d = &inner.disk;
+        Estimate {
+            cpus,
+            memory,
+            disk_lane: tree + d.snapshot + d.artifacts + d.logs + d.volumes.unwrap_or(0),
+            disk_repo: images,
+        }
+    }
+
     /// The current picture; with `history`, the last ten minutes per series.
     pub fn report(&self, sup: &Supervisor, history: bool) -> UsageReport {
         let inner = self.inner.lock().unwrap();
@@ -455,6 +544,26 @@ fn spawn(name: &str, f: impl FnOnce() + Send + 'static) {
 
 /// Bytes below `path`, not following links or junctions.
 fn dir_size(path: &Path) -> u64 {
+    walk(path, &[], false)
+}
+
+/// Bytes below `path` but in `skip` and any `.git` directory, not
+/// following links or junctions.
+fn dir_size_except(path: &Path, skip: &[&Path]) -> u64 {
+    walk(path, skip, true)
+}
+
+fn walk(path: &Path, skip: &[&Path], no_git: bool) -> u64 {
+    // Compared as the file system names them (a long path on Windows).
+    let skip: Vec<std::path::PathBuf> = skip
+        .iter()
+        .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()))
+        .collect();
+    let skipped = |skip: &[std::path::PathBuf], p: &Path| {
+        skip.iter().any(|s| {
+            s.file_name() == p.file_name() && std::fs::canonicalize(p).is_ok_and(|c| c == *s)
+        })
+    };
     let mut total = 0;
     let mut stack = vec![path.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -469,7 +578,9 @@ fn dir_size(path: &Path) -> u64 {
                 continue;
             }
             if meta.is_dir() {
-                stack.push(e.path());
+                if !(no_git && e.file_name() == ".git") && !skipped(&skip, &e.path()) {
+                    stack.push(e.path());
+                }
             } else {
                 total += meta.len();
             }
@@ -512,5 +623,32 @@ mod tests {
         std::fs::write(d.path().join("y"), [0u8; 24]).unwrap();
         assert_eq!(dir_size(d.path()), 1024);
         assert_eq!(dir_size(&d.path().join("missing")), 0);
+        // The tree a lane takes: without `.git` and without its state.
+        std::fs::create_dir_all(d.path().join(".git")).unwrap();
+        std::fs::write(d.path().join(".git/pack"), [0u8; 4000]).unwrap();
+        std::fs::create_dir_all(d.path().join(".devstack")).unwrap();
+        std::fs::write(d.path().join(".devstack/log"), [0u8; 500]).unwrap();
+        assert_eq!(dir_size(d.path()), 5524);
+        assert_eq!(
+            dir_size_except(d.path(), &[&d.path().join(".devstack")]),
+            1024
+        );
+    }
+
+    #[test]
+    fn a_peak_is_the_highest_minute_and_the_most_memory() {
+        let mut s = Series::default();
+        let p = |at, cpu, memory| Point { at, cpu, memory };
+        // Minute 0: one spike of 400 % among idle; minute 1: 150 % steadily.
+        s.history.extend([
+            p(0, 400.0, 1 << 20),
+            p(20_000, 0.0, 1 << 20),
+            p(40_000, 0.0, 1 << 20),
+            p(60_000, 150.0, 3 << 20),
+            p(90_000, 150.0, 2 << 20),
+        ]);
+        let (cpus, memory) = s.peak();
+        assert!((cpus - 1.5).abs() < 1e-9, "{cpus}");
+        assert_eq!(memory, 3 << 20);
     }
 }

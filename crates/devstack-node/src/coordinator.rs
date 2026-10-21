@@ -171,6 +171,23 @@ pub struct Report {
     /// Bytes free where it keeps lanes; absent from an older node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disk_free: Option<u64>,
+    /// What a new lane can take of its disk (ADR-0048 point 6): free, and
+    /// what it could free (kept lanes no lease uses), less what its
+    /// running lanes are still expected to write. Absent from an older
+    /// node: `disk_free` stands for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk_room: Option<u64>,
+    /// What its lanes took, each lease's run so far and those that ended
+    /// since its last report (ADR-0048 point 2).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<crate::footprint::Run>,
+}
+
+impl Report {
+    /// What a new lane can take of its disk, as far as it says.
+    pub fn room(&self) -> Option<u64> {
+        self.disk_room.or(self.disk_free)
+    }
 }
 
 /// A lane a node has a slot for: whose, of which repository.
@@ -182,8 +199,22 @@ pub struct SlotRef {
 }
 
 /// Less free disk than this where a node keeps lanes: it takes none (a
-/// lane's images, mirror and volumes need room).
+/// lane's images, mirror and volumes need room). Beyond a lane's disk need
+/// (ADR-0048), the margin that stays free.
 pub const MIN_DISK_FREE: u64 = 5 << 30;
+
+fn is_zero(v: &u64) -> bool {
+    *v == 0
+}
+
+/// Bytes as GiB with one decimal (`12.5 GiB`), or MiB below one.
+pub fn gib(b: u64) -> String {
+    if b < 1 << 30 {
+        format!("{} MiB", b >> 20)
+    } else {
+        format!("{:.1} GiB", b as f64 / f64::from(1u32 << 30))
+    }
+}
 
 /// Where a lane would go, best first (ADR-0026 point 3, ADR-0031 point 4):
 /// `GET /v1/placement`, and the coordinator's own choice.
@@ -198,6 +229,13 @@ pub struct Placement {
     /// What it offers now.
     pub cpus: f64,
     pub memory: u64,
+    /// The disk the lane needs there beyond what is there already
+    /// (ADR-0048 point 6), and what it has for lanes; absent from an
+    /// older coordinator.
+    #[serde(default)]
+    pub disk: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk_room: Option<u64>,
 }
 
 /// Rank the nodes for a lane of `member`'s `repo`/`lane` needing `need`:
@@ -207,18 +245,35 @@ pub struct Placement {
 /// builds are there), then the most free capacity for the need (the lower
 /// of free memory and free CPU, each over the need). `nodes` are the
 /// candidates already granted, online and admitted by their policy, with
-/// their last report.
+/// their last report. The disk a node needs room for is what the lane
+/// does not have there yet (ADR-0048 point 6), and GPUs it asks for are
+/// GPUs the node offers.
 pub fn rank(
     nodes: &[(&str, &str, &Report)],
     member: &str,
     repo: &str,
     lane: &str,
-    need: crate::share::Amount,
+    need: crate::share::Need,
     requester: Option<&Release>,
 ) -> Vec<Placement> {
     let mut out: Vec<(u8, f64, Placement)> = nodes
         .iter()
         .map(|(id, name, rep)| {
+            let kept = rep
+                .slots
+                .iter()
+                .any(|s| s.member == member && s.repo == repo && s.lane == lane);
+            let warm = rep.slots.iter().any(|s| s.repo == repo);
+            let disk = need.disk_on(kept, warm);
+            let room = rep.room();
+            let gpus = need.gpus.filter(|g| g.count > 0).map(|g| {
+                let fit = rep
+                    .gpus
+                    .iter()
+                    .filter(|x| x.offered && x.memory >= g.memory)
+                    .count();
+                (g, fit)
+            });
             let refuse = if rep.api.is_none() {
                 Some("runs no node agent".to_string())
             } else if !rep.sharing {
@@ -233,11 +288,27 @@ pub fn rank(
                     need.cpus,
                     need.memory >> 20
                 ))
-            } else if rep.disk_free.is_some_and(|d| d < MIN_DISK_FREE) {
+            } else if let Some(r) = room.filter(|r| *r < disk.saturating_add(MIN_DISK_FREE)) {
+                Some(if disk == 0 {
+                    format!(
+                        "has {} for lanes on disk, less than {}",
+                        gib(r),
+                        gib(MIN_DISK_FREE)
+                    )
+                } else {
+                    format!(
+                        "has {} for lanes on disk; the lane needs {} there, and {} stay free",
+                        gib(r),
+                        gib(disk),
+                        gib(MIN_DISK_FREE)
+                    )
+                })
+            } else if let Some((g, fit)) = gpus.filter(|(g, fit)| (*fit as u32) < g.count) {
                 Some(format!(
-                    "has {} MiB of disk free, less than {} MiB",
-                    rep.disk_free.unwrap_or(0) >> 20,
-                    MIN_DISK_FREE >> 20
+                    "offers {fit} GPU{} with {} or more, the lane asks for {}",
+                    if fit == 1 { "" } else { "s" },
+                    gib(g.memory),
+                    g.count
                 ))
             } else {
                 None
@@ -247,13 +318,9 @@ pub fn rank(
                 let c = rep.cpus / need.cpus.max(0.01);
                 m.min(c)
             };
-            let roomy =
-                rep.memory as f64 >= need.memory as f64 * 1.5 && rep.cpus >= need.cpus * 1.5;
-            let kept = rep
-                .slots
-                .iter()
-                .any(|s| s.member == member && s.repo == repo && s.lane == lane);
-            let warm = rep.slots.iter().any(|s| s.repo == repo);
+            let roomy = rep.memory as f64 >= need.memory as f64 * 1.5
+                && rep.cpus >= need.cpus * 1.5
+                && room.is_none_or(|r| r as f64 >= disk as f64 * 1.5 + MIN_DISK_FREE as f64);
             let (tier, why) = match &refuse {
                 Some(r) => (9, r.clone()),
                 None if roomy && kept => {
@@ -275,6 +342,8 @@ pub fn rank(
                     why,
                     cpus: rep.cpus,
                     memory: rep.memory,
+                    disk,
+                    disk_room: room,
                 },
             )
         })
@@ -522,7 +591,7 @@ pub struct LeaseReport {
     /// What it was admitted with: the coordinator knows the lease again
     /// from it after a restart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub need: Option<crate::share::Amount>,
+    pub need: Option<crate::share::Need>,
 }
 
 /// `POST /v1/leases`: a requester asks for a lane on `node`.
@@ -533,9 +602,22 @@ pub struct LeaseRequest {
     /// The repository, as the requester names it (its stack id).
     pub repo: String,
     pub lane: String,
-    /// What the lane is expected to need.
+    /// What the lane is expected to need: the requester's estimate, or a
+    /// default (ADR-0048 point 4); what the lane's repository took in the
+    /// pool comes first.
     #[serde(default)]
-    pub need: crate::share::Amount,
+    pub need: crate::share::Need,
+    /// Where `need` comes from, as the requester says it ("estimated from
+    /// the main tree"); absent from older requesters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub need_from: Option<String>,
+    /// What the stack file declares (`[lanes.need]`, the profile's): a
+    /// floor on each part of the need (ADR-0048 point 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor: Option<crate::share::Need>,
+    /// The profile the lane runs with (ADR-0041): its footprint is its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// The requester's devstack: the coordinator places the lane on a
     /// node with the same pool protocol only. Absent from older requesters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -571,6 +653,12 @@ pub struct LeaseOffer {
     /// requester named it, and from an older coordinator.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
+    /// The need the lease holds, and where it comes from (ADR-0048 point
+    /// 10); absent from an older coordinator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub need: Option<crate::share::Need>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub need_from: Option<String>,
 }
 
 /// A lease as the coordinator keeps it.
@@ -581,7 +669,11 @@ pub struct Lease {
     pub member: String,
     pub repo: String,
     pub lane: String,
-    pub need: crate::share::Amount,
+    pub need: crate::share::Need,
+    /// The disk it needs on its node beyond what is there already
+    /// (ADR-0048 point 6): held there while it is offered.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub disk: u64,
     /// `offered` (created, not yet admitted by the node) or `running`.
     pub state: String,
     /// Unix seconds.
@@ -840,28 +932,33 @@ const OFFER_FOR: Duration = Duration::from_secs(300);
 /// (brought forward by the admission) counts it from then on.
 const OFFER_HOLDS: Duration = Duration::from_secs(60);
 
-/// What leases offered for `node` and not admitted there yet need: the
-/// node's last report does not count them.
-fn offered_need(
-    leases: &HashMap<String, (Lease, String, std::time::Instant)>,
-    node: &str,
-) -> crate::share::Amount {
+/// What leases offered for `node` and not admitted there yet hold: the
+/// node's last report does not count them. Their disk is what each needs
+/// there (`Lease::disk`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct Held {
+    cpus: f64,
+    memory: u64,
+    disk: u64,
+}
+
+fn offered_need(leases: &HashMap<String, (Lease, String, std::time::Instant)>, node: &str) -> Held {
     leases
         .values()
         .filter(|(l, _, at)| l.node == node && l.state == "offered" && at.elapsed() < OFFER_HOLDS)
-        .fold(crate::share::Amount::default(), |a, (l, _, _)| {
-            crate::share::Amount {
-                cpus: a.cpus + l.need.cpus,
-                memory: a.memory + l.need.memory,
-            }
+        .fold(Held::default(), |a, (l, _, _)| Held {
+            cpus: a.cpus + l.need.cpus,
+            memory: a.memory + l.need.memory,
+            disk: a.disk + l.disk,
         })
 }
 
 /// A node's report with what offered leases hold taken off its offer.
-fn less_offered(rep: &Report, held: crate::share::Amount) -> Report {
+fn less_offered(rep: &Report, held: Held) -> Report {
     Report {
         cpus: (rep.cpus - held.cpus).max(0.0),
         memory: rep.memory.saturating_sub(held.memory),
+        disk_room: rep.room().map(|r| r.saturating_sub(held.disk)),
         ..rep.clone()
     }
 }
@@ -877,6 +974,8 @@ struct Inner {
     /// Leases by id, with their token and when they were offered.
     leases: Mutex<HashMap<String, (Lease, String, std::time::Instant)>>,
     store: Store,
+    /// What each repository's lanes took where they ran (ADR-0048).
+    footprints: crate::footprint::Footprints,
     ca_pem: String,
     reports: Mutex<HashMap<String, (std::time::Instant, Report)>>,
     /// Each node's capacity over time (ADR-0036).
@@ -1125,6 +1224,7 @@ async fn report(
                         repo: x.repo.clone(),
                         lane: x.lane.clone(),
                         need: x.need.unwrap_or_default(),
+                        disk: 0,
                         state: "running".into(),
                         created: store::now(),
                         expires_in: Some(x.expires_in),
@@ -1135,6 +1235,29 @@ async fn report(
                     std::time::Instant::now(),
                 ),
             );
+        }
+    }
+    // What its lanes took (ADR-0048 point 2): runs of leases on this node
+    // only, before those that ended are let go below.
+    if m.node && !r.runs.is_empty() {
+        let ours: HashMap<String, String> = s
+            .leases
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|(l, _, _)| l.node == m.id)
+            .map(|(l, _, _)| (l.id.clone(), l.repo.clone()))
+            .collect();
+        let now = store::now();
+        let mut changed = false;
+        for run in r.runs.iter().filter(|x| ours.get(&x.id) == Some(&x.repo)) {
+            if run.profile.as_ref().is_some_and(|p| p.len() > 64) {
+                continue;
+            }
+            changed |= s.footprints.record(run, now);
+        }
+        if changed && let Err(e) = s.footprints.save() {
+            eprintln!("coordinator: footprints.json: {e}");
         }
     }
     {
@@ -1216,6 +1339,38 @@ async fn nodes(
     ))
 }
 
+/// The need a lease of `r` holds (ADR-0048 point 4), and where it comes
+/// from: what the repository's lanes with its profile took in the pool,
+/// else the requester's estimate; each part at least what the stack file
+/// declares, and at least the least (ADR-0033 point 4).
+fn need_of(s: &Inner, r: &LeaseRequest) -> (crate::share::Need, String) {
+    let (base, from) = match s.footprints.get(&r.repo, r.profile.as_deref()) {
+        Some((n, runs)) => (
+            n,
+            format!(
+                "measured: the most of its last {runs} run{} in the pool",
+                if runs == 1 { "" } else { "s" }
+            ),
+        ),
+        None => (
+            r.need,
+            r.need_from
+                .clone()
+                .unwrap_or_else(|| "as the requester expects it".into()),
+        ),
+    };
+    let (need, raised) = match r.floor {
+        Some(f) => base.at_least(f),
+        None => (base, false),
+    };
+    let from = if raised {
+        format!("{from}, raised to what its stack file declares")
+    } else {
+        from
+    };
+    (crate::policy::floor_need(need), from)
+}
+
 /// The nodes that may take `r` for `me` at all (granted, online, not
 /// paused, not the requester, admitted by their policy), ranked.
 fn placement_for(s: &Shared, ms: &[Member], me: &Member, r: &LeaseRequest) -> Vec<Placement> {
@@ -1251,14 +1406,15 @@ fn placement_for(s: &Shared, ms: &[Member], me: &Member, r: &LeaseRequest) -> Ve
         &me.id,
         &r.repo,
         &r.lane,
-        crate::policy::floor_need(r.need),
+        need_of(s, r).0,
         r.devstack.as_ref(),
     )
 }
 
-/// `GET /v1/placement?repo=&lane=&cpus=&memory=`: where a lane of the
-/// caller's would go, best first, with why (what the dashboard shows
-/// beside the nodes to start it on).
+/// `GET /v1/placement?repo=&lane=&cpus=&memory=&disk=&profile=`: where a
+/// lane of the caller's would go, best first, with why (what the dashboard
+/// shows beside the nodes to start it on). `disk` is the requester's
+/// estimate of the lane's own part.
 async fn placement(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
@@ -1270,10 +1426,15 @@ async fn placement(
         node: String::new(),
         repo: q.repo,
         lane: q.lane,
-        need: crate::share::Amount {
+        need: crate::share::Need {
             cpus: q.cpus.unwrap_or(0.0),
             memory: q.memory.unwrap_or(0),
+            disk_lane: q.disk.unwrap_or(0),
+            ..Default::default()
         },
+        need_from: None,
+        floor: None,
+        profile: q.profile.filter(|p| !p.is_empty()),
         devstack: Some(Release::this()),
     };
     Ok(Json(placement_for(&s, &ms, &me, &r)))
@@ -1287,6 +1448,10 @@ struct PlacementQuery {
     cpus: Option<f64>,
     #[serde(default)]
     memory: Option<u64>,
+    #[serde(default)]
+    disk: Option<u64>,
+    #[serde(default)]
+    profile: Option<String>,
 }
 
 async fn lease_create(
@@ -1296,8 +1461,14 @@ async fn lease_create(
 ) -> ApiResult<Json<LeaseOffer>> {
     let me = member(&s, &peer)?;
     crate::policy::valid_lease_names(&r.repo, &r.lane).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-    // A lane needs at least the least, whatever it claims (ADR-0033 point 4).
-    r.need = crate::policy::floor_need(r.need);
+    // What the lane's repository took in the pool, at least what its stack
+    // file declares, and at least the least, whatever the requester claims
+    // (ADR-0048 point 4, ADR-0033 point 4).
+    if r.profile.as_ref().is_some_and(|p| p.len() > 64) {
+        return Err((StatusCode::BAD_REQUEST, "not a profile's name".into()));
+    }
+    let (need, need_from) = need_of(&s, &r);
+    r.need = need;
     let offered = s
         .leases
         .lock()
@@ -1332,9 +1503,10 @@ async fn lease_create(
             return Err((
                 StatusCode::CONFLICT,
                 format!(
-                    "no node of the pool can take the lane now ({:.1} CPU, {} MiB): none online, sharing, with that much free and a devstack that works with the requester's",
+                    "no node of the pool can take the lane now ({:.1} CPU, {} MiB, {} of disk; {need_from}): none online, sharing, with that much free and a devstack that works with the requester's",
                     r.need.cpus,
-                    r.need.memory >> 20
+                    r.need.memory >> 20,
+                    gib(r.need.disk())
                 ),
             ));
         };
@@ -1359,7 +1531,7 @@ async fn lease_create(
             ));
         }
     };
-    let (api, offer, node_release) = {
+    let (api, rep, node_release) = {
         let reports = s.reports.lock().unwrap();
         let Some((at, rep)) = reports
             .get(&node.id)
@@ -1411,14 +1583,7 @@ async fn lease_create(
                 ),
             ));
         }
-        (
-            api,
-            crate::share::Amount {
-                cpus: rep.cpus,
-                memory: rep.memory,
-            },
-            rep.devstack.clone(),
-        )
+        (api, rep.clone(), rep.devstack.clone())
     };
     // Checked and offered in one step, less what other offers for the node
     // hold until it admits them: two requests between two reports cannot
@@ -1427,22 +1592,22 @@ async fn lease_create(
     let token = random_hex(24);
     {
         let mut leases = s.leases.lock().unwrap();
-        let held = offered_need(&leases, &node.id);
-        let offer = crate::share::Amount {
-            cpus: (offer.cpus - held.cpus).max(0.0),
-            memory: offer.memory.saturating_sub(held.memory),
-        };
-        if r.need.cpus > offer.cpus || r.need.memory > offer.memory {
+        let rep = less_offered(&rep, offered_need(&leases, &node.id));
+        // The same conditions as placement (`rank`), on this node alone.
+        let [p] = rank(
+            &[(&node.id, &node.name, &rep)],
+            &me.id,
+            &r.repo,
+            &r.lane,
+            r.need,
+            r.devstack.as_ref(),
+        )
+        .try_into()
+        .expect("one node ranked");
+        if !p.eligible {
             return Err((
                 StatusCode::CONFLICT,
-                format!(
-                    "{} offers {:.1} CPU and {} MiB now; the lane needs {:.1} CPU and {} MiB",
-                    node.name,
-                    offer.cpus,
-                    offer.memory >> 20,
-                    r.need.cpus,
-                    r.need.memory >> 20
-                ),
+                format!("{} {} (the lane's need: {need_from})", node.name, p.why),
             ));
         }
         let lease = Lease {
@@ -1452,6 +1617,7 @@ async fn lease_create(
             repo: r.repo,
             lane: r.lane,
             need: r.need,
+            disk: p.disk,
             state: "offered".into(),
             created: store::now(),
             expires_in: None,
@@ -1473,6 +1639,8 @@ async fn lease_create(
             devstack: node_release,
         },
         coordinator: Some(Release::this()),
+        need: Some(need),
+        need_from: Some(need_from),
     }))
 }
 
@@ -2014,6 +2182,7 @@ pub async fn serve(
         updates: Mutex::new(HashMap::new()),
         prunes: Mutex::new(std::collections::HashSet::new()),
         store: Store::new(dir),
+        footprints: crate::footprint::Footprints::load(dir),
         ca_pem,
         reports: Mutex::new(HashMap::new()),
     });
@@ -2094,7 +2263,7 @@ mod history_tests {
 #[cfg(test)]
 mod placement_tests {
     use super::*;
-    use crate::share::Amount;
+    use crate::share::{Gpu, GpuNeed, Need};
 
     const GIB: u64 = 1 << 30;
 
@@ -2118,7 +2287,7 @@ mod placement_tests {
         }
     }
 
-    fn order(nodes: &[(&str, &str, &Report)], need: Amount) -> Vec<(String, bool, String)> {
+    fn order(nodes: &[(&str, &str, &Report)], need: Need) -> Vec<(String, bool, String)> {
         rank(nodes, "me", "shop", "fix", need, Some(&Release::this()))
             .into_iter()
             .map(|p| (p.name, p.eligible, p.why))
@@ -2127,9 +2296,10 @@ mod placement_tests {
 
     #[test]
     fn a_lane_goes_where_it_starts_warm_with_room_to_spare() {
-        let need = Amount {
+        let need = Need {
             cpus: 1.0,
             memory: 4 * GIB,
+            ..Need::default()
         };
         let big = node(16.0, 64, &[]);
         let warm = node(4.0, 8, &[("someone", "shop", "other")]);
@@ -2156,9 +2326,10 @@ mod placement_tests {
 
     #[test]
     fn free_capacity_counts_cpu_and_memory_against_the_need() {
-        let need = Amount {
+        let need = Need {
             cpus: 2.0,
             memory: 2 * GIB,
+            ..Need::default()
         };
         // Much memory, little CPU: 1.25× the need in CPU.
         let ram = node(2.5, 64, &[]);
@@ -2169,9 +2340,10 @@ mod placement_tests {
 
     #[test]
     fn what_cannot_take_the_lane_says_why_and_comes_last() {
-        let need = Amount {
+        let need = Need {
             cpus: 1.0,
             memory: 4 * GIB,
+            ..Need::default()
         };
         let small = node(0.5, 2, &[("me", "shop", "fix")]);
         let mut full = node(8.0, 32, &[]);
@@ -2192,8 +2364,88 @@ mod placement_tests {
         assert!(o[1..].iter().all(|x| !x.1), "{o:?}");
         let why = |n: &str| o.iter().find(|x| x.0 == n).unwrap().2.clone();
         assert!(why("small").contains("offers 0.5 CPU"), "{o:?}");
-        assert!(why("full").contains("disk free"), "{o:?}");
+        assert!(why("full").contains("on disk"), "{o:?}");
         assert!(why("off").contains("does not share"), "{o:?}");
+    }
+
+    #[test]
+    fn a_lane_needs_the_disk_it_does_not_have_there_yet() {
+        let need = Need {
+            cpus: 1.0,
+            memory: GIB,
+            disk_repo: 20 * GIB,
+            disk_lane: 10 * GIB,
+            gpus: None,
+        };
+        // 30 GiB room: enough for a node with the repository's images
+        // (10 + 5 free), not for a cold one (30 + 5).
+        let room = |slots: &[(&str, &str, &str)]| {
+            let mut n = node(8.0, 32, slots);
+            n.disk_free = Some(30 * GIB);
+            n
+        };
+        let cold = room(&[]);
+        let warm = room(&[("someone", "shop", "other")]);
+        let kept = room(&[("me", "shop", "fix")]);
+        let o = rank(
+            &[
+                ("a", "cold", &cold),
+                ("b", "warm", &warm),
+                ("c", "kept", &kept),
+            ],
+            "me",
+            "shop",
+            "fix",
+            need,
+            Some(&Release::this()),
+        );
+        let by = |n: &str| o.iter().find(|p| p.name == n).unwrap().clone();
+        assert!(!by("cold").eligible, "{o:?}");
+        assert!(
+            by("cold").why.contains("the lane needs 30.0 GiB there"),
+            "{o:?}"
+        );
+        assert_eq!((by("warm").eligible, by("warm").disk), (true, 10 * GIB));
+        assert_eq!((by("kept").eligible, by("kept").disk), (true, 0));
+        // What a node could free counts: its room says so.
+        let mut roomy = room(&[]);
+        roomy.disk_room = Some(60 * GIB);
+        assert!(order(&[("d", "roomy", &roomy)], need)[0].1);
+    }
+
+    #[test]
+    fn gpus_asked_for_are_gpus_offered() {
+        let need = Need {
+            cpus: 1.0,
+            memory: GIB,
+            gpus: Some(GpuNeed {
+                count: 1,
+                memory: 16 * GIB,
+            }),
+            ..Need::default()
+        };
+        let gpu = |memory: u64, offered: bool| Gpu {
+            name: "gpu".into(),
+            memory,
+            offered,
+            ..Gpu::default()
+        };
+        let mut small = node(8.0, 32, &[]);
+        small.gpus = vec![gpu(8 * GIB, true)];
+        let mut held = node(8.0, 32, &[]);
+        held.gpus = vec![gpu(24 * GIB, false)];
+        let mut big = node(8.0, 32, &[]);
+        big.gpus = vec![gpu(24 * GIB, true)];
+        let o = order(
+            &[
+                ("a", "small", &small),
+                ("b", "held", &held),
+                ("c", "big", &big),
+            ],
+            need,
+        );
+        assert_eq!((o[0].0.as_str(), o[0].1), ("big", true), "{o:?}");
+        assert!(o[1..].iter().all(|x| !x.1 && x.2.contains("GPU")), "{o:?}");
     }
 
     #[test]
@@ -2208,10 +2460,12 @@ mod placement_tests {
                         member: "me".into(),
                         repo: "shop".into(),
                         lane: id.into(),
-                        need: Amount {
+                        need: Need {
                             cpus: 1.0,
                             memory: gib * GIB,
+                            ..Need::default()
                         },
+                        disk: gib * GIB,
                         state: state.into(),
                         created: 0,
                         expires_in: None,
@@ -2238,12 +2492,16 @@ mod placement_tests {
         // A second lane of 4 GiB no longer fits there.
         let o = order(
             &[("n1", "n1", &rep)],
-            Amount {
+            Need {
                 cpus: 1.0,
                 memory: 4 * GIB,
+                ..Need::default()
             },
         );
         assert!(!o[0].1, "{o:?}");
+        // Their disk is held too.
+        assert_eq!(held.disk, 6 * GIB);
+        assert_eq!(rep.disk_room, Some(94 * GIB));
         // More held than offered: nothing left, never less.
         let rep = less_offered(&node(1.0, 1, &[]), held);
         assert_eq!((rep.cpus, rep.memory), (0.0, 0));

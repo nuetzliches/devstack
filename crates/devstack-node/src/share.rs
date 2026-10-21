@@ -26,6 +26,114 @@ pub struct Amount {
     pub memory: u64,
 }
 
+/// What a lane needs (ADR-0048 point 1): CPU cores, memory, disk (bytes)
+/// and GPUs. A superset of [`Amount`] on the wire: a peer that knows only
+/// that reads the CPU and memory of it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct Need {
+    pub cpus: f64,
+    pub memory: u64,
+    /// The repository's part of its disk: the lane image and the
+    /// infrastructure's images, shared by the repository's lanes on a node.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub disk_repo: u64,
+    /// The lane's own part: its slot (mirror, caches, build output,
+    /// volumes, ADR-0038).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub disk_lane: u64,
+    /// GPUs it asks for; declared only, never measured (ADR-0048 point 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpus: Option<GpuNeed>,
+}
+
+/// GPUs a lane asks for: how many, each with at least `memory` bytes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GpuNeed {
+    pub count: u32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub memory: u64,
+}
+
+fn is_zero(v: &u64) -> bool {
+    *v == 0
+}
+
+impl Need {
+    /// Its disk, both parts.
+    pub fn disk(&self) -> u64 {
+        self.disk_repo.saturating_add(self.disk_lane)
+    }
+
+    /// The disk it needs on a node beyond what is there already: nothing
+    /// where the lane has a slot (`kept`), its own part where the
+    /// repository has one (`warm`: its images are there), else both
+    /// (ADR-0048 point 6).
+    pub fn disk_on(&self, kept: bool, warm: bool) -> u64 {
+        if kept {
+            0
+        } else if warm {
+            self.disk_lane
+        } else {
+            self.disk()
+        }
+    }
+
+    /// Each part the larger of the two.
+    pub fn max(self, o: Need) -> Need {
+        Need {
+            cpus: self.cpus.max(o.cpus),
+            memory: self.memory.max(o.memory),
+            disk_repo: self.disk_repo.max(o.disk_repo),
+            disk_lane: self.disk_lane.max(o.disk_lane),
+            gpus: match (self.gpus, o.gpus) {
+                (Some(a), Some(b)) => Some(GpuNeed {
+                    count: a.count.max(b.count),
+                    memory: a.memory.max(b.memory),
+                }),
+                (a, b) => a.or(b),
+            },
+        }
+    }
+
+    /// Raised to `floor` (what a stack file declares, ADR-0048 point 5):
+    /// CPU, memory and GPUs each at least the floor's, the disk at least
+    /// the floor's in all, the difference added to the lane's part.
+    /// Whether the floor raised anything is the second value.
+    pub fn at_least(self, floor: Need) -> (Need, bool) {
+        let mut n = Need {
+            disk_repo: self.disk_repo,
+            disk_lane: self.disk_lane,
+            ..self.max(Need {
+                disk_repo: 0,
+                disk_lane: 0,
+                ..floor
+            })
+        };
+        if n.disk() < floor.disk() {
+            n.disk_lane = floor.disk().saturating_sub(n.disk_repo);
+        }
+        (n, n != self)
+    }
+
+    /// CPU and memory alone.
+    pub fn amount(&self) -> Amount {
+        Amount {
+            cpus: self.cpus,
+            memory: self.memory,
+        }
+    }
+}
+
+impl From<Amount> for Need {
+    fn from(a: Amount) -> Self {
+        Need {
+            cpus: a.cpus,
+            memory: a.memory,
+            ..Need::default()
+        }
+    }
+}
+
 fn path(dir: &Path) -> PathBuf {
     dir.join("share.json")
 }
@@ -172,6 +280,59 @@ mod tests {
             }
         );
         assert_eq!(idle_cpus((100, 1000), (150, 1100), 8), 4.0);
+    }
+
+    #[test]
+    fn a_floor_raises_each_part_and_the_disk_in_all() {
+        let measured = Need {
+            cpus: 1.0,
+            memory: 2 * GIB,
+            disk_repo: 6 * GIB,
+            disk_lane: 3 * GIB,
+            gpus: None,
+        };
+        let (same, raised) = measured.at_least(Need {
+            memory: GIB,
+            disk_lane: 5 * GIB,
+            ..Need::default()
+        });
+        assert_eq!(
+            (same, raised),
+            (measured, false),
+            "below the measure: nothing"
+        );
+        let (n, raised) = measured.at_least(Need {
+            cpus: 2.0,
+            disk_lane: 20 * GIB,
+            gpus: Some(GpuNeed {
+                count: 1,
+                memory: 16 * GIB,
+            }),
+            ..Need::default()
+        });
+        assert!(raised);
+        assert_eq!((n.cpus, n.memory), (2.0, 2 * GIB));
+        assert_eq!((n.disk_repo, n.disk_lane), (6 * GIB, 14 * GIB));
+        assert_eq!(n.gpus.map(|g| g.count), Some(1));
+        assert_eq!(n.disk_on(true, true), 0);
+        assert_eq!(n.disk_on(false, true), 14 * GIB);
+        assert_eq!(n.disk_on(false, false), 20 * GIB);
+    }
+
+    #[test]
+    fn a_need_reads_as_an_amount_and_back() {
+        let n: Need = serde_json::from_str(r#"{"cpus":0.5,"memory":1024}"#).unwrap();
+        assert_eq!(
+            n,
+            Need::from(Amount {
+                cpus: 0.5,
+                memory: 1024
+            })
+        );
+        let a: Amount =
+            serde_json::from_str(&serde_json::to_string(&Need { disk_lane: 9, ..n }).unwrap())
+                .unwrap();
+        assert_eq!(a, n.amount());
     }
 
     #[test]

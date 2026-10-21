@@ -415,10 +415,7 @@ async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> 
         }
         if let Some(on) = body.on.as_deref().filter(|o| !o.trim().is_empty()) {
             // What a local lane would need here is what it needs there.
-            let need = devstack_node::share::Amount {
-                cpus: 0.5,
-                memory: lane_need(&main, &usage).max(1 << 30),
-            };
+            let need = lane_estimate(&main, &usage);
             return match lanes.activate_remote(&body.path, on.trim(), need, profile)? {
                 crate::lanes::RemoteStart::Running(name) => {
                     view(&name).map(|v| (StatusCode::CREATED, v))
@@ -430,6 +427,7 @@ async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> 
         }
         if !body.force {
             memory_fits(&main, &usage)?;
+            disk_fits(&main, &usage, &body.path)?;
         }
         let lane = lanes.activate(&body.path, profile)?;
         // A profile may turn the workers on (ADR-0041).
@@ -454,6 +452,74 @@ fn lane_need(main: &crate::supervisor::Supervisor, usage: &crate::usage::Sampler
     let r = usage.report(main, false);
     r.services.iter().map(|e| e.load.memory).sum::<u64>()
         + r.containers.iter().map(|e| e.load.memory).sum::<u64>()
+}
+
+/// What a lane on a node is expected to need, as this machine estimates it
+/// from the main tree (ADR-0048 point 4): the most it took over the last
+/// ten minutes, and the disk its tree, state, volumes and images take.
+/// A default where the main tree takes nothing yet.
+fn lane_estimate(
+    main: &crate::supervisor::Supervisor,
+    usage: &crate::usage::Sampler,
+) -> crate::remote::Expected {
+    const CPUS: f64 = 0.5;
+    const MEMORY: u64 = 1 << 30;
+    const DISK: u64 = 10 << 30;
+    let e = usage.estimate(main);
+    let runs = e.memory > 0;
+    let counted = e.disk_lane > 0;
+    let need = devstack_node::share::Need {
+        cpus: e.cpus.max(CPUS),
+        memory: if runs { e.memory.max(MEMORY) } else { MEMORY },
+        disk_repo: e.disk_repo,
+        disk_lane: if counted { e.disk_lane } else { DISK },
+        gpus: None,
+    };
+    let from = match (runs, counted) {
+        (true, true) => "estimated from the main tree".into(),
+        (false, true) => {
+            "estimated from the main tree (its disk; CPU and memory a default: it runs nothing now)"
+                .into()
+        }
+        (true, false) => "estimated from the main tree (its load; disk a default)".into(),
+        (false, false) => "a default: the main tree runs nothing now".into(),
+    };
+    crate::remote::Expected { need, from }
+}
+
+/// A lane here takes disk of its own (ADR-0048 point 9): its snapshot,
+/// artifacts and logs, and its own Compose volumes (ADR-0030), about what
+/// the main tree's take; its worktree is there already, and it shares the
+/// images. Refuse when the drive of its worktree does not have that, with
+/// a margin.
+fn disk_fits(
+    main: &crate::supervisor::Supervisor,
+    usage: &crate::usage::Sampler,
+    worktree: &std::path::Path,
+) -> Result<(), String> {
+    const MARGIN: u64 = 2 << 30;
+    let Some(d) = usage
+        .report(main, false)
+        .lanes
+        .into_iter()
+        .next()
+        .and_then(|l| l.disk)
+    else {
+        return Ok(()); // not counted yet: no reason to refuse
+    };
+    let need = d.snapshot + d.artifacts + d.logs + d.volumes.unwrap_or(0);
+    let Some(free) = devstack_proc::disk_free(worktree) else {
+        return Ok(());
+    };
+    if free >= need + MARGIN {
+        return Ok(());
+    }
+    let gb = |b: u64| b as f64 / (1u64 << 30) as f64;
+    Err(format!(
+        "a lane needs about {:.1} GB of disk (what the main tree's snapshot, artifacts, logs and volumes take), {:.1} GB are free on the drive of its worktree:          remove lanes you no longer need, start it on another machine of the pool          (`devstack up --on <node>`, see `devstack pool`), or start it anyway with `devstack up --force`",
+        gb(need),
+        gb(free)
+    ))
 }
 
 /// A lane is a second copy of the stack, containers included (ADR-0030): it
@@ -697,10 +763,7 @@ async fn lanes_move(
     let main = s.sup.clone();
     let usage = s.usage.clone();
     let res = tokio::task::spawn_blocking(move || {
-        let need = devstack_node::share::Amount {
-            cpus: 0.5,
-            memory: lane_need(&main, &usage).max(1 << 30),
-        };
+        let need = lane_estimate(&main, &usage);
         lanes
             .move_lane(&lane, body.to.trim(), need)
             .map(|()| lanes.list())

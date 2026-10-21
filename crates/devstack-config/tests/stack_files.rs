@@ -757,3 +757,49 @@ fn ports_a_first_lane_would_collide_on_are_a_warning() {
     let s = from_str(&other, Path::new("t.toml")).unwrap();
     assert!(devstack_config::validate::warnings(&s).is_empty());
 }
+
+#[test]
+fn a_lanes_need_is_a_floor_a_profile_raises() {
+    let text = format!(
+        r#"{MINIMAL}
+[lanes.need]
+memory = "6G"
+disk = "25GiB"
+cpus = 2
+
+[profiles.ml.need]
+memory = "8G"
+gpus = {{ memory = "16G" }}
+"#
+    );
+    let stack = from_str(&text, Path::new("t")).unwrap_or_else(|e| panic!("{e}"));
+    let n = stack.lane_need(None);
+    assert_eq!(
+        (n.cpus, n.memory, n.disk, n.gpus.is_none()),
+        (Some(2.0), Some(6 << 30), Some(25 << 30), true)
+    );
+    let n = stack.lane_need(Some("ml"));
+    assert_eq!((n.memory, n.disk), (Some(8 << 30), Some(25 << 30)));
+    let g = n.gpus.unwrap();
+    assert_eq!((g.count, g.memory), (1, Some(16 << 30)));
+    assert_eq!(devstack_config::model::parse_size("512M"), Ok(512 << 20));
+    assert_eq!(devstack_config::model::parse_size("1.5k"), Ok(1536));
+    assert_eq!(devstack_config::model::parse_size("2048"), Ok(2048));
+    assert!(devstack_config::model::parse_size("6 gigs").is_err());
+
+    let bad = invalid(&format!(
+        "{MINIMAL}\n[lanes.need]\ncpus = 0\ngpus = {{ count = 0 }}\n"
+    ));
+    assert!(bad.iter().any(|i| i.contains("lanes.need.cpus")), "{bad:?}");
+    assert!(
+        bad.iter().any(|i| i.contains("lanes.need.gpus.count")),
+        "{bad:?}"
+    );
+    let err = from_str(
+        &format!("{MINIMAL}\n[lanes.need]\nmemory = \"lots\"\n"),
+        Path::new("t"),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("invalid size"), "{err}");
+}

@@ -62,7 +62,11 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   container: `[lanes] image` (a toolchain image) or `[lanes] dockerfile`. Files
   git ignores do not go there unless `[lanes] sync` names them (a dev
   certificate); `prepare` installs what the copy lacks (`npm ci`).
-  `[lanes] share` says whom such a lane is shared with by default.
+  `[lanes] share` says whom such a lane is shared with by default. The pool
+  places a lane by what its runs took there (ADR-0048); `[lanes.need]`
+  (`cpus`, `memory = "6G"`, `disk = "25G"`, `gpus = { count, memory }`) is a
+  floor only: set it where the first runs would be placed too small, or for
+  a GPU. A profile's `need` raises it for that profile.
 - **A purpose gets a profile, not a second stack file** (ADR-0041).
   `[profiles.<name>]` changes how the stack runs for an acceptance run or a
   light review: `workers`, `data = "fresh"`, `env` with the tree's

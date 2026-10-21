@@ -8,7 +8,6 @@
 use devstack_node::coordinator::{LeaseRequest, NodeRef};
 use devstack_node::member::Local;
 use devstack_node::nodeclient::{Elsewhere, HashCache, NodeClient};
-use devstack_node::share::Amount;
 use devstack_node::version::{self, Compat, Release};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -32,7 +31,7 @@ pub struct RemoteState {
     pub running: usize,
     pub services: usize,
     /// What goes wrong now, by what it concerns (`sync`, `renew`,
-    /// `sharing`, `port 3000`, `lease`), each until that works again: a
+    /// `sharing`, `port 3000`, `lease`, `disk`), each until that works again: a
     /// sync that works does not hide a port that is not forwarded.
     pub errors: std::collections::BTreeMap<String, String>,
     /// The lease is over (an admin ended it, or it expired): the lane no
@@ -303,8 +302,10 @@ pub struct RemoteSpec<'a> {
     pub stack_file: &'a str,
     /// The node: its name or member id.
     pub on: &'a str,
-    /// What the lane is expected to take.
-    pub need: Amount,
+    /// What the lane is expected to take, as this machine estimates it.
+    pub need: &'a Expected,
+    /// What its stack file declares it needs at least (ADR-0048 point 5).
+    pub floor: Option<devstack_node::share::Need>,
     /// A directory of this daemon's for the lane.
     pub scratch: &'a Path,
     /// Each service port of the lane, as `(on the node, here)`: the lane
@@ -322,6 +323,33 @@ pub struct RemoteSpec<'a> {
     pub step: &'a (dyn Fn(u8, &str) + Send + Sync),
     /// The profile it runs with (ADR-0041).
     pub profile: Option<&'a str>,
+}
+
+/// What a lane is expected to need as this machine estimates it (ADR-0048
+/// point 4), and from what; the coordinator takes what the lane's
+/// repository took in the pool first.
+#[derive(Debug, Clone, Default)]
+pub struct Expected {
+    pub need: devstack_node::share::Need,
+    pub from: String,
+}
+
+/// What a stack file declares a lane needs at least, as the pool reads it;
+/// `None`: nothing.
+pub fn floor_of(n: &devstack_config::model::Need) -> Option<devstack_node::share::Need> {
+    if n.is_empty() {
+        return None;
+    }
+    Some(devstack_node::share::Need {
+        cpus: n.cpus.unwrap_or(0.0),
+        memory: n.memory.unwrap_or(0),
+        disk_repo: 0,
+        disk_lane: n.disk.unwrap_or(0),
+        gpus: n.gpus.as_ref().map(|g| devstack_node::share::GpuNeed {
+            count: g.count,
+            memory: g.memory.unwrap_or(0),
+        }),
+    })
 }
 
 /// A lane leased on its node and admitted there, not yet synced or started
@@ -384,7 +412,10 @@ impl RemoteLane {
                 node,
                 repo: spec.repo.into(),
                 lane: spec.name.into(),
-                need: spec.need,
+                need: spec.need.need,
+                need_from: Some(spec.need.from.clone()),
+                floor: spec.floor,
+                profile: spec.profile.map(str::to_string),
                 devstack: Some(Release::this()),
             })
             .map_err(|e| format!("lease on `{}`: {e}", spec.on))?;
@@ -393,6 +424,26 @@ impl RemoteLane {
         // Another release, or one that does not say, is a warning
         // (ADR-0031 point 8).
         let warning = release_warning(&offer).map_err(|e| format!("lane `{}`: {e}", spec.name))?;
+        // What the lease holds, and from what (ADR-0048 point 10).
+        if let Some(n) = &offer.need {
+            let from = offer.need_from.as_deref().unwrap_or("");
+            crate::diag::info(
+                "remote_lane_need",
+                serde_json::json!({ "lane": spec.name, "node": offer.node.name,
+                    "cpus": n.cpus, "memory": n.memory, "disk_repo": n.disk_repo,
+                    "disk_lane": n.disk_lane, "from": from }),
+            );
+            (spec.step)(
+                1,
+                &format!(
+                    "lease on {}: {:.1} CPU, {} memory, {} disk ({from})",
+                    offer.node.name,
+                    n.cpus,
+                    devstack_node::coordinator::gib(n.memory),
+                    devstack_node::coordinator::gib(n.disk())
+                ),
+            );
+        }
         // The coordinator chose the node (`pool`): said why (ADR-0026 point 3).
         if let Some(why) = &offer.why {
             crate::diag::info(
@@ -893,9 +944,21 @@ impl RemoteLane {
                 return;
             }
             match self.client.renew(&self.lease).await {
-                Ok(_) => {
+                Ok(l) => {
                     renewed = Instant::now();
                     self.trouble("renew", None);
+                    // The node is short of disk (ADR-0048 point 8): shown
+                    // with the lane while it is, logged when it begins.
+                    let short = self.state.lock().unwrap().errors.contains_key("disk");
+                    if let Some(w) = &l.warning
+                        && !short
+                    {
+                        crate::diag::warn(
+                            "remote_lane_disk",
+                            serde_json::json!({ "lane": self.name, "node": self.node.name, "warning": w }),
+                        );
+                    }
+                    self.trouble("disk", l.warning);
                     if self.owns_main() {
                         let _ = self
                             .client
@@ -1402,6 +1465,8 @@ mod tests {
             },
             coordinator,
             why: None,
+            need: None,
+            need_from: None,
         }
     }
 

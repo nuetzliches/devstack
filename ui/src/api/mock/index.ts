@@ -287,6 +287,8 @@ export class MockTransport implements Transport {
           why: lane === 'review-cart' ? "keeps this lane's data (mirror, builds, volumes)" : 'the repository ran there (its images and builds are there)',
           cpus: 12,
           memory: 48 * 2 ** 30,
+          disk: lane === 'review-cart' ? 0 : 6 * 2 ** 30,
+          disk_room: 180 * 2 ** 30,
         },
       ]);
     }

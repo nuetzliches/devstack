@@ -1,6 +1,6 @@
 # ADR-0048: A lane's need is measured where it ran, disk included; the stack file sets a floor
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-21), amended 2026-10-21 (point 9: what a lane here checks)
 - **Date:** 2026-10-21
 - **Deciders:** project owner
 - **Related:** [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md) (point 3's "expected need" detailed here), [ADR-0031](0031-a-coordinator-places-lanes.md) (point 4), [ADR-0033](0033-a-node-decides-what-runs-on-it.md) (admission), [ADR-0036](0036-the-pool-shows-its-capacity-over-time.md) (point 4: GPUs), [ADR-0038](0038-a-lanes-data-outlives-its-lease.md) (slots), [ADR-0041](0041-a-profile-says-how-a-lane-runs-for-a-purpose.md) (profiles), plan §12
@@ -95,6 +95,12 @@ included (`usage.rs`). None of this reaches placement.
 9. **A local lane checks disk too.** Besides `memory_fits`, the daemon
    refuses a lane whose estimated disk (point 4, second step; at least the floor of point 5) does not fit
    the drive of its worktree, unless forced, as it does for memory.
+
+   *Amended 2026-10-21.* A lane here checks against what it adds, not
+   against the estimate for a node: its snapshot, artifacts, logs and
+   Compose volumes, as the main tree's take. Its worktree is there already,
+   and it shares the images with the main tree, both of which the estimate
+   for a node counts; the floor is for the pool, where those count too.
 10. **Placement says where its numbers came from.** The lease offer's `why`,
     `GET /v1/placement`, the CLI and the dashboard show the need and its
     source ("measured, max of 5 runs", "estimated from the main tree",
@@ -150,6 +156,47 @@ Will live in:
   [stack-file.md](../stack-file.md)
 - [pool.md](../pool.md)
 - the lane and pool views in `ui/`
+
+*Paths as built, noted 2026-10-21.*
+
+- The need is a type of its own, `Need` in
+  `crates/devstack-node/src/share.rs` (`disk_repo`, `disk_lane`, `gpus`;
+  `disk_on`, `at_least`), not `Amount` with disk added: on the wire it is
+  a superset of `Amount`, so older peers read its CPU and memory.
+  `policy::floor_need` takes it.
+- A node measures in `crates/devstack-node/src/runs.rs` (memory and CPU
+  each round, disk every five minutes and at a lease's end) and reports the
+  runs in its report (`Report::runs`); a run counts once its lane ran
+  three minutes (`COUNTS_AFTER`): a start that failed, or one just begun,
+  would make the footprint smaller than what the lane takes. GPU memory is
+  not measured: no node hands a GPU over yet.
+- The footprint is `crates/devstack-node/src/footprint.rs`
+  (`footprints.json` of the coordinator), not `store.rs`; the coordinator
+  takes runs of leases it knows on that node only. `need_of` in
+  `coordinator.rs` picks footprint, estimate and floor; `rank` counts disk
+  and GPUs, and `lease_create` checks a named node by `rank` too.
+- What a node could free is its kept slots no lease uses, as last counted;
+  lane images no lane uses (removed when space runs short) are not counted.
+  A node reports it within `disk_room`; it holds each lease's `disk` less
+  what its slot and the images it brought take (`NodeLease::disk`,
+  `images`), and prunes in `make_room` after admitting a lease that needs
+  the room.
+- The requester's estimate is `Sampler::estimate` in
+  `crates/devstack-daemon/src/usage.rs`: memory each series' highest,
+  CPU each series' highest minute, summed; disk the tree without `.git`
+  and its state, its snapshot, artifacts, logs and volumes, and the images
+  of its Compose containers (`Docker::project_images`). The lane image is
+  not counted: the node builds it. `lane_estimate` in `api.rs` fills in
+  the defaults; the floor comes from the lane's own stack file
+  (`Stack::lane_need`, `remote::floor_of`).
+- Point 8: the warning comes with each renewal (`NodeLease::warning`), is
+  shown with the lane as its `disk` trouble and logged as
+  `remote_lane_disk`. The pool area does not show a node's free disk yet.
+- Point 10: the lease offer carries `need` and `need_from`, the lane's
+  start step says them, `daemon.log` has `remote_lane_need`; a placement
+  has `disk` and `disk_room` per node, and the dashboard shows the disk a
+  lane needs on each node. `devstack pool placement` does not print them
+  yet.
 
 ## What this ADR does not say
 

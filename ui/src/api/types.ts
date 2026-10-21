@@ -429,8 +429,18 @@ export type SharedLane = {
   owner_devstack?: PoolRelease;
 };
 
-/** Where the coordinator would start a lane, best first (ADR-0026 point 3), `GET /hub/pool/placement`. */
-export type Placement = { node: string; name: string; eligible: boolean; why: string; cpus: number; memory: number };
+/** Where the coordinator would start a lane, best first (ADR-0026 point 3), `GET /hub/pool/placement`.
+ * `disk`: what the lane needs there beyond what is there already, `disk_room`: what the node has for lanes (ADR-0048). */
+export type Placement = {
+  node: string;
+  name: string;
+  eligible: boolean;
+  why: string;
+  cpus: number;
+  memory: number;
+  disk?: number;
+  disk_room?: number;
+};
 
 /** A node's or the pool's capacity at one moment (ADR-0036), `GET /hub/pool/history`. */
 export type CapacityPoint = {

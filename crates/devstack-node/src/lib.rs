@@ -4,6 +4,7 @@
 pub mod confine;
 pub mod coordinator;
 pub mod egress;
+pub mod footprint;
 pub mod laneinfra;
 pub mod lanerun;
 pub mod member;
@@ -11,6 +12,7 @@ pub mod node;
 pub mod nodeclient;
 pub mod pki;
 pub mod policy;
+pub mod runs;
 pub mod safefs;
 pub mod share;
 pub mod store;
