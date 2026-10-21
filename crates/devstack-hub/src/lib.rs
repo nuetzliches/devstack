@@ -33,6 +33,7 @@ use tokio_stream::StreamExt;
 
 static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 
+mod branches;
 mod dialog;
 #[cfg(windows)]
 mod foreground;
@@ -463,6 +464,10 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/stacks/{id}/up", post(stack_up))
         .route("/hub/stacks/{id}/down", post(stack_down))
         .route("/hub/stacks/{id}", delete(forget))
+        .route("/hub/stacks/{id}/branches", get(stack_branches))
+        .route("/hub/stacks/{id}/worktrees", post(worktree_add))
+        .route("/hub/stacks/{id}/worktrees/remove", post(worktree_remove))
+        .route("/hub/stacks/{id}/fetch", post(stack_fetch))
         .route("/hub/stacks/{id}/api/{*rest}", any(forward))
         .route("/hub/pool", get(pool::overview))
         .route("/hub/pool/share", get(share::get))
@@ -1467,6 +1472,82 @@ async fn openers() -> Response {
         Ok(found) => Json(found.into_iter().map(|f| f.opener).collect::<Vec<_>>()).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
+}
+
+/// Run `f` on the repository of stack `id`, git being slow: its answer as
+/// JSON, `400` for what the page got wrong, `409` with what git said.
+async fn with_repo<T: serde::Serialize + Send + 'static>(
+    s: &AppState,
+    id: &str,
+    f: impl FnOnce(&std::path::Path) -> Result<T, branches::Error> + Send + 'static,
+) -> Response {
+    let Some(e) = entry(s, id) else {
+        return err(StatusCode::NOT_FOUND, "no such stack");
+    };
+    match tokio::task::spawn_blocking(move || f(&e.repo)).await {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(branches::Error::Bad(m))) => err(StatusCode::BAD_REQUEST, m),
+        Ok(Err(branches::Error::Git(m))) => {
+            diag::warn("git_failed", serde_json::json!({ "error": m }));
+            err(StatusCode::CONFLICT, m)
+        }
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `GET /hub/stacks/{id}/branches` (ADR-0047).
+async fn stack_branches(State(s): State<AppState>, Path(id): Path<String>) -> Response {
+    with_repo(&s, &id, branches::list).await
+}
+
+#[derive(Deserialize)]
+struct WorktreeAdd {
+    branch: String,
+    #[serde(default)]
+    new: Option<String>,
+}
+
+/// `POST /hub/stacks/{id}/worktrees {branch, new?}`: a lane on a branch the
+/// hub lists, or on a new one from it (ADR-0047): `{path}`.
+async fn worktree_add(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<WorktreeAdd>,
+) -> Response {
+    with_repo(&s, &id, move |repo| {
+        branches::add(repo, &b.branch, b.new.as_deref()).map(|p| serde_json::json!({ "path": p }))
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+struct WorktreeRemove {
+    path: String,
+}
+
+/// `POST /hub/stacks/{id}/worktrees/remove {path}`: `git worktree remove`
+/// of one of its linked worktrees, which git refuses with changes in it.
+async fn worktree_remove(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<WorktreeRemove>,
+) -> Response {
+    let raw = PathBuf::from(&b.path);
+    if !raw.is_absolute() || !local_path(&b.path, &raw) {
+        return err(StatusCode::BAD_REQUEST, "a folder on this machine");
+    }
+    with_repo(&s, &id, move |repo| {
+        branches::remove(repo, &raw).map(|()| serde_json::json!({}))
+    })
+    .await
+}
+
+/// `POST /hub/stacks/{id}/fetch`: `git fetch --all --prune`, no prompt.
+async fn stack_fetch(State(s): State<AppState>, Path(id): Path<String>) -> Response {
+    with_repo(&s, &id, |repo| {
+        branches::fetch(repo).map(|()| serde_json::json!({}))
+    })
+    .await
 }
 
 #[derive(Deserialize)]

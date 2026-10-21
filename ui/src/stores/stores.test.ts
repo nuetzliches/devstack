@@ -209,6 +209,55 @@ describe('stack store', () => {
     expect(e.defaultPrevented).toBe(false);
   });
 
+  it('a lane made from a branch is shown once the daemon lists it (ADR-0047)', async () => {
+    const stack = await shownStack();
+    const made = 'D:\\src\\shop.worktrees\\feat-login';
+    fake.on('/hub/stacks/shop/branches', ok({ branches: [{ name: 'feat/login', main: false, date: 1 }] }));
+    fake.on('/hub/stacks/shop/worktrees', ok({ path: made }));
+    // git lists it with forward slashes.
+    const lane = { name: 'feat-login', path: 'D:/src/shop.worktrees/feat-login', branch: 'feat/login', number: 1, active: false, port_offset: 100, owns_main: false, running: 0, services: 3 };
+    fake.on('/hub/stacks/shop/api/v1/lanes', ok([lane]));
+    await stack.newLane('feat/login');
+    const sent = fake.requests.filter((r) => r.path === '/hub/stacks/shop/worktrees');
+    expect(sent.map((r) => r.body)).toEqual([{ branch: 'feat/login' }]);
+    expect(stack.lane).toBe('feat-login');
+
+    await stack.newLane('feat/login', 'feat/next');
+    expect(fake.requests.filter((r) => r.path === '/hub/stacks/shop/worktrees').at(-1)?.body).toEqual({ branch: 'feat/login', new: 'feat/next' });
+  });
+
+  it("removing a lane's worktree asks first, and shows the main tree after", async () => {
+    const stack = await shownStack();
+    const lane = { name: 'feat', path: '/src/feat', number: 1, active: false, port_offset: 100, owns_main: false, running: 0, services: 3 };
+    fake.stream('/hub/stacks/shop/api/v1/events').handlers.onMessage({ type: 'lanes', lanes: [lane] });
+    stack.selectLane('feat');
+    fake.on('/hub/stacks/shop/worktrees/remove', ok({}));
+    fake.on('/hub/stacks/shop/branches', ok({ branches: [] }));
+    fake.on('/hub/stacks/shop/api/v1/lanes', ok([]));
+    const ui = useUi();
+    const done = stack.removeWorktree('/src/feat', 'feat');
+    await vi.waitFor(() => expect(ui.confirmRequest).not.toBeNull());
+    ui.confirmRequest!.resolve(true);
+    await done;
+    const sent = fake.requests.filter((r) => r.path === '/hub/stacks/shop/worktrees/remove');
+    expect(sent.map((r) => (r.body as { path: string }).path)).toEqual(['/src/feat']);
+    expect(stack.lane).toBeNull();
+  });
+
+  it("someone else's lane gets no branches and makes none", async () => {
+    fake.on('/hub/session', ok({ version: '0.9.8' }));
+    fake.on('/hub/pools', ok([{ name: 'default', joined: true, state: 'approved', coordinator: 'https://c' }]));
+    fake.on('/hub/pool/shared', ok([{ lease: 'ab12', repo: 'crm', lane: 'fix', owner: 'o', owner_name: 'anna', node: { id: 'n', name: 'build', api: 'https://n' }, services: [] }]));
+    await useHub().init();
+    fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [] });
+    await usePool().load();
+    const stack = useStack();
+    stack.select('shared~default~ab12');
+    await stack.loadBranches();
+    await stack.newLane('main');
+    expect(fake.requests.some((r) => r.path.includes('/branches') || r.path.includes('/worktrees'))).toBe(false);
+  });
+
   it('a lane removed while shown gives way to the main tree', async () => {
     const stack = await shownStack();
     const feat = { name: 'feat', path: '/src/feat', number: 1, active: true, port_offset: 100, owns_main: false, running: 2, services: 3 };

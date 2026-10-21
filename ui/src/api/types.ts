@@ -224,7 +224,27 @@ export type StackView = {
   profile?: string;
   /** The stack file's profiles, for a start with one. */
   profiles?: ProfileView[];
+  /** Nothing moves with the main slot (Compose containers only, #184): serving the main ports is refused. */
+  no_main_ports?: boolean;
 };
+
+/** A branch of a stack's repository (ADR-0047), `GET /hub/stacks/{id}/branches`. */
+export type BranchView = {
+  /** `feat/login`, or `origin/feat/login` for a remote-tracking one. */
+  name: string;
+  /** The remote of a remote-tracking branch. */
+  remote?: string;
+  /** What a local branch tracks. */
+  upstream?: string;
+  /** The worktree that has it checked out. */
+  worktree?: string;
+  /** That worktree is the main working tree. */
+  main: boolean;
+  /** Its last commit, Unix seconds. */
+  date: number;
+};
+
+export type Branches = { branches: BranchView[]; fetched?: number };
 
 /** A profile of the stack file (ADR-0041). */
 export type ProfileView = { name: string; description?: string; fresh?: boolean; command?: string };

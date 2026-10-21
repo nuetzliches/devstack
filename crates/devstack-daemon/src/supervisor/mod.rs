@@ -650,6 +650,7 @@ impl Supervisor {
             lane: (!self.lane.is_empty()).then(|| self.lane.clone()),
             branch: self.branch.lock().unwrap().clone(),
             main_served_by: self.served_by(),
+            no_main_ports: !self.main_slot_moves(),
             watcher_error: self
                 .watcher_error
                 .lock()

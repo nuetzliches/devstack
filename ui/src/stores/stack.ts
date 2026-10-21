@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia';
 import { computed, ref, shallowRef, triggerRef, watch } from 'vue';
 import { api, paths, sharedRef, v1, type GroupAction, type ServiceAction, type StreamState, type Subscription } from '@/api';
-import type { LaneView, Point, Run, ServiceView, StackEvent, StackView, UsageReport } from '@/api/types';
+import type { Branches, LaneView, Point, Run, ServiceView, StackEvent, StackView, UsageReport } from '@/api/types';
+import { samePath } from '@/lib/lanes';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
@@ -142,6 +143,7 @@ export const useStack = defineStore('stack', () => {
     // loads none.
     lanes.value = [];
     lanesOf.value = null;
+    branches.value = null;
     persist.saveLastStack(next);
     lane.value = persist.get<string | null>(`lane.${next}`) ?? null;
     reset(next);
@@ -288,6 +290,87 @@ export const useStack = defineStore('stack', () => {
   }
 
   /** Throw a stopped lane's data away, here and on its nodes (ADR-0038): its next start is fresh. */
+  // ------------------------------------------------------------ branches
+
+  /** The repository's branches (ADR-0047), loaded when the picker opens. */
+  const branches = shallowRef<Branches | null>(null);
+
+  async function loadBranches() {
+    const sid = id.value;
+    if (!sid || readOnly.value) return;
+    try {
+      const res = await api().request<Branches>('GET', paths.branches(sid));
+      const b = res.body;
+      if (sid === id.value && res.ok && b && typeof b === 'object' && Array.isArray(b.branches)) branches.value = b;
+    } catch {
+      // keep the list; opening the picker again asks again
+    }
+  }
+
+  /** `git fetch --all --prune` (ADR-0047 point 7): only when asked. */
+  async function fetchBranches() {
+    if (refuseReadOnly() || !id.value) return;
+    busy.value.branches = 'fetch';
+    try {
+      const r = await act({ label: 'Fetch', path: paths.fetch(id.value), success: false });
+      if (r.ok) await loadBranches();
+    } finally {
+      delete busy.value.branches;
+    }
+  }
+
+  /**
+   * A lane on `branch`, or on a new branch `create` made from it (ADR-0047):
+   * the hub makes the worktree, the daemon finds it within a second, and the
+   * lane is shown, not started.
+   */
+  async function newLane(branch: string, create?: string) {
+    if (refuseReadOnly() || !id.value) return;
+    const sid = id.value;
+    busy.value.branches = 'add';
+    try {
+      const r = await act<{ path: string }>({
+        label: create ? `New branch ${create}` : `New lane on ${branch}`,
+        path: paths.worktrees(sid),
+        body: create ? { branch, new: create } : { branch },
+        success: (b) => (running.value ? `Worktree made: ${b?.path}` : `Worktree made: ${b?.path}. It shows as a lane once the stack runs.`),
+      });
+      if (!r.ok || !r.body?.path) return;
+      const at = r.body.path;
+      await loadBranches();
+      for (let i = 0; i < 20 && sid === id.value && running.value; i++) {
+        await loadLanes();
+        const l = lanes.value.find((x) => samePath(x.path, at));
+        if (l) {
+          selectLane(l.name);
+          return;
+        }
+        await new Promise((res) => setTimeout(res, 250));
+      }
+    } finally {
+      delete busy.value.branches;
+    }
+  }
+
+  /** `git worktree remove` of a stopped lane's worktree; git refuses one with changes. The branch stays. */
+  async function removeWorktree(path: string, label: string) {
+    if (refuseReadOnly() || !id.value) return;
+    const r = await act({
+      label: `Remove lane ${label}`,
+      path: paths.worktreeRemove(id.value),
+      body: { path },
+      confirmText: `git removes the worktree ${path}. It refuses one with changes (commit or stash them first); the branch stays.`,
+      confirmLabel: 'Remove',
+      danger: true,
+      success: `Lane ${label} removed`,
+    });
+    if (!r.ok) return;
+    const shown = lanes.value.find((l) => l.name === lane.value);
+    if (shown && samePath(shown.path, path)) selectLane(null);
+    await loadBranches();
+    await loadLanes();
+  }
+
   async function resetLane(name: string) {
     if (!id.value) return;
     await act({
@@ -796,6 +879,11 @@ export const useStack = defineStore('stack', () => {
     running,
     readOnly,
     sharedLane,
+    branches,
+    loadBranches,
+    fetchBranches,
+    newLane,
+    removeWorktree,
     followLink,
     runningLanes,
     mainIdle,

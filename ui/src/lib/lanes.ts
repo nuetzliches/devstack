@@ -29,3 +29,16 @@ export function orderLanes(lanes: LaneView[]): { running: LaneView[]; idle: Lane
   const idle = lanes.filter((l) => !started(l)).sort(byLabel);
   return { running, idle };
 }
+
+/**
+ * Two spellings of one folder: git lists `D:/src/app`, the hub answers
+ * `D:\src\app`. Paths with a drive letter compare without case, as Windows
+ * does.
+ */
+export function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => {
+    const s = p.replace(/\\/g, '/').replace(/\/+$/, '');
+    return /^[a-z]:/i.test(s) ? s.toLowerCase() : s;
+  };
+  return norm(a) === norm(b);
+}

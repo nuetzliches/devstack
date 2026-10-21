@@ -475,6 +475,36 @@ export class MockTransport implements Transport {
       hub.publish();
       return empty(204);
     }
+    // Branches (ADR-0047): the worktrees below, and some without one. The
+    // mock makes and removes no worktree; it answers as the hub would.
+    if (rest === '/branches' && method === 'GET') {
+      const day = Math.floor(Date.now() / 1000) - 86_400;
+      const tree = (b: string, path: string) => ({ name: b, main: false, worktree: path, upstream: `origin/${b}` });
+      return json(200, {
+        fetched: day + 80_000,
+        branches: [
+          { name: 'main', main: true, worktree: stack.view.repo, upstream: 'origin/main', date: day + 70_000 },
+          { ...tree('agent/login-fix', 'C:\\work\\shop-agent-login-fix'), date: day + 60_000 },
+          { ...tree('review-cart', 'C:\\work\\shop-review-cart'), date: day + 50_000 },
+          { ...tree('agent/checkout-totals', 'C:\\work\\_wt\\1242'), date: day + 40_000 },
+          { ...tree('agent/i18n-de', 'C:\\work\\_wt\\1333'), date: day + 30_000 },
+          { name: 'feat/coupons', main: false, upstream: 'origin/feat/coupons', date: day + 20_000 },
+          { name: 'spike/search', main: false, date: day },
+          { name: 'origin/release/2.4', remote: 'origin', main: false, date: day - 90_000 },
+          { name: 'origin/fix/vat-rounding', remote: 'origin', main: false, date: day - 200_000 },
+        ],
+      });
+    }
+    if (rest === '/fetch' && method === 'POST') {
+      await sleep(900);
+      return json(200, {});
+    }
+    if (rest === '/worktrees' && method === 'POST') {
+      await sleep(600);
+      const name = String(body?.new ?? body?.branch ?? '').replace(/^origin\//, '').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+      return json(200, { path: `C:\\work\\shop.worktrees\\${name}` });
+    }
+    if (rest === '/worktrees/remove' && method === 'POST') return json(409, { error: 'error: worktree contains modified or untracked files, use --force to delete it' });
     if (!rest.startsWith('/api/')) return json(404, { error: 'no route' });
     if (!stack.running) return json(503, { error: 'stack not running' });
     return this.daemon(stack, method, rest.slice(4), url.searchParams, body);

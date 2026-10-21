@@ -190,6 +190,11 @@ pub struct StackView {
     /// absent while the main working tree serves them itself.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub main_served_by: Option<String>,
+    /// Nothing of this stack moves with the main slot: no service on a port,
+    /// none with workers (Compose containers only, #184). Serving the main
+    /// ports is refused; the dashboard does not offer it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub no_main_ports: bool,
     /// Why the file watcher does not work (it could not be set up, or the
     /// OS dropped its events): edits then make no candidates until it does.
     #[serde(skip_serializing_if = "Option::is_none")]

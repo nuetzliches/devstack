@@ -1,16 +1,18 @@
 <script setup lang="ts">
 // The stack's head on every tab: name, state, version, where it runs from and
-// which worktree (branch) is shown, with a picker to switch worktrees (lanes,
-// ADR-0024), the lane's actions and start/stop. Replaces the lane banner.
+// which worktree (branch) is shown, with the branch picker (lanes from
+// branches, ADR-0047), the lane's actions and start/stop. Replaces the lane
+// banner.
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { duration, ago, useNow } from '@/lib/format';
-import { laneLabel, orderLanes, nodeLabel } from '@/lib/lanes';
+import { laneLabel, nodeLabel } from '@/lib/lanes';
 import { usePopover } from '@/lib/popover';
-import type { LaneView, Opener } from '@/api/types';
+import type { Opener } from '@/api/types';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import { usePool } from '@/stores/pool';
 import { useUi } from '@/stores/ui';
+import BranchPicker from './BranchPicker.vue';
 import Icon from './icons/Icon.vue';
 
 const hub = useHub();
@@ -23,7 +25,6 @@ const hubAway = computed(() => !hub.reachable);
 const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 const current = computed(() => stack.lanes.find((l) => l.name === stack.lane) ?? null);
 const servedBy = computed(() => stack.lanes.find((l) => l.owns_main) ?? null);
-const lanes = computed(() => orderLanes(stack.lanes));
 const busyMain = computed(() => !!stack.busy['lane-main']);
 
 /** The shown tree's state and its event stream: live, or why not. */
@@ -38,8 +39,6 @@ const liveState = computed(() => {
 
 /** Where the shown tree lives and which branch it has. */
 const path = computed(() => current.value?.path ?? view.value?.repo ?? stack.entry?.repo ?? '');
-const branch = computed(() => (current.value ? current.value.branch : view.value?.branch) ?? null);
-const tree = computed(() => (current.value ? laneLabel(current.value) : 'main working tree'));
 
 // Where a started lane can move (ADR-0025 point 10): this machine, and the
 // pool's nodes that are online and run lanes.
@@ -122,16 +121,6 @@ function openWith(o: Opener) {
   pathClose();
   if (stack.id) void hub.openWith(stack.id, path.value, o);
 }
-
-const root = ref<HTMLElement | null>(null);
-const trigger = ref<HTMLButtonElement | null>(null);
-const { open, close } = usePopover(root, trigger);
-
-function pick(l: LaneView | null) {
-  close();
-  // A lane not started is shown with its start options, not started here.
-  stack.selectLane(l?.name ?? null);
-}
 </script>
 
 <template>
@@ -148,7 +137,7 @@ function pick(l: LaneView | null) {
       <span class="grow" />
       <template v-if="!hubAway && !stack.readOnly">
         <button
-          v-if="current && !current.owns_main && current.active !== false"
+          v-if="current && !current.owns_main && current.active !== false && !view?.no_main_ports"
           type="button"
           class="btn btn-sm"
           :disabled="busyMain"
@@ -279,49 +268,7 @@ function pick(l: LaneView | null) {
           </template>
         </div>
       </div>
-      <div ref="root" class="picker">
-        <button
-          ref="trigger"
-          type="button"
-          class="tree"
-          :aria-expanded="open"
-          aria-haspopup="listbox"
-          :title="stack.lanes.length ? 'Switch the worktree shown' : 'The branch checked out here'"
-          data-testid="worktree-picker"
-          @click="open = !open"
-        >
-          <Icon name="gitBranch" :size="13" />
-          <span class="branch">{{ branch ?? 'detached' }}</span>
-          <span class="muted">· {{ tree }}</span>
-          <span v-if="current" class="muted">· ports +{{ current.port_offset }}</span>
-          <Icon v-if="stack.lanes.length" name="chevronDown" :size="13" class="muted" />
-        </button>
-        <div v-if="open && stack.lanes.length" class="menu" role="listbox" aria-label="Worktrees">
-          <button type="button" class="opt" :class="{ on: !stack.lane }" role="option" :aria-selected="!stack.lane" data-testid="worktree-option" @click="pick(null)">
-            <span class="dot on" /><span class="grow truncate">main working tree</span>
-            <span v-if="!servedBy" class="pill sm">main ports</span>
-          </button>
-          <button
-            v-for="l in [...lanes.running, ...lanes.idle]"
-            :key="l.name"
-            type="button"
-            class="opt"
-            :class="{ on: stack.lane === l.name, idle: l.active === false }"
-            role="option"
-            :aria-selected="stack.lane === l.name"
-            :title="l.path"
-            data-testid="worktree-option"
-            @click="pick(l)"
-          >
-            <span class="dot" :class="l.active === false ? 'off' : l.running ? 'on' : 'off'" />
-            <span class="grow truncate">{{ laneLabel(l) }}</span>
-            <span v-if="l.node" class="pill sm info" :title="`Runs on ${nodeLabel(l)}`">{{ nodeLabel(l) }}</span>
-            <span v-if="l.owns_main" class="pill sm ok">main ports</span>
-            <span v-else-if="l.active === false" class="faint">start</span>
-            <span v-else class="faint tabular">{{ l.running }}/{{ l.services }}</span>
-          </button>
-        </div>
-      </div>
+      <BranchPicker />
       <span v-if="daemon && !current" class="muted small">daemon pid {{ daemon.pid }} · port {{ daemon.port }} · up {{ duration(now - daemon.started) }}</span>
       <span v-if="moving" class="muted small move-line" data-testid="lane-moving" :title="moving.what">
         <span class="bar"><span :style="{ width: `${(100 * moving.step) / moving.steps}%` }" /></span>
@@ -443,25 +390,6 @@ h1 {
 .picker {
   position: relative;
 }
-.tree {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface-2);
-  color: inherit;
-  font: inherit;
-  font-size: 12.5px;
-  cursor: pointer;
-}
-.tree:hover {
-  border-color: var(--border-strong);
-}
-.branch {
-  font-weight: 600;
-}
 .menu {
   position: absolute;
   top: calc(100% + 6px);
@@ -519,13 +447,6 @@ h1 {
 }
 .opt:hover {
   background: var(--surface-hover);
-}
-.opt.on {
-  background: var(--accent-soft);
-  color: var(--accent-text);
-}
-.opt.idle {
-  color: var(--text-muted);
 }
 .grow {
   flex: 1;
