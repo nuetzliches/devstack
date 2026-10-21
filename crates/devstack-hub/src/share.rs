@@ -1,40 +1,42 @@
-//! This machine's share of the pool (ADR-0031 point 3): the hub measures what
-//! is free, offers half of it (capped, only with the switch on) and reports it
-//! to the coordinator every 15 s, which also tells the pool the machine is
-//! online. A machine in no pool, or not approved yet, reports nothing.
+//! This machine in the pool (ADR-0031): the hub measures what the machine has
+//! and what is free and reports it to the coordinator every 15 s, which also
+//! tells the pool the machine is online and which devstack it runs. A machine
+//! in no pool, or not approved yet, reports nothing.
 //!
-//! - `GET /hub/pool/share`: the switch, the caps, what is free and offered now,
-//!   the last report
-//! - `PUT /hub/pool/share` `{enabled, max_cpus?, max_memory?}`: change them;
-//!   reports at once
+//! The hub offers nothing to the pool. A machine runs other members' lanes
+//! with a node agent (`devstack node agent`, granted by an admin), and the
+//! dashboard's share switch never started one: it only reported capacity
+//! nobody could use, and is gone until it does (#171; on Windows, which
+//! cannot run the Linux lanes, #168).
 //!
-//! Both per pool (`?pool=<name>`, ADR-0034): each pool has its own switch
-//! and caps, and gets its own report.
+//! - `GET /hub/pool/share?pool=`: what is measured, the last report, the
+//!   coordinator's devstack, and why nothing is offered (`unavailable`)
 
 use axum::Json;
 use axum::extract::Query;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use devstack_node::coordinator::Report;
-use devstack_node::share::{Amount, Settings, idle_cpus};
+use devstack_node::share::{Amount, idle_cpus};
 use devstack_node::store::State;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 const EVERY: Duration = Duration::from_secs(15);
 
+/// Why the hub offers nothing to the pool.
+const NOT_SHARED: &str = "A machine runs other members' lanes with a node agent \
+     (`devstack node agent`, granted by an admin); the dashboard does not start one yet \
+     (#171, on Windows #168).";
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Status {
-    pub settings: Settings,
     /// What the machine has in all.
     pub total: Amount,
     /// What is free now.
     pub free: Amount,
-    /// What it offers now.
-    pub offer: Amount,
     /// Whether it belongs to a pool as an approved member (else nothing is
     /// reported).
     pub member: bool,
@@ -46,12 +48,8 @@ pub struct Status {
     /// report; `None` before one, or from an older coordinator.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coordinator: Option<devstack_node::version::Release>,
-}
-
-struct Sharing {
-    /// Per pool.
-    status: Mutex<BTreeMap<String, Status>>,
-    poke: Mutex<mpsc::Sender<()>>,
+    /// Why this machine offers the pool nothing.
+    pub unavailable: &'static str,
 }
 
 #[derive(Deserialize, Default)]
@@ -72,7 +70,8 @@ impl PoolQuery {
     }
 }
 
-static SHARING: OnceLock<Sharing> = OnceLock::new();
+/// Per pool.
+static STATUS: OnceLock<Mutex<BTreeMap<String, Status>>> = OnceLock::new();
 
 fn state() -> std::path::PathBuf {
     devstack_daemon::token::token_path()
@@ -85,10 +84,9 @@ fn dir(pool: &str) -> std::path::PathBuf {
     devstack_node::member::pool_dir(&state(), pool)
 }
 
-/// A pool's status, its settings read from its directory the first time.
 fn entry<'a>(map: &'a mut BTreeMap<String, Status>, pool: &str) -> &'a mut Status {
     map.entry(pool.to_string()).or_insert_with(|| Status {
-        settings: Settings::load(&dir(pool)),
+        unavailable: NOT_SHARED,
         ..Status::default()
     })
 }
@@ -101,28 +99,19 @@ fn now_ms() -> u128 {
 
 /// Start measuring and reporting, once per hub.
 pub fn start() {
-    let (tx, rx) = mpsc::channel();
-    if SHARING
-        .set(Sharing {
-            status: Mutex::new(BTreeMap::new()),
-            poke: Mutex::new(tx),
-        })
-        .is_err()
-    {
+    if STATUS.set(Mutex::new(BTreeMap::new())).is_err() {
         return;
     }
-    std::thread::spawn(move || run(&rx));
+    std::thread::spawn(run);
 }
 
-fn run(poked: &mpsc::Receiver<()>) {
+fn run() {
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
     let mut before = devstack_proc::cpu_times();
     // The first CPU reading needs a second one to say anything.
     let mut wait = Duration::from_secs(2);
     loop {
-        if let Err(mpsc::RecvTimeoutError::Disconnected) = poked.recv_timeout(wait) {
-            return;
-        }
+        std::thread::sleep(wait);
         wait = EVERY;
         let after = devstack_proc::cpu_times();
         let free = Amount {
@@ -139,17 +128,14 @@ fn run(poked: &mpsc::Receiver<()>) {
             cpus: cores as f64,
             memory: devstack_proc::memory_total().unwrap_or(0),
         };
-        let Some(s) = SHARING.get() else { return };
+        let Some(status) = STATUS.get() else { return };
         let gpus = devstack_node::share::gpus();
         for (pool, _) in devstack_node::member::pools(&state()) {
-            let settings = entry(&mut s.status.lock().unwrap(), &pool).settings.clone();
-            let offer = settings.offer(free);
-            let result = report(&pool, &settings, offer, total, &gpus);
-            let mut map = s.status.lock().unwrap();
+            let result = report(&pool, total, &gpus);
+            let mut map = status.lock().unwrap();
             let st = entry(&mut map, &pool);
             st.total = total;
             st.free = free;
-            st.offer = offer;
             match result {
                 Ok(answer) => {
                     st.member = answer.is_some();
@@ -185,12 +171,10 @@ fn guests(pool: &str) -> Option<Vec<crate::guests::Guest>> {
     Some(crate::guests::of(pool, &m.id, &leases, &nodes))
 }
 
-/// Report to the coordinator: what it says it runs; `Ok(None)` when this
-/// machine is no approved member (nothing to report to).
+/// Report to the coordinator, offering nothing: what it says it runs;
+/// `Ok(None)` when this machine is no approved member (nothing to report to).
 fn report(
     pool: &str,
-    settings: &Settings,
-    offer: Amount,
     total: Amount,
     gpus: &[devstack_node::share::Gpu],
 ) -> Result<Option<Option<devstack_node::version::Release>>, String> {
@@ -202,9 +186,9 @@ fn report(
     }
     local
         .report(&Report {
-            sharing: settings.enabled,
-            cpus: offer.cpus,
-            memory: offer.memory,
+            sharing: false,
+            cpus: 0.0,
+            memory: 0,
             api: None,
             dedicated: false,
             devstack: Some(devstack_node::version::Release::this()),
@@ -219,7 +203,7 @@ fn report(
             gpus: gpus
                 .iter()
                 .map(|g| devstack_node::share::Gpu {
-                    offered: settings.enabled,
+                    offered: false,
                     ..g.clone()
                 })
                 .collect(),
@@ -236,58 +220,22 @@ pub async fn get(Query(q): Query<PoolQuery>) -> Response {
         )
             .into_response();
     };
-    match SHARING.get() {
-        Some(s) => {
-            let mut map = s.status.lock().unwrap();
+    match STATUS.get() {
+        Some(status) => {
+            let mut map = status.lock().unwrap();
             // A pool not reported yet still shows what is measured.
             let any = map.values().next().cloned();
             let st = entry(&mut map, &pool);
             if let Some(a) = any.filter(|_| st.reported_at.is_none() && st.total.cpus == 0.0) {
                 st.total = a.total;
                 st.free = a.free;
-                st.offer = st.settings.offer(a.free);
             }
             Json(st.clone()).into_response()
         }
         None => (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "sharing has not started" })),
+            Json(serde_json::json!({ "error": "reporting has not started" })),
         )
             .into_response(),
     }
-}
-
-pub async fn put(Query(q): Query<PoolQuery>, Json(new): Json<Settings>) -> Response {
-    let bad = |m: &str| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": m })),
-        )
-            .into_response()
-    };
-    if new.max_cpus.is_some_and(|c| !c.is_finite() || c < 0.0) {
-        return bad("max_cpus: a number of cores, 0 or more");
-    }
-    let Some(pool) = q.name() else {
-        return bad("pool: a-z, 0-9, `-` and `_`, at most 32");
-    };
-    let Some(s) = SHARING.get() else {
-        return bad("sharing has not started");
-    };
-    if let Err(e) = new.save(&dir(&pool)) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
-    let status = {
-        let mut map = s.status.lock().unwrap();
-        let st = entry(&mut map, &pool);
-        st.settings = new;
-        st.offer = st.settings.offer(st.free);
-        st.clone()
-    };
-    let _ = s.poke.lock().unwrap().send(());
-    Json(status).into_response()
 }

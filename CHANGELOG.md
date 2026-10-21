@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Removed
+
+- **The share switch is gone from the dashboard** (sidebar and pool area):
+  it reported capacity but never started a node agent, so no member could
+  start a lane on a machine that only switched it on; on Windows none can
+  run at all (#168). The hub reports the machine (online, what it has, its
+  devstack) and offers nothing; `PUT /hub/pool/share` is gone, `GET` says why
+  (`unavailable`). A machine runs other members' lanes with `devstack node
+  agent`, granted by an admin; a switch that starts it is #171.
+
 ### Changed
 
 - **A lane started on a node opens its pages as soon as its daemon runs

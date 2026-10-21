@@ -100,8 +100,9 @@ browsers as well.
     (local certificates, an ignored env file), from the worktree or else the
     main tree. The node's owner can read all of it, and the lane's output and
     containers run there.
-  - Your machine reports to the coordinator what it shares (CPU, memory, GPUs,
-    load) when the share switch is on, and a node reports its lanes.
+  - Your machine reports to the coordinator what it has (CPU, memory, GPUs,
+    load) and which devstack it runs; a node reports what it offers and its
+    lanes.
   - **Telemetry** to the pool's collector only with your consent, per pool,
     off by default (`devstack join --telemetry`, `devstack pool telemetry
     on|off`, the pool area): devstack's diagnostic log, cut to first lines as

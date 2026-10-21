@@ -390,13 +390,10 @@ export type PoolRelease = { version: string; protocol: number };
 
 /** CPU cores and memory (bytes). */
 export type PoolAmount = { cpus: number; memory: number };
-export type ShareSettings = { enabled: boolean; max_cpus?: number; max_memory?: number };
 /** `GET /hub/pool/share`: what this machine shares (ADR-0031 point 3). */
 export type ShareStatus = {
-  settings: ShareSettings;
   total: PoolAmount;
   free: PoolAmount;
-  offer: PoolAmount;
   /** An approved member of a pool: only then is anything reported. */
   member: boolean;
   /** Unix ms of the last report that reached the coordinator. */
@@ -404,6 +401,8 @@ export type ShareStatus = {
   error: string | null;
   /** The devstack the coordinator runs, from its answer to the last report; absent from an older one. */
   coordinator?: PoolRelease;
+  /** Why this machine offers the pool nothing (a node agent runs lanes; #171, on Windows #168). */
+  unavailable: string;
 };
 
 /** A pool this machine belongs to or asked to join (ADR-0034), `GET /hub/pools`. */
