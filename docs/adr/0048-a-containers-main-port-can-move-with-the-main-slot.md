@@ -28,12 +28,23 @@ that matter: containers outlive the daemon (`devstack down` without
 file's port may be meant for other machines (`3724:3724` binds every
 interface; a game client on the LAN uses it).
 
+What has to switch is narrow. The developer works with a few services
+directly: the UI in the browser, the API a desktop tool or the browser
+calls. Those have to answer on the main ports from the lane chosen. What
+they use in turn may run on any port, as long as each lane's services reach
+their own lane's and never another's: the goal is no crosstalk between
+lanes, not every port moving.
+
 ## Decision
 
 1. **Opt-in per Compose service.** `[compose.<group>] main_ports = ["realmd",
    "mangosd"]` names the services whose published ports are devstack's in
    the main tree. Without it nothing changes: Docker binds the ports, and
-   the main slot does not move them.
+   the main slot does not move them. The list names what the developer
+   reaches directly from the host (the UI, the API the browser calls), not
+   what those services use: a lane's containers reach the lane's own on its
+   Compose network or its moved ports (ADR-0030), whichever lane serves the
+   main ports.
 2. **The main tree's overlay moves those ports to an instance port.** As a
    lane's overlay does (ADR-0030), the main tree gets one for such a group:
    each TCP port of a named service is published on a port Docker assigns,
@@ -88,6 +99,10 @@ interface; a game client on the LAN uses it).
 - One more forward per connection on the host (a copy in the daemon), as for
   dev servers.
 - A UDP service (a game's voice port, DNS) does not follow a lane.
+- Crosstalk stays possible where a stack makes it: a browser that calls an
+  API by its fixed port while only the UI is named reaches the main tree's
+  API from the lane's UI. Name both, or let the UI reach the API through its
+  own origin (a dev proxy, a relative URL).
 - The view of such a container shows the fixed and the instance port, as a
   proxied service's does.
 
