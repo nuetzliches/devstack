@@ -34,6 +34,7 @@ use tokio_stream::StreamExt;
 static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 
 mod dialog;
+mod guests;
 mod notify;
 mod pool;
 pub mod release;
@@ -372,6 +373,12 @@ pub fn serve() -> Result<(), String> {
             Arc::new(move |t: &notify::Target| open_dashboard(port, &codes, &t.path()))
         };
         let notify = Arc::new(notify::Center::new(&dir, notify::platform_sink(port, open)));
+        {
+            let notify = notify.clone();
+            guests::on_started(move |g| {
+                notify.guest_started(g);
+            });
+        }
         let state = AppState {
             port,
             token: Arc::new(token),
@@ -1321,7 +1328,13 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
         .map(|engine| serde_json::json!({ "type": "docker", "docker": engine }));
     let release = tokio_stream::wrappers::WatchStream::new(s.newer.clone())
         .map(|newer| serde_json::json!({ "type": "release", "current": VERSION, "newer": newer }));
-    stacks.merge(docker).merge(release).merge(update)
+    let guests = tokio_stream::wrappers::WatchStream::new(guests::subscribe())
+        .map(|guests| serde_json::json!({ "type": "guests", "guests": guests }));
+    stacks
+        .merge(docker)
+        .merge(release)
+        .merge(update)
+        .merge(guests)
 }
 
 fn entry(s: &AppState, id: &str) -> Option<StackEntry> {

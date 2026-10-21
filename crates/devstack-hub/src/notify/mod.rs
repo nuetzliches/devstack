@@ -53,12 +53,17 @@ pub(crate) struct Target {
     pub stack: Option<String>,
     pub lane: Option<String>,
     pub service: Option<String>,
+    /// The pool area instead (guest lanes).
+    pub pool: bool,
 }
 
 impl Target {
     /// The dashboard's route for it (hash history). `lane=` (empty) shows
     /// the main working tree, whichever lane was shown last.
     pub fn path(&self) -> String {
+        if self.pool {
+            return "/#/pool".into();
+        }
         let Some(stack) = &self.stack else {
             return "/#/".into();
         };
@@ -76,6 +81,9 @@ impl Target {
     /// The `devstack://open` link that opens it (`devstack open-url`).
     #[cfg_attr(not(windows), allow(dead_code))]
     pub fn link(&self) -> String {
+        if self.pool {
+            return "devstack://open?page=pool".into();
+        }
         let mut q = Vec::new();
         for (k, v) in [
             ("stack", &self.stack),
@@ -258,6 +266,39 @@ impl Center {
                 stack: Some(stack.to_string()),
                 lane: lane.map(str::to_string),
                 service: n.service,
+                pool: false,
+            },
+            tag: blake3::hash(key.as_bytes()).to_hex()[..16].to_string(),
+        });
+        true
+    }
+
+    /// A lane of another member started running on this machine
+    /// (`guests.rs`). Once per lease; whether it was told.
+    pub fn guest_started(&self, g: &crate::guests::Guest) -> bool {
+        if !self.settings.lock().unwrap().on(Kind::GuestLane) {
+            return false;
+        }
+        let key = format!("guest/{}/{}", g.pool, g.lease);
+        diag::info(
+            "notice",
+            serde_json::json!({
+                "kind": Kind::GuestLane.key(), "pool": g.pool, "owner": g.owner,
+                "repo": g.repo, "lane": g.lane, "shown": self.sink.status().is_ok(),
+            }),
+        );
+        let pool = if g.pool == devstack_node::member::DEFAULT_POOL {
+            String::new()
+        } else {
+            format!(" · pool {}", g.pool)
+        };
+        self.sink.show(Shown {
+            title: format!("{}'s lane {} runs on this machine", g.owner, g.lane),
+            context: format!("{}{pool}", g.repo),
+            body: "The pool area shows it; pausing the node there takes no new lanes.".into(),
+            target: Target {
+                pool: true,
+                ..Target::default()
             },
             tag: blake3::hash(key.as_bytes()).to_hex()[..16].to_string(),
         });
@@ -582,6 +623,7 @@ mod tests {
                 stack: Some("ab12".into()),
                 lane: Some("feat-x".into()),
                 service: Some("api".into()),
+                pool: false,
             }
         );
     }
@@ -668,6 +710,7 @@ mod tests {
             stack: Some("ab12".into()),
             lane: Some("feat x".into()),
             service: Some("api".into()),
+            pool: false,
         };
         assert_eq!(t.path(), "/#/s/ab12/services/api?lane=feat%20x");
         assert_eq!(
@@ -682,5 +725,13 @@ mod tests {
         assert_eq!(main.link(), "devstack://open?stack=ab12");
         assert_eq!(Target::default().path(), "/#/");
         assert_eq!(Target::default().link(), "devstack://open");
+        let pool = Target {
+            pool: true,
+            ..Target::default()
+        };
+        assert_eq!(
+            (pool.path().as_str(), pool.link().as_str()),
+            ("/#/pool", "devstack://open?page=pool")
+        );
     }
 }
