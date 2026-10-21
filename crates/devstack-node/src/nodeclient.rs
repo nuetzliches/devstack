@@ -474,6 +474,14 @@ impl NodeClient {
         let read = reader
             .await
             .map_err(|e| ClientError::Other(e.to_string()))?;
+        // Gone since it was hashed: like a file that changed, the next sync
+        // sends what is there then.
+        if read
+            .as_ref()
+            .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+        {
+            return Ok(false);
+        }
         let (status, text) = answer.map_err(|_| {
             ClientError::Other(format!(
                 "{}: not sent within {} min",
@@ -609,7 +617,13 @@ fn hash_all(
             .filter(|k| k.len == meta.len() && Some(k.modified) == modified);
         let hash = match cached {
             Some(k) => k.hash,
-            None => hash_file(&path).map_err(|e| ClientError::Io(path.display().to_string(), e))?,
+            // Gone since it was listed (a package manager rewriting
+            // `node_modules`): not sent now; the next sync sees what is there.
+            None => match hash_file(&path) {
+                Ok(h) => h,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(ClientError::Io(path.display().to_string(), e)),
+            },
         };
         if let Some(modified) = modified
             && now.duration_since(modified).is_ok_and(|age| age >= SETTLED)

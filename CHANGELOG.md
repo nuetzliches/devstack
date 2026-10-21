@@ -40,6 +40,21 @@ and listed with their assets on the
 
 ### Fixed
 
+- A lane on a node no longer stops syncing when a file goes while it is
+  sent (a package manager rewriting `node_modules`): the file is left out
+  and the next sync sends what is there then.
+- A browser or dev server closing a connection through a lane's tunnel is
+  no longer a warning in the diagnostic log (Windows reports it as
+  "aborted", 10053).
+- Files of a write in progress no longer show among the paths that made a
+  candidate: atomic writes of editors and agents' tools
+  (`db.rs.tmp.<pid>.<hex>`), `sed -i`'s `sedXXXXXX`, vim's `4913` and swap
+  files, Emacs' `.#` and `~` files.
+- A dev server's failed rebuild goes to the diagnostic log with its error
+  lines, not only with its tool's last line: Angular on Windows prints them
+  after that line, and the log line now waits for them (2 s at most after
+  the last).
+
 - The daemon log says why a lane whose worktree went is not removed at once:
   `lane_forget_deferred` said "it is being started" also when a removal of
   the same lane was under way already, or a move.

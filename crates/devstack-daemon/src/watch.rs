@@ -77,10 +77,42 @@ fn cache(name: &str) -> bool {
     )
 }
 
+/// Is `name` the file name of a write in progress, renamed onto the real
+/// file a moment later? Atomic writes of editors and agents' tools
+/// (`db.rs.tmp.33128.2dcc67a056d2`: name, `.tmp.`, process id, random hex),
+/// GNU `sed -i` (`sedGr1VFQ`), vim's probe file `4913` and its swap files,
+/// Emacs' lock and backup files. The real file's change follows; these
+/// would only put names in a candidate's paths that never were the user's.
+fn transient(name: &str) -> bool {
+    let mut parts = name.rsplitn(3, '.');
+    let write_atomic = matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (Some(hex), Some(pid), Some(rest))
+            if !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit())
+                && !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit())
+                && rest.ends_with(".tmp")
+    );
+    // Six random letters and digits; a real name of that shape (`sedimentd`)
+    // is lower case throughout.
+    let sed = name.len() == 9
+        && name.starts_with("sed")
+        && name[3..].bytes().all(|b| b.is_ascii_alphanumeric())
+        && name[3..]
+            .bytes()
+            .any(|b| b.is_ascii_uppercase() || b.is_ascii_digit());
+    write_atomic
+        || sed
+        || name == "4913"
+        || name.ends_with('~')
+        || name.starts_with(".#")
+        || (name.starts_with('.') && (name.ends_with(".swp") || name.ends_with(".swx")))
+}
+
 /// Is `rel` (repository-relative, `/`-separated) in a directory that never
-/// counts: a generated one or a tool's cache?
+/// counts (a generated one or a tool's cache), or a write in progress?
 pub fn ignored(rel: &str) -> bool {
     rel.split('/').any(|n| generated(n) || cache(n))
+        || rel.rsplit('/').next().is_some_and(transient)
 }
 
 /// Is `rel` in a generated directory (not a cache)? What tells a remote
@@ -371,6 +403,33 @@ mod tests {
             "docs/objects.md",
             "src/cache/x.ts",
             "web/src/app/angular.json",
+        ] {
+            assert!(!super::ignored(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn writes_in_progress_do_not_count() {
+        for p in [
+            "server/src/db.rs.tmp.33128.2dcc67a056d2",
+            "schema/migrations/0045_icon.sql.tmp.33128.3fd2b0a603be",
+            "tools/mock/sedGr1VFQ",
+            "src/4913",
+            "src/main.rs~",
+            "src/.#main.rs",
+            "src/.main.rs.swp",
+        ] {
+            assert!(super::ignored(p), "{p}");
+        }
+        for p in [
+            "src/db.rs",
+            "src/data.tmp",
+            "src/v1.tmp.x.y",
+            "src/sedan.rs",
+            "src/seducers",
+            "bin2/sedimentd",
+            "docs/4913.md",
+            "src/swap.swp",
         ] {
             assert!(!super::ignored(p), "{p}");
         }
