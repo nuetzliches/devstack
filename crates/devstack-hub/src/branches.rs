@@ -221,7 +221,9 @@ fn folder(repo: &Path, name: &str) -> Result<PathBuf, String> {
             let at = at.created().or_else(|_| at.modified()).ok()?;
             let gitdir = std::fs::read_to_string(e.path().join("gitdir")).ok()?;
             // `<worktree>/.git`: the worktree's parent is where they go.
-            let dir = Path::new(gitdir.trim()).parent()?.parent()?.to_path_buf();
+            // git writes `/` on Windows too: the platform's separators.
+            let gitdir = PathBuf::from(gitdir.trim().replace('/', std::path::MAIN_SEPARATOR_STR));
+            let dir = gitdir.parent()?.parent()?.to_path_buf();
             dir.is_dir().then_some((at, dir))
         })
         .max_by_key(|(at, _)| *at)
@@ -386,7 +388,12 @@ mod tests {
 
         // A new branch from it goes beside the worktree just made.
         let next = add(&repo, "feat/login", Some("feat/next")).unwrap();
-        assert_eq!(next, tmp.path().join("app.worktrees").join("feat-next"));
+        // Beside the worktree git names: compared as the same folder (a
+        // short `RUNNER~1` and a long name are one).
+        assert_eq!(
+            std::fs::canonicalize(&next).unwrap(),
+            std::fs::canonicalize(tmp.path().join("app.worktrees").join("feat-next")).unwrap()
+        );
 
         remove(&repo, &next).unwrap();
         assert!(!next.exists());
