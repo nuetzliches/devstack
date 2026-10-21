@@ -115,6 +115,9 @@ export type ProxyView = {
 };
 
 /** A lane: another git worktree of the repository, running the stack beside the main one (plan §3.5). */
+/** What `POST /v1/lanes/{lane}/reset` (and prune) found and did, per place. */
+export type Pruned = { place: string; lane: string; bytes: number | null; why: string; removed: boolean; error: string | null };
+
 export type LaneView = {
   name: string;
   path: string;
@@ -226,6 +229,8 @@ export type StackView = {
   profiles?: ProfileView[];
   /** Nothing moves with the main slot (Compose containers only, #184): serving the main ports is refused. */
   no_main_ports?: boolean;
+  /** The file watcher could not be set up, or lost events: edits make no candidates (or every built service got one). */
+  watcher_error?: string | null;
 };
 
 /** A branch of a stack's repository (ADR-0047), `GET /hub/stacks/{id}/branches`. */
@@ -283,6 +288,8 @@ export type StackEventBody =
   | { type: 'infra'; group: string; message: string }
   | { type: 'command'; command: string; run: number; status: RunStatus }
   | { type: 'config'; changed: boolean }
+  /** The file watcher failed or lost events, or works again (`null`). */
+  | { type: 'watcher'; error: string | null }
   /** A worktree added or removed, a branch checked out, a lane started or stopped, the main ports moved. */
   | { type: 'lanes'; lanes: LaneView[] }
   | ({ type: 'usage' } & UsageReport);

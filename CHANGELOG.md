@@ -18,6 +18,19 @@ and listed with their assets on the
   stop first, each with its own containers (a lane on the main ports gives
   them back first, a lane on a node is released), then the main tree's
   containers go (`POST /v1/down?infra=true&all=true`).
+- **A lane reset says where its data stayed.** When removing a lane's
+  containers and volumes on this machine failed, `POST /v1/lanes/{lane}/reset`
+  still answered `removed: true`, and the dashboard said the lane starts
+  fresh. That place now answers `removed: false` with the error, and the
+  dashboard names every place that kept the lane's data.
+- **A file watcher that misses edits is shown.** `watcher_error` (the watcher
+  could not be set up, or lost events) was in `/v1/stack` but nothing showed
+  it: edits then made no candidates without a word. The dashboard shows it as
+  a banner and on the Events page (a new `watcher` event keeps it current),
+  `devstack status` as a line.
+- **Main services that do not start again are logged** when a lane on a node
+  that served the main ports is gone (`main_slot_back_failed`); the error was
+  dropped.
 
 ## [0.17.0] - 2026-10-21
 

@@ -287,6 +287,34 @@ describe('stack store', () => {
     expect(stack.apiLane).toBeNull();
   });
 
+  it('a reset that left data somewhere says where, not that the lane starts fresh', async () => {
+    const stack = await shownStack();
+    fake.on(
+      '/hub/stacks/shop/api/v1/lanes/feat/reset',
+      ok([
+        { place: 'this machine', lane: 'feat', bytes: null, why: 'reset', removed: false, error: 'data: volume in use' },
+        { place: 'node-a', lane: 'feat', bytes: null, why: 'reset', removed: true, error: null },
+      ]),
+    );
+    const ui = useUi();
+    const done = stack.resetLane('feat');
+    await vi.waitFor(() => expect(ui.confirmRequest).not.toBeNull());
+    ui.confirmRequest!.resolve(true);
+    await done;
+    expect(ui.toasts.map((x) => [x.kind, x.title, x.message])).toEqual([['error', 'Lane feat: not all of its data went', 'this machine: data: volume in use']]);
+  });
+
+  it("the file watcher's trouble and its end reach the view", async () => {
+    const stack = await shownStack();
+    const events = fake.stream('/hub/stacks/shop/api/v1/events');
+    const view = { name: 'shop', repo: '/src/shop', version: '0.9.8', services: [], infra: [], groups: [], commands: [] };
+    events.handlers.onMessage({ type: 'snapshot', stack: view } as never);
+    events.handlers.onMessage({ type: 'watcher', error: 'the file watcher lost events (overflow)' } as never);
+    expect(stack.view?.watcher_error).toBe('the file watcher lost events (overflow)');
+    events.handlers.onMessage({ type: 'watcher', error: null } as never);
+    expect(stack.view?.watcher_error).toBeNull();
+  });
+
   it('shows the services stopped once the daemon is gone', async () => {
     const stack = await shownStack();
     const svc = (name: string, state: 'running' | 'stopped' | 'failed') => ({

@@ -15,9 +15,10 @@ const types: { v: Type; label: string }[] = [
   { v: 'infra', label: 'Infra' },
   { v: 'command', label: 'Command' },
   { v: 'config', label: 'Stack file' },
+  { v: 'watcher', label: 'Watcher' },
   { v: 'snapshot', label: 'Connect' },
 ];
-const enabled = ref<Record<Type, boolean>>({ service: true, candidate: true, devserver_rebuild: true, infra: true, command: true, config: true, snapshot: true });
+const enabled = ref<Record<Type, boolean>>({ service: true, candidate: true, devserver_rebuild: true, infra: true, command: true, config: true, watcher: true, snapshot: true });
 const subject = ref('');
 
 function subjectOf(e: TimelineEvent): string {
@@ -31,6 +32,7 @@ function subjectOf(e: TimelineEvent): string {
     case 'command':
       return e.command;
     case 'config':
+    case 'watcher':
     case 'snapshot':
       return '';
   }
@@ -80,6 +82,10 @@ function describe(e: TimelineEvent): Desc {
       return e.changed
         ? { icon: 'file', tone: 'warn', title: 'Stack file', text: 'Changed since the daemon started; applies with the next start' }
         : { icon: 'file', tone: 'ok', title: 'Stack file', text: 'Back to what the daemon runs with' };
+    case 'watcher':
+      return e.error
+        ? { icon: 'alert', tone: 'warn', title: 'File watcher', text: 'Edits may not be seen', detail: e.error }
+        : { icon: 'checkCircle', tone: 'ok', title: 'File watcher', text: 'Works again' };
     case 'snapshot':
       return { icon: 'activity', tone: 'neutral', title: 'Connected', text: `snapshot of ${e.stack.services.length} services` };
   }

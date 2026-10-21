@@ -266,6 +266,11 @@ pub enum EventBody {
     Config {
         changed: bool,
     },
+    /// The file watcher failed or lost events (`error`), or works again
+    /// (`None`): the same as the stack's `watcher_error`.
+    Watcher {
+        error: Option<String>,
+    },
     /// Current load, every native sample (plan §12); history via `/v1/usage`.
     Usage(Box<crate::usage::UsageReport>),
     /// The lanes changed: a worktree added or removed, a branch checked out, a

@@ -673,7 +673,10 @@ impl Supervisor {
                 serde_json::json!({ "lane": self.lane, "error": e }),
             );
         }
-        *cur = error.map(|e| (e, Instant::now()));
+        *cur = error.clone().map(|e| (e, Instant::now()));
+        drop(cur);
+        // Logged above: the event is for the dashboard.
+        self.emit_quiet(EventBody::Watcher { error });
     }
 
     /// The watcher delivers events again: a lost-events notice goes after a
@@ -685,6 +688,8 @@ impl Supervisor {
             .is_some_and(|(_, at)| at.elapsed() >= Duration::from_secs(60))
         {
             *cur = None;
+            drop(cur);
+            self.emit_quiet(EventBody::Watcher { error: None });
         }
     }
 

@@ -89,6 +89,7 @@ class MockHub {
     this.unpaired = q.includes('unpaired');
     if (q.includes('newer')) this.newer = '0.5.0';
     if (q.includes('configchanged')) shop.view.config_changed = true;
+    if (q.includes('watcher')) shop.view.watcher_error = 'the file watcher lost events (overflow); every built service was rebuilt as a candidate';
     // A fresh install: no stack registered yet (the welcome page with the scan).
     this.empty = q.includes('empty');
     if (q.includes('nodocker')) this.docker = { state: 'stopped', starter: 'Docker Desktop', hint: 'start Docker Desktop' };

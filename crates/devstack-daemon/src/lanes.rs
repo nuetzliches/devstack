@@ -994,7 +994,12 @@ impl Lanes {
             "main_slot_lost",
             serde_json::json!({ "lane": owner, "reason": "the lane on its node is gone" }),
         );
-        let _ = self.give_back(&mut ho);
+        if let Err(e) = self.give_back(&mut ho) {
+            crate::diag::warn(
+                "main_slot_back_failed",
+                serde_json::json!({ "lane": owner, "error": e }),
+            );
+        }
     }
 
     /// The first lane number whose port range collides with nothing: the main
@@ -1070,7 +1075,8 @@ impl Lanes {
         }
         self.missing.lock().unwrap().remove(name);
         self.profiles.lock().unwrap().remove(name);
-        self.remove_infra(name);
+        // Logged there; a lane that is forgotten has nobody to tell.
+        let _ = self.remove_infra(name);
         // Its kept data on the nodes it ran on goes too (ADR-0038 point 4);
         // a node that does not answer keeps it until its retention ends.
         let ran = crate::remote::ran_on(&self.state_dir(name));
@@ -1116,14 +1122,14 @@ impl Lanes {
                 "lane `{name}` runs: `devstack lane stop {name}` first"
             ));
         }
-        self.remove_infra(name);
+        let here = self.remove_infra(name);
         let mut out = vec![Pruned {
             place: "this machine".into(),
             lane: name.to_string(),
             bytes: None,
             why: "reset".into(),
-            removed: true,
-            error: None,
+            removed: here.is_ok(),
+            error: here.err(),
         }];
         let repo = self.main.stack.stack.name.clone();
         for on in crate::remote::ran_on(&self.state_dir(name)) {
@@ -1291,8 +1297,11 @@ impl Lanes {
     /// Remove the containers, volumes and networks of lane `name`
     /// (ADR-0030), also of a lane not started now: Compose finds a project
     /// by its name alone.
-    fn remove_infra(&self, name: &str) {
+    /// Remove the lane's Compose projects here: `Err` names the groups
+    /// whose removal failed (their containers or volumes are still there).
+    fn remove_infra(&self, name: &str) -> Result<(), String> {
         let docker = devstack_compose::Docker::default();
+        let mut failed = Vec::new();
         for (g, cfg) in &self.main.stack.compose {
             let group = devstack_compose::Group {
                 name: g.clone(),
@@ -1308,7 +1317,13 @@ impl Lanes {
                     "lane_infra_not_removed",
                     serde_json::json!({ "lane": name, "group": g, "error": e.to_string() }),
                 );
+                failed.push(format!("{g}: {e}"));
             }
+        }
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(failed.join("; "))
         }
     }
 

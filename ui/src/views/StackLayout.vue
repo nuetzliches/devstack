@@ -139,6 +139,10 @@ function isActive(name: string) {
           {{ stack.busy['stack'] === 'restart' ? 'Restarting…' : 'Restart stack' }}
         </button>
       </div>
+      <div v-if="!hubDown && stack.running && stack.view?.watcher_error" class="banner warn" data-testid="watcher-error">
+        <Icon name="alert" :size="18" />
+        <span class="grow"><strong>The file watcher does not see every edit.</strong> {{ stack.view.watcher_error }}</span>
+      </div>
       <div v-if="unknown" class="banner neutral">
         <Icon name="info" :size="18" />
         <span class="grow">This stack is not registered with the hub. It appears once its daemon starts.</span>
