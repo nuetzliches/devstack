@@ -1156,10 +1156,16 @@ impl RemoteLane {
             .map_err(|e| e.to_string())?;
         let mut up = hyper_util::rt::TokioIo::new(up);
         let open = crate::telemetry::Tunnel::open(&self.name, &self.node.name);
-        tokio::io::copy_bidirectional(&mut up, &mut tcp)
-            .await
-            .map(|(a, b)| open.closed(a + b))
-            .map_err(|e| e.to_string())
+        match tokio::io::copy_bidirectional(&mut up, &mut tcp).await {
+            Ok((a, b)) => {
+                open.closed(a + b);
+                Ok(())
+            }
+            // One end hung up without a goodbye (a browser closing a tab or
+            // a dev server's WebSocket): how connections end, not a fault.
+            Err(e) if closed_by_a_peer(&e) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     /// Why the node cannot do what `method` on the lane daemon's `path`
@@ -1282,6 +1288,17 @@ fn release_warning(
     Ok((!notes.is_empty()).then(|| notes.join("; ")))
 }
 
+/// Did a connection of a tunnel end because one end hung up (reset, aborted,
+/// a write to a closed socket)? Windows says "aborted" (10053) where a
+/// browser closes a connection it kept alive.
+fn closed_by_a_peer(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::*;
+    matches!(
+        e.kind(),
+        ConnectionReset | ConnectionAborted | BrokenPipe | UnexpectedEof
+    )
+}
+
 /// A tunnel the node or the lane did not open: what it said, and the
 /// releases when they differ (an older lane daemon may serve other ports).
 pub fn tunnel_error(what: &str, body: &str, node: &NodeRef) -> String {
@@ -1340,6 +1357,20 @@ pub fn readiness(view: &serde_json::Value, expected: &[String]) -> Option<Result
 #[cfg(test)]
 mod tests {
     use super::{NodeRef, Release, RemoteState, release_warning, tunnel_error, version};
+
+    #[test]
+    fn a_peer_hanging_up_is_how_a_tunnel_ends() {
+        use std::io::{Error, ErrorKind};
+        for k in [
+            ErrorKind::ConnectionReset,
+            ErrorKind::ConnectionAborted,
+            ErrorKind::BrokenPipe,
+        ] {
+            assert!(super::closed_by_a_peer(&Error::from(k)), "{k:?}");
+        }
+        assert!(!super::closed_by_a_peer(&Error::from(ErrorKind::TimedOut)));
+        assert!(!super::closed_by_a_peer(&Error::other("tls")));
+    }
 
     #[test]
     fn a_sync_that_works_does_not_hide_a_port_that_is_not_forwarded() {
