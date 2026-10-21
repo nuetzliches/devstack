@@ -48,8 +48,11 @@ const sort = useSort(
 );
 const rows = sort.sorted;
 
-const tone = (o: string) => (o === 'live' ? 'ok' : o === 'failed' ? 'danger' : o === 'held' ? 'warn' : o === 'superseded' ? '' : 'accent');
-const shown = computed(() => rows.value);
+const tone = (o: string) => (o === 'live' ? 'ok' : o === 'failed' ? 'danger' : o === 'held' ? 'warn' : o === 'superseded' || o === 'interrupted' ? '' : 'accent');
+/** The newest few; the rest on request. */
+const FIRST = 10;
+const expanded = ref(false);
+const shown = computed(() => (expanded.value ? rows.value : rows.value.slice(0, FIRST)));
 </script>
 
 <template>
@@ -83,6 +86,10 @@ const shown = computed(() => rows.value);
           </tr>
         </tbody>
       </table>
+      <button v-if="list.length > FIRST" type="button" class="more" :aria-expanded="expanded" data-testid="builds-more" @click="expanded = !expanded">
+        <Icon :name="expanded ? 'chevronDown' : 'chevronRight'" :size="13" />
+        {{ expanded ? 'Show fewer' : `Show ${list.length - FIRST} more` }}
+      </button>
     </div>
     <div v-else class="empty"><p>{{ loaded ? 'No build in the diagnostic log yet.' : 'Loading…' }}</p></div>
     <KeptLogsModal v-if="logFor && stack.id" :open="!!logFor" :stack-id="stack.id" :lane="stack.apiLane" :service="service" :initial-file="`build-${logFor}.log`" @close="logFor = null" />
@@ -92,6 +99,25 @@ const shown = computed(() => rows.value);
 <style scoped>
 .build-row {
   cursor: pointer;
+}
+.more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.more:hover {
+  background: var(--surface-hover);
+  color: var(--text);
 }
 .now {
   margin-left: 6px;

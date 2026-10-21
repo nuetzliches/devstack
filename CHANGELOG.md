@@ -9,6 +9,21 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **A service's build list shows the newest ten**, the rest behind "Show
+  more". The list is read from the diagnostic log (5 MB, one rotated file);
+  what builds keep on disk is bounded apart from it: the newest five
+  artifacts per service and whatever a tree or lane runs or may go back to,
+  and the newest ten build logs.
+
+### Fixed
+
+- **A build left building, starting or switching is `interrupted`**: one
+  the daemon's stop, or a stop or restart, cut short stayed in that state in
+  the build list for good ("switching", 20 h). Only the candidate's build is
+  still on its way.
+
 ## [0.18.0] - 2026-10-21
 
 Notices: what no request reports reaches the dashboard (ADR-0050). A lane

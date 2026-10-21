@@ -631,6 +631,16 @@ export class MockTransport implements Transport {
         { build: svc?.build_id ?? 'a1b2c3d4e5f6a7b8', started_ms: t - 600_000, updated_ms: t - 588_000, outcome: 'live', reason: null, current: true },
         { build: 'cafe0000cafe0000', started_ms: t - 640_000, updated_ms: t - 637_000, outcome: 'superseded', reason: null, current: false },
         { build: '99aa88bb77cc66dd', started_ms: t - 3_600_000, updated_ms: t - 3_590_000, outcome: 'live', reason: null, current: false },
+        { build: 'dead0000beef1111', started_ms: t - 7_200_000, updated_ms: t - 7_190_000, outcome: 'interrupted', reason: null, current: false },
+        // Older builds of a long day: the list shows the newest first, the rest on request.
+        ...Array.from({ length: 14 }, (_, i) => ({
+          build: `0ld${String(i).padStart(2, '0')}0000aaaa0000`,
+          started_ms: t - 86_400_000 - i * 600_000,
+          updated_ms: t - 86_400_000 - i * 600_000 + 20_000,
+          outcome: i % 4 === 3 ? 'superseded' : 'live',
+          reason: null,
+          current: false,
+        })),
       ]);
     }
     if (/^\/v1\/services\/[^/]+\/logs\/files$/.test(p)) {
