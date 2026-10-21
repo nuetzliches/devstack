@@ -14,6 +14,8 @@
   --space-5: 24px;
   --space-6: 32px;
   --topbar-h: 56px;
+  /* The banners below the top bar (App.vue measures them). */
+  --banners-h: 0px;
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
 
   color-scheme: light;
