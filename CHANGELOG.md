@@ -9,12 +9,23 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **Open a tree in GitHub Desktop** (Windows, ADR-0046): the path's menu
+  in the stack header lists it when it is installed, in a group of its own
+  for Git clients. A repository it does not know yet is added to its list.
+
 ### Fixed
 
 - **Serving the main ports refuses a stack of Compose containers only**
   (#184): it answered that the lane served them and moved nothing, as a
   container's published port is Docker's, not devstack's. It now says so
   (`409`), in the dashboard too.
+- A link to a service or container of a lane shared with you (its port, in
+  the list and on its page) opens it: a click opens the forward to it on
+  your machine, as **Open** in the pool area does, and keeps the link's
+  path. Before, it pointed at `localhost:<port>` of the lane's node, where
+  nothing on your machine listens.
 - **A tree opened in a program comes to the front on Windows** (ADR-0046):
   Explorer, the terminals, the editors, the agents and Orca opened behind
   the browser, as the hub runs in the background. The hub takes the
@@ -128,11 +139,6 @@ share switch is gone: it never let a lane run (see Removed).
 
 ### Fixed
 
-- A link to a service or container of a lane shared with you (its port, in
-  the list and on its page) opens it: a click opens the forward to it on
-  your machine, as **Open** in the pool area does, and keeps the link's
-  path. Before, it pointed at `localhost:<port>` of the lane's node, where
-  nothing on your machine listens.
 - A lane's failed start on a node no longer stays on its start page after
   the lane or the stack stopped: stopping the lane, stopping the main tree
   (`devstack down`) or starting the lane here clears it, and the dashboard
