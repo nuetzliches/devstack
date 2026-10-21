@@ -27,6 +27,16 @@ and listed with their assets on the
 
 ### Added
 
+- **Open a stack's folder from the dashboard**
+  ([ADR-0046](docs/adr/0046-the-hub-opens-a-worktree-in-the-users-programs.md)):
+  the path in the stack header is a menu. It copies the path, or opens the
+  shown tree (the main working tree or a lane's worktree) in Explorer or the
+  file manager, Windows Terminal, PowerShell or a terminal, VS Code, Cursor,
+  Windsurf, Zed, Claude Desktop, Claude Code or Orca: whichever of them the
+  hub finds on this machine (an editor or agent by the URL scheme it
+  registered). The hub opens only a registered stack's own trees, with a
+  program from that list (`GET /hub/openers`, `POST /hub/open`). A lane
+  shared with you offers the copy only.
 - **Desktop notifications** ([ADR-0045](docs/adr/0045-the-hub-notifies-the-desktop.md), #156):
   the hub follows every running stack and each of its started lanes (on a
   node too) and tells the desktop when a build failed, a candidate is held

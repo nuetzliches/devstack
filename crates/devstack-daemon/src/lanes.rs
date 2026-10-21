@@ -557,6 +557,20 @@ fn worktrees(repo: &Path) -> Option<(Vec<Worktree>, Vec<PathBuf>)> {
     Some((here, missing.into_iter().map(|w| w.path).collect()))
 }
 
+/// The worktree of `repo` (the main working tree included) that `path`
+/// names, as git lists it; `repo` itself also without git. `None` when
+/// `path` is none of them. What the hub opens (ADR-0046) is checked against
+/// it.
+pub fn worktree_of(repo: &Path, path: &Path) -> Option<PathBuf> {
+    if same_tree(repo, path) {
+        return Some(repo.to_path_buf());
+    }
+    let (here, _) = worktrees(repo)?;
+    here.into_iter()
+        .map(|w| w.path)
+        .find(|w| same_tree(w, path))
+}
+
 /// What changes in `<git common dir>/worktrees` when a worktree is added or
 /// removed or checks out another branch: its entries and their `HEAD`s.
 fn fingerprint(dir: &Path) -> Vec<(std::ffi::OsString, Option<std::time::SystemTime>)> {
@@ -2407,6 +2421,32 @@ impl Lanes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_repository_and_its_worktrees_are_its_trees() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let g = |args: &[&str]| git(&repo, args).unwrap();
+        g(&["init", "-q"]);
+        g(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "x",
+        ]);
+        let wt = d.path().join("wt");
+        g(&["worktree", "add", "-q", &wt.to_string_lossy()]);
+        assert!(worktree_of(&repo, &repo).is_some());
+        assert!(worktree_of(&repo, &wt).is_some_and(|p| same_tree(&p, &wt)));
+        assert!(worktree_of(&repo, &repo.join(".git")).is_none());
+        assert!(worktree_of(&repo, d.path()).is_none());
+    }
 
     #[test]
     fn the_state_of_a_forgotten_lane_is_swept() {

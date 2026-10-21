@@ -449,6 +449,9 @@ export type CapacityPoint = {
   gpu_memory_used: number;
 };
 
+/** A program this machine can open a stack's folder with (`GET /hub/openers`, ADR-0046). */
+export type Opener = { id: string; label: string; kind: 'files' | 'terminal' | 'editor' | 'agent' };
+
 /** A kind of desktop notification and whether it is on (ADR-0045). */
 export type NotifyKind = { kind: string; label: string; on: boolean; default: boolean };
 
