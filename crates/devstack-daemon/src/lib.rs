@@ -129,6 +129,9 @@ fn cgroup_root(stack: &str) -> Option<PathBuf> {
 /// How long a stopping daemon waits for open requests before it stops anyway.
 const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// How long an exiting daemon waits to send its last telemetry (ADR-0037).
+const TELEMETRY_FLUSH: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// How long a stopping daemon waits for its services to stop. What still
 /// runs then dies with the daemon (ADR-0009); a second Ctrl-C ends the wait.
 const SHUTDOWN_STOP: std::time::Duration = std::time::Duration::from_secs(90);
@@ -413,6 +416,7 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
         }
         let _ = std::fs::remove_file(info_path(&state_dir));
         diag::info("daemon_stop", serde_json::json!({}));
+        telemetry::flush(TELEMETRY_FLUSH);
         served
     });
     // A stop still under way must not keep the process (dropping the

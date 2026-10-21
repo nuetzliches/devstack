@@ -37,6 +37,12 @@ and listed with their assets on the
 
 ### Added
 
+- **Stop stack can take the containers down too**: the dashboard's stop
+  dialog (header and sidebar) offers "Stop its containers too", as
+  `devstack down --infra` does; their volumes stay. Checked when the stack
+  runs nothing but containers, where a stop without them changed nothing
+  but the daemon. Not offered while lanes run: they keep the containers
+  they share (ADR-0030).
 - **Links to a stack's or a lane's dashboard page, for agents to hand on**:
   `devstack status`, `devstack up` and `devstack lane start` end with
   `dashboard: http://127.0.0.1:4250/#/s/<id>?lane=<lane>`; the MCP tools
@@ -114,6 +120,8 @@ and listed with their assets on the
   the lanes when their counts change (a lane on a node is read every 5 s),
   and the shown lane counts from its own stream. Before, a lane started on
   a node stayed yellow until the page switched to another tree.
+- A daemon's last telemetry is sent as it exits (2 s at most): what it said
+  in its last minute, its stop included, was dropped before (ADR-0037).
 - A lane on a node no longer stops syncing when a file goes while it is
   sent (a package manager rewriting `node_modules`): the file is left out
   and the next sync sends what is there then.

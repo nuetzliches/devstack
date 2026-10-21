@@ -7,7 +7,7 @@ import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
 import { useHub } from './hub';
 import { usePool } from './pool';
-import { useUi } from './ui';
+import { useUi, type ConfirmOption } from './ui';
 
 const MAX_EVENTS = 500;
 const HISTORY_WINDOW_MS = 10 * 60_000;
@@ -725,21 +725,31 @@ export const useStack = defineStore('stack', () => {
     if (!id.value) return;
     const name = entry.value?.name ?? 'stack';
     const kept = runningLanes.value;
+    // Lanes that run keep the containers they share (ADR-0030): nothing to choose.
+    const containers = !kept.length && (view.value?.infra.some((g) => g.containers.length) ?? true);
+    // Containers only, nothing else to stop: then they are what "stop" means.
+    const option = containers ? stopContainers(view.value !== null && view.value.services.length === 0) : undefined;
     const ok = await ui.confirm({
       title: `Stop ${name}`,
       text: kept.length
         ? `The main working tree's services stop. ${laneList(kept)} keep running, and with them the daemon. Infrastructure containers keep running.`
-        : 'All services of this stack stop and its daemon exits. Infrastructure containers keep running.',
+        : 'All services of this stack stop and its daemon exits.',
       confirmLabel: 'Stop stack',
       danger: true,
+      option,
     });
     if (!ok) return;
     busy.value['stack'] = 'stop';
     try {
-      await act({ label: `Stop ${name}`, path: paths.down(id.value, false), success: 'Stopping the stack…' });
+      await act({ label: `Stop ${name}`, path: paths.down(id.value, !!option?.checked), success: 'Stopping the stack…' });
     } finally {
       delete busy.value['stack'];
     }
+  }
+
+  /** The choice to take a stack's containers down with it (`devstack down --infra`). */
+  function stopContainers(checked: boolean): ConfirmOption {
+    return { label: 'Stop its containers too', hint: 'Docker Compose takes them down; their volumes stay.', checked };
   }
 
   function laneList(names: string[]) {
@@ -747,6 +757,7 @@ export const useStack = defineStore('stack', () => {
   }
 
   return {
+    stopContainers,
     id,
     view,
     viewAt,
