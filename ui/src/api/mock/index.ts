@@ -641,7 +641,7 @@ export class MockTransport implements Transport {
           reason: null,
           current: false,
         })),
-      ]);
+      ].map((b, i) => ({ ...b, artifact: i < 5, log: i < 10 })));
     }
     if (/^\/v1\/services\/[^/]+\/logs\/files$/.test(p)) {
       const t = Date.now();

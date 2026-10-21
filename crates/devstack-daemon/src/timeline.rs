@@ -22,6 +22,11 @@ pub struct BuildEntry {
     pub reason: Option<String>,
     /// It runs as the main instance now.
     pub current: bool,
+    /// The store still has it: it can be gone back to (the newest five per
+    /// service and what something runs or may go back to, ADR-0002).
+    pub artifact: bool,
+    /// Its build log is still kept (the newest ten per service).
+    pub log: bool,
 }
 
 fn at_ms(v: &Value) -> Option<u64> {
@@ -96,6 +101,8 @@ pub fn builds(
                                     outcome: state.into(),
                                     reason: None,
                                     current: false,
+                                    artifact: false,
+                                    log: false,
                                 });
                                 out.len() - 1
                             }
@@ -133,6 +140,8 @@ pub fn builds(
                             outcome: "live".into(),
                             reason: None,
                             current: false,
+                            artifact: false,
+                            log: false,
                         }),
                     }
                     pending_start = None;

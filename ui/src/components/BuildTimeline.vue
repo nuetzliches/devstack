@@ -15,7 +15,16 @@ const props = defineProps<{ service: string; build: string | null; candidateStat
 const stack = useStack();
 const now = useNow();
 
-type Build = { build: string; started_ms: number; updated_ms: number; outcome: string; reason: string | null; current: boolean };
+/** `artifact`, `log`: what of it is still there (older daemons omit both: taken as there). */
+type Build = { build: string; started_ms: number; updated_ms: number; outcome: string; reason: string | null; current: boolean; artifact?: boolean; log?: boolean };
+const hasLog = (b: Build) => b.log !== false;
+function rowTitle(b: Build): string {
+  if (hasLog(b)) return `Build log of ${b.build}${b.artifact === false ? '\nIts artifact is removed (the newest five per service are kept)' : ''}`;
+  return `${b.build}: its artifact and build log are removed (the newest five artifacts and ten build logs per service are kept)`;
+}
+function open(b: Build) {
+  if (hasLog(b)) logFor.value = b.build;
+}
 const list = ref<Build[]>([]);
 const loaded = ref(false);
 const logFor = ref<string | null>(null);
@@ -75,9 +84,19 @@ const shown = computed(() => (expanded.value ? rows.value : rows.value.slice(0, 
           </tr>
         </thead>
         <tbody>
-          <tr v-for="b in shown" :key="b.build" class="build-row" tabindex="0" :title="`Build log of ${b.build}`" @click="logFor = b.build" @keydown.enter="logFor = b.build">
-            <td class="mono">
-              {{ shortBuild(b.build) }}<span v-if="b.current" class="tag now">running</span>
+          <tr
+            v-for="b in shown"
+            :key="b.build"
+            class="build-row"
+            :class="{ gone: !hasLog(b) }"
+            :tabindex="hasLog(b) ? 0 : undefined"
+            :title="rowTitle(b)"
+            data-testid="build-row"
+            @click="open(b)"
+            @keydown.enter="open(b)"
+          >
+            <td class="mono nowrap">
+              {{ shortBuild(b.build) }}<Icon v-if="b.artifact" name="box" :size="12" class="kept" aria-label="artifact kept" /><span v-if="b.current" class="tag now">running</span>
             </td>
             <td><span class="pill sm" :class="tone(b.outcome)">{{ b.outcome }}</span></td>
             <td class="nowrap" :title="dateTime(b.started_ms)">{{ ago(b.started_ms, now) }}</td>
@@ -99,6 +118,19 @@ const shown = computed(() => (expanded.value ? rows.value : rows.value.slice(0, 
 <style scoped>
 .build-row {
   cursor: pointer;
+}
+/* Its log is gone: what happened stays, nothing opens. */
+.build-row.gone {
+  cursor: default;
+  color: var(--text-muted);
+}
+.build-row.gone .pill {
+  opacity: 0.6;
+}
+.kept {
+  margin-left: 5px;
+  color: var(--text-faint);
+  vertical-align: -1px;
 }
 .more {
   display: flex;

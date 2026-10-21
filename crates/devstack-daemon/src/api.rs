@@ -1058,14 +1058,22 @@ async fn builds(
     let lane = s.sup.lane.clone();
     let limit = q.limit.unwrap_or(50).min(500);
     let list = tokio::task::spawn_blocking(move || {
-        crate::timeline::from_log(
+        let mut list = crate::timeline::from_log(
             &path,
             &name,
             &lane,
             current.as_deref(),
             on_way.as_deref(),
             limit,
-        )
+        );
+        // What of each is still there: older builds outlive their artifact
+        // and their log in the list.
+        let logs = s.sup.log_dir(&name);
+        for e in &mut list {
+            e.artifact = s.sup.has_artifact(&name, &e.build);
+            e.log = logfiles::resolve(&logs, &format!("build-{}.log", e.build)).is_some();
+        }
+        list
     })
     .await
     .unwrap_or_default();

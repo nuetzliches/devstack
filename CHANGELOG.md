@@ -15,7 +15,9 @@ and listed with their assets on the
   more". The list is read from the diagnostic log (5 MB, one rotated file);
   what builds keep on disk is bounded apart from it: the newest five
   artifacts per service and whatever a tree or lane runs or may go back to,
-  and the newest ten build logs.
+  and the newest ten build logs. Each build now says what of it is still
+  there (`artifact`, `log` in `/v1/services/{name}/builds`): a kept artifact
+  is marked, and a build whose log is gone is shown faint and opens nothing.
 
 ### Fixed
 
