@@ -26,6 +26,18 @@ use std::time::Duration;
 
 const EVERY: Duration = Duration::from_secs(15);
 
+/// Why this machine cannot run the pool's lanes, whatever the switch says.
+/// A lane is a Linux container with a Linux `devstack` in it (ADR-0028),
+/// which a node agent on Windows cannot provide; until #168 a Windows
+/// machine offers nothing, so the pool shows no capacity nobody can use.
+const UNAVAILABLE: Option<&str> = if cfg!(windows) {
+    Some(
+        "Windows does not run the pool's lanes yet: they are Linux containers, which an agent on Windows cannot provide (#168).          This machine can still start its lanes in the pool.",
+    )
+} else {
+    None
+};
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Status {
     pub settings: Settings,
@@ -46,6 +58,9 @@ pub struct Status {
     /// report; `None` before one, or from an older coordinator.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coordinator: Option<devstack_node::version::Release>,
+    /// Why this machine shares nothing whatever the switch says (Windows).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable: Option<String>,
 }
 
 struct Sharing {
@@ -89,6 +104,7 @@ fn dir(pool: &str) -> std::path::PathBuf {
 fn entry<'a>(map: &'a mut BTreeMap<String, Status>, pool: &str) -> &'a mut Status {
     map.entry(pool.to_string()).or_insert_with(|| Status {
         settings: Settings::load(&dir(pool)),
+        unavailable: UNAVAILABLE.map(str::to_string),
         ..Status::default()
     })
 }
@@ -143,7 +159,11 @@ fn run(poked: &mpsc::Receiver<()>) {
         let gpus = devstack_node::share::gpus();
         for (pool, _) in devstack_node::member::pools(&state()) {
             let settings = entry(&mut s.status.lock().unwrap(), &pool).settings.clone();
-            let offer = settings.offer(free);
+            let offer = if UNAVAILABLE.is_some() {
+                Amount::default()
+            } else {
+                settings.offer(free)
+            };
             let result = report(&pool, &settings, offer, total, &gpus);
             let mut map = s.status.lock().unwrap();
             let st = entry(&mut map, &pool);
@@ -182,7 +202,7 @@ fn report(
     }
     local
         .report(&Report {
-            sharing: settings.enabled,
+            sharing: settings.enabled && UNAVAILABLE.is_none(),
             cpus: offer.cpus,
             memory: offer.memory,
             api: None,
@@ -199,7 +219,7 @@ fn report(
             gpus: gpus
                 .iter()
                 .map(|g| devstack_node::share::Gpu {
-                    offered: settings.enabled,
+                    offered: settings.enabled && UNAVAILABLE.is_none(),
                     ..g.clone()
                 })
                 .collect(),
@@ -225,7 +245,9 @@ pub async fn get(Query(q): Query<PoolQuery>) -> Response {
             if let Some(a) = any.filter(|_| st.reported_at.is_none() && st.total.cpus == 0.0) {
                 st.total = a.total;
                 st.free = a.free;
-                st.offer = st.settings.offer(a.free);
+                if UNAVAILABLE.is_none() {
+                    st.offer = st.settings.offer(a.free);
+                }
             }
             Json(st.clone()).into_response()
         }
@@ -254,6 +276,13 @@ pub async fn put(Query(q): Query<PoolQuery>, Json(new): Json<Settings>) -> Respo
     let Some(s) = SHARING.get() else {
         return bad("sharing has not started");
     };
+    if let Some(why) = UNAVAILABLE.filter(|_| new.enabled) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": why })),
+        )
+            .into_response();
+    }
     if let Err(e) = new.save(&dir(&pool)) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -265,7 +294,11 @@ pub async fn put(Query(q): Query<PoolQuery>, Json(new): Json<Settings>) -> Respo
         let mut map = s.status.lock().unwrap();
         let st = entry(&mut map, &pool);
         st.settings = new;
-        st.offer = st.settings.offer(st.free);
+        st.offer = if UNAVAILABLE.is_some() {
+            Amount::default()
+        } else {
+            st.settings.offer(st.free)
+        };
         st.clone()
     };
     let _ = s.poke.lock().unwrap().send(());

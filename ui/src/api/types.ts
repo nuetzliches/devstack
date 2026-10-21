@@ -384,6 +384,8 @@ export type ShareStatus = {
   error: string | null;
   /** The devstack the coordinator runs, from its answer to the last report; absent from an older one. */
   coordinator?: PoolRelease;
+  /** Why this machine shares nothing whatever the switch says (Windows, #168); absent where it can. */
+  unavailable?: string;
 };
 
 /** A pool this machine belongs to or asked to join (ADR-0034), `GET /hub/pools`. */

@@ -9,6 +9,14 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **The share switch on Windows is off and says why**: a Windows machine
+  cannot run the pool's lanes yet (a lane is a Linux container), so it
+  offered capacity nobody could use. The hub reports nothing as shared from
+  Windows and refuses to switch sharing on (`409`); its own lanes still start
+  in the pool. Running lanes of others on Windows is #168.
+
 ### Changed
 
 - **A lane started on a node opens its pages as soon as its daemon runs

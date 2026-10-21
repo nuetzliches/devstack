@@ -10,7 +10,9 @@ import { usePool } from '@/stores/pool';
 const props = defineProps<{ compact?: boolean }>();
 const pool = usePool();
 const s = computed(() => pool.share);
-const on = computed(() => !!s.value?.settings.enabled);
+/** This machine cannot run the pool's lanes (Windows, #168): the switch stays off. */
+const unavailable = computed(() => s.value?.unavailable ?? null);
+const on = computed(() => !!s.value?.settings.enabled && !unavailable.value);
 const busy = ref(false);
 
 const GIB = 2 ** 30;
@@ -69,8 +71,8 @@ const reported = computed(() => {
         role="switch"
         class="switch"
         :aria-checked="on"
-        :disabled="busy || !s.member"
-        :title="s.member ? (on ? 'Stop sharing this machine' : 'Share this machine with the pool') : 'Join a pool first'"
+        :disabled="busy || !s.member || !!unavailable"
+        :title="unavailable ?? (s.member ? (on ? 'Stop sharing this machine' : 'Share this machine with the pool') : 'Join a pool first')"
         data-testid="share-switch"
         @click="toggle"
       >
@@ -78,11 +80,16 @@ const reported = computed(() => {
       </button>
       <span class="label">
         <strong>{{ on ? 'Sharing' : 'Not sharing' }}</strong>
+        <span v-if="unavailable && props.compact" class="faint small" :title="unavailable" data-testid="share-unavailable">not on Windows yet</span>
         <span v-if="props.compact && pool.pools.filter((p) => p.joined).length > 1" class="faint small" data-testid="share-pool">{{ pool.current }}</span>
         <span v-if="on" class="faint small tabular" data-testid="share-offer">{{ offerText }}</span>
       </span>
     </div>
-    <template v-if="!props.compact">
+    <p v-if="unavailable && !props.compact" class="muted small unavailable" data-testid="share-unavailable">
+      {{ unavailable.replace(' (#168)', '') }}
+      <a href="https://github.com/nuetzliches/devstack/issues/168" target="_blank" rel="noopener">#168</a>
+    </p>
+    <template v-if="!props.compact && !unavailable">
       <p class="muted small">
         With sharing on, the pool may run other members' lanes on this machine: half of the memory and CPU free right now, recomputed every 15 s,
         never more than the caps below.

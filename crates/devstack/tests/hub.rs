@@ -846,3 +846,35 @@ fn down_then_up_at_once_runs_again() {
         std::thread::sleep(Duration::from_millis(200));
     }
 }
+
+/// #168: a Windows machine cannot run the pool's lanes, so its switch stays
+/// off and says why; elsewhere nothing changes.
+#[test]
+fn sharing_is_refused_on_windows_with_the_reason() {
+    let h = start();
+    let p = h.port;
+    let bearer = format!("Authorization: Bearer {}\r\n", token(&h));
+    let (s, _, body) = get(p, "/hub/pool/share", &bearer);
+    assert_eq!(s, 200, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["unavailable"].is_string(), cfg!(windows), "{v}");
+    let put = |body: &str| {
+        http(
+            p,
+            &format!(
+                "PUT /hub/pool/share HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\n{bearer}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+    };
+    let (s, _, body) = put(r#"{"enabled":true}"#);
+    if cfg!(windows) {
+        assert_eq!(s, 409, "{body}");
+        assert!(body.contains("#168"), "{body}");
+    } else {
+        assert_eq!(s, 200, "{body}");
+    }
+    // Switching it off (or setting caps) is always fine.
+    let (s, _, body) = put(r#"{"enabled":false,"max_cpus":2}"#);
+    assert_eq!(s, 200, "{body}");
+}
