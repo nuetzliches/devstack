@@ -9,8 +9,27 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **A lane started on a node opens its pages as soon as its daemon runs
+  there** (#164, ADR-0025 noted 2026-10-21): the node creates the lane's
+  containers, starts the lane container and answers, then brings the
+  containers up under the running daemon, a Compose group at a time. The
+  lane's page shows them created, starting and healthy, and its services
+  start once their infrastructure is up, as on this machine. A container
+  that does not get healthy within 300 s shows on the lane's page with its
+  output and its group's error instead of failing the start.
+- While a lane's containers come up on a node, its worktree syncs again;
+  Compose builds nothing then (`--no-build`), since images are built before
+  the lane runs (ADR-0033, noted 2026-10-21).
+- `devstack node run-lane` waits for the lane's services past their
+  infrastructure, and stops on a Compose group that failed.
+
 ### Added
 
+- The node's pool telemetry reports each Compose group of a lane brought up
+  or failed (`node_lane_infra_up`, `node_lane_infra_failed`, with its
+  duration and Compose's reason).
 - **`prepare.link`** (ADR-0044, #159): directories `prepare` installs in a
   lane's copy (`link = ["web/node_modules"]`) are linked into the lane's
   worktree, a junction on Windows, so git hooks there (`npx eslint` in a
