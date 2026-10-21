@@ -9,6 +9,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 impl Supervisor {
+    /// The store still has build `id` of `name`: retention (ADR-0002) did
+    /// not remove it.
+    pub fn has_artifact(&self, name: &str, id: &str) -> bool {
+        self.builder.artifact(name, id).is_some()
+    }
+
     /// Keep the newest artifacts of a service and everything something runs or
     /// may go back to (ADR-0002 retention): this tree's main, previous,
     /// candidate and held builds, and what every lane runs. Only the main tree

@@ -15,11 +15,18 @@ pub struct BuildEntry {
     pub updated_ms: u64,
     /// `live` (it ran as the main instance), `failed`, `superseded` (a newer
     /// change replaced it before it went live), `held` (waits for promote),
-    /// or the state it is in now (`building`, `starting`, `switching`).
+    /// `interrupted` (it was on its way and is no longer: the daemon stopped,
+    /// or a stop or restart came between), or the state it is in now
+    /// (`building`, `starting`, `switching`).
     pub outcome: String,
     pub reason: Option<String>,
     /// It runs as the main instance now.
     pub current: bool,
+    /// The store still has it: it can be gone back to (the newest five per
+    /// service and what something runs or may go back to, ADR-0002).
+    pub artifact: bool,
+    /// Its build log is still kept (the newest ten per service).
+    pub log: bool,
 }
 
 fn at_ms(v: &Value) -> Option<u64> {
@@ -27,12 +34,15 @@ fn at_ms(v: &Value) -> Option<u64> {
     u64::try_from(ts.as_millisecond()).ok()
 }
 
-/// The builds of `service` in the diagnostic log lines, newest first, at most `limit`.
+/// The builds of `service` in the diagnostic log lines, newest first, at most
+/// `limit`. `on_way` is the build the service's candidate has now while it
+/// builds, starts or switches: only that one is still on its way.
 pub fn builds(
     lines: &[String],
     service: &str,
     lane: &str,
     current: Option<&str>,
+    on_way: Option<&str>,
     limit: usize,
 ) -> Vec<BuildEntry> {
     let mut out: Vec<BuildEntry> = Vec::new();
@@ -91,6 +101,8 @@ pub fn builds(
                                     outcome: state.into(),
                                     reason: None,
                                     current: false,
+                                    artifact: false,
+                                    log: false,
                                 });
                                 out.len() - 1
                             }
@@ -128,6 +140,8 @@ pub fn builds(
                             outcome: "live".into(),
                             reason: None,
                             current: false,
+                            artifact: false,
+                            log: false,
                         }),
                     }
                     pending_start = None;
@@ -138,6 +152,12 @@ pub fn builds(
     }
     for e in out.iter_mut() {
         e.current = current == Some(e.build.as_str());
+        // The log says where it got to, not that it got no further.
+        if matches!(e.outcome.as_str(), "building" | "starting" | "switching")
+            && on_way != Some(e.build.as_str())
+        {
+            e.outcome = "interrupted".into();
+        }
     }
     out.reverse();
     out.truncate(limit);
@@ -150,11 +170,12 @@ pub fn from_log(
     service: &str,
     lane: &str,
     current: Option<&str>,
+    on_way: Option<&str>,
     limit: usize,
 ) -> Vec<BuildEntry> {
     let needle = format!("\"service\":\"{service}\"");
     let lines = crate::diag::tail(path, 50_000, Some(&needle));
-    builds(&lines, service, lane, current, limit)
+    builds(&lines, service, lane, current, on_way, limit)
 }
 
 #[cfg(test)]
@@ -208,9 +229,9 @@ mod tests {
                 r#""event":"service","service":"web","build_id":"zzz","status":{"state":"healthy"}"#,
             ),
         ];
-        let b = builds(&lines, "api", "", Some("bbb"), 10);
+        let b = builds(&lines, "api", "", Some("bbb"), None, 10);
         assert!(
-            builds(&lines, "api", "feat", None, 10).is_empty(),
+            builds(&lines, "api", "feat", None, None, 10).is_empty(),
             "another lane stays out"
         );
         let got: Vec<(&str, &str, bool)> = b
@@ -233,7 +254,7 @@ mod tests {
             "from the build start to the switch"
         );
         assert_eq!(b[0].reason.as_deref(), Some("exited with code 3"));
-        assert_eq!(builds(&lines, "api", "", None, 2).len(), 2);
+        assert_eq!(builds(&lines, "api", "", None, None, 2).len(), 2);
     }
 
     #[test]
@@ -255,12 +276,57 @@ mod tests {
             ),
         ];
         for lane in ["", "main"] {
-            let ids: Vec<String> = builds(&lines, "api", lane, None, 10)
+            let ids: Vec<String> = builds(&lines, "api", lane, None, None, 10)
                 .into_iter()
                 .map(|e| e.build)
                 .collect();
             assert_eq!(ids, ["bbb", "aaa"], "lane {lane:?}");
         }
-        assert_eq!(builds(&lines, "api", "feat", None, 10).len(), 1);
+        assert_eq!(builds(&lines, "api", "feat", None, None, 10).len(), 1);
+    }
+
+    #[test]
+    fn a_build_no_longer_on_its_way_was_interrupted() {
+        let c = |t, state: &str, id: &str| {
+            ev(
+                t,
+                &format!(
+                    "\"event\":\"candidate\",\"service\":\"api\",\"candidate\":{{\"state\":\"{state}\",\"build_id\":\"{id}\"}}"
+                ),
+            )
+        };
+        // A switch the daemon's stop cut short, then a build under way.
+        let lines = vec![
+            c(1, "switching", "aaa"),
+            ev(
+                2,
+                r#""event":"service","service":"api","build_id":"zzz","status":{"state":"healthy"}"#,
+            ),
+            c(3, "building", "bbb"),
+        ];
+        let outcomes = |on_way| {
+            builds(&lines, "api", "", Some("zzz"), on_way, 10)
+                .into_iter()
+                .map(|e| (e.build, e.outcome))
+                .collect::<Vec<_>>()
+        };
+        let s = |b: &str, o: &str| (b.to_string(), o.to_string());
+        assert_eq!(
+            outcomes(Some("bbb")),
+            [
+                s("bbb", "building"),
+                s("zzz", "live"),
+                s("aaa", "interrupted")
+            ]
+        );
+        assert_eq!(
+            outcomes(None),
+            [
+                s("bbb", "interrupted"),
+                s("zzz", "live"),
+                s("aaa", "interrupted")
+            ],
+            "nothing on its way now"
+        );
     }
 }
