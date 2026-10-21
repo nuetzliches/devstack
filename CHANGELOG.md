@@ -9,6 +9,15 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-21
+
+Notices: what no request reports reaches the dashboard (ADR-0050). A lane
+whose worktree is removed elsewhere shows it while it goes, and stays shown
+until left (ADR-0024 point 7 amended). The stack header's path reads as a
+menu whose programs can be ordered and hidden; the branch picker groups
+lanes, local and remote branches; the sidebar marks what serves the main
+ports. `down --all --infra` removes every container.
+
 ### Added
 
 - **Notices: what no request reports reaches the dashboard**
@@ -24,6 +33,32 @@ and listed with their assets on the
   did not start again), a shared lane's tunnel refused, a desktop
   notification not shown. Before, all of these were only in the diagnostic
   log. The log stays as it is; the dashboard does not show it.
+- **A lane whose worktree is removed shows it, and stays shown until left**
+  (ADR-0024 point 7 amended). Removed from GitHub Desktop, an IDE or an
+  agent, a running lane took some twenty seconds to go (its containers and
+  volumes removed) and looked live meanwhile. The daemon now lists it with
+  `removing` from the start (`devstack lane list` too); the dashboard shows
+  "removing", then "removed", read only, with the lane as it was last,
+  instead of switching to the main tree, and offers to make the worktree
+  again on its branch while the branch is there (a fresh lane: the data
+  went with the old one). `?mock=laneremoved` shows it in the mock.
+- **The path menu's programs can be ordered and hidden**: "Manage
+  programs…" at its end, kept in this browser (ADR-0046's list itself is
+  unchanged).
+
+### Changed
+
+- **The stack header's path reads as a menu**: a chip like the branch's,
+  with a folder and a caret; a long path is cut in its folder, so the
+  worktree's name stays readable.
+- **The branch picker groups the branches**: those with a worktree (the
+  main tree's first), then the other local ones, then the remote ones, each
+  by name. "New branch from" is always shown, as a ghost button.
+- **The sidebar marks what serves the main ports**, the main working tree
+  too.
+- **The overview** gives the list more of the width, leaves out the states
+  nothing is in, and shows the active filter in the accent with a "Reset
+  filter" button.
 
 ### Fixed
 
@@ -47,6 +82,12 @@ and listed with their assets on the
 - **Main services that do not start again are logged** when a lane on a node
   that served the main ports is gone (`main_slot_back_failed`); the error was
   dropped.
+- **A stack file that is gone is no change**: a lane's worktree being
+  removed took its stack file first, and the dashboard offered "Restart
+  stack" for a change that applies after a restart.
+- The branch chip no longer names a lane's branch twice; service details and
+  the disk legend no longer break inside a value; a CPU share of 1,000 % and
+  more gets its thousands separator.
 
 ## [0.17.0] - 2026-10-21
 
@@ -1109,7 +1150,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/nuetzliches/devstack/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/nuetzliches/devstack/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/nuetzliches/devstack/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/nuetzliches/devstack/compare/v0.14.1...v0.15.0
