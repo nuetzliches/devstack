@@ -1,7 +1,7 @@
 //! The hub and the dashboard (ADR-0021): `devstack ui`, `devstack hub`, and
 //! the `devstack://` links the system hands over.
 
-use crate::{Cmd, HubAction, hubcmd, integration};
+use crate::{Cmd, HubAction, NotifyAction, hubcmd, integration};
 use anyhow::Result;
 
 pub(crate) fn run(cmd: Cmd) -> Result<()> {
@@ -37,5 +37,11 @@ fn hub(action: Option<HubAction>) -> Result<()> {
             println!("{}", integration::status_text());
             Ok(())
         }
+        Some(HubAction::Notify { action }) => match action {
+            None => hubcmd::notify_show(),
+            Some(NotifyAction::On { kinds }) => hubcmd::notify_set(&kinds, true),
+            Some(NotifyAction::Off { kinds }) => hubcmd::notify_set(&kinds, false),
+            Some(NotifyAction::Test) => hubcmd::notify_test(),
+        },
     }
 }

@@ -8,7 +8,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { DockerEngine, HubEvent, ShareSettings, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
+import type { DockerEngine, HubEvent, NotifySettings, ShareSettings, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -206,6 +206,21 @@ async function crmScript(s: MockStack): Promise<void> {
 }
 
 
+/** The hub's notification settings (ADR-0045), as a fresh install has them. */
+const notify: NotifySettings = {
+  available: true,
+  unavailable: null,
+  kinds: [
+    { kind: 'build_failed', label: 'A build failed', on: true, default: true },
+    { kind: 'held', label: 'A candidate is held and waits for promote', on: true, default: true },
+    { kind: 'service_failed', label: 'A service exited by itself or failed to start', on: true, default: true },
+    { kind: 'lane_failed', label: "A lane's start or move on a node failed", on: true, default: true },
+    { kind: 'main_ports', label: 'A lane took or gave back the main ports', on: false, default: false },
+    { kind: 'live', label: 'A candidate went live', on: false, default: false },
+  ],
+  muted: [],
+};
+
 function json<T>(status: number, body: T): Response<T> {
   return { status, ok: status >= 200 && status < 300, body: JSON.parse(JSON.stringify(body)) as T };
 }
@@ -389,6 +404,18 @@ export class MockTransport implements Transport {
       ]);
     }
     if (p === '/hub/update/check' && method === 'POST') return json(200, { current: '0.2.0', newer: hub.newer });
+    if (p === '/hub/notify' && method === 'GET') return json(200, notify);
+    if (p === '/hub/notify' && method === 'PUT') {
+      const b = (body ?? {}) as { kinds?: Record<string, boolean>; muted?: string[] };
+      for (const [k, on] of Object.entries(b.kinds ?? {})) {
+        const kind = notify.kinds.find((x) => x.kind === k);
+        if (!kind) return json(400, { error: `no kind of notification \`${k}\`` });
+        kind.on = on;
+      }
+      if (b.muted) notify.muted = [...b.muted].sort();
+      return json(200, notify);
+    }
+    if (p === '/hub/notify/test' && method === 'POST') return empty(204);
     if (p === '/hub/update' && method === 'POST') {
       // As if installed: the hub would restart on the new version.
       const send = (ev: HubEvent) => hub.hubSubs.forEach((l) => l.send(ev));

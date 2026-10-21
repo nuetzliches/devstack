@@ -31,7 +31,11 @@ ureq.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle.workspace = true
+windows.workspace = true
 windows-sys.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
