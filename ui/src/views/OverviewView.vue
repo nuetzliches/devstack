@@ -121,6 +121,9 @@ const badges = computed<{ f: Filter; n: number; tone: string }[]>(() => [
   { f: 'pending', n: stack.pending.length, tone: 'warn' },
 ]);
 
+/** A state nothing is in is left out (healthy stays, as the anchor), unless it is the filter. */
+const shownBadges = computed(() => badges.value.filter((b) => b.n || b.f === 'healthy' || filter.value === b.f));
+
 const hubAway = computed(() => !hub.reachable);
 const groupActions: { action: 'start' | 'stop' | 'restart'; title: string; icon: 'play' | 'stop' | 'restart' }[] = [  { action: 'start', title: 'Start every service of', icon: 'play' },  { action: 'restart', title: 'Rebuild and restart every service and container of', icon: 'restart' },  { action: 'stop', title: 'Stop every service of', icon: 'stop' },];
 const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
@@ -133,7 +136,7 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
         <div class="side">
           <div class="filters stale-dim" role="group" aria-label="Filter the overview by state">
             <button
-              v-for="b in badges"
+              v-for="b in shownBadges"
               :key="b.f"
               type="button"
               class="badge"
@@ -294,7 +297,7 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 }
 .md {
   display: grid;
-  grid-template-columns: minmax(380px, 40%) minmax(0, 1fr);
+  grid-template-columns: minmax(440px, 46%) minmax(0, 1fr);
   gap: var(--space-4);
   align-items: start;
 }

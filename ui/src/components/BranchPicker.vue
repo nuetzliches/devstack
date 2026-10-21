@@ -43,29 +43,27 @@ function toggle() {
   }
 }
 
-type Row = { i: number; b: BranchView; lane: LaneView | null };
+type Row = { b: BranchView; lane: LaneView | null };
 /** At most this many of a group are listed; the filter finds the others. */
 const SHOWN = 40;
-
-/**
- * The main tree's branch, then the started lanes, then the other worktrees,
- * then the branches without one; in the hub's order (newest first) within.
- */
-function rank(r: Row): number {
-  if (r.b.main) return 0;
-  if (r.lane && r.lane.active !== false) return 1;
-  return r.b.worktree ? 2 : 3;
-}
 
 const rows = computed<Row[]>(() => {
   const q = filter.value.trim().toLowerCase();
   return (stack.branches?.branches ?? [])
     .filter((b) => !q || b.name.toLowerCase().includes(q))
-    .map((b, i) => ({ i, b, lane: b.worktree && !b.main ? (stack.lanes.find((l) => samePath(l.path, b.worktree!)) ?? null) : null }))
-    .sort((x, y) => rank(x) - rank(y) || x.i - y.i);
+    .map((b) => ({ b, lane: b.worktree && !b.main ? (stack.lanes.find((l) => samePath(l.path, b.worktree!)) ?? null) : null }))
+    .sort((x, y) => Number(y.b.main) - Number(x.b.main) || x.b.name.localeCompare(y.b.name));
 });
-const local = computed(() => rows.value.filter((r) => !r.b.remote));
-const remote = computed(() => rows.value.filter((r) => r.b.remote));
+/** The branches with a worktree (the main tree's first), then the remote ones, then the other local ones; each by name. */
+const groups = computed(() =>
+  (
+    [
+      ['Lanes', rows.value.filter((r) => r.b.worktree)],
+      ['Remote', rows.value.filter((r) => !r.b.worktree && r.b.remote)],
+      ['Local', rows.value.filter((r) => !r.b.worktree && !r.b.remote)],
+    ] as const
+  ).filter(([, list]) => list.length),
+);
 
 /** Shown now: the main tree for its branch, the lane for another worktree's. */
 function isShown(r: Row): boolean {
@@ -159,8 +157,8 @@ function create() {
       </div>
       <span v-if="!stack.branches" class="faint small note"><span class="spinner" /> Reading branches…</span>
       <span v-else-if="!rows.length" class="faint small note">No branch {{ filter ? `matches “${filter}”` : 'here' }}.</span>
-      <template v-for="[group, list] in [['Local', local], ['Remote', remote]] as const" :key="group">
-        <div v-if="list.length" class="group faint small">{{ group }}</div>
+      <template v-for="([group, list], gi) in groups" :key="group">
+        <div class="group faint small" :class="{ sep: gi > 0 }">{{ group }}</div>
         <template v-for="r in list.slice(0, SHOWN)" :key="r.b.name">
           <div class="row" :class="{ on: isShown(r) }" role="option" :aria-selected="isShown(r)" data-testid="branch-option" :data-branch="r.b.name">
             <button
@@ -175,7 +173,7 @@ function create() {
               <span v-if="r.lane?.owns_main || (r.b.main && !stack.lanes.some((l) => l.owns_main))" class="pill sm ok">main ports</span>
               <span v-else class="faint small">{{ hint(r) }}</span>
             </button>
-            <button type="button" class="icon-btn" :disabled="!!busy" :title="`New branch from ${r.b.name}, and a lane on it`" data-testid="branch-new" @click="startNew(r)">
+            <button type="button" class="icon-btn ghost" :disabled="!!busy" :title="`New branch from ${r.b.name}, and a lane on it`" data-testid="branch-new" @click="startNew(r)">
               <Icon name="plus" :size="13" />
             </button>
             <button v-if="removable(r)" type="button" class="icon-btn danger" :disabled="!!busy" :title="`Remove the worktree ${r.b.worktree} (git refuses one with changes; the branch stays)`" data-testid="branch-remove" @click="remove(r)">
@@ -260,6 +258,11 @@ function create() {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.group.sep {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
 .row {
   display: flex;
   align-items: center;
@@ -300,9 +303,15 @@ function create() {
   cursor: pointer;
   opacity: 0;
 }
+/* "New branch from" is always there, faint; removing shows on hover only. */
+.icon-btn.ghost {
+  opacity: 1;
+  color: var(--text-faint);
+}
 .row:hover .icon-btn,
 .icon-btn:focus-visible {
   opacity: 1;
+  color: var(--text-muted);
 }
 .icon-btn:hover {
   background: var(--surface-2);
