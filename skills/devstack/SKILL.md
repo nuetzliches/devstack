@@ -56,7 +56,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack builds <service>` | the service's builds, newest first: live, failed (with the reason), superseded by a newer change, held; answers "did my change ever go live" and "since when is it broken" |
 | `devstack hot-reload <service> on\|off` | for a debugging session: the toolchain's watcher (e.g. `dotnet watch`) from the source tree instead of builds and candidates; needs `hot_reload` in the stack file. Switch it off again afterwards |
 | `devstack up` in a `git worktree` | starts that worktree's **lane** (every worktree is one) in the main tree's daemon: its own builds, ports moved by +100 (+200, ...), its own containers (a Compose project per lane, ports moved alike; `shared` services come from the main tree), no background workers (`--workers` turns them on; `--force` skips the memory check). Every command in the worktree then acts on the lane (`devstack lane list` shows all) |
-| `git worktree add <path> -b <branch>` | a new worktree is a lane at once, not started (devstack never creates or removes worktrees; use git or your tool). A lane runs from a copy of its worktree, so `git worktree remove` works while it runs and stops it. `devstack lane stop <name>` stops a lane and keeps the worktree |
+| `git worktree add <path> -b <branch>` | a new worktree is a lane at once, not started (devstack never creates or removes worktrees; use git or your tool); tell the user its dashboard page (`devstack ui --link` in it). A lane runs from a copy of its worktree, so `git worktree remove` works while it runs and stops it. `devstack lane stop <name>` stops a lane and keeps the worktree |
 | `devstack lane start <name> [--on <node>]` | start a lane from the main tree (or anywhere in the repository), as `devstack up` in its worktree does; `status` in the main tree lists the lanes in one line. **To run another branch or commit beside the main stack** (an end-to-end run against a given commit, a review): `git worktree add <dir> <commit>`, `devstack lane start <name>` (its ports are the main ports plus its offset, `devstack lane list`), test against those, `devstack lane stop <name>`, `git worktree remove <dir>`. **For an acceptance run** use the stack file's profile if it has one (`status` lists none; `[profiles]` in the file): `devstack lane start <name> --profile <p> --run` starts the lane as the profile says (a build instead of a dev server, workers, fresh data, the suite's env) and runs its suite command. A worktree another tool or script created is a lane too: starting it gives its own ports, containers and database without building a separate environment |
 | `devstack lane reset <name>` / `devstack lane prune [--older-than 7d] [--dry-run]` | throw a stopped lane's data away (it starts fresh, seeded again); remove what lanes whose worktree is gone left behind, here and on the pool's nodes. A lane on a node keeps its data there between starts. Ask the user before either: data goes |
 | `devstack promote --lane <name>` | the lane's services, dev servers included, answer on the main ports; ask the user first, `--lane main` gives them back. A lane on a node may take them only on a dedicated node (a server) |
@@ -75,7 +75,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack start <service>` / `stop <service>` | one service |
 | `devstack run <command>` | a command of the stack file (list below) |
 | `devstack top` | CPU, memory, disk per service, container, group and lane |
-| `devstack ui` | dashboard in the browser (pairs the browser once); `--browser chrome\|edge\|firefox\|brave\|<path>`, else `DEVSTACK_BROWSER`, else `BROWSER` picks the browser, `--print` only prints the link |
+| `devstack ui` | dashboard in the browser, on this stack (in a worktree on its lane; `--lane <name>` on another), and pairs the browser once; `--browser chrome\|edge\|firefox\|brave\|<path>`, else `DEVSTACK_BROWSER`, else `BROWSER` picks the browser. `--link` prints the lasting links instead (see "Tell the user where to look"), `--print` the one-time pairing link |
 | `devstack hub notify` | the desktop notifications the hub shows (a build failed, a candidate held, a service crashed, a lane's start on a node failed) and whether they show; `on\|off <kind>…\|all`, `test`. The user's own choice: change it only when asked |
 | `devstack update` | install the newest devstack (`--check` only asks); stacks switch at their next restart |
 | `devstack down` | stop the services and the daemon; containers keep running. `down --infra` removes them too. In the main tree, lanes that run keep the daemon and the infrastructure (only the main tree's services stop); `down --all` stops the lanes too: ask first, they may be someone else's |
@@ -121,6 +121,19 @@ devstack status             # every service healthy / running / completed, no "n
 Check, do not assume: if something "does not run", `devstack status` and the
 port tell within a second, and they are the evidence to quote.
 
+### Tell the user where to look
+
+Whenever you started the stack or a lane, or created a worktree, give the user
+its dashboard page: one link to its services, logs, builds and events.
+`devstack status`, `devstack up` and `devstack lane start` end with it
+(`dashboard: http://127.0.0.1:<port>/#/s/<stack id>?lane=<lane>`, an empty
+`lane=` is the main working tree); for a worktree not started yet,
+`devstack ui --link` in it (or `--lane <name>` from the main tree) prints it.
+Quote it as printed, never build it yourself. The page opens in a browser that
+was paired before; `devstack ui --link` also prints a
+`devstack://open?stack=…&lane=…` link that pairs the browser first (where the
+chat or terminal makes it clickable), and `devstack ui` opens the page paired.
+
 ## 5. Agents: MCP
 
 `devstack mcp` is an MCP server (stdio) with `status`, `up` (`on` for a lane on a
@@ -128,7 +141,8 @@ node), `down`, `start_service`, `stop_service`, `restart_service`,
 `promote_service`, `rollback_service`, `hot_reload`, `logs`, `builds`,
 `diagnostics`, `doctor`, `run_command`, `usage`, `lanes`, `lane_start`,
 `lane_stop`, `lane_move`, `lane_share`, `promote_lane`, `placement`,
-`hub_status`, `hub_start`. `lane_start` and `lane_stop` work from the main tree too: an
+`hub_status`, `hub_start`. `status`, `up` and `lane_start` end with the
+`dashboard:` page, `lanes` names each lane's. `lane_start` and `lane_stop` work from the main tree too: an
 agent there runs another worktree's lane without moving to it. `up` also
 takes `profile`, `run` and `yes` (as `--profile`, `--run`, `--yes`) and
 `timeout_s` (how long it waits for the services; the stack keeps starting);

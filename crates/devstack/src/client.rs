@@ -677,20 +677,24 @@ pub fn print_status(stack: &Value) {
     print!("{}", status_text(stack));
 }
 
-/// `devstack status`: the table, plus a note when the generated agent skills
-/// no longer match.
+/// `devstack status`: the table, a note when the generated agent skills no
+/// longer match, and where the dashboard shows this tree.
 pub fn print_status_for(stack: &Value, stack_file: &Path) {
     print_status(stack);
-    if let Some(n) = Client::probe(&state_dir(stack_file).unwrap_or_default())
+    let c = Client::probe(&state_dir(stack_file).unwrap_or_default())
         .ok()
-        .flatten()
-        .and_then(|c| lanes_note(&c))
-    {
+        .flatten();
+    if let Some(n) = c.as_ref().and_then(lanes_note) {
         println!("\n{n}");
     }
     if let Some(n) = crate::skills::outdated_note(stack_file) {
         println!("\n{n}");
     }
+    let lane = c.as_ref().and_then(Client::lane).filter(|l| *l != "-");
+    println!(
+        "\n{}",
+        crate::hubcmd::dashboard_line(&daemon_file(stack_file), lane)
+    );
 }
 
 /// The service table and the infrastructure, as `devstack status` shows them.
@@ -1575,6 +1579,10 @@ pub fn lane_start(
         UpOutcome::Ready(stack) => {
             println!();
             print!("{}", status_text(&stack));
+            println!(
+                "\n{}",
+                crate::hubcmd::dashboard_line(&daemon_file(stack_file), Some(&started.name))
+            );
             if run && let Some(cmd) = wanted.and_then(|p| p.command.as_deref()) {
                 println!(
                     "\nrunning `{cmd}` in lane `{}`, the profile's command",
@@ -1590,6 +1598,23 @@ pub fn lane_start(
         }
         UpOutcome::TimedOut(_) => unreachable!("no timeout given"),
     }
+}
+
+/// The lane of the worktree the CLI runs in, started or not, by the
+/// daemon's list; `None` in the main working tree, or without a daemon.
+pub fn worktree_lane(stack_file: &Path) -> Option<String> {
+    let c = Client::probe(&state_dir(stack_file).ok()?).ok().flatten()?;
+    let wt = worktree()?;
+    let lanes: Vec<Value> = serde_json::from_str(&c.get("/v1/lanes").ok()?).ok()?;
+    let me = devstack_proc::long_path(&wt.path);
+    lanes
+        .iter()
+        .find(|l| {
+            l["path"]
+                .as_str()
+                .is_some_and(|p| same_dir(&devstack_proc::long_path(Path::new(p)), &me))
+        })
+        .and_then(|l| l["name"].as_str().map(str::to_string))
 }
 
 /// One line on the lanes for `status` in the main working tree (#103): that
