@@ -54,13 +54,13 @@ const rows = computed<Row[]>(() => {
     .map((b) => ({ b, lane: b.worktree && !b.main ? (stack.lanes.find((l) => samePath(l.path, b.worktree!)) ?? null) : null }))
     .sort((x, y) => Number(y.b.main) - Number(x.b.main) || x.b.name.localeCompare(y.b.name));
 });
-/** The branches with a worktree (the main tree's first), then the remote ones, then the other local ones; each by name. */
+/** The branches with a worktree (the main tree's first), then the other local ones, then the remote ones; each by name. */
 const groups = computed(() =>
   (
     [
       ['Lanes', rows.value.filter((r) => r.b.worktree)],
-      ['Remote', rows.value.filter((r) => !r.b.worktree && r.b.remote)],
       ['Local', rows.value.filter((r) => !r.b.worktree && !r.b.remote)],
+      ['Remote', rows.value.filter((r) => !r.b.worktree && r.b.remote)],
     ] as const
   ).filter(([, list]) => list.length),
 );
