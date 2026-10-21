@@ -37,6 +37,7 @@ impl Supervisor {
     /// A removed lane: stop its services, release its ports, end its threads.
     pub(crate) fn close(&self) {
         self.down(false);
+        self.unlink_prepared();
         self.closed.store(true, Ordering::SeqCst);
         for (_, p) in std::mem::take(&mut *self.proxies.lock().unwrap()) {
             p.close();

@@ -1832,6 +1832,7 @@ impl Lanes {
         let lanes: Vec<Arc<Lane>> = self.map.lock().unwrap().values().cloned().collect();
         for l in lanes {
             l.sup.down(false);
+            l.sup.unlink_prepared();
         }
         // A daemon that stops releases its lanes on nodes (ADR-0025 point 7).
         let remote: Vec<Arc<RemoteLane>> = std::mem::take(&mut *self.remote.lock().unwrap())
