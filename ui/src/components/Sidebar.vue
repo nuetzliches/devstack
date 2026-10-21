@@ -120,19 +120,27 @@ function mainDot(s: StackEntry): Dot {
   return mainActive.value[s.id] === false ? 'off' : 'on';
 }
 const servedBy = (s: StackEntry) => (known.value[s.id] ?? []).find((l) => l.owns_main) ?? null;
+/**
+ * How many of a lane's services run: the shown lane's from its own stream,
+ * which the list (the main tree's, not followed meanwhile) lags behind.
+ */
+function laneRuns(s: StackEntry, l: LaneView): number {
+  if (s.id !== stack.id || stack.lane !== l.name || !stack.live || !stack.services.length) return l.running;
+  return stack.services.filter((x) => statusBucket(x.status) !== 'idle').length;
+}
 /** A lane's state as a dot, like a stack's: the words are in its tooltip. */
-function laneDot(l: LaneView): Dot {
+function laneDot(s: StackEntry, l: LaneView): Dot {
   if (!hub.reachable) return 'unknown';
   if (l.moving?.error) return 'err';
   if (!started(l)) return 'off';
-  return l.running > 0 ? 'on' : 'warn';
+  return laneRuns(s, l) > 0 ? 'on' : 'warn';
 }
-function laneTitle(l: LaneView): string {
+function laneTitle(s: StackEntry, l: LaneView): string {
   const where = l.node ? `runs on ${nodeLabel(l)}` : `ports +${l.port_offset}`;
   if (l.moving?.error) return `${l.path}\n${l.moving.error}`;
   if (l.moving) return `${l.path}\n${l.moving.what}`;
   if (!started(l)) return `${l.path}\nnot started`;
-  return `${l.path}\n${l.running} of ${l.services} services running · ${where}${l.owns_main ? ' · serves the main ports' : ''}`;
+  return `${l.path}\n${laneRuns(s, l)} of ${l.services} services running · ${where}${l.owns_main ? ' · serves the main ports' : ''}`;
 }
 
 function openStack(s: StackEntry) {
@@ -206,13 +214,15 @@ async function stopStack(s: StackEntry) {
   closeMenu();
   // The shown stack's own stop knows its lanes and says what stays.
   if (isCurrent(s)) return void stack.stopStack();
+  const option = stack.stopContainers(false);
   const ok = await ui.confirm({
     title: `Stop ${s.name}`,
-    text: 'Its services stop. Infrastructure containers keep running.',
+    text: 'Its services stop. Lanes that still run keep its daemon and the containers they share.',
     confirmLabel: 'Stop stack',
     danger: true,
+    option,
   });
-  if (ok) await act({ label: `Stop ${s.name}`, path: paths.down(s.id, false), success: 'Stopping the stack…' });
+  if (ok) await act({ label: `Stop ${s.name}`, path: paths.down(s.id, option.checked), success: 'Stopping the stack…' });
 }
 async function removeStack(s: StackEntry) {
   closeMenu();
@@ -311,13 +321,13 @@ async function copyPath(s: StackEntry) {
               type="button"
               class="item lane"
               :class="{ active: isCurrent(s) && stack.lane === l.name, idle: !started(l) }"
-              :title="laneTitle(l)"
+              :title="laneTitle(s, l)"
               data-testid="sidebar-lane"
               :data-lane="l.name"
               @click="openLane(s, l)"
             >
               <span v-if="l.moving && !l.moving.error" class="spinner sm" aria-hidden="true" />
-              <span v-else class="dot" :class="laneDot(l)" aria-hidden="true" />
+              <span v-else class="dot" :class="laneDot(s, l)" aria-hidden="true" />
               <span class="label truncate">{{ laneLabel(l) }}</span>
               <span v-if="l.node" class="pill sm info" data-testid="sidebar-lane-node">{{ nodeLabel(l) }}</span>
               <span v-if="l.owns_main" class="pill sm ok">main ports</span>

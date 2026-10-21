@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+# Template: the release workflow fills in {{version}}, {{date}} and {{sha256}}
+# (from the release's SHA256SUMS) and submits it (release.yml, job winget).
+
+PackageIdentifier: nuetzliches.devstack
+PackageVersion: {{version}}
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+- RelativeFilePath: devstack.exe
+  PortableCommandAlias: devstack
+Commands:
+- devstack
+ReleaseDate: {{date}}
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/nuetzliches/devstack/releases/download/v{{version}}/devstack-x86_64-pc-windows-msvc.zip
+  InstallerSha256: {{sha256}}
+ManifestType: installer
+ManifestVersion: 1.12.0

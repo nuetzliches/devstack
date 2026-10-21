@@ -75,6 +75,17 @@ describe('hub store', () => {
     expect(hub.status).toBe('unpaired');
   });
 
+  it('asks once what it opens folders with, and names a tree and a program only (ADR-0046)', async () => {
+    fake.on('/hub/openers', ok([{ id: 'vscode', label: 'VS Code', kind: 'editor' }]));
+    fake.on('/hub/open', ok(null));
+    const hub = useHub();
+    await hub.loadOpeners();
+    await hub.loadOpeners();
+    expect(fake.requests.filter((r) => r.path === '/hub/openers')).toHaveLength(1);
+    await hub.openWith('shop', '/src/shop', hub.openers![0]);
+    expect(fake.requests.find((r) => r.path === '/hub/open')?.body).toEqual({ stack: 'shop', path: '/src/shop', with: 'vscode' });
+  });
+
   it('clears "starting" when the hub reports a failed start', async () => {
     fake.on('/hub/session', ok({ version: '0.9.8' }));
     const hub = useHub();
@@ -170,6 +181,69 @@ describe('stack store', () => {
     expect(useUi().toasts.some((x) => x.title === 'Lane feat is gone')).toBe(true);
   });
 
+  it('a lane stopped stays shown, with its start', async () => {
+    const stack = await shownStack();
+    const feat = { name: 'feat', path: '/src/feat', number: 1, active: true, port_offset: 100, owns_main: false, running: 2, services: 3 };
+    fake.stream('/hub/stacks/shop/api/v1/events').handlers.onMessage({ type: 'lanes', lanes: [feat] });
+    stack.selectLane('feat');
+    expect(stack.apiLane).toBe('feat');
+    fake.on('/hub/stacks/shop/api/v1/lanes/feat/stop', ok(null));
+    fake.on('/hub/stacks/shop/api/v1/lanes', ok([{ ...feat, active: false, running: 0 }]));
+    await stack.stopLane('feat');
+    expect(stack.lane).toBe('feat');
+    expect(stack.apiLane).toBeNull();
+  });
+
+  it('shows the services stopped once the daemon is gone', async () => {
+    const stack = await shownStack();
+    const svc = (name: string, state: 'running' | 'stopped' | 'failed') => ({
+      name,
+      kind: 'service',
+      groups: [],
+      port: 5000,
+      autostart: true,
+      status: state === 'failed' ? { state, reason: 'boom' } : { state },
+      build_id: null,
+      pid: 42,
+      since: 0,
+      log: null,
+      instance_port: 5001,
+      proxy: null,
+      candidate: null,
+    });
+    const view = { name: 'shop', repo: '/src/shop', version: '0.9.8', services: [svc('api', 'running'), svc('job', 'stopped'), svc('web', 'failed')], infra: [], groups: [], commands: [] };
+    fake.stream('/hub/stacks/shop/api/v1/events').handlers.onMessage({ type: 'snapshot', stack: view } as never);
+    expect(stack.view?.services[0].status.state).toBe('running');
+    // `down`: the daemon closes its API, then stops its services, and exits.
+    fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [entry('shop', false)] });
+    await vi.waitFor(() => expect(stack.view?.services.map((s) => s.status.state)).toEqual(['stopped', 'stopped', 'failed']));
+    expect(stack.view?.services[0].pid).toBeNull();
+  });
+
+  it('a stack of containers only stops them too, unless told otherwise', async () => {
+    const stack = await shownStack();
+    const app = { group: 'app', project: 'shop', containers: [{ service: 'db', name: 'shop-db-1', state: 'running', health: '', ports: [] }], error: null };
+    const view = (services: unknown[]) => ({ name: 'shop', repo: '/src/shop', version: '0.9.8', services, infra: [app], groups: [], commands: [] });
+    const events = fake.stream('/hub/stacks/shop/api/v1/events');
+    const ui = useUi();
+    const stopWith = async (checked?: boolean) => {
+      const done = stack.stopStack();
+      await vi.waitFor(() => expect(ui.confirmRequest).not.toBeNull());
+      const option = ui.confirmRequest!.option!;
+      const offered = option.checked;
+      if (checked !== undefined) option.checked = checked;
+      ui.confirmRequest!.resolve(true);
+      await done;
+      return { offered, path: fake.requests.at(-1)?.path };
+    };
+    events.handlers.onMessage({ type: 'snapshot', stack: view([]) } as never);
+    expect(await stopWith()).toEqual({ offered: true, path: '/hub/stacks/shop/down?infra=true' });
+    expect((await stopWith(false)).path).toBe('/hub/stacks/shop/down?infra=false');
+    // Services of its own: the containers stay unless asked.
+    events.handlers.onMessage({ type: 'snapshot', stack: view([{ name: 'api', status: { state: 'running' } }]) } as never);
+    expect(await stopWith()).toEqual({ offered: false, path: '/hub/stacks/shop/down?infra=false' });
+  });
+
   it('a lane not started is shown from the main tree', async () => {
     const stack = await shownStack();
     fake.stream('/hub/stacks/shop/api/v1/events').handlers.onMessage({
@@ -211,6 +285,15 @@ describe('stack store', () => {
       await done;
       expect(ups()).toHaveLength(0);
       expect(useUi().toasts.some((x) => x.message === 'no space left')).toBe(true);
+    });
+
+    it('forgets the failed start once the stack stops', async () => {
+      const { stack, events, done } = await startOnNode();
+      events.handlers.onMessage({ type: 'lanes', lanes: [{ ...starting, moving: { ...starting.moving, error: 'no space left', failed_at: 1 } }] });
+      await done;
+      fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [entry('shop', false)] });
+      await vi.waitFor(() => expect(stack.lanes[0]?.moving).toBeUndefined());
+      expect(stack.lanes[0]?.name).toBe('feat');
     });
   });
 });

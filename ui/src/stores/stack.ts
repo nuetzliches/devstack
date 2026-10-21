@@ -7,7 +7,7 @@ import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
 import { useHub } from './hub';
 import { usePool } from './pool';
-import { useUi } from './ui';
+import { useUi, type ConfirmOption } from './ui';
 
 const MAX_EVENTS = 500;
 const HISTORY_WINDOW_MS = 10 * 60_000;
@@ -282,10 +282,9 @@ export const useStack = defineStore('stack', () => {
       path: daemonPath(id.value, v1.laneStop(name)),
       success: `Lane ${name} stopped`,
     });
-    if (res.ok) {
-      if (lane.value === name) selectLane(null);
-      await loadLanes();
-    }
+    // The lane stays shown, with its start: the eyes are on the button that
+    // stopped it, and "Stop stack" there would be the main tree's.
+    if (res.ok) await loadLanes();
   }
 
   /** Throw a stopped lane's data away, here and on its nodes (ADR-0038): its next start is fresh. */
@@ -306,15 +305,27 @@ export const useStack = defineStore('stack', () => {
   // of a page) streams from its own API, which does not carry the lanes:
   // they are read now, as `reset` would have.
   watch(running, (r) => {
-    if (r && !sub) {
-      connect();
-      if (lanesOf.value !== id.value) void loadLanes();
+    if (r) {
+      if (!sub) {
+        connect();
+        if (lanesOf.value !== id.value) void loadLanes();
+      }
+      return;
     }
-    if (!r && sub) {
+    if (sub) {
       disconnect();
       if (viewAt.value === null && view.value) viewAt.value = Date.now();
     }
+    // A start under way, or one that failed, lived in the daemon that is gone.
+    if (lanes.value.some((l) => l.moving)) lanes.value = lanes.value.map((l) => ({ ...l, moving: undefined }));
+    // Its services went with it (ADR-0009), after its API: it never said so.
+    if (view.value?.services.some(ran)) {
+      view.value = { ...view.value, services: view.value.services.map((s) => (ran(s) ? { ...s, status: { state: 'stopped' }, pid: null, instance_port: null } : s)) };
+      if (id.value && !lane.value) persist.saveStack(id.value, { view: view.value, at: viewAt.value ?? Date.now() });
+    }
   });
+  /** A service that runs, or is on its way to. */
+  const ran = (s: ServiceView) => !['idle', 'failed'].includes(statusBucket(s.status));
 
   function connect() {
     if (!id.value) return;
@@ -714,21 +725,31 @@ export const useStack = defineStore('stack', () => {
     if (!id.value) return;
     const name = entry.value?.name ?? 'stack';
     const kept = runningLanes.value;
+    // Lanes that run keep the containers they share (ADR-0030): nothing to choose.
+    const containers = !kept.length && (view.value?.infra.some((g) => g.containers.length) ?? true);
+    // Containers only, nothing else to stop: then they are what "stop" means.
+    const option = containers ? stopContainers(view.value !== null && view.value.services.length === 0) : undefined;
     const ok = await ui.confirm({
       title: `Stop ${name}`,
       text: kept.length
         ? `The main working tree's services stop. ${laneList(kept)} keep running, and with them the daemon. Infrastructure containers keep running.`
-        : 'All services of this stack stop and its daemon exits. Infrastructure containers keep running.',
+        : 'All services of this stack stop and its daemon exits.',
       confirmLabel: 'Stop stack',
       danger: true,
+      option,
     });
     if (!ok) return;
     busy.value['stack'] = 'stop';
     try {
-      await act({ label: `Stop ${name}`, path: paths.down(id.value, false), success: 'Stopping the stack…' });
+      await act({ label: `Stop ${name}`, path: paths.down(id.value, !!option?.checked), success: 'Stopping the stack…' });
     } finally {
       delete busy.value['stack'];
     }
+  }
+
+  /** The choice to take a stack's containers down with it (`devstack down --infra`). */
+  function stopContainers(checked: boolean): ConfirmOption {
+    return { label: 'Stop its containers too', hint: 'Docker Compose takes them down; their volumes stay.', checked };
   }
 
   function laneList(names: string[]) {
@@ -736,6 +757,7 @@ export const useStack = defineStore('stack', () => {
   }
 
   return {
+    stopContainers,
     id,
     view,
     viewAt,

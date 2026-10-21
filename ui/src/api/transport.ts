@@ -56,6 +56,8 @@ export const paths = {
   inspect: (path: string) => `/hub/inspect?path=${encodeURIComponent(path)}`,
   stackAdd: '/hub/stacks/add',
   pickFolder: '/hub/pick-folder',
+  openers: '/hub/openers',
+  open: '/hub/open',
   scanStacks: '/hub/stacks/scan',
   stackInit: '/hub/stacks/init',
   up: (stack: string) => `/hub/stacks/${enc(stack)}/up`,

@@ -36,6 +36,7 @@ static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 mod dialog;
 mod guests;
 mod notify;
+mod open;
 mod pool;
 pub mod release;
 mod share;
@@ -452,6 +453,8 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/notify/test", post(notify::test))
         .route("/hub/inspect", get(inspect))
         .route("/hub/pick-folder", post(pick_folder))
+        .route("/hub/openers", get(openers))
+        .route("/hub/open", post(open_tree))
         .route("/hub/stacks/add", post(stack_add))
         .route("/hub/stacks/init", post(stack_init))
         .route("/hub/stacks/scan", post(stack_scan))
@@ -1451,6 +1454,71 @@ async fn pick_folder() -> Response {
     match picked {
         Ok(Ok(path)) => Json(serde_json::json!({ "path": path })).into_response(),
         Ok(Err(e)) => err(StatusCode::NOT_IMPLEMENTED, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `GET /hub/openers`: what this machine can open a stack's tree with
+/// (ADR-0046), `[{id, label, kind}]`; empty without a desktop.
+async fn openers() -> Response {
+    match tokio::task::spawn_blocking(open::found).await {
+        Ok(found) => Json(found.into_iter().map(|f| f.opener).collect::<Vec<_>>()).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct OpenQuery {
+    stack: String,
+    path: String,
+    with: String,
+}
+
+/// `POST /hub/open {stack, path, with}`: open one of the stack's trees (its
+/// repository or a worktree of it) with a program `GET /hub/openers` lists.
+/// Anything else is refused: the page names a tree and a program, never a
+/// command (ADR-0046).
+async fn open_tree(State(s): State<AppState>, Json(q): Json<OpenQuery>) -> Response {
+    let Some(e) = entry(&s, &q.stack) else {
+        return err(StatusCode::NOT_FOUND, "no such stack");
+    };
+    let opened = tokio::task::spawn_blocking(move || {
+        let raw = PathBuf::from(&q.path);
+        if !raw.is_absolute() || !local_path(&q.path, &raw) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "a folder on this machine".to_string(),
+            ));
+        }
+        let Some(tree) = devstack_daemon::lanes::worktree_of(&e.repo, &raw) else {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "not a worktree of this stack".to_string(),
+            ));
+        };
+        let file = e
+            .file
+            .strip_prefix(&e.repo)
+            .map(|rel| tree.join(rel))
+            .unwrap_or_else(|_| e.file.clone());
+        open::open(&q.with, &tree, &e.repo, &file).map_err(|e| match e {
+            open::OpenError::Unknown => (
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "{} is not a program this machine opens folders with",
+                    q.with
+                ),
+            ),
+            open::OpenError::Failed(why) => (StatusCode::BAD_GATEWAY, why),
+        })
+    })
+    .await;
+    match opened {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err((status, msg))) => {
+            diag::warn("open_failed", serde_json::json!({ "error": msg }));
+            err(status, msg)
+        }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }

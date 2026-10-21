@@ -40,6 +40,39 @@ and listed with their assets on the
 
 ### Added
 
+- **Stop stack can take the containers down too**: the dashboard's stop
+  dialog (header and sidebar) offers "Stop its containers too", as
+  `devstack down --infra` does; their volumes stay. Checked when the stack
+  runs nothing but containers, where a stop without them changed nothing
+  but the daemon. Not offered while lanes run: they keep the containers
+  they share (ADR-0030).
+- **Links to a stack's or a lane's dashboard page, for agents to hand on**:
+  `devstack status`, `devstack up` and `devstack lane start` end with
+  `dashboard: http://127.0.0.1:4250/#/s/<id>?lane=<lane>`; the MCP tools
+  `status`, `up` and `lane_start` too, and `lanes` names each lane's page.
+  `devstack ui` opens the dashboard on the stack it runs in, in a worktree on
+  its lane (`--lane <name>` for another); `devstack ui --link` prints the page
+  and the `devstack://open` link that pairs the browser first. The `devstack`
+  skill tells agents to give the user that page after starting a stack or a
+  lane, or creating a worktree (run `devstack skills install` again).
+- **Open a stack's folder from the dashboard**
+  ([ADR-0046](docs/adr/0046-the-hub-opens-a-worktree-in-the-users-programs.md)):
+  the path in the stack header is a menu. It copies the path, or opens the
+  shown tree (the main working tree or a lane's worktree) in Explorer or the
+  file manager, Windows Terminal, PowerShell or a terminal, VS Code, Cursor,
+  Windsurf, Zed, Claude Desktop, Claude Code or Orca: whichever of them the
+  hub finds on this machine (an editor or agent by the URL scheme it
+  registered). The hub opens only a registered stack's own trees, with a
+  program from that list (`GET /hub/openers`, `POST /hub/open`). A lane
+  shared with you offers the copy only.
+- **winget**: `winget install nuetzliches.devstack` (once winget's catalogue
+  has the release). Each release submits its manifests
+  (`packaging/winget/`) to `microsoft/winget-pkgs`; the release workflow
+  needs the secret `WINGET_TOKEN` for it. `devstack update` (and the
+  dashboard's update) on a devstack winget installed runs `winget upgrade`,
+  moving the running binary out of winget's way first, since winget cannot
+  replace a file that runs; `devstack self uninstall` leaves that binary to
+  `winget uninstall`.
 - **Desktop notifications** ([ADR-0045](docs/adr/0045-the-hub-notifies-the-desktop.md), #156):
   the hub follows every running stack and each of its started lanes (on a
   node too) and tells the desktop when a build failed, a candidate is held
@@ -75,6 +108,23 @@ and listed with their assets on the
 
 ### Fixed
 
+- A lane's failed start on a node no longer stays on its start page after
+  the lane or the stack stopped: stopping the lane, stopping the main tree
+  (`devstack down`) or starting the lane here clears it, and the dashboard
+  drops it once the stack's daemon is gone. Before, it stayed ten minutes
+  whatever happened.
+- After **Stop stack** the dashboard shows the stack's services stopped.
+  They did stop, but the daemon closes its API before it stops them and
+  exits, so the page kept showing them as running.
+- Stopping a lane keeps it shown, with its start, instead of switching to
+  the main working tree, where the same button is "Stop stack". A lane whose
+  worktree was removed still gives way to the main tree.
+- A lane's dot in the sidebar follows its services: the daemon announces
+  the lanes when their counts change (a lane on a node is read every 5 s),
+  and the shown lane counts from its own stream. Before, a lane started on
+  a node stayed yellow until the page switched to another tree.
+- A daemon's last telemetry is sent as it exits (2 s at most): what it said
+  in its last minute, its stop included, was dropped before (ADR-0037).
 - A lane on a node no longer stops syncing when a file goes while it is
   sent (a package manager rewriting `node_modules`): the file is left out
   and the next sync sends what is there then.

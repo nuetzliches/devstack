@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useHub } from '@/stores/hub';
 import { ago, useNow } from '@/lib/format';
 import TopBar from '@/components/TopBar.vue';
@@ -15,6 +15,20 @@ const hub = useHub();
 const now = useNow();
 
 onMounted(() => void hub.init());
+
+// The banners below the top bar stay with it; the sidebar and other sticky
+// parts start below them and are as much shorter (`--banners-h`), so a
+// banner never makes the page scroll.
+const banners = ref<HTMLElement | null>(null);
+const bannersObserver = new ResizeObserver(([e]) => {
+  document.documentElement.style.setProperty('--banners-h', `${Math.round(e?.borderBoxSize?.[0]?.blockSize ?? 0)}px`);
+});
+watch(banners, (el, old) => {
+  if (old) bannersObserver.unobserve(old);
+  if (el) bannersObserver.observe(el);
+  else document.documentElement.style.setProperty('--banners-h', '0px');
+});
+onBeforeUnmount(() => bannersObserver.disconnect());
 
 const hubDown = computed(() => hub.status === 'unreachable' || (hub.status === 'ok' && hub.stream === 'error'));
 const booting = computed(() => hub.status === 'loading' && !hub.stacks.length);
@@ -45,27 +59,29 @@ async function startHub() {
   <template v-else>
     <a class="skip" href="#main">Skip to content</a>
     <TopBar />
-    <div v-if="hubDown" class="hub-banner" role="alert" data-testid="hub-unreachable">
-      <div class="hub-banner-inner">
-        <Icon name="wifiOff" :size="18" />
-        <div class="grow">
-          <strong>devstack hub is not reachable.</strong> Start it here, or run <code>devstack ui</code> in a project.
-          <span class="last">Showing the last known state<template v-if="hub.lastContact"> from {{ ago(hub.lastContact, now) }}</template>.</span>
+    <div ref="banners" class="banners">
+      <div v-if="hubDown" class="hub-banner" role="alert" data-testid="hub-unreachable">
+        <div class="hub-banner-inner">
+          <Icon name="wifiOff" :size="18" />
+          <div class="grow">
+            <strong>devstack hub is not reachable.</strong> Start it here, or run <code>devstack ui</code> in a project.
+            <span class="last">Showing the last known state<template v-if="hub.lastContact"> from {{ ago(hub.lastContact, now) }}</template>.</span>
+          </div>
+          <a
+            class="btn btn-primary btn-sm"
+            href="devstack://hub/start"
+            title="Needs the devstack:// link (`devstack hub install`, done by `devstack up`)"
+            data-testid="action-start-hub"
+            @click="startHub()"
+          >
+            <span v-if="startingHub" class="spinner" /><Icon v-else name="play" :size="14" />
+            {{ startingHub ? 'Starting…' : 'Start hub' }}
+          </a>
+          <span class="retry"><span class="spinner" aria-hidden="true" /> retrying</span>
         </div>
-        <a
-          class="btn btn-primary btn-sm"
-          href="devstack://hub/start"
-          title="Needs the devstack:// link (`devstack hub install`, done by `devstack up`)"
-          data-testid="action-start-hub"
-          @click="startHub()"
-        >
-          <span v-if="startingHub" class="spinner" /><Icon v-else name="play" :size="14" />
-          {{ startingHub ? 'Starting…' : 'Start hub' }}
-        </a>
-        <span class="retry"><span class="spinner" aria-hidden="true" /> retrying</span>
       </div>
+      <GuestBanner v-if="!hubDown" />
     </div>
-    <GuestBanner v-if="!hubDown" />
     <div class="shell">
       <Sidebar v-if="!booting" class="side" />
       <main id="main" tabindex="-1">
@@ -115,9 +131,17 @@ main {
   .side {
     display: flex;
     position: sticky;
-    top: var(--topbar-h);
-    height: calc(100vh - var(--topbar-h));
+    top: calc(var(--topbar-h) + var(--banners-h));
+    height: calc(100vh - var(--topbar-h) - var(--banners-h));
   }
+}
+.banners {
+  position: sticky;
+  top: var(--topbar-h);
+  z-index: 29;
+}
+.banners:empty {
+  display: none;
 }
 .hub-banner {
   background: var(--danger-soft);

@@ -219,8 +219,18 @@ enum Cmd {
     },
     /// MCP server on stdio for coding agents; a client of the daemon like the CLI.
     Mcp,
-    /// Open the dashboard: starts the hub if needed and pairs the browser (ADR-0021).
+    /// Open the dashboard: starts the hub if needed and pairs the browser
+    /// (ADR-0021). In a repository it opens on this stack, in a worktree on
+    /// its lane.
     Ui {
+        /// Open on this lane of the stack (default: the worktree's own).
+        #[arg(long, value_name = "LANE")]
+        lane: Option<String>,
+        /// Print the lasting links to this stack (or lane) instead: the page,
+        /// for a browser paired before, and the `devstack://open` link, which
+        /// pairs the browser first.
+        #[arg(long, conflicts_with = "print")]
+        link: bool,
         /// Print the one-time pairing link instead of opening a browser.
         #[arg(long)]
         print: bool,
@@ -672,7 +682,9 @@ fn main() -> Result<()> {
         cmd @ (Cmd::Node { .. } | Cmd::Join { .. } | Cmd::Pool { .. } | Cmd::Open { .. }) => {
             dispatch::pool::run(&file, cmd)
         }
-        cmd @ (Cmd::Ui { .. } | Cmd::Hub { .. } | Cmd::OpenUrl { .. }) => dispatch::hub::run(cmd),
+        cmd @ (Cmd::Ui { .. } | Cmd::Hub { .. } | Cmd::OpenUrl { .. }) => {
+            dispatch::hub::run(&file, cmd)
+        }
         cmd @ (Cmd::Update { .. } | Cmd::Myself { .. }) => dispatch::myself::run(cmd),
         Cmd::Skills { action } => dispatch::skills::run(&file, action),
         cmd @ (Cmd::Daemon | Cmd::ServeStatic { .. } | Cmd::Shim { .. }) => {
@@ -728,6 +740,27 @@ mod tests {
         };
         assert!(workers && !force);
         assert_eq!(on.as_deref(), Some("pool"));
+    }
+
+    #[test]
+    fn ui_opens_on_a_lane_or_prints_its_links() {
+        assert!(matches!(
+            parse(&["ui", "--lane", "feat-x", "--link"]).cmd,
+            Cmd::Ui { lane: Some(l), link: true, print: false, .. } if l == "feat-x"
+        ));
+        assert!(matches!(
+            parse(&["ui"]).cmd,
+            Cmd::Ui {
+                lane: None,
+                link: false,
+                print: false,
+                ..
+            }
+        ));
+        assert_eq!(
+            refused(&["ui", "--link", "--print"]),
+            ErrorKind::ArgumentConflict
+        );
     }
 
     #[test]

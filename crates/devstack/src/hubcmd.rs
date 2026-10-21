@@ -2,6 +2,7 @@
 
 use anyhow::{Result, anyhow, bail};
 use serde_json::Value;
+use std::path::Path;
 use std::time::Duration;
 
 fn agent() -> ureq::Agent {
@@ -262,6 +263,41 @@ pub fn pairing_url() -> Result<String> {
         .ok_or_else(|| anyhow!("no url in the hub's answer"))
 }
 
+/// Where the dashboard shows a stack, on a lane or its main working tree.
+pub struct DashboardLinks {
+    /// The hash route: `/#/s/<id>?lane=<lane>`.
+    pub route: String,
+    /// The page, for a browser paired before.
+    pub page: String,
+    /// `devstack://open?stack=<id>&lane=<lane>`: pairs the browser that
+    /// opens it first, then shows the page (ADR-0045 point 6).
+    pub link: String,
+}
+
+/// The dashboard's links for the stack whose daemon runs from `main_file`
+/// (in a lane, the main working tree's stack file); `lane: None` is the
+/// main working tree. The id is the one the daemon registers.
+pub fn dashboard_links(main_file: &Path, lane: Option<&str>) -> DashboardLinks {
+    let abs = std::path::absolute(main_file).unwrap_or_else(|_| main_file.to_path_buf());
+    let id = devstack_daemon::registry::id_for(&devstack_proc::long_path(&abs));
+    let lane = crate::client::enc(lane.unwrap_or(""));
+    let route = format!("/#/s/{id}?lane={lane}");
+    DashboardLinks {
+        page: format!("http://127.0.0.1:{}{route}", devstack_hub::port()),
+        link: if lane.is_empty() {
+            format!("devstack://open?stack={id}")
+        } else {
+            format!("devstack://open?stack={id}&lane={lane}")
+        },
+        route,
+    }
+}
+
+/// `dashboard: <page>`: the line `status`, `up` and `lane start` end with.
+pub fn dashboard_line(main_file: &Path, lane: Option<&str>) -> String {
+    format!("dashboard: {}", dashboard_links(main_file, lane).page)
+}
+
 /// Open the dashboard at `route` (a hash route, `/#/s/<id>?lane=`), paired
 /// like `devstack ui`: a click on a notification (`devstack://open`).
 pub fn open_dashboard(route: &str) -> Result<()> {
@@ -285,8 +321,39 @@ fn chosen_browser(explicit: Option<&str>) -> Option<String> {
         .filter(|b| !b.trim().is_empty())
 }
 
-pub fn ui(print_only: bool, browser: Option<&str>) -> Result<()> {
-    let url = pairing_url()?;
+/// `devstack ui`: the dashboard in the browser, paired, on the stack of
+/// `stack_file` when there is one, on `lane` or this worktree's lane. `link`
+/// prints the lasting links instead (an agent hands them on), `print_only`
+/// the one-time pairing link.
+pub fn ui(
+    stack_file: &Path,
+    lane: Option<&str>,
+    link: bool,
+    print_only: bool,
+    browser: Option<&str>,
+) -> Result<()> {
+    let here = stack_file.is_file().then(|| {
+        let lane = lane
+            .map(str::to_string)
+            .or_else(|| crate::client::worktree_lane(stack_file));
+        dashboard_links(&crate::client::daemon_file(stack_file), lane.as_deref())
+    });
+    if here.is_none() && (link || lane.is_some()) {
+        bail!(
+            "no stack file at {}: run it in the repository, or name the file with -f",
+            stack_file.display()
+        );
+    }
+    if link {
+        let l = here.expect("checked above");
+        println!("{}", l.page);
+        println!("{}", l.link);
+        return Ok(());
+    }
+    let mut url = pairing_url()?;
+    if let Some(l) = &here {
+        url = format!("{url}&next={}", devstack_hub::next_param(&l.route));
+    }
     if print_only {
         println!("{url}");
         return Ok(());
@@ -431,6 +498,23 @@ pub fn ensure_quietly() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_dashboard_links_name_the_stack_the_daemon_registers() {
+        let file = std::env::temp_dir().join("shop").join("devstack.toml");
+        let id = devstack_daemon::registry::id_for(&devstack_proc::long_path(&file));
+        let port = devstack_hub::port();
+        let main = super::dashboard_links(&file, None);
+        assert_eq!(main.route, format!("/#/s/{id}?lane="));
+        assert_eq!(main.page, format!("http://127.0.0.1:{port}/#/s/{id}?lane="));
+        assert_eq!(main.link, format!("devstack://open?stack={id}"));
+        let lane = super::dashboard_links(&file, Some("feat-x"));
+        assert_eq!(
+            lane.page,
+            format!("http://127.0.0.1:{port}/#/s/{id}?lane=feat-x")
+        );
+        assert_eq!(lane.link, format!("devstack://open?stack={id}&lane=feat-x"));
+    }
+
     #[test]
     fn browsers_by_name_or_path() {
         let b = super::browser_program;

@@ -557,6 +557,20 @@ fn worktrees(repo: &Path) -> Option<(Vec<Worktree>, Vec<PathBuf>)> {
     Some((here, missing.into_iter().map(|w| w.path).collect()))
 }
 
+/// The worktree of `repo` (the main working tree included) that `path`
+/// names, as git lists it; `repo` itself also without git. `None` when
+/// `path` is none of them. What the hub opens (ADR-0046) is checked against
+/// it.
+pub fn worktree_of(repo: &Path, path: &Path) -> Option<PathBuf> {
+    if same_tree(repo, path) {
+        return Some(repo.to_path_buf());
+    }
+    let (here, _) = worktrees(repo)?;
+    here.into_iter()
+        .map(|w| w.path)
+        .find(|w| same_tree(w, path))
+}
+
 /// What changes in `<git common dir>/worktrees` when a worktree is added or
 /// removed or checks out another branch: its entries and their `HEAD`s.
 fn fingerprint(dir: &Path) -> Vec<(std::ffi::OsString, Option<std::time::SystemTime>)> {
@@ -903,6 +917,7 @@ impl Lanes {
             .spawn(move || {
                 let mut last = fingerprint(&dir);
                 let mut since = std::time::Instant::now();
+                let mut shown = Vec::new();
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(1));
                     let Some(me) = weak.upgrade() else { return };
@@ -910,6 +925,14 @@ impl Lanes {
                         return;
                     }
                     me.main_slot_check();
+                    // What changes without a call here: a lane's services
+                    // starting and stopping, a lane on a node as read every
+                    // few seconds, a failed start that expired.
+                    let now = me.shown();
+                    if now != shown {
+                        shown = now;
+                        me.announce();
+                    }
                     let now = fingerprint(&dir);
                     if now != last || since.elapsed() >= std::time::Duration::from_secs(30) {
                         last = now;
@@ -918,6 +941,22 @@ impl Lanes {
                     }
                 }
             });
+    }
+
+    /// Of each lane, what the lists show that changes on its own.
+    fn shown(&self) -> Vec<(String, usize, usize, Option<String>, bool)> {
+        self.views()
+            .into_iter()
+            .map(|v| {
+                (
+                    v.name,
+                    v.running,
+                    v.services,
+                    v.node_error,
+                    v.moving.is_some(),
+                )
+            })
+            .collect()
     }
 
     /// A lane on a node that serves the main ports and is gone (its lease
@@ -1539,6 +1578,8 @@ impl Lanes {
         })();
         self.pending.lock().unwrap().remove(&name);
         if result.is_ok() {
+            // Started here: a start on a node that failed before is over.
+            self.forget_failed(Some(&name));
             self.announce();
         }
         result
@@ -1556,6 +1597,8 @@ impl Lanes {
         let t0 = std::time::Instant::now();
         // A profile holds while the lane runs (ADR-0041).
         self.profiles.lock().unwrap().remove(name);
+        // Stopped: a start or move that failed before is no longer news.
+        self.forget_failed(Some(name));
         let remote = self.remote.lock().unwrap().remove(name);
         if let Some(r) = remote {
             let node = r.node.name.clone();
@@ -1934,6 +1977,20 @@ impl Lanes {
             }
         }
         self.announce();
+    }
+
+    /// Forget the start or move of `name` (`None`: of every lane) that
+    /// failed: the lane started another way, or it or the stack stopped.
+    pub fn forget_failed(&self, name: Option<&str>) {
+        let gone = {
+            let mut moves = self.moves.lock().unwrap();
+            let before = moves.len();
+            moves.retain(|n, m| m.error.is_none() || name.is_some_and(|x| x != n));
+            moves.len() != before
+        };
+        if gone {
+            self.announce();
+        }
     }
 
     /// Release a lane on a node, on a thread of its own: the call blocks on
@@ -2407,6 +2464,32 @@ impl Lanes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_repository_and_its_worktrees_are_its_trees() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let g = |args: &[&str]| git(&repo, args).unwrap();
+        g(&["init", "-q"]);
+        g(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "x",
+        ]);
+        let wt = d.path().join("wt");
+        g(&["worktree", "add", "-q", &wt.to_string_lossy()]);
+        assert!(worktree_of(&repo, &repo).is_some());
+        assert!(worktree_of(&repo, &wt).is_some_and(|p| same_tree(&p, &wt)));
+        assert!(worktree_of(&repo, &repo.join(".git")).is_none());
+        assert!(worktree_of(&repo, d.path()).is_none());
+    }
 
     #[test]
     fn the_state_of_a_forgotten_lane_is_swept() {
