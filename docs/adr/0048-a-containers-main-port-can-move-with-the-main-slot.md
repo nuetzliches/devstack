@@ -1,6 +1,6 @@
 # ADR-0048: A container's main port can be devstack's, and then moves with the main slot
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-21)
 - **Date:** 2026-10-21
 - **Deciders:** project owner
 - **Related:** [#184](https://github.com/nuetzliches/devstack/issues/184) (part 2), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) point 5, [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md), [ADR-0043](0043-a-dev-servers-fixed-port-is-devstacks.md), [ADR-0047](0047-the-dashboard-makes-a-lane-from-a-branch.md)
@@ -68,7 +68,10 @@ lanes, not every port moving.
    containers reach each other on the lane's network, as now.
 6. **TCP only.** A UDP port of a named service stays Docker's in the main
    tree and does not move; the stack file check warns about it, and
-   `promote --lane` says which ports stayed.
+   `promote --lane` says which ports stayed. devstack forwards no UDP
+   anywhere yet (a lane on a node neither), which is a known limitation of
+   its own ([#192](https://github.com/nuetzliches/devstack/issues/192)); once
+   it does, `main_ports` moves UDP too.
 
 ## Alternatives considered
 
