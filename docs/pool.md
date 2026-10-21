@@ -327,7 +327,9 @@ next one.
 
 They also **view** it ([ADR-0040](adr/0040-a-shared-lane-can-be-watched-like-ones-own.md),
 amended 2026-10-20): a click on it opens the same pages as one's own lane,
-read only. They see its state, its services' and containers' logs, its
+read only. A click on a service's or container's link there opens the
+forward to it as `devstack open` does, the link's path kept. They see its
+state, its services' and containers' logs, its
 events, its command runs and its usage, never its environment, and change
 nothing: no restart, no stop. Logs show what the services print: share a
 lane only where that is fine. The node asks the coordinator at least every

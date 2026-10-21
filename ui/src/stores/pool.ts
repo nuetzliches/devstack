@@ -330,8 +330,8 @@ export const usePool = defineStore('pool', () => {
   /** Every lane shared with this machine, with its pool. */
   const shared = computed(() => pools.value.flatMap((p) => (sharedBy.value[p.name] ?? []).map((l) => ({ ...l, pool: p.name }))));
 
-  /** Open a service of a shared lane: a forward here, then the page. */
-  async function openShared(pool: string, lease: string, service: string) {
+  /** Open a service of a shared lane: a forward here, then the page; `path` (`/ui?x#y`) after its address. */
+  async function openShared(pool: string, lease: string, service: string, path = '') {
     const r = await act<{ url: string; port: number; warning?: string }>({
       label: `Open ${service}`,
       path: at(paths.poolSharedOpen(lease), pool),
@@ -342,7 +342,7 @@ export const usePool = defineStore('pool', () => {
     // Its node or owner runs another devstack: a failure there may be why.
     if (r.body.warning) useUi().toast('warning', `${service}: another devstack`, r.body.warning, 12_000);
     // The scheme comes from the lane's owner: open web pages only.
-    const url = webUrl(r.body.url);
+    const url = webUrl(r.body.url.replace(/\/$/, '') + path);
     if (url) window.open(url, '_blank', 'noopener');
     else useUi().toast('error', `Not opening ${service}`, `The lane shares it as ${r.body.url}; only http and https addresses are opened.`);
   }

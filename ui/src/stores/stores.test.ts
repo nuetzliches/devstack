@@ -165,6 +165,50 @@ describe('stack store', () => {
     expect(useUi().toasts.some((x) => x.title === 'Read only')).toBe(true);
   });
 
+  it("a shared lane's link opens a forward here to the service on its port (ADR-0035)", async () => {
+    fake.on('/hub/session', ok({ version: '0.9.8' }));
+    fake.on('/hub/pools', ok([{ name: 'default', joined: true, state: 'approved', coordinator: 'https://c' }]));
+    const services = [
+      { name: 'web', port: 4300, scheme: 'http', here: 4300 },
+      { name: 'map', port: 8290, scheme: 'http', here: 8290 },
+    ];
+    fake.on('/hub/pool/shared', ok([{ lease: 'ab12', repo: 'crm', lane: 'fix', owner: 'o', owner_name: 'anna', node: { id: 'n', name: 'build', api: 'https://n' }, services }]));
+    // Its owner's port is taken here: the forward is on another one.
+    fake.on(/\/hub\/pool\/shared\/ab12\/open/, ok({ url: 'http://localhost:51000', port: 51000 }));
+    const opened: string[] = [];
+    vi.spyOn(window, 'open').mockImplementation((url) => {
+      opened.push(String(url));
+      return null;
+    });
+    const hub = useHub();
+    await hub.init();
+    fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [] });
+    await usePool().load();
+    const stack = useStack();
+    stack.select('shared~default~ab12');
+    const click = () => new MouseEvent('click', { cancelable: true });
+
+    const e = click();
+    stack.followLink(e, 'http://localhost:8290/ui?x=1');
+    expect(e.defaultPrevented).toBe(true);
+    await vi.waitFor(() => expect(opened).toEqual(['http://localhost:51000/ui?x=1']));
+    const sent = fake.requests.filter((r) => r.path.startsWith('/hub/pool/shared/ab12/open'));
+    expect(sent.map((r) => r.body)).toEqual([{ service: 'map' }]);
+
+    // A port the lane does not share opens nothing, and says so.
+    const none = click();
+    stack.followLink(none, 'http://localhost:9999');
+    expect(none.defaultPrevented).toBe(true);
+    expect(useUi().toasts.some((x) => x.title === 'Not opening localhost:9999')).toBe(true);
+  });
+
+  it("one's own stack's links are followed as they are", async () => {
+    const stack = await shownStack();
+    const e = new MouseEvent('click', { cancelable: true });
+    stack.followLink(e, 'http://localhost:8290');
+    expect(e.defaultPrevented).toBe(false);
+  });
+
   it('a lane removed while shown gives way to the main tree', async () => {
     const stack = await shownStack();
     const feat = { name: 'feat', path: '/src/feat', number: 1, active: true, port_offset: 100, owns_main: false, running: 2, services: 3 };

@@ -65,7 +65,7 @@ const kv = computed(() => {
           <div class="subtitle">
             container · {{ group }}
             <template v-for="u in (container?.urls ?? []).filter((x) => webUrl(x))" :key="u">
-              · <a :href="u" target="_blank" rel="noopener" data-testid="container-url">{{ u.replace(/^https?:\/\//, '') }} <Icon name="external" :size="12" /></a>
+              · <a :href="u" @click="stack.followLink($event, u)" @auxclick="stack.followLink($event, u)" target="_blank" rel="noopener" data-testid="container-url">{{ u.replace(/^https?:\/\//, '') }} <Icon name="external" :size="12" /></a>
             </template>
           </div>
         </div>

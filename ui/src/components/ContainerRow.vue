@@ -59,10 +59,10 @@ const extraUrls = computed(() => webUrls.value.filter((u) => !props.container!.p
       <div class="meta">
         <template v-if="container">
           <template v-for="p in container.ports" :key="p">
-            <a v-if="urlFor(p)" class="tag port-link" :href="urlFor(p)" target="_blank" rel="noopener" :title="`open ${urlFor(p)}`" data-testid="container-url">{{ hostPort(p) }}</a>
+            <a v-if="urlFor(p)" class="tag port-link" :href="urlFor(p)" @click="stack.followLink($event, urlFor(p)!)" @auxclick="stack.followLink($event, urlFor(p)!)" target="_blank" rel="noopener" :title="`open ${urlFor(p)}`" data-testid="container-url">{{ hostPort(p) }}</a>
             <span v-else class="tag" :title="p">{{ hostPort(p) }}</span>
           </template>
-          <a v-for="u in extraUrls" :key="u" class="tag port-link" :href="u" target="_blank" rel="noopener" data-testid="container-url">{{ u.replace(/^https?:\/\//, '') }}</a>
+          <a v-for="u in extraUrls" :key="u" class="tag port-link" :href="u" @click="stack.followLink($event, u)" @auxclick="stack.followLink($event, u)" target="_blank" rel="noopener" data-testid="container-url">{{ u.replace(/^https?:\/\//, '') }}</a>
           <span v-if="!container.ports.length" class="faint">no published ports</span>
           <span v-if="refuses" class="tag" :title="refuses" data-testid="container-unmanaged">not in the stack file</span>
           <button
