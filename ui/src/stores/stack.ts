@@ -14,7 +14,7 @@ const MAX_EVENTS = 500;
 const HISTORY_WINDOW_MS = 10 * 60_000;
 
 /** An entry of the events timeline (usage ticks are left out). */
-export type TimelineEvent = Exclude<StackEvent, { type: 'usage' } | { type: 'lanes' }>;
+export type TimelineEvent = Exclude<StackEvent, { type: 'usage' } | { type: 'lanes' } | { type: 'notices' }>;
 
 /** Keys of usage series: svc:<name>, ctr:<group>/<service>, builds, grp:<name>, lane:<name>. */
 export type SeriesKey = string;
@@ -535,6 +535,13 @@ export const useStack = defineStore('stack', () => {
       case 'watcher':
         if (view.value) view.value.watcher_error = ev.error;
         save();
+        break;
+      case 'notices':
+        if (view.value) view.value.notices = ev.notices;
+        save();
+        return; // shown as banners; what happened once is a `notice`
+      case 'notice':
+        ui.toast(ev.level === 'error' ? 'error' : 'warning', ev.text);
         break;
       case 'usage':
         addUsage(ev);

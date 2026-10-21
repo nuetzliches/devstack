@@ -159,6 +159,10 @@ impl Sink for Bus {
                         "notify_failed",
                         serde_json::json!({ "error": e.to_string() }),
                     );
+                    crate::notice::tell(
+                        "warn",
+                        format!("A desktop notification could not be shown: {e}"),
+                    );
                     // Connect again next time: the service may have gone.
                     *inner.proxy.lock().await = None;
                 }

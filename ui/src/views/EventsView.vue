@@ -16,9 +16,10 @@ const types: { v: Type; label: string }[] = [
   { v: 'command', label: 'Command' },
   { v: 'config', label: 'Stack file' },
   { v: 'watcher', label: 'Watcher' },
+  { v: 'notice', label: 'Notice' },
   { v: 'snapshot', label: 'Connect' },
 ];
-const enabled = ref<Record<Type, boolean>>({ service: true, candidate: true, devserver_rebuild: true, infra: true, command: true, config: true, watcher: true, snapshot: true });
+const enabled = ref<Record<Type, boolean>>({ service: true, candidate: true, devserver_rebuild: true, infra: true, command: true, config: true, watcher: true, notice: true, snapshot: true });
 const subject = ref('');
 
 function subjectOf(e: TimelineEvent): string {
@@ -33,6 +34,7 @@ function subjectOf(e: TimelineEvent): string {
       return e.command;
     case 'config':
     case 'watcher':
+    case 'notice':
     case 'snapshot':
       return '';
   }
@@ -86,6 +88,8 @@ function describe(e: TimelineEvent): Desc {
       return e.error
         ? { icon: 'alert', tone: 'warn', title: 'File watcher', text: 'Edits may not be seen', detail: e.error }
         : { icon: 'checkCircle', tone: 'ok', title: 'File watcher', text: 'Works again' };
+    case 'notice':
+      return { icon: 'alert', tone: e.level === 'error' ? 'danger' : 'warn', title: 'Notice', text: e.text };
     case 'snapshot':
       return { icon: 'activity', tone: 'neutral', title: 'Connected', text: `snapshot of ${e.stack.services.length} services` };
   }

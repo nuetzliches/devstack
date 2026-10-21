@@ -110,6 +110,10 @@ export const useHub = defineStore('hub', () => {
           guests.value = ev.guests;
           return;
         }
+        if (ev.type === 'notice') {
+          useUi().toast(ev.level === 'error' ? 'error' : 'warning', ev.text);
+          return;
+        }
         if (ev.type === 'docker') {
           docker.value = ev.docker;
           if (ev.docker.state === 'running') dockerStarting.value = false;

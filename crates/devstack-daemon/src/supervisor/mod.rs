@@ -7,8 +7,8 @@
 use crate::health::Checker;
 use crate::proxy::Proxy;
 use crate::state::{
-    Candidate, CommandView, Event, EventBody, GroupView, InfraView, Persisted, ServiceView,
-    StackView, Status, now_ms,
+    Candidate, CommandView, Event, EventBody, GroupView, InfraView, Notice, NoticeLevel, Persisted,
+    ServiceView, StackView, Status, now_ms,
 };
 use devstack_build::{Builder, Layout, Snapshot};
 use devstack_compose::Docker;
@@ -141,6 +141,9 @@ pub struct Supervisor {
     /// Why the file watcher does not work, if it does not (no candidates
     /// then): shown in the status, not only logged.
     watcher_error: Mutex<Option<(String, Instant)>>,
+    /// What the user should know of this tree and no request reports, by
+    /// id (ADR-0050).
+    notices: Mutex<BTreeMap<String, Notice>>,
     /// Debounced restarts (dev servers, containers): last change, worker running.
     quiet: Mutex<BTreeMap<String, (Instant, bool)>>,
     /// One `prepare` at a time: two in the same directory would collide.
@@ -456,6 +459,7 @@ impl Supervisor {
             started: Mutex::new(BTreeSet::new()),
             opened_manifest: Mutex::new(opened_manifest),
             watcher_error: Mutex::new(None),
+            notices: Mutex::new(BTreeMap::new()),
             quiet: Mutex::new(BTreeMap::new()),
             preparing: Mutex::new(()),
             branch: Mutex::new(None),
@@ -662,7 +666,63 @@ impl Supervisor {
                 .unwrap()
                 .as_ref()
                 .map(|(e, _)| e.clone()),
+            notices: self.notices(),
         }
+    }
+
+    /// This tree's notices (ADR-0050), by id.
+    pub(crate) fn notices(&self) -> Vec<Notice> {
+        self.notices.lock().unwrap().values().cloned().collect()
+    }
+
+    /// Say `text` as the notice `id` while its condition holds (ADR-0050).
+    /// The same again changes nothing; another text keeps when it began.
+    /// `true` when it is new: the caller logs the condition then, as before.
+    pub(crate) fn set_notice(&self, id: &str, level: NoticeLevel, text: String) -> bool {
+        let mut all = self.notices.lock().unwrap();
+        let since = match all.get(id) {
+            Some(n) if n.level == level && n.text == text => return false,
+            Some(n) => n.since,
+            None => now_ms(),
+        };
+        let new = !all.contains_key(id);
+        all.insert(
+            id.to_string(),
+            Notice {
+                id: id.to_string(),
+                level,
+                text,
+                since,
+            },
+        );
+        let notices = all.values().cloned().collect();
+        drop(all);
+        self.emit_quiet(EventBody::Notices { notices });
+        new
+    }
+
+    /// The notice `id` no longer holds.
+    pub(crate) fn clear_notice(&self, id: &str) {
+        self.clear_notices(|n| n == id);
+    }
+
+    /// Every notice whose id `gone` names no longer holds.
+    pub(crate) fn clear_notices(&self, gone: impl Fn(&str) -> bool) {
+        let mut all = self.notices.lock().unwrap();
+        let before = all.len();
+        all.retain(|id, _| !gone(id));
+        if all.len() == before {
+            return;
+        }
+        let notices = all.values().cloned().collect();
+        drop(all);
+        self.emit_quiet(EventBody::Notices { notices });
+    }
+
+    /// Something happened once that no request reports (ADR-0050 point 3):
+    /// the dashboard shows it as a toast. The caller logs it.
+    pub(crate) fn tell(&self, level: NoticeLevel, text: String) {
+        self.emit_quiet(EventBody::Notice { level, text });
     }
 
     /// The file watcher failed to start or lost track: say so in the status
@@ -1155,5 +1215,55 @@ mod port_tests {
     fn a_port_held_on_ipv4_loopback_is_in_use() {
         let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         assert!(super::port_in_use(l.local_addr().unwrap().port()));
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::*;
+
+    #[test]
+    fn a_notice_holds_until_it_is_cleared_and_each_change_is_told() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("devstack.toml");
+        let stack =
+            devstack_config::from_str("version = 1\n[stack]\nname = \"s\"\n", &file).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let sup = Supervisor::new(
+            stack,
+            file,
+            d.path().to_path_buf(),
+            d.path().join(".devstack"),
+            devstack_proc::Options::default(),
+            rt.handle().clone(),
+        )
+        .unwrap();
+        let mut rx = sup.events.subscribe();
+        assert!(sup.set_notice("copy", NoticeLevel::Warn, "behind".into()));
+        assert!(
+            !sup.set_notice("copy", NoticeLevel::Warn, "behind".into()),
+            "the same again"
+        );
+        let since = sup.notices()[0].since;
+        assert!(!sup.set_notice("copy", NoticeLevel::Error, "still behind".into()));
+        let n = &sup.view().notices[0];
+        assert_eq!(
+            (n.level, n.text.as_str()),
+            (NoticeLevel::Error, "still behind")
+        );
+        assert_eq!(n.since, since, "it began when it began");
+        sup.clear_notice("other");
+        sup.clear_notices(|id| id.starts_with("co"));
+        assert!(sup.view().notices.is_empty());
+        let mut told = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            if let EventBody::Notices { notices } = ev.body {
+                told.push(notices.len());
+            }
+        }
+        assert_eq!(told, [1, 1, 0], "set, changed, cleared");
     }
 }

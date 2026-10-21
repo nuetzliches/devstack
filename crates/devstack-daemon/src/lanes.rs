@@ -32,6 +32,7 @@
 
 use crate::api::{self, AppState};
 use crate::remote::RemoteLane;
+use crate::state::{Notice, NoticeLevel};
 use crate::supervisor::Supervisor;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -92,6 +93,29 @@ pub struct LaneView {
     /// services stop, its data goes): nothing can be done with it any more.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub removing: bool,
+    /// Its notices (ADR-0050): its own tree's while it runs here, and what
+    /// the main tree's daemon knows of it (its worktree missing).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notices: Vec<Notice>,
+}
+
+/// Of a lane, what the lists show that changes on its own: name, services
+/// running and all, its node's error, whether it moves, its notices.
+type Shown = (String, usize, usize, Option<String>, bool, Vec<Notice>);
+
+/// The notice of a lane whose worktree git lists but is not there, missing
+/// since `since` (unix ms): the lane goes after [`MISSING_GRACE`].
+fn missing_notice(path: &Path, since: u128) -> Notice {
+    Notice {
+        id: "worktree_missing".into(),
+        level: NoticeLevel::Error,
+        text: format!(
+            "Its worktree {} is not there, though git still lists it. Unless it is back within {} minutes, the lane goes, with its containers and volumes.",
+            path.display(),
+            MISSING_GRACE.as_secs() / 60
+        ),
+        since,
+    }
 }
 
 /// A lane being started on a node (`up --on`) or moved (`lane move`), as the
@@ -836,6 +860,7 @@ impl Lanes {
             });
             let mut added = false;
             let mut moved = false;
+            let mut no_ports = Vec::new();
             for w in &trees {
                 // Its path stays on this machine (ADR-0037 point 4).
                 crate::diag::add_root(&w.path, "<worktree>");
@@ -871,7 +896,7 @@ impl Lanes {
                     .find(|n| !known.contains_key(n))
                     .expect("a free name");
                 let Some(number) = self.free_number(&known, false) else {
-                    crate::diag::warn("lane_no_ports", serde_json::json!({ "worktree": w.path }));
+                    no_ports.push(w.path.clone());
                     continue;
                 };
                 crate::diag::info(
@@ -895,8 +920,39 @@ impl Lanes {
                 self.save(&known);
             }
             changed = added || moved;
+            self.note_no_ports(&no_ports);
+        }
+        // A lane that runs says in its own view that its worktree is missing.
+        let missing = self.missing.lock().unwrap().clone();
+        for (name, l) in self.map.lock().unwrap().iter() {
+            match missing.get(name) {
+                Some(_) => {
+                    let n = missing_notice(&l.entry.path, crate::state::now_ms());
+                    l.sup.set_notice(&n.id, n.level, n.text);
+                }
+                None => l.sup.clear_notice("worktree_missing"),
+            }
         }
         Some((gone, changed))
+    }
+
+    /// The worktrees that got no lane for want of a port range, as notices
+    /// of the main tree (ADR-0050), logged once each.
+    fn note_no_ports(&self, worktrees: &[PathBuf]) {
+        let id = |p: &PathBuf| format!("no_ports.{}", p.display());
+        let now: BTreeSet<String> = worktrees.iter().map(id).collect();
+        self.main
+            .clear_notices(|n| n.starts_with("no_ports.") && !now.contains(n));
+        for w in worktrees {
+            let text = format!(
+                "The worktree {} gets no lane: no lane number up to 199 moves the stack's ports to ones free of the other lanes and below 65536 (`[lanes] port_step` is {}). Remove a worktree no longer needed, or lower `port_step`.",
+                w.display(),
+                self.main.stack.lanes.port_step
+            );
+            if self.main.set_notice(&id(w), NoticeLevel::Warn, text) {
+                crate::diag::warn("lane_no_ports", serde_json::json!({ "worktree": w }));
+            }
+        }
     }
 
     /// Tell every client what the lanes are now (a `lanes` event): the main
@@ -956,7 +1012,7 @@ impl Lanes {
     }
 
     /// Of each lane, what the lists show that changes on its own.
-    fn shown(&self) -> Vec<(String, usize, usize, Option<String>, bool)> {
+    fn shown(&self) -> Vec<Shown> {
         self.views()
             .into_iter()
             .map(|v| {
@@ -966,6 +1022,7 @@ impl Lanes {
                     v.services,
                     v.node_error,
                     v.moving.is_some(),
+                    v.notices,
                 )
             })
             .collect()
@@ -998,12 +1055,26 @@ impl Lanes {
             "main_slot_lost",
             serde_json::json!({ "lane": owner, "reason": "the lane on its node is gone" }),
         );
-        if let Err(e) = self.give_back(&mut ho) {
+        let back = self.give_back(&mut ho);
+        if let Err(e) = &back {
             crate::diag::warn(
                 "main_slot_back_failed",
                 serde_json::json!({ "lane": owner, "error": e }),
             );
         }
+        self.main.tell(
+            if back.is_ok() {
+                NoticeLevel::Warn
+            } else {
+                NoticeLevel::Error
+            },
+            format!(
+                "Lane {owner} served the main ports and is gone (its lease ended, or its node no longer answers): the main tree serves them again.{}",
+                back.err()
+                    .map(|e| format!(" These did not start again: {e}"))
+                    .unwrap_or_default()
+            ),
+        );
     }
 
     /// The first lane number whose port range collides with nothing: the main
@@ -1068,6 +1139,12 @@ impl Lanes {
             crate::diag::warn(
                 "main_slot_back_failed",
                 serde_json::json!({ "lane": name, "error": e }),
+            );
+            self.main.tell(
+                NoticeLevel::Error,
+                format!(
+                    "Lane {name} served the main ports and was removed ({why}): the main tree took them back, but not all of its services started again: {e}"
+                ),
             );
         }
         // Not under the map's lock: stopping its services takes a while, and
@@ -1458,6 +1535,7 @@ impl Lanes {
 
     /// The lanes as they are known now, without asking git.
     pub(crate) fn views(&self) -> Vec<LaneView> {
+        let missing = self.missing.lock().unwrap().clone();
         let map = self.map.lock().unwrap();
         let remote = self.remote.lock().unwrap();
         let now = crate::state::now_ms();
@@ -1511,6 +1589,16 @@ impl Lanes {
                         .or_else(|| moves.get(&k.entry.name).and_then(|m| m.warning.clone())),
                     moving: moves.get(&k.entry.name).cloned(),
                     removing: forgetting.contains(&k.entry.name),
+                    notices: {
+                        let mut n = lane.map(|l| l.sup.notices()).unwrap_or_default();
+                        if let Some(t) = missing.get(&k.entry.name)
+                            && !n.iter().any(|x| x.id == "worktree_missing")
+                        {
+                            let since = now.saturating_sub(t.elapsed().as_millis());
+                            n.push(missing_notice(&k.entry.path, since));
+                        }
+                        n
+                    },
                 }
             })
             .collect()

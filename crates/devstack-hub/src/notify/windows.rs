@@ -129,6 +129,10 @@ impl Sink for Toast {
                     "notify_failed",
                     serde_json::json!({ "error": e.to_string() }),
                 );
+                crate::notice::tell(
+                    "warn",
+                    format!("A desktop notification could not be shown: {e}"),
+                );
             }
         });
     }

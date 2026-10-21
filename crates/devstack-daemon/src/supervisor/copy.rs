@@ -1,7 +1,7 @@
 //! A lane's copy of its worktree, and `prepare`.
 
 use super::{COPY_QUIET, KEEP_BUILD_LOGS, STOPPED, Supervisor, tail};
-use crate::state::now_ms;
+use crate::state::{NoticeLevel, now_ms};
 use devstack_build::Snapshot;
 use devstack_config::model::Service;
 use devstack_proc::Spec;
@@ -134,6 +134,7 @@ impl Supervisor {
         let job = {
             let mut snap = self.snapshot.lock().unwrap();
             snap.sync().map_err(|e| e.to_string())?;
+            self.clear_notice("copy");
             self.prepare_job(name, svc, &snap)?
         };
         if let Some(job) = job {
@@ -166,13 +167,22 @@ impl Supervisor {
         let copy = self.run_root();
         for rel in &p.link {
             let (link, target) = (self.repo.join(rel), copy.join(rel));
+            let id = format!("prepare.{name}.{rel}");
             if std::fs::symlink_metadata(&link).is_ok() {
+                self.clear_notice(&id);
                 continue;
             }
             let not_linked = |why: String| {
                 crate::diag::warn(
                     "prepare_not_linked",
                     serde_json::json!({ "lane": self.lane, "service": name, "path": rel, "why": why }),
+                );
+                self.set_notice(
+                    &id,
+                    NoticeLevel::Warn,
+                    format!(
+                        "`{rel}`, which `prepare` of {name} installs, is not linked into the worktree: {why}. What runs in the worktree itself (git hooks) does not find it."
+                    ),
                 );
             };
             if !target.is_dir() {
@@ -196,6 +206,7 @@ impl Supervisor {
                 ));
                 continue;
             }
+            self.clear_notice(&id);
             crate::diag::info(
                 "prepare_linked",
                 serde_json::json!({ "lane": self.lane, "service": name, "path": rel }),
@@ -244,6 +255,7 @@ impl Supervisor {
             .unwrap()
             .sync()
             .map_err(|e| e.to_string())?;
+        self.clear_notice("copy");
         self.log_sync("command", &stats);
         Ok(())
     }
@@ -286,11 +298,23 @@ impl Supervisor {
             }
             let synced = s.snapshot.lock().unwrap().sync();
             match synced {
-                Ok(stats) => s.log_sync("change", &stats),
-                Err(e) => crate::diag::warn(
-                    "copy_not_synced",
-                    serde_json::json!({ "lane": s.lane, "error": e.to_string() }),
-                ),
+                Ok(stats) => {
+                    s.clear_notice("copy");
+                    s.log_sync("change", &stats);
+                }
+                Err(e) => {
+                    crate::diag::warn(
+                        "copy_not_synced",
+                        serde_json::json!({ "lane": s.lane, "error": e.to_string() }),
+                    );
+                    s.set_notice(
+                        "copy",
+                        NoticeLevel::Warn,
+                        format!(
+                            "The lane's copy could not be brought up to date with its worktree: {e}. Its dev servers and tools run the code of before; the next edit tries again."
+                        ),
+                    );
+                }
             }
         });
     }
