@@ -8,7 +8,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { DockerEngine, Guest, HubEvent, NotifySettings, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
+import type { DockerEngine, Guest, HubEvent, LaneView, NotifySettings, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -24,6 +24,8 @@ const laneNodes = new Map<string, string>();
 let mockDefaultOn: string | null = null;
 /** Lanes starting on a node, since when (ms): the mock plays the phases. */
 const remoteStarts = new Map<string, number>();
+/** `?mock=laneremoved`: the worktree of a running lane is removed (ADR-0024 point 7): removing from `at`, gone 8 s later. */
+let laneRemoval: { lane: string; at: number } | null = null;
 const START_PHASES: [number, string, string][] = [
   [1, 'lease', 'lease'],
   [2, 'sync: comparing 7177 files', 'sync'],
@@ -90,6 +92,7 @@ class MockHub {
     if (q.includes('newer')) this.newer = '0.5.0';
     if (q.includes('configchanged')) shop.view.config_changed = true;
     if (q.includes('watcher')) shop.view.watcher_error = 'the file watcher lost events (overflow); every built service was rebuilt as a candidate';
+    if (q.includes('laneremoved')) laneRemoval = { lane: 'agent-login-fix', at: Date.now() + 8000 };
     // A fresh install: no stack registered yet (the welcome page with the scan).
     this.empty = q.includes('empty');
     if (q.includes('nodocker')) this.docker = { state: 'stopped', starter: 'Docker Desktop', hint: 'start Docker Desktop' };
@@ -251,6 +254,14 @@ export class MockTransport implements Transport {
       hubDown: (down = true) => this.hub.setHubDown(down),
       stacks: () => this.hub.stacks,
     };
+    // The removal is told as the daemon tells it: `lanes` events.
+    if (laneRemoval) {
+      const shop = this.hub.stacks.find((x) => x.view.name === 'shop')!;
+      setInterval(async () => {
+        const r = await this.daemon(shop, 'GET', '/v1/lanes', new URLSearchParams());
+        shop.emit({ type: 'lanes', lanes: r.body as LaneView[] });
+      }, 1000);
+    }
   }
 
   async request<T = unknown>(method: string, path: string, body?: unknown): Promise<Response<T>> {
@@ -528,6 +539,9 @@ export class MockTransport implements Transport {
             if (t0 !== undefined && Date.now() - t0 < 40_000) {
               return { ...l, active: false, running: 0, services: 5, moving: startMove(laneNodes.get(l.name) ?? 'build-server', t0) };
             }
+            if (laneRemoval?.lane === l.name && Date.now() >= laneRemoval.at) {
+              return Date.now() - laneRemoval.at < 8000 ? { ...l, active: false, owns_main: false, running: 0, services: 5, removing: true } : null;
+            }
             const active = l.name === 'agent-login-fix' || s.startedLanes.has(l.name);
             const owns = l.name === 'agent-login-fix' && s.laneOwnsMain;
             // review-cart runs on a node of the pool once started (ADR-0025);
@@ -536,6 +550,7 @@ export class MockTransport implements Transport {
             const node = active && placed !== 'local' ? { node: placed } : {};
             return { ...l, active, owns_main: owns, running: active ? (l.name === 'agent-login-fix' ? 3 : 5) : 0, services: 5, ...node };
           })
+          .filter((l) => l !== null)
         : [];
     if (p === '/v1/lanes' && method === 'GET') return json(200, lanes());
     if (p === '/v1/lanes' && method === 'POST') {

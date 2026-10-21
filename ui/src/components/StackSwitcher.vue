@@ -35,7 +35,7 @@ const currentName = computed(() => current.value?.name ?? stack.view?.name ?? 'S
 // its own, named by its branch. Started ones first; the worktrees nobody
 // started (agents leave many) fold away.
 const lanes = computed(() => orderLanes(stack.lanes));
-const shownLane = computed(() => stack.lanes.find((l) => l.name === stack.lane) ?? null);
+const shownLane = computed(() => stack.shownLane);
 const showIdle = ref(false);
 
 function chooseLane(l: LaneView | null) {

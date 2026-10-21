@@ -25,12 +25,14 @@ const view = computed(() => stack.view);
 const daemon = computed(() => stack.entry?.daemon ?? null);
 const hubAway = computed(() => !hub.reachable);
 const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
-const current = computed(() => stack.lanes.find((l) => l.name === stack.lane) ?? null);
+const current = computed(() => stack.shownLane);
 const servedBy = computed(() => stack.lanes.find((l) => l.owns_main) ?? null);
 const busyMain = computed(() => !!stack.busy['lane-main']);
 
 /** The shown tree's state and its event stream: live, or why not. */
 const liveState = computed(() => {
+  if (stack.ending?.removing) return { tone: 'warn', label: 'removing', title: 'Its worktree is gone: the lane stops and its data is removed' };
+  if (stack.ending) return { tone: '', label: 'removed', title: 'Its worktree is gone, and the lane with it' };
   if (!stack.running) return { tone: '', label: 'offline', title: 'The stack daemon is not running' };
   if (current.value && current.value.active === false) return { tone: '', label: 'not started', title: 'This worktree runs nothing yet' };
   if (stack.mainIdle) return { tone: '', label: 'stopped', title: 'Nothing of the main working tree runs; its daemon is up and its events are live' };
@@ -108,7 +110,7 @@ const ui = useUi();
 const pathRoot = ref<HTMLElement | null>(null);
 const pathTrigger = ref<HTMLButtonElement | null>(null);
 const { open: pathOpen, close: pathClose } = usePopover(pathRoot, pathTrigger);
-const canOpen = computed(() => !hubAway.value && !stack.sharedLane && !!stack.id);
+const canOpen = computed(() => !hubAway.value && !stack.sharedLane && !stack.ending && !!stack.id);
 const openerPrefs = useOpenerPrefs();
 const openers = computed(() => (canOpen.value ? openerPrefs.shown(hub.openers ?? []) : []));
 const managing = ref(false);

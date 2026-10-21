@@ -50,8 +50,10 @@ export const useStack = defineStore('stack', () => {
     const r = shared.value;
     return r ? (usePool().shared.find((l) => l.pool === r.pool && l.lease === r.lease) ?? null) : null;
   });
-  /** Someone else's lane: nothing here changes it. */
-  const readOnly = computed(() => !!shared.value);
+  /** Someone else's lane: this machine has no API of it. */
+  const foreign = computed(() => !!shared.value);
+  /** Someone else's lane, or one whose worktree is gone: nothing here changes it. */
+  const readOnly = computed(() => foreign.value || !!ending.value);
   const entry = computed(() => {
     const own = hub.entry(id.value);
     const l = sharedLane.value;
@@ -68,6 +70,8 @@ export const useStack = defineStore('stack', () => {
 
   /** The lane shown (plan §3.5); `null`: the main working tree. */
   const lane = ref<string | null>(null);
+  /** The shown lane as it was last, once the daemon no longer lists it. */
+  const goneLane = ref<LaneView | null>(null);
   const lanes = ref<LaneView[]>([]);
   /**
    * The lane whose API the daemon paths of the shown stack go to: the shown
@@ -85,7 +89,7 @@ export const useStack = defineStore('stack', () => {
 
   async function loadLanes() {
     const sid = id.value;
-    if (!sid || !running.value || readOnly.value) return;
+    if (!sid || !running.value || foreign.value) return;
     try {
       const res = await api().request<LaneView[]>('GET', daemonPath(sid, v1.lanes));
       if (sid === id.value && res.ok && Array.isArray(res.body)) setLanes(res.body);
@@ -102,20 +106,36 @@ export const useStack = defineStore('stack', () => {
     void loadLanes();
   }
 
-  /** The lanes now; the one shown is gone (its worktree was removed): back to the main tree. */
+  /**
+   * The lanes now. The one shown whose worktree is gone stays shown, as it
+   * was last, until the user leaves it: being removed (`removing`), then
+   * removed (`gone`, the dashboard's own mark). Its stream ends with it.
+   */
   function setLanes(next: LaneView[]) {
+    const before = lane.value ? (lanes.value.find((l) => l.name === lane.value) ?? null) : null;
     const wasActive = lane.value ? laneActive(lane.value) : null;
     lanes.value = next;
     lanesOf.value = id.value;
-    if (lane.value && !next.some((l) => l.name === lane.value)) {
-      const gone = lane.value;
-      selectLane(null);
-      useUi().toast('info', `Lane ${gone} is gone`, 'Its worktree was removed; devstack removed the lane with it. Showing the main working tree.');
+    if (!lane.value) return;
+    const now = next.find((l) => l.name === lane.value) ?? null;
+    if (!now) {
+      // Never seen (a lane remembered from before a reload): the main tree.
+      if (!before && !goneLane.value) return selectLane(null);
+      goneLane.value = { ...(before ?? goneLane.value!), removing: false, gone: true };
+      disconnect();
       return;
     }
+    // Its stream lasts while it stops; when it ends, the next check finds the lane gone.
+    if (now.removing) return;
+    // Made again (restored): this one is shown now.
+    goneLane.value = null;
     // The shown lane started, or stopped: its own stream, or the main tree's.
-    if (lane.value && id.value && wasActive !== laneActive(lane.value)) reset(id.value);
+    if (id.value && wasActive !== laneActive(lane.value)) reset(id.value);
   }
+  /** The lane shown, also once it is gone (see `setLanes`); `null`: the main tree. */
+  const shownLane = computed(() => (lane.value ? (lanes.value.find((l) => l.name === lane.value) ?? (goneLane.value?.name === lane.value ? goneLane.value : null)) : null));
+  /** The shown lane's worktree is gone: it is being removed, or was. */
+  const ending = computed(() => (shownLane.value?.removing || shownLane.value?.gone ? shownLane.value : null));
 
   /** The lanes that run: they keep the daemon when the main tree stops (ADR-0024). */
   const runningLanes = computed(() => (lanesOf.value === id.value ? lanes.value.filter((l) => l.active !== false).map((l) => l.name) : []));
@@ -131,6 +151,7 @@ export const useStack = defineStore('stack', () => {
 
   function selectLane(next: string | null) {
     if (next === lane.value) return;
+    goneLane.value = null;
     lane.value = next;
     if (id.value) persist.set(`lane.${id.value}`, next);
     reset(id.value!);
@@ -143,6 +164,7 @@ export const useStack = defineStore('stack', () => {
     // loads none.
     lanes.value = [];
     lanesOf.value = null;
+    goneLane.value = null;
     branches.value = null;
     persist.saveLastStack(next);
     lane.value = persist.get<string | null>(`lane.${next}`) ?? null;
@@ -297,7 +319,7 @@ export const useStack = defineStore('stack', () => {
 
   async function loadBranches() {
     const sid = id.value;
-    if (!sid || readOnly.value) return;
+    if (!sid || foreign.value) return;
     try {
       const res = await api().request<Branches>('GET', paths.branches(sid));
       const b = res.body;
@@ -647,6 +669,10 @@ export const useStack = defineStore('stack', () => {
   /** An action on someone else's lane: said, and not sent (the node refuses it anyway). */
   function refuseReadOnly(): boolean {
     if (!readOnly.value) return false;
+    if (ending.value) {
+      useUi().toast('info', 'Worktree removed', `The worktree of ${ending.value.branch ?? ending.value.name} is gone, and its lane with it.`);
+      return true;
+    }
     const l = sharedLane.value;
     useUi().toast('info', 'Read only', `This lane is ${l ? `${l.owner_name}'s` : "someone else's"}: you view it, its owner runs it.`);
     return true;
@@ -887,6 +913,9 @@ export const useStack = defineStore('stack', () => {
     entry,
     running,
     readOnly,
+    foreign,
+    shownLane,
+    ending,
     sharedLane,
     branches,
     loadBranches,

@@ -88,6 +88,10 @@ pub struct LaneView {
     /// A start on a node or a move under way, or one that failed lately.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub moving: Option<LaneMove>,
+    /// Its worktree is gone, and the lane is being removed with it (its
+    /// services stop, its data goes): nothing can be done with it any more.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub removing: bool,
 }
 
 /// A lane being started on a node (`up --on`) or moved (`lane move`), as the
@@ -1048,6 +1052,9 @@ impl Lanes {
             return;
         }
         self.forgetting.lock().unwrap().insert(name.to_string());
+        // Stopping it and removing its data takes a while (its containers
+        // and volumes): the clients see it go from the start.
+        self.announce();
         self.forget_claimed(name, why);
         self.forgetting.lock().unwrap().remove(name);
         self.pending.lock().unwrap().remove(name);
@@ -1463,6 +1470,7 @@ impl Lanes {
             m.clone()
         };
         let services = self.main.stack.services.len();
+        let forgetting = self.forgetting.lock().unwrap().clone();
         self.known
             .lock()
             .unwrap()
@@ -1502,6 +1510,7 @@ impl Lanes {
                         .and_then(|r| r.warning.clone())
                         .or_else(|| moves.get(&k.entry.name).and_then(|m| m.warning.clone())),
                     moving: moves.get(&k.entry.name).cloned(),
+                    removing: forgetting.contains(&k.entry.name),
                 }
             })
             .collect()

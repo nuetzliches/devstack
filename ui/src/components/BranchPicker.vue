@@ -18,12 +18,12 @@ const hub = useHub();
 const stack = useStack();
 const now = useNow();
 
-const current = computed(() => stack.lanes.find((l) => l.name === stack.lane) ?? null);
+const current = computed(() => stack.shownLane);
 const branch = computed(() => (current.value ? current.value.branch : stack.view?.branch) ?? null);
 /** A lane is named by its branch (shown already): only what kind of tree it is. */
 const tree = computed(() => (current.value ? 'lane' : 'main working tree'));
 /** Someone else's lane, or no hub: the branch is shown, nothing more. */
-const canPick = computed(() => !stack.readOnly && hub.reachable && !!stack.id);
+const canPick = computed(() => !stack.foreign && hub.reachable && !!stack.id);
 const busy = computed(() => stack.busy.branches);
 
 const root = ref<HTMLElement | null>(null);
@@ -73,6 +73,7 @@ function isShown(r: Row): boolean {
 /** What a click on the row does, said on it. */
 function hint(r: Row): string {
   if (r.b.main) return 'main tree';
+  if (r.lane?.removing) return 'lane · removing';
   if (r.lane) return r.lane.owns_main ? 'main ports' : r.lane.active === false ? 'lane · not started' : 'lane · running';
   if (r.b.worktree) return 'worktree';
   return busy.value === 'add' ? '' : 'new lane';
@@ -95,7 +96,7 @@ function pick(r: Row) {
 /** A stopped lane's worktree, or any while the stack is down (nothing of it runs then). */
 function removable(r: Row): boolean {
   if (!r.b.worktree || r.b.main) return false;
-  return r.lane ? r.lane.active === false && !r.lane.owns_main && !r.lane.moving : !stack.running;
+  return r.lane ? r.lane.active === false && !r.lane.owns_main && !r.lane.moving && !r.lane.removing : !stack.running;
 }
 function remove(r: Row) {
   close();
