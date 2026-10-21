@@ -30,6 +30,7 @@ const busyMain = computed(() => !!stack.busy['lane-main']);
 const liveState = computed(() => {
   if (!stack.running) return { tone: '', label: 'offline', title: 'The stack daemon is not running' };
   if (current.value && current.value.active === false) return { tone: '', label: 'not started', title: 'This worktree runs nothing yet' };
+  if (stack.mainIdle) return { tone: '', label: 'stopped', title: 'Nothing of the main working tree runs; its daemon is up and its events are live' };
   if (stack.live) return { tone: 'ok', label: 'live', title: `Receiving live events from the ${current.value ? 'lane' : 'main working tree'}` };
   if (stack.stream === 'error') return { tone: 'warn', label: 'reconnecting', title: 'The event stream dropped; reconnecting' };
   return { tone: '', label: 'connecting', title: 'Connecting to the event stream' };
