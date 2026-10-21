@@ -1,6 +1,6 @@
 # devstack: plan
 
-- **Status:** Active: phases 0 to 2 done (0.4.0), phase 3 done (lanes per worktree 0.7.0, each with its own infrastructure since 0.8.0, ADR-0030), phase 4 under way; the pool since 0.9.0: lanes on other machines, moved, shared, given the main ports; node policies, several pools, capacity over time, telemetry with consent (ADR-0025 to ADR-0037, 0.9.0 to 0.9.8; [pool.md](pool.md), §7.4, backlog §13); 0.10.0 (2026-10-18) carries the fixes of the review of 0.9.8: lanes confined on a node, nodes granted by an admin, the promotion gate and restore of ADR-0013/0016 as written, the hub's origin rules; 0.11.0 (2026-10-19): lanes that outlive the main tree's stop, keep their data on a node, run with a profile, and can be viewed when shared; a server updated by an admin (ADR-0038 to ADR-0041); 0.12.0 (2026-10-20): sharing a lane includes viewing it (ADR-0040 amended), a remote lane's containers controlled through its node, a dev server's rebuilds shown like builds (ADR-0042), a node's own lines in the pool's telemetry; 0.13.0 (2026-10-20): a dev server's fixed port is devstack's, forwarded to its instance (ADR-0043); 0.14.0 (2026-10-21): the pool places a lane where it starts warm (ADR-0026 point 3), where a lane starts without `--on` is the machine's choice (ADR-0025 amended), a lane's start on a node shows its phases; 0.15.0 (2026-10-21) carries the fixes of a review of the whole code base: a node runs the Compose model it checked, several agents share one engine, the supervisor keeps edits and stops, stack file paths stay in the repository ([CHANGELOG](../CHANGELOG.md))
+- **Status:** Active: phases 0 to 2 done (0.4.0), phase 3 done (lanes per worktree 0.7.0, each with its own infrastructure since 0.8.0, ADR-0030), phase 4 under way; the pool since 0.9.0: lanes on other machines, moved, shared, given the main ports; node policies, several pools, capacity over time, telemetry with consent (ADR-0025 to ADR-0037, 0.9.0 to 0.9.8; [pool.md](pool.md), §7.4, backlog §13); 0.10.0 (2026-10-18) carries the fixes of the review of 0.9.8: lanes confined on a node, nodes granted by an admin, the promotion gate and restore of ADR-0013/0016 as written, the hub's origin rules; 0.11.0 (2026-10-19): lanes that outlive the main tree's stop, keep their data on a node, run with a profile, and can be viewed when shared; a server updated by an admin (ADR-0038 to ADR-0041); 0.12.0 (2026-10-20): sharing a lane includes viewing it (ADR-0040 amended), a remote lane's containers controlled through its node, a dev server's rebuilds shown like builds (ADR-0042), a node's own lines in the pool's telemetry; 0.13.0 (2026-10-20): a dev server's fixed port is devstack's, forwarded to its instance (ADR-0043); 0.14.0 (2026-10-21): the pool places a lane where it starts warm (ADR-0026 point 3), where a lane starts without `--on` is the machine's choice (ADR-0025 amended), a lane's start on a node shows its phases; 0.15.0 (2026-10-21) carries the fixes of a review of the whole code base: a node runs the Compose model it checked, several agents share one engine, the supervisor keeps edits and stops, stack file paths stay in the repository; 0.16.0 (2026-10-21): desktop notifications from the hub and lanes of other members shown (ADR-0045), winget on Windows, a stack's folder opened in one's own programs (ADR-0046), the share switch removed (ADR-0031 amended) ([CHANGELOG](../CHANGELOG.md))
 - **Date:** 2026-10-14, status updated 2026-10-21
 - **Inputs:** [problem-statement.md](problem-statement.md), [ADR index](adr/README.md)
 
@@ -734,6 +734,16 @@ ADR-0038). The supervisor keeps edits made while a service is exited and
 stops made while a migrator runs; stack file paths stay in the
 repository; the docs say what the code does. The details are in the
 [changelog](../CHANGELOG.md).
+
+**0.16.0 (2026-10-21): the desktop and the machine.** The hub notifies the
+desktop of what needs attention, a toast on Windows, the session bus on
+Linux, without a tray (ADR-0045, ADR-0018 amended), and shows whose lanes
+run on this machine. Windows installs and updates through winget. The
+dashboard opens a stack's folder in the user's own programs (ADR-0046),
+gives agents links to a stack or lane, and stops a stack with its
+containers. The share switch is removed: it reported capacity but never ran
+a node agent (ADR-0031 amended; a switch that starts one is #171, Windows as
+a node #168). The details are in the [changelog](../CHANGELOG.md).
 
 ## 8. Open questions
 
