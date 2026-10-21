@@ -2247,10 +2247,7 @@ data: {\"type\":\"line\",\"text\":\"c\"}\n\n";
     #[test]
     fn the_status_says_when_the_file_watcher_misses_edits() {
         let stack = serde_json::json!({ "services": [], "watcher_error": "the file watcher lost events (overflow)" });
-        assert!(status_text(&stack).starts_with(
-            "! the file watcher lost events (overflow)
-"
-        ));
+        assert!(status_text(&stack).starts_with("! the file watcher lost events (overflow)\n"));
         assert!(!status_text(&serde_json::json!({ "services": [] })).contains('!'));
     }
 
