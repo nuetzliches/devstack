@@ -9,6 +9,13 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **A tree opened in a program comes to the front on Windows** (ADR-0046):
+  Explorer, the terminals, the editors, the agents and Orca opened behind
+  the browser, as the hub runs in the background. The hub takes the
+  foreground first and hands it to the program.
+
 ## [0.16.0] - 2026-10-21
 
 The hub tells the desktop what needs attention (a failed build, a held

@@ -34,6 +34,8 @@ use tokio_stream::StreamExt;
 static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 
 mod dialog;
+#[cfg(windows)]
+mod foreground;
 mod guests;
 mod notify;
 mod open;
