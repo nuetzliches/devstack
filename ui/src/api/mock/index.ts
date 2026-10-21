@@ -439,6 +439,7 @@ export class MockTransport implements Transport {
         { id: 'wt', label: 'Windows Terminal', kind: 'terminal' },
         { id: 'powershell', label: 'PowerShell', kind: 'terminal' },
         { id: 'vscode', label: 'VS Code', kind: 'editor' },
+        { id: 'github-desktop', label: 'GitHub Desktop', kind: 'git' },
         { id: 'claude', label: 'Claude Desktop', kind: 'agent' },
         { id: 'claude-cli', label: 'Claude Code', kind: 'agent' },
         { id: 'orca', label: 'Orca', kind: 'agent' },
