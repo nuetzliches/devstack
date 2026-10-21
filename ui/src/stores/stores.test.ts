@@ -212,6 +212,15 @@ describe('stack store', () => {
       expect(ups()).toHaveLength(0);
       expect(useUi().toasts.some((x) => x.message === 'no space left')).toBe(true);
     });
+
+    it('forgets the failed start once the stack stops', async () => {
+      const { stack, events, done } = await startOnNode();
+      events.handlers.onMessage({ type: 'lanes', lanes: [{ ...starting, moving: { ...starting.moving, error: 'no space left', failed_at: 1 } }] });
+      await done;
+      fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [entry('shop', false)] });
+      await vi.waitFor(() => expect(stack.lanes[0]?.moving).toBeUndefined());
+      expect(stack.lanes[0]?.name).toBe('feat');
+    });
   });
 });
 

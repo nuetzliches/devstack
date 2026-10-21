@@ -80,6 +80,11 @@ and listed with their assets on the
 
 ### Fixed
 
+- A lane's failed start on a node no longer stays on its start page after
+  the lane or the stack stopped: stopping the lane, stopping the main tree
+  (`devstack down`) or starting the lane here clears it, and the dashboard
+  drops it once the stack's daemon is gone. Before, it stayed ten minutes
+  whatever happened.
 - A lane on a node no longer stops syncing when a file goes while it is
   sent (a package manager rewriting `node_modules`): the file is left out
   and the next sync sends what is there then.

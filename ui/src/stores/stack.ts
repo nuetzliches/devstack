@@ -314,6 +314,8 @@ export const useStack = defineStore('stack', () => {
       disconnect();
       if (viewAt.value === null && view.value) viewAt.value = Date.now();
     }
+    // A start under way, or one that failed, lived in the daemon that is gone.
+    if (!r && lanes.value.some((l) => l.moving)) lanes.value = lanes.value.map((l) => ({ ...l, moving: undefined }));
   });
 
   function connect() {

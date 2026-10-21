@@ -1539,6 +1539,8 @@ impl Lanes {
         })();
         self.pending.lock().unwrap().remove(&name);
         if result.is_ok() {
+            // Started here: a start on a node that failed before is over.
+            self.forget_failed(Some(&name));
             self.announce();
         }
         result
@@ -1556,6 +1558,8 @@ impl Lanes {
         let t0 = std::time::Instant::now();
         // A profile holds while the lane runs (ADR-0041).
         self.profiles.lock().unwrap().remove(name);
+        // Stopped: a start or move that failed before is no longer news.
+        self.forget_failed(Some(name));
         let remote = self.remote.lock().unwrap().remove(name);
         if let Some(r) = remote {
             let node = r.node.name.clone();
@@ -1934,6 +1938,20 @@ impl Lanes {
             }
         }
         self.announce();
+    }
+
+    /// Forget the start or move of `name` (`None`: of every lane) that
+    /// failed: the lane started another way, or it or the stack stopped.
+    pub fn forget_failed(&self, name: Option<&str>) {
+        let gone = {
+            let mut moves = self.moves.lock().unwrap();
+            let before = moves.len();
+            moves.retain(|n, m| m.error.is_none() || name.is_some_and(|x| x != n));
+            moves.len() != before
+        };
+        if gone {
+            self.announce();
+        }
     }
 
     /// Release a lane on a node, on a thread of its own: the call blocks on
