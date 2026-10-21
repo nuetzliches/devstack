@@ -11,6 +11,15 @@ and listed with their assets on the
 
 ### Added
 
+- **winget**: `winget install nuetzliches.devstack` (once winget's catalogue
+  has the release). Each release submits its manifests
+  (`packaging/winget/`) to `microsoft/winget-pkgs`; the release workflow
+  needs the secret `WINGET_TOKEN` for it. `devstack update` (and the
+  dashboard's update) on a devstack winget installed runs `winget upgrade`,
+  moving the running binary out of winget's way first, since winget cannot
+  replace a file that runs; `devstack self uninstall` leaves that binary to
+  `winget uninstall`.
+
 - **`prepare.link`** (ADR-0044, #159): directories `prepare` installs in a
   lane's copy (`link = ["web/node_modules"]`) are linked into the lane's
   worktree, a junction on Windows, so git hooks there (`npx eslint` in a

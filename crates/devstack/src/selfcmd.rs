@@ -144,6 +144,7 @@ pub fn uninstall(yes: bool, with_coordinator: bool) -> Result<()> {
 
     let exe = std::env::current_exe()?;
     let ours = install_dir().is_some_and(|d| exe.parent() == Some(d.as_path()));
+    let winget = crate::update::is_winget_install(&exe);
     println!("devstack self uninstall removes:");
     println!("  - the dashboard hub, its start at logon and the devstack:// link");
     println!("  - {} (token, list of stacks, hub log)", root.display());
@@ -161,6 +162,12 @@ pub fn uninstall(yes: bool, with_coordinator: bool) -> Result<()> {
     }
     if ours {
         println!("  - {} and its PATH entry", exe.display());
+    } else if winget {
+        println!(
+            "  (not {}: winget installed it, `winget uninstall {}` removes it)",
+            exe.display(),
+            crate::update::WINGET_ID
+        );
     } else {
         println!(
             "  (not {}: it is not where the installer puts devstack)",
@@ -205,6 +212,12 @@ pub fn uninstall(yes: bool, with_coordinator: bool) -> Result<()> {
         println!(
             "{} goes in a few seconds, once this process has exited.",
             exe.parent().unwrap().display()
+        );
+    }
+    if winget {
+        println!(
+            "The binary stays: `winget uninstall {}` removes it.",
+            crate::update::WINGET_ID
         );
     }
     Ok(())

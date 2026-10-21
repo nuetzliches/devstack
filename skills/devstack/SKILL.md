@@ -25,6 +25,7 @@ install it yourself.
 ```powershell
 # Windows
 irm https://github.com/nuetzliches/devstack/releases/latest/download/install.ps1 | iex
+# or, once winget has the release: winget install nuetzliches.devstack
 ```
 
 ```bash
