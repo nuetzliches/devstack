@@ -8,7 +8,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { DockerEngine, HubEvent, NotifySettings, ShareSettings, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
+import type { DockerEngine, Guest, HubEvent, NotifySettings, ShareSettings, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -53,6 +53,11 @@ function startMove(to: string, t0: number) {
 class MockHub {
   stacks: MockStack[] = [];
   hubSubs = new Set<Listener<HubEvent>>();
+  /** A lane of laptop-anna's runs here, a second one is admitted. */
+  guests: Guest[] = [
+    { pool: 'default', lease: 'l-7f3a', member: '1122334455667788', owner: 'laptop-anna', repo: 'shop', lane: 'feat-cart', state: 'running', since: Math.floor(Date.now() / 1000) - 2400, cpus: 2, memory: 4 * 2 ** 30 },
+    { pool: 'default', lease: 'l-91c2', member: '1122334455667788', owner: 'laptop-anna', repo: 'crm', lane: 'agent-1242', state: 'offered', since: Math.floor(Date.now() / 1000) - 20, cpus: 1.5, memory: 3 * 2 ** 30 },
+  ];
   hubDown = false;
   unpaired = false;
   empty = false;
@@ -217,6 +222,7 @@ const notify: NotifySettings = {
     { kind: 'lane_failed', label: "A lane's start or move on a node failed", on: true, default: true },
     { kind: 'main_ports', label: 'A lane took or gave back the main ports', on: false, default: false },
     { kind: 'live', label: 'A candidate went live', on: false, default: false },
+    { kind: 'guest_lane', label: 'A lane of another member started on this machine', on: true, default: true },
   ],
   muted: [],
 };
@@ -741,6 +747,7 @@ export class MockTransport implements Transport {
       l.send({ type: 'stacks', stacks: hub.entries() });
       l.send({ type: 'docker', docker: hub.docker });
       l.send({ type: 'release', current: '0.4.0', newer: hub.newer });
+      l.send({ type: 'guests', guests: hub.guests });
       hub.hubSubs.add(l);
       return { stop: () => hub.hubSubs.delete(l) };
     }

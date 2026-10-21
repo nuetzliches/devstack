@@ -18,16 +18,18 @@ pub enum Kind {
     LaneFailed,
     MainPorts,
     Live,
+    GuestLane,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 6] = [
+    pub const ALL: [Kind; 7] = [
         Kind::BuildFailed,
         Kind::Held,
         Kind::ServiceFailed,
         Kind::LaneFailed,
         Kind::MainPorts,
         Kind::Live,
+        Kind::GuestLane,
     ];
 
     pub fn key(self) -> &'static str {
@@ -38,6 +40,7 @@ impl Kind {
             Kind::LaneFailed => "lane_failed",
             Kind::MainPorts => "main_ports",
             Kind::Live => "live",
+            Kind::GuestLane => "guest_lane",
         }
     }
 
@@ -53,6 +56,7 @@ impl Kind {
             Kind::LaneFailed => "A lane's start or move on a node failed",
             Kind::MainPorts => "A lane took or gave back the main ports",
             Kind::Live => "A candidate went live",
+            Kind::GuestLane => "A lane of another member started on this machine",
         }
     }
 

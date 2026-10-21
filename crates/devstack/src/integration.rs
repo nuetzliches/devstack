@@ -136,7 +136,7 @@ pub fn open_url(url: &str) -> Result<()> {
 /// value must be a name (a stack's id, a lane's, a service's), so nothing
 /// else can be smuggled into the route.
 fn dashboard_route(query: &str) -> Result<String> {
-    let (mut stack, mut lane, mut service) = (None, None, None);
+    let (mut stack, mut lane, mut service, mut page) = (None, None, None, None);
     for pair in query.split('&').filter(|p| !p.is_empty()) {
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
         let v = percent_decode(v).ok_or_else(|| anyhow!("bad value in devstack link"))?;
@@ -151,8 +151,15 @@ fn dashboard_route(query: &str) -> Result<String> {
             "stack" => stack = Some(v),
             "lane" => lane = Some(v),
             "service" => service = Some(v),
+            "page" => page = Some(v),
             _ => return Err(anyhow!("unknown `{k}` in devstack link")),
         }
+    }
+    match page.as_deref() {
+        None => {}
+        // Guest lanes on this machine (a notification's).
+        Some("pool") if stack.is_none() => return Ok("/#/pool".into()),
+        Some(p) => return Err(anyhow!("unknown page `{p}` in devstack link")),
     }
     let Some(stack) = stack else {
         return Ok("/#/".into());
@@ -442,6 +449,8 @@ mod tests {
         );
         assert_eq!(dashboard_route("stack=ab12").unwrap(), "/#/s/ab12?lane=");
         assert_eq!(dashboard_route("").unwrap(), "/#/");
+        assert_eq!(dashboard_route("page=pool").unwrap(), "/#/pool");
+        assert!(dashboard_route("page=settings").is_err());
         for bad in [
             "stack=shop",
             "stack=ab12&lane=..%2F..",

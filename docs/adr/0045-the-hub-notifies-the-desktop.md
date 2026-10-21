@@ -43,6 +43,7 @@ before that Windows answers "not found".
    | `lane_failed` | a lane's start on a node or its move failed | on |
    | `main_ports` | a lane took or gave back the main ports | off |
    | `live` | a candidate went live | off |
+   | `guest_lane` | a lane of another member started running on this machine | on |
 
    A dev server's rebuild (ADR-0042) does not notify: it fails on every
    unfinished edit, and its own overlay says so.
