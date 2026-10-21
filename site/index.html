@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!-- The page talks to GitHub's API and to the hub on this machine, nothing
      else; the script's hash changes with it (CI checks that they match). -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-MGKZfF/ul+IbnuE3tGd1y0fqaZMYLpUtXqB5hHBGTCE='; style-src 'unsafe-inline'; img-src data:; connect-src https://api.github.com http://127.0.0.1:*; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-jyoXKkHTCeEk6PbcE0InOsJSWWvZdy/xbugd715sdrY='; style-src 'unsafe-inline'; img-src data:; connect-src https://api.github.com http://127.0.0.1:*; base-uri 'none'; form-action 'none'">
 <title>devstack</title>
 <meta name="description" content="devstack runs your local development stack: containers from Compose, your services built in the background, a change goes live only once it is healthy.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233a6df0'/%3E%3Cpath d='M9 11h14M9 16h14M9 21h9' stroke='white' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E">
@@ -62,7 +62,7 @@
     services built in the background. A change goes live only once it is healthy, and you can
     always see whether it has.</p>
 
-  <section class="panel" aria-live="polite">
+  <section class="panel" id="here" aria-live="polite">
     <h2>On this machine</h2>
     <div class="status">
       <span id="dot" class="dot"></span>
@@ -196,6 +196,10 @@
   let waiting = false;
 
   function render(local, rel) {
+    // devstack answers now and did not before (installed, or its hub came
+    // up): the reader is likely down at the install command, out of sight
+    // of this panel, so it comes into view, its button focused.
+    const appeared = !!local && !!shown && !shown.local;
     shown = { local, rel };
     const actions = $('actions');
     actions.replaceChildren();
@@ -220,7 +224,15 @@
           ? 'The installer opened the dashboard in a new tab; this button opens it again.'
           : rel ? 'Up to date.' : '';
       }
-      link('Open the dashboard', HUB + '/', true);
+      const open = link('Open the dashboard', HUB + '/', true);
+      if (appeared) {
+        const r = $('here').getBoundingClientRect();
+        if (r.top < 0 || r.bottom > innerHeight) {
+          const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+          $('here').scrollIntoView({ behavior: calm ? 'auto' : 'smooth', block: 'start' });
+        }
+        open.focus({ preventScroll: true });
+      }
     } else if (waiting) {
       $('dot').className = 'dot wait';
       $('state').textContent = 'Waiting for the installer…';
