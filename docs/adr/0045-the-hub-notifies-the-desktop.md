@@ -1,6 +1,6 @@
 # ADR-0045: The hub notifies the desktop of what needs attention, without a tray
 
-- **Status:** Accepted (2026-10-21)
+- **Status:** Accepted (2026-10-21), amended 2026-10-21 (`guest_lane`)
 - **Date:** 2026-10-21
 - **Deciders:** project owner
 - **Related:** [#156](https://github.com/nuetzliches/devstack/issues/156), [#1](https://github.com/nuetzliches/devstack/issues/1) (the tray), [ADR-0018](0018-dashboard-is-a-browser-page.md) (point 2 amended here), [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md)
@@ -43,7 +43,6 @@ before that Windows answers "not found".
    | `lane_failed` | a lane's start on a node or its move failed | on |
    | `main_ports` | a lane took or gave back the main ports | off |
    | `live` | a candidate went live | off |
-   | `guest_lane` | a lane of another member started running on this machine | on |
 
    A dev server's rebuild (ADR-0042) does not notify: it fails on every
    unfinished edit, and its own overlay says so.
@@ -130,3 +129,9 @@ before that Windows answers "not found".
   node going offline): the kinds above are about one's own stacks.
 - That a notification carries anything to act on (promote, restart): a
   click opens the dashboard, where the action is.
+
+*Amended 2026-10-21.* A seventh kind, `guest_lane`, on by default: a lane of
+another member started running on this machine (#167). The hub reads the
+pool's leases after each report to the coordinator; a pool's first reading
+is the baseline, and a lease is told once, when it runs. A click opens the
+pool area (`devstack://open?page=pool`).
