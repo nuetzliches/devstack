@@ -1,9 +1,9 @@
 # ADR-0047: The dashboard makes a lane from a branch; the main tree's checkout stays the user's
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-21)
 - **Date:** 2026-10-21
 - **Deciders:** project owner
-- **Related:** [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (point 1 and its second amendment, which this would replace in part), [ADR-0040](0040-a-shared-lane-can-be-watched-like-ones-own.md), [ADR-0046](0046-the-hub-opens-a-worktree-in-the-users-programs.md)
+- **Related:** [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (point 1 and its second amendment, which this replaces in part), [ADR-0040](0040-a-shared-lane-can-be-watched-like-ones-own.md), [ADR-0046](0046-the-hub-opens-a-worktree-in-the-users-programs.md)
 
 ## Context
 
@@ -61,7 +61,10 @@ ports (`promote --lane`, ADR-0024 point 5, **Take main ports** in the header).
    commit, stash or remove it elsewhere. The branch stays.
 5. **The main tree's checkout is never changed.** No checkout, switch, reset or
    pull in the main working tree. To run a branch on the main ports, the page
-   offers **New lane**, then **Take main ports**.
+   offers **New lane**, then **Take main ports**. That moves the fixed ports
+   of `[services.*]` only: for a stack of Compose containers only, the slot
+   has nothing to move and is refused (#184), so the page offers no **Take
+   main ports** there and the switch is a lane on its own ports.
 6. **The hub runs git, the page names.** `GET /hub/stacks/{id}/branches`,
    `POST /hub/stacks/{id}/worktrees {branch, new?, base?}`,
    `POST /hub/stacks/{id}/worktrees/remove {path}` (cookie and Origin,
@@ -117,6 +120,9 @@ ports (`promote --lane`, ADR-0024 point 5, **Take main ports** in the header).
 - Another state that can go stale: a branch deleted or checked out elsewhere
   between listing and clicking. The hub answers what git says.
 - The header's lane picker goes; switching lanes is the sidebar's.
+- Until a Compose container's published port can move with the main slot
+  (#184, an ADR of its own), a stack of containers only has no "switch":
+  its other branch runs on the lane's ports.
 
 ## Enforced by
 
