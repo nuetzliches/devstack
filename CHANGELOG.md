@@ -21,6 +21,9 @@ and listed with their assets on the
 
 ### Fixed
 
+- The daemon log says why a lane whose worktree went is not removed at once:
+  `lane_forget_deferred` said "it is being started" also when a removal of
+  the same lane was under way already, or a move.
 - Docs: a viewer of a shared lane reads its containers' logs, as it has
   since 0.11.0 (the node answers them itself); the docs and notes of 0.15.0
   said otherwise.
