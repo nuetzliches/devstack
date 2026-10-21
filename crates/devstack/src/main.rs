@@ -563,6 +563,29 @@ enum HubAction {
     },
     /// Remove both again; `devstack up` then leaves them alone.
     Uninstall,
+    /// Desktop notifications from the hub (ADR-0045); without an action, what
+    /// notifies and whether the desktop shows it.
+    Notify {
+        #[command(subcommand)]
+        action: Option<NotifyAction>,
+    },
+}
+
+#[derive(Subcommand)]
+enum NotifyAction {
+    /// Switch kinds on: build_failed, held, service_failed, lane_failed,
+    /// main_ports, live, or all.
+    On {
+        #[arg(required = true, value_name = "KIND")]
+        kinds: Vec<String>,
+    },
+    /// Switch kinds off (as `on`).
+    Off {
+        #[arg(required = true, value_name = "KIND")]
+        kinds: Vec<String>,
+    },
+    /// Show a test notification.
+    Test,
 }
 
 #[derive(Subcommand)]
@@ -821,6 +844,14 @@ mod tests {
     #[test]
     fn hub_self_skills_and_env() {
         assert!(matches!(parse(&["hub"]).cmd, Cmd::Hub { action: None }));
+        assert!(matches!(
+            parse(&["hub", "notify", "off", "live", "held"]).cmd,
+            Cmd::Hub {
+                action: Some(HubAction::Notify {
+                    action: Some(NotifyAction::Off { ref kinds })
+                })
+            } if kinds == &["live", "held"]
+        ));
         assert!(matches!(
             parse(&["hub", "install", "--no-autostart"]).cmd,
             Cmd::Hub {

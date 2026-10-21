@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { ago, useNow } from '@/lib/format';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
@@ -10,6 +10,7 @@ import LaneStart from '@/components/LaneStart.vue';
 import type { IconName } from '@/components/icons/icons';
 
 const route = useRoute();
+const router = useRouter();
 const hub = useHub();
 const stack = useStack();
 const now = useNow();
@@ -18,6 +19,19 @@ watch(
   () => route.params.stack as string | undefined,
   (id) => {
     if (id) stack.select(id);
+  },
+  { immediate: true },
+);
+
+// A link names the lane to show (`?lane=`, empty: the main working tree), as
+// a notification's does (ADR-0045); shown, the query goes again.
+watch(
+  () => route.query.lane,
+  (lane) => {
+    if (typeof lane !== 'string' || !route.params.stack) return;
+    stack.selectLane(lane || null);
+    const { lane: _, ...rest } = route.query;
+    void router.replace({ query: rest });
   },
   { immediate: true },
 );

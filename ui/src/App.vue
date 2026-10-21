@@ -8,6 +8,7 @@ import GlobalDialogs from '@/components/GlobalDialogs.vue';
 import CommandPalette from '@/components/CommandPalette.vue';
 import Icon from '@/components/icons/Icon.vue';
 import Sidebar from '@/components/Sidebar.vue';
+import GuestBanner from '@/components/GuestBanner.vue';
 import UnpairedView from '@/views/UnpairedView.vue';
 
 const hub = useHub();
@@ -64,6 +65,7 @@ async function startHub() {
         <span class="retry"><span class="spinner" aria-hidden="true" /> retrying</span>
       </div>
     </div>
+    <GuestBanner v-if="!hubDown" />
     <div class="shell">
       <Sidebar v-if="!booting" class="side" />
       <main id="main" tabindex="-1">

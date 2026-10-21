@@ -57,6 +57,17 @@ describe('hub store', () => {
     expect(JSON.parse(localStorage.getItem('devstack.hub') ?? '{}').stacks).toHaveLength(1);
   });
 
+  it('follows the lanes of other members on this machine', async () => {
+    fake.on('/hub/session', ok({ version: '0.9.8' }));
+    const hub = useHub();
+    await hub.init();
+    const guest = { pool: 'default', lease: 'l1', member: 'm1', owner: 'anna', repo: 'shop', lane: 'feat-cart', state: 'running', since: 1, cpus: 2, memory: 2 ** 31 };
+    fake.stream('/hub/events').handlers.onMessage({ type: 'guests', guests: [guest] });
+    expect(hub.guests.map((g) => g.owner)).toEqual(['anna']);
+    fake.stream('/hub/events').handlers.onMessage({ type: 'guests', guests: [] });
+    expect(hub.guests).toEqual([]);
+  });
+
   it('says so when the browser is not paired', async () => {
     fake.on('/hub/session', { status: 401, ok: false, body: { error: 'not paired' } });
     const hub = useHub();

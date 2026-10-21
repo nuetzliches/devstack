@@ -147,8 +147,28 @@ fn run() {
                 }
                 Err(e) => st.error = Some(e),
             }
+            drop(map);
+            crate::guests::seen(&pool, guests(&pool));
         }
     }
+}
+
+/// Other members' lanes on this machine in `pool`; `None` when the
+/// coordinator could not be asked. The member list is read only when a
+/// lease names this machine.
+fn guests(pool: &str) -> Option<Vec<crate::guests::Guest>> {
+    let local = devstack_node::member::Local::new(&dir(pool));
+    let m = match local.membership() {
+        Ok(Some(m)) if m.state == State::Approved => m,
+        Ok(_) => return Some(Vec::new()),
+        Err(_) => return None,
+    };
+    let leases = local.leases().ok()?;
+    if !leases.iter().any(|l| l.node == m.id && l.member != m.id) {
+        return Some(Vec::new());
+    }
+    let nodes = local.nodes().ok()?;
+    Some(crate::guests::of(pool, &m.id, &leases, &nodes))
 }
 
 /// Report to the coordinator, offering nothing: what it says it runs;

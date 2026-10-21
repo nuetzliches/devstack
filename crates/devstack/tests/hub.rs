@@ -41,6 +41,8 @@ fn start_in(home: tempfile::TempDir, port: u16) -> Hub {
         .env("LOCALAPPDATA", home.path())
         .env("XDG_STATE_HOME", home.path())
         .env("DEVSTACK_NO_UPDATE_CHECK", "1")
+        // What would notify is logged; nothing shows on the desktop.
+        .env("DEVSTACK_NO_NOTIFY", "1")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -872,4 +874,192 @@ fn the_hub_offers_the_pool_nothing_and_says_why() {
         ),
     );
     assert_eq!(s, 405, "no switch to turn on");
+}
+
+/// ADR-0045: the settings over the API, and a link from a notification
+/// (`/auth?next=`) that lands on the stack, without a second session for a
+/// browser that is paired already.
+#[test]
+fn notification_settings_and_the_link_a_click_opens() {
+    let h = start();
+    let p = h.port;
+    let bearer = format!("Authorization: Bearer {}\r\n", token(&h));
+    let send = |method: &str, path: &str, body: &str| {
+        http(
+            p,
+            &format!(
+                "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\n{bearer}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+    };
+    let (s, _, body) = get(p, "/hub/notify", &bearer);
+    assert_eq!(s, 200, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["available"], false);
+    assert!(
+        v["unavailable"]
+            .as_str()
+            .unwrap()
+            .contains("DEVSTACK_NO_NOTIFY"),
+        "{v}"
+    );
+    let on = |v: &serde_json::Value, k: &str| {
+        v["kinds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["kind"] == k)
+            .unwrap()["on"]
+            .clone()
+    };
+    assert_eq!(on(&v, "build_failed"), true);
+    assert_eq!(on(&v, "live"), false);
+
+    let (s, _, body) = send(
+        "PUT",
+        "/hub/notify",
+        r#"{"kinds":{"live":true,"held":false},"muted":["ab12/agent-1"]}"#,
+    );
+    assert_eq!(s, 200, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        (on(&v, "live"), on(&v, "held")),
+        (true.into(), false.into())
+    );
+    assert_eq!(v["muted"], serde_json::json!(["ab12/agent-1"]));
+    let (s, _, _) = send("PUT", "/hub/notify", r#"{"kinds":{"everything":true}}"#);
+    assert_eq!(s, 400);
+    let (s, _, _) = send("PUT", "/hub/notify", r#"{"muted":["../x"]}"#);
+    assert_eq!(s, 400);
+    // Nothing would show: the test says why.
+    let (s, _, body) = send("POST", "/hub/notify/test", "");
+    assert_eq!(s, 503);
+    assert!(body.contains("DEVSTACK_NO_NOTIFY"), "{body}");
+    // With the cookie, the settings need the hub's own page as any mutation.
+    let cookie = paired_cookie(&h);
+    let (s, _, _) = http(
+        p,
+        &format!(
+            "PUT /hub/notify HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\nCookie: {cookie}\r\nOrigin: http://evil.example\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+        ),
+    );
+    assert_eq!(s, 403);
+
+    // A click: pairing with `next`, which names a dashboard route.
+    let next = "%2F%23%2Fs%2Fab12%2Fservices%2Fapi%3Flane%3Dfeat-x";
+    let (s, head, _) = get(p, &format!("/auth?code={}&next={next}", pair(&h)), "");
+    assert_eq!(s, 303, "{head}");
+    assert!(
+        head.contains("location: /#/s/ab12/services/api?lane=feat-x"),
+        "{head}"
+    );
+    assert!(head.contains("set-cookie:"), "{head}");
+    // Paired already: on to the route, no new session.
+    let (s, head, _) = get(
+        p,
+        &format!("/auth?code={}&next={next}", pair(&h)),
+        &format!("Cookie: {cookie}\r\n"),
+    );
+    assert_eq!(s, 303, "{head}");
+    assert!(
+        head.contains("location: /#/s/ab12/services/api?lane=feat-x"),
+        "{head}"
+    );
+    assert!(!head.contains("set-cookie:"), "{head}");
+    // Anything but a dashboard route goes home.
+    let (_, head, _) = get(
+        p,
+        &format!("/auth?code={}&next=https%3A%2F%2Fevil.example%2F", pair(&h)),
+        "",
+    );
+    assert!(
+        head.contains("location: /\r\n") || head.ends_with("location: /"),
+        "{head}"
+    );
+}
+
+/// ADR-0045: the hub follows a running stack by itself, no dashboard open,
+/// and a service that keeps exiting is one notice (folded), not one per
+/// restart.
+#[test]
+fn a_service_that_keeps_exiting_is_one_notice() {
+    let h = start();
+    let p = h.port;
+    let with = format!(
+        "Cookie: {}\r\nSec-Fetch-Site: same-origin\r\n",
+        paired_cookie(&h)
+    );
+    let own = format!("Origin: http://127.0.0.1:{p}\r\n");
+    let post = |path: &str, body: &str| {
+        http(
+            p,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\n{with}{own}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+    };
+    let repo = h.home.path().join("crashy");
+    std::fs::create_dir_all(&repo).unwrap();
+    let brief = if cfg!(windows) {
+        "ping -n 2 127.0.0.1 >NUL"
+    } else {
+        "sleep 1"
+    };
+    std::fs::write(
+        repo.join("devstack.toml"),
+        format!("version = 1\n[stack]\nname = \"crashy\"\n[services.api]\nrun = \"{brief}\"\n"),
+    )
+    .unwrap();
+    let dir = serde_json::to_string(&repo.to_string_lossy()).unwrap();
+    let (s, _, body) = post("/hub/stacks/add", &format!("{{\"path\":{dir}}}"));
+    assert_eq!(s, 200, "{body}");
+    let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (s, _, body) = post(&format!("/hub/stacks/{id}/up"), "");
+    assert_eq!(s, 202, "{body}");
+
+    let log = h.home.path().join("devstack").join("hub").join("hub.log");
+    let notices = || -> Vec<String> {
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.contains("\"notice\""))
+            .map(str::to_string)
+            .collect()
+    };
+    let daemon_log = repo.join(".devstack").join("daemon.log");
+    let restarts = || {
+        std::fs::read_to_string(&daemon_log)
+            .unwrap_or_default()
+            .matches("\"service_restarting\"")
+            .count()
+    };
+    let t0 = Instant::now();
+    while restarts() < 2 {
+        assert!(
+            t0.elapsed() < Duration::from_secs(90),
+            "the service did not exit twice; notices: {:?}",
+            notices()
+        );
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    let seen = notices();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    let n: serde_json::Value = serde_json::from_str(&seen[0]).unwrap();
+    assert_eq!(n["kind"], "service_failed", "{n}");
+    assert_eq!(n["service"], "api", "{n}");
+    assert_eq!(n["stack"], "crashy", "{n}");
+    assert_eq!(n["shown"], false, "{n}");
+
+    let (s, _, body) = post(&format!("/hub/stacks/{id}/down"), "");
+    assert_eq!(s, 202, "{body}");
+    let state = repo.join(".devstack").join("daemon.json");
+    let t0 = Instant::now();
+    while state.exists() && t0.elapsed() < Duration::from_secs(30) {
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }

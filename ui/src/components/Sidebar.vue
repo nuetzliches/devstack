@@ -20,6 +20,7 @@ import { usePool } from '@/stores/pool';
 import { useStack } from '@/stores/stack';
 import { useUi } from '@/stores/ui';
 import AddStackDialog from './AddStackDialog.vue';
+import GuestTile from './GuestTile.vue';
 import Icon from './icons/Icon.vue';
 
 const hub = useHub();
@@ -352,6 +353,7 @@ async function copyPath(s: StackEntry) {
       </ul>
     </template>
     <div class="pool-block">
+      <GuestTile />
       <button
         type="button"
         class="item pool-item"

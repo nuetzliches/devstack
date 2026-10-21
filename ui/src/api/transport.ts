@@ -50,6 +50,8 @@ export const paths = {
   hubEvents: '/hub/events',
   hubUpdate: '/hub/update',
   hubUpdateCheck: '/hub/update/check',
+  notify: '/hub/notify',
+  notifyTest: '/hub/notify/test',
   dockerStart: '/hub/docker/start',
   inspect: (path: string) => `/hub/inspect?path=${encodeURIComponent(path)}`,
   stackAdd: '/hub/stacks/add',

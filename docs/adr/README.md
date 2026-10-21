@@ -66,7 +66,7 @@ stay.
 | [0015](0015-devstack-is-optional.md) | devstack accelerates a stack, it is never required to run one | Accepted |
 | [0016](0016-a-daemon-restart-is-a-clean-restart.md) | A daemon restart is a clean restart from the last promoted artifacts | Accepted |
 | [0017](0017-stack-file-is-toml.md) | The stack file is TOML, without profiles in version 1 | Accepted, amended 2026-10-20 (ADR-0041's profiles are not the environments ruled out) |
-| [0018](0018-dashboard-is-a-browser-page.md) | The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper | Accepted; who serves it amended by ADR-0021; the tray is not built |
+| [0018](0018-dashboard-is-a-browser-page.md) | The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper | Accepted; who serves it amended by ADR-0021; the tray is not built; notifications from the hub by ADR-0045 |
 | [0019](0019-control-api-security.md) | The control API trusts the user's own processes, never a web page | Accepted, amended (own page for reads too; the hub proves itself; IPv4 loopback and `DEVSTACK_LISTEN`; the cookie is the hub's, no `token rotate`) |
 | [0020](0020-builds-share-one-long-lived-build-job.md) | Builds share one long-lived build job; a cancel ends only the cancelled build's tree | Accepted |
 | [0021](0021-a-hub-serves-the-dashboard.md) | A hub on a fixed port serves the dashboard for every stack | Accepted, amended (streams over WebSocket; the pool area polls) |
@@ -93,3 +93,4 @@ stay.
 | [0042](0042-a-dev-servers-rebuilds-show-like-builds.md) | A dev server's rebuilds show like builds, read from its output | Accepted |
 | [0043](0043-a-dev-servers-fixed-port-is-devstacks.md) | A dev server's fixed port is devstack's, forwarded to its instance | Accepted |
 | [0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) | A lane's prepared directories can be linked into its worktree | Accepted |
+| [0045](0045-the-hub-notifies-the-desktop.md) | The hub notifies the desktop of what needs attention, without a tray | Accepted, amended 2026-10-21 (`guest_lane`) |

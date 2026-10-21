@@ -226,10 +226,11 @@ dashboard ─────┘    one per repo,   └── services: main slot (f
 
 | Variable | Effect |
 |---|---|
-| `DEVSTACK_BROWSER` | the browser `devstack ui` pairs (`chrome`, `edge`, `firefox`, `brave`, a path) |
+| `DEVSTACK_BROWSER` | the browser `devstack ui` pairs (`chrome`, `edge`, `firefox`, `brave`, a path), and that a click on a notification opens |
 | `DEVSTACK_HUB_PORT` | the hub's port (default 4250) |
 | `DEVSTACK_NO_HUB` | `devstack up` does not start the dashboard hub |
 | `DEVSTACK_NO_HUB_INTEGRATION` | the installer registers no hub at logon and no `devstack://` link (and records that); `devstack up` registers neither while it is set |
+| `DEVSTACK_NO_NOTIFY` | the hub shows no desktop notifications (they are set per kind with `devstack hub notify` or the bell in the dashboard) |
 | `DEVSTACK_NO_UPDATE_CHECK` | no check for a newer release |
 | `DEVSTACK_OTLP_ENDPOINT` | devstack's own diagnostic log also to this OTLP/HTTP collector |
 | `DEVSTACK_HUB_PING_ORIGINS` | more origins (comma-separated) that may ask whether a hub runs, for a copy of the landing page |

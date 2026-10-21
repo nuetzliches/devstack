@@ -73,6 +73,14 @@ which cannot run the Linux lanes yet,
 [#168](https://github.com/nuetzliches/devstack/issues/168)). The hub reports
 the machine (online, what it has, its devstack) and offers nothing.
 
+Lanes of other members on your machine always show: a banner below the
+dashboard's top bar (it can be hidden until a lane comes or goes), a tile in
+the sidebar, and **On this machine** in the pool area, with whose lane
+it is, its repository, since when and what it reserved. A lane that starts
+running here also notifies the desktop (`guest_lane`,
+[ADR-0045](adr/0045-the-hub-notifies-the-desktop.md)). The hub reads them from
+the pool's leases after each share report.
+
 ## Run a node
 
 A machine that runs lanes for others, typically a server, runs the node
