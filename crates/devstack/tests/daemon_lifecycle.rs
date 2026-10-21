@@ -2188,7 +2188,16 @@ fn a_worktree_runs_as_a_lane() {
         "the lane stopped with its worktree\n{}",
         s.diag()
     );
-    assert!(!s.ok(&["lane", "list"]).contains(&lane));
+    // Its services stop first; it leaves the list once its containers are
+    // gone too, which takes a moment longer.
+    assert!(
+        wait_for(
+            || !s.ok(&["lane", "list"]).contains(&lane),
+            Duration::from_secs(30)
+        ),
+        "the lane is forgotten with its worktree\n{}",
+        s.diag()
+    );
     assert!(s.api("/health").is_some(), "main still runs");
 
     // 6. A worktree added with git is a lane at once: the daemon notices it
