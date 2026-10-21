@@ -11,6 +11,10 @@ and listed with their assets on the
 
 ### Fixed
 
+- **Serving the main ports refuses a stack of Compose containers only**
+  (#184): it answered that the lane served them and moved nothing, as a
+  container's published port is Docker's, not devstack's. It now says so
+  (`409`), in the dashboard too.
 - **A tree opened in a program comes to the front on Windows** (ADR-0046):
   Explorer, the terminals, the editors, the agents and Orca opened behind
   the browser, as the hub runs in the background. The hub takes the
