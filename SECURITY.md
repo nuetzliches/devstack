@@ -197,6 +197,12 @@ A pool is a group of machines that trust each other to a stated degree
   --signer-workflow nuetzliches/devstack/.github/workflows/release.yml`) and
   stop if it fails, showing gh's reason; you can run the same command
   yourself.
+- The winget package `nuetzliches.devstack` names the release's archive on
+  GitHub and its SHA-256, taken by the release workflow from the archive it
+  built and published; winget checks the download against it. Its manifests
+  (`packaging/winget/`) go through the review of `microsoft/winget-pkgs`
+  before winget offers a release. A devstack winget installed is updated
+  through winget, never replaced behind its back.
 - `devstack update`, and a server node an admin updates
   ([ADR-0039](docs/adr/0039-an-admin-can-update-a-server-node.md)), check
   only `SHA256SUMS`: the trust is GitHub's TLS and control of this

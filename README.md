@@ -44,6 +44,11 @@ irm https://github.com/nuetzliches/devstack/releases/latest/download/install.ps1
 curl -fsSL https://github.com/nuetzliches/devstack/releases/latest/download/install.sh | sh
 ```
 
+On Windows, `winget install nuetzliches.devstack` installs the same build
+(releases after 0.15.0, once winget's catalogue has them, usually a few days
+after the release); `devstack update` then updates it through winget, and
+the first `devstack up` registers the hub as the installer would.
+
 The scripts and `devstack update` check the download against the release's
 `SHA256SUMS`: that proves the archive is the one the release lists (not
 damaged or swapped on the way), not who built it, since both come from the

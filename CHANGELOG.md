@@ -37,6 +37,14 @@ and listed with their assets on the
 
 ### Added
 
+- **winget**: `winget install nuetzliches.devstack` (once winget's catalogue
+  has the release). Each release submits its manifests
+  (`packaging/winget/`) to `microsoft/winget-pkgs`; the release workflow
+  needs the secret `WINGET_TOKEN` for it. `devstack update` (and the
+  dashboard's update) on a devstack winget installed runs `winget upgrade`,
+  moving the running binary out of winget's way first, since winget cannot
+  replace a file that runs; `devstack self uninstall` leaves that binary to
+  `winget uninstall`.
 - **Desktop notifications** ([ADR-0045](docs/adr/0045-the-hub-notifies-the-desktop.md), #156):
   the hub follows every running stack and each of its started lanes (on a
   node too) and tells the desktop when a build failed, a candidate is held
