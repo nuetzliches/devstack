@@ -28,6 +28,7 @@ describe('numbers', () => {
     expect(bytes(null)).toBe('—');
     expect(percent(0.05)).toBe('<0.1%');
     expect(percent(42.4)).toBe('42%');
+    expect(percent(1234.4)).toBe('1,234%');
     expect(duration(61_000)).toBe('1m 1s');
     expect(duration(-5)).toBe('0s');
   });

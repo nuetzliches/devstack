@@ -20,7 +20,8 @@ const now = useNow();
 
 const current = computed(() => stack.lanes.find((l) => l.name === stack.lane) ?? null);
 const branch = computed(() => (current.value ? current.value.branch : stack.view?.branch) ?? null);
-const tree = computed(() => (current.value ? laneLabel(current.value) : 'main working tree'));
+/** A lane is named by its branch (shown already): only what kind of tree it is. */
+const tree = computed(() => (current.value ? 'lane' : 'main working tree'));
 /** Someone else's lane, or no hub: the branch is shown, nothing more. */
 const canPick = computed(() => !stack.readOnly && hub.reachable && !!stack.id);
 const busy = computed(() => stack.busy.branches);
@@ -50,10 +51,19 @@ const rows = computed<Row[]>(() => {
   const q = filter.value.trim().toLowerCase();
   return (stack.branches?.branches ?? [])
     .filter((b) => !q || b.name.toLowerCase().includes(q))
-    .map((b) => ({ b, lane: b.worktree && !b.main ? (stack.lanes.find((l) => samePath(l.path, b.worktree!)) ?? null) : null }));
+    .map((b) => ({ b, lane: b.worktree && !b.main ? (stack.lanes.find((l) => samePath(l.path, b.worktree!)) ?? null) : null }))
+    .sort((x, y) => Number(y.b.main) - Number(x.b.main) || x.b.name.localeCompare(y.b.name));
 });
-const local = computed(() => rows.value.filter((r) => !r.b.remote));
-const remote = computed(() => rows.value.filter((r) => r.b.remote));
+/** The branches with a worktree (the main tree's first), then the other local ones, then the remote ones; each by name. */
+const groups = computed(() =>
+  (
+    [
+      ['Lanes', rows.value.filter((r) => r.b.worktree)],
+      ['Local', rows.value.filter((r) => !r.b.worktree && !r.b.remote)],
+      ['Remote', rows.value.filter((r) => !r.b.worktree && r.b.remote)],
+    ] as const
+  ).filter(([, list]) => list.length),
+);
 
 /** Shown now: the main tree for its branch, the lane for another worktree's. */
 function isShown(r: Row): boolean {
@@ -123,7 +133,7 @@ function create() {
       @click="toggle"
     >
       <Icon name="gitBranch" :size="13" />
-      <span class="branch">{{ branch ?? 'detached' }}</span>
+      <span class="branch">{{ branch ?? (current ? laneLabel(current) : 'detached') }}</span>
       <span class="muted">· {{ tree }}</span>
       <span v-if="current" class="muted">· ports +{{ current.port_offset }}</span>
       <Icon v-if="canPick" name="chevronDown" :size="13" class="muted" />
@@ -147,8 +157,8 @@ function create() {
       </div>
       <span v-if="!stack.branches" class="faint small note"><span class="spinner" /> Reading branches…</span>
       <span v-else-if="!rows.length" class="faint small note">No branch {{ filter ? `matches “${filter}”` : 'here' }}.</span>
-      <template v-for="[group, list] in [['Local', local], ['Remote', remote]] as const" :key="group">
-        <div v-if="list.length" class="group faint small">{{ group }}</div>
+      <template v-for="([group, list], gi) in groups" :key="group">
+        <div class="group faint small" :class="{ sep: gi > 0 }">{{ group }}</div>
         <template v-for="r in list.slice(0, SHOWN)" :key="r.b.name">
           <div class="row" :class="{ on: isShown(r) }" role="option" :aria-selected="isShown(r)" data-testid="branch-option" :data-branch="r.b.name">
             <button
@@ -163,7 +173,7 @@ function create() {
               <span v-if="r.lane?.owns_main || (r.b.main && !stack.lanes.some((l) => l.owns_main))" class="pill sm ok">main ports</span>
               <span v-else class="faint small">{{ hint(r) }}</span>
             </button>
-            <button type="button" class="icon-btn" :disabled="!!busy" :title="`New branch from ${r.b.name}, and a lane on it`" data-testid="branch-new" @click="startNew(r)">
+            <button type="button" class="icon-btn ghost" :disabled="!!busy" :title="`New branch from ${r.b.name}, and a lane on it`" data-testid="branch-new" @click="startNew(r)">
               <Icon name="plus" :size="13" />
             </button>
             <button v-if="removable(r)" type="button" class="icon-btn danger" :disabled="!!busy" :title="`Remove the worktree ${r.b.worktree} (git refuses one with changes; the branch stays)`" data-testid="branch-remove" @click="remove(r)">
@@ -248,10 +258,16 @@ function create() {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.group.sep {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
 .row {
   display: flex;
   align-items: center;
   gap: 2px;
+  padding-right: 4px;
   border-radius: 8px;
 }
 .row:hover {
@@ -288,9 +304,20 @@ function create() {
   cursor: pointer;
   opacity: 0;
 }
+/* "New branch from" is always there, as a ghost button; removing shows on hover only. */
+.icon-btn.ghost {
+  opacity: 1;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  padding: 4px;
+}
+.icon-btn.ghost:hover {
+  border-color: var(--border-strong);
+}
 .row:hover .icon-btn,
 .icon-btn:focus-visible {
   opacity: 1;
+  color: var(--text-muted);
 }
 .icon-btn:hover {
   background: var(--surface-2);

@@ -121,6 +121,9 @@ const badges = computed<{ f: Filter; n: number; tone: string }[]>(() => [
   { f: 'pending', n: stack.pending.length, tone: 'warn' },
 ]);
 
+/** A state nothing is in is left out (healthy stays, as the anchor), unless it is the filter. */
+const shownBadges = computed(() => badges.value.filter((b) => b.n || b.f === 'healthy' || filter.value === b.f));
+
 const hubAway = computed(() => !hub.reachable);
 const groupActions: { action: 'start' | 'stop' | 'restart'; title: string; icon: 'play' | 'stop' | 'restart' }[] = [  { action: 'start', title: 'Start every service of', icon: 'play' },  { action: 'restart', title: 'Rebuild and restart every service and container of', icon: 'restart' },  { action: 'stop', title: 'Stop every service of', icon: 'stop' },];
 const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
@@ -133,7 +136,7 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
         <div class="side">
           <div class="filters stale-dim" role="group" aria-label="Filter the overview by state">
             <button
-              v-for="b in badges"
+              v-for="b in shownBadges"
               :key="b.f"
               type="button"
               class="badge"
@@ -144,12 +147,14 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
               :data-testid="b.f === 'pending' ? 'pending-count' : undefined"
               @click="toggle(b.f)"
             >
-              <span class="dot" /><span class="v tabular">{{ b.n }}</span> {{ filterLabel[b.f] }}
+              <span class="dot" /><span class="v tabular">{{ b.n }}</span> {{ filterLabel[b.f] }}<Icon v-if="filter === b.f" name="x" :size="12" />
+            </button>
+            <button v-if="filter" type="button" class="btn btn-ghost btn-xs" data-testid="overview-filter-reset" @click="filter = null">
+              <Icon name="rollback" :size="12" /> Reset filter
             </button>
           </div>
           <p v-if="filter" class="filter-note muted" data-testid="overview-filter">
             Showing only what is {{ filterLabel[filter] }}<template v-if="!shown.length">: nothing right now</template>.
-            <button type="button" class="link-btn" @click="filter = null">Show everything</button>
           </p>
           <div class="list stale-dim" data-testid="member-list">
             <section v-for="card in shown" :key="card.key" class="card section" :class="{ folded: folded[card.key] }" :data-testid="`group-${card.key}`">
@@ -283,18 +288,9 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
   font-size: 13px;
   margin: 0;
 }
-.link-btn {
-  border: 0;
-  background: none;
-  padding: 0;
-  color: var(--accent);
-  font: inherit;
-  cursor: pointer;
-  text-decoration: underline;
-}
 .md {
   display: grid;
-  grid-template-columns: minmax(380px, 40%) minmax(0, 1fr);
+  grid-template-columns: minmax(440px, 46%) minmax(0, 1fr);
   gap: var(--space-4);
   align-items: start;
 }
@@ -376,10 +372,15 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 .badge:hover {
   border-color: color-mix(in srgb, var(--tone) 55%, var(--border));
 }
+/* The filter: in the accent, whatever its state's colour (a neutral one barely shows). */
 .badge.active {
-  border-color: var(--tone);
-  background: color-mix(in srgb, var(--tone) 14%, var(--surface-2));
-  color: var(--text);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.badge.active .v {
+  color: var(--accent-text);
 }
 .detail {
   min-width: 0;

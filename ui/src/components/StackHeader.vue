@@ -12,8 +12,10 @@ import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import { usePool } from '@/stores/pool';
 import { useUi } from '@/stores/ui';
+import { useOpenerPrefs } from '@/lib/openers';
 import BranchPicker from './BranchPicker.vue';
 import Icon from './icons/Icon.vue';
+import OpenersDialog from './OpenersDialog.vue';
 
 const hub = useHub();
 const stack = useStack();
@@ -39,6 +41,11 @@ const liveState = computed(() => {
 
 /** Where the shown tree lives and which branch it has. */
 const path = computed(() => current.value?.path ?? view.value?.repo ?? stack.entry?.repo ?? '');
+/** The path's folder and its last part: a long path is cut in the folder, the worktree's name stays. */
+const pathParts = computed(() => {
+  const m = /^(.*[\\/])([^\\/]+)[\\/]?$/.exec(path.value);
+  return m ? { dir: m[1], leaf: m[2] } : { dir: '', leaf: path.value };
+});
 
 // Where a started lane can move (ADR-0025 point 10): this machine, and the
 // pool's nodes that are online and run lanes.
@@ -102,7 +109,13 @@ const pathRoot = ref<HTMLElement | null>(null);
 const pathTrigger = ref<HTMLButtonElement | null>(null);
 const { open: pathOpen, close: pathClose } = usePopover(pathRoot, pathTrigger);
 const canOpen = computed(() => !hubAway.value && !stack.sharedLane && !!stack.id);
-const openers = computed(() => (canOpen.value ? (hub.openers ?? []) : []));
+const openerPrefs = useOpenerPrefs();
+const openers = computed(() => (canOpen.value ? openerPrefs.shown(hub.openers ?? []) : []));
+const managing = ref(false);
+function manage() {
+  pathClose();
+  managing.value = true;
+}
 const openerIcon = { files: 'folder', terminal: 'terminal', editor: 'file', git: 'gitBranch', agent: 'zap' } as const;
 function togglePath() {
   pathOpen.value = !pathOpen.value;
@@ -236,14 +249,16 @@ function openWith(o: Opener) {
         <button
           ref="pathTrigger"
           type="button"
-          class="path-btn truncate mono"
+          class="path-btn mono"
           :aria-expanded="pathOpen"
           aria-haspopup="menu"
           :title="`${path}: copy, or open in another program`"
           data-testid="path-menu"
           @click="togglePath"
         >
-          {{ path }}
+          <Icon name="folder" :size="13" class="muted" />
+          <span class="where"><span class="dir">{{ pathParts.dir }}</span><span class="leaf">{{ pathParts.leaf }}</span></span>
+          <Icon name="chevronDown" :size="13" class="muted" />
         </button>
         <div v-if="pathOpen" class="menu" role="menu" aria-label="Open the folder" data-testid="path-menu-list">
           <button type="button" class="opt" role="menuitem" data-testid="path-copy" @click="copyPath">
@@ -252,7 +267,8 @@ function openWith(o: Opener) {
           <template v-if="canOpen">
             <div class="sep" />
             <span v-if="!hub.openers" class="faint small menu-note"><span class="spinner" /> Looking for programs…</span>
-            <span v-else-if="!openers.length" class="faint small menu-note">No program to open it with on this machine.</span>
+            <span v-else-if="!hub.openers.length" class="faint small menu-note">No program to open it with on this machine.</span>
+            <span v-else-if="!openers.length" class="faint small menu-note">All programs are hidden.</span>
             <button
               v-for="(o, i) in openers"
               :key="o.id"
@@ -265,8 +281,12 @@ function openWith(o: Opener) {
             >
               <Icon :name="openerIcon[o.kind] ?? 'external'" :size="14" class="muted" /><span class="grow">{{ o.label }}</span>
             </button>
+            <div v-if="hub.openers?.length" class="menu-foot">
+              <button type="button" class="link-btn" role="menuitem" data-testid="path-manage" @click="manage">Manage programs…</button>
+            </div>
           </template>
         </div>
+        <OpenersDialog :open="managing" :openers="hub.openers ?? []" @close="managing = false" />
       </div>
       <BranchPicker />
       <span v-if="daemon && !current" class="muted small">daemon pid {{ daemon.pid }} · port {{ daemon.port }} · up {{ duration(now - daemon.started) }}</span>
@@ -334,21 +354,41 @@ h1 {
   max-width: 48ch;
 }
 .path-btn {
-  display: block;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   max-width: 100%;
-  padding: 2px 4px;
-  margin-left: -4px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
   color: var(--text-2);
   font-size: 12.5px;
   cursor: pointer;
 }
 .path-btn:hover,
 .path-btn[aria-expanded='true'] {
-  background: var(--surface-hover);
+  border-color: var(--border-strong);
   color: var(--text);
+}
+.where {
+  display: flex;
+  min-width: 0;
+}
+.path-btn .dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.path-btn .leaf {
+  flex: none;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-weight: 600;
 }
 .path-picker .menu {
   min-width: 220px;
@@ -371,6 +411,23 @@ h1 {
   height: 1px;
   background: var(--border);
   opacity: 0.6;
+}
+.menu-foot {
+  margin: 4px -6px -6px;
+  padding: 7px 14px;
+  border-top: 1px solid var(--border);
+}
+.link-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.link-btn:hover {
+  text-decoration: underline;
 }
 .menu-note {
   padding: 6px 8px;

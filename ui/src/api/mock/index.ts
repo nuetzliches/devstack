@@ -484,11 +484,11 @@ export class MockTransport implements Transport {
         fetched: day + 80_000,
         branches: [
           { name: 'main', main: true, worktree: stack.view.repo, upstream: 'origin/main', date: day + 70_000 },
+          { name: 'feat/coupons', main: false, upstream: 'origin/feat/coupons', date: day + 65_000 },
           { ...tree('agent/login-fix', 'C:\\work\\shop-agent-login-fix'), date: day + 60_000 },
           { ...tree('review-cart', 'C:\\work\\shop-review-cart'), date: day + 50_000 },
           { ...tree('agent/checkout-totals', 'C:\\work\\_wt\\1242'), date: day + 40_000 },
           { ...tree('agent/i18n-de', 'C:\\work\\_wt\\1333'), date: day + 30_000 },
-          { name: 'feat/coupons', main: false, upstream: 'origin/feat/coupons', date: day + 20_000 },
           { name: 'spike/search', main: false, date: day },
           { name: 'origin/release/2.4', remote: 'origin', main: false, date: day - 90_000 },
           { name: 'origin/fix/vat-rounding', remote: 'origin', main: false, date: day - 200_000 },

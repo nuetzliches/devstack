@@ -20,7 +20,7 @@ export function percent(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
   if (n === 0) return '0%';
   if (n < 0.1) return '<0.1%';
-  return `${n < 10 ? n.toFixed(1) : Math.round(n)}%`;
+  return `${n < 10 ? n.toFixed(1) : Math.round(n).toLocaleString('en')}%`;
 }
 
 export function duration(ms: number): string {

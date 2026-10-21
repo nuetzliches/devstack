@@ -132,7 +132,8 @@ function diskTotal(d: LaneDisk) {
   padding: 0;
   margin: 8px 0 0;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* two columns, one where they no longer fit */
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 4px 16px;
   font-size: 12.5px;
 }
@@ -149,6 +150,7 @@ function diskTotal(d: LaneDisk) {
 }
 .lv {
   margin-left: auto;
+  white-space: nowrap;
   color: var(--text-muted);
 }
 </style>
