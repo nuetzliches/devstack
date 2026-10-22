@@ -56,7 +56,7 @@ after the release); `devstack update` then updates it through winget, and
 the first `devstack up` registers the hub as the installer would. A copy
 Homebrew installed is updated the same way, through `brew upgrade`.
 
-**macOS is a preview** ([ADR-0054](docs/adr/0054-macos-is-a-developer-platform-in-preview.md)):
+**macOS is a preview** ([ADR-0054](docs/adr/0054-macos-is-a-developer-platform-in-preview.md), [what a tester checks](docs/macos.md)):
 Apple Silicon and Intel, macOS 11 or later, Docker Desktop, OrbStack or
 Colima. None of the maintainers has a Mac: CI checks what it can, and
 [reports](https://github.com/nuetzliches/devstack/issues/66) check the rest.

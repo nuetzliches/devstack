@@ -115,7 +115,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # Opt-in tests are #[ignore]d; they run in their own steps and jobs.
       - name: test
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast
       # Linux runners have a Docker engine with Linux containers; Windows runners do not.
       - name: compose against Docker
         if: matrix.os == 'ubuntu-latest'
