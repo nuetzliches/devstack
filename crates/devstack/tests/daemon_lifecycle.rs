@@ -2114,6 +2114,9 @@ fn a_worktree_runs_as_a_lane() {
     //    slot comes back.
     s.ok(&["stop", "site"]);
     let lane_build = lane_info()["build"].as_str().unwrap().to_string();
+    // A service the lane does not run moves too: its main port answers once
+    // it runs there (seen refused for one stopped service).
+    wt_cli(&["stop", "site"]);
     s.ok(&["promote", "--lane", &lane]);
     assert!(
         wait_for(
@@ -2179,12 +2182,19 @@ fn a_worktree_runs_as_a_lane() {
         "what was stopped before stays stopped\n{}",
         s.ok(&["status"])
     );
-    // `down` and `up` in the main tree leave a running lane alone.
+    // `down` and `up` in the main tree leave a running lane alone, and what
+    // serves it from the main tree (`tray`, `lanes = false`) runs on.
     let out = s.ok(&["down"]);
     assert!(out.contains("lanes keep running"), "{out}");
+    assert!(out.contains("tray that serve them"), "{out}");
     assert!(
         wait_for(|| s.api("/health").is_none(), Duration::from_secs(30)),
         "the main tree stopped"
+    );
+    assert!(
+        get_on(tray_port, "/").is_some(),
+        "the lanes' `tray` runs on\n{}",
+        s.diag()
     );
     let lane_pid = lane_info()["pid"].clone();
     s.cli(&["up"], None); // `broken` fails, the rest runs

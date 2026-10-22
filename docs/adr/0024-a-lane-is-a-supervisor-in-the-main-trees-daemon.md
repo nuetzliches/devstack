@@ -69,6 +69,13 @@ names (the containers of one tree served the other), workers twice.
    instance serves every lane and keeps its workers wherever the main slot is.
    While a lane holds the main slot, the
    main tree builds no candidates for the moved services.
+
+   *Noted 2026-10-22.* "Every proxied service" includes one the lane does not
+   run at the moment (stopped, failed): its fixed port forwards to the lane's
+   port and answers once it runs there. Refusing the main slot for it kept
+   the main ports from a lane that ran all but one service. And while lanes
+   run, the main tree's `down` stops its own services but the ones that serve
+   them: a service with `lanes = false` and what it starts `after`.
 6. **Who owns the main slot is runtime state**, one value shared by every
    supervisor of the daemon. A daemon restart starts clean (ADR-0016) with the
    main tree owning it; the lanes start only with `devstack up` in their

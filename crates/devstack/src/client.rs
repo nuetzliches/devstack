@@ -1955,9 +1955,19 @@ pub fn down(stack_file: &Path, infra: bool, all: bool) -> Result<()> {
     // infrastructure they share (ADR-0030).
     let lanes = running_lanes(status, &body);
     if !lanes.is_empty() && !all {
+        // What serves the lanes (`lanes = false`) runs on for them.
+        let kept: Vec<String> = serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|v| serde_json::from_value(v["kept"].clone()).ok())
+            .unwrap_or_default();
         println!(
-            "main working tree stopped; lanes keep running: {} (the daemon and the infrastructure stay; `devstack down --all` stops them too)",
-            lanes.join(", ")
+            "main working tree stopped; lanes keep running: {} (the daemon and the infrastructure stay{}; `devstack down --all` stops them too)",
+            lanes.join(", "),
+            if kept.is_empty() {
+                String::new()
+            } else {
+                format!(", and {} that serve them", kept.join(", "))
+            }
         );
         return Ok(());
     }

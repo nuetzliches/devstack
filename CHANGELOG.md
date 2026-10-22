@@ -69,6 +69,17 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A lane takes the main ports when one of its services does not run.**
+  `promote --lane` (the dashboard's "Serve main ports") refused while a
+  single service of the lane was stopped or failed ("does not run
+  document-service"); now that service's main port moves too and answers
+  once it runs in the lane (ADR-0024 point 5, noted). The `main_slot` line
+  names what did not run yet.
+- **Stopping the main tree while lanes run keeps what serves them.** A
+  service with `lanes = false` runs only in the main tree and serves every
+  lane; `devstack down` (and "Stop stack") stopped it too, and the lanes
+  lost it. It runs on now, with what it starts `after`; `devstack down`
+  names it, `POST /v1/down` reports it as `kept`.
 - **Giving the main ports back from a lane runs what the main tree ran
   before**, not a candidate held meanwhile (ADR-0013): the main tree started
   its services anew, which built its tree as it is and took a held build

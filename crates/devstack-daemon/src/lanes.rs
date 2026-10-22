@@ -1912,41 +1912,32 @@ impl Lanes {
                 .find(|v| v.name == s && v.status.is_active())
                 .and_then(|v| v.port.map(|p| (p, v.build_id.clone()))),
         };
-        let down: Vec<String> = main
+        // A proxied service the lane does not run (stopped, failed) moves
+        // too: its main port answers once it runs in the lane, as every
+        // proxied service's does (ADR-0024 point 5). Refusing kept the main
+        // ports from a lane that ran all but one service.
+        let lane_port = |s: &str| {
+            main.stack
+                .services
+                .get(s)
+                .and_then(|svc| svc.port)
+                .and_then(|p| p.checked_add(offset))
+        };
+        let not_running: Vec<String> = main
             .proxied_services()
             .into_iter()
             .filter(|s| active(s).is_none())
-            .collect();
-        if !down.is_empty() {
-            // Each with what it is: a service that failed needs its error
-            // read, not `up` (seen: four promotes refused while a build
-            // failed, each advising `up`).
-            let state = |s: &str| {
-                views
+            .map(|s| {
+                match views
                     .iter()
                     .find(|v| v.name == s)
                     .map(|v| status_text(&v.status))
-            };
-            let named: Vec<String> = down
-                .iter()
-                .map(|s| match state(s) {
+                {
                     Some(st) => format!("{s} ({st})"),
-                    None => s.clone(),
-                })
-                .collect();
-            let stopped_only = down
-                .iter()
-                .all(|s| state(s).is_none_or(|st| st == "stopped"));
-            return Err(format!(
-                "lane `{t}` does not run {}: {}",
-                named.join(", "),
-                if stopped_only {
-                    "`devstack up` in its working tree first"
-                } else {
-                    "`devstack status` in its working tree says why"
+                    None => s,
                 }
-            ));
-        }
+            })
+            .collect();
         let prev = current
             .as_deref()
             .and_then(|c| self.map.lock().unwrap().get(c).cloned());
@@ -1987,7 +1978,14 @@ impl Lanes {
         // 2. Point them at the lane. A failure gives everything back.
         let moved = (|| {
             for s in main.proxied_services() {
-                let (port, build) = active(&s).expect("checked above");
+                let (port, build) = match active(&s) {
+                    Some(a) => a,
+                    None => (
+                        lane_port(&s)
+                            .ok_or_else(|| format!("{s}: its lane port is beyond 65535"))?,
+                        None,
+                    ),
+                };
                 main.forward(&s, Some((&t, port, build)))?;
             }
             for s in main.unproxied_services() {
@@ -2042,7 +2040,10 @@ impl Lanes {
                 failed.push(format!("{s}: {e}"));
             }
         }
-        crate::diag::info("main_slot", serde_json::json!({ "lane": t }));
+        crate::diag::info(
+            "main_slot",
+            serde_json::json!({ "lane": t, "not_running": not_running }),
+        );
         self.announce();
         if failed.is_empty() {
             Ok(())
