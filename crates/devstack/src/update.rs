@@ -14,6 +14,7 @@
 //! dashboard offers that ("Restart stack"), the CLI says it.
 
 use anyhow::{Result, anyhow, bail};
+use devstack_desktop::channel::WINGET_ID;
 use devstack_hub::release;
 use std::path::{Path, PathBuf};
 
@@ -56,25 +57,25 @@ pub fn run(check_only: bool, version: Option<&str>) -> Result<()> {
         return Ok(());
     }
     let exe = std::env::current_exe()?;
-    if crate::integration::is_dev_build(&exe) {
+    if devstack_desktop::is_dev_build(&exe) {
         bail!(
             "this is a build from source ({}); update the installed copy, or rebuild",
             exe.display()
         );
     }
-    if is_cargo_install(&exe) {
+    if devstack_desktop::is_cargo_install(&exe) {
         bail!(
             "this devstack came from `cargo install` ({}); update it the same way, or install a release with the installer (it goes elsewhere)",
             exe.display()
         );
     }
     println!("installing devstack {target} ...");
-    let installed = if is_winget_install(&exe) {
+    let installed = if devstack_desktop::is_winget_install(&exe) {
         winget_upgrade(&exe, version.map(|_| target.as_str()))?
     } else {
         // Where the installers put devstack, or the running copy if it lives
         // elsewhere.
-        let into = crate::selfcmd::install_dir()
+        let into = devstack_desktop::install_dir()
             .map(|d| d.join(EXE))
             .filter(|p| p.is_file())
             .unwrap_or_else(|| exe.clone());
@@ -132,13 +133,13 @@ pub fn for_node(
         ));
     }
     let exe = undeleted(std::env::current_exe().map_err(|e| e.to_string())?);
-    if crate::integration::is_dev_build(&exe) {
+    if devstack_desktop::is_dev_build(&exe) {
         return Err(format!(
             "this agent is a build from source ({})",
             exe.display()
         ));
     }
-    if is_cargo_install(&exe) {
+    if devstack_desktop::is_cargo_install(&exe) {
         return Err(format!(
             "this agent came from `cargo install` ({})",
             exe.display()
@@ -250,38 +251,6 @@ fn unpack(archive: &[u8]) -> Result<Vec<u8>> {
         }
     }
     bail!("the archive holds no {EXE}")
-}
-
-/// `cargo install` puts binaries into `$CARGO_HOME/bin` (`~/.cargo/bin`);
-/// replacing one with a release build would surprise its next `cargo install`.
-fn is_cargo_install(exe: &Path) -> bool {
-    let Some(dir) = exe.parent() else {
-        return false;
-    };
-    if let Some(home) = std::env::var_os("CARGO_HOME")
-        && dir == Path::new(&home).join("bin")
-    {
-        return true;
-    }
-    let mut parts = dir.components().rev();
-    parts.next().is_some_and(|c| c.as_os_str() == "bin")
-        && parts.next().is_some_and(|c| c.as_os_str() == ".cargo")
-}
-
-/// The package winget installs devstack as (`packaging/winget/`).
-pub(crate) const WINGET_ID: &str = "nuetzliches.devstack";
-
-/// winget keeps a portable package in `...\WinGet\Packages\<id>_<source>\`
-/// and puts a link to it in `...\WinGet\Links\` (per user under
-/// `%LOCALAPPDATA%\Microsoft`, for the machine under `%ProgramFiles%`).
-/// Replacing that binary behind winget's back leaves winget with the old
-/// version on record.
-pub(crate) fn is_winget_install(exe: &Path) -> bool {
-    let path = exe
-        .to_string_lossy()
-        .replace('/', "\\")
-        .to_ascii_lowercase();
-    path.contains(r"\winget\packages\") || path.contains(r"\winget\links\")
 }
 
 /// Update a devstack winget installed, through winget, so winget keeps the
@@ -449,32 +418,7 @@ mod tests {
     }
 
     #[test]
-    fn a_cargo_install_is_recognised() {
-        let home = if cfg!(windows) {
-            r"C:\Users\u\.cargo\bin\devstack.exe"
-        } else {
-            "/home/u/.cargo/bin/devstack"
-        };
-        assert!(is_cargo_install(Path::new(home)));
-        assert!(!is_cargo_install(Path::new("/home/u/.local/bin/devstack")));
-    }
-
-    #[test]
-    fn a_winget_install_is_recognised() {
-        for winget in [
-            r"C:\Users\u\AppData\Local\Microsoft\WinGet\Packages\nuetzliches.devstack_Microsoft.Winget.Source_8wekyb3d8bbwe\devstack.exe",
-            r"C:\Users\u\AppData\Local\Microsoft\WinGet\Links\devstack.exe",
-            r"C:\Program Files\WinGet\Packages\nuetzliches.devstack_Microsoft.Winget.Source_8wekyb3d8bbwe\devstack.exe",
-        ] {
-            assert!(is_winget_install(Path::new(winget)), "{winget}");
-        }
-        for not in [
-            r"C:\Users\u\AppData\Local\Programs\devstack\devstack.exe",
-            r"C:\src\winget-packages\devstack.exe",
-            "/home/u/.local/bin/devstack",
-        ] {
-            assert!(!is_winget_install(Path::new(not)), "{not}");
-        }
+    fn a_canonical_windows_path_is_made_plain() {
         assert_eq!(
             plain(PathBuf::from(r"\\?\C:\Users\u\devstack.exe")),
             PathBuf::from(r"C:\Users\u\devstack.exe")

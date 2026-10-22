@@ -4,8 +4,7 @@
 //! notifications are off and say why. A click (the `default` action) is
 //! heard here and opens the dashboard (point 6).
 
-use super::{Open, Shown, Sink, Target};
-use devstack_daemon::diag;
+use crate::notify::{Failure, Hooks, Note, Sink};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use tokio_stream::StreamExt;
@@ -20,24 +19,24 @@ pub struct Bus {
 struct Inner {
     proxy: tokio::sync::Mutex<Option<zbus::Proxy<'static>>>,
     status: Mutex<Result<(), String>>,
-    /// Notification id -> what a click opens, oldest first.
-    clicks: Mutex<VecDeque<(u32, Target)>>,
+    /// Notification id -> the route a click opens, oldest first.
+    clicks: Mutex<VecDeque<(u32, String)>>,
     /// Tag -> the id of the notification shown for it, to replace it.
     tags: Mutex<HashMap<String, u32>>,
-    open: Open,
+    hooks: Hooks,
     /// Why the last click could not open the dashboard; a click that does
     /// clears it.
     open_error: Mutex<Option<String>>,
 }
 
 impl Bus {
-    pub fn new(open: Open) -> Self {
+    pub fn new(hooks: Hooks) -> Self {
         let inner = Arc::new(Inner {
             proxy: tokio::sync::Mutex::new(None),
             status: Mutex::new(Err("not connected to the session bus yet".into())),
             clicks: Mutex::new(VecDeque::new()),
             tags: Mutex::new(HashMap::new()),
-            open,
+            hooks,
             open_error: Mutex::new(None),
         });
         let first = inner.clone();
@@ -66,10 +65,10 @@ impl Inner {
         p.clone()
     }
 
-    /// A click on the notification for `t`: open the dashboard, and keep
-    /// whether it could.
-    fn clicked(&self, t: &Target) {
-        *self.open_error.lock().unwrap() = (self.open)(t).err();
+    /// A click on the notification for `route`: open the dashboard there,
+    /// and keep whether it could.
+    fn clicked(&self, route: &str) {
+        *self.open_error.lock().unwrap() = (self.hooks.open)(route).err();
     }
 }
 
@@ -128,7 +127,7 @@ impl Sink for Bus {
         self.inner.open_error.lock().unwrap().clone()
     }
 
-    fn show(&self, n: Shown) {
+    fn show(&self, n: Note) {
         let inner = self.inner.clone();
         tokio::spawn(async move {
             let Some(proxy) = inner.proxy().await else {
@@ -161,20 +160,13 @@ impl Sink for Bus {
                     inner.tags.lock().unwrap().insert(n.tag, id);
                     let mut clicks = inner.clicks.lock().unwrap();
                     clicks.retain(|(i, _)| *i != id);
-                    clicks.push_back((id, n.target));
+                    clicks.push_back((id, n.route));
                     while clicks.len() > REMEMBERED {
                         clicks.pop_front();
                     }
                 }
                 Err(e) => {
-                    diag::warn(
-                        "notify_failed",
-                        serde_json::json!({ "error": e.to_string() }),
-                    );
-                    crate::notice::tell(
-                        "warn",
-                        format!("A desktop notification could not be shown: {e}"),
-                    );
+                    (inner.hooks.failed)(Failure::NotShown(e.to_string()));
                     // Connect again next time: the service may have gone.
                     *inner.proxy.lock().await = None;
                 }
@@ -198,15 +190,18 @@ mod tests {
     #[test]
     fn a_click_that_cannot_open_the_dashboard_is_trouble_until_one_can() {
         let fail = Arc::new(AtomicBool::new(true));
-        let open: Open = {
-            let fail = fail.clone();
-            Arc::new(move |_: &Target| -> Result<(), String> {
-                if fail.load(Ordering::SeqCst) {
-                    Err("xdg-open did not start".into())
-                } else {
-                    Ok(())
-                }
-            })
+        let hooks = Hooks {
+            open: {
+                let fail = fail.clone();
+                Arc::new(move |_: &str| -> Result<(), String> {
+                    if fail.load(Ordering::SeqCst) {
+                        Err("xdg-open did not start".into())
+                    } else {
+                        Ok(())
+                    }
+                })
+            },
+            failed: Arc::new(|_| {}),
         };
         let bus = Bus {
             inner: Arc::new(Inner {
@@ -214,15 +209,15 @@ mod tests {
                 status: Mutex::new(Ok(())),
                 clicks: Mutex::new(VecDeque::new()),
                 tags: Mutex::new(HashMap::new()),
-                open,
+                hooks,
                 open_error: Mutex::new(None),
             }),
         };
         assert_eq!(bus.trouble(), None);
-        bus.inner.clicked(&Target::default());
+        bus.inner.clicked("/#/");
         assert_eq!(bus.trouble().as_deref(), Some("xdg-open did not start"));
         fail.store(false, Ordering::SeqCst);
-        bus.inner.clicked(&Target::default());
+        bus.inner.clicked("/#/");
         assert_eq!(bus.trouble(), None);
     }
 }

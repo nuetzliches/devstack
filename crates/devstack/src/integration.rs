@@ -2,7 +2,7 @@
 //! `devstack://hub/start` link starts it from the dashboard, which cannot reach
 //! a hub that does not run (nothing listens on its port).
 //!
-//! Both live in the user's profile, no admin rights:
+//! Both live in the user's profile, no admin rights (`devstack_desktop`):
 //!
 //! | | Windows | Linux |
 //! | --- | --- | --- |
@@ -18,7 +18,7 @@
 //! (`DEVSTACK_NO_HUB_INTEGRATION`; the installers turn that into the marker).
 
 use anyhow::{Result, anyhow};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// What is registered right now.
 pub struct Status {
@@ -52,12 +52,6 @@ fn write_marker(installed: bool) {
     );
 }
 
-/// A cargo build (`.../target/...`) is not where the user keeps devstack; a
-/// registration pointing there breaks with the next `cargo clean`.
-pub(crate) fn is_dev_build(exe: &Path) -> bool {
-    exe.components().any(|c| c.as_os_str() == "target")
-}
-
 fn exe() -> Result<PathBuf> {
     std::env::current_exe().map_err(|e| anyhow!("own path: {e}"))
 }
@@ -65,27 +59,27 @@ fn exe() -> Result<PathBuf> {
 /// Register link and (if asked) autostart for the running devstack binary.
 pub fn install(autostart: bool) -> Result<Status> {
     let exe = exe()?;
-    imp::install_link(&exe)?;
+    devstack_desktop::install_link(&exe).map_err(|e| anyhow!(e))?;
     if autostart {
-        imp::install_autostart(&exe)?;
+        devstack_desktop::install_autostart(&exe).map_err(|e| anyhow!(e))?;
     } else {
-        imp::remove_autostart()?;
+        devstack_desktop::remove_autostart().map_err(|e| anyhow!(e))?;
     }
     write_marker(true);
     Ok(status())
 }
 
 pub fn uninstall() -> Result<()> {
-    imp::remove_link()?;
-    imp::remove_autostart()?;
+    devstack_desktop::remove_link().map_err(|e| anyhow!(e))?;
+    devstack_desktop::remove_autostart().map_err(|e| anyhow!(e))?;
     write_marker(false);
     Ok(())
 }
 
 pub fn status() -> Status {
     Status {
-        link: imp::has_link(),
-        autostart: imp::has_autostart(),
+        link: devstack_desktop::has_link(),
+        autostart: devstack_desktop::has_autostart(),
     }
 }
 
@@ -104,7 +98,7 @@ pub fn ensure_once() {
         return;
     }
     let Ok(exe) = exe() else { return };
-    if is_dev_build(&exe) {
+    if devstack_desktop::is_dev_build(&exe) {
         return;
     }
     match install(true) {
@@ -202,236 +196,9 @@ pub fn status_text() -> String {
     )
 }
 
-/// `mimeapps.list` without devstack's `x-scheme-handler/devstack` entries
-/// (another handler the user chose for the scheme stays).
-#[cfg_attr(windows, allow(dead_code))]
-fn without_handler(text: &str) -> String {
-    let mut out: String = text
-        .lines()
-        .filter(|l| {
-            let l = l.trim();
-            !(l.starts_with("x-scheme-handler/devstack=") && l.contains("devstack-url.desktop"))
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    if text.ends_with('\n') {
-        out.push('\n');
-    }
-    out
-}
-
-#[cfg(windows)]
-mod imp {
-    use super::*;
-    use std::process::{Command, Stdio};
-
-    const CLASSES: &str = r"HKCU\Software\Classes\devstack";
-    const RUN: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-    const RUN_VALUE: &str = "devstack-hub";
-
-    fn reg(args: &[&str]) -> Result<bool> {
-        use std::os::windows::process::CommandExt;
-        let s = Command::new("reg")
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
-            .status()
-            .map_err(|e| anyhow!("reg.exe: {e}"))?;
-        Ok(s.success())
-    }
-
-    fn must(args: &[&str]) -> Result<()> {
-        if reg(args)? {
-            Ok(())
-        } else {
-            Err(anyhow!("`reg {}` failed", args.join(" ")))
-        }
-    }
-
-    /// `"C:\Windows\System32\conhost.exe" --headless "<exe>" <args>`
-    fn headless(exe: &Path, args: &str) -> String {
-        let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
-        format!(
-            r#""{root}\System32\conhost.exe" --headless "{}" {args}"#,
-            exe.display()
-        )
-    }
-
-    pub fn install_link(exe: &Path) -> Result<()> {
-        must(&["add", CLASSES, "/ve", "/d", "URL:devstack", "/f"])?;
-        must(&["add", CLASSES, "/v", "URL Protocol", "/d", "", "/f"])?;
-        let cmd = headless(exe, r#"open-url "%1""#);
-        must(&[
-            "add",
-            &format!(r"{CLASSES}\shell\open\command"),
-            "/ve",
-            "/d",
-            &cmd,
-            "/f",
-        ])
-    }
-
-    pub fn remove_link() -> Result<()> {
-        if has_link() {
-            must(&["delete", CLASSES, "/f"])?;
-        }
-        Ok(())
-    }
-
-    pub fn has_link() -> bool {
-        reg(&["query", &format!(r"{CLASSES}\shell\open\command")]).unwrap_or(false)
-    }
-
-    pub fn install_autostart(exe: &Path) -> Result<()> {
-        must(&[
-            "add",
-            RUN,
-            "/v",
-            RUN_VALUE,
-            "/d",
-            &headless(exe, "hub start"),
-            "/f",
-        ])
-    }
-
-    pub fn remove_autostart() -> Result<()> {
-        if has_autostart() {
-            must(&["delete", RUN, "/v", RUN_VALUE, "/f"])?;
-        }
-        Ok(())
-    }
-
-    pub fn has_autostart() -> bool {
-        reg(&["query", RUN, "/v", RUN_VALUE]).unwrap_or(false)
-    }
-}
-
-#[cfg(not(windows))]
-mod imp {
-    use super::*;
-    use std::process::{Command, Stdio};
-
-    fn home() -> PathBuf {
-        std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default()
-    }
-
-    fn data_dir() -> PathBuf {
-        std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home().join(".local/share"))
-    }
-
-    fn config_dir() -> PathBuf {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home().join(".config"))
-    }
-
-    fn link_file() -> PathBuf {
-        data_dir().join("applications/devstack-url.desktop")
-    }
-
-    fn autostart_file() -> PathBuf {
-        config_dir().join("autostart/devstack-hub.desktop")
-    }
-
-    fn write(path: &Path, text: &str) -> Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        std::fs::write(path, text).map_err(|e| anyhow!("{}: {e}", path.display()))
-    }
-
-    pub fn install_link(exe: &Path) -> Result<()> {
-        write(
-            &link_file(),
-            &format!(
-                "[Desktop Entry]\nType=Application\nName=devstack\nExec=\"{}\" open-url %u\nNoDisplay=true\nTerminal=false\nMimeType=x-scheme-handler/devstack;\n",
-                exe.display()
-            ),
-        )?;
-        // Without xdg-utils (a server, a container) the file is there but no
-        // browser asks for it; that is all we can do.
-        let _ = Command::new("xdg-mime")
-            .args([
-                "default",
-                "devstack-url.desktop",
-                "x-scheme-handler/devstack",
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        Ok(())
-    }
-
-    pub fn remove_link() -> Result<()> {
-        let _ = std::fs::remove_file(link_file());
-        // `xdg-mime default` wrote the association into mimeapps.list; it
-        // would point at a file that is gone.
-        for list in [
-            config_dir().join("mimeapps.list"),
-            data_dir().join("applications/mimeapps.list"),
-        ] {
-            if let Ok(text) = std::fs::read_to_string(&list) {
-                let kept = super::without_handler(&text);
-                if kept != text {
-                    let _ = std::fs::write(&list, kept);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn has_link() -> bool {
-        link_file().is_file()
-    }
-
-    pub fn install_autostart(exe: &Path) -> Result<()> {
-        write(
-            &autostart_file(),
-            &format!(
-                "[Desktop Entry]\nType=Application\nName=devstack hub\nComment=Serves the devstack dashboard\nExec=\"{}\" hub start\nTerminal=false\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n",
-                exe.display()
-            ),
-        )
-    }
-
-    pub fn remove_autostart() -> Result<()> {
-        let _ = std::fs::remove_file(autostart_file());
-        Ok(())
-    }
-
-    pub fn has_autostart() -> bool {
-        autostart_file().is_file()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_cargo_build_is_recognised() {
-        assert!(is_dev_build(Path::new(
-            "/src/devstack/target/release/devstack"
-        )));
-        assert!(!is_dev_build(Path::new("/home/u/.local/bin/devstack")));
-    }
-
-    #[test]
-    fn the_scheme_handler_leaves_mimeapps_list() {
-        let text = "[Default Applications]\nx-scheme-handler/devstack=devstack-url.desktop\ntext/html=firefox.desktop\n[Added Associations]\nx-scheme-handler/devstack=devstack-url.desktop;\n";
-        assert_eq!(
-            without_handler(text),
-            "[Default Applications]\ntext/html=firefox.desktop\n[Added Associations]\n"
-        );
-        let other = "x-scheme-handler/devstack=mine.desktop\n";
-        assert_eq!(without_handler(other), other);
-    }
 
     #[test]
     fn links_other_than_hub_start_and_open_are_refused() {

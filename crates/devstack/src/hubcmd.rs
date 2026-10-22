@@ -432,53 +432,15 @@ pub fn ui(
     Ok(())
 }
 
-/// What `--browser` names, as a program to start: a path as it is, a known
-/// name as that browser's executable on this platform, anything else as a
-/// program on PATH.
-fn browser_program(name: &str) -> String {
-    let n = name.trim();
-    if n.contains(['/', '\\']) {
-        return n.to_string();
-    }
-    let known = |win: &'static str, unix: &'static str| if cfg!(windows) { win } else { unix };
-    match n.to_ascii_lowercase().as_str() {
-        "chrome" | "google-chrome" => known("chrome", "google-chrome"),
-        "edge" | "msedge" | "microsoft-edge" => known("msedge", "microsoft-edge"),
-        "firefox" => known("firefox", "firefox"),
-        "brave" => known("brave", "brave-browser"),
-        "chromium" => known("chromium", "chromium"),
-        _ => n,
-    }
-    .to_string()
-}
-
-/// Open `url` in the browser `name` (`--browser`, `DEVSTACK_BROWSER`, `BROWSER`).
+/// Open `url` in the browser `name` (`--browser`, `DEVSTACK_BROWSER`,
+/// `BROWSER`): a path as it is, a known name as that browser on this
+/// platform, anything else as a program on PATH.
 fn open_in(name: &str, url: &str) -> Result<()> {
     web_url(url)?;
-    let program = browser_program(name);
-    #[cfg(windows)]
-    let mut cmd = {
-        use std::os::windows::process::CommandExt;
-        // `start` finds browsers by their registered name (App Paths), which
-        // are rarely on PATH; the empty title keeps a quoted path a program.
-        // cmd reads the line again: the address in quotes, or an `&` in it
-        // (`/auth?code=…&next=…`) would end the command.
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/d", "/c", "start", "", &program]);
-        c.raw_arg(format!("\"{url}\""));
-        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        c
-    };
-    #[cfg(not(windows))]
-    let mut cmd = {
-        let mut c = std::process::Command::new(&program);
-        c.arg(url);
-        c
-    };
-    let status = cmd
-        .status()
+    let program = devstack_desktop::browser_program(name);
+    let started = devstack_desktop::start_browser(&program, url)
         .map_err(|e| anyhow!("cannot start {program} ({e}); open {url} yourself"))?;
-    if cfg!(windows) && !status.success() {
+    if !started {
         bail!(
             "cannot start {program}; open {url} yourself, or pass the browser's path to --browser"
         );
@@ -501,22 +463,7 @@ fn web_url(url: &str) -> Result<()> {
 
 fn open_browser(url: &str) -> Result<()> {
     web_url(url)?;
-    #[cfg(windows)]
-    let mut cmd = {
-        use std::os::windows::process::CommandExt;
-        let mut c = std::process::Command::new("rundll32");
-        c.args(["url.dll,FileProtocolHandler", url]);
-        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        c
-    };
-    #[cfg(not(windows))]
-    let mut cmd = {
-        let mut c = std::process::Command::new("xdg-open");
-        c.arg(url);
-        c
-    };
-    cmd.spawn()
-        .map(|_| ())
+    devstack_desktop::open_browser(url)
         .map_err(|e| anyhow!("cannot open a browser ({e}); open {url} yourself"))
 }
 
@@ -573,31 +520,6 @@ mod tests {
             format!("http://127.0.0.1:{port}/#/s/{id}?lane=feat-x")
         );
         assert_eq!(lane.link, format!("devstack://open?stack={id}&lane=feat-x"));
-    }
-
-    #[test]
-    fn browsers_by_name_or_path() {
-        let b = super::browser_program;
-        assert_eq!(
-            b("Edge"),
-            if cfg!(windows) {
-                "msedge"
-            } else {
-                "microsoft-edge"
-            }
-        );
-        assert_eq!(
-            b("chrome"),
-            if cfg!(windows) {
-                "chrome"
-            } else {
-                "google-chrome"
-            }
-        );
-        assert_eq!(b("firefox"), "firefox");
-        assert_eq!(b(r"C:\Tools\vivaldi.exe"), r"C:\Tools\vivaldi.exe");
-        assert_eq!(b("/opt/x/browser"), "/opt/x/browser");
-        assert_eq!(b("vivaldi"), "vivaldi");
     }
 
     #[test]

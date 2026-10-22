@@ -1,0 +1,31 @@
+[package]
+name = "devstack-desktop"
+description = "The desktop devstack runs on, one module per operating system: the hub at logon, the devstack:// link, notifications, the folder dialog, browsers and programs, starting Docker, how devstack was installed (ADR-0054)"
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+rfd.workspace = true
+tokio.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+devstack-proc.workspace = true
+raw-window-handle.workspace = true
+windows.workspace = true
+windows-sys.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tokio-stream.workspace = true
+zbus.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -371,7 +371,7 @@ fn path_entry() -> Option<Finding> {
     let found = find_on_path("devstack");
     Some(match found {
         Some(p) if !same_dir(p.parent().unwrap_or(&p), &dir) => f(
-            if crate::integration::is_dev_build(&exe) {
+            if devstack_desktop::is_dev_build(&exe) {
                 Level::Info
             } else {
                 Level::Warn

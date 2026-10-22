@@ -362,15 +362,7 @@ pub mod budget {
 
 /// Hide the console window a child would open on Windows (the daemon and
 /// the hub have none).
-pub fn no_window(cmd: &mut Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-    #[cfg(not(windows))]
-    let _ = cmd;
-}
+pub use devstack_desktop::no_window;
 
 /// Run `cmd` to its end and collect its output, at most `budget`; `None`
 /// when it took longer. It runs as a tree of its own

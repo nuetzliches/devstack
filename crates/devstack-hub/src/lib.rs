@@ -21,6 +21,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, delete, get, post};
 use devstack_compose::engine::{self, Engine};
 use devstack_daemon::{diag, registry};
+use devstack_desktop::no_window;
 use hyper_util::rt::TokioIo;
 use include_dir::{Dir, include_dir};
 use serde::{Deserialize, Serialize};
@@ -34,9 +35,6 @@ use tokio_stream::StreamExt;
 static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 
 mod branches;
-mod dialog;
-#[cfg(windows)]
-mod foreground;
 mod guests;
 mod notice;
 mod notify;
@@ -403,7 +401,7 @@ pub fn serve() -> Result<(), String> {
         let codes: Codes = Arc::new(Mutex::new(HashMap::new()));
         let open: notify::Open = {
             let codes = codes.clone();
-            Arc::new(move |t: &notify::Target| open_dashboard(port, &codes, &t.path()))
+            Arc::new(move |route: &str| open_dashboard(port, &codes, route))
         };
         let notify = Arc::new(notify::Center::new(&dir, notify::platform_sink(port, open)));
         {
@@ -820,33 +818,25 @@ async fn pair(State(s): State<AppState>) -> Response {
 }
 
 /// Open the dashboard at `route` in the default browser, paired: what a
-/// click on a notification the hub hears itself does (Linux, ADR-0045).
-/// `Err` with why it could not, for the notifications' `trouble`.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+/// click on a notification the hub hears itself does (Linux, ADR-0045; a
+/// Windows toast opens a link). `Err` with why it could not, for the
+/// notifications' `trouble`.
 fn open_dashboard(port: u16, codes: &Codes, route: &str) -> Result<(), String> {
     let code = new_code(codes);
     let url = format!(
         "http://127.0.0.1:{port}/auth?code={code}&next={}",
         next_param(route)
     );
-    #[cfg(target_os = "linux")]
-    if let Err(e) = std::process::Command::new("xdg-open")
-        .arg(&url)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
+    if let Err(e) = devstack_desktop::open_browser(&url) {
         diag::warn(
             "open_dashboard_failed",
             serde_json::json!({ "error": e.to_string() }),
         );
         return Err(format!(
-            "A click on a notification could not open the dashboard: xdg-open did not start ({e})."
+            "A click on a notification could not open the dashboard: {} did not start ({e}).",
+            devstack_desktop::URL_OPENER
         ));
     }
-    #[cfg(not(target_os = "linux"))]
-    let _ = url;
     Ok(())
 }
 
@@ -1549,7 +1539,7 @@ async fn pick_folder() -> Response {
     // this future, but not the dialog's thread.
     let picked = tokio::task::spawn_blocking(move || {
         let _picking = picking;
-        dialog::pick_folder()
+        devstack_desktop::pick_folder()
     })
     .await;
     match picked {
@@ -2749,16 +2739,6 @@ async fn asset(req: Request) -> Response {
     )
         .into_response()
 }
-
-#[cfg(windows)]
-fn no_window(cmd: &mut std::process::Command) {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    cmd.creation_flags(CREATE_NO_WINDOW);
-}
-
-#[cfg(not(windows))]
-fn no_window(_cmd: &mut std::process::Command) {}
 
 /// Start a hub in the background unless one answers; returns its port.
 ///
