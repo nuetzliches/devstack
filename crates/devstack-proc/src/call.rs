@@ -71,13 +71,9 @@ impl Call {
             Some(job) => job.terminate(),
             None => crate::windows::kill_tree(self.child.id(), self.created),
         }
+        // The group is the child's own (it leads it).
         #[cfg(unix)]
-        {
-            // SAFETY: plain syscall; the group is the child's own (it leads it).
-            unsafe {
-                libc::kill(-(self.child.id() as i32), libc::SIGKILL);
-            }
-        }
+        let _ = crate::posix::kill_group(self.child.id() as i32, libc::SIGKILL);
         let _ = self.child.kill();
         let _ = self.child.wait();
     }

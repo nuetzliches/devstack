@@ -1,9 +1,10 @@
-//! Linux: a shim per tree, process group always, cgroup v2 where delegated
-//! (spike (a), ADR-0009). Other Unixes get the process group and the shim; the
-//! cgroup parts are Linux-only.
+//! Unix: a shim per tree, process group always, a cgroup where the OS has one
+//! and it is delegated (spike (a), ADR-0009). What is POSIX lives here
+//! (signals, process groups, the shim, `rlimit`); what the OS has to say
+//! about processes comes from `crate::sys` (Linux: `/proc` and cgroups).
 
+use crate::sys::{self, Cgroup};
 use crate::{Options, ProcError, Record, Result, Spec, Usage};
-use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -12,81 +13,21 @@ use std::time::Duration;
 
 pub(crate) struct Tree {
     pgid: i32,
-    cgroup: Option<PathBuf>,
+    cgroup: Option<Cgroup>,
     child: Child,
     exit: Option<i32>,
 }
 
-/// Start time of a process in clock ticks since boot (/proc/<pid>/stat field 22).
-pub(crate) fn start_time(pid: i32) -> Option<u64> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let rest = &stat[stat.rfind(')')? + 2..];
-    rest.split_whitespace().nth(19)?.parse().ok()
-}
-
-/// (pid, process group, state) of every process; `None` when `/proc`
-/// cannot be read.
-fn processes() -> Option<Vec<(i32, i32, char)>> {
-    let mut out = Vec::new();
-    let dir = fs::read_dir("/proc").ok()?;
-    for e in dir.flatten() {
-        let Ok(pid) = e.file_name().to_string_lossy().parse::<i32>() else {
-            continue;
-        };
-        let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
-            continue;
-        };
-        let Some(close) = stat.rfind(')') else {
-            continue;
-        };
-        let mut f = stat[close + 2..].split_whitespace();
-        let state = f.next().and_then(|s| s.chars().next()).unwrap_or('?');
-        let _ppid = f.next();
-        let Some(pgrp) = f.next().and_then(|s| s.parse().ok()) else {
-            continue;
-        };
-        out.push((pid, pgrp, state));
-    }
-    Some(out)
-}
-
-/// The process exists and is no zombie.
-fn live(pid: i32) -> bool {
-    fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
-        stat.rfind(')')
-            .and_then(|i| stat[i + 1..].split_whitespace().next())
-            .is_some_and(|state| state != "Z")
-    })
-}
-
 /// Live members of a process group; `None` when that cannot be told. A
-/// group that is gone costs one `kill(-pgid, 0)`, not a scan of `/proc`.
-fn group_members(pgid: i32) -> Option<Vec<i32>> {
+/// group that is gone costs one `kill(-pgid, 0)`, not a scan of every process.
+pub(crate) fn group_members(pgid: i32) -> Option<Vec<i32>> {
     // SAFETY: plain syscall; signal 0 only checks.
     if unsafe { libc::kill(-pgid, 0) } != 0
         && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
     {
         return Some(Vec::new());
     }
-    Some(
-        processes()?
-            .into_iter()
-            .filter(|&(_, g, s)| g == pgid && s != 'Z')
-            .map(|(p, _, _)| p)
-            .collect(),
-    )
-}
-
-/// Live members of a cgroup; `None` when it cannot be read.
-fn cgroup_members(cg: &Path) -> Option<Vec<i32>> {
-    Some(
-        fs::read_to_string(cg.join("cgroup.procs"))
-            .ok()?
-            .lines()
-            .filter_map(|l| l.trim().parse().ok())
-            .filter(|&p| live(p))
-            .collect(),
-    )
+    sys::group(pgid)
 }
 
 pub(crate) fn kill_group(pgid: i32, sig: i32) -> std::io::Result<()> {
@@ -96,11 +37,6 @@ pub(crate) fn kill_group(pgid: i32, sig: i32) -> std::io::Result<()> {
     } else {
         Err(std::io::Error::last_os_error())
     }
-}
-
-pub(crate) fn kill_cgroup(cg: &Path) {
-    // cgroup.kill (Linux 5.14+) SIGKILLs every process in the cgroup and below.
-    let _ = fs::write(cg.join("cgroup.kill"), "1");
 }
 
 type SpawnJob = (Command, std::sync::mpsc::Sender<std::io::Result<Child>>);
@@ -144,14 +80,7 @@ pub(crate) fn spawn(spec: Spec, opts: &Options) -> Result<(Tree, Record)> {
         ));
     };
     let cgroup = match &opts.cgroup_root {
-        Some(root) => {
-            let cg = root.join(&spec.name);
-            fs::create_dir_all(&cg).map_err(|e| ProcError::Os {
-                what: format!("create cgroup {}", cg.display()),
-                source: e,
-            })?;
-            Some(cg)
-        }
+        Some(root) => Some(Cgroup::create(root.join(&spec.name))?),
         None => None,
     };
     let err = spec.log.try_clone().map_err(|e| ProcError::Os {
@@ -163,7 +92,7 @@ pub(crate) fn spawn(spec: Spec, opts: &Options) -> Result<(Tree, Record)> {
         .arg("--ppid")
         .arg(std::process::id().to_string());
     if let Some(cg) = &cgroup {
-        cmd.arg("--cgroup").arg(cg);
+        cmd.arg("--cgroup").arg(cg.path());
     }
     cmd.arg("--")
         .args(["sh", "-c", &spec.command])
@@ -181,8 +110,8 @@ pub(crate) fn spawn(spec: Spec, opts: &Options) -> Result<(Tree, Record)> {
     let record = Record {
         name: spec.name,
         pgid: pgid as i64,
-        leader_start: start_time(pgid).unwrap_or(0),
-        cgroup: cgroup.clone(),
+        leader_start: sys::start_time(pgid).unwrap_or(0),
+        cgroup: cgroup.as_ref().map(|cg| cg.path().to_path_buf()),
     };
     Ok((
         Tree {
@@ -209,7 +138,7 @@ impl Tree {
 
     fn members(&self) -> Option<Vec<i32>> {
         match &self.cgroup {
-            Some(cg) => cgroup_members(cg),
+            Some(cg) => cg.members(),
             None => group_members(self.pgid),
         }
     }
@@ -222,7 +151,7 @@ impl Tree {
 
     pub(crate) fn usage(&mut self) -> Usage {
         let pids = self.pids();
-        usage_of(self.cgroup.as_deref(), &pids)
+        usage_of(self.cgroup.as_ref(), &pids)
     }
 
     pub(crate) fn try_exit_code(&mut self) -> Option<i32> {
@@ -243,7 +172,7 @@ impl Tree {
 
     pub(crate) fn kill(&mut self) {
         if let Some(cg) = &self.cgroup {
-            kill_cgroup(cg);
+            cg.kill();
         }
         let _ = kill_group(self.pgid, libc::SIGKILL);
         let _ = self.child.wait();
@@ -257,7 +186,7 @@ impl Drop for Tree {
             self.kill();
         }
         if let Some(cg) = &self.cgroup {
-            let _ = fs::remove_dir(cg);
+            cg.remove();
         }
     }
 }
@@ -298,24 +227,28 @@ pub fn shim_main(args: &[String]) -> ! {
     if cmd.is_empty() {
         fail("no command after --");
     }
-    // SAFETY: installing async-signal-safe handlers and setting the death signal.
+    let cgroup = cgroup.map(|dir| {
+        Cgroup::at(&dir)
+            .unwrap_or_else(|| fail(&format!("--cgroup {}: no cgroups here", dir.display())))
+    });
+    // SAFETY: installing async-signal-safe handlers.
     unsafe {
         let death: extern "C" fn(libc::c_int) = on_parent_death;
         let noop: extern "C" fn(libc::c_int) = ignore;
         libc::signal(libc::SIGUSR2, death as libc::sighandler_t);
         libc::signal(libc::SIGTERM, noop as libc::sighandler_t);
         libc::signal(libc::SIGINT, noop as libc::sighandler_t);
-        #[cfg(target_os = "linux")]
-        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGUSR2);
-        // The supervisor may have died before the death signal was armed.
-        if libc::getppid() != ppid {
-            PARENT_DIED.store(true, Ordering::SeqCst);
-        }
+    }
+    sys::arm_parent_death(ppid, libc::SIGUSR2);
+    // The supervisor may have died before the death signal was armed.
+    // SAFETY: plain syscall.
+    if unsafe { libc::getppid() } != ppid {
+        PARENT_DIED.store(true, Ordering::SeqCst);
     }
     if let Some(cg) = &cgroup
-        && let Err(e) = fs::write(cg.join("cgroup.procs"), std::process::id().to_string())
+        && let Err(e) = cg.join(std::process::id())
     {
-        fail(&format!("join cgroup {}: {e}", cg.display()));
+        fail(&format!("join cgroup {}: {e}", cg.path().display()));
     }
     let me = std::process::id() as i32;
     // SAFETY: plain syscall.
@@ -328,7 +261,7 @@ pub fn shim_main(args: &[String]) -> ! {
     loop {
         if PARENT_DIED.load(Ordering::SeqCst) {
             if let Some(cg) = &cgroup {
-                kill_cgroup(cg); // includes this shim
+                cg.kill(); // includes this shim
             }
             let _ = kill_group(pgid, libc::SIGKILL);
             std::process::exit(137);
@@ -339,7 +272,7 @@ pub fn shim_main(args: &[String]) -> ! {
             code = Some(status.code().unwrap_or(1));
         }
         let others = match &cgroup {
-            Some(cg) => cgroup_members(cg),
+            Some(cg) => cg.members(),
             None => group_members(pgid),
         };
         if others.is_some_and(|o| o.iter().all(|&p| p == me)) {
@@ -370,15 +303,15 @@ pub(crate) fn cleanup(records: &[Record]) -> Vec<(String, usize)> {
         .iter()
         .map(|r| {
             let mut n = 0;
-            if let Some(cg) = &r.cgroup {
-                n += cgroup_members(cg).map_or(0, |m| m.len());
-                kill_cgroup(cg);
+            if let Some(cg) = r.cgroup.as_deref().and_then(Cgroup::at) {
+                n += cg.members().map_or(0, |m| m.len());
+                cg.kill();
             }
             if r.leader_start == 0 {
                 return (r.name.clone(), n);
             }
             for pid in group_members(r.pgid as i32).unwrap_or_default() {
-                if start_time(pid).is_some_and(|t| t >= r.leader_start) {
+                if sys::start_time(pid).is_some_and(|t| t >= r.leader_start) {
                     // SAFETY: plain syscall.
                     unsafe {
                         libc::kill(pid, libc::SIGKILL);
@@ -391,20 +324,20 @@ pub(crate) fn cleanup(records: &[Record]) -> Vec<(String, usize)> {
         .collect()
 }
 
-/// Usage from the cgroup where there is one (`cpu.stat`, `memory.current`),
-/// else summed over the processes from `/proc`.
-pub(crate) fn usage_of(cgroup: Option<&Path>, pids: &[u32]) -> Usage {
-    let read = |name: &str| cgroup.and_then(|cg| fs::read_to_string(cg.join(name)).ok());
-    let cpu_us = read("cpu.stat")
-        .and_then(|s| {
-            s.lines()
-                .find_map(|l| l.strip_prefix("usage_usec "))
-                .and_then(|v| v.trim().parse().ok())
-        })
-        .unwrap_or_else(|| pids.iter().map(|&p| proc_cpu_us(p)).sum());
-    let memory = read("memory.current")
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or_else(|| pids.iter().map(|&p| proc_rss(p)).sum());
+/// Usage from the cgroup where there is one, else summed over the processes.
+pub(crate) fn usage_of(cgroup: Option<&Cgroup>, pids: &[u32]) -> Usage {
+    match cgroup {
+        Some(cg) => cg.usage(pids),
+        None => summed_usage(pids),
+    }
+}
+
+/// Usage summed over live processes: what has exited is not counted.
+pub(crate) fn summed_usage(pids: &[u32]) -> Usage {
+    let (cpu_us, memory) = pids
+        .iter()
+        .map(|&p| sys::process_usage(p))
+        .fold((0, 0), |(c, m), (pc, pm)| (c + pc, m + pm));
     Usage {
         cpu_us,
         memory,
@@ -412,31 +345,61 @@ pub(crate) fn usage_of(cgroup: Option<&Path>, pids: &[u32]) -> Usage {
     }
 }
 
-fn proc_cpu_us(pid: u32) -> u64 {
-    let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
-        return 0;
+// -------------------------------------------------------------------- misc
+
+pub(crate) fn pid_alive(pid: u32) -> bool {
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
     };
-    // After the command name: state is field 3, utime 14, stime 15.
-    let Some(rest) = stat.rfind(')').map(|i| &stat[i + 2..]) else {
-        return 0;
-    };
-    let f: Vec<&str> = rest.split_whitespace().collect();
-    let ticks: u64 = [11, 12]
-        .iter()
-        .filter_map(|&i| f.get(i).and_then(|v| v.parse::<u64>().ok()))
-        .sum();
-    // SAFETY: plain libc call.
-    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as u64;
-    ticks * 1_000_000 / hz
+    // SAFETY: signal 0 only checks that the process exists.
+    let sent = unsafe { libc::kill(pid, 0) } == 0;
+    sent || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
-fn proc_rss(pid: u32) -> u64 {
-    let pages: u64 = fs::read_to_string(format!("/proc/{pid}/statm"))
-        .ok()
-        .and_then(|s| s.split_whitespace().nth(1).and_then(|v| v.parse().ok()))
-        .unwrap_or(0);
-    // SAFETY: plain libc call.
-    pages * unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(1) as u64
+/// No console to give: services get `SIGTERM` to their process group.
+pub(crate) fn ensure_console() -> Result<bool> {
+    Ok(false)
+}
+
+/// Unix paths have no short form.
+pub(crate) fn long_path(_path: &Path) -> Option<PathBuf> {
+    None
+}
+
+pub(crate) fn disk_free(path: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: `c` is a NUL-terminated path, `s` a statvfs to fill.
+    let ok = unsafe { libc::statvfs(c.as_ptr(), &mut s) } == 0;
+    #[allow(clippy::unnecessary_cast)]
+    ok.then(|| s.f_bavail as u64 * s.f_frsize as u64)
+}
+
+pub(crate) fn raise_open_files() -> Option<u64> {
+    let mut l: libc::rlimit = unsafe { std::mem::zeroed() };
+    // SAFETY: `l` is an rlimit to fill.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut l) } != 0 {
+        return None;
+    }
+    // macOS refuses more than OPEN_MAX for an unlimited hard limit.
+    let want = if l.rlim_max == libc::RLIM_INFINITY {
+        l.rlim_cur.max(10240)
+    } else {
+        l.rlim_max
+    };
+    if want > l.rlim_cur {
+        let raised = libc::rlimit {
+            rlim_cur: want,
+            rlim_max: l.rlim_max,
+        };
+        // SAFETY: a valid rlimit no higher than the hard limit.
+        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raised) } == 0 {
+            l.rlim_cur = want;
+        }
+    }
+    #[allow(clippy::unnecessary_cast)]
+    Some(l.rlim_cur as u64)
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -465,7 +428,7 @@ mod tests {
         );
         assert!(child.try_wait().unwrap().is_none(), "still running");
         let known = Record {
-            leader_start: start_time(pgid as i32).unwrap(),
+            leader_start: sys::start_time(pgid as i32).unwrap(),
             ..record
         };
         assert_eq!(cleanup(&[known]), vec![("x".to_string(), 1)]);

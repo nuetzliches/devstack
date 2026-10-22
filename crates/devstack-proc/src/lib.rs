@@ -29,13 +29,38 @@ pub use call::Call;
 pub use detach::{keep_std_handles, spawn_detached};
 pub use lock::{LockError, StateLock};
 
+// One module per operating system, each with the same set of functions
+// (`sys`): the machine's memory and CPU time, and on Unix what the POSIX
+// backend needs from the OS (process lists, start times, per-process usage,
+// the shim's parent-death signal, cgroups). The process-ownership backend
+// (`backend`) is Windows' job objects or POSIX process groups; both have the
+// same set of functions too. An OS without a module does not build.
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(unix)]
-mod unix;
+mod posix;
 #[cfg(windows)]
 mod windows;
 
 #[cfg(unix)]
-pub use unix::shim_main;
+use posix as backend;
+#[cfg(windows)]
+use windows as backend;
+
+#[cfg(target_os = "linux")]
+use linux as sys;
+#[cfg(target_os = "macos")]
+use macos as sys;
+#[cfg(windows)]
+use windows as sys;
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+compile_error!("devstack-proc supports Windows, Linux and macOS: another OS needs a module");
+
+#[cfg(unix)]
+pub use posix::shim_main;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProcError {
@@ -61,33 +86,7 @@ pub(crate) fn os(what: impl Into<String>) -> ProcError {
 /// Is a process with this id running? For processes devstack did not start
 /// itself (no handle to wait on); a reused id answers yes.
 pub fn pid_alive(pid: u32) -> bool {
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
-        use windows_sys::Win32::System::Threading::{
-            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-        };
-        // SAFETY: plain Win32 calls on a handle opened and closed here.
-        unsafe {
-            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-            if h.is_null() {
-                return false;
-            }
-            let mut code = 0u32;
-            let ok = GetExitCodeProcess(h, &mut code) != 0;
-            CloseHandle(h);
-            ok && code == STILL_ACTIVE as u32
-        }
-    }
-    #[cfg(unix)]
-    {
-        let Ok(pid) = i32::try_from(pid) else {
-            return false;
-        };
-        // SAFETY: signal 0 only checks that the process exists.
-        let sent = unsafe { libc::kill(pid, 0) } == 0;
-        sent || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-    }
+    backend::pid_alive(pid)
 }
 
 /// What a process tree costs right now (plan §12). Callers derive CPU load
@@ -142,10 +141,7 @@ pub struct Record {
 /// An owned process tree.
 pub struct Owned {
     pub name: String,
-    #[cfg(windows)]
-    inner: windows::Tree,
-    #[cfg(unix)]
-    inner: unix::Tree,
+    inner: backend::Tree,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,17 +156,8 @@ pub struct StopOutcome {
 /// Start a service as an owned tree.
 pub fn spawn(spec: Spec, opts: &Options) -> Result<(Owned, Record)> {
     let name = spec.name.clone();
-    #[cfg(windows)]
-    {
-        let _ = opts;
-        let (inner, record) = windows::spawn(spec)?;
-        Ok((Owned { name, inner }, record))
-    }
-    #[cfg(unix)]
-    {
-        let (inner, record) = unix::spawn(spec, opts)?;
-        Ok((Owned { name, inner }, record))
-    }
+    let (inner, record) = backend::spawn(spec, opts)?;
+    Ok((Owned { name, inner }, record))
 }
 
 impl Owned {
@@ -245,145 +232,31 @@ impl Owned {
 /// share it and receive `CTRL_BREAK`. No-op elsewhere and when a console exists.
 /// Returns true if a console was allocated.
 pub fn ensure_console() -> Result<bool> {
-    #[cfg(windows)]
-    {
-        windows::ensure_console()
-    }
-    #[cfg(not(windows))]
-    {
-        Ok(false)
-    }
+    backend::ensure_console()
 }
 
-/// Physical memory available for new work, in bytes; `None` where devstack
-/// cannot tell (the lane memory check, ADR-0030, then does not refuse).
 /// Physical memory of the machine, in bytes; `None` where devstack cannot
 /// tell.
 pub fn memory_total() -> Option<u64> {
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
-        let mut m: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
-        m.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
-        // SAFETY: `m` is a properly sized MEMORYSTATUSEX with dwLength set.
-        let ok = unsafe { GlobalMemoryStatusEx(&mut m) } != 0;
-        ok.then_some(m.ullTotalPhys)
-    }
-    #[cfg(target_os = "linux")]
-    {
-        meminfo("MemTotal:")
-    }
-    #[cfg(not(any(windows, target_os = "linux")))]
-    {
-        None
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn meminfo(key: &str) -> Option<u64> {
-    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
-    let kb: u64 = text
-        .lines()
-        .find_map(|l| l.strip_prefix(key))?
-        .trim()
-        .trim_end_matches("kB")
-        .trim()
-        .parse()
-        .ok()?;
-    Some(kb * 1024)
+    sys::memory_total()
 }
 
 /// The machine's CPU time so far, all cores together: `(idle, total)` in
 /// the platform's ticks. Two readings give the share that was idle between
 /// them; `None` where devstack cannot tell.
 pub fn cpu_times() -> Option<(u64, u64)> {
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::Foundation::FILETIME;
-        use windows_sys::Win32::System::Threading::GetSystemTimes;
-        let (mut idle, mut kernel, mut user): (FILETIME, FILETIME, FILETIME) =
-            unsafe { std::mem::zeroed() };
-        // SAFETY: three valid FILETIME out-pointers.
-        let ok = unsafe { GetSystemTimes(&mut idle, &mut kernel, &mut user) } != 0;
-        let t = |f: FILETIME| (u64::from(f.dwHighDateTime) << 32) | u64::from(f.dwLowDateTime);
-        // Kernel time includes the idle time.
-        ok.then(|| (t(idle), t(kernel) + t(user)))
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let text = std::fs::read_to_string("/proc/stat").ok()?;
-        let v: Vec<u64> = text
-            .lines()
-            .next()?
-            .strip_prefix("cpu ")?
-            .split_whitespace()
-            .filter_map(|x| x.parse().ok())
-            .collect();
-        // user nice system idle iowait irq softirq steal ...
-        let idle = v.get(3)? + v.get(4).copied().unwrap_or(0);
-        Some((idle, v.iter().take(8).sum()))
-    }
-    #[cfg(not(any(windows, target_os = "linux")))]
-    {
-        None
-    }
+    sys::cpu_times()
 }
 
+/// Physical memory available for new work, in bytes; `None` where devstack
+/// cannot tell (the lane memory check, ADR-0030, then does not refuse).
 pub fn memory_available() -> Option<u64> {
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
-        let mut m: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
-        m.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
-        // SAFETY: `m` is a properly sized MEMORYSTATUSEX with dwLength set.
-        let ok = unsafe { GlobalMemoryStatusEx(&mut m) } != 0;
-        ok.then_some(m.ullAvailPhys)
-    }
-    #[cfg(target_os = "linux")]
-    {
-        meminfo("MemAvailable:")
-    }
-    #[cfg(not(any(windows, target_os = "linux")))]
-    {
-        None
-    }
+    sys::memory_available()
 }
 
 /// Bytes free for this user on the filesystem that holds `path`.
 pub fn disk_free(path: &std::path::Path) -> Option<u64> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-        let mut free: u64 = 0;
-        // SAFETY: `wide` is a NUL-terminated UTF-16 path; the other out
-        // parameters may be null.
-        let ok = unsafe {
-            GetDiskFreeSpaceExW(
-                wide.as_ptr(),
-                &mut free,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        } != 0;
-        ok.then_some(free)
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
-        let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
-        // SAFETY: `c` is a NUL-terminated path, `s` a statvfs to fill.
-        let ok = unsafe { libc::statvfs(c.as_ptr(), &mut s) } == 0;
-        #[allow(clippy::unnecessary_cast)]
-        ok.then(|| s.f_bavail as u64 * s.f_frsize as u64)
-    }
-    #[cfg(not(any(windows, unix)))]
-    {
-        let _ = path;
-        None
-    }
+    backend::disk_free(path)
 }
 
 /// Unix: raise this process's soft limit of open files to its hard limit,
@@ -392,36 +265,7 @@ pub fn disk_free(path: &std::path::Path) -> Option<u64> {
 /// daemon on a node ("No file descriptors available", os error 24). `None`
 /// on Windows (no such limit) and when it cannot be read.
 pub fn raise_open_files() -> Option<u64> {
-    #[cfg(unix)]
-    {
-        let mut l: libc::rlimit = unsafe { std::mem::zeroed() };
-        // SAFETY: `l` is an rlimit to fill.
-        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut l) } != 0 {
-            return None;
-        }
-        // macOS refuses more than OPEN_MAX for an unlimited hard limit.
-        let want = if l.rlim_max == libc::RLIM_INFINITY {
-            l.rlim_cur.max(10240)
-        } else {
-            l.rlim_max
-        };
-        if want > l.rlim_cur {
-            let raised = libc::rlimit {
-                rlim_cur: want,
-                rlim_max: l.rlim_max,
-            };
-            // SAFETY: a valid rlimit no higher than the hard limit.
-            if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raised) } == 0 {
-                l.rlim_cur = want;
-            }
-        }
-        #[allow(clippy::unnecessary_cast)]
-        Some(l.rlim_cur as u64)
-    }
-    #[cfg(not(unix))]
-    {
-        None
-    }
+    backend::raise_open_files()
 }
 
 /// Windows: the long form of a path (`C:\Users\RUNNER~1` becomes
@@ -430,26 +274,12 @@ pub fn raise_open_files() -> Option<u64> {
 /// `canonicalize`, `subst` drives and junctions stay as they are. Returns the
 /// path unchanged elsewhere and when the lookup fails.
 pub fn long_path(path: &std::path::Path) -> std::path::PathBuf {
-    #[cfg(windows)]
-    {
-        windows::long_path(path).unwrap_or_else(|| path.to_path_buf())
-    }
-    #[cfg(not(windows))]
-    {
-        path.to_path_buf()
-    }
+    backend::long_path(path).unwrap_or_else(|| path.to_path_buf())
 }
 
 /// Kill what a previous instance recorded and left behind (ADR-0016). Returns
 /// the number of processes signalled per record. Windows needs nothing: its
 /// trees die with their owner.
 pub fn cleanup(records: &[Record]) -> Vec<(String, usize)> {
-    #[cfg(unix)]
-    {
-        unix::cleanup(records)
-    }
-    #[cfg(not(unix))]
-    {
-        records.iter().map(|r| (r.name.clone(), 0)).collect()
-    }
+    backend::cleanup(records)
 }
