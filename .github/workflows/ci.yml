@@ -102,6 +102,11 @@ jobs:
           toolchain: stable
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Spotlight indexes every file the tests write and takes most of the
+      # runner's three cores: a node test then finds no free CPU to offer.
+      - name: no Spotlight
+        if: runner.os == 'macOS'
+        run: sudo mdutil -a -i off
       # The dashboard the hub embeds: its tests run against the real build
       # (routing and caching depend on its index.html and assets/).
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -200,6 +205,10 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # As in `check`: Spotlight would index every copy the tests make.
+      - name: no Spotlight
+        if: runner.os == 'macOS'
+        run: sudo mdutil -a -i off
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
