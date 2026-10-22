@@ -73,7 +73,9 @@ placement decision, so this ADR has to move that guard on purpose.
    is clean (ADR-0016): the main slot returns to the main tree, remote lanes are
    stopped and their leases released; `devstack up` starts them again, on the
    node that still has their mirror if it can. Removing the lane releases the
-   lease and deletes the mirror on the node.
+   lease and deletes the mirror on the node. *(Amended by
+   [ADR-0052](0052-a-restart-carries-the-lanes-over.md): a restart of the
+   stack keeps the lanes on nodes; the next daemon renews their leases.)*
 8. **Remote lanes run Linux containers.** Windows-only services do not run in
    a remote lane. When a remote lane owns the main slot they keep running in
    the main tree, as any service the lane does not run (ADR-0024 point 5);

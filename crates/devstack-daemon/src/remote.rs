@@ -393,6 +393,77 @@ fn phase_over(lane: &str, node: &str, phase: &str, ms: u64) {
     );
 }
 
+/// What a lane on a node is made of here, for [`RemoteLane::assemble`].
+struct Parts<'a> {
+    name: &'a str,
+    pool: String,
+    node: NodeRef,
+    lease: String,
+    warning: Option<String>,
+    worktree: &'a Path,
+    main: &'a Path,
+    extra: &'a [String],
+    client: NodeClient,
+    ports: Vec<(u16, u16)>,
+    hashes: HashCache,
+}
+
+/// A lane on a node as a daemon that restarts leaves it for the next one
+/// (ADR-0052): enough to renew its lease and follow it again.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Carried {
+    pub pool: String,
+    pub node: NodeRef,
+    pub lease: String,
+    /// Its ports, `(on the node, here)`, its containers' included.
+    pub ports: Vec<(u16, u16)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+}
+
+/// Watch `worktree` for changes to sync (ADR-0029 point 2): `dirty` is set
+/// by each one that is no generated file. `None`, said, when it cannot be
+/// watched: the lane then compares it every few seconds.
+fn watch_worktree(
+    name: &str,
+    worktree: &Path,
+    dirty: &Arc<std::sync::atomic::AtomicBool>,
+) -> Option<notify::RecommendedWatcher> {
+    let (dirty, root) = (dirty.clone(), worktree.to_path_buf());
+    let w = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        let relevant = match res {
+            Ok(ev) => {
+                ev.need_rescan()
+                    || ev.paths.iter().any(|p| {
+                        p.strip_prefix(&root).is_ok_and(|r| {
+                            !crate::watch::in_generated(&r.to_string_lossy().replace('\\', "/"))
+                        })
+                    })
+            }
+            Err(_) => true,
+        };
+        if relevant {
+            dirty.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    })
+    .and_then(|mut w| {
+        use notify::Watcher as _;
+        w.watch(worktree, notify::RecursiveMode::Recursive)
+            .map(|()| w)
+    });
+    match w {
+        Ok(w) => Some(w),
+        Err(e) => {
+            crate::diag::warn(
+                "remote_lane_unwatched",
+                serde_json::json!({ "lane": name, "error": e.to_string(),
+                    "why": "the worktree is compared every few seconds instead" }),
+            );
+            None
+        }
+    }
+}
+
 impl RemoteLane {
     /// Lease the lane on its node, sync it, start it there, and follow it.
     pub fn start(rt: &tokio::runtime::Handle, spec: RemoteSpec<'_>) -> Result<Arc<Self>, String> {
@@ -643,72 +714,60 @@ impl RemoteLane {
             serde_json::json!({ "lane": name, "node": offer.node.name, "lease": offer.id,
                 "ms": t0.elapsed().as_millis() as u64 }),
         );
-        // The worktree's changes are synced when they happen (ADR-0029
-        // point 2); without a watcher, every few seconds.
+        let lane = Self::assemble(
+            rt,
+            Parts {
+                name,
+                pool,
+                node: offer.node,
+                lease: offer.id,
+                warning,
+                worktree,
+                main,
+                extra,
+                client,
+                ports,
+                hashes,
+            },
+        );
+        if let Some(e) = unwritten.into_inner().unwrap() {
+            lane.trouble("sync", Some(format!("sync: {e}")));
+        }
+        lane.take_on(rt, sharing, forward, scratch);
+        Ok(lane)
+    }
+
+    /// The lane as a lease on its node and what follows it here, not yet
+    /// followed: its worktree watched (ADR-0029 point 2; without a watcher,
+    /// compared every few seconds).
+    fn assemble(rt: &tokio::runtime::Handle, p: Parts<'_>) -> Arc<Self> {
         let dirty = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let watcher = {
-            let (dirty, root) = (dirty.clone(), worktree.to_path_buf());
-            let w = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-                let relevant = match res {
-                    Ok(ev) => {
-                        ev.need_rescan()
-                            || ev.paths.iter().any(|p| {
-                                p.strip_prefix(&root).is_ok_and(|r| {
-                                    !crate::watch::in_generated(
-                                        &r.to_string_lossy().replace('\\', "/"),
-                                    )
-                                })
-                            })
-                    }
-                    Err(_) => true,
-                };
-                if relevant {
-                    dirty.store(true, std::sync::atomic::Ordering::SeqCst);
-                }
-            })
-            .and_then(|mut w| {
-                use notify::Watcher as _;
-                w.watch(worktree, notify::RecursiveMode::Recursive)
-                    .map(|()| w)
-            });
-            match w {
-                Ok(w) => Some(w),
-                Err(e) => {
-                    crate::diag::warn(
-                        "remote_lane_unwatched",
-                        serde_json::json!({ "lane": name, "error": e.to_string(),
-                            "why": "the worktree is compared every few seconds instead" }),
-                    );
-                    None
-                }
-            }
-        };
-        let node_release = offer.node.devstack.clone();
+        let watcher = watch_worktree(p.name, p.worktree, &dirty);
+        let node_release = p.node.devstack.clone();
         let lane = Arc::new(Self {
-            name: name.into(),
-            pool,
-            node: offer.node,
-            lease: offer.id,
-            warning,
+            name: p.name.into(),
+            pool: p.pool,
+            node: p.node,
+            lease: p.lease,
+            warning: p.warning,
             node_release,
-            worktree: worktree.to_path_buf(),
-            main: main.to_path_buf(),
-            extra: extra.to_vec(),
+            worktree: p.worktree.to_path_buf(),
+            main: p.main.to_path_buf(),
+            extra: p.extra.to_vec(),
             sharing: Mutex::new(None),
             owns_main: std::sync::atomic::AtomicBool::new(false),
-            client,
+            client: p.client,
             state: Mutex::new(RemoteState::default()),
             stopped: tokio::sync::watch::channel(false).0,
-            ports,
+            ports: p.ports,
             listening: tokio::sync::watch::channel(false).0,
             gone: tokio::sync::watch::channel(false).0,
             dirty: dirty.clone(),
             _watcher: watcher,
-            hashes: Mutex::new(hashes),
+            hashes: Mutex::new(p.hashes),
         });
         if lane._watcher.is_none() {
             // No watcher: every tick counts as a change.
-            let dirty = dirty.clone();
             let mut over = lane.stopped.subscribe();
             rt.spawn(async move {
                 loop {
@@ -720,18 +779,97 @@ impl RemoteLane {
                 }
             });
         }
-        if let Some(e) = unwritten.into_inner().unwrap() {
-            lane.trouble("sync", Some(format!("sync: {e}")));
-        }
+        lane
+    }
+
+    /// Follow the lane from here: shared as said, its ports listened on
+    /// (`forward`), synced, renewed, its state read.
+    fn take_on(
+        self: &Arc<Self>,
+        rt: &tokio::runtime::Handle,
+        sharing: Option<devstack_node::coordinator::Sharing>,
+        forward: bool,
+        scratch: &Path,
+    ) {
         if sharing.is_some()
-            && let Err(e) = lane.share(sharing)
+            && let Err(e) = self.share(sharing)
         {
-            lane.trouble("sharing", Some(format!("sharing: {e}")));
+            self.trouble("sharing", Some(format!("sharing: {e}")));
         }
         if forward {
-            lane.start_forwarding(rt);
+            self.start_forwarding(rt);
         }
-        lane.follow(rt, scratch.to_path_buf());
+        self.follow(rt, scratch.to_path_buf());
+    }
+
+    /// What the next daemon needs to follow the lane after a restart
+    /// (ADR-0052).
+    pub fn carried(&self) -> Carried {
+        Carried {
+            pool: self.pool.clone(),
+            node: self.node.clone(),
+            lease: self.lease.clone(),
+            ports: self.ports.clone(),
+            warning: self.warning.clone(),
+        }
+    }
+
+    /// The daemon stops for a restart (ADR-0052): the lane is no longer
+    /// followed from here; its lease stays for the next daemon to renew.
+    pub fn leave(&self) {
+        self.listening.send_replace(false);
+        self.stopped.send_replace(true);
+        crate::diag::info(
+            "remote_lane_left",
+            serde_json::json!({ "lane": self.name, "node": self.node.name, "lease": self.lease }),
+        );
+    }
+
+    /// Follow the lane `name` a daemon before this one followed (ADR-0052):
+    /// its lease renewed first, then synced, renewed and its ports listened
+    /// on here, as after a start. `Err` when the lease is over or the node
+    /// does not answer. Blocking.
+    #[allow(clippy::too_many_arguments)]
+    pub fn adopt(
+        rt: &tokio::runtime::Handle,
+        name: &str,
+        c: Carried,
+        worktree: &Path,
+        main: &Path,
+        extra: &[String],
+        sharing: Option<devstack_node::coordinator::Sharing>,
+        scratch: &Path,
+    ) -> Result<Arc<Self>, String> {
+        let client =
+            NodeClient::new(&local_member(&c.pool), c.node.clone()).map_err(|e| e.to_string())?;
+        let renewed = match rt.block_on(client.renew(&c.lease)) {
+            Ok(l) => l,
+            Err(devstack_node::nodeclient::ClientError::Status(404, _)) => {
+                return Err(format!(
+                    "its lease on {} is over (it expired, or an admin ended it)",
+                    c.node.name
+                ));
+            }
+            Err(e) => return Err(format!("renewing its lease on {}: {e}", c.node.name)),
+        };
+        let lane = Self::assemble(
+            rt,
+            Parts {
+                name,
+                pool: c.pool,
+                node: c.node,
+                lease: c.lease,
+                warning: c.warning,
+                worktree,
+                main,
+                extra,
+                client,
+                ports: c.ports,
+                hashes: HashCache::default(),
+            },
+        );
+        lane.trouble("disk", renewed.warning);
+        lane.take_on(rt, sharing, true, scratch);
         Ok(lane)
     }
 

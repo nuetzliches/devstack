@@ -403,6 +403,67 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     );
     cli(&main, &["promote", "--lane", "main"]);
 
+    // A restart carries the lane over (ADR-0052): the next daemon renews its
+    // lease, its containers on the node run on untouched, its port here
+    // answers again, and the main slot it held goes back to it.
+    cli(&main, &["promote", "--lane", "wt"]);
+    let db_before = lane_db_started();
+    let (st, _) = api_request(&main, state.path(), "POST", "/v1/shutdown?restart=true")
+        .expect("the daemon answers the restart");
+    assert_eq!(st, 202);
+    let until = Instant::now() + Duration::from_secs(120);
+    while main.join(".devstack/daemon.json").exists() {
+        assert!(Instant::now() < until, "the daemon did not stop");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    cli(&main, &["up"]);
+    let until = Instant::now() + Duration::from_secs(120);
+    loop {
+        let lane = api("/v1/lanes")
+            .and_then(|v| v.as_array()?.iter().find(|l| l["name"] == "wt").cloned());
+        if lane
+            .as_ref()
+            .is_some_and(|l| l["active"] == true && l["node"] == "ci-node" && l["moving"].is_null())
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "the lane was not carried over: {lane:?}"
+        );
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    assert_eq!(
+        lane_db_started(),
+        db_before,
+        "the lane's containers on the node ran on"
+    );
+    let until = Instant::now() + Duration::from_secs(120);
+    let log = loop {
+        let log =
+            std::fs::read_to_string(main.join(".devstack").join("daemon.log")).unwrap_or_default();
+        if log.contains("\"main_slot_carried\"") {
+            break log;
+        }
+        assert!(
+            Instant::now() < until && !log.contains("\"main_slot_not_carried\""),
+            "the main slot did not go back to the lane:\n{log}"
+        );
+        std::thread::sleep(Duration::from_millis(500));
+    };
+    assert!(log.contains("\"lane_carried\""), "{log}");
+    let body = http_get(port, "/health");
+    assert!(
+        body.contains("ok"),
+        "GET /health on {port} after the restart: {body}"
+    );
+    let body = http_get(5080, "/health");
+    assert!(
+        body.contains("ok"),
+        "GET /health on the main port after the restart: {body}"
+    );
+    cli(&main, &["promote", "--lane", "main"]);
+
     // `down` in the main tree stops the main tree only: the lane on the
     // node runs on, and answers on its port here.
     let down = cli(&main, &["down"]);
@@ -559,6 +620,16 @@ fn slow_db(main: &Path) {
 /// `GET <path>` of the requester's daemon (the main tree's), as its JSON;
 /// `None` while it does not answer.
 fn api_get(main: &Path, state: &Path, path: &str) -> Option<serde_json::Value> {
+    let (status, body) = api_request(main, state, "GET", path)?;
+    if status != 200 {
+        return None;
+    }
+    serde_json::from_str(&body).ok()
+}
+
+/// `<method> <path>` of the requester's daemon, without a body: its status
+/// and body; `None` while it does not answer.
+fn api_request(main: &Path, state: &Path, method: &str, path: &str) -> Option<(u16, String)> {
     use std::io::{Read, Write};
     let info: serde_json::Value =
         serde_json::from_slice(&std::fs::read(main.join(".devstack/daemon.json")).ok()?).ok()?;
@@ -569,17 +640,21 @@ fn api_get(main: &Path, state: &Path, path: &str) -> Option<serde_json::Value> {
     // HTTP/1.0: the body comes whole, not in chunks.
     write!(
         s,
-        "GET {path} HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {}\r\n\r\n",
+        "{method} {path} HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {}\r\nContent-Length: 0\r\n\r\n",
         token.trim()
     )
     .ok()?;
     let mut out = String::new();
     let _ = s.read_to_string(&mut out);
     let (head, body) = out.split_once("\r\n\r\n")?;
-    if !head.lines().next()?.contains(" 200") {
-        return None;
-    }
-    serde_json::from_str(body).ok()
+    let status = head
+        .lines()
+        .next()?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()?;
+    Some((status, body.to_string()))
 }
 
 /// The fixture stack's files (not its local build output) into `to`.

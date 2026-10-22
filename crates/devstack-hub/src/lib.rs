@@ -91,6 +91,9 @@ pub struct DaemonEntry {
     pub port: u16,
     pub started: u128,
     pub version: String,
+    /// A restart carries its lanes over (ADR-0052); `false` for an older
+    /// daemon, which stops them.
+    pub carries_lanes: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -193,6 +196,7 @@ fn scan(last_seen: &mut HashMap<String, u128>, errors: &StartErrors) -> Vec<Stac
                     port: i.port,
                     started: i.started,
                     version: i.version,
+                    carries_lanes: i.carries_lanes,
                 }),
                 last_seen: last_seen.get(&e.id).copied(),
                 id: e.id,
@@ -202,6 +206,29 @@ fn scan(last_seen: &mut HashMap<String, u128>, errors: &StartErrors) -> Vec<Stac
             }
         })
         .collect()
+}
+
+/// A stack whose daemon runs another devstack than the hub, once per stack
+/// and release of its daemon (ADR-0052 point 5): how long stacks stay on an
+/// old release shows in the pool's telemetry.
+fn note_outdated(stacks: &[StackEntry], noted: &mut HashMap<String, String>) {
+    for s in stacks {
+        let Some(d) = &s.daemon else {
+            continue;
+        };
+        if d.version == VERSION {
+            noted.remove(&s.id);
+            continue;
+        }
+        if noted.get(&s.id) != Some(&d.version) {
+            noted.insert(s.id.clone(), d.version.clone());
+            diag::info(
+                "daemon_outdated",
+                serde_json::json!({ "stack": s.name, "daemon": d.version, "hub": VERSION,
+                    "daemon_age_s": (now_ms().saturating_sub(d.started) / 1000) as u64 }),
+            );
+        }
+    }
 }
 
 /// Run the hub in the foreground until `POST /hub/shutdown` or Ctrl+C. A second
@@ -348,9 +375,10 @@ pub fn serve() -> Result<(), String> {
         let start_errors: StartErrors = Arc::default();
         let errors = start_errors.clone();
         tokio::task::spawn_blocking(move || {
-            let mut seen = HashMap::new();
+            let (mut seen, mut outdated) = (HashMap::new(), HashMap::new());
             loop {
                 let next = scan(&mut seen, &errors);
+                note_outdated(&next, &mut outdated);
                 tx.send_if_modified(|cur| {
                     if *cur == next {
                         false
@@ -2226,6 +2254,10 @@ struct DownQuery {
     /// Its lanes, too: the daemon exits even while lanes run.
     #[serde(default)]
     all: bool,
+    /// For a restart (ADR-0052): the daemon exits even while lanes run and
+    /// leaves them to the next one (an older daemon stops them).
+    #[serde(default)]
+    restart: bool,
 }
 
 async fn stack_down(
@@ -2270,7 +2302,9 @@ async fn stack_down(
             let kept = daemon_request(port, &token, Method::POST, path).await == Ok(200);
             (q.all || !kept) && shutdown().await.is_ok()
         } else {
-            let path = if q.all {
+            let path = if q.restart {
+                "/v1/shutdown?restart=true"
+            } else if q.all {
                 "/v1/shutdown"
             } else {
                 "/v1/shutdown?unless_lanes=true"
@@ -3271,6 +3305,7 @@ mod daemon_send_tests {
                 started: 5,
                 version: String::new(),
                 stopping,
+                carries_lanes: false,
             };
             std::fs::write(
                 devstack_daemon::info_path(d.path()),

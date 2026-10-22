@@ -1023,6 +1023,10 @@ pub fn start_and_wait(
     let t0 = Instant::now();
     loop {
         let stack = c.stack()?;
+        // A lane serves the main ports: what it took over is stopped here
+        // and stays so (a restart gives a carried lane the main slot back
+        // right after `up`, ADR-0052); waiting for it would never end.
+        let served_elsewhere = stack["main_served_by"].is_string();
         let mut done = true;
         let mut failed: Vec<(String, String)> = Vec::new();
         for s in stack["services"].as_array().into_iter().flatten() {
@@ -1036,6 +1040,7 @@ pub fn start_and_wait(
                 let state = s["status"]["state"].as_str().unwrap_or("");
                 match state {
                     "healthy" | "running" => {}
+                    "stopped" if served_elsewhere => {}
                     "completed" if s["status"]["exit_code"] == 0 => {}
                     "failed" | "exited" => failed.push((
                         name.clone(),

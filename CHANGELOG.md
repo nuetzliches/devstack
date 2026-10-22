@@ -45,6 +45,20 @@ and listed with their assets on the
 
 ### Changed
 
+- **"Restart stack" switches the daemon to the installed devstack while
+  lanes run too** (ADR-0052). Before, a restart with a lane running only
+  restarted the main tree's services in the old daemon, so the banner
+  "<stack> runs devstack X, devstack Y is installed" stayed until every lane
+  was stopped. Now the daemon leaves its lanes to the next one: a lane on a
+  node keeps running there (the next daemon renews its lease and forwards
+  its ports again), a lane here starts again from the builds it ran, and
+  the lane that served the main ports gets them back. The confirmation says
+  which lanes go where; a daemon of an earlier release cannot do it, and
+  then the confirmation says its lanes stop. New: `restart=true` on
+  `POST /hub/stacks/{id}/down` and `POST /v1/shutdown`, `carries_lanes` on
+  a stack's daemon. Telemetry: `lane_carried`, `lane_not_carried`,
+  `main_slot_carried`, `daemon_stopping` with what a restart carries, and
+  `daemon_outdated` from the hub (once per stack and release of its daemon).
 - **A service's build list shows the newest ten**, the rest behind "Show
   more". The list is read from the diagnostic log (5 MB, one rotated file);
   what builds keep on disk is bounded apart from it: the newest five

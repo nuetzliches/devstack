@@ -18,6 +18,36 @@ export function started(l: LaneView): boolean {
   return l.active !== false;
 }
 
+/** What a restart of the stack does to its started lanes (ADR-0052). */
+export type RestartPlan = {
+  /** Lanes on nodes: they keep running there (carried), or stop (an older daemon). */
+  onNodes: string[];
+  /** Lanes on this machine: they restart with the daemon (carried), or stop. */
+  here: string[];
+  /** The daemon carries its lanes over; `false`: an older one, which stops them. */
+  carried: boolean;
+};
+
+export function restartPlan(lanes: LaneView[], carriesLanes: boolean | undefined): RestartPlan {
+  const up = lanes.filter(started);
+  return { onNodes: up.filter((l) => l.node).map((l) => l.name), here: up.filter((l) => !l.node).map((l) => l.name), carried: !!carriesLanes };
+}
+
+/** `Lane a`, `lanes a, b`: capitalised at the start of a sentence. */
+const names = (n: string[], first: boolean) => `${first ? 'L' : 'l'}ane${n.length === 1 ? '' : 's'} ${n.join(', ')}`;
+const verb = (n: string[], v: string) => (n.length === 1 ? `${v}s` : v);
+
+/** What happens to the lanes, for the restart's confirmation and the version banner; empty without lanes. */
+export function restartLanesText(p: RestartPlan): string {
+  const all = [...p.onNodes, ...p.here];
+  if (!all.length) return '';
+  if (!p.carried) return `This daemon is too old to pass its lanes on: ${names(all, false)} ${verb(all, 'stop')} and must be started again.`;
+  const parts: string[] = [];
+  if (p.onNodes.length) parts.push(`${names(p.onNodes, true)} ${verb(p.onNodes, 'keep')} running on ${p.onNodes.length === 1 ? 'its node' : 'their nodes'}`);
+  if (p.here.length) parts.push(`${names(p.here, !parts.length)} ${verb(p.here, 'restart')} with it`);
+  return `${parts.join('; ')}.`;
+}
+
 /** Of a started lane, its services and its Compose containers: running, and all. */
 export type RunCounts = { running: number; services: number; containersRunning: number; containers: number };
 

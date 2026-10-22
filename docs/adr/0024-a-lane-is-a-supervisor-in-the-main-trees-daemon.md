@@ -73,7 +73,9 @@ names (the containers of one tree served the other), workers twice.
    supervisor of the daemon. A daemon restart starts clean (ADR-0016) with the
    main tree owning it; the lanes start only with `devstack up` in their
    worktree. `.devstack/lanes.json` remembers each lane's number, so its ports
-   stay the same.
+   stay the same. *(Amended by [ADR-0052](0052-a-restart-carries-the-lanes-over.md):
+   a restart of the stack carries the started lanes, and the main slot,
+   over to the next daemon.)*
 7. **A worktree removed takes its lane along**: the lane stops and its state
    (snapshot, logs) is deleted; its builds stay in the shared store until
    pruned.

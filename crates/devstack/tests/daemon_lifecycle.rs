@@ -21,12 +21,22 @@ fn enabled(var: &str) -> bool {
     std::env::var(var).as_deref() == Ok("1")
 }
 
+/// A free port for a stack's fixed ports, as a real stack has them: outside
+/// the OS's ephemeral ranges (Linux 32768-60999, Windows 49152-65535), so
+/// an instance port the daemon gets from the OS never takes one (a lane's
+/// forward found its fixed port taken so after a restart started everything
+/// at once), with room above it for the lanes' ranges (`port_step` 100).
 fn free_port() -> u16 {
-    std::net::TcpListener::bind(("127.0.0.1", 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    let seed = (std::process::id() % 10000) as u16;
+    loop {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let port = 20000 + (seed.wrapping_add(n.wrapping_mul(37)) % 10000);
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
 }
 
 struct Stack {
@@ -321,6 +331,25 @@ members = [\"api\", \"command.ping\"]
             .call()
             .unwrap();
         serde_json::from_str(&r.body_mut().read_to_string().unwrap()).unwrap()
+    }
+
+    /// A POST without a body on the daemon's API, with its token: the status.
+    fn daemon_post(&self, path: &str) -> u16 {
+        let daemon: Value = serde_json::from_slice(
+            &std::fs::read(self.dir.path().join(".devstack/daemon.json")).unwrap(),
+        )
+        .unwrap();
+        let token = std::fs::read_to_string(self.token_home.path().join("devstack/token")).unwrap();
+        ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .build()
+            .new_agent()
+            .post(&format!("http://127.0.0.1:{}{path}", daemon["port"]))
+            .header("Authorization", &format!("Bearer {token}"))
+            .send_empty()
+            .unwrap()
+            .status()
+            .as_u16()
     }
 
     /// The first event of a daemon SSE stream.
@@ -2166,6 +2195,41 @@ fn a_worktree_runs_as_a_lane() {
     );
     assert_eq!(s.daemon_pid(), daemon, "in the same daemon");
     assert_eq!(lane_info()["pid"], lane_pid, "the lane ran on, untouched");
+
+    // A restart of the stack carries the lane over (ADR-0052): the next
+    // daemon starts it again, from the artifact it ran, without `up` in its
+    // worktree.
+    let lane_build = lane_info()["build"].as_str().unwrap().to_string();
+    assert_eq!(s.daemon_post("/v1/shutdown?restart=true"), 202);
+    let state = s.dir.path().join(".devstack");
+    assert!(
+        wait_for(
+            || !state.join("daemon.json").exists(),
+            Duration::from_secs(120)
+        ),
+        "the daemon stopped for the restart\n{}",
+        s.daemon_log()
+    );
+    s.cli(&["up"], None); // `broken` fails, the rest runs
+    assert!(
+        wait_for(
+            || get_on(lane_port, "/info").is_some_and(|i| i.contains(&lane_build)),
+            Duration::from_secs(180)
+        ),
+        "the lane runs again in the next daemon, from its build\n{}",
+        s.diag()
+    );
+    assert_ne!(s.daemon_pid(), daemon, "a new daemon");
+    assert_ne!(lane_info()["pid"], lane_pid, "the lane started again");
+    assert!(
+        s.daemon_log().contains("\"lane_carried\""),
+        "{}",
+        s.daemon_log()
+    );
+    assert!(
+        !state.join("restart.json").exists(),
+        "the word is read once"
+    );
 
     // 5. The lane runs from a copy of its worktree: `prepare` ran there, an
     //    edit reaches its dev server within moments, and nothing runs in the
