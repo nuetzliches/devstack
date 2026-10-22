@@ -565,7 +565,10 @@ impl RemoteLane {
                     &|n, of, bytes| {
                         step(
                             2,
-                            &format!("sync: {n} of {of} changed files sent ({} KiB)", bytes / 1024),
+                            &format!(
+                                "sync: {n} of {of} changed files sent ({} KiB)",
+                                bytes / 1024
+                            ),
                         );
                     },
                 )
@@ -573,7 +576,9 @@ impl RemoteLane {
             crate::diag::info(
                 "remote_lane_synced",
                 serde_json::json!({ "lane": name, "node": offer.node.name, "files": s.files,
-                    "uploaded": s.uploaded, "bytes": s.bytes, "ms": t0.elapsed().as_millis() as u64 }),
+                    "uploaded": s.uploaded, "bytes": s.bytes, "ms": t0.elapsed().as_millis() as u64,
+                    "hashed": s.hashed, "hash_ms": s.hash_ms, "compare_ms": s.compare_ms,
+                    "upload_ms": s.upload_ms, "apply_ms": s.apply_ms }),
             );
             // Files the node could not write: the lane starts with the rest,
             // and says so (#128).
@@ -587,7 +592,12 @@ impl RemoteLane {
                 );
                 *unwritten.lock().unwrap() = Some(e);
             }
-            phase_over(name, &offer.node.name, "sync", t.elapsed().as_millis() as u64);
+            phase_over(
+                name,
+                &offer.node.name,
+                "sync",
+                t.elapsed().as_millis() as u64,
+            );
             // Paths in its logs point into the worktree, `/` as compilers
             // on the node write them.
             let display = worktree.to_string_lossy().replace('\\', "/");

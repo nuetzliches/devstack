@@ -37,7 +37,10 @@ impl Supervisor {
             )
         };
         // A starting or switching candidate finishes first; the change follows.
-        if serving && !matches!(state.as_deref(), Some("starting" | "switching")) {
+        // One that says `changed` already keeps its first path: every file of
+        // a checkout or an install would be an event of its own (1925 in a
+        // minute, seen in the pool's telemetry).
+        if serving && !matches!(state.as_deref(), Some("starting" | "switching" | "changed")) {
             self.set_candidate(
                 name,
                 Some(Candidate::new("changed", None, Some(path.into()))),

@@ -925,10 +925,14 @@ async fn session() -> Response {
 }
 
 /// Look at the Docker engine every 10 s (every 2 s after a start request) and
-/// publish changes. One `docker version` per look; nothing when it did not change.
+/// publish changes. One `docker version` per look; nothing when it did not
+/// change. A running engine counts as gone only when two looks in a row say
+/// so: one `docker version` that fails on a busy machine is no stopped
+/// engine (the dashboard would say Docker is not running, or not installed).
 fn watch_engine(fast_until: Arc<std::sync::atomic::AtomicU64>) -> watch::Receiver<Engine> {
     let (tx, rx) = watch::channel(engine::status("docker"));
     std::thread::spawn(move || {
+        let mut doubt: Option<Engine> = None;
         loop {
             let fast = now_ms() < u128::from(fast_until.load(std::sync::atomic::Ordering::Relaxed));
             let step = if fast { 2 } else { 10 };
@@ -936,7 +940,23 @@ fn watch_engine(fast_until: Arc<std::sync::atomic::AtomicU64>) -> watch::Receive
             if tx.is_closed() {
                 return;
             }
-            let next = engine::status("docker");
+            let t0 = Instant::now();
+            let (next, why) = engine::look("docker");
+            let ms = t0.elapsed().as_millis() as u64;
+            let fields = |e: &Engine| {
+                let mut v = serde_json::to_value(e).unwrap_or_default();
+                v["ms"] = ms.into();
+                if let Some(w) = &why {
+                    v["error"] = w.as_str().into();
+                }
+                v
+            };
+            if tx.borrow().is_running() && !next.is_running() && doubt.as_ref() != Some(&next) {
+                diag::info("docker_look_failed", fields(&next));
+                doubt = Some(next);
+                continue;
+            }
+            doubt = None;
             tx.send_if_modified(|cur| {
                 if *cur == next {
                     false
@@ -944,7 +964,7 @@ fn watch_engine(fast_until: Arc<std::sync::atomic::AtomicU64>) -> watch::Receive
                     diag::log(
                         if next.is_running() { "info" } else { "warn" },
                         "docker",
-                        serde_json::to_value(&next).unwrap_or_default(),
+                        fields(&next),
                     );
                     *cur = next;
                     true

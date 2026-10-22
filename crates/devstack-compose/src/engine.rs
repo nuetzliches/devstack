@@ -40,14 +40,28 @@ impl Engine {
 /// Ask the engine for its version (5 s at most: a starting Docker Desktop
 /// can hold the call).
 pub fn status(program: &str) -> Engine {
+    look(program).0
+}
+
+/// [`status`], and why it is not `Running`: `docker` could not be run (not
+/// found is `Missing`, anything else counts as an engine that does not
+/// answer), it gave no answer within 5 s, or it answered without a version.
+pub fn look(program: &str) -> (Engine, Option<String>) {
     let mut cmd = Command::new(program);
     cmd.args(["version", "--format", "{{.Server.Version}}"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     no_window(&mut cmd);
-    let Ok(mut child) = cmd.spawn() else {
-        return Engine::Missing;
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (Engine::Missing, None),
+        Err(e) => {
+            return (
+                stopped(),
+                Some(format!("`{program}` could not be run: {e}")),
+            );
+        }
     };
     let t0 = Instant::now();
     let exit = loop {
@@ -63,17 +77,27 @@ pub fn status(program: &str) -> Engine {
             }
         }
     };
-    if exit.is_some_and(|s| s.success()) {
-        let mut out = String::new();
-        if let Some(mut so) = child.stdout.take() {
-            use std::io::Read;
-            let _ = so.read_to_string(&mut out);
+    let why = match exit {
+        None => "no answer within 5 s".to_string(),
+        Some(s) if !s.success() => format!("`{program} version` ended with {s}"),
+        Some(_) => {
+            let mut out = String::new();
+            if let Some(mut so) = child.stdout.take() {
+                use std::io::Read;
+                let _ = so.read_to_string(&mut out);
+            }
+            let version = out.trim().to_string();
+            if !version.is_empty() {
+                return (Engine::Running { version }, None);
+            }
+            "the engine named no version".to_string()
         }
-        let version = out.trim().to_string();
-        if !version.is_empty() {
-            return Engine::Running { version };
-        }
-    }
+    };
+    (stopped(), Some(why))
+}
+
+/// The CLI is there, the engine does not answer: what can start it.
+fn stopped() -> Engine {
     match starter() {
         Some(s) => Engine::Stopped {
             hint: format!("start {s}"),
@@ -216,5 +240,24 @@ mod imp {
         } else {
             Err(std::io::Error::other(format!("systemctl answered {s}")))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn only_a_docker_that_is_not_there_is_missing() {
+        assert_eq!(
+            super::look("devstack-no-such-docker-cli"),
+            (super::Engine::Missing, None)
+        );
+        // A program that runs and names no version: an engine that does
+        // not answer, with why.
+        let (engine, why) = super::look(if cfg!(windows) { "whoami" } else { "true" });
+        assert!(
+            matches!(engine, super::Engine::Stopped { .. }),
+            "{engine:?}"
+        );
+        assert!(why.is_some());
     }
 }

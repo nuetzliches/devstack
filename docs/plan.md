@@ -920,6 +920,9 @@ What is open, roughly in the order it pays off, and where it comes from.
 | Placing by node tags (ADR-0033 point 2: `--on pool:gpu`); the syntax clashes with `<pool>:<node>` (ADR-0034) and is to be decided first | ADR-0033 | small |
 | Metrics in the pool's collector: the devstack tenant takes logs only; durations and gauges need a metrics pipeline with TSDB templates and a retention | ADR-0037 | small |
 | Watcher on Windows: a folder that arrives by a move (into the tree, or from one folder to another) is reported as itself only; report its files by listing it once the tree has been quiet for a moment, never in the watcher callback (the immediate listing raced `pnpm install`) | the EBUSY fix in `watch.rs` | small |
+| A lane's first sync on a node reads every file to hash it (35 s for 4669 files and nothing to send, seen in the pool's telemetry): keep the hashes per worktree on disk (path, size, modification time) and hash in parallel; a restart's carried lane (ADR-0052) syncs in full once for the same reason. `remote_lane_synced` now says where the time goes (`hashed`, `hash_ms`, `compare_ms`, `upload_ms`, `apply_ms`) | pool telemetry 2026-10-22 | small |
+| Tunnels with an idle timeout once one side closed, and the open descriptors and tunnels of the node agent and a lane's daemon as gauges (a lane's daemon on a node ran out of descriptors at its soft limit of 1024; the limit is raised to the hard one since) | pool telemetry 2026-10-22 | small |
+| A lane on a node sends no telemetry of its own (its services, builds, health): the node could pass the lane daemon's diagnostic lines on (ADR-0037 point 3) | pool telemetry 2026-10-22 | medium |
 | Own domain for the landing page (now on GitHub Pages) | phase 4 | small |
 | Code signing of the Windows binary (deferred) | [#3](https://github.com/nuetzliches/devstack/issues/3) | small |
 | Remove the downstream stack's old orchestrator once its team works without it | phase 4 | downstream |

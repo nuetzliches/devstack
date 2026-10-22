@@ -187,6 +187,22 @@ impl Supervisor {
     /// Start a running service again from its current build, so a changed
     /// worker switch takes effect; nothing is built (a change in the tree,
     /// held or not, does not come in this way).
+    /// The build `name` runs, or ran last.
+    pub fn build_of(&self, name: &str) -> Option<String> {
+        self.slots.lock().unwrap().get(name)?.view.build_id.clone()
+    }
+
+    /// Start `name` from `build` while its artifact is there, else as
+    /// [`Self::start`] does: what a tree ran before it gave the main ports to
+    /// a lane runs again, not a candidate built or held meanwhile.
+    pub fn start_build(self: &Arc<Self>, name: &str, build: Option<String>) -> Result<(), String> {
+        let artifact = build
+            .map(|id| (self.layout.artifact(name, &id), id))
+            .filter(|(dir, _)| dir.is_dir())
+            .map(|(dir, id)| (id, dir));
+        self.start_with(name, artifact)
+    }
+
     pub fn relaunch(self: &Arc<Self>, name: &str) -> Result<(), String> {
         let current = self.slots.lock().unwrap()[name].view.build_id.clone();
         let artifact = current
@@ -695,7 +711,8 @@ impl Supervisor {
                         }
                         return Err(format!(
                             "job exited with code {code}\n{}",
-                            tail(&inst.log, 15)
+                            tail(&inst.log, 15),
+                            code = crate::state::exit_code_text(code)
                         ));
                     }
                     if cancel() {
@@ -722,7 +739,8 @@ impl Supervisor {
                         if let Some(code) = inst.tree.try_exit_code() {
                             return Err(format!(
                                 "exited with code {code} before it became healthy\n{}",
-                                tail(&inst.log, 15)
+                                tail(&inst.log, 15),
+                                code = crate::state::exit_code_text(code)
                             ));
                         }
                         match self
@@ -745,7 +763,8 @@ impl Supervisor {
                     if let Some(code) = inst.tree.try_exit_code() {
                         return Err(format!(
                             "exited with code {code} right after start\n{}",
-                            tail(&inst.log, 15)
+                            tail(&inst.log, 15),
+                            code = crate::state::exit_code_text(code)
                         ));
                     }
                     Ok(Status::Running)
@@ -805,6 +824,8 @@ impl Supervisor {
                                     "lane": me.lane,
                                     "service": name,
                                     "exit_code": code,
+                                    // Windows: an exception code reads in hex.
+                                    "exit": crate::state::exit_code_text(code),
                                     "ran_s": ran.as_secs(),
                                     "tree_left": left,
                                     "why": "it exited by itself: no stop, restart or switch asked for it",
@@ -814,7 +835,8 @@ impl Supervisor {
                         if let Some(p) = me.proxy(&name) {
                             p.set_upstream(None);
                             p.set_waiting(Waiting::Refuse(format!(
-                                "`{name}` exited with code {code} (devstack logs {name})"
+                                "`{name}` exited with code {} (devstack logs {name})",
+                                crate::state::exit_code_text(code)
                             )));
                         }
                         me.set_front(&name, crate::tcpfwd::FrontState::Refuse);

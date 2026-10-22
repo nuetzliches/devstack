@@ -656,6 +656,9 @@ fn repo_of(file: &Path) -> Result<PathBuf> {
 
 /// Every command goes to the area that handles it ([`dispatch`]).
 fn main() -> Result<()> {
+    // Daemons, agents and the hub hold many connections (unix: the soft
+    // limit up to the hard one).
+    let _ = devstack_proc::raise_open_files();
     let Cli { file, cmd } = Cli::parse();
     match cmd {
         cmd @ (Cmd::Check { .. }
