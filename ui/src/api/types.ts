@@ -492,8 +492,8 @@ export type PoolEntry = {
   coordinator?: string | null;
 };
 
-/** A service of a lane someone shares (ADR-0035). */
-export type SharedService = { name: string; port: number; scheme: string; here: number };
+/** A service of a lane someone shares (ADR-0035). `forwarded`: its port here while this machine is connected to the lane (ADR-0053). */
+export type SharedService = { name: string; port: number; scheme: string; here: number; forwarded?: number };
 
 /** A lane another member shares with this machine, `GET /hub/pool/shared`. */
 export type SharedLane = {

@@ -159,7 +159,7 @@ fn pool_query(pool: Option<&str>) -> Result<String> {
 }
 
 /// `devstack pool shared`: the lanes others share with this machine
-/// (ADR-0035).
+/// (ADR-0035), a connected one's services with their ports here (ADR-0053).
 pub fn shared(pool: Option<&str>) -> Result<()> {
     let v = hub_get(&format!("/hub/pool/shared{}", pool_query(pool)?))?;
     let lanes = v.as_array().cloned().unwrap_or_default();
@@ -172,11 +172,17 @@ pub fn shared(pool: Option<&str>) -> Result<()> {
         "LANE", "REPOSITORY", "ON", "SHARED BY"
     );
     for l in lanes {
-        let services: Vec<&str> = l["services"]
+        let services: Vec<String> = l["services"]
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|s| s["name"].as_str())
+            .filter_map(|s| {
+                let name = s["name"].as_str()?;
+                Some(match s["forwarded"].as_u64() {
+                    Some(port) => format!("{name} (localhost:{port})"),
+                    None => name.to_string(),
+                })
+            })
             .collect();
         println!(
             "{:<24} {:<16} {:<18} {:<16} {}",
@@ -190,9 +196,9 @@ pub fn shared(pool: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// `devstack open <lane> [service]`: open a service of a lane someone shares
-/// with this machine, through a forward the hub keeps (ADR-0035 point 3).
-pub fn open_shared(lane: &str, service: Option<&str>, pool: Option<&str>) -> Result<()> {
+/// The lane called `lane` (or whose lease starts so) shared with this
+/// machine, its lease, and the hub's query for `pool`.
+fn shared_lane(lane: &str, pool: Option<&str>) -> Result<(Value, String, String)> {
     let q = pool_query(pool)?;
     let v = hub_get(&format!("/hub/pool/shared{q}"))?;
     let lanes = v.as_array().cloned().unwrap_or_default();
@@ -201,7 +207,7 @@ pub fn open_shared(lane: &str, service: Option<&str>, pool: Option<&str>) -> Res
         .filter(|l| l["lane"] == lane || l["lease"].as_str().is_some_and(|x| x.starts_with(lane)))
         .collect();
     let l = match found.as_slice() {
-        [one] => *one,
+        [one] => (*one).clone(),
         [] => bail!(
             "no lane `{lane}` is shared with this machine (`devstack pool shared` lists them)"
         ),
@@ -209,6 +215,61 @@ pub fn open_shared(lane: &str, service: Option<&str>, pool: Option<&str>) -> Res
             "several shared lanes are called `{lane}`: name its lease (`devstack pool shared`)"
         ),
     };
+    let lease = l["lease"].as_str().unwrap_or("").to_string();
+    if lease.is_empty() || !lease.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        bail!("the hub names no usable lease for `{lane}`");
+    }
+    Ok((l, lease, q))
+}
+
+/// `devstack pool connect <lane>`: forward every service of a lane someone
+/// shares with this machine here (ADR-0053).
+pub fn connect_shared(lane: &str, pool: Option<&str>) -> Result<()> {
+    let (l, lease, q) = shared_lane(lane, pool)?;
+    let a = hub_send(
+        "POST",
+        &format!("/hub/pool/shared/{lease}/connect{q}"),
+        None,
+    )?;
+    println!(
+        "lane `{lane}` ({}, on {}) connected:",
+        l["owner_name"].as_str().unwrap_or(""),
+        l["node"]["name"].as_str().unwrap_or("")
+    );
+    for s in a["services"].as_array().into_iter().flatten() {
+        println!(
+            "  {:<16} {}",
+            s["name"].as_str().unwrap_or(""),
+            s["url"].as_str().unwrap_or("")
+        );
+    }
+    if let Some(w) = a["warning"].as_str() {
+        eprintln!("warning: {w}");
+    }
+    Ok(())
+}
+
+/// `devstack pool disconnect <lane>`: close the forwards to a shared lane,
+/// its ports here are free again (ADR-0053).
+pub fn disconnect_shared(lane: &str, pool: Option<&str>) -> Result<()> {
+    let (_, lease, q) = shared_lane(lane, pool)?;
+    let a = hub_send(
+        "POST",
+        &format!("/hub/pool/shared/{lease}/disconnect{q}"),
+        None,
+    )?;
+    match a["closed"].as_u64().unwrap_or(0) {
+        0 => println!("lane `{lane}` was not connected"),
+        n => println!("lane `{lane}` disconnected: {n} port(s) here closed"),
+    }
+    Ok(())
+}
+
+/// `devstack open <lane> [service]`: open a service of a lane someone shares
+/// with this machine, connecting the lane if it is not (ADR-0035 point 3,
+/// ADR-0053 point 2).
+pub fn open_shared(lane: &str, service: Option<&str>, pool: Option<&str>) -> Result<()> {
+    let (l, lease, q) = shared_lane(lane, pool)?;
     let services: Vec<&str> = l["services"]
         .as_array()
         .into_iter()
@@ -221,10 +282,6 @@ pub fn open_shared(lane: &str, service: Option<&str>, pool: Option<&str>) -> Res
         (None, _) => bail!("which service: {}", services.join(", ")),
     };
     let port = devstack_hub::ensure_running().map_err(|e| anyhow!(e))?;
-    let lease = l["lease"].as_str().unwrap_or("");
-    if lease.is_empty() || !lease.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        bail!("the hub names no usable lease for `{lane}`");
-    }
     let mut r = agent()
         .post(&format!(
             "http://127.0.0.1:{port}/hub/pool/shared/{lease}/open{q}"
@@ -238,7 +295,7 @@ pub fn open_shared(lane: &str, service: Option<&str>, pool: Option<&str>) -> Res
         bail!("{}", a["error"].as_str().unwrap_or(&text));
     };
     println!(
-        "{service} of lane `{lane}` ({}, on {}): {url}",
+        "{service} of lane `{lane}` ({}, on {}): {url} (the lane is connected; `devstack pool disconnect {lane}` frees its ports)",
         l["owner_name"].as_str().unwrap_or(""),
         l["node"]["name"].as_str().unwrap_or("")
     );

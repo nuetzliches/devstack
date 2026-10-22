@@ -17,6 +17,11 @@ export const DEFAULT_POOL = 'default';
 /** A node a lane can start on or move to, with what `--on` names it by. */
 export type LaneTarget = { pool: string; node: PoolNode; on: string; label: string };
 
+/** Whether this machine is connected to a shared lane: its services forwarded here (ADR-0053). */
+export function connectedTo(l: SharedLane): boolean {
+  return l.services.some((s) => !!s.forwarded);
+}
+
 export const usePool = defineStore('pool', () => {
   /** The pools this machine belongs to; the default one first. */
   const pools = ref<PoolEntry[]>([{ name: DEFAULT_POOL, joined: false }]);
@@ -102,6 +107,16 @@ export const usePool = defineStore('pool', () => {
     if (r.ok) await loadTelemetry();
   }
 
+  /** What others share with this machine in pool `p`, and which of it is connected. */
+  async function loadShared(p: string) {
+    try {
+      const r = await api().request<SharedLane[]>('GET', at(paths.poolShared, p));
+      if (r.ok && Array.isArray(r.body)) sharedBy.value = { ...sharedBy.value, [p]: r.body };
+    } catch {
+      // The hub away: the list stays as it was.
+    }
+  }
+
   async function load() {
     loading.value = true;
     void loadShare();
@@ -113,13 +128,7 @@ export const usePool = defineStore('pool', () => {
       if (!pools.value.some((p) => p.name === current.value)) current.value = DEFAULT_POOL;
       // What others share, in every pool.
       for (const p of pools.value) {
-        if (!p.joined) continue;
-        void api()
-          .request<SharedLane[]>('GET', at(paths.poolShared, p.name))
-          .then((r) => {
-            if (r.ok && Array.isArray(r.body)) sharedBy.value = { ...sharedBy.value, [p.name]: r.body };
-          })
-          .catch(() => undefined);
+        if (p.joined) void loadShared(p.name);
       }
       // The other pools' nodes, for starting and moving lanes there.
       for (const p of pools.value) {
@@ -330,7 +339,24 @@ export const usePool = defineStore('pool', () => {
   /** Every lane shared with this machine, with its pool. */
   const shared = computed(() => pools.value.flatMap((p) => (sharedBy.value[p.name] ?? []).map((l) => ({ ...l, pool: p.name }))));
 
-  /** Open a service of a shared lane: a forward here, then the page; `path` (`/ui?x#y`) after its address. */
+  /** Connect to a shared lane: each of its services forwarded here, on its owner's port if free (ADR-0053). */
+  async function connectShared(pool: string, lease: string) {
+    const r = await act<{ services: { name: string; port: number; url: string }[]; warning?: string }>({
+      label: 'Connect',
+      path: at(paths.poolSharedConnect(lease), pool),
+      success: (b) => `Connected: ${(b?.services ?? []).map((s) => `${s.name} on localhost:${s.port}`).join(', ') || 'it shares no web page'}`,
+    });
+    if (r.ok && r.body?.warning) useUi().toast('warning', 'Another devstack', r.body.warning, 12_000);
+    await loadShared(pool);
+  }
+
+  /** Disconnect from a shared lane: its forwards close, its ports here are free again (ADR-0053). */
+  async function disconnectShared(pool: string, lease: string) {
+    await act({ label: 'Disconnect', path: at(paths.poolSharedDisconnect(lease), pool), success: 'Disconnected: its ports here are free again' });
+    await loadShared(pool);
+  }
+
+  /** Open a service of a shared lane: its lane connected if it is not (ADR-0053), then the page; `path` (`/ui?x#y`) after its address. */
   async function openShared(pool: string, lease: string, service: string, path = '') {
     const r = await act<{ url: string; port: number; warning?: string }>({
       label: `Open ${service}`,
@@ -338,6 +364,7 @@ export const usePool = defineStore('pool', () => {
       body: { service },
       success: false,
     });
+    void loadShared(pool);
     if (!r.ok || !r.body?.url) return;
     // Its node or owner runs another devstack: a failure there may be why.
     if (r.body.warning) useUi().toast('warning', `${service}: another devstack`, r.body.warning, 12_000);
@@ -361,6 +388,8 @@ export const usePool = defineStore('pool', () => {
     setDefaultOn,
     shared,
     openShared,
+    connectShared,
+    disconnectShared,
     telemetry,
     setTelemetry,
     joinedAny,

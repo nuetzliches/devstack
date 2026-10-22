@@ -26,6 +26,13 @@ type Route = { stop(): void } | null;
 const laneNodes = new Map<string, string>();
 /** Where lanes start without a place named (ADR-0025): `null` here. */
 let mockDefaultOn: string | null = null;
+/** Shared lanes this machine is connected to (ADR-0053). */
+const connectedLeases = new Set<string>();
+/** A shared lane's services, forwarded while connected: `api`'s owner port is taken here. */
+function sharedServices(lease: string, services: { name: string; port: number; scheme: string; here: number }[]) {
+  if (!connectedLeases.has(lease)) return services;
+  return services.map((s) => ({ ...s, forwarded: s.name === 'api' ? 51234 : s.here }));
+}
 /** Lanes starting on a node, since when (ms): the mock plays the phases. */
 const remoteStarts = new Map<string, number>();
 /** `?mock=laneremoved`: the worktree of a running lane is removed (ADR-0024 point 7): removing from `at`, gone 8 s later. */
@@ -373,14 +380,29 @@ export class MockTransport implements Transport {
                 owner: '1122334455667788',
                 owner_name: 'laptop-anna',
                 node: { id: '9f8e7d6c5b4a3921', name: 'build-server', api: 'https://10.0.0.14:4261' },
-                services: [
+                services: sharedServices('0d3a5b6c7e8f9012', [
                   { name: 'api', port: 5000, scheme: 'http', here: 5100 },
                   { name: 'web', port: 4200, scheme: 'https', here: 4300 },
-                ],
+                ]),
               },
             ],
       );
-    if (/^\/hub\/pool\/shared\/[^/]+\/open$/.test(p) && method === 'POST') return json(200, { url: 'http://localhost:5100', port: 5100 });
+    const sharedAct = /^\/hub\/pool\/shared\/([^/]+)\/(open|connect|disconnect)$/.exec(p);
+    if (sharedAct && method === 'POST') {
+      const [, lease, what] = sharedAct;
+      if (what === 'disconnect') {
+        const closed = connectedLeases.delete(lease) ? 2 : 0;
+        return json(200, { closed });
+      }
+      connectedLeases.add(lease);
+      if (what === 'open') return json(200, { url: 'http://localhost:51234', port: 51234 });
+      return json(200, {
+        services: [
+          { name: 'api', port: 51234, url: 'http://localhost:51234' },
+          { name: 'web', port: 4300, url: 'https://localhost:4300' },
+        ],
+      });
+    }
     if (p === '/hub/pools' && method === 'GET')
       return json(200, [
         { name: 'default', joined: true, state: 'approved', coordinator: 'https://10.0.0.14:4260' },
