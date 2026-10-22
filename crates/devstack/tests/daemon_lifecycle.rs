@@ -21,16 +21,19 @@ fn enabled(var: &str) -> bool {
     std::env::var(var).as_deref() == Ok("1")
 }
 
-/// A free port with room above it for the lanes' ranges (`port_step` 100
-/// per lane): one the OS hands out near 65535 fails the stack file's check.
+/// A free port for a stack's fixed ports, as a real stack has them: outside
+/// the OS's ephemeral ranges (Linux 32768-60999, Windows 49152-65535), so
+/// an instance port the daemon gets from the OS never takes one (a lane's
+/// forward found its fixed port taken so after a restart started everything
+/// at once), with room above it for the lanes' ranges (`port_step` 100).
 fn free_port() -> u16 {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    let seed = (std::process::id() % 10000) as u16;
     loop {
-        let port = std::net::TcpListener::bind(("127.0.0.1", 0))
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        if port <= 64000 {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let port = 20000 + (seed.wrapping_add(n.wrapping_mul(37)) % 10000);
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
             return port;
         }
     }
