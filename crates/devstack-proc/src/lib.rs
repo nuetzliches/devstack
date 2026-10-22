@@ -11,6 +11,9 @@
 //!   when the supervisor dies (`PR_SET_PDEATHSIG`). Graceful stop is `SIGTERM`
 //!   to the group. What a dead instance left is removed by [`cleanup`] from the
 //!   [`Record`]s it wrote.
+//! - **macOS:** the same shim and process group, without cgroups; the shim
+//!   notices the supervisor's death by polling `getppid()`, and process lists,
+//!   start times and usage come from libproc (ADR-0054).
 //!
 //! A tree's lifetime ends when the supervisor drops its [`Owned`] handle or
 //! dies, whichever comes first.
@@ -95,10 +98,11 @@ pub fn pid_alive(pid: u32) -> bool {
 pub struct Usage {
     /// CPU time spent so far, user plus kernel, in microseconds. Windows and
     /// Linux with a cgroup count processes that already exited; without a
-    /// cgroup it is the sum over the live processes and may drop.
+    /// cgroup (and on macOS) it is the sum over the live processes and may
+    /// drop.
     pub cpu_us: u64,
     /// Bytes: the summed working sets (Windows), `memory.current` of the
-    /// cgroup, else the summed resident sets (Linux).
+    /// cgroup, else the summed resident sets (Linux, macOS).
     pub memory: u64,
     pub processes: u32,
 }
@@ -120,10 +124,11 @@ pub struct Spec {
 /// How to own trees on this machine.
 #[derive(Debug, Clone, Default)]
 pub struct Options {
-    /// Linux: parent directory for per-service cgroups. `None`: process group only.
+    /// Linux: parent directory for per-service cgroups. `None`: process group
+    /// only. macOS has no cgroups: a root is refused there.
     pub cgroup_root: Option<PathBuf>,
-    /// Linux: program and leading arguments that run [`shim_main`], e.g.
-    /// `["/usr/bin/devstack", "shim"]`. Required on Linux.
+    /// Unix: program and leading arguments that run [`shim_main`], e.g.
+    /// `["/usr/bin/devstack", "shim"]`. Required on Linux and macOS.
     pub shim: Vec<String>,
 }
 
@@ -131,9 +136,10 @@ pub struct Options {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct Record {
     pub name: String,
-    /// Process group id (Linux); root process id (Windows, informational).
+    /// Process group id (Unix); root process id (Windows, informational).
     pub pgid: i64,
-    /// Start time of the group leader in clock ticks since boot (Linux).
+    /// Start time of the group leader since boot: clock ticks (Linux), Mach
+    /// absolute time units (macOS).
     pub leader_start: u64,
     pub cgroup: Option<PathBuf>,
 }
@@ -161,7 +167,7 @@ pub fn spawn(spec: Spec, opts: &Options) -> Result<(Owned, Record)> {
 }
 
 impl Owned {
-    /// Process id of the tree's root (the shell, or the shim on Linux).
+    /// Process id of the tree's root (the shell, or the shim on Unix).
     pub fn root_pid(&self) -> u32 {
         self.inner.root_pid()
     }

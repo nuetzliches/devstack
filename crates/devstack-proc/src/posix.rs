@@ -1,7 +1,8 @@
 //! Unix: a shim per tree, process group always, a cgroup where the OS has one
 //! and it is delegated (spike (a), ADR-0009). What is POSIX lives here
 //! (signals, process groups, the shim, `rlimit`); what the OS has to say
-//! about processes comes from `crate::sys` (Linux: `/proc` and cgroups).
+//! about processes comes from `crate::sys` (Linux: `/proc` and cgroups;
+//! macOS: libproc).
 
 use crate::sys::{self, Cgroup};
 use crate::{Options, ProcError, Record, Result, Spec, Usage};
@@ -402,7 +403,7 @@ pub(crate) fn raise_open_files() -> Option<u64> {
     Some(l.rlim_cur as u64)
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

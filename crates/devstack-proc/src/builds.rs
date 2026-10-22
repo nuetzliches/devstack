@@ -20,8 +20,10 @@ pub struct Build {
 impl BuildJob {
     /// `opts.shim` and `opts.cgroup_root` are used on Linux: a shim holds a
     /// cgroup `<cgroup_root>/builds` that every build joins, and kills it when
-    /// the daemon dies. Without a cgroup root, builds run in their own process
-    /// groups and their servers end by their own idle timeouts after a crash.
+    /// the daemon dies. Without a cgroup root (and on macOS), each build runs
+    /// in a process group of its own, which its servers stay in: the job
+    /// knows the groups it started, measures them and kills them when it is
+    /// dropped. After a crash those servers end by their own idle timeouts.
     pub fn new(opts: &crate::Options) -> Result<Self> {
         Ok(Self {
             inner: imp::Job::new(opts)?,
@@ -37,7 +39,7 @@ impl BuildJob {
     }
 
     /// What the build job costs: builds and their servers together (plan §12,
-    /// ADR-0020). Linux without a cgroup root reports nothing.
+    /// ADR-0020). Without a cgroup (Unix) only what still runs is counted.
     pub fn usage(&self) -> crate::Usage {
         self.inner.usage()
     }
@@ -131,14 +133,18 @@ mod imp {
 
 #[cfg(unix)]
 mod imp {
-    use crate::posix::{kill_group, spawn_from_keeper, usage_of};
-    use crate::sys::Cgroup;
+    use crate::posix::{group_members, kill_group, spawn_from_keeper, summed_usage, usage_of};
+    use crate::sys::{self, Cgroup};
     use crate::{ProcError, Result, Spec, Usage};
     use std::os::unix::process::CommandExt;
     use std::process::{Child, Command, Stdio};
+    use std::sync::Mutex;
 
     pub(super) struct Job {
         holder: Option<Holder>,
+        /// Without a holder: the process group of every build started, with
+        /// the start time of its leader, until nothing is left in it.
+        groups: Mutex<Vec<(i32, u64)>>,
     }
 
     /// A shim that holds the build cgroup and kills it when the daemon dies.
@@ -173,7 +179,10 @@ mod imp {
                 }
                 _ => None,
             };
-            Ok(Self { holder })
+            Ok(Self {
+                holder,
+                groups: Mutex::new(Vec::new()),
+            })
         }
 
         pub(super) fn run(&self, spec: Spec) -> Result<Root> {
@@ -196,21 +205,66 @@ mod imp {
                 what: format!("start build {}", spec.name),
                 source: e,
             })?;
+            let pgid = child.id() as i32;
+            // A root whose start cannot be read (gone already) is not
+            // tracked: its group could not be told from one reusing the number.
+            if self.holder.is_none()
+                && let Some(start) = sys::start_time(pgid)
+            {
+                self.groups
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push((pgid, start));
+            }
             Ok(Root { child })
         }
 
         pub(super) fn usage(&self) -> Usage {
             match &self.holder {
                 Some(h) => usage_of(Some(&h.cgroup), &self.pids()),
-                None => Usage::default(),
+                None => summed_usage(&self.pids()),
             }
         }
 
         pub(super) fn pids(&self) -> Vec<u32> {
             match &self.holder {
                 Some(h) => h.cgroup.listed(),
-                None => Vec::new(),
+                None => {
+                    let mut pids: Vec<u32> = self
+                        .live_groups()
+                        .into_iter()
+                        .flat_map(|(_, members)| members)
+                        .map(|p| p as u32)
+                        .collect();
+                    pids.sort();
+                    pids
+                }
             }
+        }
+
+        /// The build groups that still have members, with them; forgets the
+        /// ones that ended. A group whose number now belongs to a leader with
+        /// another start time is not the build's any more (a process group's
+        /// number is not reused while the group exists, so a group whose
+        /// leader has ended is still the build's).
+        fn live_groups(&self) -> Vec<(i32, Vec<i32>)> {
+            let mut groups = self.groups.lock().unwrap_or_else(|e| e.into_inner());
+            let mut live = Vec::new();
+            groups.retain(|&(pgid, start)| {
+                if sys::start_time(pgid).is_some_and(|t| t != start) {
+                    return false;
+                }
+                match group_members(pgid) {
+                    Some(m) if m.is_empty() => false,
+                    Some(m) => {
+                        live.push((pgid, m));
+                        true
+                    }
+                    // Cannot be told now: kept, and not counted.
+                    None => true,
+                }
+            });
+            live
         }
     }
 
@@ -221,6 +275,9 @@ mod imp {
                 let _ = h.shim.kill();
                 let _ = h.shim.wait();
                 h.cgroup.remove();
+            }
+            for (pgid, _) in self.live_groups() {
+                let _ = kill_group(pgid, libc::SIGKILL);
             }
         }
     }
