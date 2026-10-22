@@ -59,6 +59,11 @@ and listed with their assets on the
   the daemon's stop, or a stop or restart, cut short stayed in that state in
   the build list for good ("switching", 20 h). Only the candidate's build is
   still on its way.
+- **A lane of a stack of Compose containers only is no longer yellow** in
+  the dashboard's sidebar while its containers run ("0 of 0 services
+  running"). A lane's containers now count as its services do, and its
+  tooltip names them (`3 of 3 containers running`); `GET /v1/lanes` reports
+  `containers_running` and `containers`, a lane on a node's too.
 
 ## [0.18.0] - 2026-10-21
 

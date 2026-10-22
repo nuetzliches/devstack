@@ -141,6 +141,20 @@ pub struct ContainerView {
     pub managed: bool,
 }
 
+/// Of the containers devstack starts in `infra`, those that run, and all.
+pub fn containers_running(infra: &[InfraView]) -> (usize, usize) {
+    let managed = || {
+        infra
+            .iter()
+            .flat_map(|g| &g.containers)
+            .filter(|c| c.managed)
+    };
+    (
+        managed().filter(|c| c.state == "running").count(),
+        managed().count(),
+    )
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct InfraView {
     pub group: String,

@@ -136,6 +136,9 @@ export type LaneView = {
   owns_main: boolean;
   running: number;
   services: number;
+  /** Its Compose containers devstack starts that run, and all of them. Older daemons omit them. */
+  containers_running?: number;
+  containers?: number;
   /** The node of the pool it runs on (ADR-0025); absent: this machine. */
   node?: string;
   /** The pool of that node (ADR-0034). */

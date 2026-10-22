@@ -18,6 +18,26 @@ export function started(l: LaneView): boolean {
   return l.active !== false;
 }
 
+/** Of a started lane, its services and its Compose containers: running, and all. */
+export type RunCounts = { running: number; services: number; containersRunning: number; containers: number };
+
+/**
+ * Whether a started lane runs what it has: its containers count as its
+ * services do, since a stack of containers only runs by them. `false`: it
+ * has something to run and runs none of it.
+ */
+export function runsAnything(c: RunCounts): boolean {
+  return c.running > 0 || c.containersRunning > 0 || c.services + c.containers === 0;
+}
+
+/** `2 of 3 services, 1 of 1 container running`: of what it has. */
+export function runCounts(c: RunCounts): string {
+  const parts: string[] = [];
+  if (c.services > 0 || c.containers === 0) parts.push(`${c.running} of ${c.services} services`);
+  if (c.containers > 0) parts.push(`${c.containersRunning} of ${c.containers} container${c.containers === 1 ? '' : 's'}`);
+  return `${parts.join(', ')} running`;
+}
+
 /**
  * Started lanes first (the one serving the main ports on top), then the
  * worktrees not started; each by label. Agents open many worktrees: the ones
