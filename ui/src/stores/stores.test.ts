@@ -75,6 +75,20 @@ describe('hub store', () => {
     expect(useUi().toasts.map((t) => [t.kind, t.title])).toEqual([['warning', 'A desktop notification could not be shown.']]);
   });
 
+  it("keeps why the hub's last release check failed until one does not", async () => {
+    fake.on('/hub/session', ok({ version: '0.9.8' }));
+    const hub = useHub();
+    await hub.init();
+    const s = fake.stream('/hub/events');
+    s.handlers.onMessage({ type: 'release', current: '0.9.8', newer: null, error: 'no network' });
+    expect([hub.newer, hub.releaseError]).toEqual([null, 'no network']);
+    s.handlers.onMessage({ type: 'release', current: '0.9.8', newer: '1.0.0', error: null });
+    expect([hub.newer, hub.releaseError]).toEqual(['1.0.0', null]);
+    // An older hub says nothing of it.
+    s.handlers.onMessage({ type: 'release', current: '0.9.8', newer: null });
+    expect(hub.releaseError).toBeNull();
+  });
+
   it('says so when the browser is not paired', async () => {
     fake.on('/hub/session', { status: 401, ok: false, body: { error: 'not paired' } });
     const hub = useHub();

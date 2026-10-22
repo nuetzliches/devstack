@@ -100,6 +100,7 @@ const label = computed(() => (quiet.value ? 'Notifications: muted for this stack
       <p v-if="error" class="err small">{{ error }}</p>
       <template v-else-if="settings">
         <p v-if="!settings.available" class="warn small" data-testid="notify-unavailable">Not shown here: {{ settings.unavailable }}</p>
+        <p v-if="settings.trouble" class="warn small" data-testid="notify-trouble">{{ settings.trouble }}</p>
         <ul class="kinds">
           <li v-for="k in settings.kinds" :key="k.kind">
             <label>

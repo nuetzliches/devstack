@@ -27,7 +27,8 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// Register the AppUserModelID under which the hub's toasts show.
+/// Register the AppUserModelID under which the hub's toasts show; `Err`
+/// with what follows when it could not be (logged).
 pub fn register() -> Result<(), String> {
     let key = wide(AUMID_KEY);
     let name = wide("DisplayName");
@@ -45,10 +46,16 @@ pub fn register() -> Result<(), String> {
         )
     };
     if rc == ERROR_SUCCESS {
-        Ok(())
-    } else {
-        Err(format!("registering {AUMID}: error {rc}"))
+        return Ok(());
     }
+    diag::warn(
+        "notify_register_failed",
+        serde_json::json!({ "error": format!("registering {AUMID}: error {rc}") }),
+    );
+    Err(format!(
+        "devstack's name could not be registered with Windows (HKCU\\{AUMID_KEY}: error {rc}), \
+         so notifications may show without it, or not at all."
+    ))
 }
 
 pub fn unregister() {
@@ -77,11 +84,13 @@ fn link_registered() -> bool {
 
 pub struct Toast {
     port: u16,
+    /// How the registration at hub start went (`register`).
+    registered: Result<(), String>,
 }
 
 impl Toast {
-    pub fn new(port: u16) -> Self {
-        Self { port }
+    pub fn new(port: u16, registered: Result<(), String>) -> Self {
+        Self { port, registered }
     }
 }
 
@@ -114,6 +123,10 @@ impl Sink for Toast {
             }
             _ => Err("Windows does not show notifications from devstack".into()),
         }
+    }
+
+    fn trouble(&self) -> Option<String> {
+        self.registered.clone().err()
     }
 
     fn show(&self, n: Shown) {

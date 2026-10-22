@@ -30,6 +30,8 @@ export const useHub = defineStore('hub', () => {
   const dockerStarting = ref(false);
   /** A newer devstack release, if the hub found one. */
   const newer = ref<string | null>(null);
+  /** Why the hub's last check for a newer release failed (no network, GitHub's rate limit); null when it did not. */
+  const releaseError = ref<string | null>(null);
   /** `devstack update` started from the dashboard runs. */
   const updating = ref(false);
   /** The last "Check for updates" of this page: when, and what it found or why not. */
@@ -100,6 +102,7 @@ export const useHub = defineStore('hub', () => {
       onMessage(ev) {
         if (ev.type === 'release') {
           newer.value = ev.newer;
+          releaseError.value = ev.error ?? null;
           return;
         }
         if (ev.type === 'update') {
@@ -225,6 +228,7 @@ export const useHub = defineStore('hub', () => {
     docker,
     dockerStarting,
     newer,
+    releaseError,
     guests,
     updating,
     lastCheck,

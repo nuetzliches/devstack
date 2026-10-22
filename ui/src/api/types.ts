@@ -35,8 +35,8 @@ export type DockerEngine =
 export type HubEvent =
   | { type: 'stacks'; stacks: StackEntry[] }
   | { type: 'docker'; docker: DockerEngine }
-  /** A newer release than the hub (`newer`), or none. */
-  | { type: 'release'; current: string; newer: string | null }
+  /** A newer release than the hub (`newer`), or none; why the last check failed (`error`; older hubs leave it out). */
+  | { type: 'release'; current: string; newer: string | null; error?: string | null }
   /** The dashboard's update (`POST /hub/update`): running, or how the last one ended. Older hubs never send it. */
   | { type: 'update'; update: UpdateState }
   /** Lanes of other members that run on this machine, every pool; older hubs never send it. */
@@ -555,6 +555,8 @@ export type NotifySettings = {
   available: boolean;
   /** Why nothing shows (no desktop session, switched off in the system's settings). */
   unavailable: string | null;
+  /** What does not work as it should while notifications show (devstack's name not registered with Windows, a click that could not open the dashboard); older hubs leave it out. */
+  trouble?: string | null;
   kinds: NotifyKind[];
   /** Stack ids, and `<stack id>/<lane>`. */
   muted: string[];

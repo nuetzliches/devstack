@@ -4,13 +4,11 @@
 //! notifications are off and say why. A click (the `default` action) is
 //! heard here and opens the dashboard (point 6).
 
-use super::{Shown, Sink, Target};
+use super::{Open, Shown, Sink, Target};
 use devstack_daemon::diag;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use tokio_stream::StreamExt;
-
-type Open = Arc<dyn Fn(&Target) + Send + Sync>;
 
 /// How many notifications a click is remembered for.
 const REMEMBERED: usize = 64;
@@ -27,6 +25,9 @@ struct Inner {
     /// Tag -> the id of the notification shown for it, to replace it.
     tags: Mutex<HashMap<String, u32>>,
     open: Open,
+    /// Why the last click could not open the dashboard; a click that does
+    /// clears it.
+    open_error: Mutex<Option<String>>,
 }
 
 impl Bus {
@@ -37,6 +38,7 @@ impl Bus {
             clicks: Mutex::new(VecDeque::new()),
             tags: Mutex::new(HashMap::new()),
             open,
+            open_error: Mutex::new(None),
         });
         let first = inner.clone();
         tokio::spawn(async move {
@@ -62,6 +64,12 @@ impl Inner {
             }
         }
         p.clone()
+    }
+
+    /// A click on the notification for `t`: open the dashboard, and keep
+    /// whether it could.
+    fn clicked(&self, t: &Target) {
+        *self.open_error.lock().unwrap() = (self.open)(t).err();
     }
 }
 
@@ -105,7 +113,7 @@ fn listen(inner: Arc<Inner>, proxy: zbus::Proxy<'static>) {
                 .find(|(i, _)| *i == id)
                 .map(|(_, t)| t.clone());
             if let Some(t) = target {
-                (inner.open)(&t);
+                inner.clicked(&t);
             }
         }
     });
@@ -114,6 +122,10 @@ fn listen(inner: Arc<Inner>, proxy: zbus::Proxy<'static>) {
 impl Sink for Bus {
     fn status(&self) -> Result<(), String> {
         self.inner.status.lock().unwrap().clone()
+    }
+
+    fn trouble(&self) -> Option<String> {
+        self.inner.open_error.lock().unwrap().clone()
     }
 
     fn show(&self, n: Shown) {
@@ -176,4 +188,41 @@ fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn a_click_that_cannot_open_the_dashboard_is_trouble_until_one_can() {
+        let fail = Arc::new(AtomicBool::new(true));
+        let open: Open = {
+            let fail = fail.clone();
+            Arc::new(move |_: &Target| -> Result<(), String> {
+                if fail.load(Ordering::SeqCst) {
+                    Err("xdg-open did not start".into())
+                } else {
+                    Ok(())
+                }
+            })
+        };
+        let bus = Bus {
+            inner: Arc::new(Inner {
+                proxy: tokio::sync::Mutex::new(None),
+                status: Mutex::new(Ok(())),
+                clicks: Mutex::new(VecDeque::new()),
+                tags: Mutex::new(HashMap::new()),
+                open,
+                open_error: Mutex::new(None),
+            }),
+        };
+        assert_eq!(bus.trouble(), None);
+        bus.inner.clicked(&Target::default());
+        assert_eq!(bus.trouble().as_deref(), Some("xdg-open did not start"));
+        fail.store(false, Ordering::SeqCst);
+        bus.inner.clicked(&Target::default());
+        assert_eq!(bus.trouble(), None);
+    }
 }
