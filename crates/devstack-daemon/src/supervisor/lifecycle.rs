@@ -122,8 +122,45 @@ impl Supervisor {
     /// Stop every service, last started first. Infra stays up (ADR-0004: it is
     /// long-lived) unless `infra` is set. Returns what did not stop.
     pub fn down(&self, infra: bool) -> Vec<String> {
+        self.down_keeping(infra, &BTreeSet::new())
+    }
+
+    /// Main tree, while lanes run: stop every service but those that serve
+    /// the lanes, a service with `lanes = false` and what it starts `after`
+    /// (ADR-0024 point 5: the main tree's instance serves every lane).
+    /// Their names, and what did not stop.
+    pub fn down_for_lanes(&self) -> (Vec<String>, Vec<String>) {
+        let mut keep: BTreeSet<String> = self
+            .stack
+            .services
+            .iter()
+            .filter(|(_, s)| !s.lanes)
+            .map(|(n, _)| n.clone())
+            .collect();
+        let mut todo: Vec<String> = keep.iter().cloned().collect();
+        while let Some(n) = todo.pop() {
+            for dep in self
+                .stack
+                .services
+                .get(&n)
+                .map(|s| s.after.clone())
+                .unwrap_or_default()
+            {
+                if self.stack.services.contains_key(&dep) && keep.insert(dep.clone()) {
+                    todo.push(dep);
+                }
+            }
+        }
+        let failed = self.down_keeping(false, &keep);
+        (keep.into_iter().collect(), failed)
+    }
+
+    fn down_keeping(&self, infra: bool, keep: &BTreeSet<String>) -> Vec<String> {
         let mut failed = Vec::new();
         for name in self.service_order().into_iter().rev() {
+            if keep.contains(&name) {
+                continue;
+            }
             if let Err(e) = self.stop(&name) {
                 failed.push(format!("{name}: {e}"));
             }
@@ -406,11 +443,40 @@ impl Supervisor {
             return Ok(());
         }
         let port = svc.port.expect("a fronted dev server has a port");
-        if port_in_use(port) {
-            return Err(super::port_taken(port));
+        // Held a moment longer by something on its way out (the instance of
+        // a daemon that just restarted, ADR-0052): tried again for a while;
+        // a port that stays taken names its holder as before.
+        let t0 = std::time::Instant::now();
+        let bound = loop {
+            let r = if port_in_use(port) {
+                Err(std::io::Error::from(std::io::ErrorKind::AddrInUse))
+            } else {
+                crate::tcpfwd::Front::bind(port, &self.rt)
+            };
+            match r {
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::AddrInUse
+                        && t0.elapsed() < Duration::from_secs(10) =>
+                {
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+                r => break r,
+            }
+        };
+        if t0.elapsed() >= Duration::from_millis(250) {
+            crate::diag::info(
+                "front_port_waited",
+                serde_json::json!({ "lane": self.lane, "service": name, "port": port,
+                    "ms": t0.elapsed().as_millis() as u64, "bound": bound.is_ok() }),
+            );
         }
-        let f = crate::tcpfwd::Front::bind(port, &self.rt)
-            .map_err(|e| format!("forward on port {port}: {e}"))?;
+        let f = match bound {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                return Err(super::port_taken(port));
+            }
+            Err(e) => return Err(format!("forward on port {port}: {e}")),
+        };
         fronts.insert(name.into(), f);
         Ok(())
     }

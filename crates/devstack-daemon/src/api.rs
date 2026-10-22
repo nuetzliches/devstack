@@ -258,7 +258,27 @@ async fn down(State(s): State<AppState>, Query(q): Query<DownQuery>) -> Response
     let lanes = s.lanes.as_ref().map(|l| l.active()).unwrap_or_default();
     let infra = q.infra && lanes.is_empty();
     let sup = s.sup.clone();
-    let result = tokio::task::spawn_blocking(move || sup.down(infra)).await;
+    // Lanes that still run keep what serves them (`lanes = false`).
+    let keeping = !lanes.is_empty() && s.lanes.is_some();
+    let result = tokio::task::spawn_blocking(move || {
+        if keeping {
+            let (kept, failed) = sup.down_for_lanes();
+            if !kept.is_empty() {
+                crate::diag::info(
+                    "main_down_kept",
+                    serde_json::json!({ "services": kept, "why": "they serve the lanes that run" }),
+                );
+            }
+            (kept, failed)
+        } else {
+            (Vec::new(), sup.down(infra))
+        }
+    })
+    .await;
+    let (kept, result) = match result {
+        Ok((k, f)) => (k, Ok(f)),
+        Err(e) => (Vec::new(), Err(e)),
+    };
     // The stack stopped: a lane's start or move that failed before is over.
     if let Some(l) = &s.lanes {
         l.forget_failed(None);
@@ -275,7 +295,9 @@ async fn down(State(s): State<AppState>, Query(q): Query<DownQuery>) -> Response
                 )
             ),
         ),
-        Ok(_) if !lanes.is_empty() => Json(serde_json::json!({ "lanes": lanes })).into_response(),
+        Ok(_) if !lanes.is_empty() => {
+            Json(serde_json::json!({ "lanes": lanes, "kept": kept })).into_response()
+        }
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
