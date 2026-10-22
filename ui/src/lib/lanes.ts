@@ -92,3 +92,20 @@ export function samePath(a: string, b: string): boolean {
   };
   return norm(a) === norm(b);
 }
+
+/**
+ * Published ports this machine does not forward (`["5353/udp"]`, a lane on a
+ * node: devstack forwards TCP only, #192) as a sentence; empty for none.
+ */
+export function notForwardedText(ports: string[] | undefined): string {
+  const list = (ports ?? []).map((p) => {
+    const [port, proto = 'udp'] = p.split('/');
+    return { port, proto: proto.toUpperCase() };
+  });
+  if (!list.length) return '';
+  const one = list.every((p) => p.proto === list[0].proto);
+  const named = one
+    ? `${list[0].proto} port${list.length === 1 ? '' : 's'} ${list.map((p) => p.port).join(', ')}`
+    : `ports ${list.map((p) => `${p.proto} ${p.port}`).join(', ')}`;
+  return `${named} ${list.length === 1 ? 'is' : 'are'} not forwarded to this machine (devstack forwards TCP only)`;
+}

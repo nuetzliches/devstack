@@ -198,6 +198,10 @@ devstack leases the lane, syncs the worktree to the node (by content, only
 what changed: a change within two seconds of saving, and everything compared
 every 30 s besides), starts it there and forwards its ports to your machine:
 `localhost:<port>` reaches it as if it ran locally, its containers' ports too.
+Forwarding carries TCP only: a container port published as UDP (`53/udp`,
+a game's voice port) runs on the node but is not forwarded here. The lane's
+page, its container's row and `devstack lane list` say so ("UDP port 5353 is
+not forwarded to this machine"); keep such a lane local (#192).
 The dashboard shows where each lane runs, its start step by step, and offers
 **Start here / on a node / in the pool** for a lane that is not started.
 

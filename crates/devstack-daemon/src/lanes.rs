@@ -90,6 +90,10 @@ pub struct LaneView {
     /// or does not say which (ADR-0031, amended 2026-10-19).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_warning: Option<String>,
+    /// Of a lane on a node, its containers' published ports this machine
+    /// does not forward (`5353/udp`): devstack forwards TCP only (#192).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub not_forwarded: Vec<String>,
     /// A start on a node or a move under way, or one that failed lately.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub moving: Option<LaneMove>,
@@ -105,8 +109,15 @@ pub struct LaneView {
 
 /// Of a lane, what the lists show that changes on its own: name, services
 /// and containers running and all, its node's error, whether it moves, its
-/// notices.
-type Shown = (String, [usize; 4], Option<String>, bool, Vec<Notice>);
+/// notices, its ports not forwarded.
+type Shown = (
+    String,
+    [usize; 4],
+    Option<String>,
+    bool,
+    Vec<Notice>,
+    Vec<String>,
+);
 
 /// The notice of a lane whose worktree git lists but is not there, missing
 /// since `since` (unix ms): the lane goes after [`MISSING_GRACE`].
@@ -1087,6 +1098,7 @@ impl Lanes {
                     v.node_error,
                     v.moving.is_some(),
                     v.notices,
+                    v.not_forwarded,
                 )
             })
             .collect()
@@ -1660,7 +1672,11 @@ impl Lanes {
                     pool: on_node.map(|r| r.pool.clone()),
                     shared_with: self.share_of(&k.entry.name),
                     profile: self.profiles.lock().unwrap().get(&k.entry.name).cloned(),
-                    node_error: node_state.and_then(|st| st.error()),
+                    node_error: node_state.as_ref().and_then(|st| st.error()),
+                    not_forwarded: node_state
+                        .as_ref()
+                        .map(|st| st.not_forwarded.clone())
+                        .unwrap_or_default(),
                     node_warning: on_node
                         .and_then(|r| r.warning.clone())
                         .or_else(|| moves.get(&k.entry.name).and_then(|m| m.warning.clone())),

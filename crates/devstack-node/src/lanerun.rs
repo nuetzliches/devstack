@@ -187,7 +187,7 @@ fn initial_infra(
                 let ports: BTreeMap<String, String> = m
                     .ports
                     .iter()
-                    .map(|p| (p.target.to_string(), format!("{svc}:{}", p.target)))
+                    .map(|p| (port_key(p), format!("{svc}:{}", p.target)))
                     .collect();
                 // Where a local lane would publish each port: the host port
                 // of the Compose files, moved by the lane's offset.
@@ -196,11 +196,18 @@ fn initial_infra(
                     .iter()
                     .filter_map(|p| {
                         let host: u16 = p.published.as_deref()?.trim().parse().ok()?;
-                        Some((p.target.to_string(), host.checked_add(port_offset)?))
+                        Some((port_key(p), host.checked_add(port_offset)?))
                     })
                     .collect();
+                // The requester forwards TCP only (#192): a UDP port stays
+                // listed, for the daemon to say it is not forwarded.
                 if starts {
-                    infra_ports.extend(published.values().copied());
+                    infra_ports.extend(
+                        published
+                            .iter()
+                            .filter(|(key, _)| !key.contains('/'))
+                            .map(|(_, host)| *host),
+                    );
                 }
                 (
                     svc.clone(),
@@ -226,6 +233,23 @@ fn initial_infra(
     infra_ports.sort_unstable();
     infra_ports.dedup();
     (serde_json::json!({ "groups": infra }), infra_ports)
+}
+
+/// A Compose port without a protocol, or `tcp`, is TCP.
+fn is_tcp(p: &devstack_compose::PortModel) -> bool {
+    p.protocol
+        .as_deref()
+        .is_none_or(|x| x.is_empty() || x.eq_ignore_ascii_case("tcp"))
+}
+
+/// How the lane's daemon's file keys a container port: `5432` for TCP, as
+/// every agent wrote it, `53/udp` for another protocol, so a service's
+/// `53/tcp` and `53/udp` stay two (#192).
+fn port_key(p: &devstack_compose::PortModel) -> String {
+    match (is_tcp(p), p.protocol.as_deref()) {
+        (false, Some(proto)) => format!("{}/{}", p.target, proto.to_ascii_lowercase()),
+        _ => p.target.to_string(),
+    }
 }
 
 fn docker_for(args: &[&str], within: Duration) -> Result<String> {
@@ -1130,6 +1154,38 @@ mod tests {
         // forwarded.
         assert_eq!(app["services"]["seed"]["state"], "");
         assert_eq!(ports, [15532], "only what the group starts is forwarded");
+    }
+
+    #[test]
+    fn a_udp_port_is_listed_with_its_protocol_and_not_forwarded() {
+        let model = devstack_compose::parse_config(
+            r#"{"name":"shop","services":{
+                "dns":{"image":"dnsmasq","ports":[
+                    {"target":53,"published":"5353","protocol":"tcp"},
+                    {"target":53,"published":"5353","protocol":"udp"},
+                    {"target":8080,"published":"8080"}]},
+                "voice":{"image":"sip","ports":[{"target":5060,"published":"5060","protocol":"udp"}]}}}"#,
+        )
+        .unwrap();
+        let g = Group {
+            name: "app".into(),
+            project: "shop-ab12".into(),
+            files: Vec::new(),
+            env_files: Vec::new(),
+            networks: Vec::new(),
+            services: Vec::new(),
+            dir: PathBuf::from("/compose"),
+        };
+        let (infra, ports) = initial_infra(&[("app".into(), g, model)], 100);
+        let dns = &infra["groups"]["app"]["services"]["dns"];
+        assert_eq!(dns["ports"]["53"], "dns:53");
+        assert_eq!(dns["ports"]["53/udp"], "dns:53", "not folded into 53/tcp");
+        assert_eq!(dns["published"]["53"], 5453);
+        assert_eq!(dns["published"]["53/udp"], 5453);
+        assert_eq!(dns["published"]["8080"], 8180);
+        let voice = &infra["groups"]["app"]["services"]["voice"];
+        assert_eq!(voice["published"]["5060/udp"], 5160);
+        assert_eq!(ports, [5453, 8180], "TCP only, each once");
     }
 
     #[test]

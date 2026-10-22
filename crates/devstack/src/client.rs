@@ -1355,6 +1355,9 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
         if let Some(w) = l["node_warning"].as_str() {
             troubles.push(format!("{name}: {w}"));
         }
+        if let Some(t) = not_forwarded_line(&l["not_forwarded"]) {
+            troubles.push(format!("{name}: {t}"));
+        }
         println!(
             "{:<24} {:<24} {:>8} {:>9}  {:<5}  {:<16} {}",
             name,
@@ -1374,6 +1377,33 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
         println!("  ! {t}");
     }
     Ok(())
+}
+
+/// A lane's `not_forwarded` (`["5353/udp"]`) as a line: `UDP port 5353 is
+/// not forwarded ...`; `None` when there is none (#192).
+fn not_forwarded_line(ports: &Value) -> Option<String> {
+    let ports: Vec<(String, String)> = ports
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|p| {
+            let (port, proto) = p.split_once('/').unwrap_or((p, "udp"));
+            (proto.to_ascii_uppercase(), port.to_string())
+        })
+        .collect();
+    let (first, rest) = ports.split_first()?;
+    let listed = if rest.iter().all(|(proto, _)| *proto == first.0) {
+        let numbers: Vec<&str> = ports.iter().map(|(_, n)| n.as_str()).collect();
+        let s = if numbers.len() == 1 { "" } else { "s" };
+        format!("{} port{s} {}", first.0, numbers.join(", "))
+    } else {
+        let each: Vec<String> = ports.iter().map(|(p, n)| format!("{p} {n}")).collect();
+        format!("ports {}", each.join(", "))
+    };
+    let are = if ports.len() == 1 { "is" } else { "are" };
+    Some(format!(
+        "{listed} {are} not forwarded to this machine (devstack forwards TCP only)"
+    ))
 }
 
 /// A lane's `moving` as a line: `  [2/3] sync: ...`.
@@ -2308,5 +2338,28 @@ data: {\"type\":\"line\",\"text\":\"c\"}\n\n";
     fn this_process_is_alive() {
         assert!(pid_alive(std::process::id()));
         assert!(!pid_alive(u32::MAX - 1));
+    }
+
+    #[test]
+    fn a_lanes_ports_not_forwarded_are_said() {
+        let line = |v: Value| not_forwarded_line(&v);
+        assert_eq!(line(serde_json::json!(null)), None, "an older daemon");
+        assert_eq!(line(serde_json::json!([])), None);
+        assert_eq!(
+            line(serde_json::json!(["5353/udp"])).as_deref(),
+            Some("UDP port 5353 is not forwarded to this machine (devstack forwards TCP only)")
+        );
+        assert_eq!(
+            line(serde_json::json!(["5060/udp", "5353/udp"])).as_deref(),
+            Some(
+                "UDP ports 5060, 5353 are not forwarded to this machine (devstack forwards TCP only)"
+            )
+        );
+        assert_eq!(
+            line(serde_json::json!(["5353/udp", "9000/sctp"])).as_deref(),
+            Some(
+                "ports UDP 5353, SCTP 9000 are not forwarded to this machine (devstack forwards TCP only)"
+            )
+        );
     }
 }

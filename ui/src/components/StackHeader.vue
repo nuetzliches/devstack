@@ -5,7 +5,7 @@
 // banner.
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { duration, ago, useNow } from '@/lib/format';
-import { laneLabel, nodeLabel } from '@/lib/lanes';
+import { laneLabel, nodeLabel, notForwardedText } from '@/lib/lanes';
 import { usePopover } from '@/lib/popover';
 import type { Opener } from '@/api/types';
 import { useHub } from '@/stores/hub';
@@ -305,6 +305,7 @@ function openWith(o: Opener) {
         {{ current.owns_main ? 'serves the main ports' : 'no background workers' }}
         <span v-if="current.node_error" class="err" :title="current.node_error"> · {{ current.node_error }}</span>
         <span v-if="current.node_warning" class="warn-text" :title="current.node_warning" data-testid="lane-node-warning"> · {{ current.node_warning }}</span>
+        <span v-if="current.not_forwarded?.length" class="warn-text" data-testid="lane-not-forwarded"> · {{ notForwardedText(current.not_forwarded) }}</span>
       </span>
     </div>
   </header>
