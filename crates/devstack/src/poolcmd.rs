@@ -224,7 +224,7 @@ pub fn members_policy(
     node: &str,
     allow: Vec<String>,
     repos: Vec<String>,
-    (memory_headroom, max_cpus): (Option<f64>, Option<f64>),
+    (memory_headroom, max_cpus, share_percent): (Option<f64>, Option<f64>, Option<u8>),
     network: Option<String>,
     clear: bool,
 ) -> Result<()> {
@@ -237,6 +237,7 @@ pub fn members_policy(
         || !repos.is_empty()
         || memory_headroom.is_some()
         || max_cpus.is_some()
+        || share_percent.is_some()
         || network.is_some();
     let m = if !changes {
         let ms = store.list()?;
@@ -259,6 +260,7 @@ pub fn members_policy(
                 repos,
                 memory_headroom,
                 max_cpus,
+                share_percent,
                 network,
                 ..NodePolicy::default()
             }),
@@ -271,7 +273,7 @@ pub fn members_policy(
             m.id, m.name
         ),
         Some(p) => println!(
-            "{} ({}): allow {}; repositories {}; memory {}; CPU {}; network {}",
+            "{} ({}): allow {}; repositories {}; memory {}; CPU {}; offers {}% of what is free; network {}",
             m.id,
             m.name,
             if p.allow.is_empty() {
@@ -288,6 +290,7 @@ pub fn members_policy(
                 .map_or("unlimited".into(), |h| format!("need x {h}")),
             p.max_cpus
                 .map_or("unlimited".into(), |c| format!("{c} cores per lane")),
+            p.share_percent.unwrap_or(50),
             match p.network {
                 Network::Lan => "the internet and the local network",
                 Network::Internet => "the internet, not the local network",

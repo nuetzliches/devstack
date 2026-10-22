@@ -101,7 +101,8 @@ why. A member that only shares from the dashboard is no node.
 - `--dedicated`: a server its owner never reclaims. The pool shows it as a
   server, and only a lane on such a node may take the main ports.
 - `--max-cpus`, `--max-memory-gib`: caps on what its lanes take together;
-  below them, half of what is free right now.
+  below them, half of what is free right now, or the part its policy says
+  (`share_percent`).
 - `--api https://host:port`: where requesters reach it, when `--listen` is
   every address (`0.0.0.0:4261`).
 - `--pool <name>`: the pool it serves (one agent per pool, see [Several
@@ -375,7 +376,7 @@ devstack node members remove <id>
 devstack node members tags <id> team:backend customer:acme
 devstack node members node <id> on|off          # whether the pool runs lanes there
 devstack node members policy build-server --allow team:backend --repo shop \
-    --memory-headroom 2 --max-cpus 8 --network internet
+    --memory-headroom 2 --max-cpus 8 --share-percent 80 --network internet
 ```
 
 `devstack node members policy <node>` without options prints the node's
@@ -388,7 +389,9 @@ A node's **policy** (ADR-0033): who may run lanes there (member ids or
 tags), which repositories (`[stack] name`; a guard against mistakes, not
 against a member who lies), a memory limit (the lane's expected need times
 the headroom, at least 2 GiB), a CPU limit per lane, both on every container
-of the lane, and its network:
+of the lane, what of its free CPU and memory it offers (`--share-percent`,
+1 to 100; default 50: a dedicated server nobody works on can offer more),
+and its network:
 
 | `--network` | A lane there reaches |
 |---|---|

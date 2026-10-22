@@ -151,3 +151,12 @@ a machine that only switched it on (on Windows none can, #168). A machine
 shares by running a node agent an admin granted (ADR-0032); the hub reports
 the machine and offers nothing (`crates/devstack-hub/src/share.rs`). A
 switch that starts the agent is #171, and comes with its own ADR.
+
+*Amended 2026-10-22.* Point 3's "by default half": a node's policy
+(ADR-0033) says another part, `share_percent` (1 to 100; the admin's in the
+dashboard or `devstack node members policy --share-percent`, the node's own
+in its `policy.json`, the smaller of the two). A dedicated server nobody
+works on can offer most of what is free; its caps hold as before. A start's
+own lease is room the lane has: `GET /v1/placement` counts it as the
+lane's (what the dashboard shows while the lane starts there), a lease
+request does not.

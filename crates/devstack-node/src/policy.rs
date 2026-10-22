@@ -85,6 +85,10 @@ pub struct NodePolicy {
     /// The most CPU cores one lane's container may use; `None`: no limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_cpus: Option<f64>,
+    /// What of its free CPU and memory the node offers the pool, percent
+    /// (1 to 100, ADR-0031 point 3); `None`: half.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_percent: Option<u8>,
     #[serde(default)]
     pub network: Network,
     /// How long a stopped lane's mirror and data stay here for its next
@@ -150,10 +154,12 @@ impl NodePolicy {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
-        let lower = |a: Option<u64>, b: Option<u64>| match (a, b) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
+        fn lower<T: Ord>(a: Option<T>, b: Option<T>) -> Option<T> {
+            match (a, b) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            }
+        }
         all.iter().fold(None, |acc: Option<NodePolicy>, p| {
             Some(match acc {
                 None => (*p).clone(),
@@ -162,6 +168,7 @@ impl NodePolicy {
                     repos: Vec::new(),
                     memory_headroom: min(a.memory_headroom, p.memory_headroom),
                     max_cpus: min(a.max_cpus, p.max_cpus),
+                    share_percent: lower(a.share_percent, p.share_percent),
                     network: a.network.max(p.network),
                     keep_lanes_hours: lower(a.keep_lanes_hours, p.keep_lanes_hours),
                     keep_lanes_gib: lower(a.keep_lanes_gib, p.keep_lanes_gib),
@@ -207,14 +214,15 @@ mod tests {
         let coord = NodePolicy {
             memory_headroom: Some(2.0),
             max_cpus: Some(8.0),
+            share_percent: Some(80),
             ..Default::default()
         };
         assert!(NodePolicy::admits_all(&[&node, &coord], "x", &[], "shop").is_err());
         assert!(NodePolicy::admits_all(&[&node, &coord], "x", &["team:a".into()], "shop").is_ok());
         let s = NodePolicy::strictest(&[&node, &coord]).unwrap();
         assert_eq!(
-            (s.max_cpus, s.memory_headroom, s.network),
-            (Some(4.0), Some(2.0), Network::Internet)
+            (s.max_cpus, s.memory_headroom, s.network, s.share_percent),
+            (Some(4.0), Some(2.0), Network::Internet, Some(80))
         );
         assert!(NodePolicy::strictest(&[]).is_none());
         let none = NodePolicy {

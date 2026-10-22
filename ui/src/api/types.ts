@@ -382,6 +382,8 @@ export type NodePolicy = {
   memory_headroom?: number;
   /** The most CPU cores one lane may use. */
   max_cpus?: number;
+  /** What of its free CPU and memory the node offers the pool, percent (1 to 100); absent: half. */
+  share_percent?: number;
   /** `lan`: the internet and the local network; `internet`: not the local network; `none`: only the lane's own containers. */
   network?: 'lan' | 'internet' | 'none';
 };

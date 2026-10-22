@@ -546,6 +546,10 @@ enum MembersAction {
         /// The most CPU cores one lane may use.
         #[arg(long)]
         max_cpus: Option<f64>,
+        /// What of its free CPU and memory the node offers the pool, percent
+        /// (default 50).
+        #[arg(long, value_parser = clap::value_parser!(u8).range(1..=100))]
+        share_percent: Option<u8>,
         /// `lan` (the internet and the local network), `internet` (not the
         /// local network) or `none` (only the lane's own containers).
         #[arg(long)]

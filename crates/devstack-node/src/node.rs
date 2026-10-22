@@ -3349,11 +3349,17 @@ async fn background(s: Shared) {
             })
             .await;
         }
+        // The part of what is free a policy says, else half (ADR-0031 point 3).
+        let percent = {
+            let policies = s.policies();
+            let all: Vec<&crate::policy::NodePolicy> = policies.iter().collect();
+            crate::policy::NodePolicy::strictest(&all).and_then(|p| p.share_percent)
+        };
         let offer = Settings {
             enabled: true,
             ..s.share.clone()
         }
-        .offer(free);
+        .offer(free, percent);
         // The caps hold for the lanes together: what they use already is
         // not on offer again.
         let offer = Amount {
