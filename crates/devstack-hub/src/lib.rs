@@ -137,8 +137,8 @@ struct AppState {
     stacks: watch::Receiver<Vec<StackEntry>>,
     /// The Docker engine as last seen, see `watch_engine`.
     engine: watch::Receiver<Engine>,
-    /// A newer release than this hub, if the check found one (`release`).
-    newer: watch::Receiver<Option<String>>,
+    /// What the release check last found (`release`).
+    release: watch::Receiver<Release>,
     /// Asks the release check to look again if its last answer is older than
     /// an hour (a dashboard connected, see `watch_release`).
     release_poke: std::sync::mpsc::Sender<Poke>,
@@ -397,12 +397,11 @@ pub fn serve() -> Result<(), String> {
         share::start();
         let engine_fast_until = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let engine_rx = watch_engine(engine_fast_until.clone());
-        let (newer_rx, release_poke) = watch_release();
+        let (release_rx, release_poke) = watch_release();
 
         let shutdown = Arc::new(tokio::sync::Notify::new());
         let codes: Codes = Arc::new(Mutex::new(HashMap::new()));
-        notify::register();
-        let open = {
+        let open: notify::Open = {
             let codes = codes.clone();
             Arc::new(move |t: &notify::Target| open_dashboard(port, &codes, &t.path()))
         };
@@ -420,7 +419,7 @@ pub fn serve() -> Result<(), String> {
             codes,
             stacks: rx,
             engine: engine_rx,
-            newer: newer_rx,
+            release: release_rx,
             release_poke,
             update: initial_update_state(&dir),
             start_errors,
@@ -817,8 +816,9 @@ async fn pair(State(s): State<AppState>) -> Response {
 
 /// Open the dashboard at `route` in the default browser, paired: what a
 /// click on a notification the hub hears itself does (Linux, ADR-0045).
+/// `Err` with why it could not, for the notifications' `trouble`.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn open_dashboard(port: u16, codes: &Codes, route: &str) {
+fn open_dashboard(port: u16, codes: &Codes, route: &str) -> Result<(), String> {
     let code = new_code(codes);
     let url = format!(
         "http://127.0.0.1:{port}/auth?code={code}&next={}",
@@ -836,9 +836,13 @@ fn open_dashboard(port: u16, codes: &Codes, route: &str) {
             "open_dashboard_failed",
             serde_json::json!({ "error": e.to_string() }),
         );
+        return Err(format!(
+            "A click on a notification could not open the dashboard: xdg-open did not start ({e})."
+        ));
     }
     #[cfg(not(target_os = "linux"))]
     let _ = url;
+    Ok(())
 }
 
 /// `route` as the value of `/auth`'s `next`.
@@ -1003,6 +1007,34 @@ fn watch_engine(fast_until: Arc<std::sync::atomic::AtomicU64>) -> watch::Receive
     rx
 }
 
+/// What the release check last found (`watch_release`), as the `release`
+/// event tells it.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Release {
+    /// A newer release than this hub, if a check found one.
+    newer: Option<String>,
+    /// Why the last check failed (no network, GitHub's rate limit); gone
+    /// with the next one that does not. A newer release found before stays.
+    error: Option<String>,
+}
+
+impl Release {
+    /// Take a check's answer: the newer release, if any, or why there is no
+    /// answer. Whether anything changed.
+    fn answer(&mut self, got: Result<Option<String>, String>) -> bool {
+        let next = match got {
+            Ok(newer) => Release { newer, error: None },
+            Err(e) => Release {
+                newer: self.newer.clone(),
+                error: Some(e),
+            },
+        };
+        let changed = next != *self;
+        *self = next;
+        changed
+    }
+}
+
 /// What the release watcher is asked (`watch_release`).
 enum Poke {
     /// A dashboard connected: look again if the last answer is over an hour old.
@@ -1017,11 +1049,9 @@ enum Poke {
 /// Not with a 12-hour sleep: on Windows a sleeping thread's time stands still
 /// while the machine is in standby, so a hub from last night would not look
 /// again until well into the day. A failed check is tried again after an
-/// hour. `DEVSTACK_NO_UPDATE_CHECK` turns it off.
-fn watch_release() -> (
-    watch::Receiver<Option<String>>,
-    std::sync::mpsc::Sender<Poke>,
-) {
+/// hour, and its error is told until one is not. `DEVSTACK_NO_UPDATE_CHECK`
+/// turns it off.
+fn watch_release() -> (watch::Receiver<Release>, std::sync::mpsc::Sender<Poke>) {
     use std::sync::mpsc::RecvTimeoutError;
     use std::time::SystemTime;
     const EVERY: Duration = Duration::from_secs(12 * 3600);
@@ -1030,7 +1060,7 @@ fn watch_release() -> (
     // GitHub answers 60 unauthenticated requests an hour: a button clicked
     // again and again gets the last answer.
     const AGAIN: Duration = Duration::from_secs(30);
-    let (tx, rx) = watch::channel(None);
+    let (tx, rx) = watch::channel(Release::default());
     let (poke, pokes) = std::sync::mpsc::channel::<Poke>();
     if release::check_disabled() {
         return (rx, poke);
@@ -1069,26 +1099,24 @@ fn watch_release() -> (
             let got = match release::latest() {
                 Ok(latest) => {
                     next = now + EVERY;
-                    let newer = release::newer(&latest, VERSION).then_some(latest);
-                    tx.send_if_modified(|cur| {
-                        if *cur == newer {
-                            false
-                        } else {
-                            if let Some(v) = &newer {
-                                diag::info("release", serde_json::json!({ "newer": v }));
-                            }
-                            *cur = newer.clone();
-                            true
-                        }
-                    });
-                    Ok(newer)
+                    Ok(release::newer(&latest, VERSION).then_some(latest))
                 }
                 Err(e) => {
                     next = now + RETRY;
                     diag::warn("release_check", serde_json::json!({ "error": e }));
-                    Err(e.to_string())
+                    Err(e)
                 }
             };
+            tx.send_if_modified(|cur| {
+                let was = cur.newer.clone();
+                let changed = cur.answer(got.clone());
+                if cur.newer != was
+                    && let Some(v) = &cur.newer
+                {
+                    diag::info("release", serde_json::json!({ "newer": v }));
+                }
+                changed
+            });
             if let Some(reply) = reply {
                 let _ = reply.send(got.clone());
             }
@@ -1392,8 +1420,9 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
         .map(|stacks| serde_json::json!({ "type": "stacks", "stacks": stacks }));
     let docker = tokio_stream::wrappers::WatchStream::new(s.engine.clone())
         .map(|engine| serde_json::json!({ "type": "docker", "docker": engine }));
-    let release = tokio_stream::wrappers::WatchStream::new(s.newer.clone())
-        .map(|newer| serde_json::json!({ "type": "release", "current": VERSION, "newer": newer }));
+    let release = tokio_stream::wrappers::WatchStream::new(s.release.clone()).map(|r| {
+        serde_json::json!({ "type": "release", "current": VERSION, "newer": r.newer, "error": r.error })
+    });
     let guests = tokio_stream::wrappers::WatchStream::new(guests::subscribe())
         .map(|guests| serde_json::json!({ "type": "guests", "guests": guests }));
     // A dashboard that fell behind misses a toast, nothing it shows.
@@ -3115,6 +3144,20 @@ mod update_tests {
     #[test]
     fn this_process_is_alive() {
         assert!(devstack_proc::pid_alive(std::process::id()));
+    }
+
+    #[test]
+    fn a_failed_release_check_is_told_until_one_succeeds() {
+        let mut r = Release::default();
+        assert!(r.answer(Ok(Some("9.0.0".into()))));
+        assert!(!r.answer(Ok(Some("9.0.0".into()))), "nothing new");
+        // No answer: the newer release found before stays, with why.
+        assert!(r.answer(Err("no network".into())));
+        assert_eq!(r.newer.as_deref(), Some("9.0.0"));
+        assert_eq!(r.error.as_deref(), Some("no network"));
+        assert!(!r.answer(Err("no network".into())));
+        assert!(r.answer(Ok(None)));
+        assert_eq!(r, Release::default());
     }
 }
 

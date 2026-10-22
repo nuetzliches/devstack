@@ -133,6 +133,12 @@ pub(crate) trait Sink: Send + Sync {
     /// `Err` with why nothing shows (no desktop session, switched off in
     /// the system's settings, not on this platform).
     fn status(&self) -> Result<(), String>;
+    /// What does not work as it should while notifications show (devstack's
+    /// name not registered with Windows, a click that could not open the
+    /// dashboard), or `None`.
+    fn trouble(&self) -> Option<String> {
+        None
+    }
     /// Show it, in the background; a failure goes to the hub's log.
     fn show(&self, n: Shown);
 }
@@ -154,18 +160,20 @@ fn switched_off() -> bool {
     std::env::var_os("DEVSTACK_NO_NOTIFY").is_some_and(|v| !v.is_empty() && v != "0")
 }
 
-/// The sink of this platform. `open` shows the dashboard for a click the
-/// hub hears itself (Linux); a Windows toast opens it through a link.
+/// Shows the dashboard for a click the hub hears itself; `Err` with why it
+/// could not.
+pub(crate) type Open = std::sync::Arc<dyn Fn(&Target) -> Result<(), String> + Send + Sync>;
+
+/// The sink of this platform, and on Windows the registration its toasts
+/// need. `open` shows the dashboard for a click the hub hears itself
+/// (Linux); a Windows toast opens it through a link.
 #[allow(unused_variables)]
-pub(crate) fn platform_sink(
-    port: u16,
-    open: std::sync::Arc<dyn Fn(&Target) + Send + Sync>,
-) -> Box<dyn Sink> {
+pub(crate) fn platform_sink(port: u16, open: Open) -> Box<dyn Sink> {
     if switched_off() {
         return Box::new(Off("switched off (DEVSTACK_NO_NOTIFY)"));
     }
     #[cfg(windows)]
-    return Box::new(windows::Toast::new(port));
+    return Box::new(windows::Toast::new(port, windows::register()));
     #[cfg(target_os = "linux")]
     return Box::new(linux::Bus::new(open));
     #[cfg(not(any(windows, target_os = "linux")))]
@@ -312,6 +320,7 @@ impl Center {
         serde_json::json!({
             "available": status.is_ok(),
             "unavailable": status.err(),
+            "trouble": self.sink.trouble(),
             "kinds": Kind::ALL.iter().map(|k| serde_json::json!({
                 "kind": k.key(),
                 "label": k.label(),
@@ -556,16 +565,6 @@ pub fn unregister() {
     windows::unregister();
 }
 
-/// Register what notifications need (the hub, when it starts).
-pub(crate) fn register() {
-    #[cfg(windows)]
-    if !switched_off()
-        && let Err(e) = windows::register()
-    {
-        diag::warn("notify_register_failed", serde_json::json!({ "error": e }));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -678,6 +677,29 @@ mod tests {
             file["kinds"],
             serde_json::json!({ "held": false, "live": true })
         );
+    }
+
+    #[test]
+    fn the_view_says_why_nothing_shows_and_what_does_not_work() {
+        struct Troubled;
+        impl Sink for Troubled {
+            fn status(&self) -> Result<(), String> {
+                Ok(())
+            }
+            fn trouble(&self) -> Option<String> {
+                Some("no name".into())
+            }
+            fn show(&self, _: Shown) {}
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let v = Center::new(dir.path(), Box::new(Troubled)).view();
+        assert_eq!(
+            (&v["available"], &v["trouble"]),
+            (&true.into(), &"no name".into())
+        );
+        let v = Center::new(dir.path(), Box::new(Off("switched off"))).view();
+        assert_eq!(v["unavailable"], "switched off");
+        assert_eq!(v["trouble"], Value::Null);
     }
 
     #[test]

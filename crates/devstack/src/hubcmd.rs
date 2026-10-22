@@ -94,6 +94,9 @@ fn print_notify(v: &Value) {
         None => println!("notifications: shown by the desktop"),
         Some(why) => println!("notifications: not shown ({why})"),
     }
+    if let Some(trouble) = v["trouble"].as_str() {
+        println!("! {trouble}");
+    }
     for k in v["kinds"].as_array().into_iter().flatten() {
         println!(
             "  {:<3} {:<15} {}",

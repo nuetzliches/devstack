@@ -5,6 +5,7 @@
 //   ?mock=empty      no stack registered (a fresh install)
 //   ?mock=configchanged  the shop stack's file changed since it started
 //   ?mock=newer      a newer release (0.5.0) is out
+//   ?mock=hubtrouble the hub's last release check failed, and devstack's name is not registered for notifications
 //   ?mock=skills     shop was set up with an older devstack, crm's agent skills miss a stack file change
 //   ?mock=startfailed  the docs stack's last start from the dashboard failed
 //   Add a stack with a path containing "broken": a stack file that does not load
@@ -71,6 +72,7 @@ class MockHub {
   empty = false;
   docker: DockerEngine = { state: 'running', version: '28.4.0' };
   newer: string | null = null;
+  releaseError: string | null = null;
   /** `?mock=notices`: a lane whose worktree is missing (ADR-0050). */
   laneNotices = false;
   /** The agent skills in each stack's repository: the devstack that wrote them, and whether they differ from what it would write now. */
@@ -100,6 +102,10 @@ class MockHub {
     this.hubDown = q.includes('hubdown');
     this.unpaired = q.includes('unpaired');
     if (q.includes('newer')) this.newer = '0.5.0';
+    if (q.includes('hubtrouble')) {
+      this.releaseError = 'GitHub answered 403 (rate limit exceeded)';
+      notify.trouble = "devstack's name could not be registered with Windows (error 5), so notifications may show without it, or not at all.";
+    }
     if (q.includes('configchanged')) shop.view.config_changed = true;
     if (q.includes('startfailed')) docs.entry.start_error = 'Error: port 4000 (site) is taken by another process (node.exe, pid 4242)\n  devstack doctor names it; stop it or change the port in devstack.toml';
     // `?mock=skills`: shop was set up with an older devstack, crm's stack file changed since.
@@ -885,7 +891,7 @@ export class MockTransport implements Transport {
       const l = listener<HubEvent>();
       l.send({ type: 'stacks', stacks: hub.entries() });
       l.send({ type: 'docker', docker: hub.docker });
-      l.send({ type: 'release', current: '0.4.0', newer: hub.newer });
+      l.send({ type: 'release', current: '0.4.0', newer: hub.newer, error: hub.releaseError });
       l.send({ type: 'guests', guests: hub.guests });
       hub.hubSubs.add(l);
       return { stop: () => hub.hubSubs.delete(l) };

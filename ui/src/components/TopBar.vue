@@ -134,6 +134,7 @@ const mismatch = computed(() => {
           </dl>
           <p v-if="hub.newer" class="news" data-testid="version-newer">devstack {{ hub.newer }} is out.</p>
           <p v-else-if="hub.lastCheck?.error" class="err small" data-testid="version-error">{{ hub.lastCheck.error }}</p>
+          <p v-else-if="hub.releaseError" class="err small" data-testid="version-check-failed">The last check for updates failed: {{ hub.releaseError }}</p>
           <p v-else-if="hub.lastCheck" class="faint small" data-testid="version-current">Up to date · checked {{ ago(hub.lastCheck.at, now) }}</p>
           <div class="ver-actions">
             <button type="button" class="btn btn-sm" :disabled="hub.checkingUpdate" data-testid="version-check" @click="hub.checkUpdate()">
