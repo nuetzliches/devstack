@@ -286,10 +286,18 @@ struct ShutdownQuery {
     /// Not while a lane runs: `409` with `{"lanes": [...]}` instead.
     #[serde(default)]
     unless_lanes: bool,
+    /// For a restart (ADR-0052): what runs is left for the next daemon, the
+    /// lanes on nodes keep running there; lanes do not hold it back.
+    #[serde(default)]
+    restart: bool,
 }
 
 async fn shutdown(State(s): State<AppState>, Query(q): Query<ShutdownQuery>) -> Response {
-    if q.unless_lanes {
+    if q.restart {
+        if let Some(l) = &s.lanes {
+            l.restart_next();
+        }
+    } else if q.unless_lanes {
         let lanes = s.lanes.as_ref().map(|l| l.active()).unwrap_or_default();
         if !lanes.is_empty() {
             return (

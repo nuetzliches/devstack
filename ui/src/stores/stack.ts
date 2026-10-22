@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { computed, ref, shallowRef, triggerRef, watch } from 'vue';
 import { api, paths, sharedRef, v1, type GroupAction, type ServiceAction, type StreamState, type Subscription } from '@/api';
 import type { Branches, LaneView, Point, Pruned, Run, ServiceView, SkillsState, StackEvent, StackView, UsageReport } from '@/api/types';
-import { samePath } from '@/lib/lanes';
+import { restartLanesText, restartPlan, samePath } from '@/lib/lanes';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
@@ -844,20 +844,25 @@ export const useStack = defineStore('stack', () => {
     if (!res.ok) delete hub.starting[stackId];
   }
 
-  /** Down, wait until the daemon is gone, up: picks up a changed stack file. */
+  /** What a restart does to the started lanes (ADR-0052). */
+  const restartLanes = computed(() => restartPlan(lanesOf.value === id.value ? lanes.value : [], entry.value?.daemon?.carries_lanes));
+
+  /**
+   * Down, wait until the daemon is gone, up: picks up the installed devstack
+   * and a changed stack file. The daemon leaves its lanes to the next one
+   * (ADR-0052): those on nodes keep running, those here restart with it.
+   */
   async function restartStack() {
     if (refuseReadOnly()) return;
     if (!id.value) return;
     const stackId = id.value;
     const name = entry.value?.name ?? 'stack';
-    const kept = runningLanes.value;
+    const lanesText = restartLanesText(restartLanes.value);
     const ok = await ui.confirm({
       title: `Restart ${name}`,
-      text: kept.length
-        ? `The main working tree's services stop and start again. ${laneList(kept)} keep running, and with them the daemon: the installed devstack and a changed stack file take effect once no lane runs.`
-        : 'All services stop and start again, with the installed devstack and the current stack file. Containers keep running unless the file changes them.',
+      text: `All services stop and start again, with the installed devstack and the current stack file. Containers keep running unless the file changes them.${lanesText ? ` ${lanesText}` : ''}`,
       confirmLabel: 'Restart stack',
-      danger: false,
+      danger: !restartLanes.value.carried && !!lanesText,
     });
     if (!ok) return;
     busy.value['stack'] = 'restart';
@@ -873,14 +878,7 @@ export const useStack = defineStore('stack', () => {
           return;
         }
       }
-      if (kept.length) {
-        // The daemon stays for its lanes: down and up in it.
-        const down = await act({ label: `Stop ${name}`, path: paths.api(stackId, v1.down), success: false });
-        if (!down.ok) return;
-        await act({ label: `Start ${name}`, path: paths.api(stackId, v1.up), success: 'Starting the main working tree again…' });
-        return;
-      }
-      const down = await act({ label: `Stop ${name}`, path: paths.down(stackId, false), success: false });
+      const down = await act({ label: `Stop ${name}`, path: paths.down(stackId, false, true), success: false });
       if (!down.ok) return;
       // The hub's stack stream says when the daemon is gone; 60 s at most.
       const gone = await new Promise<boolean>((resolve) => {
@@ -1003,5 +1001,5 @@ export const useStack = defineStore('stack', () => {
     containerAction,
     startStack,
     stopStack,
-    restartStack, shareLane };
+    restartStack, restartLanes, shareLane };
 });

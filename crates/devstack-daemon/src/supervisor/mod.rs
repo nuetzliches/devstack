@@ -132,6 +132,9 @@ pub struct Supervisor {
     /// Main lane only: `promote --lane` is moving the main ports to a lane;
     /// nothing of this tree may take a proxy's upstream meanwhile (ADR-0008).
     handing_over: AtomicBool,
+    /// An `up` of this tree ran to its end (succeeded or not), since this
+    /// daemon started: a restart's main slot moves after it (ADR-0052).
+    upped: AtomicBool,
     /// Services started at least once by this daemon: the first start after
     /// a daemon start restores the last promoted artifact (ADR-0016).
     started: Mutex<BTreeSet<String>>,
@@ -456,6 +459,7 @@ impl Supervisor {
             held: Mutex::new(held),
             stops,
             handing_over: AtomicBool::new(false),
+            upped: AtomicBool::new(false),
             started: Mutex::new(BTreeSet::new()),
             opened_manifest: Mutex::new(opened_manifest),
             watcher_error: Mutex::new(None),

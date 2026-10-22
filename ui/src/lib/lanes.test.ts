@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runCounts, runsAnything } from './lanes';
+import { restartLanesText, restartPlan, runCounts, runsAnything } from './lanes';
 
 describe('a started lane runs', () => {
   it('by its containers when the stack has no services', () => {
@@ -18,5 +18,28 @@ describe('a started lane runs', () => {
     expect(runsAnything({ running: 1, services: 3, containersRunning: 0, containers: 0 })).toBe(true);
     expect(runCounts({ running: 1, services: 3, containersRunning: 0, containers: 0 })).toBe('1 of 3 services running');
     expect(runsAnything({ running: 0, services: 0, containersRunning: 0, containers: 0 })).toBe(true);
+  });
+});
+
+describe('a restart of the stack (ADR-0052)', () => {
+  const lane = (name: string, node?: string, active = true) => ({
+    name, path: `/src/${name}`, number: 1, active, port_offset: 100, owns_main: false, running: 1, services: 1, ...(node ? { node } : {}),
+  });
+
+  it('says what happens to the lanes on nodes and here', () => {
+    const p = restartPlan([lane('feat', 'build-server'), lane('fix'), lane('idle', undefined, false)], true);
+    expect(p).toEqual({ onNodes: ['feat'], here: ['fix'], carried: true });
+    expect(restartLanesText(p)).toBe('Lane feat keeps running on its node; lane fix restarts with it.');
+    expect(restartLanesText(restartPlan([lane('a'), lane('b')], true))).toBe('Lanes a, b restart with it.');
+  });
+
+  it('warns that an older daemon stops its lanes', () => {
+    expect(restartLanesText(restartPlan([lane('feat', 'build-server')], undefined))).toBe(
+      'This daemon is too old to pass its lanes on: lane feat stops and must be started again.',
+    );
+  });
+
+  it('says nothing without lanes', () => {
+    expect(restartLanesText(restartPlan([], true))).toBe('');
   });
 });

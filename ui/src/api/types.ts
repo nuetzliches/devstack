@@ -3,7 +3,14 @@
 
 // ---------------------------------------------------------------- hub
 
-export type DaemonInfo = { pid: number; port: number; started: number; version: string };
+export type DaemonInfo = {
+  pid: number;
+  port: number;
+  started: number;
+  version: string;
+  /** A restart carries its lanes over to the next daemon (ADR-0052); older hubs and daemons omit it (it stops them). */
+  carries_lanes?: boolean;
+};
 
 export type StackEntry = {
   id: string;

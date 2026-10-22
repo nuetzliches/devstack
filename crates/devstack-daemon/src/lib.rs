@@ -97,6 +97,10 @@ pub struct DaemonInfo {
     /// it is done. A daemon starting meanwhile waits for it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stopping: bool,
+    /// A restart carries its lanes over to the next daemon (ADR-0052);
+    /// absent from a daemon before that, which stops them.
+    #[serde(default)]
+    pub carries_lanes: bool,
 }
 
 pub fn info_path(state_dir: &Path) -> PathBuf {
@@ -287,6 +291,7 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
             started: state::now_ms(),
             version: devstack_config::VERSION.into(),
             stopping: false,
+            carries_lanes: true,
         };
         std::fs::write(
             info_path(&state_dir),
@@ -363,14 +368,30 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
             shutdown: shutdown.clone(),
             lanes: Some(lanes.clone()),
         });
+        // What a daemon before this one left running for a restart
+        // (ADR-0052), taken up beside the main tree's start.
+        {
+            let lanes = lanes.clone();
+            let _ = std::thread::Builder::new()
+                .name("lanes-take-up".into())
+                .spawn(move || lanes.take_up());
+        }
         let (stopping_tx, stopping_rx) = tokio::sync::oneshot::channel::<()>();
         let stopping_info = (info_path(&state_dir), info.clone());
+        let stopping_lanes = lanes.clone();
         let stop = async move {
             let why = tokio::select! {
                 _ = shutdown.notified() => "shutdown requested",
                 _ = tokio::signal::ctrl_c() => "ctrl-c",
             };
-            diag::info("daemon_stopping", serde_json::json!({ "reason": why }));
+            // A restart carries the lanes over (ADR-0052): how many, by place.
+            let restart = stopping_lanes.restarting();
+            let (local, remote) = stopping_lanes.running_by_place();
+            diag::info(
+                "daemon_stopping",
+                serde_json::json!({ "reason": why, "restart": restart,
+                    "lanes_local": local, "lanes_remote": remote }),
+            );
             // A daemon started now (`down` + `up`) waits for this one instead
             // of taking it for one that serves (`acquire_state_lock`).
             let (path, mut info) = stopping_info;
@@ -398,9 +419,9 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
                 Ok(())
             }
         };
-        let s = sup.clone();
+        let (s, l) = (sup.clone(), lanes.clone());
         let down = tokio::task::spawn_blocking(move || {
-            lanes.down_all();
+            l.down_all();
             s.down(false)
         });
         tokio::select! {
@@ -416,6 +437,9 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
                 diag::warn("daemon_stop_forced", serde_json::json!({ "reason": "ctrl-c again" }));
             }
         }
+        // A restart leaves the lanes on nodes to the next daemon last
+        // (ADR-0052): their leases were renewed while everything else stopped.
+        let _ = tokio::task::spawn_blocking(move || lanes.leave_all()).await;
         let _ = std::fs::remove_file(info_path(&state_dir));
         diag::info("daemon_stop", serde_json::json!({}));
         telemetry::flush(TELEMETRY_FLUSH);
@@ -453,6 +477,7 @@ mod tests {
             started: 0,
             version: String::new(),
             stopping,
+            carries_lanes: false,
         };
         std::fs::write(super::info_path(dir), serde_json::to_vec(&info).unwrap()).unwrap();
     }

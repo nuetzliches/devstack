@@ -336,7 +336,42 @@ pub struct Lanes {
     /// The daemon is stopping ([`Lanes::down_all`]): the main tree takes no
     /// main slot back and starts nothing for it.
     closing: std::sync::atomic::AtomicBool,
+    /// It stops for a restart (ADR-0052): [`Lanes::down_all`] leaves the
+    /// lanes for the next daemon instead of releasing those on nodes.
+    restart: std::sync::atomic::AtomicBool,
+    /// What a restart carries over, noted when the daemon begins to stop and
+    /// written when it is done ([`Lanes::leave_all`]).
+    carry: Mutex<Option<Carry>>,
 }
+
+/// What a daemon that restarts leaves for the next one, in
+/// `.devstack/restart.json` (ADR-0052).
+#[derive(Debug, Serialize, Deserialize)]
+struct Carry {
+    /// Unix ms it was written.
+    written: u128,
+    /// `[stack] name`: it was written for this stack.
+    stack: String,
+    lanes: Vec<CarriedLane>,
+    /// The lane that served the main ports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    main: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CarriedLane {
+    name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    profile: Option<String>,
+    /// On a node: its lease and ports; absent: it ran on this machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    node: Option<crate::remote::Carried>,
+}
+
+const CARRY_FILE: &str = "restart.json";
+/// How long a restart's word holds for the next daemon: less than a lease
+/// the old daemon renewed (every 30 s) lives without a renewal (150 s).
+const CARRY_FOR: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// What `prune` or `reset` found, and did.
 #[derive(Debug, Clone, Serialize)]
@@ -781,6 +816,8 @@ impl Lanes {
             syncing: Mutex::new(()),
             missing: Mutex::new(BTreeMap::new()),
             closing: std::sync::atomic::AtomicBool::new(false),
+            restart: std::sync::atomic::AtomicBool::new(false),
+            carry: Mutex::new(None),
         });
         let remembered: Option<Vec<LaneEntry>> = match std::fs::read(me.file()) {
             Ok(b) => serde_json::from_slice(&b)
@@ -2093,14 +2130,23 @@ impl Lanes {
         failed
     }
 
-    /// Stop every lane's services (the daemon is stopping).
+    /// Stop every lane's services (the daemon is stopping). For a restart
+    /// (ADR-0052) what runs is noted for the next daemon first, and the
+    /// lanes on nodes go on (renewed, forwarded) until [`Self::leave_all`].
     pub fn down_all(&self) {
         self.closing
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        let restart = self.restarting();
+        if restart {
+            *self.carry.lock().unwrap() = Some(self.carry_now());
+        }
         let lanes: Vec<Arc<Lane>> = self.map.lock().unwrap().values().cloned().collect();
         for l in lanes {
             l.sup.down(false);
             l.sup.unlink_prepared();
+        }
+        if restart {
+            return;
         }
         // A daemon that stops releases its lanes on nodes (ADR-0025 point 7).
         let remote: Vec<Arc<RemoteLane>> = std::mem::take(&mut *self.remote.lock().unwrap())
@@ -2108,6 +2154,266 @@ impl Lanes {
             .collect();
         for r in remote {
             self.stop_remote(r);
+        }
+    }
+
+    /// The last of a daemon that restarts (ADR-0052): the lanes on nodes are
+    /// no longer followed from here, their leases renewed until now, and the
+    /// word for the next daemon is written. Nothing without a restart.
+    pub fn leave_all(&self) {
+        let Some(mut carry) = self.carry.lock().unwrap().take() else {
+            return;
+        };
+        for r in std::mem::take(&mut *self.remote.lock().unwrap()).into_values() {
+            r.leave();
+        }
+        carry.written = crate::state::now_ms();
+        let tmp = self.root_state.join(format!("{CARRY_FILE}.tmp"));
+        let res = serde_json::to_vec_pretty(&carry)
+            .map_err(std::io::Error::other)
+            .and_then(|b| std::fs::write(&tmp, b))
+            .and_then(|()| std::fs::rename(&tmp, self.carry_file()));
+        if let Err(e) = res {
+            crate::diag::warn(
+                "carry_not_written",
+                serde_json::json!({ "error": e.to_string() }),
+            );
+        }
+    }
+
+    /// The daemon is told to stop for a restart (ADR-0052).
+    pub fn restart_next(&self) {
+        self.restart
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn restarting(&self) -> bool {
+        self.restart.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The lanes started here and on nodes (a start or move under way not
+    /// counted): what a restart carries over.
+    pub fn running_by_place(&self) -> (usize, usize) {
+        let remote = self.remote.lock().unwrap();
+        (
+            self.map.lock().unwrap().len(),
+            remote.values().filter(|r| !r.state().ended).count(),
+        )
+    }
+
+    fn carry_file(&self) -> PathBuf {
+        self.root_state.join(CARRY_FILE)
+    }
+
+    /// What runs, for the next daemon (ADR-0052 point 1): the lanes here
+    /// with their profile, those on nodes with their lease, and who serves
+    /// the main ports. A start or move under way is not carried.
+    fn carry_now(&self) -> Carry {
+        let profiles = self.profiles.lock().unwrap().clone();
+        let mut lanes: Vec<CarriedLane> = self
+            .map
+            .lock()
+            .unwrap()
+            .keys()
+            .map(|n| CarriedLane {
+                name: n.clone(),
+                profile: profiles.get(n).cloned(),
+                node: None,
+            })
+            .collect();
+        lanes.extend(
+            self.remote
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, r)| !r.state().ended)
+                .map(|(n, r)| CarriedLane {
+                    name: n.clone(),
+                    profile: profiles.get(n).cloned(),
+                    node: Some(r.carried()),
+                }),
+        );
+        for name in self.pending.lock().unwrap().iter() {
+            crate::diag::warn(
+                "lane_not_carried",
+                serde_json::json!({ "lane": name, "why": "its start or move was under way" }),
+            );
+        }
+        Carry {
+            written: crate::state::now_ms(),
+            stack: self.main.stack.stack.name.clone(),
+            lanes,
+            main: self.main.served_by(),
+        }
+    }
+
+    /// Take up what a daemon before this one left running for a restart
+    /// (ADR-0052 point 2): the lanes on nodes first (their leases run
+    /// out), then those here, then the main slot. The word is read once.
+    /// Blocking: on a thread of its own.
+    pub fn take_up(self: &Arc<Self>) {
+        let path = self.carry_file();
+        let Ok(bytes) = std::fs::read(&path) else {
+            return;
+        };
+        let _ = std::fs::remove_file(&path);
+        let carry: Carry = match serde_json::from_slice(&bytes) {
+            Ok(c) => c,
+            Err(e) => {
+                crate::diag::warn(
+                    "carry_unreadable",
+                    serde_json::json!({ "error": e.to_string() }),
+                );
+                return;
+            }
+        };
+        let age = crate::state::now_ms().saturating_sub(carry.written);
+        if carry.stack != self.main.stack.stack.name || age > CARRY_FOR.as_millis() {
+            crate::diag::warn(
+                "carry_ignored",
+                serde_json::json!({ "age_ms": age as u64, "lanes": carry.lanes.len(),
+                    "why": if carry.stack != self.main.stack.stack.name { "written for another stack" } else { "too old: the leases may be over" } }),
+            );
+            return;
+        }
+        let (remote, local): (Vec<CarriedLane>, Vec<CarriedLane>) =
+            carry.lanes.into_iter().partition(|l| l.node.is_some());
+        for l in remote {
+            self.take_up_remote(l);
+        }
+        for l in local {
+            self.take_up_local(l);
+        }
+        if let Some(lane) = carry.main {
+            // The main tree starts beside this (`devstack up` asks for it):
+            // the main slot moves once it did, so what the main tree hands
+            // over is noted and comes back with `promote --lane main`.
+            if !self.main.wait_upped(std::time::Duration::from_secs(900)) {
+                crate::diag::warn(
+                    "main_slot_not_carried",
+                    serde_json::json!({ "lane": lane, "error": "the main tree did not start within 15 minutes" }),
+                );
+                if let Some(r) = self.remote(&lane) {
+                    let _ = r.set_main(&self.rt, false);
+                }
+                self.announce();
+                return;
+            }
+            match self.take_main(&lane) {
+                Ok(()) => {
+                    crate::diag::info("main_slot_carried", serde_json::json!({ "lane": lane }))
+                }
+                Err(e) => {
+                    // The lane on a node runs its workers no longer.
+                    if let Some(r) = self.remote(&lane) {
+                        let _ = r.set_main(&self.rt, false);
+                    }
+                    crate::diag::warn(
+                        "main_slot_not_carried",
+                        serde_json::json!({ "lane": lane, "error": e }),
+                    );
+                }
+            }
+        }
+        self.announce();
+    }
+
+    /// A lane not taken up after a restart: said in the log, and with the
+    /// lane for a while (its `moving`, as a start that failed).
+    fn not_carried(&self, name: &str, place: &str, to: &str, error: &str) {
+        crate::diag::warn(
+            "lane_not_carried",
+            serde_json::json!({ "lane": name, "place": place, "node": (place == "remote").then_some(to), "error": error }),
+        );
+        if self.known.lock().unwrap().contains_key(name) {
+            self.begin_move(name, "start", to, 1);
+            self.finish(
+                name,
+                Some(&format!(
+                    "lane `{name}` did not come back after the restart: {error}"
+                )),
+            );
+        }
+    }
+
+    fn take_up_remote(&self, l: CarriedLane) {
+        let t0 = std::time::Instant::now();
+        let c = l.node.expect("partitioned: on a node");
+        let node = c.node.name.clone();
+        let entry = self
+            .known
+            .lock()
+            .unwrap()
+            .get(&l.name)
+            .map(|k| k.entry.clone());
+        let Some(entry) = entry else {
+            // Its worktree went meanwhile: the lane goes with it (ADR-0024
+            // point 7), its lease too.
+            if let Ok(client) = devstack_node::nodeclient::NodeClient::new(
+                &crate::remote::local_member(&c.pool),
+                c.node.clone(),
+            ) {
+                let _ = self.rt.block_on(client.release(&c.lease));
+            }
+            return self.not_carried(&l.name, "remote", &node, "its worktree is gone");
+        };
+        if let Some(p) = &l.profile {
+            self.profiles
+                .lock()
+                .unwrap()
+                .insert(l.name.clone(), p.clone());
+        }
+        let adopted = crate::remote::RemoteLane::adopt(
+            &self.rt,
+            &l.name,
+            c,
+            &devstack_proc::long_path(&entry.path),
+            &self.main.repo,
+            &self.main.stack.lanes.sync,
+            self.sharing_of(&entry),
+            &self.state_dir(&l.name).join("remote"),
+        );
+        match adopted {
+            Ok(r) => {
+                self.remote.lock().unwrap().insert(l.name.clone(), r);
+                crate::diag::info(
+                    "lane_carried",
+                    serde_json::json!({ "lane": l.name, "place": "remote", "node": node,
+                        "ms": t0.elapsed().as_millis() as u64 }),
+                );
+                self.announce();
+            }
+            Err(e) => {
+                self.profiles.lock().unwrap().remove(&l.name);
+                self.not_carried(&l.name, "remote", &node, &e);
+            }
+        }
+    }
+
+    fn take_up_local(&self, l: CarriedLane) {
+        let t0 = std::time::Instant::now();
+        let path = self
+            .known
+            .lock()
+            .unwrap()
+            .get(&l.name)
+            .map(|k| k.entry.path.clone());
+        let Some(path) = path else {
+            return self.not_carried(&l.name, "local", "local", "its worktree is gone");
+        };
+        // From the artifacts it ran (ADR-0016 point 4), as `devstack up` in
+        // its worktree: a service that fails shows as failed, as after any
+        // `up`, and the lane runs the rest.
+        match self.activate(&path, l.profile.as_deref()) {
+            Ok(lane) => {
+                let failed = lane.sup.up().err();
+                crate::diag::info(
+                    "lane_carried",
+                    serde_json::json!({ "lane": l.name, "place": "local", "failed": failed,
+                        "ms": t0.elapsed().as_millis() as u64 }),
+                );
+            }
+            Err(e) => self.not_carried(&l.name, "local", "local", &e),
         }
     }
 

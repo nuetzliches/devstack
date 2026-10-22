@@ -28,6 +28,25 @@ impl Supervisor {
     /// Infra, then every autostart service for this platform, in order; a
     /// service that fails holds back only what comes `after` it.
     pub fn up(self: &Arc<Self>) -> Result<(), String> {
+        let r = self.up_all();
+        self.upped.store(true, Ordering::SeqCst);
+        r
+    }
+
+    /// Wait until an `up` of this tree ran to its end, `within` at most:
+    /// `false` when none did.
+    pub fn wait_upped(&self, within: Duration) -> bool {
+        let until = std::time::Instant::now() + within;
+        while !self.upped.load(Ordering::SeqCst) {
+            if std::time::Instant::now() >= until {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        true
+    }
+
+    fn up_all(self: &Arc<Self>) -> Result<(), String> {
         {
             // A profile with `data = "fresh"` (ADR-0041): the tree's own
             // volumes go first, once per start, so its seed jobs fill new
