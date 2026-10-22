@@ -99,3 +99,4 @@ stay.
 | [0048](0048-a-containers-main-port-can-move-with-the-main-slot.md) | A container's main port can be devstack's, and then moves with the main slot | Accepted |
 | [0049](0049-a-lanes-need-is-measured-disk-included.md) | A lane's need is measured where it ran, disk included; the stack file sets a floor | Accepted, amended 2026-10-21 (point 9: what a lane here checks) |
 | [0050](0050-what-no-request-reports-reaches-the-dashboard-as-a-notice.md) | What no request reports reaches the dashboard as a notice, not as a log view | Accepted |
+| [0051](0051-a-pool-can-grow-by-nodes-a-provisioner-makes.md) | A pool can grow by nodes a provisioner makes for one member's lane, and gives back when it is removed | Proposed |
