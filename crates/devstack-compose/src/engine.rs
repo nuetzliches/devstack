@@ -254,7 +254,10 @@ mod tests {
         // A program that runs and names no version: an engine that does
         // not answer, with why.
         let (engine, why) = super::look(if cfg!(windows) { "whoami" } else { "true" });
-        assert!(matches!(engine, super::Engine::Stopped { .. }), "{engine:?}");
+        assert!(
+            matches!(engine, super::Engine::Stopped { .. }),
+            "{engine:?}"
+        );
         assert!(why.is_some());
     }
 }
