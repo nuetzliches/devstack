@@ -27,7 +27,7 @@ pub(crate) fn run(file: &Path, action: SkillsAction) -> Result<()> {
                     println!("{n}");
                     std::process::exit(1);
                 }
-                None => println!("skills: up to date (or not installed in the default directory)"),
+                None => println!("skills: up to date (or none installed)"),
             }
             Ok(())
         }

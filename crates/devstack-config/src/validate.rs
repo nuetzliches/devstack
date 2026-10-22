@@ -317,6 +317,28 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         }
     }
 
+    if let Some(dirs) = &stack.agents.skills {
+        if dirs.is_empty() {
+            c.err(
+                "agents.skills",
+                "must name at least one folder; leave it out for `.claude/skills`",
+            );
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for d in dirs {
+            if !inside_repo(d) {
+                c.err(
+                    "agents.skills",
+                    format!(
+                        "`{d}` must be a folder inside the repository, relative to the stack file"
+                    ),
+                );
+            } else if !seen.insert(d.replace('\\', "/").trim_end_matches('/').to_string()) {
+                c.err("agents.skills", format!("`{d}` is named twice"));
+            }
+        }
+    }
+
     // ---------------------------------------------------------- compose groups
     let mut projects = BTreeMap::new();
     for (g, group) in &stack.compose {

@@ -67,6 +67,11 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   (`cpus`, `memory = "6G"`, `disk = "25G"`, `gpus = { count, memory }`) is a
   floor only: set it where the first runs would be placed too small, or for
   a GPU. A profile's `need` raises it for that profile.
+- **Agent skills go where the repository's agents look.** `[agents] skills`
+  names the folders `devstack skills install` writes to: `.claude/skills`
+  (Claude Code, the default), `.agents/skills` (Codex, Gemini CLI and most
+  others); both only when both kinds of agents work here, since an agent
+  that reads both sees each skill twice.
 - **A purpose gets a profile, not a second stack file** (ADR-0041).
   `[profiles.<name>]` changes how the stack runs for an acceptance run or a
   light review: `workers`, `data = "fresh"`, `env` with the tree's

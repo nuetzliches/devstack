@@ -11,6 +11,18 @@ and listed with their assets on the
 
 ### Added
 
+- **`[agents] skills` in the stack file: where the agent skills go.**
+  `devstack skills install` writes the generated skills into each folder it
+  names: `.claude/skills` (Claude Code, still the default), `.agents/skills`
+  (Codex, Gemini CLI and most others), or both. `devstack init` fills it in
+  from what the repository shows (`CLAUDE.md`, `AGENTS.md`, `.cursor/`, ...).
+  A generated skill in another agent's folder (one written with `--dir`) is
+  now found too: `devstack status`, `doctor`, `skills check` and the
+  dashboard report it when it is out of date, and `skills install`
+  refreshes it there. Skills are named by their folder in those reports
+  (`.agents/skills/devstack`). A stack file that uses `[agents]` needs
+  `[stack] requires` at this version.
+
 - **The dashboard says when a repository was set up with an older
   devstack**, and hands a coding agent a prompt to bring it up to date. The
   generated agent skills name the devstack that wrote them; when they no

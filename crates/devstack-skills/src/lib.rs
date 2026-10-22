@@ -2,10 +2,12 @@
 //!
 //! The binary carries the templates (`skills/` in the devstack repository) and
 //! fills in what the stack file says: its services, commands, held paths and
-//! the URLs to check after a start. A generated skill says so in a marker line;
-//! installing again overwrites it, and `devstack status` (and the dashboard,
-//! through the hub) notes when the installed copy no longer matches this
-//! devstack or this stack file. What is
+//! the URLs to check after a start, into the folders `[agents] skills` names
+//! (`.claude/skills` when it names none). A generated skill says so in a
+//! marker line; installing again overwrites it, and `devstack status` (and
+//! the dashboard, through the hub) notes when an installed copy, in those
+//! folders or another agent's, no longer matches this devstack or this stack
+//! file. What is
 //! specific to a project beyond that belongs in a skill of the project's own,
 //! which devstack never touches.
 
@@ -31,9 +33,59 @@ const TEMPLATES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Where the skills go by default: Claude Code's project skills.
-pub fn default_dir(stack_file: &Path) -> Result<PathBuf> {
-    Ok(repo(stack_file)?.join(".claude").join("skills"))
+/// The project skill folders coding agents read, relative to the repository:
+/// where a generated skill is looked for besides `[agents] skills` (one
+/// installed there earlier, or with `--dir`).
+pub const KNOWN_DIRS: &[&str] = &[
+    ".claude/skills",
+    ".agents/skills",
+    ".github/skills",
+    ".cursor/skills",
+    ".gemini/skills",
+    ".opencode/skills",
+    ".windsurf/skills",
+    ".devin/skills",
+    ".codex/skills",
+];
+
+/// The folders `[agents] skills` names (`.claude/skills` when it names
+/// none), in the repository.
+pub fn skill_dirs(stack: &Stack, stack_file: &Path) -> Result<Vec<PathBuf>> {
+    let repo = repo(stack_file)?;
+    Ok(stack
+        .agents
+        .skill_dirs()
+        .iter()
+        .map(|d| repo.join(d))
+        .collect())
+}
+
+/// The folders a generated skill is looked for in: `[agents] skills`, then
+/// the other agents' ones, each once.
+fn search_dirs(stack: &Stack, stack_file: &Path) -> Result<Vec<PathBuf>> {
+    let repo = repo(stack_file)?;
+    let mut dirs: Vec<String> = stack.agents.skill_dirs();
+    for k in KNOWN_DIRS {
+        if !dirs.iter().any(|d| same_dir(d, k)) {
+            dirs.push((*k).to_string());
+        }
+    }
+    Ok(dirs.iter().map(|d| repo.join(d)).collect())
+}
+
+fn same_dir(a: &str, b: &str) -> bool {
+    let n = |s: &str| s.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    n(a) == n(b)
+}
+
+/// A skill in `dir` (a folder in the repository) by its repository-relative
+/// name: `.agents/skills/devstack`.
+fn shown(stack_file: &Path, dir: &Path, name: &str) -> String {
+    let rel = repo(stack_file)
+        .ok()
+        .and_then(|r| dir.strip_prefix(r).ok().map(Path::to_path_buf))
+        .unwrap_or_else(|| dir.to_path_buf());
+    format!("{}/{name}", rel.to_string_lossy().replace('\\', "/"))
 }
 
 fn repo(stack_file: &Path) -> Result<PathBuf> {
@@ -277,51 +329,74 @@ pub enum Outcome {
     Kept(PathBuf),
 }
 
+/// Write the skills into `dir`, or else into the folders `[agents] skills`
+/// names, and refresh a generated copy found in another agent's folder (it is
+/// devstack's, and would stay behind otherwise).
 pub fn install(
     stack: &Stack,
     stack_file: &Path,
     dir: Option<&Path>,
     force: bool,
 ) -> Result<Vec<Outcome>> {
-    let dir = match dir {
-        Some(d) => d.to_path_buf(),
-        None => default_dir(stack_file)?,
+    let rendered = render_all(stack, stack_file);
+    // The folder, and whether it was asked for (else only devstack's copies).
+    let targets: Vec<(PathBuf, bool)> = match dir {
+        Some(d) => vec![(d.to_path_buf(), true)],
+        None => {
+            let named = skill_dirs(stack, stack_file)?;
+            let mut t: Vec<(PathBuf, bool)> = named.iter().map(|d| (d.clone(), true)).collect();
+            for d in search_dirs(stack, stack_file)? {
+                if !named.contains(&d) && rendered.iter().any(|(n, _)| generated(&d.join(n))) {
+                    t.push((d, false));
+                }
+            }
+            t
+        }
     };
     let mut done = Vec::new();
-    for (name, content) in render_all(stack, stack_file) {
-        let path = dir.join(name).join("SKILL.md");
-        let existing = std::fs::read_to_string(&path).ok();
-        match existing {
-            Some(e) if normalize(&e) == normalize(&content) => {
-                done.push(Outcome::Unchanged(path));
+    for (dir, asked) in targets {
+        for (name, content) in &rendered {
+            if !asked && !generated(&dir.join(name)) {
                 continue;
             }
-            Some(e) if !e.contains(MARKER_TAG) && !force => {
-                done.push(Outcome::Kept(path));
-                continue;
-            }
-            _ => {}
+            done.push(write_one(&dir.join(name).join("SKILL.md"), content, force)?);
         }
-        std::fs::create_dir_all(path.parent().expect("has a parent"))
-            .with_context(|| format!("create {}", path.display()))?;
-        std::fs::write(&path, &content).with_context(|| format!("write {}", path.display()))?;
-        done.push(Outcome::Written(path));
     }
     Ok(done)
+}
+
+/// A generated skill in `skill_dir` (its own folder, `…/skills/devstack`).
+fn generated(skill_dir: &Path) -> bool {
+    std::fs::read_to_string(skill_dir.join("SKILL.md")).is_ok_and(|e| e.contains(MARKER_TAG))
+}
+
+fn write_one(path: &Path, content: &str, force: bool) -> Result<Outcome> {
+    let path = path.to_path_buf();
+    match std::fs::read_to_string(&path).ok() {
+        Some(e) if normalize(&e) == normalize(content) => return Ok(Outcome::Unchanged(path)),
+        Some(e) if !e.contains(MARKER_TAG) && !force => return Ok(Outcome::Kept(path)),
+        _ => {}
+    }
+    std::fs::create_dir_all(path.parent().expect("has a parent"))
+        .with_context(|| format!("create {}", path.display()))?;
+    std::fs::write(&path, content).with_context(|| format!("write {}", path.display()))?;
+    Ok(Outcome::Written(path))
 }
 
 fn normalize(s: &str) -> String {
     s.replace("\r\n", "\n")
 }
 
-/// The generated skills installed in the default directory, held against what
+/// The generated skills installed in the repository (in the folders
+/// `[agents] skills` names and in the other agents' ones), held against what
 /// this devstack would write for this stack file.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Installed {
-    /// Generated skills found there (one the project wrote itself is not).
-    pub found: Vec<&'static str>,
+    /// Generated skills found, by folder: `.claude/skills/devstack` (one the
+    /// project wrote itself is not one).
+    pub found: Vec<String>,
     /// Of those, the ones that differ from what `install` would write now.
-    pub outdated: Vec<&'static str>,
+    pub outdated: Vec<String>,
     /// The oldest devstack their marker lines name: the version the
     /// repository was last set up with. `None` when no marker names one.
     pub from: Option<String>,
@@ -329,27 +404,34 @@ pub struct Installed {
 
 /// What [`Installed`] says for this stack file; nothing when it does not load.
 pub fn installed(stack_file: &Path) -> Installed {
-    let (Ok(stack), Ok(dir)) = (devstack_config::load(stack_file), default_dir(stack_file)) else {
+    let Ok(stack) = devstack_config::load(stack_file) else {
         return Installed::default();
     };
+    let Ok(dirs) = search_dirs(&stack, stack_file) else {
+        return Installed::default();
+    };
+    let rendered = render_all(&stack, stack_file);
     let mut out = Installed::default();
-    for (name, content) in render_all(&stack, stack_file) {
-        let Ok(e) = std::fs::read_to_string(dir.join(name).join("SKILL.md")) else {
-            continue;
-        };
-        if !e.contains(MARKER_TAG) {
-            continue;
-        }
-        out.found.push(name);
-        if normalize(&e) != normalize(&content) {
-            out.outdated.push(name);
-        }
-        if let Some(v) = marker_version(&e) {
-            let older = out.from.as_deref().is_none_or(|f| {
-                devstack_config::version_order(&v) < devstack_config::version_order(f)
-            });
-            if older {
-                out.from = Some(v);
+    for dir in &dirs {
+        for (name, content) in &rendered {
+            let Ok(e) = std::fs::read_to_string(dir.join(name).join("SKILL.md")) else {
+                continue;
+            };
+            if !e.contains(MARKER_TAG) {
+                continue;
+            }
+            let at = shown(stack_file, dir, name);
+            if normalize(&e) != normalize(content) {
+                out.outdated.push(at.clone());
+            }
+            out.found.push(at);
+            if let Some(v) = marker_version(&e) {
+                let older = out.from.as_deref().is_none_or(|f| {
+                    devstack_config::version_order(&v) < devstack_config::version_order(f)
+                });
+                if older {
+                    out.from = Some(v);
+                }
             }
         }
     }
@@ -367,9 +449,9 @@ fn marker_version(skill: &str) -> Option<String> {
     devstack_config::version_order(v).map(|_| v.to_string())
 }
 
-/// Installed generated skills (in the default directory) that differ from what
-/// this devstack would write for this stack file.
-pub fn outdated(stack_file: &Path) -> Vec<&'static str> {
+/// Installed generated skills that differ from what this devstack would
+/// write for this stack file.
+pub fn outdated(stack_file: &Path) -> Vec<String> {
     installed(stack_file).outdated
 }
 
@@ -550,38 +632,77 @@ ours"
     fn installed_says_what_is_there_and_how_old() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("devstack.toml");
-        std::fs::write(
-            &file,
-            "version = 1
-[stack]
-name = \"shop\"
-[services.api]
-run = \"x\"
-",
-        )
-        .unwrap();
+        std::fs::write(&file, STACK).unwrap();
         assert_eq!(installed(&file), Installed::default(), "nothing installed");
 
         let stack = devstack_config::load(&file).unwrap();
         install(&stack, &file, None, false).unwrap();
         let now = installed(&file);
-        assert_eq!(now.found, ["devstack", "devstack-config"]);
+        assert_eq!(
+            now.found,
+            [".claude/skills/devstack", ".claude/skills/devstack-config"]
+        );
         assert!(now.outdated.is_empty());
         assert_eq!(now.from.as_deref(), Some(VERSION));
 
         // One of them written by an older devstack.
-        let old = default_dir(&file)
-            .unwrap()
-            .join("devstack")
-            .join("SKILL.md");
-        let text = std::fs::read_to_string(&old).unwrap();
+        age(&dir.path().join(".claude/skills/devstack/SKILL.md"));
+        let then = installed(&file);
+        assert_eq!(then.outdated, [".claude/skills/devstack"]);
+        assert_eq!(then.from.as_deref(), Some("0.1.0"));
+    }
+
+    const STACK: &str = "version = 1\n[stack]\nname = \"shop\"\n[services.api]\nrun = \"x\"\n";
+
+    /// As if an older devstack had written it.
+    fn age(skill: &Path) {
+        let text = std::fs::read_to_string(skill).unwrap();
         std::fs::write(
-            &old,
+            skill,
             text.replace(&format!("devstack {VERSION} "), "devstack 0.1.0 "),
         )
         .unwrap();
-        let then = installed(&file);
-        assert_eq!(then.outdated, ["devstack"]);
-        assert_eq!(then.from.as_deref(), Some("0.1.0"));
+    }
+
+    #[test]
+    fn install_writes_every_folder_named_and_refreshes_copies_elsewhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("devstack.toml");
+        std::fs::write(
+            &file,
+            format!("{STACK}[agents]\nskills = [\".claude/skills\", \".agents/skills\"]\n"),
+        )
+        .unwrap();
+        let stack = devstack_config::load(&file).unwrap();
+        install(&stack, &file, None, false).unwrap();
+        for d in [".claude/skills", ".agents/skills"] {
+            assert!(
+                dir.path().join(d).join("devstack/SKILL.md").is_file(),
+                "{d}"
+            );
+        }
+        assert!(
+            !dir.path().join(".github/skills").exists(),
+            "only what is named"
+        );
+
+        // A copy an older devstack put into Copilot's folder (`--dir`) is
+        // found and refreshed; the project's own skill there stays.
+        let github = dir.path().join(".github/skills");
+        install(&stack, &file, Some(&github), false).unwrap();
+        age(&github.join("devstack/SKILL.md"));
+        std::fs::write(github.join("devstack-config/SKILL.md"), "ours").unwrap();
+        assert_eq!(outdated(&file), [".github/skills/devstack"]);
+        install(&stack, &file, None, false).unwrap();
+        assert!(outdated(&file).is_empty());
+        assert_eq!(
+            std::fs::read_to_string(github.join("devstack-config/SKILL.md")).unwrap(),
+            "ours"
+        );
+        assert_eq!(
+            installed(&file).found.len(),
+            5,
+            "two folders named, one copy elsewhere"
+        );
     }
 }

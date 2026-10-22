@@ -755,6 +755,15 @@ pub fn draft(repo: &Path) -> Result<Draft> {
         t,
         "# TODO: commands people and agents run (seed, reset); see the reference, section commands.\n"
     );
+    let skills: Vec<String> = agent_skill_dirs(repo)
+        .iter()
+        .map(|d| format!("\"{d}\""))
+        .collect();
+    let _ = writeln!(
+        t,
+        "# Where `devstack skills install` writes the agent skills: .claude/skills (Claude Code),\n# .agents/skills (Codex, Gemini CLI and most others). An agent that reads both sees each skill twice.\n[agents]\nskills = [{}]",
+        skills.join(", ")
+    );
     let todos = t.matches("TODO").count();
     Ok(Draft {
         file,
@@ -763,6 +772,30 @@ pub fn draft(repo: &Path) -> Result<Draft> {
         todos,
         text: t,
     })
+}
+
+/// The skill folders for the agents a repository shows signs of: Claude
+/// Code's, the one most others read (`.agents/skills`), or both; no sign:
+/// Claude Code's.
+fn agent_skill_dirs(repo: &Path) -> Vec<&'static str> {
+    let any = |paths: &[&str]| paths.iter().any(|p| repo.join(p).exists());
+    let claude = any(&[".claude", "CLAUDE.md"]);
+    let others = any(&[
+        "AGENTS.md",
+        ".agents",
+        ".codex",
+        ".cursor",
+        ".gemini",
+        "GEMINI.md",
+        ".opencode",
+        ".windsurf",
+        ".github/copilot-instructions.md",
+    ]);
+    match (claude, others) {
+        (true, true) => vec![".claude/skills", ".agents/skills"],
+        (false, true) => vec![".agents/skills"],
+        _ => vec![".claude/skills"],
+    }
 }
 
 pub fn run(repo: &Path, print: bool, json: bool) -> Result<()> {
@@ -817,6 +850,29 @@ mod tests {
                 5001
             ),
             "port = 5001\nrun = \"x --urls http://localhost:5001 --id 50001 -v 1.5000\""
+        );
+    }
+
+    #[test]
+    fn the_skill_folders_follow_the_agents_a_repository_shows() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        assert_eq!(
+            agent_skill_dirs(r),
+            [".claude/skills"],
+            "no sign: Claude Code"
+        );
+        std::fs::write(r.join("AGENTS.md"), "").unwrap();
+        assert_eq!(agent_skill_dirs(r), [".agents/skills"]);
+        std::fs::create_dir_all(r.join(".claude")).unwrap();
+        assert_eq!(agent_skill_dirs(r), [".claude/skills", ".agents/skills"]);
+        // The draft says so, and loads.
+        let d = draft(r).unwrap();
+        assert!(
+            d.text
+                .contains("[agents]\nskills = [\".claude/skills\", \".agents/skills\"]"),
+            "{}",
+            d.text
         );
     }
 

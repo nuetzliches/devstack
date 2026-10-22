@@ -38,10 +38,39 @@ pub struct Stack {
     /// when it starts: `devstack up --profile <name>`.
     #[serde(default)]
     pub profiles: BTreeMap<String, Profile>,
+    /// What devstack writes for the coding agents that work in the
+    /// repository.
+    #[serde(default)]
+    pub agents: Agents,
     /// The profile this stack runs with, once applied ([`Stack::with_profile`]).
     #[serde(skip)]
     #[schemars(skip)]
     pub profile: Option<Active>,
+}
+
+/// `[agents]`: what devstack writes for the coding agents that work in the
+/// repository.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Agents {
+    /// The folders `devstack skills install` writes the generated skills to,
+    /// relative to the stack file: `.claude/skills` (Claude Code),
+    /// `.agents/skills` (Codex, Gemini CLI and most others), or both. Agents
+    /// that read both find a skill twice. Not set: `.claude/skills`.
+    #[serde(default)]
+    pub skills: Option<Vec<String>>,
+}
+
+impl Agents {
+    /// Where the generated skills are written when `skills` is not set.
+    pub const DEFAULT_SKILLS: &str = ".claude/skills";
+
+    /// The skill folders, `skills` or the default.
+    pub fn skill_dirs(&self) -> Vec<String> {
+        self.skills
+            .clone()
+            .unwrap_or_else(|| vec![Self::DEFAULT_SKILLS.to_string()])
+    }
 }
 
 /// `[profiles.<name>]` (ADR-0041): an overlay that changes how the stack
