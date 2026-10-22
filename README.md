@@ -26,7 +26,8 @@ devstack ui        # every stack, live, in the browser
 - **Your files, no lock-in.** Infrastructure comes from the Compose files you
   deploy with; services from a short `devstack.toml`. `devstack env api
   --export dotenv` runs any service without devstack.
-- **Windows and Linux, natively.** One static binary, no WSL required.
+- **Windows and Linux, natively.** One static binary, no WSL required. macOS
+  is in preview.
 
 > **Before 1.0** · local stacks, lanes and the pool are in daily use on .NET, Node and
 > Angular stacks. See [what is planned](docs/plan.md) and
@@ -40,14 +41,29 @@ irm https://github.com/nuetzliches/devstack/releases/latest/download/install.ps1
 ```
 
 ```sh
-# Linux (x86_64, static): to ~/.local/bin
+# Linux (x86_64, arm64; static) and macOS: to ~/.local/bin
 curl -fsSL https://github.com/nuetzliches/devstack/releases/latest/download/install.sh | sh
+```
+
+```sh
+# macOS and Linux, with Homebrew
+brew install nuetzliches/tap/devstack
 ```
 
 On Windows, `winget install nuetzliches.devstack` installs the same build
 (releases after 0.15.0, once winget's catalogue has them, usually a few days
 after the release); `devstack update` then updates it through winget, and
-the first `devstack up` registers the hub as the installer would.
+the first `devstack up` registers the hub as the installer would. A copy
+Homebrew installed is updated the same way, through `brew upgrade`.
+
+**macOS is a preview** ([ADR-0054](docs/adr/0054-macos-is-a-developer-platform-in-preview.md)):
+Apple Silicon and Intel, macOS 11 or later, Docker Desktop, OrbStack or
+Colima. None of the maintainers has a Mac: CI checks what it can, and
+[reports](https://github.com/nuetzliches/devstack/issues/66) check the rest.
+Desktop notifications, the `devstack://` link and a Mac as a pool node are
+not there yet. The binary is not signed: install it with Homebrew or
+`install.sh` (neither marks it for Gatekeeper); a copy downloaded with a
+browser is blocked until `xattr -d com.apple.quarantine devstack`.
 
 The scripts and `devstack update` check the download against the release's
 `SHA256SUMS`: that proves the archive is the one the release lists (not
@@ -65,7 +81,8 @@ install --git https://github.com/nuetzliches/devstack devstack` (without the
 dashboard: it needs `npm ci && npm run build` in `ui/` before the build;
 `devstack update` leaves such a binary alone).
 
-The installer registers the dashboard **hub** to start at logon and a
+The installer registers the dashboard **hub** to start at logon (on macOS a
+LaunchAgent, for a Homebrew install too: not `brew services`) and a
 `devstack://` link the dashboard uses to start it. To skip both, set
 `DEVSTACK_NO_HUB_INTEGRATION=1` before the install command (Windows also
 takes `-NoHubIntegration` when the script is run as a file); the choice is

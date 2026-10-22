@@ -88,10 +88,12 @@ jobs:
     needs: [changes, ui]
     if: needs.changes.outputs.rust == 'true'
     # Windows is a first-class target (ADR-0011): every job runs on both.
+    # macOS is a preview (ADR-0054), checked here on Apple Silicon; its
+    # runners have no Docker.
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -188,6 +190,9 @@ jobs:
             skip: --skip lifecycle_with_compose --skip a_lane_has_its_own_containers
           - os: ubuntu-latest
             skip: ''
+          # No Docker on the macOS runners (ADR-0054).
+          - os: macos-14
+            skip: --skip lifecycle_with_compose --skip a_lane_has_its_own_containers
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

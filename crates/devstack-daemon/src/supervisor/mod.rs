@@ -1042,6 +1042,24 @@ pub fn port_in_use(port: u16) -> bool {
     };
     taken(std::net::TcpListener::bind(("127.0.0.1", port)))
         || taken(std::net::TcpListener::bind(("::1", port)))
+        || (cfg!(target_os = "macos") && answers_locally(port))
+}
+
+/// Does something accept a connection on `port` of a loopback address? Asked
+/// on macOS only: with BSD sockets a bind on `127.0.0.1` succeeds while
+/// another process listens on `*:port` (std sets `SO_REUSEADDR`), and that
+/// listener answers. Not on Windows, where a connect to a closed loopback
+/// port takes seconds of retries.
+fn answers_locally(port: u16) -> bool {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
+    [
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V6(Ipv6Addr::LOCALHOST),
+    ]
+    .into_iter()
+    .any(|ip| {
+        TcpStream::connect_timeout(&SocketAddr::new(ip, port), Duration::from_millis(250)).is_ok()
+    })
 }
 
 /// "port N is already in use by another process", with that process when
@@ -1209,6 +1227,21 @@ mod port_tests {
         let Ok(l) = std::net::TcpListener::bind(("::1", 0)) else {
             return; // no IPv6 on this host
         };
+        let port = l.local_addr().unwrap().port();
+        assert!(super::port_in_use(port));
+        drop(l);
+        assert!(!super::port_in_use(port));
+    }
+
+    // Not on Windows: there a bind on 127.0.0.1 succeeds too while the same
+    // user listens on 0.0.0.0, and a connect probe would take seconds per
+    // closed port; not covered yet.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_port_held_on_every_address_is_in_use() {
+        // Docker's published ports, a dev server on 0.0.0.0. With BSD sockets
+        // (macOS) a bind on 127.0.0.1 still succeeds; the connect tells.
+        let l = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
         let port = l.local_addr().unwrap().port();
         assert!(super::port_in_use(port));
         drop(l);

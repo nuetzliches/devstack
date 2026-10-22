@@ -135,6 +135,21 @@ fn counted(repo: &Path, path: &Path) -> Option<String> {
     (!rel.is_empty() && !ignored(&rel)).then_some(rel)
 }
 
+/// `path` under `repo` when the OS reported it under `real`, the repository's
+/// real path. FSEvents (macOS) reports real paths: `/private/tmp/...` for a
+/// repository opened as `/tmp/...`, the target of a symlinked project folder,
+/// the case the disk has. Elsewhere `real` never prefixes an event's path
+/// that `repo` does not, and nothing changes.
+fn as_given(repo: &Path, real: &Path, path: PathBuf) -> PathBuf {
+    if path.starts_with(repo) {
+        return path;
+    }
+    match path.strip_prefix(real) {
+        Ok(rel) => repo.join(rel),
+        Err(_) => path,
+    }
+}
+
 /// Does a change to `path` change the ignore rules? Asked of the event's own
 /// paths: `.git/info/exclude` is in a directory that never counts.
 fn rule_file(repo: &Path, path: &Path) -> bool {
@@ -283,6 +298,7 @@ fn watch(sup: Arc<Supervisor>) -> Result<Watcher, String> {
         .ok()
         .map(|p| p.to_string_lossy().replace('\\', "/"));
     let repo = sup.repo.clone();
+    let real = std::fs::canonicalize(&repo).unwrap_or_else(|_| repo.clone());
     let me = sup.clone();
     let lane_copy = lane;
     // Read once here and again when a rule file changes, never per event.
@@ -309,11 +325,15 @@ fn watch(sup: Arc<Supervisor>) -> Result<Watcher, String> {
         }
     };
     let mut inner = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        let ev = match res {
+        let mut ev = match res {
             Ok(ev) if ev.need_rescan() => return rescan("the OS asked for a rescan".into()),
             Ok(ev) => ev,
             Err(e) => return rescan(e.to_string()),
         };
+        ev.paths = std::mem::take(&mut ev.paths)
+            .into_iter()
+            .map(|p| as_given(&repo, &real, p))
+            .collect();
         if matches!(ev.kind, EventKind::Access(_)) {
             return;
         }
@@ -463,6 +483,29 @@ mod tests {
         for p in ["/r/src/a.cs", "/elsewhere/.gitignore", "/r/.git/index"] {
             assert!(!rule_file(repo, Path::new(p)), "{p}");
         }
+    }
+
+    #[test]
+    fn a_real_path_is_taken_back_under_the_repository() {
+        // FSEvents: the repository opened as /tmp/r lives in /private/tmp/r.
+        let (repo, real) = (Path::new("/tmp/r"), Path::new("/private/tmp/r"));
+        assert_eq!(
+            as_given(repo, real, PathBuf::from("/private/tmp/r/src/a.cs")),
+            Path::new("/tmp/r/src/a.cs")
+        );
+        assert_eq!(
+            as_given(repo, real, PathBuf::from("/tmp/r/src/a.cs")),
+            Path::new("/tmp/r/src/a.cs")
+        );
+        assert_eq!(
+            as_given(repo, real, PathBuf::from("/private/tmp/other/a.cs")),
+            Path::new("/private/tmp/other/a.cs")
+        );
+        // Where the repository is its real path, nothing moves.
+        assert_eq!(
+            as_given(repo, repo, PathBuf::from("/tmp/r/a.cs")),
+            Path::new("/tmp/r/a.cs")
+        );
     }
 
     /// A tree that exists only as a map, and a record of every question asked

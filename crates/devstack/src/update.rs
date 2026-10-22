@@ -21,10 +21,20 @@ use std::path::{Path, PathBuf};
 
 const BASE: &str = "https://github.com/nuetzliches/devstack/releases";
 
-const ASSET: &str = if cfg!(windows) {
-    "devstack-x86_64-pc-windows-msvc.zip"
+/// The release archive built for this machine (`release.yml`, `install.sh`),
+/// `None` where there is none.
+const ASSET: Option<&str> = if cfg!(all(windows, target_arch = "x86_64")) {
+    Some("devstack-x86_64-pc-windows-msvc.zip")
+} else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+    Some("devstack-x86_64-unknown-linux-musl.tar.gz")
+} else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+    Some("devstack-aarch64-unknown-linux-musl.tar.gz")
+} else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+    Some("devstack-aarch64-apple-darwin.tar.gz")
+} else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+    Some("devstack-x86_64-apple-darwin.tar.gz")
 } else {
-    "devstack-x86_64-unknown-linux-musl.tar.gz"
+    None
 };
 const EXE: &str = if cfg!(windows) {
     "devstack.exe"
@@ -178,19 +188,20 @@ fn undeleted(exe: PathBuf) -> PathBuf {
 /// Download, check and put release `version` in place of `target`; returns
 /// `target`, the path of the new binary.
 fn install(version: &str, target: &Path) -> Result<PathBuf> {
-    if !cfg!(any(windows, target_os = "linux")) || !cfg!(target_arch = "x86_64") {
+    let Some(asset) = ASSET else {
         bail!("there is no release build for this platform; build devstack from source");
-    }
+    };
     let base = format!("{BASE}/download/v{version}");
-    println!("  [1/3] downloading {ASSET}");
-    let archive = get(&format!("{base}/{ASSET}"))?;
+    println!("  [1/3] downloading {asset}");
+    let archive = get(&format!("{base}/{asset}"))?;
     let sums = String::from_utf8(get(&format!("{base}/SHA256SUMS"))?)?;
     println!("  [2/3] checking it against the release checksums");
-    let expected = expected_sum(&sums, ASSET)
-        .ok_or_else(|| anyhow!("SHA256SUMS of v{version} lists no {ASSET}"))?;
+    // A release from before this platform had a build lists none for it.
+    let expected = expected_sum(&sums, asset)
+        .ok_or_else(|| anyhow!("SHA256SUMS of v{version} lists no {asset}"))?;
     let actual = sha256_hex(&archive);
     if actual != expected {
-        bail!("checksum mismatch for {ASSET}: expected {expected}, got {actual}");
+        bail!("checksum mismatch for {asset}: expected {expected}, got {actual}");
     }
     let binary = unpack(&archive)?;
     println!("  [3/3] installing to {}", target.display());
