@@ -443,11 +443,40 @@ impl Supervisor {
             return Ok(());
         }
         let port = svc.port.expect("a fronted dev server has a port");
-        if port_in_use(port) {
-            return Err(super::port_taken(port));
+        // Held a moment longer by something on its way out (the instance of
+        // a daemon that just restarted, ADR-0052): tried again for a while;
+        // a port that stays taken names its holder as before.
+        let t0 = std::time::Instant::now();
+        let bound = loop {
+            let r = if port_in_use(port) {
+                Err(std::io::Error::from(std::io::ErrorKind::AddrInUse))
+            } else {
+                crate::tcpfwd::Front::bind(port, &self.rt)
+            };
+            match r {
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::AddrInUse
+                        && t0.elapsed() < Duration::from_secs(10) =>
+                {
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+                r => break r,
+            }
+        };
+        if t0.elapsed() >= Duration::from_millis(250) {
+            crate::diag::info(
+                "front_port_waited",
+                serde_json::json!({ "lane": self.lane, "service": name, "port": port,
+                    "ms": t0.elapsed().as_millis() as u64, "bound": bound.is_ok() }),
+            );
         }
-        let f = crate::tcpfwd::Front::bind(port, &self.rt)
-            .map_err(|e| format!("forward on port {port}: {e}"))?;
+        let f = match bound {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                return Err(super::port_taken(port));
+            }
+            Err(e) => return Err(format!("forward on port {port}: {e}")),
+        };
         fronts.insert(name.into(), f);
         Ok(())
     }
