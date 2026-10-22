@@ -641,6 +641,29 @@ with one, alphabetically.
 `members` is required, not empty, lists each member once, and names what
 exists (a `compose.<group>.<service>` member is a service its group starts).
 
+## `[agents]`: what devstack writes for coding agents
+
+```toml
+[agents]
+skills = [".claude/skills", ".agents/skills"]   # default: [".claude/skills"]
+```
+
+`skills` names the folders `devstack skills install` writes the generated
+agent skills to, relative to the stack file. Claude Code reads
+`.claude/skills` only, Codex `.agents/skills` only; Copilot, Cursor,
+Gemini CLI, OpenCode, Amp and Windsurf read `.agents/skills`, most of them
+`.claude/skills` too, and then find each skill twice: name both only when
+the repository's agents need both. `devstack init` fills it in from what the
+repository shows (`.claude/` or `CLAUDE.md`; `AGENTS.md`, `.agents/`,
+`.codex/`, `.cursor/`, `.gemini/` and the like). Each folder must stay
+inside the repository and be named once; the list must not be empty.
+
+A generated skill (its marker line says so) is also looked for in the other
+agents' folders (`.github/skills`, `.cursor/skills`, `.gemini/skills`, ...):
+`devstack status`, `doctor`, `skills check` and the dashboard report one that
+no longer matches, and `skills install` refreshes it there. A skill the
+project wrote itself is never touched.
+
 ## Placeholders
 
 | Placeholder | Value |

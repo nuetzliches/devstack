@@ -621,7 +621,7 @@ enum SkillsAction {
     /// Write the skills `devstack` (run the stack) and `devstack-config` (edit the
     /// stack file), filled in from this stack file. Again to refresh them.
     Install {
-        /// Target directory; default `.claude/skills` next to the stack file.
+        /// Target directory; default the folders `[agents] skills` names (`.claude/skills`).
         #[arg(long)]
         dir: Option<PathBuf>,
         /// Also replace a file of the same name the project wrote itself.

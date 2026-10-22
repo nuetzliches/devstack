@@ -177,10 +177,11 @@ per machine, a customer's beside the team's. Setup and everything else:
 ```
 
 `devstack skills install` writes two skills into the repository
-(`.claude/skills/`): **`devstack`** (operating this stack, "is my change
-live", troubleshooting) and **`devstack-config`** (editing the stack file).
-They are filled in from the stack file; `devstack status` says when they are
-out of date. A command with a confirmation text in the stack file runs only
+(`.claude/skills/` by default; `[agents] skills` in the stack file names the
+folders, `.agents/skills` for Codex and most other agents):
+**`devstack`** (operating this stack, "is my change live", troubleshooting)
+and **`devstack-config`** (editing the stack file). They are filled in from
+the stack file; `devstack status` says when they are out of date. A command with a confirmation text in the stack file runs only
 when the agent passes `confirm: true`, which it may only do after you agreed.
 
 ## Commands

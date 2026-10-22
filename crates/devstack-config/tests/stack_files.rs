@@ -819,3 +819,35 @@ fn main_ports_name_started_services_a_lane_runs_itself() {
     );
     assert!(all.contains("`mail` is `shared`"), "{all}");
 }
+
+#[test]
+fn agent_skill_folders_default_to_claude_code_and_stay_in_the_repository() {
+    let stack = from_str(MINIMAL, Path::new("t.toml")).unwrap();
+    assert_eq!(stack.agents.skill_dirs(), [".claude/skills"]);
+
+    let both = format!("{MINIMAL}\n[agents]\nskills = [\".claude/skills\", \".agents/skills\"]\n");
+    let stack = from_str(&both, Path::new("t.toml")).unwrap();
+    assert_eq!(
+        stack.agents.skill_dirs(),
+        [".claude/skills", ".agents/skills"]
+    );
+
+    let bad = format!(
+        "{MINIMAL}\n[agents]\nskills = [\"../elsewhere\", \"/abs\", \".agents/skills\", \".agents/skills/\"]\n"
+    );
+    let issues = invalid(&bad).join("\n");
+    assert!(
+        issues.contains("`../elsewhere` must be a folder inside"),
+        "{issues}"
+    );
+    assert!(
+        issues.contains("`/abs` must be a folder inside"),
+        "{issues}"
+    );
+    assert!(
+        issues.contains("`.agents/skills/` is named twice"),
+        "{issues}"
+    );
+    let none = invalid(&format!("{MINIMAL}\n[agents]\nskills = []\n")).join("\n");
+    assert!(none.contains("at least one folder"), "{none}");
+}

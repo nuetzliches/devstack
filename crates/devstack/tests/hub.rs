@@ -535,7 +535,7 @@ fn a_stack_is_added_or_drafted_from_the_dashboard() {
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(
         v["found"],
-        serde_json::json!(["devstack", "devstack-config"])
+        serde_json::json!([".claude/skills/devstack", ".claude/skills/devstack-config"])
     );
     assert_eq!(v["outdated"], serde_json::json!([]));
     assert_eq!(v["from"], v["current"]);
