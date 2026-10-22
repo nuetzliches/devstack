@@ -426,6 +426,7 @@ impl Supervisor {
             urls: self.container_urls(group, &c.service, &ports),
             ports,
             unreachable: Vec::new(),
+            not_forwarded: Vec::new(),
             held,
         }
     }
@@ -1032,7 +1033,7 @@ impl Supervisor {
 
     /// In a lane on a node: the container address a tunnel on `port` goes
     /// to, when `port` is where a container of the lane is published for its
-    /// developer (ADR-0029 point 4).
+    /// developer (ADR-0029 point 4). A tunnel carries TCP (#192).
     pub fn infra_tunnel(&self, port: u16) -> Option<String> {
         let ext = crate::external::read(&self.external_infra()?).ok()?;
         ext.groups
@@ -1041,7 +1042,7 @@ impl Supervisor {
             .find_map(|s| {
                 s.published
                     .iter()
-                    .find(|(_, h)| **h == port)
+                    .find(|(k, h)| k.is_tcp() && **h == port)
                     .and_then(|(target, _)| s.ports.get(target).cloned())
             })
     }
@@ -1073,36 +1074,36 @@ impl Supervisor {
                         view.error = Some(e);
                     }
                     for (svc, s) in eg.services {
-                        for (port, addr) in &s.ports {
+                        for (key, addr) in &s.ports {
                             // A published container is reached on loopback,
                             // as on the developer's machine: the same
                             // addresses for the services (`rewrite_hosts`),
-                            // and loopback where they insist on it.
-                            let at = match s.published.get(port) {
-                                Some(host) if self.loopback_forward(*host, addr) => {
+                            // and loopback where they insist on it. A
+                            // forward carries TCP; a UDP port is reached at
+                            // its container (#192).
+                            let at = match s.published.get(key) {
+                                Some(host)
+                                    if key.is_tcp() && self.loopback_forward(*host, addr) =>
+                                {
                                     format!("127.0.0.1:{host}")
                                 }
                                 _ => addr.clone(),
                             };
-                            cache.published.insert((g.clone(), svc.clone(), *port), at);
+                            // A port's TCP entry comes first, and stays.
+                            cache
+                                .published
+                                .entry((g.clone(), svc.clone(), key.port))
+                                .or_insert(at);
                         }
                         cache
                             .envs
                             .insert((g.clone(), svc.clone()), s.environment.clone());
                         if !s.state.is_empty() {
                             // Shown, and linked, as the developer reaches it.
-                            let ports: Vec<String> = s
-                                .ports
-                                .iter()
-                                .map(|(p, a)| match s.published.get(p) {
-                                    Some(h) => format!("{h}->{a}"),
-                                    None => format!("{p}->{a}"),
-                                })
-                                .collect();
+                            let ports = s.shown_ports();
                             let here: Vec<String> = s
-                                .published
-                                .values()
-                                .map(|h| format!("localhost:{h}"))
+                                .forwarded()
+                                .map(|(_, h)| format!("localhost:{h}"))
                                 .collect();
                             view.containers.push(ContainerView {
                                 service: svc.clone(),
@@ -1113,6 +1114,7 @@ impl Supervisor {
                                 urls: self.container_urls(&g, &svc, &here),
                                 ports,
                                 unreachable: Vec::new(),
+                                not_forwarded: s.not_forwarded(),
                                 held: Vec::new(),
                                 managed: true,
                             });
@@ -1499,6 +1501,7 @@ mod tests {
             ports: Vec::new(),
             urls: Vec::new(),
             unreachable: Vec::new(),
+            not_forwarded: Vec::new(),
             held: Vec::new(),
             managed,
         }

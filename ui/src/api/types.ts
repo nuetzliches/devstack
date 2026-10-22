@@ -158,6 +158,8 @@ export type LaneView = {
   node_error?: string;
   /** Its node or the pool's coordinator runs another devstack than this machine, or does not say which. */
   node_warning?: string;
+  /** Of a lane on a node, its containers' published ports this machine does not forward (`5353/udp`): devstack forwards TCP only. Older daemons omit it. */
+  not_forwarded?: string[];
   /** A start on a node or a move under way (step of steps), or one that failed lately. */
   moving?: LaneMove;
   /** Its worktree is gone: it stops and its data goes (ADR-0024 point 7); it leaves the list after. */
@@ -212,6 +214,8 @@ export type ServiceView = {
 export type ContainerView = {
   /** Published ports Docker no longer forwards (accepted, closed at once); older daemons omit it. */
   unreachable?: string[];
+  /** Of a lane on a node, its published ports of another protocol than TCP (`5353/udp`), which the developer's machine does not reach. Older daemons omit it. */
+  not_forwarded?: string[];
   service: string;
   name: string;
   state: string;

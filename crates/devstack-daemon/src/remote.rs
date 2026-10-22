@@ -42,6 +42,9 @@ pub struct RemoteState {
     pub ended: bool,
     /// Its services that run now (healthy or running), by name.
     pub active: Vec<String>,
+    /// Its containers' published ports this machine does not forward
+    /// (`5353/udp`): devstack forwards TCP only (#192).
+    pub not_forwarded: Vec<String>,
 }
 
 impl RemoteState {
@@ -1200,6 +1203,7 @@ impl RemoteLane {
                 st.containers_running = all.iter().filter(|c| c["state"] == "running").count();
                 st.containers = all.len();
                 st.active = active;
+                st.not_forwarded = not_forwarded(&all);
             }
             if !self.tick(STATE_EVERY).await {
                 return;
@@ -1485,6 +1489,23 @@ fn not_written(failed: &[String]) -> String {
         s.push_str(&format!(" (and {} more)", failed.len() - SHOWN));
     }
     s
+}
+
+/// The published ports of a lane's containers (its view's, read as JSON)
+/// that this machine does not forward, each once, in order (`5353/udp`).
+/// A lane daemon from before #192 does not say.
+fn not_forwarded(containers: &[serde_json::Value]) -> Vec<String> {
+    let mut out: Vec<String> = containers
+        .iter()
+        .flat_map(|c| c["not_forwarded"].as_array().cloned().unwrap_or_default())
+        .filter_map(|p| p.as_str().map(str::to_string))
+        .collect();
+    out.sort_by_key(|p| {
+        let port = p.split('/').next().and_then(|n| n.parse::<u16>().ok());
+        (port, p.clone())
+    });
+    out.dedup();
+    out
 }
 
 /// What a lease offer says of the node's and the coordinator's devstack:
@@ -1803,6 +1824,21 @@ members = ["api"]
         assert_eq!(
             super::not_written(&failed[..1]),
             "not written on the node: f1: denied"
+        );
+    }
+
+    #[test]
+    fn a_lanes_ports_not_forwarded_are_listed_once_in_order() {
+        let containers: Vec<serde_json::Value> = serde_json::from_str(
+            r#"[{"service":"dns","not_forwarded":["10053/udp","5453/udp"]},
+                {"service":"voice","not_forwarded":["5453/udp"]},
+                {"service":"db","ports":["15432->db:5432"]}]"#,
+        )
+        .unwrap();
+        assert_eq!(super::not_forwarded(&containers), ["5453/udp", "10053/udp"]);
+        assert!(
+            super::not_forwarded(&containers[2..]).is_empty(),
+            "an older lane daemon's"
         );
     }
 }

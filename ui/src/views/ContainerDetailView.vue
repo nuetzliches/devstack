@@ -5,6 +5,7 @@ import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { bytes, percent, webUrl } from '@/lib/format';
 import { containerLook, containerRefuses } from '@/lib/status';
+import { notForwardedText } from '@/lib/lanes';
 import { useStack } from '@/stores/stack';
 import StatusPill from '@/components/StatusPill.vue';
 import LogView from '@/components/LogView.vue';
@@ -94,6 +95,11 @@ const kv = computed(() => {
     <div v-if="container?.unreachable?.length" class="banner warn">
       <Icon name="alert" :size="18" />
       <span class="grow">{{ container.unreachable.join(', ') }} closes connections from this machine at once: Docker lost the port forward (restart the container), or nothing listens on it inside.</span>
+    </div>
+
+    <div v-if="container?.not_forwarded?.length" class="banner info" data-testid="container-not-forwarded">
+      <Icon name="alert" :size="18" />
+      <span class="grow">{{ notForwardedText(container.not_forwarded) }}: the container gets them on its node, where nothing here reaches them.</span>
     </div>
 
     <div class="cols">
