@@ -141,7 +141,7 @@ async function saveTags(m: PoolMember) {
   editTags.value = null;
 }
 const editPolicy = ref<string | null>(null);
-const pol = ref({ allow: '', repos: '', headroom: '', cpus: '', network: 'lan' as 'lan' | 'internet' | 'none' });
+const pol = ref({ allow: '', repos: '', headroom: '', cpus: '', share: '', network: 'lan' as 'lan' | 'internet' | 'none' });
 function startPolicy(id: string) {
   const p = memberOf(id)?.policy;
   pol.value = {
@@ -149,6 +149,7 @@ function startPolicy(id: string) {
     repos: (p?.repos ?? []).join(', '),
     headroom: p?.memory_headroom !== undefined ? String(p.memory_headroom) : '',
     cpus: p?.max_cpus !== undefined ? String(p.max_cpus) : '',
+    share: p?.share_percent !== undefined ? String(p.share_percent) : '',
     network: p?.network ?? 'lan',
   };
   editPolicy.value = id;
@@ -160,16 +161,20 @@ const cpusOf = (t: string) => {
 const list = (t: string) => t.split(',').map((x) => x.trim()).filter(Boolean);
 async function savePolicy(id: string, name: string, clear = false) {
   const h = Number(pol.value.headroom.replace(',', '.'));
+  const share = Math.round(Number(pol.value.share));
   await pool.setPolicy(
     id,
     name,
     clear
       ? null
       : {
+          // What the form does not edit stays as it is.
+          ...memberOf(id)?.policy,
           allow: list(pol.value.allow),
           repos: list(pol.value.repos),
           memory_headroom: pol.value.headroom.trim() && Number.isFinite(h) && h > 0 ? h : undefined,
           max_cpus: cpusOf(pol.value.cpus),
+          share_percent: pol.value.share.trim() && share >= 1 && share <= 100 ? share : undefined,
           network: pol.value.network,
         },
   );
@@ -186,7 +191,10 @@ function policyText(id: string) {
       : p.network === 'internet'
         ? ' · internet, not the local network'
         : '';
-  const mem = (p.memory_headroom ? ` · memory need ×${p.memory_headroom}` : '') + (p.max_cpus ? ` · at most ${p.max_cpus} CPU per lane` : '');
+  const mem =
+    (p.memory_headroom ? ` · memory need ×${p.memory_headroom}` : '') +
+    (p.max_cpus ? ` · at most ${p.max_cpus} CPU per lane` : '') +
+    (p.share_percent ? ` · offers ${p.share_percent}% of what is free` : '');
   return `${who} · ${what}${mem}${net}`;
 }
 </script>
@@ -624,6 +632,9 @@ function policyText(id: string) {
                     <label><span>Repositories</span><input v-model="pol.repos" class="input" placeholder="any" /></label>
                     <label><span>Memory limit (× need)</span><input v-model="pol.headroom" class="input" placeholder="none" /></label>
                     <label><span>CPU per lane (cores)</span><input v-model="pol.cpus" class="input" placeholder="no limit" /></label>
+                    <label title="What of its free CPU and memory the node offers the pool; its own caps still hold">
+                      <span>Offers of what is free (%)</span><input v-model="pol.share" class="input" inputmode="numeric" placeholder="50" />
+                    </label>
                     <label>
                       <span>Network</span>
                       <select v-model="pol.network" class="input">

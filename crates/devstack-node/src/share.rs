@@ -1,6 +1,6 @@
 //! What a machine shares with the pool (ADR-0031 point 3): with the switch on,
-//! half of the memory and CPU that are free right now, never more than the
-//! cap its owner sets. Kept in `share.json` next to the membership.
+//! half of the memory and CPU that are free right now (a node's policy may
+//! say another part), never more than the cap its owner sets. Kept in `share.json` next to the membership.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -154,14 +154,15 @@ impl Settings {
         )
     }
 
-    /// What the machine offers now, given what is `free`: half of it, capped;
-    /// nothing with the switch off.
-    pub fn offer(&self, free: Amount) -> Amount {
+    /// What the machine offers now, given what is `free`: `percent` of it
+    /// (half when `None`), capped; nothing with the switch off.
+    pub fn offer(&self, free: Amount, percent: Option<u8>) -> Amount {
         if !self.enabled {
             return Amount::default();
         }
-        let cpus = free.cpus / 2.0;
-        let memory = free.memory / 2;
+        let part = f64::from(percent.unwrap_or(50).clamp(1, 100)) / 100.0;
+        let cpus = free.cpus * part;
+        let memory = (free.memory as f64 * part) as u64;
         Amount {
             cpus: self.max_cpus.map_or(cpus, |m| cpus.min(m)).max(0.0),
             memory: self.max_memory.map_or(memory, |m| memory.min(m)),
@@ -255,13 +256,17 @@ mod tests {
             memory: 20 * GIB,
         };
         let off = Settings::default();
-        assert_eq!(off.offer(free), Amount::default(), "off shares nothing");
+        assert_eq!(
+            off.offer(free, None),
+            Amount::default(),
+            "off shares nothing"
+        );
         let on = Settings {
             enabled: true,
             ..Settings::default()
         };
         assert_eq!(
-            on.offer(free),
+            on.offer(free, None),
             Amount {
                 cpus: 5.0,
                 memory: 10 * GIB
@@ -273,12 +278,22 @@ mod tests {
             max_memory: Some(4 * GIB),
         };
         assert_eq!(
-            capped.offer(free),
+            capped.offer(free, None),
             Amount {
                 cpus: 2.0,
                 memory: 4 * GIB
             }
         );
+        // A policy's part instead of half, still under the cap.
+        assert_eq!(
+            on.offer(free, Some(80)),
+            Amount {
+                cpus: 8.0,
+                memory: 16 * GIB
+            }
+        );
+        assert_eq!(capped.offer(free, Some(80)).cpus, 2.0);
+        assert_eq!(on.offer(free, Some(0)).cpus, 0.1, "at least 1 percent");
         assert_eq!(idle_cpus((100, 1000), (150, 1100), 8), 4.0);
     }
 

@@ -943,14 +943,49 @@ struct Held {
 }
 
 fn offered_need(leases: &HashMap<String, (Lease, String, std::time::Instant)>, node: &str) -> Held {
+    held_by(leases, node, |l, at| {
+        l.state == "offered" && at.elapsed() < OFFER_HOLDS
+    })
+}
+
+/// What the leases on `node` that `which` picks need there together.
+fn held_by(
+    leases: &HashMap<String, (Lease, String, std::time::Instant)>,
+    node: &str,
+    which: impl Fn(&Lease, &std::time::Instant) -> bool,
+) -> Held {
     leases
         .values()
-        .filter(|(l, _, at)| l.node == node && l.state == "offered" && at.elapsed() < OFFER_HOLDS)
+        .filter(|(l, _, at)| l.node == node && which(l, at))
         .fold(Held::default(), |a, (l, _, _)| Held {
             cpus: a.cpus + l.need.cpus,
             memory: a.memory + l.need.memory,
             disk: a.disk + l.disk,
         })
+}
+
+/// A node's report as a lane that holds leases there sees it: what its own
+/// offered leases hold is not held against it, and what its running ones
+/// take is room it has (the node counts them in its report: their need
+/// while they settle, what they use after). Without this, a lane starting
+/// on a node would read that the node cannot take it, its own lease taking
+/// the room.
+fn with_own(
+    rep: &Report,
+    leases: &HashMap<String, (Lease, String, std::time::Instant)>,
+    node: &str,
+    own: impl Fn(&Lease) -> bool,
+) -> Report {
+    let others = held_by(leases, node, |l, at| {
+        l.state == "offered" && at.elapsed() < OFFER_HOLDS && !own(l)
+    });
+    let mine = held_by(leases, node, |l, _| l.state == "running" && own(l));
+    let rep = less_offered(rep, others);
+    Report {
+        cpus: rep.cpus + mine.cpus,
+        memory: rep.memory.saturating_add(mine.memory),
+        ..rep
+    }
 }
 
 /// A node's report with what offered leases hold taken off its offer.
@@ -1372,9 +1407,18 @@ fn need_of(s: &Inner, r: &LeaseRequest) -> (crate::share::Need, String) {
 }
 
 /// The nodes that may take `r` for `me` at all (granted, online, not
-/// paused, not the requester, admitted by their policy), ranked.
-fn placement_for(s: &Shared, ms: &[Member], me: &Member, r: &LeaseRequest) -> Vec<Placement> {
+/// paused, not the requester, admitted by their policy), ranked. `own`:
+/// the room the lane's own leases hold counts as its (what the dashboard
+/// shows while it starts or runs), not when it asks for another lease.
+fn placement_for(
+    s: &Shared,
+    ms: &[Member],
+    me: &Member,
+    r: &LeaseRequest,
+    own: bool,
+) -> Vec<Placement> {
     let leases = s.leases.lock().unwrap().clone();
+    let mine = |l: &Lease| l.member == me.id && l.repo == r.repo && l.lane == r.lane;
     // What each node offers less what offers not admitted yet hold there.
     let reports: HashMap<String, (std::time::Instant, Report)> = s
         .reports
@@ -1382,10 +1426,12 @@ fn placement_for(s: &Shared, ms: &[Member], me: &Member, r: &LeaseRequest) -> Ve
         .unwrap()
         .iter()
         .map(|(id, (at, rep))| {
-            (
-                id.clone(),
-                (*at, less_offered(rep, offered_need(&leases, id))),
-            )
+            let rep = if own {
+                with_own(rep, &leases, id, mine)
+            } else {
+                less_offered(rep, offered_need(&leases, id))
+            };
+            (id.clone(), (*at, rep))
         })
         .collect();
     let nodes: Vec<(&str, &str, &Report)> = ms
@@ -1437,7 +1483,7 @@ async fn placement(
         profile: q.profile.filter(|p| !p.is_empty()),
         devstack: Some(Release::this()),
     };
-    Ok(Json(placement_for(&s, &ms, &me, &r)))
+    Ok(Json(placement_for(&s, &ms, &me, &r, true)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1494,7 +1540,7 @@ async fn lease_create(
     // enough, not the requester itself, warm ones first (`rank`).
     let mut why = None;
     if r.node.is_empty() || r.node.eq_ignore_ascii_case("pool") {
-        let ranked = placement_for(&s, &ms, &me, &r);
+        let ranked = placement_for(&s, &ms, &me, &r, false);
         let best = ranked.into_iter().find(|p| p.eligible).map(|p| {
             why = Some(p.why);
             p.node
@@ -2505,6 +2551,12 @@ mod placement_tests {
         // More held than offered: nothing left, never less.
         let rep = less_offered(&node(1.0, 1, &[]), held);
         assert_eq!((rep.cpus, rep.memory), (0.0, 0));
+        // Lane `a` sees its own offer as its room, the others' held.
+        let a = with_own(&node(4.0, 8, &[]), &leases, "n1", |l| l.lane == "a");
+        assert_eq!((a.cpus, a.memory), (3.0, 6 * GIB));
+        // Lane `c` runs there: the room its need takes in the report is its.
+        let c = with_own(&node(4.0, 8, &[]), &leases, "n1", |l| l.lane == "c");
+        assert_eq!((c.cpus, c.memory), (3.0, 10 * GIB));
         assert!(
             UpdateReport {
                 at: 1,

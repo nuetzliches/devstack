@@ -7,6 +7,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { api, paths } from '@/api';
 import type { LaneView, Placement } from '@/api/types';
+import type { LaneTarget } from '@/stores/pool';
 import { bytes, duration, useNow } from '@/lib/format';
 import { laneLabel } from '@/lib/lanes';
 import { usePool } from '@/stores/pool';
@@ -67,7 +68,16 @@ function placeOf(poolName: string, nodeId: string) {
   const i = list.findIndex((p) => p.node === nodeId);
   return i < 0 ? null : { rank: i + 1, pick: i === 0 && list[0].eligible, ...list[i] };
 }
-
+/** The node the lane is starting on, while it does: the one named, or the
+ * one its lease is on. Its card says so rather than rank the node for a
+ * lane that holds room there already. */
+function startingOn(n: LaneTarget) {
+  const mv = m.value;
+  if (!running.value || !mv) return false;
+  if (mv.to === n.on || mv.to === n.node.name) return true;
+  const lease = `lease on ${n.node.name}`;
+  return [mv.what, ...(mv.phases ?? []).map((p) => p.phase)].some((w) => w === lease || w.startsWith(`${lease}:`) || w.startsWith(`on ${n.node.name}:`));
+}
 
 function start(on?: string) {
   void stack.startLane(props.lane.name, on, profile.value || undefined);
@@ -165,7 +175,8 @@ function start(on?: string) {
             <Icon name="server" :size="14" /> on <strong>{{ n.label }}</strong>
             <span v-if="placeOf(n.pool, n.node.id)?.pick" class="pill sm info" data-testid="lane-start-pick" :title="`The coordinator would start it here: ${placeOf(n.pool, n.node.id)?.why}`">pool's pick</span>
           </span>
-          <span v-if="placeOf(n.pool, n.node.id)" class="why" :class="{ err: !placeOf(n.pool, n.node.id)?.eligible }" data-testid="lane-start-why">
+          <span v-if="startingOn(n)" class="why" data-testid="lane-start-why">the lane is starting here</span>
+          <span v-else-if="placeOf(n.pool, n.node.id)" class="why" :class="{ err: !placeOf(n.pool, n.node.id)?.eligible }" data-testid="lane-start-why">
             {{ placeOf(n.pool, n.node.id)?.eligible ? `#${placeOf(n.pool, n.node.id)?.rank} · ` : 'cannot take it: ' }}{{ placeOf(n.pool, n.node.id)?.why
             }}<template v-if="placeOf(n.pool, n.node.id)?.eligible && placeOf(n.pool, n.node.id)?.disk"> · needs {{ bytes(placeOf(n.pool, n.node.id)?.disk) }} of disk there</template>
           </span>

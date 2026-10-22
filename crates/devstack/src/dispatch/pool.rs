@@ -93,6 +93,7 @@ fn node(file: &Path, action: NodeAction) -> Result<()> {
                 repo,
                 memory_headroom,
                 max_cpus,
+                share_percent,
                 network,
                 clear,
             } => poolcmd::members_policy(
@@ -100,7 +101,7 @@ fn node(file: &Path, action: NodeAction) -> Result<()> {
                 &node,
                 allow,
                 repo,
-                (memory_headroom, max_cpus),
+                (memory_headroom, max_cpus, share_percent),
                 network,
                 clear,
             ),
