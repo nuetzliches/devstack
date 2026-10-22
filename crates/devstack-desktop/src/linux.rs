@@ -11,6 +11,14 @@ mod notify;
 
 pub(crate) const PLATFORM: Platform = Platform::Linux;
 
+pub const PREVIEW: Option<crate::Preview> = None;
+
+pub const LINK_UNAVAILABLE: Option<&str> = None;
+
+pub fn autostart_note() -> Option<String> {
+    None
+}
+
 pub fn no_window(_cmd: &mut Command) {}
 
 /// Nothing to bring to the front: the desktop lets the dialog and the
@@ -335,6 +343,10 @@ pub fn start_docker() -> std::io::Result<()> {
 
 pub fn docker_hint() -> &'static str {
     "start the Docker service (`sudo systemctl start docker`)"
+}
+
+pub fn docker_install_hint() -> &'static str {
+    "install Docker Desktop or Docker Engine"
 }
 
 // ------------------------------------------------------------ self uninstall

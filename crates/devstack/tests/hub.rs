@@ -188,6 +188,8 @@ fn pairing_cookie_and_checks() {
     let (s, _, body) = get(p, "/hub/session", &with);
     assert_eq!(s, 200, "{body}");
     assert!(body.contains("version"));
+    // Whether the page may offer `devstack://hub/start` while the hub is down.
+    assert!(body.contains("\"link_unavailable\""), "{body}");
     // Another server on a loopback port may set a cookie of the same name;
     // the browser then sends both, and the real one still counts (H-9).
     let (s, _, _) = get(

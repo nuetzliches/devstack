@@ -10,6 +10,8 @@
 //! | Windows | Docker Desktop | `Docker Desktop.exe` (no admin needed) |
 //! | Linux | Docker Desktop for Linux | `systemctl --user start docker-desktop` |
 //! | Linux | Docker Engine (system service) | nothing: it needs root, so devstack names `sudo systemctl start docker` |
+//! | macOS | Docker Desktop, else OrbStack | `open -g -a Docker` / `open -g -a OrbStack` |
+//! | macOS | Colima | nothing: devstack names `colima start` |
 
 use crate::no_window;
 use serde::Serialize;

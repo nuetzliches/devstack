@@ -948,7 +948,13 @@ async fn ping_preflight(h: HeaderMap) -> Response {
 }
 
 async fn session() -> Response {
-    Json(serde_json::json!({ "version": VERSION })).into_response()
+    Json(serde_json::json!({
+        "version": VERSION,
+        // The page keeps it for when the hub is down: no "Start hub" link
+        // where the platform has none (macOS, ADR-0054).
+        "link_unavailable": devstack_desktop::LINK_UNAVAILABLE,
+    }))
+    .into_response()
 }
 
 /// Look at the Docker engine every 10 s (every 2 s after a start request) and
@@ -1310,7 +1316,7 @@ async fn update(State(s): State<AppState>) -> Response {
         let log = log.clone();
         let dir = dir.clone();
         move || {
-            let exe = std::env::current_exe().map_err(|_| "cannot find devstack".to_string())?;
+            let exe = devstack_exe().map_err(|_| "cannot find devstack".to_string())?;
             let out = std::fs::File::create(&log).map_err(|e| e.to_string())?;
             let out2 = out
                 .try_clone()
@@ -2110,7 +2116,7 @@ async fn stack_init(Json(q): Json<PathQuery>) -> Response {
             "it has a devstack.toml already; add it instead",
         );
     }
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = devstack_exe() else {
         return err(StatusCode::INTERNAL_SERVER_ERROR, "cannot find devstack");
     };
     let run = {
@@ -2164,7 +2170,7 @@ async fn stack_up(State(s): State<AppState>, Path(id): Path<String>) -> Response
     let Some(e) = entry(&s, &id) else {
         return err(StatusCode::NOT_FOUND, format!("no stack {id}"));
     };
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = devstack_exe() else {
         return err(StatusCode::INTERNAL_SERVER_ERROR, "cannot find devstack");
     };
     s.start_errors.lock().unwrap().remove(&id);
@@ -2740,6 +2746,14 @@ async fn asset(req: Request) -> Response {
         .into_response()
 }
 
+/// The devstack binary to run for `up`, `init`, `update` and the hub itself:
+/// this one, by the path that stays. For a copy Homebrew installed that is
+/// `<prefix>/bin/devstack`; the versioned one under `Cellar/` goes with the
+/// next `brew cleanup`, while the hub may still run.
+fn devstack_exe() -> std::io::Result<PathBuf> {
+    std::env::current_exe().map(|e| devstack_desktop::stable_exe(&e))
+}
+
 /// Start a hub in the background unless one answers; returns its port.
 ///
 /// Only this user's hub counts (`who_answers`): the callers send it the
@@ -2751,7 +2765,7 @@ pub fn ensure_running() -> Result<u16, String> {
         Listener::Foreign => return Err(foreign(port)),
         Listener::Nothing => {}
     }
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = devstack_exe().map_err(|e| e.to_string())?;
     // What the hub prints before its own log exists (a failed start) goes to
     // hub.out, like the daemon's daemon.out.
     let _ = std::fs::create_dir_all(state_dir());

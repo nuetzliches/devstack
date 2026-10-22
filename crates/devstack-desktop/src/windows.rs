@@ -14,6 +14,14 @@ pub use foreground::Front;
 
 pub(crate) const PLATFORM: Platform = Platform::Windows;
 
+pub const PREVIEW: Option<crate::Preview> = None;
+
+pub const LINK_UNAVAILABLE: Option<&str> = None;
+
+pub fn autostart_note() -> Option<String> {
+    None
+}
+
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub fn no_window(cmd: &mut Command) {
@@ -387,6 +395,10 @@ pub fn start_docker() -> std::io::Result<()> {
 
 pub fn docker_hint() -> &'static str {
     "install Docker Desktop, or start your Docker engine"
+}
+
+pub fn docker_install_hint() -> &'static str {
+    "install Docker Desktop"
 }
 
 // ------------------------------------------------------------ self uninstall

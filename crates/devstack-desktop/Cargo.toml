@@ -8,16 +8,20 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-rfd.workspace = true
 tokio.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 devstack-proc.workspace = true
 raw-window-handle.workspace = true
+rfd.workspace = true
 windows.workspace = true
 windows-sys.workspace = true
 
+# The folder dialog through the XDG portal. Not on macOS: rfd would use
+# AppKit, which wants the main thread; the hub asks from a worker thread and
+# uses osascript there.
 [target.'cfg(target_os = "linux")'.dependencies]
+rfd.workspace = true
 tokio-stream.workspace = true
 zbus.workspace = true
 

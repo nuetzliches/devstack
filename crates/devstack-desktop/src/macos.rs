@@ -1,16 +1,39 @@
-//! macOS: what the `cfg(not(windows))` branches did there before this crate
-//! existed, which is Linux's (XDG files, `xdg-open`, `systemctl --user`) or
-//! nothing at all. Wrong for a Mac, and kept as it was until the macOS
-//! desktop replaces it (ADR-0054 point 3).
+//! macOS, a developer platform in preview (ADR-0054 point 3), where it needs
+//! no app bundle: the hub at logon through a LaunchAgent of devstack's own
+//! (`~/Library/LaunchAgents/it.nuetzliche.devstack.hub.plist`, loaded with
+//! `launchctl bootstrap gui/<uid>`), the folder dialog through `osascript`
+//! (`choose folder`; no AppKit in the hub, whose worker threads ask for it),
+//! `open` and `open -a` for the dashboard, a browser and the user's programs
+//! (ADR-0046), `open -g -a Docker` (or OrbStack) for the engine.
+//!
+//! Not yet, and said so (point 5): desktop notifications and the
+//! `devstack://` link need an app bundle, and a bundle needs signing to
+//! behave; a Mac as a pool node.
 
-use crate::{Local, Platform};
+use crate::mac::{AGENT_LABEL, agent_path, applescript_string, cancelled, chosen_folder};
+use crate::{Local, LocalKind, Platform, on_path};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-pub(crate) const PLATFORM: Platform = Platform::Linux;
+pub(crate) const PLATFORM: Platform = Platform::Macos;
+
+const NOT_YET: &str = "not on macOS yet";
+
+pub const LINK_UNAVAILABLE: Option<&str> = Some(NOT_YET);
+
+pub const PREVIEW: Option<crate::Preview> = Some(crate::Preview {
+    name: "macOS preview",
+    not_yet: &[
+        "desktop notifications",
+        "the devstack:// link (the dashboard cannot start a stopped hub; `devstack hub start` does)",
+        "a Mac as a pool node",
+    ],
+});
 
 pub fn no_window(_cmd: &mut Command) {}
 
+/// Nothing to bring to the front: `open` brings what it starts forward,
+/// and the folder dialog brings itself (`activate`).
 pub struct Front;
 
 impl Front {
@@ -19,182 +42,332 @@ impl Front {
     }
 }
 
-// ------------------------------------------- autostart and the devstack:// link
-
 fn home() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default()
 }
 
-fn data_dir() -> PathBuf {
-    std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".local/share"))
+/// `name.app` in `/Applications` or `~/Applications`.
+fn app(name: &str) -> Option<PathBuf> {
+    [PathBuf::from("/Applications"), home().join("Applications")]
+        .into_iter()
+        .map(|d| d.join(format!("{name}.app")))
+        .find(|p| p.is_dir())
 }
 
-fn config_dir() -> PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".config"))
+/// Run `cmd` to its end: `Err` with what it said when it failed.
+fn run(mut cmd: Command, what: &str) -> Result<(), String> {
+    let out = cmd
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("{what}: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    Err(if said.is_empty() {
+        format!("{what} ended with {}", out.status)
+    } else {
+        format!("{what}: {said}")
+    })
 }
 
-fn link_file() -> PathBuf {
-    data_dir().join("applications/devstack-url.desktop")
+// --------------------------------------------- the hub at logon: a LaunchAgent
+
+fn agent_file() -> PathBuf {
+    home()
+        .join("Library/LaunchAgents")
+        .join(format!("{AGENT_LABEL}.plist"))
 }
 
-fn autostart_file() -> PathBuf {
-    config_dir().join("autostart/devstack-hub.desktop")
+/// The user's GUI domain of launchd, `gui/<uid>`.
+fn domain() -> String {
+    // SAFETY: getuid cannot fail.
+    format!("gui/{}", unsafe { libc::getuid() })
 }
 
-fn write(path: &Path, text: &str) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
+fn launchctl(args: &[&str]) -> Result<(), String> {
+    let mut cmd = Command::new("launchctl");
+    cmd.args(args).stdout(Stdio::null());
+    run(cmd, &format!("launchctl {}", args[0]))
+}
+
+/// Write the LaunchAgent and load it, which runs `hub start` at once (the
+/// hub then runs, as it would after the next logon). A session without a
+/// GUI domain (SSH) cannot load it: the file is there, and launchd loads it
+/// at the next logon.
+pub fn install_autostart(exe: &Path) -> Result<(), String> {
+    let file = agent_file();
+    let exe = exe.to_string_lossy();
+    let path = agent_path(std::env::var("PATH").ok().as_deref());
+    let plist = crate::mac::launch_agent(AGENT_LABEL, &[&exe, "hub", "start"], &path);
+    if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
-    std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))
+    std::fs::write(&file, plist).map_err(|e| format!("{}: {e}", file.display()))?;
+    // A loaded agent keeps the definition it was loaded with: out, then in.
+    let _ = launchctl(&["bootout", &format!("{}/{AGENT_LABEL}", domain())]);
+    let _ = launchctl(&["bootstrap", &domain(), &file.to_string_lossy()]);
+    Ok(())
 }
 
-pub fn install_link(exe: &Path) -> Result<(), String> {
-    write(
-        &link_file(),
-        &format!(
-            "[Desktop Entry]\nType=Application\nName=devstack\nExec=\"{}\" open-url %u\nNoDisplay=true\nTerminal=false\nMimeType=x-scheme-handler/devstack;\n",
-            exe.display()
-        ),
-    )?;
-    let _ = Command::new("xdg-mime")
-        .args([
-            "default",
-            "devstack-url.desktop",
-            "x-scheme-handler/devstack",
-        ])
+pub fn remove_autostart() -> Result<(), String> {
+    let _ = launchctl(&["bootout", &format!("{}/{AGENT_LABEL}", domain())]);
+    match std::fs::remove_file(agent_file()) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(format!("{}: {e}", agent_file().display()))
+        }
+        _ => Ok(()),
+    }
+}
+
+pub fn has_autostart() -> bool {
+    agent_file().is_file()
+}
+
+/// Where the LaunchAgent is, and whether launchd has it loaded.
+pub fn autostart_note() -> Option<String> {
+    let file = agent_file();
+    if !file.is_file() {
+        return None;
+    }
+    let loaded = Command::new("launchctl")
+        .args(["print", &format!("{}/{AGENT_LABEL}", domain())])
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status();
+        .status()
+        .is_ok_and(|s| s.success());
+    Some(format!(
+        "LaunchAgent {}, {}",
+        file.display(),
+        if loaded {
+            "loaded"
+        } else {
+            "not loaded: launchd loads it at the next logon"
+        }
+    ))
+}
+
+// -------------------------------------------- the devstack:// link: not yet
+
+pub fn install_link(_exe: &Path) -> Result<(), String> {
     Ok(())
 }
 
 pub fn remove_link() -> Result<(), String> {
-    let _ = std::fs::remove_file(link_file());
     Ok(())
 }
 
 pub fn has_link() -> bool {
-    link_file().is_file()
+    false
 }
 
-pub fn install_autostart(exe: &Path) -> Result<(), String> {
-    write(
-        &autostart_file(),
-        &format!(
-            "[Desktop Entry]\nType=Application\nName=devstack hub\nComment=Serves the devstack dashboard\nExec=\"{}\" hub start\nTerminal=false\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n",
-            exe.display()
-        ),
-    )
-}
-
-pub fn remove_autostart() -> Result<(), String> {
-    let _ = std::fs::remove_file(autostart_file());
-    Ok(())
-}
-
-pub fn has_autostart() -> bool {
-    autostart_file().is_file()
-}
-
-// ------------------------------------------------------------ notifications
+// ------------------------------------------------- notifications: not yet
 
 pub fn notify_sink(_port: u16, _hooks: crate::notify::Hooks) -> Box<dyn crate::notify::Sink> {
-    Box::new(crate::notify::Off("not on this platform yet"))
+    Box::new(crate::notify::Off(NOT_YET))
 }
 
 pub fn notify_unregister() {}
 
 // ------------------------------------------------------------- folder dialog
 
+/// `choose folder` in osascript, brought to the front first. Cancel is
+/// `None`, as elsewhere; no dialog (an SSH session) is `Err`.
 pub fn pick_folder() -> Result<Option<String>, String> {
-    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
-        return Err("no desktop session for a folder dialog".into());
+    let choose = format!(
+        "POSIX path of (choose folder with prompt {})",
+        applescript_string("Choose the repository folder (devstack)")
+    );
+    let out = Command::new("osascript")
+        .args(["-e", "activate", "-e", &choose])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("no folder dialog (osascript: {e})"))?;
+    if out.status.success() {
+        return Ok(chosen_folder(&String::from_utf8_lossy(&out.stdout)));
     }
-    Ok(rfd::FileDialog::new()
-        .set_title("Choose the repository folder (devstack)")
-        .pick_folder()
-        .map(|p| p.to_string_lossy().into_owned()))
+    let said = String::from_utf8_lossy(&out.stderr);
+    if cancelled(&said) {
+        return Ok(None);
+    }
+    Err(format!("no folder dialog (osascript: {})", said.trim()))
 }
 
 // ------------------------------------------------------------------ browsers
 
-pub const URL_OPENER: &str = "xdg-open";
+pub const URL_OPENER: &str = "open";
 
 pub fn open_browser(url: &str) -> std::io::Result<()> {
-    Command::new("xdg-open").arg(url).spawn().map(drop)
+    let mut child = Command::new("open").arg(url).stdin(Stdio::null()).spawn()?;
+    std::thread::spawn(move || child.wait());
+    Ok(())
 }
 
+/// An application by its name or bundle (`open -a "Google Chrome"`), or a
+/// program by its path.
 pub fn start_browser(program: &str, url: &str) -> std::io::Result<bool> {
-    Command::new(program).arg(url).status().map(|_| true)
+    let is_program = program.contains('/') && !program.trim_end_matches('/').ends_with(".app");
+    if is_program {
+        return Command::new(program).arg(url).status().map(|_| true);
+    }
+    Ok(Command::new("open")
+        .args(["-a", program, url])
+        .status()?
+        .success())
 }
 
 // -------------------------------------------- the user's programs (ADR-0046)
 
-/// Nothing to open with.
 #[derive(Debug, Clone)]
-pub enum Launch {}
+pub enum Launch {
+    /// The folder, opened by `open` (Finder).
+    Open,
+    /// An application, `open -a <name> <folder>`.
+    App(&'static str),
+}
 
 pub fn files_and_terminals() -> Vec<Local> {
-    Vec::new()
+    vec![
+        Local {
+            id: "files",
+            label: "Finder",
+            kind: LocalKind::Files,
+            launch: Launch::Open,
+        },
+        Local {
+            id: "terminal",
+            label: "Terminal",
+            kind: LocalKind::Terminal,
+            launch: Launch::App("Terminal"),
+        },
+    ]
 }
 
-pub fn launch(how: &Launch, _dir: &Path, _path: &str) -> Result<(), String> {
-    match *how {}
+pub fn launch(how: &Launch, _dir: &Path, path: &str) -> Result<(), String> {
+    match how {
+        Launch::Open => shell_open(path),
+        Launch::App(name) => {
+            let mut cmd = Command::new("open");
+            cmd.args(["-a", name, path]);
+            run(cmd, &format!("open -a {name}"))
+        }
+    }
 }
 
-pub fn registered_schemes<'a>(_schemes: &[&'a str]) -> Vec<&'a str> {
-    Vec::new()
+/// Asks LaunchServices which of `schemes` an application opens, all in one
+/// osascript (JavaScript for Automation), one line per scheme found.
+const SCHEMES_JXA: &str = "ObjC.import('AppKit');
+function run(argv) {
+  const ws = $.NSWorkspace.sharedWorkspace;
+  return argv.filter(function (s) {
+    try {
+      const app = ws.URLForApplicationToOpenURL($.NSURL.URLWithString(s + '://'));
+      if (!app || app.isNil()) return false;
+      return !!ObjC.unwrap(app.path);
+    } catch (e) {
+      return false;
+    }
+  }).join('\\n');
+}";
+
+pub fn registered_schemes<'a>(schemes: &[&'a str]) -> Vec<&'a str> {
+    let Ok(out) = Command::new("osascript")
+        .args(["-l", "JavaScript", "-e", SCHEMES_JXA])
+        .args(schemes)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    schemes
+        .iter()
+        .copied()
+        .filter(|s| text.lines().any(|l| l.trim() == *s))
+        .collect()
+}
+
+/// The application bundle.
+pub fn github_desktop() -> Option<PathBuf> {
+    app("GitHub Desktop")
+}
+
+/// What its own `github` command does on a Mac: a new instance with
+/// `--cli-open=<path>`, which hands the folder to the running one.
+pub fn github_desktop_open(bundle: &Path, path: &str) -> Result<(), String> {
+    let mut cmd = Command::new("open");
+    cmd.arg("-n")
+        .arg(bundle)
+        .arg("--args")
+        .arg(format!("--cli-open={path}"));
+    run(cmd, "open GitHub Desktop")
 }
 
 pub fn orca() -> Option<PathBuf> {
-    None
+    on_path("orca").or_else(|| {
+        let p = app("Orca")?.join("Contents/Resources/bin/orca");
+        p.is_file().then_some(p)
+    })
 }
 
-pub fn github_desktop() -> Option<PathBuf> {
-    None
-}
-
-pub fn github_desktop_open(_exe: &Path, _path: &str) -> Result<(), String> {
-    Err("not supported on this platform".into())
-}
-
-pub fn shell_open(_target: &str) -> Result<(), String> {
-    Err("not supported on this platform".into())
+/// `open <target>`: a folder in Finder, a link in the application its
+/// scheme names.
+pub fn shell_open(target: &str) -> Result<(), String> {
+    let mut cmd = Command::new("open");
+    cmd.arg(target);
+    run(cmd, "open")
 }
 
 // -------------------------------------------------------------------- Docker
+//
+// Docker Desktop, else OrbStack, started in the background (`open -g`);
+// Colima is started by the user (`colima start`).
 
 pub fn docker_starter() -> Option<&'static str> {
-    Command::new("systemctl")
-        .args(["--user", "cat", "docker-desktop"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
-        .then_some("Docker Desktop")
+    if app("Docker").is_some() {
+        Some("Docker Desktop")
+    } else if app("OrbStack").is_some() {
+        Some("OrbStack")
+    } else {
+        None
+    }
 }
 
 pub fn start_docker() -> std::io::Result<()> {
-    let s = Command::new("systemctl")
-        .args(["--user", "start", "docker-desktop"])
+    let name = match docker_starter() {
+        Some("OrbStack") => "OrbStack",
+        Some(_) => "Docker",
+        None => {
+            return Err(std::io::Error::other(
+                "neither Docker Desktop nor OrbStack is installed",
+            ));
+        }
+    };
+    let s = Command::new("open")
+        .args(["-g", "-a", name])
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()?;
     if s.success() {
         Ok(())
     } else {
-        Err(std::io::Error::other(format!("systemctl answered {s}")))
+        Err(std::io::Error::other(format!(
+            "`open -g -a {name}` answered {s}"
+        )))
     }
 }
 
 pub fn docker_hint() -> &'static str {
-    "start the Docker service (`sudo systemctl start docker`)"
+    "start Docker Desktop, OrbStack or Colima (`colima start`)"
+}
+
+pub fn docker_install_hint() -> &'static str {
+    "install Docker Desktop, OrbStack or Colima"
 }
 
 // ------------------------------------------------------------ self uninstall
@@ -210,6 +383,7 @@ pub fn devstack_pids() -> Vec<u32> {
         .args(["-U", &uid.to_string(), "-o", "pid=,comm="])
         .output();
     let Ok(out) = out else { return Vec::new() };
+    // macOS names the program by its path: `/opt/homebrew/bin/devstack`.
     String::from_utf8_lossy(&out.stdout)
         .lines()
         .filter_map(|l| {
@@ -221,6 +395,8 @@ pub fn devstack_pids() -> Vec<u32> {
 }
 
 pub fn remove_from_path(_dir: &Path) -> Result<(), String> {
+    // install.sh does not edit a shell profile; Homebrew's directory is
+    // Homebrew's.
     Ok(())
 }
 

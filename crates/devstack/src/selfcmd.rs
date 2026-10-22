@@ -1,10 +1,11 @@
 //! `devstack self uninstall`: take devstack off this machine for this user.
 //!
 //! Removes what the installer and devstack itself put into the user's profile:
-//! the hub (stopped), its autostart and `devstack://` link, the name its
-//! notifications show under (Windows, ADR-0045), the per-user state
-//! (token, registry of stacks, hub log and sessions), the PATH entry and the
-//! installed binary. It leaves the repositories alone: each keeps its
+//! the hub (stopped), its autostart (on macOS the LaunchAgent) and
+//! `devstack://` link, the name its notifications show under (Windows,
+//! ADR-0045), the per-user state (token, registry of stacks, hub log and
+//! sessions), the PATH entry and the installed binary. A binary winget or
+//! Homebrew installed stays for them to remove. It leaves the repositories alone: each keeps its
 //! `.devstack/` directory (artifacts, logs) until someone deletes it, and the
 //! command lists them so nothing is forgotten.
 //!
@@ -92,8 +93,13 @@ pub fn uninstall(yes: bool, with_coordinator: bool) -> Result<()> {
     let exe = std::env::current_exe()?;
     let ours = devstack_desktop::install_dir().is_some_and(|d| exe.parent() == Some(d.as_path()));
     let winget = devstack_desktop::is_winget_install(&exe);
+    let brew = devstack_desktop::homebrew_prefix(&exe).is_some();
     println!("devstack self uninstall removes:");
-    println!("  - the dashboard hub, its start at logon and the devstack:// link");
+    if devstack_desktop::LINK_UNAVAILABLE.is_some() {
+        println!("  - the dashboard hub and its start at logon");
+    } else {
+        println!("  - the dashboard hub, its start at logon and the devstack:// link");
+    }
     println!("  - {} (token, list of stacks, hub log)", root.display());
     if !memberships.is_empty() {
         println!(
@@ -114,6 +120,11 @@ pub fn uninstall(yes: bool, with_coordinator: bool) -> Result<()> {
             "  (not {}: winget installed it, `winget uninstall {}` removes it)",
             exe.display(),
             devstack_desktop::channel::WINGET_ID
+        );
+    } else if brew {
+        println!(
+            "  (not {}: Homebrew installed it, `brew uninstall devstack` removes it)",
+            exe.display()
         );
     } else {
         println!(
@@ -167,6 +178,9 @@ pub fn uninstall(yes: bool, with_coordinator: bool) -> Result<()> {
             "The binary stays: `winget uninstall {}` removes it.",
             devstack_desktop::channel::WINGET_ID
         );
+    }
+    if brew {
+        println!("The binary stays: `brew uninstall devstack` removes it.");
     }
     Ok(())
 }

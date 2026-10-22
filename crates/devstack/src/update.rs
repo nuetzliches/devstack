@@ -7,8 +7,9 @@
 //! shell environment: Windows PowerShell 5.1 started from PowerShell 7 finds
 //! the wrong modules and has no `Get-FileHash` (#12).
 //!
-//! A devstack winget installed is updated by winget (`winget_upgrade`), so
-//! its record of the version stays true.
+//! A devstack winget installed is updated by winget (`winget_upgrade`), one
+//! Homebrew installed by Homebrew (`brew_upgrade`), so their record of the
+//! version stays true.
 //!
 //! Running stacks keep their daemon (and its version) until they restart; the
 //! dashboard offers that ("Restart stack"), the CLI says it.
@@ -69,8 +70,19 @@ pub fn run(check_only: bool, version: Option<&str>) -> Result<()> {
             exe.display()
         );
     }
+    let brew = devstack_desktop::homebrew_prefix(&exe);
+    if let (Some(_), Some(v)) = (&brew, version) {
+        bail!(
+            "Homebrew installed this devstack ({}), and Homebrew installs its formula's latest release only: \
+             `devstack update` without `--version {v}` (or `brew upgrade {}`) updates it",
+            exe.display(),
+            devstack_desktop::channel::BREW_FORMULA
+        );
+    }
     println!("installing devstack {target} ...");
-    let installed = if devstack_desktop::is_winget_install(&exe) {
+    let installed = if let Some(prefix) = &brew {
+        brew_upgrade(prefix, &target)?
+    } else if devstack_desktop::is_winget_install(&exe) {
         winget_upgrade(&exe, version.map(|_| target.as_str()))?
     } else {
         // Where the installers put devstack, or the running copy if it lives
@@ -303,6 +315,43 @@ fn winget_upgrade(exe: &Path, version: Option<&str>) -> Result<PathBuf> {
              catalogue a few days after GitHub: `winget upgrade {WINGET_ID}` later picks it up"
         ),
     }
+}
+
+/// Update a devstack Homebrew installed under `prefix`, through Homebrew
+/// (ADR-0054 point 4), so Homebrew keeps the version on record: `brew
+/// upgrade` of the tap's formula. A running binary is no obstacle on macOS
+/// and Linux. Returns the path Homebrew keeps (`<prefix>/bin/devstack`),
+/// which is what starts the hub again, never the versioned one under
+/// `Cellar/`, which `brew cleanup` removes. `target` is the release GitHub
+/// names; the tap gets it shortly after.
+fn brew_upgrade(prefix: &Path, target: &str) -> Result<PathBuf> {
+    use devstack_desktop::channel::{BREW_FORMULA, brew, brew_bin};
+    let brew = brew(prefix);
+    match std::process::Command::new(&brew)
+        .args(["upgrade", BREW_FORMULA])
+        .status()
+    {
+        Err(e) => bail!("cannot run {} ({e}); devstack is unchanged", brew.display()),
+        Ok(s) if !s.success() => bail!(
+            "Homebrew did not upgrade devstack (see above); it is unchanged. `brew upgrade {BREW_FORMULA}` tries again"
+        ),
+        Ok(_) => {}
+    }
+    let installed = brew_bin(prefix);
+    // `brew upgrade` succeeds without a newer formula too.
+    let now = std::process::Command::new(&installed)
+        .arg("--version")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    if !now.split_whitespace().any(|w| w == target) {
+        bail!(
+            "Homebrew has no devstack {target} yet ({} is `{now}`): the tap follows a release on GitHub \
+             shortly; `brew upgrade {BREW_FORMULA}` picks it up then",
+            installed.display()
+        );
+    }
+    Ok(installed)
 }
 
 /// `\\?\C:\...` (what `canonicalize` gives on Windows) as `C:\...`, which

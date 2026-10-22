@@ -312,7 +312,7 @@ export class MockTransport implements Transport {
     const url = new URL(path, 'http://hub');
     const p = url.pathname;
     const hub = this.hub;
-    if (p === '/hub/session') return hub.unpaired ? json(401, { error: 'not paired' }) : json(200, { version: MOCK_VERSION });
+    if (p === '/hub/session') return hub.unpaired ? json(401, { error: 'not paired' }) : json(200, { version: MOCK_VERSION, link_unavailable: null });
     if (hub.unpaired) return json(401, { error: 'not paired' });
     if (p === '/hub/stacks' && method === 'GET') return json(200, hub.entries());
     if (p === '/hub/docker' && method === 'GET') return json(200, hub.docker);

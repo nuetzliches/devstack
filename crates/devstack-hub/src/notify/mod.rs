@@ -1,7 +1,8 @@
 //! Desktop notifications from the hub (ADR-0045): it follows the event
 //! stream of every running stack and of each started lane, as the dashboard
 //! does, and tells the desktop what needs attention (`rules`): on Windows as
-//! a toast, on Linux over the session bus (`devstack_desktop::notify`).
+//! a toast, on Linux over the session bus, on macOS not yet (it needs an app
+//! bundle, ADR-0054) (`devstack_desktop::notify`).
 //!
 //! What notifies is the person's choice, per machine (`notify.json` beside
 //! the hub's state): each kind on or off, and a mute per stack or lane. The

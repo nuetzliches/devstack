@@ -15,6 +15,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub mod channel;
+// The macOS module's text, built and tested everywhere.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod mac;
 pub mod notify;
 
 #[cfg(target_os = "linux")]
@@ -36,7 +39,9 @@ compile_error!(
     "devstack-desktop has no module for this operating system: add one beside windows.rs, linux.rs and macos.rs (ADR-0054)"
 );
 
-pub use channel::{install_dir, is_cargo_install, is_dev_build, is_winget_install};
+pub use channel::{
+    homebrew_prefix, install_dir, is_cargo_install, is_dev_build, is_winget_install, stable_exe,
+};
 
 // ------------------------------------------------------------- processes
 
@@ -101,17 +106,21 @@ pub fn open_browser(url: &str) -> std::io::Result<()> {
     os::open_browser(url)
 }
 
-/// Browsers known by name: the names one may give, and the program each is
-/// on the platform (Windows, Linux).
-const BROWSERS: &[(&[&str], [&str; 2])] = &[
-    (&["chrome", "google-chrome"], ["chrome", "google-chrome"]),
+/// Browsers known by name: the names one may give, and the program (Windows,
+/// Linux) or application (macOS, `open -a`) each is on the platform.
+const BROWSERS: &[(&[&str], [&str; 3])] = &[
+    (
+        &["chrome", "google-chrome"],
+        ["chrome", "google-chrome", "Google Chrome"],
+    ),
     (
         &["edge", "msedge", "microsoft-edge"],
-        ["msedge", "microsoft-edge"],
+        ["msedge", "microsoft-edge", "Microsoft Edge"],
     ),
-    (&["firefox"], ["firefox", "firefox"]),
-    (&["brave"], ["brave", "brave-browser"]),
-    (&["chromium"], ["chromium", "chromium"]),
+    (&["firefox"], ["firefox", "firefox", "Firefox"]),
+    (&["brave"], ["brave", "brave-browser", "Brave Browser"]),
+    (&["chromium"], ["chromium", "chromium", "Chromium"]),
+    (&["safari"], ["safari", "safari", "Safari"]),
 ];
 
 /// The column of [`BROWSERS`] for each platform; a build uses its own one,
@@ -121,6 +130,7 @@ const BROWSERS: &[(&[&str], [&str; 2])] = &[
 enum Platform {
     Windows,
     Linux,
+    Macos,
 }
 
 /// What a browser's name (`--browser`, `DEVSTACK_BROWSER`, `BROWSER`) is to
@@ -244,6 +254,34 @@ pub fn docker_hint() -> &'static str {
     os::docker_hint()
 }
 
+/// What to tell the user when there is no `docker` at all.
+pub fn docker_install_hint() -> &'static str {
+    os::docker_install_hint()
+}
+
+// ----------------------------------------------------------- what is not there
+
+/// A platform devstack runs on as a preview (ADR-0054): its name, and what
+/// devstack does not do there yet, which `devstack doctor` says.
+#[derive(Debug, Clone, Copy)]
+pub struct Preview {
+    pub name: &'static str,
+    pub not_yet: &'static [&'static str],
+}
+
+/// `None` where devstack does everything.
+pub const PREVIEW: Option<Preview> = os::PREVIEW;
+
+/// Why there is no `devstack://` link here (macOS: "not on macOS yet"), so
+/// the dashboard cannot start a stopped hub; `None` where there is one.
+pub const LINK_UNAVAILABLE: Option<&str> = os::LINK_UNAVAILABLE;
+
+/// More about the hub's start at logon than on or off, where there is more
+/// to say (macOS: the LaunchAgent, and whether launchd has it loaded).
+pub fn autostart_note() -> Option<String> {
+    os::autostart_note()
+}
+
 // ------------------------------------------------------ self uninstall
 
 /// The devstack processes of this user (pids), this one included.
@@ -283,6 +321,13 @@ mod tests {
         assert_eq!(b(r"C:\Tools\vivaldi.exe", Windows), r"C:\Tools\vivaldi.exe");
         assert_eq!(b("/opt/x/browser", Linux), "/opt/x/browser");
         assert_eq!(b("vivaldi", Linux), "vivaldi");
+        assert_eq!(b("Edge", Macos), "Microsoft Edge");
+        assert_eq!(b("google-chrome", Macos), "Google Chrome");
+        assert_eq!(b("firefox", Macos), "Firefox");
+        assert_eq!(b("brave", Macos), "Brave Browser");
+        assert_eq!(b("Safari", Macos), "Safari");
+        assert_eq!(b("Arc", Macos), "Arc");
+        assert_eq!(b("/Applications/Arc.app", Macos), "/Applications/Arc.app");
         assert_eq!(
             browser_program("chrome"),
             browser_for("chrome", os::PLATFORM)

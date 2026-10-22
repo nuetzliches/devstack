@@ -4,14 +4,16 @@
 //!
 //! Both live in the user's profile, no admin rights (`devstack_desktop`):
 //!
-//! | | Windows | Linux |
-//! | --- | --- | --- |
-//! | autostart | `HKCU\...\CurrentVersion\Run`, value `devstack-hub` | `~/.config/autostart/devstack-hub.desktop` |
-//! | link | `HKCU\Software\Classes\devstack` | `~/.local/share/applications/devstack-url.desktop` + `xdg-mime` |
+//! | | Windows | Linux | macOS |
+//! | --- | --- | --- | --- |
+//! | autostart | `HKCU\...\CurrentVersion\Run`, value `devstack-hub` | `~/.config/autostart/devstack-hub.desktop` | `~/Library/LaunchAgents/it.nuetzliche.devstack.hub.plist` (`launchctl bootstrap gui/<uid>`) |
+//! | link | `HKCU\Software\Classes\devstack` | `~/.local/share/applications/devstack-url.desktop` + `xdg-mime` | not yet: it needs an app bundle (ADR-0054) |
 //!
 //! On Windows both run through `conhost.exe --headless`: devstack is a console
 //! program, and started from the logon or from a browser it would otherwise
-//! open a terminal window.
+//! open a terminal window. Both name the binary by the path that stays: for a
+//! copy Homebrew installed `<prefix>/bin/devstack`, not the versioned one
+//! under `Cellar/`, which `brew cleanup` removes.
 //!
 //! `devstack up` installs both once, unless the user removed them
 //! (`devstack hub uninstall` leaves a marker that says so) or opted out
@@ -53,7 +55,9 @@ fn write_marker(installed: bool) {
 }
 
 fn exe() -> Result<PathBuf> {
-    std::env::current_exe().map_err(|e| anyhow!("own path: {e}"))
+    std::env::current_exe()
+        .map(|e| devstack_desktop::stable_exe(&e))
+        .map_err(|e| anyhow!("own path: {e}"))
 }
 
 /// Register link and (if asked) autostart for the running devstack binary.
@@ -102,6 +106,9 @@ pub fn ensure_once() {
         return;
     }
     match install(true) {
+        Ok(_) if devstack_desktop::LINK_UNAVAILABLE.is_some() => eprintln!(
+            "note: the dashboard hub now starts at logon (`devstack hub uninstall` undoes it)"
+        ),
         Ok(_) => eprintln!(
             "note: the dashboard hub now starts at logon, and the dashboard can start it (`devstack hub uninstall` undoes both)"
         ),
@@ -189,10 +196,13 @@ fn percent_decode(s: &str) -> Option<String> {
 pub fn status_text() -> String {
     let s = status();
     let yn = |b: bool| if b { "on" } else { "off" };
+    let autostart = match devstack_desktop::autostart_note() {
+        Some(note) if s.autostart => format!("on ({note})"),
+        _ => yn(s.autostart).to_string(),
+    };
     format!(
-        "starts at logon: {}; dashboard can start it (devstack:// link): {}",
-        yn(s.autostart),
-        yn(s.link)
+        "starts at logon: {autostart}; dashboard can start it (devstack:// link): {}",
+        devstack_desktop::LINK_UNAVAILABLE.unwrap_or(yn(s.link))
     )
 }
 
