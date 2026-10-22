@@ -21,12 +21,19 @@ fn enabled(var: &str) -> bool {
     std::env::var(var).as_deref() == Ok("1")
 }
 
+/// A free port with room above it for the lanes' ranges (`port_step` 100
+/// per lane): one the OS hands out near 65535 fails the stack file's check.
 fn free_port() -> u16 {
-    std::net::TcpListener::bind(("127.0.0.1", 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    loop {
+        let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        if port <= 64000 {
+            return port;
+        }
+    }
 }
 
 struct Stack {

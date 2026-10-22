@@ -2392,15 +2392,33 @@ impl Lanes {
 
     fn take_up_local(&self, l: CarriedLane) {
         let t0 = std::time::Instant::now();
-        let path = self
+        let entry = self
             .known
             .lock()
             .unwrap()
             .get(&l.name)
-            .map(|k| k.entry.path.clone());
-        let Some(path) = path else {
+            .map(|k| k.entry.clone());
+        let Some(LaneEntry { path, number, .. }) = entry else {
             return self.not_carried(&l.name, "local", "local", "its worktree is gone");
         };
+        // Its ports stay its own: the old daemon's processes of the lane may
+        // hold them a moment after it exited (Windows), and a start that
+        // finds them taken moves the lane to another range.
+        let step = self.main.stack.lanes.port_step;
+        let mine: Vec<u16> = lane_offset(number, step)
+            .map(|off| {
+                ports(&self.main.stack)
+                    .iter()
+                    .filter_map(|p| p.checked_add(off))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while mine.iter().any(|p| crate::supervisor::port_in_use(*p))
+            && std::time::Instant::now() < until
+        {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
         // From the artifacts it ran (ADR-0016 point 4), as `devstack up` in
         // its worktree: a service that fails shows as failed, as after any
         // `up`, and the lane runs the rest.
