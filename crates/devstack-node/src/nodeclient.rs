@@ -44,6 +44,14 @@ pub struct SyncStats {
     /// The files the node could not write, `path: error` (#128); the others
     /// it wrote.
     pub failed: Vec<String>,
+    /// Files read to hash them (the others were known by size and
+    /// modification time), and where the time went: hashing here, the
+    /// node's comparison, the uploads, the node's apply.
+    pub hashed: usize,
+    pub hash_ms: u64,
+    pub compare_ms: u64,
+    pub upload_ms: u64,
+    pub apply_ms: u64,
 }
 
 #[derive(Clone)]
@@ -396,14 +404,18 @@ impl NodeClient {
         let list = files.to_vec();
         let elsewhere = elsewhere.clone();
         let mut known = std::mem::take(cache);
-        let (hashed, known) = tokio::task::spawn_blocking(move || {
-            let hashed = hash_all(&root, &list, &elsewhere, &mut known);
-            (hashed, known)
+        let t = std::time::Instant::now();
+        let (hashed, read, known) = tokio::task::spawn_blocking(move || {
+            let mut read = 0;
+            let hashed = hash_all(&root, &list, &elsewhere, &mut known, &mut read);
+            (hashed, read, known)
         })
         .await
         .map_err(|e| ClientError::Other(e.to_string()))?;
         *cache = known;
         let entries: Vec<(FileEntry, std::path::PathBuf, u64)> = hashed?;
+        let hash_ms = t.elapsed().as_millis() as u64;
+        let t = std::time::Instant::now();
         let missing: Hashes = self
             .json(
                 "POST",
@@ -415,8 +427,12 @@ impl NodeClient {
             .await?;
         let mut stats = SyncStats {
             files: entries.len(),
+            hashed: read,
+            hash_ms,
+            compare_ms: t.elapsed().as_millis() as u64,
             ..SyncStats::default()
         };
+        let t = std::time::Instant::now();
         for h in &missing.hashes {
             let Some((_, path, size)) = entries.iter().find(|(e, _, _)| &e.hash == h) else {
                 continue;
@@ -431,6 +447,8 @@ impl NodeClient {
             stats.bytes += size;
             uploaded(stats.uploaded, missing.hashes.len(), stats.bytes);
         }
+        stats.upload_ms = t.elapsed().as_millis() as u64;
+        let t = std::time::Instant::now();
         let applied: Applied = self
             .json(
                 "POST",
@@ -440,6 +458,7 @@ impl NodeClient {
                 }),
             )
             .await?;
+        stats.apply_ms = t.elapsed().as_millis() as u64;
         stats.written = applied.written;
         stats.removed = applied.removed;
         stats.failed = applied.failed;
@@ -476,10 +495,7 @@ impl NodeClient {
             .map_err(|e| ClientError::Other(e.to_string()))?;
         // Gone since it was hashed: like a file that changed, the next sync
         // sends what is there then.
-        if read
-            .as_ref()
-            .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
-        {
+        if read.as_ref().is_err_and(gone_or_going) {
             return Ok(false);
         }
         let (status, text) = answer.map_err(|_| {
@@ -504,6 +520,14 @@ impl NodeClient {
 const UPLOAD_WITHIN: std::time::Duration = std::time::Duration::from_secs(1800);
 
 /// Read `path` into an upload body chunk by chunk; the hash of what was sent.
+/// A file that is gone, or on its way out: Windows answers "access denied"
+/// for one being deleted until its last handle closes (a folder a package
+/// manager removes). Not sent now; the next sync sees what is there.
+fn gone_or_going(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::NotFound
+        || (cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied)
+}
+
 async fn read_into(
     path: std::path::PathBuf,
     mut tx: http_body_util::channel::Sender<bytes::Bytes, std::io::Error>,
@@ -595,6 +619,7 @@ fn hash_all(
     files: &[String],
     elsewhere: &Elsewhere,
     cache: &mut HashCache,
+    read: &mut usize,
 ) -> Result<Vec<(FileEntry, std::path::PathBuf, u64)>> {
     let mut out = Vec::with_capacity(files.len());
     let mut next = std::collections::HashMap::with_capacity(files.len());
@@ -620,8 +645,11 @@ fn hash_all(
             // Gone since it was listed (a package manager rewriting
             // `node_modules`): not sent now; the next sync sees what is there.
             None => match hash_file(&path) {
-                Ok(h) => h,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Ok(h) => {
+                    *read += 1;
+                    h
+                }
+                Err(e) if gone_or_going(&e) => continue,
                 Err(e) => return Err(ClientError::Io(path.display().to_string(), e)),
             },
         };
@@ -677,21 +705,24 @@ mod tests {
             .unwrap();
         let list = vec!["a.txt".to_string()];
         let mut cache = HashCache::default();
-        let first = hash_all(d.path(), &list, &Elsewhere::new(), &mut cache).unwrap();
+        let mut read = 0;
+        let first = hash_all(d.path(), &list, &Elsewhere::new(), &mut cache, &mut read).unwrap();
         assert_eq!(first[0].0.hash, blake3::hash(b"one").to_hex().to_string());
         assert_eq!(cache.len(), 1);
+        assert_eq!(read, 1, "read to hash it");
         // A lie in the cache shows it is used as long as size and time hold.
         cache.0.get_mut(&f).unwrap().hash = "cached".into();
-        let again = hash_all(d.path(), &list, &Elsewhere::new(), &mut cache).unwrap();
+        let again = hash_all(d.path(), &list, &Elsewhere::new(), &mut cache, &mut read).unwrap();
         assert_eq!(again[0].0.hash, "cached");
+        assert_eq!(read, 1, "known: not read again");
         // A change (same size, new time) is read again.
         std::fs::write(&f, "two").unwrap();
-        let changed = hash_all(d.path(), &list, &Elsewhere::new(), &mut cache).unwrap();
+        let changed = hash_all(d.path(), &list, &Elsewhere::new(), &mut cache, &mut read).unwrap();
         assert_eq!(changed[0].0.hash, blake3::hash(b"two").to_hex().to_string());
         // Just written: not trusted by its time yet.
         assert!(cache.is_empty());
         // A file no longer listed leaves the cache.
-        let none = hash_all(d.path(), &[], &Elsewhere::new(), &mut cache).unwrap();
+        let none = hash_all(d.path(), &[], &Elsewhere::new(), &mut cache, &mut read).unwrap();
         assert!(none.is_empty() && cache.is_empty());
     }
 }

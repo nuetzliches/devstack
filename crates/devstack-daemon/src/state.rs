@@ -5,6 +5,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// An exit code as a person reads it: on Windows a negative one is an
+/// exception or NTSTATUS code and goes with its hex form
+/// (`-532462766 (0xE0434352)`, an unhandled .NET exception).
+pub fn exit_code_text(code: i32) -> String {
+    if cfg!(windows) && code < 0 {
+        format!("{code} (0x{:08X})", code as u32)
+    } else {
+        code.to_string()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case", tag = "state")]
 pub enum Status {
@@ -376,4 +387,18 @@ pub fn now_ms() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_windows_exception_code_reads_in_hex() {
+        let text = super::exit_code_text(-532462766);
+        if cfg!(windows) {
+            assert_eq!(text, "-532462766 (0xE0434352)");
+        } else {
+            assert_eq!(text, "-532462766");
+        }
+        assert_eq!(super::exit_code_text(3), "3");
+    }
 }

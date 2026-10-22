@@ -300,6 +300,8 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
                 "pid": info.pid,
                 "port": port,
                 "stack": sup.stack.stack.name,
+                // What it may hold open (unix; raised to the hard limit).
+                "open_files_limit": devstack_proc::raise_open_files(),
             }),
         );
         let shutdown = Arc::new(tokio::sync::Notify::new());

@@ -110,6 +110,27 @@ type Shown = (String, [usize; 4], Option<String>, bool, Vec<Notice>);
 
 /// The notice of a lane whose worktree git lists but is not there, missing
 /// since `since` (unix ms): the lane goes after [`MISSING_GRACE`].
+/// A service's state in a few words, for a refusal that names it.
+fn status_text(s: &crate::state::Status) -> String {
+    use crate::state::Status;
+    match s {
+        Status::Stopped => "stopped".into(),
+        Status::Failed { reason } => {
+            format!(
+                "failed: {}",
+                reason.lines().next().unwrap_or_default().trim()
+            )
+        }
+        Status::Exited { exit_code } => format!(
+            "exited with code {}",
+            crate::state::exit_code_text(*exit_code)
+        ),
+        Status::Completed { exit_code } => format!("completed with code {exit_code}"),
+        Status::Unhealthy { .. } => "unhealthy".into(),
+        _ => "not ready".into(),
+    }
+}
+
 fn missing_notice(path: &Path, since: u128) -> Notice {
     Notice {
         id: "worktree_missing".into(),
@@ -261,8 +282,10 @@ struct Known {
 /// given back by `promote --lane main`.
 #[derive(Default)]
 struct Handover {
-    /// Its services that ran and were stopped for the lane.
-    stopped: BTreeSet<String>,
+    /// Its services that ran and were stopped for the lane, with the build
+    /// each ran: that one starts again, not a candidate held meanwhile
+    /// (ADR-0013: a held build reaches the main slot through `promote`).
+    stopped: BTreeMap<String, Option<String>>,
 }
 
 /// While it lives, the main ports are moving to a lane: the main tree's
@@ -1858,9 +1881,33 @@ impl Lanes {
             .filter(|s| active(s).is_none())
             .collect();
         if !down.is_empty() {
+            // Each with what it is: a service that failed needs its error
+            // read, not `up` (seen: four promotes refused while a build
+            // failed, each advising `up`).
+            let state = |s: &str| {
+                views
+                    .iter()
+                    .find(|v| v.name == s)
+                    .map(|v| status_text(&v.status))
+            };
+            let named: Vec<String> = down
+                .iter()
+                .map(|s| match state(s) {
+                    Some(st) => format!("{s} ({st})"),
+                    None => s.clone(),
+                })
+                .collect();
+            let stopped_only = down
+                .iter()
+                .all(|s| state(s).is_none_or(|st| st == "stopped"));
             return Err(format!(
-                "lane `{t}` does not run {}: `devstack up` in its working tree first",
-                down.join(", ")
+                "lane `{t}` does not run {}: {}",
+                named.join(", "),
+                if stopped_only {
+                    "`devstack up` in its working tree first"
+                } else {
+                    "`devstack status` in its working tree says why"
+                }
             ));
         }
         let prev = current
@@ -1881,7 +1928,7 @@ impl Lanes {
         if current.is_none() {
             for s in main.proxied_services() {
                 if main.service_active(&s) {
-                    ho.stopped.insert(s.clone());
+                    ho.stopped.insert(s.clone(), main.build_of(&s));
                 }
                 let _ = main.stop(&s);
             }
@@ -1890,13 +1937,13 @@ impl Lanes {
         for s in main.unproxied_services() {
             if active(&s).is_some() {
                 if main.service_active(&s) {
-                    ho.stopped.insert(s.clone());
+                    ho.stopped.insert(s.clone(), main.build_of(&s));
                 }
                 let _ = main.stop(&s);
-            } else if ho.stopped.remove(&s) {
+            } else if let Some(build) = ho.stopped.remove(&s) {
                 // The previous lane ran it, this one does not: it runs in the
                 // main tree again.
-                back_home.push(s);
+                back_home.push((s, build));
             }
         }
 
@@ -1953,8 +2000,8 @@ impl Lanes {
                 }
             }
         }
-        for s in back_home {
-            if let Err(e) = main.start(&s) {
+        for (s, build) in back_home {
+            if let Err(e) = main.start_build(&s, build) {
                 failed.push(format!("{s}: {e}"));
             }
         }
@@ -2000,8 +2047,8 @@ impl Lanes {
         }
         let mut failed = Vec::new();
         for s in main.service_order() {
-            if ho.stopped.remove(&s)
-                && let Err(e) = main.start(&s)
+            if let Some(build) = ho.stopped.remove(&s)
+                && let Err(e) = main.start_build(&s, build)
             {
                 failed.push(format!("{s}: {e}"));
             }

@@ -55,6 +55,35 @@ and listed with their assets on the
 
 ### Fixed
 
+- **Giving the main ports back from a lane runs what the main tree ran
+  before**, not a candidate held meanwhile (ADR-0013): the main tree started
+  its services anew, which built its tree as it is and took a held build
+  (one with a schema change) into the main slot without its migration. Each
+  service stopped for the lane now starts again from the build it ran.
+- **The hub's Docker check no longer reports a busy engine as stopped or
+  missing.** One `docker version` that failed or took longer than 5 s on a
+  busy machine made the dashboard say "Docker is not running" (or "not
+  installed", for any error starting `docker`); now only a `docker` that is
+  not found is missing, and a running engine counts as gone when two looks
+  in a row say so. The `docker` line says why and how long the look took;
+  a single failed look is `docker_look_failed`.
+- **One changed file makes one `changed` candidate event**, not one per
+  file: a checkout or an install sent hundreds of events (1925 in a minute)
+  to the dashboard and the log.
+- **A sync to a node skips a file Windows is deleting** ("access denied"
+  until its last handle closes, a folder a package manager removes) as it
+  skips one that is gone, instead of failing the whole sync.
+- **A refused `promote --lane` says what each missing service is**
+  (`document-service (failed: build failed)`), and advises `up` only when
+  they are stopped.
+- **devstack raises its limit of open files to the hard limit** (Linux,
+  macOS): a lane's daemon on a node ran out at the container's soft limit
+  of 1024 ("No file descriptors available"). `daemon_start` says the limit.
+- Telemetry: an OS error's code survives the cut to the first line when
+  Windows wraps its text (`… (os error 10053)`); a Windows exit code of an
+  exception reads in hex as well (`-532462766 (0xE0434352)`, in a failed
+  service's reason and in `service_exited`); `remote_lane_synced` says how
+  many files were read to hash them and where the time went.
 - **A build left building, starting or switching is `interrupted`**: one
   the daemon's stop, or a stop or restart, cut short stayed in that state in
   the build list for good ("switching", 20 h). Only the candidate's build is

@@ -130,6 +130,16 @@ pub const LOCAL_ONLY: &[&str] = &[
     "dir",
 ];
 
+/// The `(os error N)` Rust appends to an OS error's text, if `text` ends a
+/// line with one.
+fn os_error(text: &str) -> Option<&str> {
+    let at = text.rfind("(os error ")?;
+    let end = at + text[at..].find(')')? + 1;
+    let code = &text[at + "(os error ".len()..end - 1];
+    (!code.is_empty() && code.chars().all(|c| c.is_ascii_digit() || c == '-'))
+        .then(|| &text[at..end])
+}
+
 /// A line as it may leave the machine: the [`LOCAL_ONLY`] fields left out,
 /// every text cut to its first line (ADR-0037: never service output), the
 /// roots [`add_root`] knows replaced by their names, a user's name in a home
@@ -140,7 +150,12 @@ pub fn outbound(line: &Map<String, Value>) -> Map<String, Value> {
         match v {
             Value::String(s) => {
                 let s = match s.split_once('\n') {
-                    Some((first, _)) => format!("{} …", first.trim_end()),
+                    // Windows wraps its own error texts over two lines: the
+                    // code at the end of the rest goes along (it is no output).
+                    Some((first, rest)) => match os_error(rest) {
+                        Some(code) => format!("{} … {code}", first.trim_end()),
+                        None => format!("{} …", first.trim_end()),
+                    },
                     None => s.clone(),
                 };
                 Value::String(scrub(&s))
@@ -586,6 +601,20 @@ mod tests {
         assert!(!text.contains("secret") && !text.contains("\nb"), "{text}");
         assert_eq!(out["status"]["reason"], "job exited with code 1 …");
         assert_eq!(out["n"], 3);
+    }
+
+    #[test]
+    fn a_wrapped_windows_error_keeps_its_code() {
+        let line = json!({
+            "error": "Eine bestehende Verbindung wurde softwaregesteuert\r\ndurch den Hostcomputer abgebrochen. (os error 10053)",
+            "reason": "line one\nPassword=secret (os error x)",
+        });
+        let out = Value::Object(outbound(line.as_object().unwrap()));
+        assert_eq!(
+            out["error"],
+            "Eine bestehende Verbindung wurde softwaregesteuert … (os error 10053)"
+        );
+        assert_eq!(out["reason"], "line one …");
     }
 
     #[test]

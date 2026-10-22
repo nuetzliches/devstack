@@ -386,6 +386,44 @@ pub fn disk_free(path: &std::path::Path) -> Option<u64> {
     }
 }
 
+/// Unix: raise this process's soft limit of open files to its hard limit,
+/// and return it. A daemon holds a connection per tunnel, proxy and stream:
+/// the soft limit of 1024 a container gets by default ran out in a lane's
+/// daemon on a node ("No file descriptors available", os error 24). `None`
+/// on Windows (no such limit) and when it cannot be read.
+pub fn raise_open_files() -> Option<u64> {
+    #[cfg(unix)]
+    {
+        let mut l: libc::rlimit = unsafe { std::mem::zeroed() };
+        // SAFETY: `l` is an rlimit to fill.
+        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut l) } != 0 {
+            return None;
+        }
+        // macOS refuses more than OPEN_MAX for an unlimited hard limit.
+        let want = if l.rlim_max == libc::RLIM_INFINITY {
+            l.rlim_cur.max(10240)
+        } else {
+            l.rlim_max
+        };
+        if want > l.rlim_cur {
+            let raised = libc::rlimit {
+                rlim_cur: want,
+                rlim_max: l.rlim_max,
+            };
+            // SAFETY: a valid rlimit no higher than the hard limit.
+            if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raised) } == 0 {
+                l.rlim_cur = want;
+            }
+        }
+        #[allow(clippy::unnecessary_cast)]
+        Some(l.rlim_cur as u64)
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
 /// Windows: the long form of a path (`C:\Users\RUNNER~1` becomes
 /// `C:\Users\runneradmin`). Compilers report long paths; a repository known
 /// by its 8.3 name would not be recognised in their messages. Unlike
