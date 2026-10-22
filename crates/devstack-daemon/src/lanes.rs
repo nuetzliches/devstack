@@ -66,6 +66,10 @@ pub struct LaneView {
     /// Services that run (healthy or starting), of all.
     pub running: usize,
     pub services: usize,
+    /// The Compose containers of its own it starts that run, of all: a stack
+    /// of containers only shows by them that it runs.
+    pub containers_running: usize,
+    pub containers: usize,
     /// The node it runs on; `None`: this machine (ADR-0025 point 10).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
@@ -100,8 +104,9 @@ pub struct LaneView {
 }
 
 /// Of a lane, what the lists show that changes on its own: name, services
-/// running and all, its node's error, whether it moves, its notices.
-type Shown = (String, usize, usize, Option<String>, bool, Vec<Notice>);
+/// and containers running and all, its node's error, whether it moves, its
+/// notices.
+type Shown = (String, [usize; 4], Option<String>, bool, Vec<Notice>);
 
 /// The notice of a lane whose worktree git lists but is not there, missing
 /// since `since` (unix ms): the lane goes after [`MISSING_GRACE`].
@@ -1018,8 +1023,7 @@ impl Lanes {
             .map(|v| {
                 (
                     v.name,
-                    v.running,
-                    v.services,
+                    [v.running, v.services, v.containers_running, v.containers],
                     v.node_error,
                     v.moving.is_some(),
                     v.notices,
@@ -1557,14 +1561,25 @@ impl Lanes {
                 let lane = map.get(&k.entry.name);
                 let on_node = remote.get(&k.entry.name);
                 let node_state = on_node.map(|r| r.state());
-                let (running, services) = match (lane, &node_state) {
+                let (running, services, containers_running, containers) = match (lane, &node_state)
+                {
                     (Some(l), _) => {
                         let v = l.sup.view();
                         let n = v.services.iter().filter(|s| s.status.is_active()).count();
-                        (n, v.services.len())
+                        let (cr, c) = crate::state::containers_running(&v.infra);
+                        (n, v.services.len(), cr, c)
                     }
-                    (None, Some(st)) if st.services > 0 => (st.running, st.services),
-                    (None, _) => (0, services),
+                    (None, Some(st)) => (
+                        st.running,
+                        if st.services > 0 {
+                            st.services
+                        } else {
+                            services
+                        },
+                        st.containers_running,
+                        st.containers,
+                    ),
+                    (None, _) => (0, services, 0, 0),
                 };
                 LaneView {
                     name: k.entry.name.clone(),
@@ -1579,6 +1594,8 @@ impl Lanes {
                             && self.main.served_by().as_deref() == Some(k.entry.name.as_str())),
                     running,
                     services,
+                    containers_running,
+                    containers,
                     node: on_node.map(|r| r.node.name.clone()),
                     pool: on_node.map(|r| r.pool.clone()),
                     shared_with: self.share_of(&k.entry.name),

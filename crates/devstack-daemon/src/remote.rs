@@ -30,6 +30,9 @@ const STATE_EVERY: Duration = Duration::from_secs(5);
 pub struct RemoteState {
     pub running: usize,
     pub services: usize,
+    /// Its containers that run, of all (as [`crate::state::containers_running`]).
+    pub containers_running: usize,
+    pub containers: usize,
     /// What goes wrong now, by what it concerns (`sync`, `renew`,
     /// `sharing`, `port 3000`, `lease`, `disk`), each until that works again: a
     /// sync that works does not hide a port that is not forwarded.
@@ -1035,9 +1038,19 @@ impl RemoteLane {
                     })
                     .filter_map(|s| s["name"].as_str().map(str::to_string))
                     .collect();
+                // Read as JSON: the node may run another devstack.
+                let all = v["infra"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|g| g["containers"].as_array().cloned().unwrap_or_default())
+                    .filter(|c| c["managed"].as_bool().unwrap_or(true))
+                    .collect::<Vec<_>>();
                 let mut st = self.state.lock().unwrap();
                 st.running = running;
                 st.services = svcs.len();
+                st.containers_running = all.iter().filter(|c| c["state"] == "running").count();
+                st.containers = all.len();
                 st.active = active;
             }
             if !self.tick(STATE_EVERY).await {

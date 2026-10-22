@@ -12,7 +12,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { api, paths, sharedId, v1 } from '@/api';
 import type { LaneView, StackEntry } from '@/api/types';
 import { act } from '@/lib/actions';
-import { laneLabel, orderLanes, nodeLabel, started } from '@/lib/lanes';
+import { laneLabel, orderLanes, nodeLabel, runCounts, runsAnything, started } from '@/lib/lanes';
 import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
 import { useHub } from '@/stores/hub';
@@ -130,19 +130,30 @@ function laneRuns(s: StackEntry, l: LaneView): number {
   if (s.id !== stack.id || stack.lane !== l.name || !stack.live || !stack.services.length) return l.running;
   return stack.services.filter((x) => statusBucket(x.status) !== 'idle').length;
 }
+/** How many of a lane's containers run, and of all: the shown lane's from its stream, as `laneRuns` does. */
+function laneContainers(s: StackEntry, l: LaneView): [number, number] {
+  if (s.id !== stack.id || stack.lane !== l.name || !stack.live || !stack.view) return [l.containers_running ?? 0, l.containers ?? 0];
+  const all = stack.view.infra.flatMap((g) => g.containers).filter((c) => c.managed !== false);
+  return [all.filter((c) => c.state === 'running').length, all.length];
+}
 /** A lane's state as a dot, like a stack's: the words are in its tooltip. */
 function laneDot(s: StackEntry, l: LaneView): Dot {
   if (!hub.reachable) return 'unknown';
   if (l.moving?.error) return 'err';
   if (!started(l)) return 'off';
-  return laneRuns(s, l) > 0 ? 'on' : 'warn';
+  const [cr, c] = laneContainers(s, l);
+  return runsAnything({ running: laneRuns(s, l), services: l.services, containersRunning: cr, containers: c }) ? 'on' : 'warn';
+}
+function laneCounts(s: StackEntry, l: LaneView): string {
+  const [cr, c] = laneContainers(s, l);
+  return runCounts({ running: laneRuns(s, l), services: l.services, containersRunning: cr, containers: c });
 }
 function laneTitle(s: StackEntry, l: LaneView): string {
   const where = l.node ? `runs on ${nodeLabel(l)}` : `ports +${l.port_offset}`;
   if (l.moving?.error) return `${l.path}\n${l.moving.error}`;
   if (l.moving) return `${l.path}\n${l.moving.what}`;
   if (!started(l)) return `${l.path}\nnot started`;
-  return `${l.path}\n${laneRuns(s, l)} of ${l.services} services running · ${where}${l.owns_main ? ' · serves the main ports' : ''}`;
+  return `${l.path}\n${laneCounts(s, l)} · ${where}${l.owns_main ? ' · serves the main ports' : ''}`;
 }
 
 function openStack(s: StackEntry) {
