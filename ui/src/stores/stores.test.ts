@@ -257,6 +257,16 @@ describe('stack store', () => {
     expect(stack.skills).toMatchObject({ outdated: [], from: '0.9.8' });
   });
 
+  it('asks how far the stack file is behind, apart from the skills', async () => {
+    fake.on('/hub/stacks/shop/upgrade', () => ok({ reviewed: null, from: '0.9.1', current: '0.9.8', behind: true }));
+    fake.on('/hub/stacks/shop/skills', (method) => ok({ found: ['devstack'], outdated: [], from: '0.9.8', current: '0.9.8', ahead: false, ...(method === 'POST' ? { kept: [] } : {}) }));
+    const stack = await shownStack();
+    await vi.waitFor(() => expect(stack.upgrade?.behind).toBe(true));
+    await stack.refreshSkills();
+    expect(stack.upgrade).toMatchObject({ behind: true, from: '0.9.1' });
+    expect(fake.requests.filter((r) => r.path === '/hub/stacks/shop/upgrade')).toHaveLength(1);
+  });
+
   it("removing a lane's worktree asks first, and shows the main tree after", async () => {
     const stack = await shownStack();
     const lane = { name: 'feat', path: '/src/feat', number: 1, active: false, port_offset: 100, owns_main: false, running: 0, services: 3 };

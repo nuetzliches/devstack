@@ -37,6 +37,17 @@ and listed with their assets on the
 
 ### Changed
 
+- **The dashboard's upgrade goes by the stack file, `[stack] reviewed`, not
+  by the agent skills** (ADR-0046 amended). "Refresh skills" rewrote the
+  version the skills name, and the banner that offered a coding agent the
+  upgrade went away with nothing done to the stack file. The stack file
+  now says which devstack it was last brought up to date with (`reviewed =
+  "0.20.0"` in `[stack]`); the upgrade prompt has the agent set it at the
+  end, and `devstack init` writes it. A file without it is offered the
+  upgrade, from the skills' version while they are older. The two banners
+  are apart: the upgrade's, and the skills' with "Refresh skills". New in
+  the hub's API: `GET /hub/stacks/{id}/upgrade`. A devstack before 0.20.0
+  does not know the key: `devstack check` warns while `requires` is lower.
 - **The release adds no second winget pull request for the new package**:
   while `nuetzliches.devstack` is not in the winget catalog and a pull
   request for it is open, a release does not submit another one (each did:

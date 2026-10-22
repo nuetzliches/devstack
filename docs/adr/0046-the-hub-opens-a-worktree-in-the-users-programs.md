@@ -1,6 +1,6 @@
 # ADR-0046: The hub opens a stack's worktree in the user's own programs, from a fixed list
 
-- **Status:** Accepted (2026-10-21), amended 2026-10-21 (the program opens in front on Windows; GitHub Desktop), amended 2026-10-22 (an agent started with a prompt the hub writes)
+- **Status:** Accepted (2026-10-21), amended 2026-10-21 (the program opens in front on Windows; GitHub Desktop), amended 2026-10-22 (an agent started with a prompt the hub writes; the upgrade goes by `[stack] reviewed`)
 - **Date:** 2026-10-21
 - **Deciders:** project owner
 - **Related:** [ADR-0011](0011-platform-windows-native-first.md), [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0040](0040-a-shared-lane-can-be-watched-like-ones-own.md)
@@ -103,7 +103,7 @@ list already knows can also be started with it, in the right folder.
    |---|---|---|
    | `setup` | a folder | the stack file reference of this devstack; whether a draft is there |
    | `fix-file` | a folder with a stack file | why it does not load (`devstack_config::load`) |
-   | `upgrade` | a stack | the devstack its agent skills name and this one (`/hub/stacks/{id}/skills`) |
+   | `upgrade` | a stack | the devstack its stack file was last brought up to date with and this one (`/hub/stacks/{id}/upgrade`; *amended 2026-10-22*, see below) |
    | `start-failed` | a stack | the end of the last failed `devstack up` the hub ran, and its log file |
 
    A prompt the page wrote would make an agent one XSS away from running
@@ -129,6 +129,25 @@ list already knows can also be started with it, in the right folder.
 4. **Short enough for every link.** Claude Code takes up to 5,000
    characters in `q`; what the hub quotes (a load error, `up`'s output) is
    cut so that a prompt stays below that.
+5. **The upgrade goes by the stack file, not by the skills** (*amended
+   2026-10-22, later the same day*). The version in the agent skills' marker
+   line was taken as the one the repository was last set up with. But
+   refreshing the skills (the dashboard's "Refresh skills", or
+   `devstack skills install` that `devstack status` suggests) rewrites that
+   line without anything having been done to the stack file, and the
+   upgrade was no longer offered. Bringing the stack file up to date and
+   refreshing the skills are two things: the stack file now says which
+   devstack it was last brought up to date with, `[stack] reviewed`, which
+   the `upgrade` prompt has the agent set at the end. A file without it
+   predates the key and is behind; how far back, the skills' version says
+   while they are older than this devstack. `GET /hub/stacks/{id}/upgrade`
+   says it; the dashboard shows it apart from the skills' banner.
+   Setting the key shuts out a devstack that does not know it (every table
+   rejects unknown keys): `devstack check` warns while `requires` is below
+   the first devstack that knows it, and the prompt has the agent raise it.
+   A record on the hub's machine, acknowledged in the dashboard, would not
+   touch the file, but each teammate would acknowledge the same upgrade
+   again.
 
 ## Consequences
 

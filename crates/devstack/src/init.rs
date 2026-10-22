@@ -700,8 +700,8 @@ pub fn draft(repo: &Path) -> Result<Draft> {
     );
     let _ = writeln!(
         t,
-        "version = 1\n\n[stack]\nname     = \"{stack_name}\"\nrequires = \"{}\"\n",
-        devstack_config::VERSION
+        "version = 1\n\n[stack]\nname     = \"{stack_name}\"\nrequires = \"{v}\"\nreviewed = \"{v}\"   # the devstack this file was last brought up to date with\n",
+        v = devstack_config::VERSION
     );
 
     if let Some(first) = compose.first() {

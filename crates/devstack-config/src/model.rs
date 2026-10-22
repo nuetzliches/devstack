@@ -530,6 +530,12 @@ pub struct StackMeta {
     /// anything else, so an old devstack asks to be updated instead of failing
     /// on a key it does not know.
     pub requires: Option<String>,
+    /// The devstack this file was last brought up to date with (what changed
+    /// read, the file held against its reference), e.g. `"0.20.0"`. While it
+    /// names an older one than is installed, the dashboard offers a coding
+    /// agent the upgrade. Not the agent skills' version: those are refreshed
+    /// on their own.
+    pub reviewed: Option<String>,
     /// Env files read for `${VAR}` in every service and command, relative to the
     /// repository; missing files are skipped. A service's Compose group files and
     /// the process environment win over them.

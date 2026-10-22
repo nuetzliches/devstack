@@ -9,6 +9,7 @@ import Icon from '@/components/icons/Icon.vue';
 import StackHeader from '@/components/StackHeader.vue';
 import LaneStart from '@/components/LaneStart.vue';
 import SkillsBanner from '@/components/SkillsBanner.vue';
+import UpgradeBanner from '@/components/UpgradeBanner.vue';
 import AgentPrompt from '@/components/AgentPrompt.vue';
 import type { IconName } from '@/components/icons/icons';
 
@@ -195,6 +196,7 @@ function isActive(name: string) {
           <span v-if="stack.busy[`stack-file:${borrowedFile.name}`]" class="spinner" /><Icon v-else name="copy" :size="14" /> Copy the main tree's
         </button>
       </div>
+      <UpgradeBanner v-if="!hubDown && stack.entry && !stack.foreign" />
       <SkillsBanner v-if="!hubDown && stack.entry && !stack.foreign" />
       <div v-if="unknown" class="banner neutral">
         <Icon name="info" :size="18" />

@@ -1,11 +1,10 @@
 <script setup lang="ts">
 // The agent skills in the stack's repository no longer match this devstack
-// or its stack file: refreshed here, or, after an update of devstack, the
-// whole setup brought up to date by a coding agent with the hub's prompt.
+// or its stack file: refreshed here. Whether the stack file itself is up to
+// date is UpgradeBanner's: a refresh does not answer that.
 import { computed, watch } from 'vue';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
-import AgentPrompt from './AgentPrompt.vue';
 import Icon from './icons/Icon.vue';
 
 const hub = useHub();
@@ -18,26 +17,24 @@ watch(
   () => void stack.loadSkills(),
 );
 
-/** `ahead`: written by a newer devstack; `upgrade`: by an older one; `file`: the stack file changed. */
+/** `ahead`: written by a newer devstack; `older`: by an older one; `file`: the stack file changed. */
 const state = computed(() => {
   const s = stack.skills;
   if (!s || !s.outdated.length) return null;
   if (s.ahead) return 'ahead';
-  return s.from === s.current ? 'file' : 'upgrade';
+  return s.from === s.current ? 'file' : 'older';
 });
 </script>
 
 <template>
-  <div v-if="state" class="banner" :class="state === 'upgrade' ? 'info' : 'neutral'" data-testid="skills-outdated" :data-state="state">
-    <Icon :name="state === 'upgrade' ? 'info' : 'file'" :size="18" />
+  <div v-if="state" class="banner neutral" data-testid="skills-outdated" :data-state="state">
+    <Icon name="file" :size="18" />
     <span class="grow">
-      <template v-if="state === 'upgrade'">
-        <strong>{{ stack.entry?.name ?? 'This repository' }} was set up with {{ stack.skills!.from ? `devstack ${stack.skills!.from}` : 'an earlier devstack' }}, devstack {{ stack.skills!.current }} is installed.</strong>
-        A coding agent can bring it up to date: what changed in between, the stack file, the agent skills.
-        <AgentPrompt v-if="stack.id" kind="upgrade" :target="{ stack: stack.id }" />
-      </template>
-      <template v-else-if="state === 'file'">
+      <template v-if="state === 'file'">
         <strong>The agent skills no longer match the stack file.</strong> Refreshed, they name its services and commands again.
+      </template>
+      <template v-else-if="state === 'older'">
+        <strong>The agent skills come from {{ stack.skills!.from ? `devstack ${stack.skills!.from}` : 'an earlier devstack' }}, this is {{ stack.skills!.current }}.</strong> Refreshed, they describe this one.
       </template>
       <template v-else>
         <strong>The agent skills come from devstack {{ stack.skills!.from }}, this is {{ stack.skills!.current }}.</strong> Update devstack rather than write older ones.
