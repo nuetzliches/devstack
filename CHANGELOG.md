@@ -9,7 +9,26 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-22
+
+A restart of the stack carries its lanes over to the next daemon
+(ADR-0052). The agent skills go where the stack file says (`[agents]
+skills`); the dashboard says when a repository was set up with an older
+devstack and starts a coding agent with its prompt (ADR-0046 amended). A
+node's policy says what part of its free CPU and memory it offers. A lane
+takes the main ports with a service stopped; the hub's failures that only
+reached its log are shown; a lane on a node says which UDP ports are not
+forwarded.
+
 ### Added
+
+- **A node's policy says what part of its free CPU and memory it offers**
+  (`share_percent`, 1 to 100; ADR-0031 point 3 amended). Until now a node
+  offered half of what is free, below its caps: a dedicated server nobody
+  works on can now offer more. An admin sets it in the dashboard's policy
+  form ("Offers of what is free (%)") or with `devstack node members policy
+  <node> --share-percent 80`; a node's own `policy.json` can too, and the
+  smaller holds. `--max-cpus` and `--max-memory-gib` still cap it.
 
 - **`[agents] skills` in the stack file: where the agent skills go.**
   `devstack skills install` writes the generated skills into each folder it
@@ -69,10 +88,30 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A lane starting on a node no longer reads that the node cannot take
+  it.** The start view ranks the pool's nodes for the lane, and its own
+  lease, just admitted, counted against the node's offer for three minutes:
+  the node it was starting on said "cannot take it: offers 2.1 CPU …, the
+  lane needs 9.2 CPU". `GET /v1/placement` now counts the room a lane's own
+  leases hold as the lane's, and the node it starts on says "the lane is
+  starting here". The dashboard's policy form keeps the fields it does not
+  edit (`keep_lanes_hours`, `keep_lanes_gib`) instead of dropping them.
+- **A lane on a node forwards its TCP ports only, and says which UDP ports
+  are not forwarded** (#192). The requester listened on a UDP port's number
+  as TCP; a service's `53/tcp` and `53/udp` were one entry. The dashboard
+  (the lane's header, the container row and page) and `devstack lane list`
+  name a UDP port as not forwarded; `not_forwarded` on a container and a
+  lane in the API. devstack forwards TCP only.
+- **The hub's failures that only reached its log are shown** (#202): a
+  failed check for a newer release in the version popover (`error` in the
+  `release` event) instead of looking up to date; devstack's name not
+  registered with Windows, and a click on a notification that could not
+  open the dashboard (Linux), in the notifications popover (`trouble` in
+  `GET /hub/notify`, and `devstack hub notify`).
 - **A lane takes the main ports when one of its services does not run.**
   `promote --lane` (the dashboard's "Serve main ports") refused while a
   single service of the lane was stopped or failed ("does not run
-  document-service"); now that service's main port moves too and answers
+  worker"); now that service's main port moves too and answers
   once it runs in the lane (ADR-0024 point 5, noted). The `main_slot` line
   names what did not run yet.
 - **Stopping the main tree while lanes run keeps what serves them.** A
@@ -99,7 +138,7 @@ and listed with their assets on the
   until its last handle closes, a folder a package manager removes) as it
   skips one that is gone, instead of failing the whole sync.
 - **A refused `promote --lane` says what each missing service is**
-  (`document-service (failed: build failed)`), and advises `up` only when
+  (`worker (failed: build failed)`), and advises `up` only when
   they are stopped.
 - **devstack raises its limit of open files to the hard limit** (Linux,
   macOS): a lane's daemon on a node ran out at the container's soft limit
@@ -1260,7 +1299,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/nuetzliches/devstack/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/nuetzliches/devstack/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/nuetzliches/devstack/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/nuetzliches/devstack/compare/v0.15.0...v0.16.0
