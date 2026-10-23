@@ -38,7 +38,16 @@ impl Supervisor {
             self.restarting.lock().unwrap().insert(name.to_string());
             self.set_front(name, crate::tcpfwd::FrontState::Hold(hold));
         }
+        *self
+            .restarts_under_way
+            .lock()
+            .unwrap()
+            .entry(name.to_string())
+            .or_default() += 1;
         let result = self.restart_inner(name);
+        if let Some(n) = self.restarts_under_way.lock().unwrap().get_mut(name) {
+            *n -= 1;
+        }
         if fronted {
             self.restarting.lock().unwrap().remove(name);
             if result.is_err() && !self.service_running(name) {

@@ -10,8 +10,9 @@
 //!   (ADR-0024).
 //!
 //! Generated directories never count (`bin`, `obj`, `node_modules`, `target`,
-//! `.git`, `.devstack`, and the caches of frontend tools: `.angular`, `.vite`,
-//! `.next`, ...): a build in the repository would otherwise see its own
+//! `.git`, `.devstack`, and the caches of frontend tools and Python:
+//! `.angular`, `.vite`, `.next`, `__pycache__`, ...): a build in the
+//! repository, or a dev server as it starts, would otherwise see its own
 //! output as a change. They are not even looked at: an event is judged on its
 //! path alone, before the file system is asked anything about it. A package
 //! manager creates thousands of directories in `node_modules` in a burst, and
@@ -33,8 +34,10 @@ use crate::supervisor::Supervisor;
 use devstack_config::model::Kind;
 use globset::GlobSet;
 use notify::{EventKind, RecursiveMode, Watcher as _};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::Instant;
 
 mod gitignore;
 use gitignore::Ignores;
@@ -48,6 +51,23 @@ fn set(patterns: &[String]) -> Option<GlobSet> {
     devstack_build::watch_set(patterns).ok().flatten()
 }
 
+/// Does `restart_on` (compiled to `set`) cover `rel`: does a pattern match it,
+/// or a directory it is in? `restart_on = ["src/api"]` means the folder and
+/// what it holds. As a glob, `src/api` matches the folder's own path only,
+/// and the OS reports a change to a file by the file's path. Linux never
+/// reports the folder for it; Windows reports the folder itself (its time
+/// stamps changed) for some creations and deletions, depending on the tool
+/// that made them, and never for a saved file. So the restart came with
+/// whichever later event happened to name the folder: a second, minutes or
+/// the next change later (#221).
+///
+/// For `restart_on` only: a restart reads the working tree, so a folder means
+/// what is in it. `watch` also selects a build's input files
+/// (`devstack_build`), file by file; the watcher matches it the same way.
+fn covers(set: &GlobSet, rel: &str) -> bool {
+    set.is_match(rel) || rel.match_indices('/').any(|(i, _)| set.is_match(&rel[..i]))
+}
+
 /// Is `name`, one component of a path, a directory of git, of devstack or of
 /// a build's output?
 fn generated(name: &str) -> bool {
@@ -57,12 +77,14 @@ fn generated(name: &str) -> bool {
     )
 }
 
-/// Is `name` the cache directory of a frontend tool? Usually ignored by git
-/// as well; listed for a repository whose `.gitignore` does not say so, and
-/// so that the watcher never opens them (module doc). A dev server writes
-/// into them as it starts (Vite's prebundled dependencies in
+/// Is `name` the cache directory of a frontend tool, or of Python? Usually
+/// ignored by git as well; listed for a repository whose `.gitignore` does not
+/// say so, and so that the watcher never opens them (module doc). A dev
+/// server writes into them as it starts (Vite's prebundled dependencies in
 /// `.angular/cache/<version>/<project>/vite/deps`, a `package.json` among
-/// them).
+/// them; Python's compiled modules in `__pycache__` next to each changed
+/// source, which a `restart_on = ["src/api"]` covers: counted, the restart
+/// for a change would restart once more for what the new process compiled).
 fn cache(name: &str) -> bool {
     matches!(
         name,
@@ -74,6 +96,10 @@ fn cache(name: &str) -> bool {
             | ".cache"
             | ".svelte-kit"
             | ".parcel-cache"
+            | "__pycache__"
+            | ".pytest_cache"
+            | ".mypy_cache"
+            | ".ruff_cache"
     )
 }
 
@@ -301,6 +327,7 @@ fn watch(sup: Arc<Supervisor>) -> Result<Watcher, String> {
     let real = std::fs::canonicalize(&repo).unwrap_or_else(|_| repo.clone());
     let me = sup.clone();
     let lane_copy = lane;
+    let pending = Arc::new(Pending::default());
     // Read once here and again when a rule file changes, never per event.
     let rules = Arc::new(RwLock::new(Arc::new(if only_stack_file {
         Ignores::none()
@@ -368,19 +395,30 @@ fn watch(sup: Arc<Supervisor>) -> Result<Watcher, String> {
                 }
             }
             for (n, g) in &devservers {
-                if g.is_match(&rel) {
-                    let n = n.clone();
-                    me.debounce(format!("devserver:{n}"), move |s| {
-                        if s.service_running(&n) {
-                            let _ = s.restart(&n);
-                        }
-                    });
+                if covers(g, &rel) {
+                    let key = format!("devserver:{n}");
+                    pending.add(&key, &rel);
+                    let (n, p) = (n.clone(), pending.clone());
+                    me.debounce(key.clone(), move |s| restart_devserver(s, key, n, p));
                 }
             }
             for (group, service, g) in &containers {
-                if g.is_match(&rel) {
-                    let (group, service) = (group.clone(), service.clone());
-                    me.debounce(format!("compose:{group}.{service}"), move |s| {
+                if covers(g, &rel) {
+                    let key = format!("compose:{group}.{service}");
+                    pending.add(&key, &rel);
+                    let (group, service, p) = (group.clone(), service.clone(), pending.clone());
+                    me.debounce(key.clone(), move |s| {
+                        let Some(seen) = p.take(&key) else {
+                            return;
+                        };
+                        seen.log(
+                            "restart_on",
+                            serde_json::json!({
+                                "lane": s.lane,
+                                "group": group,
+                                "service": service,
+                            }),
+                        );
                         s.restart_container(&group, &service);
                     });
                 }
@@ -396,6 +434,100 @@ fn watch(sup: Arc<Supervisor>) -> Result<Watcher, String> {
     inner.watch(&sup.repo, mode).map_err(|e| e.to_string())?;
     sup.set_watcher_error(None);
     Ok(Watcher { _inner: inner })
+}
+
+/// The changes each `restart_on` restart waits for, by its debounce key: what
+/// the daemon log names when the restart fires, so that a restart that came
+/// late can be told from a change that was seen late (#221).
+#[derive(Default)]
+struct Pending(Mutex<BTreeMap<String, Seen>>);
+
+/// The changes under one service's `restart_on` since its last restart.
+struct Seen {
+    /// When the first of them was seen: the wait, and the time as the log's
+    /// `at` writes it.
+    first: Instant,
+    first_at: String,
+    /// The first paths, each once, in the order they came.
+    paths: Vec<String>,
+    /// Changes to further paths, beyond [`LOGGED_PATHS`].
+    more: usize,
+}
+
+/// The paths a restart's log line names at most.
+const LOGGED_PATHS: usize = 10;
+
+impl Pending {
+    fn add(&self, key: &str, rel: &str) {
+        let mut all = self.0.lock().unwrap();
+        let seen = all.entry(key.to_string()).or_insert_with(|| Seen {
+            first: Instant::now(),
+            first_at: crate::diag::now(),
+            paths: Vec::new(),
+            more: 0,
+        });
+        if seen.paths.iter().any(|p| p == rel) {
+            return;
+        }
+        if seen.paths.len() < LOGGED_PATHS {
+            seen.paths.push(rel.to_string());
+        } else {
+            seen.more += 1;
+        }
+    }
+
+    /// What `key` waits for; `None` when a restart that ran meanwhile took it
+    /// (and covers it: the change came before that restart's stop).
+    fn take(&self, key: &str) -> Option<Seen> {
+        self.0.lock().unwrap().remove(key)
+    }
+}
+
+impl Seen {
+    /// One line in the daemon log: `fields` with what changed, when the first
+    /// change was seen, and how long ago that was.
+    fn log(&self, event: &str, mut fields: serde_json::Value) {
+        if let Some(f) = fields.as_object_mut() {
+            f.insert("paths".into(), self.paths.clone().into());
+            if self.more > 0 {
+                f.insert("more_paths".into(), self.more.into());
+            }
+            f.insert("first_change".into(), self.first_at.clone().into());
+            let waited = u64::try_from(self.first.elapsed().as_millis()).unwrap_or(u64::MAX);
+            f.insert("waited_ms".into(), waited.into());
+        }
+        crate::diag::info(event, fields);
+    }
+}
+
+/// The debounce for dev server `name`'s `restart_on` is over: restart it for
+/// the changes `pending` holds under `key`.
+///
+/// A dev server that is starting or being restarted (for an earlier change,
+/// or by `devstack restart`) may have read the tree before this change: the
+/// restart waits until it is up, polled once per debounce, rather than
+/// dropping the change while it has no running instance, as it did. One
+/// that is stopped or failed is not started by a change.
+fn restart_devserver(s: &Arc<Supervisor>, key: String, name: String, pending: Arc<Pending>) {
+    let busy = s.restart_under_way(&name) || (s.service_active(&name) && !s.service_running(&name));
+    if busy {
+        s.debounce(key.clone(), move |s| {
+            restart_devserver(s, key, name, pending)
+        });
+        return;
+    }
+    let Some(seen) = pending.take(&key) else {
+        return;
+    };
+    let fields = serde_json::json!({ "lane": s.lane, "service": name });
+    if s.service_running(&name) {
+        seen.log("restart_on", fields);
+        let _ = s.restart(&name);
+    } else {
+        let mut fields = fields;
+        fields["why"] = "it is not running; a change does not start it".into();
+        seen.log("restart_on_skipped", fields);
+    }
 }
 
 #[cfg(test)]
@@ -472,6 +604,145 @@ mod tests {
             assert!(!super::in_generated(p), "{p}");
         }
         assert!(super::in_generated("src/Api/bin/x.dll"));
+    }
+
+    #[test]
+    fn python_caches_do_not_count() {
+        for p in [
+            "src/api/__pycache__/main.cpython-313.pyc",
+            "__pycache__/x.pyc",
+            ".pytest_cache/v/cache/nodeids",
+            ".mypy_cache/3.13/x.json",
+            "src/.ruff_cache/0.6.0/x",
+        ] {
+            assert!(super::ignored(p), "{p}");
+            assert!(!super::in_generated(p), "{p}");
+        }
+        assert!(!super::ignored("src/api/pycache.py"));
+    }
+
+    #[test]
+    fn restart_on_covers_what_a_folder_holds() {
+        let g = set(&[
+            "src/api".into(),
+            "uv.lock".into(),
+            "web/*.json".into(),
+            "conf/**/*.yml".into(),
+        ])
+        .unwrap();
+        for p in [
+            "src/api",
+            "src/api/probe.txt",
+            "src/api/routes/users.py",
+            "uv.lock",
+            "web/angular.json",
+            "conf/a/b.yml",
+        ] {
+            assert!(covers(&g, p), "{p}");
+        }
+        // What the watcher matched before (#221): the folder's own path only.
+        assert!(!g.is_match("src/api/probe.txt"));
+        for p in [
+            "src",
+            "src/apiclient/x.py",
+            "src/other/api/x.py",
+            "uv.lock.bak",
+            "docs/uv.lock",
+            "web/src/x.json",
+            "conf/a/b.json",
+        ] {
+            assert!(!covers(&g, p), "{p}");
+        }
+    }
+
+    /// The bug itself (#221) against the real OS watch: a file created,
+    /// saved and deleted in a folder `restart_on` names is reported by the
+    /// file's own path, at once, and counts for the folder. Windows reports
+    /// the folder itself for some of them only, never for the save.
+    #[test]
+    fn a_file_created_saved_and_deleted_in_a_restart_on_folder_counts() {
+        use notify::Watcher as _;
+        use std::time::Duration;
+
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().to_path_buf();
+        let real = std::fs::canonicalize(&repo).unwrap();
+        std::fs::create_dir_all(repo.join("src").join("api")).unwrap();
+        let g = set(&["src/api".into()]).unwrap();
+        let hits = Arc::new(Mutex::new(Vec::<String>::new()));
+        let (sink, root) = (hits.clone(), repo.clone());
+        let mut w = notify::recommended_watcher(move |res: notify::Result<Event>| {
+            let Ok(mut ev) = res else {
+                return;
+            };
+            ev.paths = std::mem::take(&mut ev.paths)
+                .into_iter()
+                .map(|p| as_given(&root, &real, p))
+                .collect();
+            for rel in rels(&root, ev) {
+                if covers(&g, &rel) {
+                    sink.lock().unwrap().push(rel);
+                }
+            }
+        })
+        .unwrap();
+        w.watch(&repo, RecursiveMode::Recursive).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+
+        let probe = repo.join("src").join("api").join("probe.txt");
+        let steps: [(&str, &dyn Fn()); 3] = [
+            ("created", &|| std::fs::write(&probe, "probe 1\n").unwrap()),
+            ("saved", &|| {
+                use std::io::Write as _;
+                let mut f = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&probe)
+                    .unwrap();
+                f.write_all(b"probe 2\n").unwrap();
+            }),
+            ("deleted", &|| std::fs::remove_file(&probe).unwrap()),
+        ];
+        for (what, step) in steps {
+            // What came before (the creation's own modification) is not this step's.
+            std::thread::sleep(Duration::from_millis(300));
+            hits.lock().unwrap().clear();
+            step();
+            let mut seen = false;
+            for _ in 0..200 {
+                if hits
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|p| p == "src/api/probe.txt")
+                {
+                    seen = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            assert!(seen, "a file {what}: {:?}", hits.lock().unwrap());
+        }
+    }
+
+    #[test]
+    fn a_restart_names_each_path_once_and_counts_the_rest() {
+        let p = Pending::default();
+        for rel in ["src/api/a.py", "src/api/b.py", "src/api/a.py"] {
+            p.add("devserver:api", rel);
+        }
+        for i in 0..LOGGED_PATHS + 3 {
+            p.add("devserver:web", &format!("web/{i}.ts"));
+        }
+        let api = p.take("devserver:api").unwrap();
+        assert_eq!(api.paths, ["src/api/a.py", "src/api/b.py"]);
+        assert_eq!(api.more, 0);
+        let web = p.take("devserver:web").unwrap();
+        assert_eq!(web.paths.len(), LOGGED_PATHS);
+        assert_eq!(web.more, 3);
+        assert!(
+            p.take("devserver:api").is_none(),
+            "taken by the restart that ran"
+        );
     }
 
     #[test]

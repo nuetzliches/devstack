@@ -201,6 +201,10 @@ pub struct Supervisor {
     /// Fronted dev servers being restarted: their front holds new
     /// connections across the stop instead of refusing them (ADR-0043).
     restarting: Mutex<BTreeSet<String>>,
+    /// Services with a `restart` under way (from any caller), and how many
+    /// each: a `restart_on` change seen meanwhile waits for it to end, where
+    /// it was dropped while the dev server had no instance (#221).
+    restarts_under_way: Mutex<BTreeMap<String, usize>>,
     /// Main lane only: the builds the lanes need kept (`Lanes::pins`).
     lane_pins: Mutex<Option<LanePins>>,
     /// Set when a lane is removed: its sampler threads end.
@@ -484,6 +488,7 @@ impl Supervisor {
             held_ports: Mutex::new(BTreeMap::new()),
             held_to_lane: Mutex::new(None),
             restarting: Mutex::new(BTreeSet::new()),
+            restarts_under_way: Mutex::new(BTreeMap::new()),
             lane_pins: Mutex::new(None),
             closed: std::sync::atomic::AtomicBool::new(false),
             fresh_done: std::sync::atomic::AtomicBool::new(false),
@@ -917,6 +922,16 @@ impl Supervisor {
             .unwrap()
             .get(name)
             .is_some_and(|s| s.view.status.is_active())
+    }
+
+    /// Is a `restart` of `name` under way (stopping, starting, or running
+    /// the jobs it comes after)?
+    pub(crate) fn restart_under_way(&self, name: &str) -> bool {
+        self.restarts_under_way
+            .lock()
+            .unwrap()
+            .get(name)
+            .is_some_and(|n| *n > 0)
     }
 
     pub(crate) fn service_running(&self, name: &str) -> bool {
@@ -1367,5 +1382,58 @@ mod copy_note_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod debounce_tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    /// The debounce fires by itself once `quiet` has passed since the last
+    /// change, without a later change to wake it; each change before that
+    /// postpones it, and a change after it fires again (#221).
+    #[test]
+    fn a_debounce_fires_once_quiet_without_a_later_change() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("devstack.toml");
+        let stack =
+            devstack_config::from_str("version = 1\n[stack]\nname = \"s\"\n", &file).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let sup = Supervisor::new(
+            stack,
+            file,
+            d.path().to_path_buf(),
+            d.path().join(".devstack"),
+            devstack_proc::Options::default(),
+            rt.handle().clone(),
+        )
+        .unwrap();
+        let quiet = Duration::from_millis(400);
+        let (tx, rx) = mpsc::channel();
+        let change = |n: u32| {
+            let tx = tx.clone();
+            sup.debounce_for("k".into(), quiet, move |_| tx.send(n).unwrap());
+        };
+
+        let start = Instant::now();
+        change(1);
+        std::thread::sleep(Duration::from_millis(250));
+        change(2); // postpones the first; its own action is not needed
+        let last = Instant::now();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(1));
+        assert!(last.elapsed() >= quiet, "{:?}", last.elapsed());
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
+        assert!(rx.recv_timeout(Duration::from_millis(800)).is_err(), "once");
+
+        change(3);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(3));
     }
 }

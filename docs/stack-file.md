@@ -240,7 +240,13 @@ anything outside the repository. When one of those changed, `devstack restart
   takes over the fixed port once `health` answers, without dropped requests.
   A failed build or health check leaves the running instance alone.
 - `restart_on` (dev servers): restart in place, for files hot reload does not
-  pick up (`tsconfig.json`, `angular.json`).
+  pick up (`tsconfig.json`, `angular.json`), debounced 2 s like `watch`. A
+  pattern that names a folder (`src/api`) covers what it holds, as
+  `src/api/**` does; the same goes for a Compose service's `restart_on`. The
+  daemon log has a `restart_on` line for each restart, with the paths that
+  caused it and when the first of them changed (`restart_on_skipped` when the
+  dev server was not running). A change while the dev server starts or
+  restarts restarts it once more when it is up.
 - `rebuild` (dev servers, [ADR-0042](adr/0042-a-dev-servers-rebuilds-show-like-builds.md)):
   how devstack reads a dev server's rebuilds from its output, to show them
   as a built service's build (rebuilding, rebuilt in how long, failed with
@@ -267,9 +273,10 @@ anything outside the repository. When one of those changed, `devstack restart
   its own port in its log; the address to open is the fixed one.
 
 Generated directories never count as changes: `bin`, `obj`, `node_modules`,
-`target`, `.git`, `.devstack`, and the caches of frontend tools (`.angular`,
+`target`, `.git`, `.devstack`, the caches of frontend tools (`.angular`,
 `.vite`, `.next`, `.nuxt`, `.turbo`, `.cache`, `.svelte-kit`,
-`.parcel-cache`), even where `.gitignore` does not list them. The watcher
+`.parcel-cache`) and of Python (`__pycache__`, `.pytest_cache`,
+`.mypy_cache`, `.ruff_cache`), even where `.gitignore` does not list them. The watcher
 does not open them either, so a package install running in one is never held
 up by devstack.
 
