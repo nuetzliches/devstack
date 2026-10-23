@@ -64,7 +64,8 @@ impl Supervisor {
         }
         let g = self.compose_group(group);
         let model = self.docker.config(&g).map_err(|e| e.to_string())?;
-        // devstack forwards TCP only (#192): a UDP port stays Docker's.
+        // The main slot moves TCP only (ADR-0048 point 6; a lane on a node
+        // relays UDP, ADR-0056): a UDP port stays Docker's.
         for name in names {
             for p in model.services.get(name).map_or(&[][..], |s| &s.ports[..]) {
                 let proto = p.protocol.as_deref().unwrap_or("tcp");
@@ -1035,6 +1036,16 @@ impl Supervisor {
     /// to, when `port` is where a container of the lane is published for its
     /// developer (ADR-0029 point 4). A tunnel carries TCP (#192).
     pub fn infra_tunnel(&self, port: u16) -> Option<String> {
+        self.infra_target(port, "tcp")
+    }
+
+    /// [`Self::infra_tunnel`] for a UDP port: where a UDP session on `port`
+    /// sends its datagrams (ADR-0056).
+    pub fn infra_udp(&self, port: u16) -> Option<String> {
+        self.infra_target(port, "udp")
+    }
+
+    fn infra_target(&self, port: u16, protocol: &str) -> Option<String> {
         let ext = crate::external::read(&self.external_infra()?).ok()?;
         ext.groups
             .values()
@@ -1042,7 +1053,7 @@ impl Supervisor {
             .find_map(|s| {
                 s.published
                     .iter()
-                    .find(|(k, h)| k.is_tcp() && **h == port)
+                    .find(|(k, h)| k.protocol == protocol && **h == port)
                     .and_then(|(target, _)| s.ports.get(target).cloned())
             })
     }
@@ -1114,7 +1125,7 @@ impl Supervisor {
                                 urls: self.container_urls(&g, &svc, &here),
                                 ports,
                                 unreachable: Vec::new(),
-                                not_forwarded: s.not_forwarded(),
+                                not_forwarded: s.not_forwarded(ext.udp),
                                 held: Vec::new(),
                                 managed: true,
                             });

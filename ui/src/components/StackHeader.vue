@@ -353,7 +353,7 @@ function openWith(o: Opener) {
         {{ current.owns_main ? 'serves the main ports' : 'no background workers' }}
         <span v-if="current.node_error" class="err" :title="current.node_error"> · {{ current.node_error }}</span>
         <span v-if="current.node_warning" class="warn-text" :title="current.node_warning" data-testid="lane-node-warning"> · {{ current.node_warning }}</span>
-        <span v-if="current.not_forwarded?.length" class="warn-text" data-testid="lane-not-forwarded"> · {{ notForwardedText(current.not_forwarded) }}</span>
+        <span v-if="current.not_forwarded?.length" class="warn-text" data-testid="lane-not-forwarded"> · {{ notForwardedText(current.not_forwarded, current.not_forwarded_reason) }}</span>
       </span>
     </div>
   </header>

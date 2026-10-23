@@ -21,6 +21,7 @@ pub mod tcpfwd;
 pub mod telemetry;
 pub mod timeline;
 pub mod token;
+pub mod udprelay;
 pub mod usage;
 pub mod watch;
 

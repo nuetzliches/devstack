@@ -174,7 +174,9 @@ impl NodeClient {
     /// images); this waits until the lane is ready or its start failed, at
     /// most `within`, and tells `phase` every new step and `over` every step
     /// that is over, with how long it took as the node measured it (an
-    /// older agent tells no times).
+    /// older agent tells no times). `relay_udp`: this machine relays the
+    /// lane's UDP ports (ADR-0056); the state names them, unless the node
+    /// is older.
     #[allow(clippy::too_many_arguments)]
     pub async fn start(
         &self,
@@ -183,6 +185,7 @@ impl NodeClient {
         display_root: Option<&str>,
         port_offset: u16,
         profile: Option<&str>,
+        relay_udp: bool,
         within: std::time::Duration,
         phase: &(dyn Fn(&str) + Send + Sync),
         over: &(dyn Fn(&str, u64) + Send + Sync),
@@ -196,6 +199,7 @@ impl NodeClient {
                     display_root: display_root.map(str::to_string),
                     port_offset,
                     profile: profile.map(str::to_string),
+                    relay_udp,
                 }),
             )
             .await?;

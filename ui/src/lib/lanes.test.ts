@@ -48,8 +48,11 @@ describe('ports a lane on a node does not forward', () => {
   it('are said by protocol and number', () => {
     expect(notForwardedText(undefined)).toBe('');
     expect(notForwardedText([])).toBe('');
-    expect(notForwardedText(['5353/udp'])).toBe('UDP port 5353 is not forwarded to this machine (devstack forwards TCP only)');
-    expect(notForwardedText(['5060/udp', '5353/udp'])).toBe('UDP ports 5060, 5353 are not forwarded to this machine (devstack forwards TCP only)');
-    expect(notForwardedText(['5353/udp', '9000/sctp'])).toBe('ports UDP 5353, SCTP 9000 are not forwarded to this machine (devstack forwards TCP only)');
+    expect(notForwardedText(['5353/udp'])).toBe('UDP port 5353 is not forwarded to this machine (an older devstack forwards TCP only)');
+    expect(notForwardedText(['5060/udp', '5353/udp'])).toBe('UDP ports 5060, 5353 are not forwarded to this machine (an older devstack forwards TCP only)');
+    expect(notForwardedText(['9000/sctp'])).toBe('SCTP port 9000 is not forwarded to this machine (devstack forwards TCP and UDP only)');
+    // The daemon's reason (ADR-0056): the node is too old to relay UDP.
+    const why = 'the node build-1 runs devstack 0.19.0, which forwards TCP only: devstack 0.20.0 or later there relays UDP';
+    expect(notForwardedText(['5353/udp', '9000/sctp'], why)).toBe(`ports UDP 5353, SCTP 9000 are not forwarded to this machine (${why})`);
   });
 });

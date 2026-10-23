@@ -21,6 +21,11 @@ pub struct ExternalInfra {
     /// agent from before #101 writes the file once, without it.
     #[serde(default)]
     pub at: Option<u64>,
+    /// The lane's requester relays its UDP ports (ADR-0056): it asked for
+    /// it at the start, and this node's agent passes them on. An older
+    /// requester or agent leaves it out, and the ports stay not forwarded.
+    #[serde(default)]
+    pub udp: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -81,9 +86,12 @@ pub struct PortKey {
 }
 
 impl PortKey {
-    /// devstack forwards TCP only (#192).
     pub fn is_tcp(&self) -> bool {
         self.protocol == "tcp"
+    }
+
+    pub fn is_udp(&self) -> bool {
+        self.protocol == "udp"
     }
 }
 
@@ -122,7 +130,8 @@ pub struct ExternalService {
     /// Container port -> the port it is on at the lane's developer's machine
     /// (what a local lane would publish it on): its links point there, and
     /// the developer's tunnels to it come in on that port (ADR-0029 point 4).
-    /// A port of another protocol than TCP is listed, but not forwarded.
+    /// A UDP port is relayed when the requester asked for it (ADR-0056); a
+    /// port of another protocol is listed, but not forwarded.
     #[serde(default)]
     pub published: BTreeMap<PortKey, u16>,
     /// Empty: not started (a parked service that is only an environment source).
@@ -148,13 +157,13 @@ impl ExternalService {
             .map(|(k, h)| (k.port, *h))
     }
 
-    /// Its published ports of another protocol, as the developer would
-    /// reach them (`5353/udp`): not forwarded, devstack forwards TCP only
-    /// (#192).
-    pub fn not_forwarded(&self) -> Vec<String> {
+    /// Its published ports the developer does not reach, as they would
+    /// (`5353/udp`): those of another protocol than TCP (#192), UDP ones
+    /// too unless the requester relays them (`udp`, ADR-0056).
+    pub fn not_forwarded(&self, udp: bool) -> Vec<String> {
         self.published
             .iter()
-            .filter(|(k, _)| !k.is_tcp())
+            .filter(|(k, _)| !k.is_tcp() && !(udp && k.is_udp()))
             .map(|(k, h)| format!("{h}/{}", k.protocol))
             .collect()
     }
@@ -262,12 +271,31 @@ mod tests {
             dns.forwarded().collect::<Vec<_>>(),
             [(53, 5453), (8080, 8180)]
         );
-        assert_eq!(dns.not_forwarded(), ["5453/udp"]);
+        assert_eq!(dns.not_forwarded(false), ["5453/udp"]);
+        assert!(dns.not_forwarded(true).is_empty(), "relayed (ADR-0056)");
         assert_eq!(
             dns.shown_ports(),
             ["5453->dns:53", "5453/udp->dns:53", "8180->dns:8080"]
         );
         assert!("x/udp".parse::<super::PortKey>().is_err());
         assert_eq!("53/UDP".parse::<super::PortKey>().unwrap().protocol, "udp");
+        assert!(
+            !x.udp,
+            "an older agent's file, or an older requester's lane"
+        );
+    }
+
+    #[test]
+    fn a_relayed_lane_still_names_a_port_of_a_third_protocol() {
+        let x: super::ExternalInfra = serde_json::from_str(
+            r#"{"udp":true,"groups":{"app":{"services":{"voice":{
+                "ports":{"5060/udp":"voice:5060","9000/sctp":"voice:9000"},
+                "published":{"5060/udp":5160,"9000/sctp":9100},
+                "state":"running"}}}}}"#,
+        )
+        .unwrap();
+        assert!(x.udp);
+        let voice = &x.groups["app"].services["voice"];
+        assert_eq!(voice.not_forwarded(x.udp), ["9100/sctp"]);
     }
 }

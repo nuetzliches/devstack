@@ -95,9 +95,10 @@ export function samePath(a: string, b: string): boolean {
 
 /**
  * Published ports this machine does not forward (`["5353/udp"]`, a lane on a
- * node: devstack forwards TCP only, #192) as a sentence; empty for none.
+ * node, #192) as a sentence, with the daemon's `reason` (ADR-0056); empty for
+ * none. Without one, UDP is not relayed by an older devstack.
  */
-export function notForwardedText(ports: string[] | undefined): string {
+export function notForwardedText(ports: string[] | undefined, reason?: string): string {
   const list = (ports ?? []).map((p) => {
     const [port, proto = 'udp'] = p.split('/');
     return { port, proto: proto.toUpperCase() };
@@ -107,5 +108,6 @@ export function notForwardedText(ports: string[] | undefined): string {
   const named = one
     ? `${list[0].proto} port${list.length === 1 ? '' : 's'} ${list.map((p) => p.port).join(', ')}`
     : `ports ${list.map((p) => `${p.proto} ${p.port}`).join(', ')}`;
-  return `${named} ${list.length === 1 ? 'is' : 'are'} not forwarded to this machine (devstack forwards TCP only)`;
+  const why = reason || (list.some((p) => p.proto === 'UDP') ? 'an older devstack forwards TCP only' : 'devstack forwards TCP and UDP only');
+  return `${named} ${list.length === 1 ? 'is' : 'are'} not forwarded to this machine (${why})`;
 }
