@@ -1,6 +1,6 @@
 # ADR-0059: A service's `stop` command ends what its `run` started outside its process tree
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-23)
 - **Date:** 2026-10-23
 - **Deciders:** project owner
 - **Related:** [#245](https://github.com/nuetzliches/devstack/issues/245), [ADR-0009](0009-the-daemon-owns-every-process-tree.md), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md), [ADR-0004](0004-infrastructure-is-delegated-to-compose.md), [ADR-0041](0041-a-profile-says-how-a-lane-runs-for-a-purpose.md)
