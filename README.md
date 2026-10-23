@@ -216,9 +216,9 @@ Every command and flag: `devstack --help`, `devstack <command> --help`.
 | `devstack builds <service>`, `logs`, `top`, `env <service> [--export dotenv]` | what ran, what it printed, what it uses, what it gets |
 | `devstack run <command>` | a command of the stack file |
 | `devstack lane list\|start\|stop\|reset\|prune\|move\|share` | the lanes (worktrees), see above; `reset` throws a stopped lane's data away, `prune` removes what gone lanes left behind |
-| `devstack ui [--lane <name>] [--browser <name\|path>] [--link\|--print]` | open and pair the dashboard, on this stack (in a worktree on its lane, or on `--lane`); the browser is `--browser`, else `DEVSTACK_BROWSER`, else `BROWSER`, else the system's default. `--link` prints the lasting links to the stack or lane instead (the page, and the `devstack://open` link that pairs first); `--print` the one-time pairing link. `status`, `up` and `lane start` end with the page as `dashboard: <url>` |
+| `devstack ui [--lane <name>] [--browser <name\|path>] [--link\|--print]` | open and pair the dashboard, on this stack (in a worktree on its lane, or on `--lane`); the browser is `--browser`, else `DEVSTACK_BROWSER`, else `BROWSER`, else the dashboard's installed app when a Chromium-family browser has it (Linux, Windows; [ADR-0061](docs/adr/0061-the-dashboard-opens-in-its-installed-app.md)), else the system's default. `--link` prints the lasting links to the stack or lane instead (the page, and the `devstack://open` link that pairs first); `--print` the one-time pairing link. `status`, `up` and `lane start` end with the page as `dashboard: <url>` |
 | `devstack hub [status\|stop\|start\|install\|uninstall]` | the hub that serves the dashboard: without an action in the foreground; `stop` leaves the stacks running; `install` registers it at logon and the `devstack://` link (`--no-autostart`: the link only), `uninstall` removes both, and `devstack up` then leaves them alone |
-| `devstack hub tray [on\|off]` | the tray icon ([ADR-0060](docs/adr/0060-the-tray-is-a-client-of-the-hub.md)): the state of every stack in the icon's colour, a menu to open the dashboard, start or stop a stack and open its folder. The hub starts it (`devstack tray`); `off` ends it and keeps it off, `on` brings it back. Windows, Linux (a StatusNotifierItem: KDE, Xfce, GNOME with the AppIndicator extension) and macOS |
+| `devstack hub tray [on\|off]` | the tray icon ([ADR-0060](docs/adr/0060-the-tray-is-a-client-of-the-hub.md)): the state of every stack in the icon's colour, a menu to open the dashboard (in its installed app when there is one, as `devstack ui`), start or stop a stack and open its folder. The hub starts it (`devstack tray`); `off` ends it and keeps it off, `on` brings it back. Windows, Linux (a StatusNotifierItem: KDE, Xfce, GNOME with the AppIndicator extension) and macOS |
 | `devstack skills install [--dir] [--force]`, `skills check` | write the agent skills; check that they match this devstack and stack file (exits 1 when not) |
 | `devstack mcp` | the MCP server (above) |
 | `devstack join <url> --fingerprint <fp> [--name] [--pool] [--telemetry] [--no-wait]` | ask a pool to admit this machine ([pool.md](docs/pool.md#join-a-pool)) |
@@ -251,7 +251,7 @@ dashboard ─────┘    one per repo,   └── services: main slot (f
 
 | Variable | Effect |
 |---|---|
-| `DEVSTACK_BROWSER` | the browser `devstack ui` pairs (`chrome`, `edge`, `firefox`, `brave`, a path), and that a click on a notification opens |
+| `DEVSTACK_BROWSER` | the browser `devstack ui` pairs (`chrome`, `edge`, `firefox`, `brave`, a path), and that a click on a notification or the tray opens; set, it wins over the dashboard's installed app |
 | `DEVSTACK_HUB_PORT` | the hub's port (default 4250) |
 | `DEVSTACK_NO_HUB` | `devstack up` does not start the dashboard hub |
 | `DEVSTACK_NO_HUB_INTEGRATION` | the installer registers no hub at logon and no `devstack://` link (and records that); `devstack up` registers neither while it is set |

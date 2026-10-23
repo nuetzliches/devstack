@@ -183,6 +183,52 @@ pub fn start_browser(program: &str, url: &str) -> std::io::Result<bool> {
     Command::new(program).arg(url).status().map(|_| true)
 }
 
+/// The launcher of the installed web app `id` (ADR-0061): a `.desktop` file
+/// in the applications folder, then the desktop folder, whose `Exec` has
+/// `--app-id=<id>`.
+pub fn dashboard_app(id: &str) -> Option<crate::webapp::WebApp> {
+    use crate::webapp;
+    let home = home();
+    let desktop = std::fs::read_to_string(config_dir().join("user-dirs.dirs"))
+        .ok()
+        .and_then(|t| webapp::desktop_dir(&t, &home))
+        .unwrap_or_else(|| home.join("Desktop"));
+    for dir in [data_dir().join("applications"), desktop] {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut files: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "desktop"))
+            .collect();
+        files.sort();
+        for file in files {
+            let Some(mut app) = std::fs::read_to_string(&file)
+                .ok()
+                .and_then(|t| webapp::desktop_entry_app(&t))
+                .filter(|a| a.id == id)
+            else {
+                continue;
+            };
+            let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let program = webapp::snap_command(&app.program)
+                .filter(|p| p.exists())
+                .or_else(|| app.program.exists().then(|| app.program.clone()))
+                .or_else(|| {
+                    webapp::programs_for_launcher(name)
+                        .iter()
+                        .find_map(|p| on_path(p))
+                });
+            if let Some(program) = program {
+                app.program = program;
+                return Some(app);
+            }
+        }
+    }
+    None
+}
+
 // -------------------------------------------- the user's programs (ADR-0046)
 
 /// The terminals tried after `$TERMINAL`, in order.

@@ -832,17 +832,17 @@ async fn pair(State(s): State<AppState>) -> Response {
     Json(serde_json::json!({ "code": code, "url": url })).into_response()
 }
 
-/// Open the dashboard at `route` in the default browser, paired: what a
-/// click on a notification the hub hears itself does (Linux, ADR-0045; a
-/// Windows toast opens a link). `Err` with why it could not, for the
-/// notifications' `trouble`.
+/// Open the dashboard at `route`, paired, in its installed app or else the
+/// default browser (ADR-0061): what a click on a notification the hub hears
+/// itself does (Linux, ADR-0045; a Windows toast opens a link). `Err` with
+/// why it could not, for the notifications' `trouble`.
 fn open_dashboard(port: u16, codes: &Codes, route: &str) -> Result<(), String> {
     let code = new_code(codes);
     let url = format!(
         "http://127.0.0.1:{port}/auth?code={code}&next={}",
         next_param(route)
     );
-    if let Err(e) = devstack_desktop::open_browser(&url) {
+    if let Err(e) = devstack_desktop::open_dashboard_page(&url) {
         diag::warn(
             "open_dashboard_failed",
             serde_json::json!({ "error": e.to_string() }),

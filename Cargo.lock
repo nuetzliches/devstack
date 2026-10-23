@@ -657,6 +657,7 @@ dependencies = [
  "raw-window-handle",
  "rfd",
  "serde",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-stream",

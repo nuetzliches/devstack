@@ -368,7 +368,7 @@ pub fn open_dashboard(route: &str) -> Result<()> {
     );
     match chosen_browser(None) {
         Some(b) => open_in(&b, &url),
-        None => open_browser(&url),
+        None => open_dashboard_page(&url).map(drop),
     }
 }
 
@@ -421,14 +421,15 @@ pub fn ui(
     // The pairing belongs to the browser that opens the link, so it must be
     // the one you develop in, not just the system default (#9).
     let chosen = chosen_browser(browser);
-    match &chosen {
-        Some(b) => open_in(b, &url)?,
-        None => open_browser(&url)?,
-    }
-    println!(
-        "dashboard opened{} (the link works once, for 60 s): {url}",
-        chosen.map(|b| format!(" in {b}")).unwrap_or_default()
-    );
+    let place = match &chosen {
+        Some(b) => {
+            open_in(b, &url)?;
+            format!(" in {b}")
+        }
+        None if open_dashboard_page(&url)? => " in its installed app".into(),
+        None => String::new(),
+    };
+    println!("dashboard opened{place} (the link works once, for 60 s): {url}");
     Ok(())
 }
 
@@ -459,6 +460,14 @@ fn web_url(url: &str) -> Result<()> {
     } else {
         bail!("not opening `{url}`: only http and https addresses are opened")
     }
+}
+
+/// The dashboard's page `url`: in its installed app, when there is one
+/// (ADR-0061), else in the default browser. `true`: in the app.
+fn open_dashboard_page(url: &str) -> Result<bool> {
+    web_url(url)?;
+    devstack_desktop::open_dashboard_page(url)
+        .map_err(|e| anyhow!("cannot open a browser ({e}); open {url} yourself"))
 }
 
 fn open_browser(url: &str) -> Result<()> {

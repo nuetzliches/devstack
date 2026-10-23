@@ -40,9 +40,15 @@ export default defineConfig(({ mode }) => {
           name: 'devstack',
           short_name: 'devstack',
           description: 'Dashboard for devstack: services, candidates, logs and resources of your local stacks.',
+          // The app's id: Chromium names the installed app by its hash, and
+          // devstack finds the app by it (ADR-0061).
+          id: '/',
           start_url: '/',
           scope: '/',
           display: 'standalone',
+          // A launch (the tray, `devstack ui`) navigates the open window
+          // instead of opening a second one (ADR-0061).
+          launch_handler: { client_mode: 'navigate-existing' },
           background_color: '#0f1115',
           theme_color: '#0f1115',
           icons: [

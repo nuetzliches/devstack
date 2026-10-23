@@ -170,6 +170,32 @@ pub fn start_browser(program: &str, url: &str) -> std::io::Result<bool> {
     Ok(c.status()?.success())
 }
 
+/// The installed web app `id` (ADR-0061): the first Chromium-family
+/// browser with a profile that has it, and that browser's program.
+pub fn dashboard_app(id: &str) -> Option<crate::webapp::WebApp> {
+    let local = PathBuf::from(std::env::var_os("LOCALAPPDATA")?);
+    let program_dirs: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+        .iter()
+        .filter_map(|v| std::env::var_os(v).map(PathBuf::from))
+        .collect();
+    crate::webapp::WINDOWS_BROWSERS
+        .iter()
+        .find_map(|(dir, exe)| {
+            let profile = crate::webapp::profiles_with_app(&local.join(dir).join("User Data"), id)
+                .into_iter()
+                .next()?;
+            let program = program_dirs
+                .iter()
+                .map(|p| p.join(dir).join("Application").join(exe))
+                .find(|p| p.is_file())?;
+            Some(crate::webapp::WebApp {
+                program,
+                profile,
+                id: id.to_string(),
+            })
+        })
+}
+
 // -------------------------------------------- the user's programs (ADR-0046)
 
 #[derive(Debug, Clone)]
