@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!-- The page talks to GitHub's API and to the hub on this machine, nothing
      else; the script's hash changes with it (CI checks that they match). -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-jyoXKkHTCeEk6PbcE0InOsJSWWvZdy/xbugd715sdrY='; style-src 'unsafe-inline'; img-src data:; connect-src https://api.github.com http://127.0.0.1:*; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-8vYw+c2T6EFVrBpNizjbC+0sU22sdOaVNk+msVPEyLE='; style-src 'unsafe-inline'; img-src data:; connect-src https://api.github.com http://127.0.0.1:*; base-uri 'none'; form-action 'none'">
 <title>devstack</title>
 <meta name="description" content="devstack runs your local development stack: containers from Compose, your services built in the background, a change goes live only once it is healthy.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233a6df0'/%3E%3Cpath d='M9 11h14M9 16h14M9 21h9' stroke='white' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E">
@@ -79,6 +79,7 @@
     <div class="tabs" role="tablist">
       <button class="tab" role="tab" data-os="windows">Windows (PowerShell)</button>
       <button class="tab" role="tab" data-os="linux">Linux</button>
+      <button class="tab" role="tab" data-os="macos">macOS (preview)</button>
     </div>
     <div class="cmd"><code id="cmd"></code><button class="btn copy" id="copy" type="button">Copy</button></div>
     <p class="muted" style="margin-top:10px">No admin rights needed. The script shows the download's
@@ -110,7 +111,7 @@
   </section>
 
   <footer>
-    Windows and Linux. Open source, MIT or Apache-2.0.
+    Windows and Linux; macOS in preview. Open source, MIT or Apache-2.0.
     <a href="https://github.com/nuetzliches/devstack">GitHub</a> ·
     <a href="https://github.com/nuetzliches/devstack/releases">Releases</a> ·
     <a href="https://github.com/nuetzliches/devstack/issues">Issues</a>
@@ -125,11 +126,13 @@
   const CMDS = {
     windows: `irm https://github.com/${REPO}/releases/latest/download/install.ps1 | iex`,
     linux: `curl -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sh`,
+    macos: 'brew install nuetzliches/tap/devstack',
   };
   const $ = (id) => document.getElementById(id);
 
   // ---------------------------------------------------------------- install command
-  let os = /windows/i.test(navigator.userAgentData?.platform || navigator.userAgent) ? 'windows' : 'linux';
+  const platform = navigator.userAgentData?.platform || navigator.userAgent;
+  let os = /windows/i.test(platform) ? 'windows' : /mac/i.test(platform) ? 'macos' : 'linux';
   function showOs(next) {
     os = next;
     $('cmd').textContent = CMDS[os];
@@ -157,7 +160,11 @@
     for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
     return false;
   };
-  const ASSETS = { windows: 'devstack-x86_64-pc-windows-msvc.zip', linux: 'devstack-x86_64-unknown-linux-musl.tar.gz' };
+  const ASSETS = {
+    windows: 'devstack-x86_64-pc-windows-msvc.zip',
+    linux: 'devstack-x86_64-unknown-linux-musl.tar.gz',
+    macos: 'devstack-aarch64-apple-darwin.tar.gz',
+  };
   let sizes = {};
   const release = fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
     .then((r) => (r.ok ? r.json() : null))

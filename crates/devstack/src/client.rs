@@ -42,7 +42,14 @@ fn same_dir(a: &Path, b: &Path) -> bool {
         let s = s.trim_end_matches('/').to_string();
         if cfg!(windows) { s.to_lowercase() } else { s }
     };
+    // The same directory under another name: macOS's temporary directories
+    // are under /var, a link to /private/var, and a shell's working
+    // directory is the real path.
     norm(a) == norm(b)
+        || matches!(
+            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+            (Ok(x), Ok(y)) if x == y
+        )
 }
 
 /// `<repo>/.git` is a file `gitdir: <main>/.git/worktrees/<name>` in a linked

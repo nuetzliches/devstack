@@ -1,6 +1,6 @@
 //! Windows: one Job Object per tree (spike (a), ADR-0009).
 
-use crate::{Record, Result, Spec, Usage, os};
+use crate::{Options, Record, Result, Spec, Usage, os};
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
@@ -252,7 +252,8 @@ pub(crate) fn start_in_job(job: &Job, spec: Spec) -> Result<Child> {
     Ok(child)
 }
 
-pub(crate) fn spawn(spec: Spec) -> Result<(Tree, Record)> {
+/// Windows needs no shim and no cgroup: `Options` is not used.
+pub(crate) fn spawn(spec: Spec, _opts: &Options) -> Result<(Tree, Record)> {
     let job = Job::new()?;
     let name = spec.name.clone();
     let child = start_in_job(&job, spec)?;
@@ -467,6 +468,81 @@ pub(crate) fn long_path(path: &std::path::Path) -> Option<std::path::PathBuf> {
         }
         buf.resize(n, 0);
     }
+}
+
+/// Nothing to clean up: a tree dies with the job handle of its owner.
+pub(crate) fn cleanup(records: &[Record]) -> Vec<(String, usize)> {
+    records.iter().map(|r| (r.name.clone(), 0)).collect()
+}
+
+pub(crate) fn pid_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::STILL_ACTIVE;
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: plain Win32 calls on a handle opened and closed here.
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return false;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(h, &mut code) != 0;
+        CloseHandle(h);
+        ok && code == STILL_ACTIVE as u32
+    }
+}
+
+pub(crate) fn disk_free(path: &std::path::Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut free: u64 = 0;
+    // SAFETY: `wide` is a NUL-terminated UTF-16 path; the other out
+    // parameters may be null.
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } != 0;
+    ok.then_some(free)
+}
+
+/// Windows has no limit of open files to raise.
+pub(crate) fn raise_open_files() -> Option<u64> {
+    None
+}
+
+fn memory_status() -> Option<windows_sys::Win32::System::SystemInformation::MEMORYSTATUSEX> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut m: MEMORYSTATUSEX = unsafe { mem::zeroed() };
+    m.dwLength = mem::size_of::<MEMORYSTATUSEX>() as u32;
+    // SAFETY: `m` is a properly sized MEMORYSTATUSEX with dwLength set.
+    let ok = unsafe { GlobalMemoryStatusEx(&mut m) } != 0;
+    ok.then_some(m)
+}
+
+pub(crate) fn memory_total() -> Option<u64> {
+    memory_status().map(|m| m.ullTotalPhys)
+}
+
+pub(crate) fn memory_available() -> Option<u64> {
+    memory_status().map(|m| m.ullAvailPhys)
+}
+
+/// `(idle, kernel + user)` in 100 ns units.
+pub(crate) fn cpu_times() -> Option<(u64, u64)> {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::GetSystemTimes;
+    let (mut idle, mut kernel, mut user): (FILETIME, FILETIME, FILETIME) = unsafe { mem::zeroed() };
+    // SAFETY: three valid FILETIME out-pointers.
+    let ok = unsafe { GetSystemTimes(&mut idle, &mut kernel, &mut user) } != 0;
+    let t = |f: FILETIME| (u64::from(f.dwHighDateTime) << 32) | u64::from(f.dwLowDateTime);
+    // Kernel time includes the idle time.
+    ok.then(|| (t(idle), t(kernel) + t(user)))
 }
 
 #[cfg(test)]

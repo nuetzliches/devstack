@@ -88,10 +88,12 @@ jobs:
     needs: [changes, ui]
     if: needs.changes.outputs.rust == 'true'
     # Windows is a first-class target (ADR-0011): every job runs on both.
+    # macOS is a preview (ADR-0054), checked here on Apple Silicon; its
+    # runners have no Docker.
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,6 +102,11 @@ jobs:
           toolchain: stable
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Spotlight indexes every file the tests write and takes most of the
+      # runner's three cores: a node test then finds no free CPU to offer.
+      - name: no Spotlight
+        if: runner.os == 'macOS'
+        run: sudo mdutil -a -i off
       # The dashboard the hub embeds: its tests run against the real build
       # (routing and caching depend on its index.html and assets/).
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -113,7 +120,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # Opt-in tests are #[ignore]d; they run in their own steps and jobs.
       - name: test
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast
       # Linux runners have a Docker engine with Linux containers; Windows runners do not.
       - name: compose against Docker
         if: matrix.os == 'ubuntu-latest'
@@ -188,6 +195,9 @@ jobs:
             skip: --skip lifecycle_with_compose --skip a_lane_has_its_own_containers
           - os: ubuntu-latest
             skip: ''
+          # No Docker on the macOS runners (ADR-0054).
+          - os: macos-14
+            skip: --skip lifecycle_with_compose --skip a_lane_has_its_own_containers
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -195,6 +205,10 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # As in `check`: Spotlight would index every copy the tests make.
+      - name: no Spotlight
+        if: runner.os == 'macOS'
+        run: sudo mdutil -a -i off
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x

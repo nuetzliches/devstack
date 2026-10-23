@@ -25,12 +25,24 @@ fn alive(pid: u32) -> bool {
             ok != 0 && code == STILL_ACTIVE as u32
         }
     }
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
         match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
             Ok(stat) => stat.rfind(')').and_then(|i| stat[i + 2..].chars().next()) != Some('Z'),
             Err(_) => false,
         }
+    }
+    // Asked of `ps`, not of libproc: the check stays apart from the code it checks.
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .is_ok_and(|o| {
+                let stat = String::from_utf8_lossy(&o.stdout);
+                let stat = stat.trim();
+                !stat.is_empty() && !stat.starts_with('Z')
+            })
     }
 }
 

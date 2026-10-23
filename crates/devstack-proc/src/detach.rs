@@ -25,7 +25,6 @@ use std::process::{Child, Command};
 /// never sees the end. Only for a short-lived CLI that does not need them
 /// inheritable afterwards; `Stdio::inherit` still works (it duplicates).
 pub fn keep_std_handles() {
-    #[cfg(windows)]
     imp::keep_std_handles();
 }
 
@@ -88,6 +87,10 @@ mod imp {
     use std::io;
     use std::os::unix::process::CommandExt;
     use std::process::{Child, Command};
+
+    /// Nothing to do: Rust opens its descriptors close-on-exec, and a child
+    /// gets only the standard ones it is given.
+    pub fn keep_std_handles() {}
 
     pub fn spawn_detached(cmd: &mut Command) -> io::Result<Child> {
         // SAFETY: setsid is async-signal-safe; it detaches from the terminal's session.

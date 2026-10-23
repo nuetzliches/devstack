@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **macOS, in preview** (ADR-0054, #66): release builds for Apple Silicon
+  and Intel, and for arm64 Linux; `install.sh` takes them, and Homebrew
+  installs devstack on macOS and Linux (`brew install
+  nuetzliches/tap/devstack`), updated through `brew upgrade` by `devstack
+  update` and the dashboard. CI runs the checks and the daemon's integration
+  test on macOS. On macOS the file watcher takes the real paths FSEvents
+  reports (`/private/tmp`, a symlinked project folder) back under the
+  repository, and a port another process listens on with every address
+  (`*:port`) counts as taken.
+
 ### Changed
 
 - **The release adds no second winget pull request for the new package**:

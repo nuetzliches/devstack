@@ -4,8 +4,7 @@
 //! admin rights. A click launches the toast's link (point 6): the
 //! `devstack://open` link when it is registered, else the hub's address.
 
-use super::{Shown, Sink};
-use devstack_daemon::diag;
+use crate::notify::{Failure, Hooks, Note, Sink};
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::UI::Notifications::{
     NotificationSetting, ToastNotification, ToastNotificationManager,
@@ -28,8 +27,8 @@ fn wide(s: &str) -> Vec<u16> {
 }
 
 /// Register the AppUserModelID under which the hub's toasts show; `Err`
-/// with what follows when it could not be (logged).
-pub fn register() -> Result<(), String> {
+/// with what follows when it could not be (told to `hooks`).
+pub fn register(hooks: &Hooks) -> Result<(), String> {
     let key = wide(AUMID_KEY);
     let name = wide("DisplayName");
     let value = wide("devstack");
@@ -48,10 +47,9 @@ pub fn register() -> Result<(), String> {
     if rc == ERROR_SUCCESS {
         return Ok(());
     }
-    diag::warn(
-        "notify_register_failed",
-        serde_json::json!({ "error": format!("registering {AUMID}: error {rc}") }),
-    );
+    (hooks.failed)(Failure::NotRegistered(format!(
+        "registering {AUMID}: error {rc}"
+    )));
     Err(format!(
         "devstack's name could not be registered with Windows (HKCU\\{AUMID_KEY}: error {rc}), \
          so notifications may show without it, or not at all."
@@ -86,11 +84,16 @@ pub struct Toast {
     port: u16,
     /// How the registration at hub start went (`register`).
     registered: Result<(), String>,
+    hooks: Hooks,
 }
 
 impl Toast {
-    pub fn new(port: u16, registered: Result<(), String>) -> Self {
-        Self { port, registered }
+    pub fn new(port: u16, registered: Result<(), String>, hooks: Hooks) -> Self {
+        Self {
+            port,
+            registered,
+            hooks,
+        }
     }
 }
 
@@ -129,23 +132,17 @@ impl Sink for Toast {
         self.registered.clone().err()
     }
 
-    fn show(&self, n: Shown) {
+    fn show(&self, n: Note) {
         let launch = if link_registered() {
-            n.target.link()
+            n.link.clone()
         } else {
-            format!("http://127.0.0.1:{}{}", self.port, n.target.path())
+            format!("http://127.0.0.1:{}{}", self.port, n.route)
         };
         let xml = toast_xml(&n, &launch);
+        let failed = self.hooks.failed.clone();
         tokio::task::spawn_blocking(move || {
             if let Err(e) = show(&xml, &n.tag) {
-                diag::warn(
-                    "notify_failed",
-                    serde_json::json!({ "error": e.to_string() }),
-                );
-                crate::notice::tell(
-                    "warn",
-                    format!("A desktop notification could not be shown: {e}"),
-                );
+                failed(Failure::NotShown(e.to_string()));
             }
         });
     }
@@ -161,7 +158,7 @@ fn show(xml: &str, tag: &str) -> windows::core::Result<()> {
 }
 
 /// A toast with a title, whose it is and why; a click launches `launch`.
-fn toast_xml(n: &Shown, launch: &str) -> String {
+fn toast_xml(n: &Note, launch: &str) -> String {
     let mut texts = format!("<text>{}</text>", esc(&n.title));
     for t in [&n.context, &n.body] {
         if !t.is_empty() {
@@ -185,15 +182,15 @@ fn esc(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::notify::Target;
 
     #[test]
     fn the_toast_escapes_what_it_shows() {
-        let n = Shown {
+        let n = Note {
             title: "api: build failed".into(),
             context: "shop · lane feat-x".into(),
             body: "error: expected `<T>` & \"more\"".into(),
-            target: Target::default(),
+            route: "/#/".into(),
+            link: "devstack://open".into(),
             tag: "t".into(),
         };
         let xml = toast_xml(&n, "devstack://open?stack=ab&lane=x");

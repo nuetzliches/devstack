@@ -1,7 +1,8 @@
 //! Desktop notifications from the hub (ADR-0045): it follows the event
 //! stream of every running stack and of each started lane, as the dashboard
-//! does, and tells the desktop what needs attention (`rules`), on Windows as
-//! a toast (`windows`), on Linux over the session bus (`linux`).
+//! does, and tells the desktop what needs attention (`rules`): on Windows as
+//! a toast, on Linux over the session bus, on macOS not yet (it needs an app
+//! bundle, ADR-0054) (`devstack_desktop::notify`).
 //!
 //! What notifies is the person's choice, per machine (`notify.json` beside
 //! the hub's state): each kind on or off, and a mute per stack or lane. The
@@ -10,16 +11,12 @@
 
 mod rules;
 
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(windows)]
-mod windows;
-
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use devstack_daemon::diag;
+use devstack_desktop::notify::{Failure, Hooks, Note, Off, Sink};
 use http_body_util::BodyExt;
 use rules::{Kind, Lanes, Notice, Scope};
 use serde::{Deserialize, Serialize};
@@ -79,7 +76,6 @@ impl Target {
     }
 
     /// The `devstack://open` link that opens it (`devstack open-url`).
-    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn link(&self) -> String {
         if self.pool {
             return "devstack://open?page=pool".into();
@@ -115,43 +111,16 @@ fn enc(s: &str) -> String {
     out
 }
 
-/// A notification as the desktop shows it.
-#[derive(Debug, Clone)]
-pub(crate) struct Shown {
-    pub title: String,
-    /// Whose: the stack, and the lane.
-    pub context: String,
-    pub body: String,
-    pub target: Target,
-    /// The same tag replaces an earlier notification of it where the
-    /// desktop keeps them (Windows' notification centre).
-    pub tag: String,
-}
-
-/// Where notifications go on this platform.
-pub(crate) trait Sink: Send + Sync {
-    /// `Err` with why nothing shows (no desktop session, switched off in
-    /// the system's settings, not on this platform).
-    fn status(&self) -> Result<(), String>;
-    /// What does not work as it should while notifications show (devstack's
-    /// name not registered with Windows, a click that could not open the
-    /// dashboard), or `None`.
-    fn trouble(&self) -> Option<String> {
-        None
+/// A notification for `target`, as the desktop shows it.
+fn note(title: String, context: String, body: String, target: &Target, tag: String) -> Note {
+    Note {
+        title,
+        context,
+        body,
+        route: target.path(),
+        link: target.link(),
+        tag,
     }
-    /// Show it, in the background; a failure goes to the hub's log.
-    fn show(&self, n: Shown);
-}
-
-/// Nothing shows, and why: macOS and anything else (not yet, #66), or
-/// `DEVSTACK_NO_NOTIFY`.
-struct Off(&'static str);
-
-impl Sink for Off {
-    fn status(&self) -> Result<(), String> {
-        Err(self.0.into())
-    }
-    fn show(&self, _: Shown) {}
 }
 
 /// `DEVSTACK_NO_NOTIFY` is set and not `0`: the hub shows nothing and
@@ -160,24 +129,41 @@ fn switched_off() -> bool {
     std::env::var_os("DEVSTACK_NO_NOTIFY").is_some_and(|v| !v.is_empty() && v != "0")
 }
 
-/// Shows the dashboard for a click the hub hears itself; `Err` with why it
-/// could not.
-pub(crate) type Open = std::sync::Arc<dyn Fn(&Target) -> Result<(), String> + Send + Sync>;
+/// Shows the dashboard at a route for a click the hub hears itself; `Err`
+/// with why it could not.
+pub(crate) type Open = devstack_desktop::notify::Open;
 
-/// The sink of this platform, and on Windows the registration its toasts
-/// need. `open` shows the dashboard for a click the hub hears itself
-/// (Linux); a Windows toast opens it through a link.
-#[allow(unused_variables)]
+/// The sink of this platform (`devstack_desktop::notify`), and on Windows
+/// the registration its toasts need. `open` shows the dashboard for a click
+/// the hub hears itself (Linux); a Windows toast opens it through a link.
 pub(crate) fn platform_sink(port: u16, open: Open) -> Box<dyn Sink> {
     if switched_off() {
         return Box::new(Off("switched off (DEVSTACK_NO_NOTIFY)"));
     }
-    #[cfg(windows)]
-    return Box::new(windows::Toast::new(port, windows::register()));
-    #[cfg(target_os = "linux")]
-    return Box::new(linux::Bus::new(open));
-    #[cfg(not(any(windows, target_os = "linux")))]
-    return Box::new(Off("not on this platform yet"));
+    devstack_desktop::notify::sink(
+        port,
+        Hooks {
+            open,
+            failed: std::sync::Arc::new(failed),
+        },
+    )
+}
+
+/// What went wrong in the sink: to the hub's log, and a notification that
+/// could not be shown to the dashboard too.
+fn failed(f: Failure) {
+    match f {
+        Failure::NotShown(e) => {
+            diag::warn("notify_failed", serde_json::json!({ "error": e }));
+            crate::notice::tell(
+                "warn",
+                format!("A desktop notification could not be shown: {e}"),
+            );
+        }
+        Failure::NotRegistered(e) => {
+            diag::warn("notify_register_failed", serde_json::json!({ "error": e }))
+        }
+    }
 }
 
 /// The person's choices (`notify.json`).
@@ -263,21 +249,22 @@ impl Center {
                 "shown": self.sink.status().is_ok(),
             }),
         );
-        self.sink.show(Shown {
-            title: n.title,
-            context: match lane {
+        let target = Target {
+            stack: Some(stack.to_string()),
+            lane: lane.map(str::to_string),
+            service: n.service,
+            pool: false,
+        };
+        self.sink.show(note(
+            n.title,
+            match lane {
                 Some(l) => format!("{name} · lane {l}"),
                 None => name.to_string(),
             },
-            body: n.body,
-            target: Target {
-                stack: Some(stack.to_string()),
-                lane: lane.map(str::to_string),
-                service: n.service,
-                pool: false,
-            },
-            tag: blake3::hash(key.as_bytes()).to_hex()[..16].to_string(),
-        });
+            n.body,
+            &target,
+            blake3::hash(key.as_bytes()).to_hex()[..16].to_string(),
+        ));
         true
     }
 
@@ -300,16 +287,16 @@ impl Center {
         } else {
             format!(" · pool {}", g.pool)
         };
-        self.sink.show(Shown {
-            title: format!("{}'s lane {} runs on this machine", g.owner, g.lane),
-            context: format!("{}{pool}", g.repo),
-            body: "The pool area shows it; pausing the node there takes no new lanes.".into(),
-            target: Target {
+        self.sink.show(note(
+            format!("{}'s lane {} runs on this machine", g.owner, g.lane),
+            format!("{}{pool}", g.repo),
+            "The pool area shows it; pausing the node there takes no new lanes.".into(),
+            &Target {
                 pool: true,
                 ..Target::default()
             },
-            tag: blake3::hash(key.as_bytes()).to_hex()[..16].to_string(),
-        });
+            blake3::hash(key.as_bytes()).to_hex()[..16].to_string(),
+        ));
         true
     }
 
@@ -400,13 +387,13 @@ pub(crate) async fn test(State(s): State<AppState>) -> Response {
     if let Err(why) = s.notify.sink.status() {
         return err(StatusCode::SERVICE_UNAVAILABLE, why);
     }
-    s.notify.sink.show(Shown {
-        title: "devstack notifications work".into(),
-        context: "A test from the dashboard hub".into(),
-        body: "A click opens the dashboard.".into(),
-        target: Target::default(),
-        tag: "test".into(),
-    });
+    s.notify.sink.show(note(
+        "devstack notifications work".into(),
+        "A test from the dashboard hub".into(),
+        "A click opens the dashboard.".into(),
+        &Target::default(),
+        "test".into(),
+    ));
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -561,8 +548,7 @@ async fn get_json(s: &AppState, id: &str, path: &str) -> Option<Value> {
 /// Remove what the hub registered with the system for its notifications
 /// (`devstack self uninstall`).
 pub fn unregister() {
-    #[cfg(windows)]
-    windows::unregister();
+    devstack_desktop::notify::unregister();
 }
 
 #[cfg(test)]
@@ -571,18 +557,18 @@ mod tests {
     use std::sync::Arc;
 
     #[derive(Default)]
-    struct Recorded(Arc<Mutex<Vec<Shown>>>);
+    struct Recorded(Arc<Mutex<Vec<Note>>>);
 
     impl Sink for Recorded {
         fn status(&self) -> Result<(), String> {
             Ok(())
         }
-        fn show(&self, n: Shown) {
+        fn show(&self, n: Note) {
             self.0.lock().unwrap().push(n);
         }
     }
 
-    fn center(dir: &Path) -> (Center, Arc<Mutex<Vec<Shown>>>) {
+    fn center(dir: &Path) -> (Center, Arc<Mutex<Vec<Note>>>) {
         let shown = Arc::new(Mutex::new(Vec::new()));
         let c = Center::new(dir, Box::new(Recorded(shown.clone())));
         (c, shown)
@@ -616,14 +602,10 @@ mod tests {
         let shown = shown.lock().unwrap();
         assert_eq!(shown.len(), 4);
         assert_eq!(shown[3].context, "shop · lane feat-x");
+        assert_eq!(shown[3].route, "/#/s/ab12/services/api?lane=feat-x");
         assert_eq!(
-            shown[3].target,
-            Target {
-                stack: Some("ab12".into()),
-                lane: Some("feat-x".into()),
-                service: Some("api".into()),
-                pool: false,
-            }
+            shown[3].link,
+            "devstack://open?stack=ab12&lane=feat-x&service=api"
         );
     }
 
@@ -689,7 +671,7 @@ mod tests {
             fn trouble(&self) -> Option<String> {
                 Some("no name".into())
             }
-            fn show(&self, _: Shown) {}
+            fn show(&self, _: Note) {}
         }
         let dir = tempfile::tempdir().unwrap();
         let v = Center::new(dir.path(), Box::new(Troubled)).view();

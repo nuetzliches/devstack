@@ -24,7 +24,11 @@ export type StackEntry = {
   start_error?: string;
 };
 
-export type HubSession = { version: string };
+export type HubSession = {
+  version: string;
+  /** Why the dashboard cannot start a stopped hub: no `devstack://` link on the hub's platform ("not on macOS yet"); null where it can. Older hubs leave it out. */
+  link_unavailable?: string | null;
+};
 
 /** The Docker engine as the hub sees it (`GET /hub/docker`, `docker` events). */
 export type DockerEngine =

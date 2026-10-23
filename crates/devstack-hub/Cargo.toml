@@ -15,6 +15,7 @@ devstack-config.workspace = true
 blake3.workspace = true
 bytes.workspace = true
 devstack-daemon.workspace = true
+devstack-desktop.workspace = true
 devstack-node.workspace = true
 devstack-proc.workspace = true
 devstack-skills.workspace = true
@@ -23,20 +24,11 @@ hyper.workspace = true
 hyper-util.workspace = true
 include_dir.workspace = true
 rand.workspace = true
-rfd.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 ureq.workspace = true
-
-[target.'cfg(windows)'.dependencies]
-raw-window-handle.workspace = true
-windows.workspace = true
-windows-sys.workspace = true
-
-[target.'cfg(target_os = "linux")'.dependencies]
-zbus.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

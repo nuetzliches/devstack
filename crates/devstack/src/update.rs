@@ -7,22 +7,34 @@
 //! shell environment: Windows PowerShell 5.1 started from PowerShell 7 finds
 //! the wrong modules and has no `Get-FileHash` (#12).
 //!
-//! A devstack winget installed is updated by winget (`winget_upgrade`), so
-//! its record of the version stays true.
+//! A devstack winget installed is updated by winget (`winget_upgrade`), one
+//! Homebrew installed by Homebrew (`brew_upgrade`), so their record of the
+//! version stays true.
 //!
 //! Running stacks keep their daemon (and its version) until they restart; the
 //! dashboard offers that ("Restart stack"), the CLI says it.
 
 use anyhow::{Result, anyhow, bail};
+use devstack_desktop::channel::WINGET_ID;
 use devstack_hub::release;
 use std::path::{Path, PathBuf};
 
 const BASE: &str = "https://github.com/nuetzliches/devstack/releases";
 
-const ASSET: &str = if cfg!(windows) {
-    "devstack-x86_64-pc-windows-msvc.zip"
+/// The release archive built for this machine (`release.yml`, `install.sh`),
+/// `None` where there is none.
+const ASSET: Option<&str> = if cfg!(all(windows, target_arch = "x86_64")) {
+    Some("devstack-x86_64-pc-windows-msvc.zip")
+} else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+    Some("devstack-x86_64-unknown-linux-musl.tar.gz")
+} else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+    Some("devstack-aarch64-unknown-linux-musl.tar.gz")
+} else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+    Some("devstack-aarch64-apple-darwin.tar.gz")
+} else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+    Some("devstack-x86_64-apple-darwin.tar.gz")
 } else {
-    "devstack-x86_64-unknown-linux-musl.tar.gz"
+    None
 };
 const EXE: &str = if cfg!(windows) {
     "devstack.exe"
@@ -56,25 +68,36 @@ pub fn run(check_only: bool, version: Option<&str>) -> Result<()> {
         return Ok(());
     }
     let exe = std::env::current_exe()?;
-    if crate::integration::is_dev_build(&exe) {
+    if devstack_desktop::is_dev_build(&exe) {
         bail!(
             "this is a build from source ({}); update the installed copy, or rebuild",
             exe.display()
         );
     }
-    if is_cargo_install(&exe) {
+    if devstack_desktop::is_cargo_install(&exe) {
         bail!(
             "this devstack came from `cargo install` ({}); update it the same way, or install a release with the installer (it goes elsewhere)",
             exe.display()
         );
     }
+    let brew = devstack_desktop::homebrew_prefix(&exe);
+    if let (Some(_), Some(v)) = (&brew, version) {
+        bail!(
+            "Homebrew installed this devstack ({}), and Homebrew installs its formula's latest release only: \
+             `devstack update` without `--version {v}` (or `brew upgrade {}`) updates it",
+            exe.display(),
+            devstack_desktop::channel::BREW_FORMULA
+        );
+    }
     println!("installing devstack {target} ...");
-    let installed = if is_winget_install(&exe) {
+    let installed = if let Some(prefix) = &brew {
+        brew_upgrade(prefix, &target)?
+    } else if devstack_desktop::is_winget_install(&exe) {
         winget_upgrade(&exe, version.map(|_| target.as_str()))?
     } else {
         // Where the installers put devstack, or the running copy if it lives
         // elsewhere.
-        let into = crate::selfcmd::install_dir()
+        let into = devstack_desktop::install_dir()
             .map(|d| d.join(EXE))
             .filter(|p| p.is_file())
             .unwrap_or_else(|| exe.clone());
@@ -132,13 +155,13 @@ pub fn for_node(
         ));
     }
     let exe = undeleted(std::env::current_exe().map_err(|e| e.to_string())?);
-    if crate::integration::is_dev_build(&exe) {
+    if devstack_desktop::is_dev_build(&exe) {
         return Err(format!(
             "this agent is a build from source ({})",
             exe.display()
         ));
     }
-    if is_cargo_install(&exe) {
+    if devstack_desktop::is_cargo_install(&exe) {
         return Err(format!(
             "this agent came from `cargo install` ({})",
             exe.display()
@@ -165,19 +188,20 @@ fn undeleted(exe: PathBuf) -> PathBuf {
 /// Download, check and put release `version` in place of `target`; returns
 /// `target`, the path of the new binary.
 fn install(version: &str, target: &Path) -> Result<PathBuf> {
-    if !cfg!(any(windows, target_os = "linux")) || !cfg!(target_arch = "x86_64") {
+    let Some(asset) = ASSET else {
         bail!("there is no release build for this platform; build devstack from source");
-    }
+    };
     let base = format!("{BASE}/download/v{version}");
-    println!("  [1/3] downloading {ASSET}");
-    let archive = get(&format!("{base}/{ASSET}"))?;
+    println!("  [1/3] downloading {asset}");
+    let archive = get(&format!("{base}/{asset}"))?;
     let sums = String::from_utf8(get(&format!("{base}/SHA256SUMS"))?)?;
     println!("  [2/3] checking it against the release checksums");
-    let expected = expected_sum(&sums, ASSET)
-        .ok_or_else(|| anyhow!("SHA256SUMS of v{version} lists no {ASSET}"))?;
+    // A release from before this platform had a build lists none for it.
+    let expected = expected_sum(&sums, asset)
+        .ok_or_else(|| anyhow!("SHA256SUMS of v{version} lists no {asset}"))?;
     let actual = sha256_hex(&archive);
     if actual != expected {
-        bail!("checksum mismatch for {ASSET}: expected {expected}, got {actual}");
+        bail!("checksum mismatch for {asset}: expected {expected}, got {actual}");
     }
     let binary = unpack(&archive)?;
     println!("  [3/3] installing to {}", target.display());
@@ -252,38 +276,6 @@ fn unpack(archive: &[u8]) -> Result<Vec<u8>> {
     bail!("the archive holds no {EXE}")
 }
 
-/// `cargo install` puts binaries into `$CARGO_HOME/bin` (`~/.cargo/bin`);
-/// replacing one with a release build would surprise its next `cargo install`.
-fn is_cargo_install(exe: &Path) -> bool {
-    let Some(dir) = exe.parent() else {
-        return false;
-    };
-    if let Some(home) = std::env::var_os("CARGO_HOME")
-        && dir == Path::new(&home).join("bin")
-    {
-        return true;
-    }
-    let mut parts = dir.components().rev();
-    parts.next().is_some_and(|c| c.as_os_str() == "bin")
-        && parts.next().is_some_and(|c| c.as_os_str() == ".cargo")
-}
-
-/// The package winget installs devstack as (`packaging/winget/`).
-pub(crate) const WINGET_ID: &str = "nuetzliches.devstack";
-
-/// winget keeps a portable package in `...\WinGet\Packages\<id>_<source>\`
-/// and puts a link to it in `...\WinGet\Links\` (per user under
-/// `%LOCALAPPDATA%\Microsoft`, for the machine under `%ProgramFiles%`).
-/// Replacing that binary behind winget's back leaves winget with the old
-/// version on record.
-pub(crate) fn is_winget_install(exe: &Path) -> bool {
-    let path = exe
-        .to_string_lossy()
-        .replace('/', "\\")
-        .to_ascii_lowercase();
-    path.contains(r"\winget\packages\") || path.contains(r"\winget\links\")
-}
-
 /// Update a devstack winget installed, through winget, so winget keeps the
 /// version on record. winget cannot replace a binary that runs (the hub,
 /// every stack's daemon): `remove_all: Access is denied`, measured with
@@ -334,6 +326,43 @@ fn winget_upgrade(exe: &Path, version: Option<&str>) -> Result<PathBuf> {
              catalogue a few days after GitHub: `winget upgrade {WINGET_ID}` later picks it up"
         ),
     }
+}
+
+/// Update a devstack Homebrew installed under `prefix`, through Homebrew
+/// (ADR-0054 point 4), so Homebrew keeps the version on record: `brew
+/// upgrade` of the tap's formula. A running binary is no obstacle on macOS
+/// and Linux. Returns the path Homebrew keeps (`<prefix>/bin/devstack`),
+/// which is what starts the hub again, never the versioned one under
+/// `Cellar/`, which `brew cleanup` removes. `target` is the release GitHub
+/// names; the tap gets it shortly after.
+fn brew_upgrade(prefix: &Path, target: &str) -> Result<PathBuf> {
+    use devstack_desktop::channel::{BREW_FORMULA, brew, brew_bin};
+    let brew = brew(prefix);
+    match std::process::Command::new(&brew)
+        .args(["upgrade", BREW_FORMULA])
+        .status()
+    {
+        Err(e) => bail!("cannot run {} ({e}); devstack is unchanged", brew.display()),
+        Ok(s) if !s.success() => bail!(
+            "Homebrew did not upgrade devstack (see above); it is unchanged. `brew upgrade {BREW_FORMULA}` tries again"
+        ),
+        Ok(_) => {}
+    }
+    let installed = brew_bin(prefix);
+    // `brew upgrade` succeeds without a newer formula too.
+    let now = std::process::Command::new(&installed)
+        .arg("--version")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    if !now.split_whitespace().any(|w| w == target) {
+        bail!(
+            "Homebrew has no devstack {target} yet ({} is `{now}`): the tap follows a release on GitHub \
+             shortly; `brew upgrade {BREW_FORMULA}` picks it up then",
+            installed.display()
+        );
+    }
+    Ok(installed)
 }
 
 /// `\\?\C:\...` (what `canonicalize` gives on Windows) as `C:\...`, which
@@ -449,32 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn a_cargo_install_is_recognised() {
-        let home = if cfg!(windows) {
-            r"C:\Users\u\.cargo\bin\devstack.exe"
-        } else {
-            "/home/u/.cargo/bin/devstack"
-        };
-        assert!(is_cargo_install(Path::new(home)));
-        assert!(!is_cargo_install(Path::new("/home/u/.local/bin/devstack")));
-    }
-
-    #[test]
-    fn a_winget_install_is_recognised() {
-        for winget in [
-            r"C:\Users\u\AppData\Local\Microsoft\WinGet\Packages\nuetzliches.devstack_Microsoft.Winget.Source_8wekyb3d8bbwe\devstack.exe",
-            r"C:\Users\u\AppData\Local\Microsoft\WinGet\Links\devstack.exe",
-            r"C:\Program Files\WinGet\Packages\nuetzliches.devstack_Microsoft.Winget.Source_8wekyb3d8bbwe\devstack.exe",
-        ] {
-            assert!(is_winget_install(Path::new(winget)), "{winget}");
-        }
-        for not in [
-            r"C:\Users\u\AppData\Local\Programs\devstack\devstack.exe",
-            r"C:\src\winget-packages\devstack.exe",
-            "/home/u/.local/bin/devstack",
-        ] {
-            assert!(!is_winget_install(Path::new(not)), "{not}");
-        }
+    fn a_canonical_windows_path_is_made_plain() {
         assert_eq!(
             plain(PathBuf::from(r"\\?\C:\Users\u\devstack.exe")),
             PathBuf::from(r"C:\Users\u\devstack.exe")

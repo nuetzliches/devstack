@@ -19,6 +19,8 @@ export const useHub = defineStore('hub', () => {
   const cached = persist.hub();
   const status = ref<SessionStatus>('loading');
   const version = ref<string | null>(cached?.version ?? null);
+  /** Why the "Start hub" link cannot work on the hub's machine (macOS: not yet); kept for the time the hub is down. */
+  const linkUnavailable = ref<string | null>(cached?.linkUnavailable ?? null);
   const stacks = ref<StackEntry[]>(cached?.stacks ?? []);
   const lastContact = ref<number | null>(cached?.at ?? null);
   const stream = ref<StreamState>('connecting');
@@ -72,7 +74,12 @@ export const useHub = defineStore('hub', () => {
   }
 
   function save() {
-    persist.saveHub({ stacks: stacks.value, version: version.value, at: lastContact.value ?? Date.now() });
+    persist.saveHub({
+      stacks: stacks.value,
+      version: version.value,
+      at: lastContact.value ?? Date.now(),
+      linkUnavailable: linkUnavailable.value,
+    });
   }
 
   async function checkSession(): Promise<void> {
@@ -84,6 +91,7 @@ export const useHub = defineStore('hub', () => {
         else if (res.ok && res.body && typeof res.body === 'object') {
           status.value = 'ok';
           version.value = res.body.version;
+          linkUnavailable.value = res.body.link_unavailable ?? null;
           lastContact.value = Date.now();
         } else status.value = 'unreachable';
       } catch (e) {
@@ -220,6 +228,7 @@ export const useHub = defineStore('hub', () => {
   return {
     status,
     version,
+    linkUnavailable,
     stacks,
     lastContact,
     stream,

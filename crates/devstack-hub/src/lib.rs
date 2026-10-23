@@ -21,6 +21,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, delete, get, post};
 use devstack_compose::engine::{self, Engine};
 use devstack_daemon::{diag, registry};
+use devstack_desktop::no_window;
 use hyper_util::rt::TokioIo;
 use include_dir::{Dir, include_dir};
 use serde::{Deserialize, Serialize};
@@ -34,9 +35,6 @@ use tokio_stream::StreamExt;
 static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 
 mod branches;
-mod dialog;
-#[cfg(windows)]
-mod foreground;
 mod guests;
 mod notice;
 mod notify;
@@ -387,7 +385,7 @@ pub fn serve() -> Result<(), String> {
         let codes: Codes = Arc::new(Mutex::new(HashMap::new()));
         let open: notify::Open = {
             let codes = codes.clone();
-            Arc::new(move |t: &notify::Target| open_dashboard(port, &codes, &t.path()))
+            Arc::new(move |route: &str| open_dashboard(port, &codes, route))
         };
         let notify = Arc::new(notify::Center::new(&dir, notify::platform_sink(port, open)));
         {
@@ -823,33 +821,25 @@ async fn pair(State(s): State<AppState>) -> Response {
 }
 
 /// Open the dashboard at `route` in the default browser, paired: what a
-/// click on a notification the hub hears itself does (Linux, ADR-0045).
-/// `Err` with why it could not, for the notifications' `trouble`.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+/// click on a notification the hub hears itself does (Linux, ADR-0045; a
+/// Windows toast opens a link). `Err` with why it could not, for the
+/// notifications' `trouble`.
 fn open_dashboard(port: u16, codes: &Codes, route: &str) -> Result<(), String> {
     let code = new_code(codes);
     let url = format!(
         "http://127.0.0.1:{port}/auth?code={code}&next={}",
         next_param(route)
     );
-    #[cfg(target_os = "linux")]
-    if let Err(e) = std::process::Command::new("xdg-open")
-        .arg(&url)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
+    if let Err(e) = devstack_desktop::open_browser(&url) {
         diag::warn(
             "open_dashboard_failed",
             serde_json::json!({ "error": e.to_string() }),
         );
         return Err(format!(
-            "A click on a notification could not open the dashboard: xdg-open did not start ({e})."
+            "A click on a notification could not open the dashboard: {} did not start ({e}).",
+            devstack_desktop::URL_OPENER
         ));
     }
-    #[cfg(not(target_os = "linux"))]
-    let _ = url;
     Ok(())
 }
 
@@ -961,7 +951,13 @@ async fn ping_preflight(h: HeaderMap) -> Response {
 }
 
 async fn session() -> Response {
-    Json(serde_json::json!({ "version": VERSION })).into_response()
+    Json(serde_json::json!({
+        "version": VERSION,
+        // The page keeps it for when the hub is down: no "Start hub" link
+        // where the platform has none (macOS, ADR-0054).
+        "link_unavailable": devstack_desktop::LINK_UNAVAILABLE,
+    }))
+    .into_response()
 }
 
 /// Look at the Docker engine every 10 s (every 2 s after a start request) and
@@ -1323,7 +1319,7 @@ async fn update(State(s): State<AppState>) -> Response {
         let log = log.clone();
         let dir = dir.clone();
         move || {
-            let exe = std::env::current_exe().map_err(|_| "cannot find devstack".to_string())?;
+            let exe = devstack_exe().map_err(|_| "cannot find devstack".to_string())?;
             let out = std::fs::File::create(&log).map_err(|e| e.to_string())?;
             let out2 = out
                 .try_clone()
@@ -1552,7 +1548,7 @@ async fn pick_folder() -> Response {
     // this future, but not the dialog's thread.
     let picked = tokio::task::spawn_blocking(move || {
         let _picking = picking;
-        dialog::pick_folder()
+        devstack_desktop::pick_folder()
     })
     .await;
     match picked {
@@ -2123,7 +2119,7 @@ async fn stack_init(Json(q): Json<PathQuery>) -> Response {
             "it has a devstack.toml already; add it instead",
         );
     }
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = devstack_exe() else {
         return err(StatusCode::INTERNAL_SERVER_ERROR, "cannot find devstack");
     };
     let run = {
@@ -2177,7 +2173,7 @@ async fn stack_up(State(s): State<AppState>, Path(id): Path<String>) -> Response
     let Some(e) = entry(&s, &id) else {
         return err(StatusCode::NOT_FOUND, format!("no stack {id}"));
     };
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = devstack_exe() else {
         return err(StatusCode::INTERNAL_SERVER_ERROR, "cannot find devstack");
     };
     s.start_errors.lock().unwrap().remove(&id);
@@ -2753,15 +2749,13 @@ async fn asset(req: Request) -> Response {
         .into_response()
 }
 
-#[cfg(windows)]
-fn no_window(cmd: &mut std::process::Command) {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    cmd.creation_flags(CREATE_NO_WINDOW);
+/// The devstack binary to run for `up`, `init`, `update` and the hub itself:
+/// this one, by the path that stays. For a copy Homebrew installed that is
+/// `<prefix>/bin/devstack`; the versioned one under `Cellar/` goes with the
+/// next `brew cleanup`, while the hub may still run.
+fn devstack_exe() -> std::io::Result<PathBuf> {
+    std::env::current_exe().map(|e| devstack_desktop::stable_exe(&e))
 }
-
-#[cfg(not(windows))]
-fn no_window(_cmd: &mut std::process::Command) {}
 
 /// Start a hub in the background unless one answers; returns its port.
 ///
@@ -2774,7 +2768,7 @@ pub fn ensure_running() -> Result<u16, String> {
         Listener::Foreign => return Err(foreign(port)),
         Listener::Nothing => {}
     }
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = devstack_exe().map_err(|e| e.to_string())?;
     // What the hub prints before its own log exists (a failed start) goes to
     // hub.out, like the daemon's daemon.out.
     let _ = std::fs::create_dir_all(state_dir());

@@ -30,7 +30,7 @@ function remove(key: string): void {
   }
 }
 
-export type CachedHub = { stacks: StackEntry[]; version: string | null; at: number };
+export type CachedHub = { stacks: StackEntry[]; version: string | null; at: number; linkUnavailable?: string | null };
 export type CachedStack = { view: StackView; at: number };
 
 export const persist = {

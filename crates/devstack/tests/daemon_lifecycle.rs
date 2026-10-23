@@ -812,9 +812,16 @@ fn lifecycle(with_compose: bool) {
         second["workers"], true,
         "the relay ends with workers on (ADR-0008)"
     );
+    // A watcher may report an edit twice (FSEvents does, late): the second
+    // report is checked against the build id and dropped as unchanged, a few
+    // milliseconds after the switch.
     assert!(
-        s.service_view("api")["candidate"].is_null(),
-        "nothing pending after the switch"
+        wait_for(
+            || s.service_view("api")["candidate"].is_null(),
+            Duration::from_secs(10)
+        ),
+        "nothing pending after the switch: {}",
+        s.service_view("api")["candidate"]
     );
     let tagged = ureq::get(&format!("http://127.0.0.1:{}/health", s.port))
         .call()
@@ -2231,8 +2238,13 @@ fn a_worktree_runs_as_a_lane() {
     );
     assert_ne!(s.daemon_pid(), daemon, "a new daemon");
     assert_ne!(lane_info()["pid"], lane_pid, "the lane started again");
+    // Logged once the lane's `up` is through, which waits for every service;
+    // its api answers before that.
     assert!(
-        s.daemon_log().contains("\"lane_carried\""),
+        wait_for(
+            || s.daemon_log().contains("\"lane_carried\""),
+            Duration::from_secs(60)
+        ),
         "{}",
         s.daemon_log()
     );

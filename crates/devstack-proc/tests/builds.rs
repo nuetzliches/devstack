@@ -25,12 +25,24 @@ fn alive(pid: u32) -> bool {
             ok != 0 && code == STILL_ACTIVE as u32
         }
     }
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
         match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
             Ok(stat) => stat.rfind(')').and_then(|i| stat[i + 2..].chars().next()) != Some('Z'),
             Err(_) => false,
         }
+    }
+    // Asked of `ps`, not of libproc: the check stays apart from the code it checks.
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .is_ok_and(|o| {
+                let stat = String::from_utf8_lossy(&o.stdout);
+                let stat = stat.trim();
+                !stat.is_empty() && !stat.starts_with('Z')
+            })
     }
 }
 
@@ -134,19 +146,40 @@ fn cancel_ends_the_build_tree_but_not_the_build_servers() {
         "cancelling one build must not end the build servers"
     );
 
-    // The job ends the servers with it, where something holds them (ADR-0020).
-    let held = cfg!(windows) || o.cgroup_root.is_some();
+    // The job ends the servers with it (ADR-0020): the job object, the
+    // cgroup, or the build's process group that the server stayed in.
     drop(job);
-    if held {
-        assert!(
-            wait_for(|| !alive(server), Duration::from_secs(5)),
-            "the build job did not end its servers"
-        );
-    } else {
-        #[cfg(unix)]
-        // SAFETY: plain syscall on a process this test started.
-        unsafe {
-            libc::kill(server as i32, libc::SIGKILL);
-        }
-    }
+    assert!(
+        wait_for(|| !alive(server), Duration::from_secs(5)),
+        "the build job did not end its servers"
+    );
+}
+
+/// Plan §12: the build job's usage covers the servers a finished build left.
+#[test]
+fn the_build_job_counts_the_servers_builds_left() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path().display().to_string();
+    let job = BuildJob::new(&opts("usage")).unwrap();
+    let mut b = job
+        .run(spec(
+            dir.path(),
+            "b",
+            format!("\"{FIXTURE}\" launch --markers \"{d}\""),
+        ))
+        .unwrap();
+    assert_eq!(b.wait().unwrap(), 0);
+    let server = pid_of(dir.path(), "server.started");
+    assert!(
+        wait_for(|| job.pids().contains(&server), Duration::from_secs(5)),
+        "server {server} is not among {:?}",
+        job.pids()
+    );
+    let u = job.usage();
+    assert!(u.processes >= 1 && u.memory > 0, "{u:?}");
+    drop(job);
+    assert!(
+        wait_for(|| !alive(server), Duration::from_secs(5)),
+        "the build job did not end its server"
+    );
 }

@@ -546,6 +546,7 @@ dependencies = [
  "devstack-compose",
  "devstack-config",
  "devstack-daemon",
+ "devstack-desktop",
  "devstack-env",
  "devstack-hub",
  "devstack-node",
@@ -584,6 +585,7 @@ name = "devstack-compose"
 version = "0.19.0"
 dependencies = [
  "devstack-config",
+ "devstack-desktop",
  "devstack-proc",
  "serde",
  "serde_json",
@@ -638,6 +640,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "devstack-desktop"
+version = "0.19.0"
+dependencies = [
+ "devstack-proc",
+ "libc",
+ "raw-window-handle",
+ "rfd",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "windows",
+ "windows-sys 0.61.2",
+ "zbus",
+]
+
+[[package]]
 name = "devstack-env"
 version = "0.19.0"
 dependencies = [
@@ -656,6 +674,7 @@ dependencies = [
  "devstack-compose",
  "devstack-config",
  "devstack-daemon",
+ "devstack-desktop",
  "devstack-node",
  "devstack-proc",
  "devstack-skills",
@@ -664,17 +683,12 @@ dependencies = [
  "hyper-util",
  "include_dir",
  "rand 0.10.3",
- "raw-window-handle",
- "rfd",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tokio-stream",
  "ureq",
- "windows",
- "windows-sys 0.61.2",
- "zbus",
 ]
 
 [[package]]
@@ -712,6 +726,7 @@ name = "devstack-proc"
 version = "0.19.0"
 dependencies = [
  "libc",
+ "mach2",
  "serde",
  "serde_json",
  "tempfile",
@@ -1298,6 +1313,12 @@ name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+
+[[package]]
+name = "mach2"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0d28e293f2b8c9d2b2d1c0193bd3c1cbdc0d2cf396888dc01162f7cf9d6c3f3"
 
 [[package]]
 name = "matchit"

@@ -1,5 +1,6 @@
 #!/bin/sh
-# Install or update devstack on Linux (x86_64, static build).
+# Install or update devstack on Linux (x86_64, arm64; static builds) or macOS
+# (Apple Silicon, Intel; a preview, ADR-0054).
 #
 #   curl -fsSL https://github.com/nuetzliches/devstack/releases/latest/download/install.sh | sh
 #   sh install.sh [--version 0.1.0] [--dir ~/.local/bin]
@@ -13,9 +14,13 @@
 # logged-in `gh`, `gh attestation verify` also checks the build provenance:
 # built by this repository's release workflow (releases from 0.10.0 on).
 #
-# Replacing the binary under a running daemon is fine on Linux; restart the
-# daemon (`devstack down`, `devstack up`) to use the new one. A running hub is
-# moved onto the new binary.
+# Replacing the binary under a running daemon is fine on Linux and macOS;
+# restart the daemon (`devstack down`, `devstack up`) to use the new one. A
+# running hub is moved onto the new binary.
+#
+# macOS: what curl downloads carries no quarantine flag, so Gatekeeper lets
+# the (unsigned) binary run. Homebrew (`brew install nuetzliches/tap/devstack`)
+# is the other way; a copy Homebrew installed is updated by Homebrew, not here.
 #
 # DEVSTACK_NO_HUB_INTEGRATION=1: no hub at logon, no devstack:// link; the
 # choice is kept (`devstack up` does not register them later either).
@@ -37,10 +42,23 @@ main() {
     esac
   done
 
-  case "$(uname -s)-$(uname -m)" in
+  machine="$(uname -s)-$(uname -m)"
+  # A shell under Rosetta reports x86_64 on Apple Silicon: take the native build.
+  if [ "$machine" = Darwin-x86_64 ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = 1 ]; then
+    machine=Darwin-arm64
+  fi
+  case "$machine" in
     Linux-x86_64) asset=devstack-x86_64-unknown-linux-musl.tar.gz ;;
+    Linux-aarch64 | Linux-arm64) asset=devstack-aarch64-unknown-linux-musl.tar.gz ;;
+    Darwin-arm64) asset=devstack-aarch64-apple-darwin.tar.gz ;;
+    Darwin-x86_64) asset=devstack-x86_64-apple-darwin.tar.gz ;;
     *) echo "no devstack build for $(uname -s) $(uname -m)" >&2; exit 1 ;;
   esac
+
+  if brewed=$(homebrew_copy); then
+    echo "devstack is installed by Homebrew ($brewed): update it with \`brew upgrade devstack\`" >&2
+    exit 1
+  fi
 
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
@@ -72,7 +90,7 @@ main() {
     done
   fi
 
-  (cd "$tmp" && grep " \*\?$asset\$" SHA256SUMS | sha256sum -c -) >/dev/null \
+  (cd "$tmp" && grep -E " \*?$asset\$" SHA256SUMS | sha256_check) >/dev/null \
     || { echo "checksum mismatch for $asset" >&2; exit 1; }
   echo "SHA-256 matches (the archive is the one release v$version lists)"
 
@@ -102,8 +120,8 @@ main() {
   mv -f "$dir/.devstack.new" "$dir/devstack"
 
   echo "Installed: $("$dir/devstack" --version) -> $dir/devstack"
-  # The dashboard hub starts at logon (XDG autostart) and the dashboard can
-  # start it (devstack:// link). DEVSTACK_NO_HUB_INTEGRATION=1 skips both and
+  # The dashboard hub starts at logon (XDG autostart; a LaunchAgent on macOS)
+  # and the dashboard can start it (devstack:// link, not on macOS yet). DEVSTACK_NO_HUB_INTEGRATION=1 skips both and
   # records it (`hub uninstall` leaves the marker `devstack up` respects).
   if [ -z "${DEVSTACK_NO_HUB_INTEGRATION:-}" ] || [ "${DEVSTACK_NO_HUB_INTEGRATION}" = 0 ]; then
     "$dir/devstack" hub install >/dev/null \
@@ -135,13 +153,37 @@ fetch_head() {
   curl --proto '=https' --tlsv1.2 -fsS -o /dev/null -w '%{redirect_url}\n' "$1"
 }
 
+# `sha256sum -c` where there is one (Linux), `shasum -a 256 -c` (macOS) else.
+sha256_check() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum -c -; else shasum -a 256 -c -; fi
+}
+
+# The devstack on PATH, if Homebrew installed it: Homebrew links its bin/
+# into the Cellar.
+homebrew_copy() {
+  found=$(command -v devstack 2>/dev/null) || return 1
+  [ -L "$found" ] || return 1
+  case "$(readlink "$found")" in
+    */Cellar/devstack/*) echo "$found" ;;
+    *) return 1 ;;
+  esac
+}
+
 hub_answers() {
   curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$1/hub/ping" 2>/dev/null
 }
 
-# `older 0.9.8 0.10.0`: true when the first version is lower.
+# `older 0.9.8 0.10.0`: true when the first version is lower (field by field,
+# numerically: the sort of macOS has no -V).
 older() {
-  [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "${1%%-*}" "${2%%-*}" | sort -V | head -n1)" = "${1%%-*}" ]
+  awk -v a="${1%%-*}" -v b="${2%%-*}" 'BEGIN {
+    n = split(a, x, "."); m = split(b, y, "."); if (m > n) n = m
+    for (i = 1; i <= n; i++) {
+      if (x[i] + 0 < y[i] + 0) exit 0
+      if (x[i] + 0 > y[i] + 0) exit 1
+    }
+    exit 1
+  }'
 }
 
 main "$@"

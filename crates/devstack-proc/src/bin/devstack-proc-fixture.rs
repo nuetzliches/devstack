@@ -7,7 +7,7 @@
 //!   like the daemon does and runs until killed (for the supervisor-death test).
 //! - `launch --markers DIR`: starts a long-lived `server` and exits, like a
 //!   build that leaves a build server behind.
-//! - `shim …`: the Linux shim.
+//! - `shim …`: the Unix shim.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};

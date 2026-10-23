@@ -13,6 +13,7 @@ clap.workspace = true
 devstack-build.workspace = true
 devstack-compose.workspace = true
 devstack-config.workspace = true
+devstack-desktop.workspace = true
 devstack-daemon.workspace = true
 devstack-env.workspace = true
 devstack-hub.workspace = true

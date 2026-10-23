@@ -2,13 +2,16 @@
 //! groups needs a running engine; without one every `docker compose` call fails
 //! with a message about a pipe or socket that says little.
 //!
-//! What "start" means depends on how Docker came onto the machine:
+//! What "start" means depends on how Docker came onto the machine, and is the
+//! desktop's (`devstack_desktop::docker_starter`):
 //!
 //! | Platform | Engine | devstack starts it with |
 //! | --- | --- | --- |
 //! | Windows | Docker Desktop | `Docker Desktop.exe` (no admin needed) |
 //! | Linux | Docker Desktop for Linux | `systemctl --user start docker-desktop` |
 //! | Linux | Docker Engine (system service) | nothing: it needs root, so devstack names `sudo systemctl start docker` |
+//! | macOS | Docker Desktop, else OrbStack | `open -g -a Docker` / `open -g -a OrbStack` |
+//! | macOS | Colima | nothing: devstack names `colima start` |
 
 use crate::no_window;
 use serde::Serialize;
@@ -118,7 +121,7 @@ pub fn start() -> Result<String, String> {
             manual_hint()
         ));
     };
-    imp::start().map_err(|e| format!("start {name}: {e}"))?;
+    devstack_desktop::start_docker().map_err(|e| format!("start {name}: {e}"))?;
     Ok(name.to_string())
 }
 
@@ -140,107 +143,11 @@ pub fn wait(program: &str, timeout: Duration) -> Result<String, String> {
 }
 
 fn starter() -> Option<&'static str> {
-    imp::installed().then_some("Docker Desktop")
+    devstack_desktop::docker_starter()
 }
 
 fn manual_hint() -> &'static str {
-    if cfg!(windows) {
-        "install Docker Desktop, or start your Docker engine"
-    } else {
-        "start the Docker service (`sudo systemctl start docker`)"
-    }
-}
-
-#[cfg(windows)]
-mod imp {
-    use super::*;
-    use std::path::PathBuf;
-
-    /// `Docker Desktop.exe`: where a machine-wide installation puts it,
-    /// beside the `docker` on PATH (`<install>\resources\bin\docker.exe`),
-    /// or where a per-user installation puts it.
-    fn exe() -> Option<PathBuf> {
-        let mut candidates = Vec::new();
-        if let Some(base) = std::env::var_os("ProgramFiles") {
-            candidates.push(PathBuf::from(base).join("Docker").join("Docker"));
-        }
-        if let Some(path) = std::env::var_os("PATH") {
-            for dir in std::env::split_paths(&path) {
-                if dir.join("docker.exe").is_file()
-                    && let Some(install) = dir.parent().and_then(|r| r.parent())
-                {
-                    candidates.push(install.to_path_buf());
-                }
-            }
-        }
-        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            let programs = PathBuf::from(local).join("Programs");
-            candidates.push(programs.join("Docker").join("Docker"));
-            candidates.push(programs.join("DockerDesktop"));
-        }
-        candidates
-            .into_iter()
-            .map(|d| d.join("Docker Desktop.exe"))
-            .find(|p| p.is_file())
-    }
-
-    pub fn installed() -> bool {
-        exe().is_some()
-    }
-
-    pub fn start() -> std::io::Result<()> {
-        let exe = exe().ok_or_else(|| std::io::Error::other("Docker Desktop is not installed"))?;
-        // Docker Desktop shows its own window and tray icon; it must outlive us.
-        let mut cmd = Command::new(exe);
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        devstack_detach(&mut cmd)
-    }
-
-    fn devstack_detach(cmd: &mut Command) -> std::io::Result<()> {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-        match cmd
-            .creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB)
-            .spawn()
-        {
-            Err(e) if e.raw_os_error() == Some(5) => cmd
-                .creation_flags(CREATE_NEW_PROCESS_GROUP)
-                .spawn()
-                .map(|_| ()),
-            other => other.map(|_| ()),
-        }
-    }
-}
-
-#[cfg(not(windows))]
-mod imp {
-    use super::*;
-
-    /// Docker Desktop for Linux runs as a systemd user unit.
-    pub fn installed() -> bool {
-        Command::new("systemctl")
-            .args(["--user", "cat", "docker-desktop"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
-    }
-
-    pub fn start() -> std::io::Result<()> {
-        let s = Command::new("systemctl")
-            .args(["--user", "start", "docker-desktop"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()?;
-        if s.success() {
-            Ok(())
-        } else {
-            Err(std::io::Error::other(format!("systemctl answered {s}")))
-        }
-    }
+    devstack_desktop::docker_hint()
 }
 
 #[cfg(test)]

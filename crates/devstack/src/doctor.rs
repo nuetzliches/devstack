@@ -82,6 +82,7 @@ pub fn run(stack_file: &Path) -> Vec<Finding> {
         }
     }
     out.push(hub());
+    out.extend(preview());
     out.extend(release());
     out.extend(path_entry());
     #[cfg(windows)]
@@ -100,7 +101,10 @@ fn docker(needed: Option<bool>) -> Vec<Finding> {
     match engine::status("docker") {
         Engine::Missing => vec![f(
             lvl,
-            "Docker: no `docker` on PATH; install Docker Desktop (Windows, Linux) or Docker Engine (Linux)",
+            format!(
+                "Docker: no `docker` on PATH; {}",
+                devstack_desktop::docker_install_hint()
+            ),
         )],
         Engine::Stopped { hint, starter } => vec![f(
             if needed == Some(true) {
@@ -345,7 +349,14 @@ fn release_error(e: &str) -> Finding {
 
 fn hub() -> Finding {
     let s = crate::integration::status();
-    if s.autostart && s.link {
+    // No link where the platform has none yet (macOS): `preview` says so.
+    let no_link = devstack_desktop::LINK_UNAVAILABLE.is_some();
+    if s.autostart && no_link {
+        let note = devstack_desktop::autostart_note()
+            .map(|n| format!(" ({n})"))
+            .unwrap_or_default();
+        f(Level::Ok, format!("hub: starts at logon{note}"))
+    } else if s.autostart && s.link {
         f(
             Level::Ok,
             "hub: starts at logon, the dashboard can start it",
@@ -354,11 +365,22 @@ fn hub() -> Finding {
         f(
             Level::Info,
             format!(
-                "hub: {}; `devstack hub install` registers both",
-                crate::integration::status_text()
+                "hub: {}; `devstack hub install` registers {}",
+                crate::integration::status_text(),
+                if no_link { "it" } else { "both" }
             ),
         )
     }
+}
+
+/// A platform devstack runs on as a preview (macOS, ADR-0054), and what it
+/// does not do there yet.
+fn preview() -> Option<Finding> {
+    let p = devstack_desktop::PREVIEW?;
+    Some(f(
+        Level::Info,
+        format!("{}: not here yet: {}", p.name, p.not_yet.join("; ")),
+    ))
 }
 
 /// The running devstack should be the one a new terminal finds.
@@ -371,7 +393,7 @@ fn path_entry() -> Option<Finding> {
     let found = find_on_path("devstack");
     Some(match found {
         Some(p) if !same_dir(p.parent().unwrap_or(&p), &dir) => f(
-            if crate::integration::is_dev_build(&exe) {
+            if devstack_desktop::is_dev_build(&exe) {
                 Level::Info
             } else {
                 Level::Warn

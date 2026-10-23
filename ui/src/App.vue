@@ -64,10 +64,16 @@ async function startHub() {
         <div class="hub-banner-inner">
           <Icon name="wifiOff" :size="18" />
           <div class="grow">
-            <strong>devstack hub is not reachable.</strong> Start it here, or run <code>devstack ui</code> in a project.
+            <strong>devstack hub is not reachable.</strong>
+            <template v-if="hub.linkUnavailable">
+              Run <code>devstack hub start</code>, or <code>devstack ui</code> in a project
+              <span class="last" data-testid="hub-start-unavailable">(the dashboard cannot start it: the devstack:// link is {{ hub.linkUnavailable }}).</span>
+            </template>
+            <template v-else>Start it here, or run <code>devstack ui</code> in a project.</template>
             <span class="last">Showing the last known state<template v-if="hub.lastContact"> from {{ ago(hub.lastContact, now) }}</template>.</span>
           </div>
           <a
+            v-if="!hub.linkUnavailable"
             class="btn btn-primary btn-sm"
             href="devstack://hub/start"
             title="Needs the devstack:// link (`devstack hub install`, done by `devstack up`)"
