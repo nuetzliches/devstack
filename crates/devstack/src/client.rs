@@ -705,6 +705,8 @@ pub fn print_status_for(stack: &Value, stack_file: &Path) {
 }
 
 /// The service table and the infrastructure, as `devstack status` shows them.
+/// `SERVICE` is a `[services.*]` entry only, as in the stack file and in
+/// "main ports"; Compose containers have their own table, by group (#184).
 pub fn status_text(stack: &Value) -> String {
     use std::fmt::Write;
     let mut out = String::new();
@@ -726,12 +728,17 @@ pub fn status_text(stack: &Value) -> String {
             let _ = writeln!(out, "! {t}\n");
         }
     }
-    let _ = writeln!(
-        out,
-        "{:<22} {:<38} {:<17} {:>6} {:>7}",
-        "SERVICE", "STATE", "BUILD", "PORT", "PID"
-    );
-    for s in stack["services"].as_array().into_iter().flatten() {
+    let services = stack["services"].as_array().filter(|s| !s.is_empty());
+    let groups = stack["infra"].as_array().filter(|g| !g.is_empty());
+    // A stack of containers only has no service table.
+    if services.is_some() || groups.is_none() {
+        let _ = writeln!(
+            out,
+            "{:<22} {:<38} {:<17} {:>6} {:>7}",
+            "SERVICE", "STATE", "BUILD", "PORT", "PID"
+        );
+    }
+    for s in services.into_iter().flatten() {
         let _ = writeln!(
             out,
             "{:<22} {:<38} {:<17} {:>6} {:>7}",
@@ -763,10 +770,16 @@ pub fn status_text(stack: &Value) -> String {
             );
         }
     }
-    for g in stack["infra"].as_array().into_iter().flatten() {
+    if groups.is_some() {
+        if services.is_some() {
+            out.push('\n');
+        }
+        let _ = writeln!(out, "{:<22} {:<24} PORTS", "CONTAINER", "STATE");
+    }
+    for g in groups.into_iter().flatten() {
         let _ = writeln!(
             out,
-            "\ncompose.{} ({})",
+            "compose.{} ({})",
             g["group"].as_str().unwrap_or(""),
             g["project"].as_str().unwrap_or("")
         );
@@ -785,13 +798,13 @@ pub fn status_text(stack: &Value) -> String {
                 .flatten()
                 .filter_map(|p| p.as_str())
                 .collect();
-            let _ = writeln!(
-                out,
-                "  {:<20} {}{health}  {}",
+            let state = format!("{}{health}", c["state"].as_str().unwrap_or(""));
+            let row = format!(
+                "  {:<20} {state:<24} {}",
                 c["service"].as_str().unwrap_or(""),
-                c["state"].as_str().unwrap_or(""),
                 ports.join(", ")
             );
+            let _ = writeln!(out, "{}", row.trim_end());
             let lost: Vec<&str> = c["unreachable"]
                 .as_array()
                 .into_iter()
@@ -2314,6 +2327,34 @@ data: {\"type\":\"line\",\"text\":\"c\"}\n\n";
         let stack = serde_json::json!({ "services": [], "watcher_error": "the file watcher lost events (overflow)" });
         assert!(status_text(&stack).starts_with("! the file watcher lost events (overflow)\n"));
         assert!(!status_text(&serde_json::json!({ "services": [] })).contains('!'));
+    }
+
+    #[test]
+    fn containers_are_listed_apart_from_services() {
+        let container = serde_json::json!({ "group": "app", "project": "shop", "containers": [
+            { "service": "db", "state": "running", "health": "healthy", "ports": ["127.0.0.1:3306"] },
+            { "service": "migrate", "state": "exited", "ports": [] }
+        ] });
+        // Containers only: no service table, nothing under `SERVICE`.
+        let only = status_text(&serde_json::json!({ "services": [], "infra": [container] }));
+        assert_eq!(
+            only,
+            "CONTAINER              STATE                    PORTS\n\
+             compose.app (shop)\n  \
+             db                   running (healthy)        127.0.0.1:3306\n  \
+             migrate              exited\n"
+        );
+        // Both: the service table, then the containers'.
+        let both = status_text(&serde_json::json!({
+            "services": [{ "name": "api", "status": { "state": "stopped" } }],
+            "infra": [container]
+        }));
+        let s = both.find("SERVICE ").unwrap();
+        let api = both.find("\napi ").unwrap();
+        let c = both.find("\n\nCONTAINER ").unwrap();
+        assert!(s < api && api < c, "{both}");
+        // Neither: the empty service table.
+        assert!(status_text(&serde_json::json!({ "services": [] })).starts_with("SERVICE "));
     }
 
     #[test]
