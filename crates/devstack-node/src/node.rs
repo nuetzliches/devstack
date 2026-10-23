@@ -84,6 +84,10 @@ pub struct NodeConfig {
     pub share: Settings,
     /// A server its owner never reclaims (ADR-0026).
     pub dedicated: bool,
+    /// What is free on the machine, taken as it is instead of measured:
+    /// a test fixes it so that what the node offers does not depend on how
+    /// busy the machine running the test is. `None` (the agent): measured.
+    pub free: Option<Amount>,
     /// How it installs a release an admin ordered (ADR-0039): the binary it
     /// is to run then, `None` when it runs that release already. Without
     /// one, an order is refused.
@@ -231,6 +235,8 @@ struct Inner {
     api: String,
     share: Settings,
     dedicated: bool,
+    /// See [`NodeConfig::free`].
+    free: Option<Amount>,
     /// [`NodeConfig::on_update`].
     on_update: Option<UpdateFn>,
     /// The update an admin ordered, as it goes (ADR-0039).
@@ -3367,10 +3373,10 @@ async fn background(s: Shared) {
                 measured = Instant::now();
             }
         }
-        let free = Amount {
+        let free = s.free.unwrap_or_else(|| Amount {
             cpus: free_cpus,
             memory: devstack_proc::memory_available().unwrap_or(0),
-        };
+        });
         // What the pool's lanes use here now, their infrastructure included,
         // each lease's into its run (ADR-0049 point 2).
         let keys = lease_keys(
@@ -3738,6 +3744,7 @@ pub async fn serve(
         api: config.api,
         share: config.share,
         dedicated: config.dedicated,
+        free: config.free,
         on_update: config.on_update.clone(),
         update: Mutex::new(None),
         draining: std::sync::atomic::AtomicBool::new(false),

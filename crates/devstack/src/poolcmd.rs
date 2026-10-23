@@ -593,6 +593,7 @@ pub fn agent(
             api,
             share,
             dedicated,
+            free: None,
             on_update: Some(std::sync::Arc::new(crate::update::for_node)),
         },
         addr,

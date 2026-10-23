@@ -6,10 +6,19 @@ use devstack_node::coordinator::{self, LeaseRequest, NodeRef};
 use devstack_node::member::Local;
 use devstack_node::node::{self, NodeConfig};
 use devstack_node::nodeclient::{ClientError, NodeClient};
-use devstack_node::share::{Need, Settings};
+use devstack_node::share::{Amount, Need, Settings};
 use devstack_node::store::{SHELL, Store};
 use std::path::Path;
 use std::time::Duration;
+
+/// What the test's node takes for free on its machine: half of it is what
+/// it offers, its caps (4 cores, 4 GiB) included. Fixed, not measured, so
+/// that a busy machine running the test does not shrink the offer below
+/// what a lane needs (ADR-0031 point 3).
+const FREE: Amount = Amount {
+    cpus: 8.0,
+    memory: 8 << 30,
+};
 
 fn rt() -> tokio::runtime::Runtime {
     tokio::runtime::Runtime::new().unwrap()
@@ -106,6 +115,7 @@ fn a_lane_is_leased_admitted_and_synced() {
             max_memory: Some(4 << 30),
         },
         dedicated: true,
+        free: Some(FREE),
     };
     std::thread::spawn(move || {
         rt_node
@@ -539,6 +549,7 @@ fn an_admin_pauses_a_node_and_ends_a_lease() {
             max_memory: Some(4 << 30),
         },
         dedicated: true,
+        free: Some(FREE),
     };
     std::thread::spawn(move || {
         rt_node
