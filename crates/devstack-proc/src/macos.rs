@@ -302,11 +302,18 @@ mod tests {
         let free = memory_available().unwrap();
         assert!(free > 0 && free <= total, "{free} of {total}");
         let (idle1, total1) = cpu_times().unwrap();
+        // Busy until the ticks move: on a virtual machine (CI) the host
+        // counts them in steps, 300 ms could see none.
         let t0 = Instant::now();
-        while t0.elapsed() < Duration::from_millis(300) {
+        let (idle2, total2) = loop {
             std::hint::black_box(t0.elapsed());
-        }
-        let (idle2, total2) = cpu_times().unwrap();
+            let now = cpu_times().unwrap();
+            if (now.1 > total1 && t0.elapsed() >= Duration::from_millis(300))
+                || t0.elapsed() > Duration::from_secs(5)
+            {
+                break now;
+            }
+        };
         assert!(total2 > total1, "{total1} -> {total2}");
         assert!(idle2 >= idle1 && idle2 - idle1 <= total2 - total1);
     }
