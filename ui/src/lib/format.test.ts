@@ -27,7 +27,11 @@ describe('numbers', () => {
     expect(bytes(1536)).toBe('1.5 KB');
     expect(bytes(null)).toBe('—');
     expect(percent(0.05)).toBe('<0.1%');
-    expect(percent(42.4)).toBe('42%');
+    expect(percent(4.54)).toBe('4.5%');
+    expect(percent(42.4)).toBe('42.4%');
+    expect(percent(23)).toBe('23.0%');
+    expect(percent(99.96)).toBe('100.0%');
+    expect(percent(250.4)).toBe('250%');
     expect(percent(1234.4)).toBe('1,234%');
     expect(duration(61_000)).toBe('1m 1s');
     expect(duration(-5)).toBe('0s');

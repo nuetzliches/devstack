@@ -16,11 +16,13 @@ export function bytes(n: number | null | undefined): string {
   return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
 
+/** CPU as a share of one core: one decimal up to 100% (so values side by
+ *  side read alike, 4.5% next to 23.0%), whole numbers above (several cores). */
 export function percent(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
   if (n === 0) return '0%';
   if (n < 0.1) return '<0.1%';
-  return `${n < 10 ? n.toFixed(1) : Math.round(n).toLocaleString('en')}%`;
+  return `${n < 100 ? n.toFixed(1) : Math.round(n).toLocaleString('en')}%`;
 }
 
 export function duration(ms: number): string {

@@ -17,7 +17,8 @@ const repairing = ref(false);
 
 const attention = computed(() => stack.pending.filter((s) => s.candidate && (s.candidate.state === 'held' || s.candidate.state === 'failed')));
 const inFlight = computed(() => stack.pending.length - attention.value.length);
-/** The shown lane in total: its services, containers and builds. */
+/** The shown lane in total: its services, containers and builds. The report
+ *  is the shown tree's own (its daemon's, on a node too), with one lane. */
 const lane = computed(() => stack.usage?.lanes.find((l) => l.name === (stack.lane ?? 'main')) ?? stack.usage?.lanes[0] ?? null);
 const infraErrors = computed(() => stack.view?.infra.filter((g) => g.error) ?? []);
 /** Running containers this machine cannot reach (Docker Desktop lost the forward). */
@@ -63,7 +64,7 @@ async function repairAll() {
     </section>
     <p v-if="inFlight" class="inflight muted"><span class="spinner" /> {{ inFlight }} change{{ inFlight === 1 ? '' : 's' }} on the way; the running instances keep serving until the new builds are healthy.</p>
 
-    <LaneUsage v-if="lane" class="stale-dim" :lane="lane" link />
+    <LaneUsage v-if="lane" class="stale-dim" :lane="lane" :title="stack.lane ?? 'main'" link />
 
     <div v-if="!attention.length && !infraErrors.length && !unreachable.length" class="card">
       <div class="empty">
