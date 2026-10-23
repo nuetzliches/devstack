@@ -56,7 +56,9 @@ on without reading its protocol.
 5. **Size.** A frame carries up to 65,535 bytes and both relays read with
    a 64 KiB buffer, so every datagram the operating system delivers
    (65,507 bytes at most over IPv4) arrives whole and leaves as one
-   datagram of the same size. The tunnel is a TCP stream with no MTU of
+   datagram of the same size; each relay's sockets get send and receive
+   buffers that hold one (macOS sends at most 9 KiB by default). The
+   tunnel is a TCP stream with no MTU of
    its own; on each end the operating system fragments a datagram larger
    than its link (loopback, the lane's Docker bridge), as it would for a
    local lane. A stream that ends inside a frame ends the session.

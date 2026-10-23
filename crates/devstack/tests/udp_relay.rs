@@ -80,6 +80,8 @@ async fn open(
 }
 
 async fn ask(client: &UdpSocket, to: std::net::SocketAddr, what: &[u8]) -> Vec<u8> {
+    // macOS sends no more than 9 KiB unless asked to.
+    devstack_daemon::udprelay::room_for_any_datagram(client);
     client.send_to(what, to).await.unwrap();
     let mut buf = vec![0u8; 1 << 16];
     let (n, _) = tokio::time::timeout(Duration::from_secs(10), client.recv_from(&mut buf))
@@ -98,6 +100,7 @@ fn a_datagram_goes_through_a_lanes_tunnel_and_its_answer_comes_back() {
     // The "container": an echo socket, at the address the lane's network
     // would give it.
     let echo = rt.block_on(UdpSocket::bind("127.0.0.1:0")).unwrap();
+    devstack_daemon::udprelay::room_for_any_datagram(&echo);
     let echo_at = echo.local_addr().unwrap();
     rt.spawn(async move {
         let mut buf = vec![0u8; 1 << 16];

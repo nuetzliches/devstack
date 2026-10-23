@@ -29,6 +29,21 @@ pub const MAX_DATAGRAM: usize = u16::MAX as usize;
 /// What a socket is read with: any datagram the system delivers, whole.
 const BUFFER: usize = 1 << 16;
 
+/// Make `socket` able to send and receive any datagram a frame carries.
+/// macOS refuses to send one larger than the socket's send buffer, 9 KiB
+/// by default (the sysctl `net.inet.udp.maxdgram`), and drops one that does
+/// not fit its receive buffer. A buffer is never made smaller.
+pub fn room_for_any_datagram(socket: &UdpSocket) {
+    let s = socket2::SockRef::from(socket);
+    if s.send_buffer_size().is_ok_and(|n| n < BUFFER) {
+        let _ = s.set_send_buffer_size(BUFFER);
+    }
+    // Room for a few, with what the system counts beside their bytes.
+    if s.recv_buffer_size().is_ok_and(|n| n < 4 * BUFFER) {
+        let _ = s.set_recv_buffer_size(4 * BUFFER);
+    }
+}
+
 /// A datagram longer than a frame carries.
 #[derive(Debug, PartialEq, Eq)]
 pub struct TooLarge(pub usize);
@@ -207,6 +222,7 @@ pub async fn relay<O, F, S>(
     F: std::future::Future<Output = Result<Opened<S>, String>> + Send + 'static,
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
+    room_for_any_datagram(&socket);
     let socket = Arc::new(socket);
     let open = Arc::new(open);
     let table = Arc::new(Mutex::new(Table::new(limits)));
@@ -403,6 +419,7 @@ pub async fn connect(addr: &str) -> std::io::Result<UdpSocket> {
         (std::net::Ipv6Addr::UNSPECIFIED, 0).into()
     };
     let socket = UdpSocket::bind(any).await?;
+    room_for_any_datagram(&socket);
     socket.connect(to).await?;
     Ok(socket)
 }
@@ -518,6 +535,7 @@ mod tests {
 
     async fn echo() -> (SocketAddr, tokio::task::JoinHandle<()>) {
         let s = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        room_for_any_datagram(&s);
         let at = s.local_addr().unwrap();
         let h = tokio::spawn(async move {
             let mut buf = vec![0u8; BUFFER];
@@ -564,6 +582,7 @@ mod tests {
     }
 
     async fn ask(client: &UdpSocket, to: SocketAddr, what: &[u8]) -> Vec<u8> {
+        room_for_any_datagram(client);
         client.send_to(what, to).await.unwrap();
         let mut buf = vec![0u8; BUFFER];
         let (n, _) = tokio::time::timeout(Duration::from_secs(5), client.recv_from(&mut buf))
