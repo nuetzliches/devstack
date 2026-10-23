@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-23
+
+A tray icon on Windows, Linux and macOS, a client of the hub (ADR-0060). A
+profile can leave out containers, whole Compose groups and services
+(ADR-0058); a service's `stop` command ends what its `run` started outside
+its process tree, a `docker run` container (ADR-0059). The dashboard's
+sidebar can be hidden and resized. Fixed: a lane carried over a restart
+warned against the previous release; the dashboard's prompts ask which
+branch a commit goes on.
+
 ### Added
 
 - **The dashboard's sidebar can be hidden and resized.** A button in the
@@ -1521,7 +1531,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/nuetzliches/devstack/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/nuetzliches/devstack/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/nuetzliches/devstack/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/nuetzliches/devstack/compare/v0.17.0...v0.18.0
