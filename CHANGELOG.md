@@ -33,7 +33,9 @@ and listed with their assets on the
   Linux names a binary replaced while it runs `<path> (deleted)`: the start
   failed ("No such file or directory"), and the new hub's tray had already
   given way to the old one, so none was left. It starts the binary at its
-  path now. `devstack hub tray on` brings it back on 0.22.0.
+  path now; and a hub whose tray gave way to an older one starts its own
+  once that one is gone, so an update from 0.22.0 or earlier keeps the
+  tray too. On 0.22.0, `devstack hub tray on` brings it back.
 
 ## [0.22.0] - 2026-10-24
 
