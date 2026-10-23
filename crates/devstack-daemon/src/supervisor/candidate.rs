@@ -519,15 +519,12 @@ mod tests {
             .is_some_and(|c| c.paths.is_empty())
     }
 
-    /// One edit, reported twice about 200 ms apart (FSEvents, #233), makes
-    /// one deadline for every service it concerns: two services after the
-    /// same job take their candidates at the same moment, the second report's
-    /// time plus the quiet period, not one of them a poll later. The first
-    /// report reaches the second service 20 ms after the first service (a
-    /// busy daemon writing its log): the thread of the first then began well
-    /// before the repeat, which made it miss its deadline by one poll.
-    #[test]
-    fn a_change_reported_twice_makes_one_deadline_for_every_service() {
+    /// How late, past the deadline the second report set, `a` and `b` took
+    /// one edit reported twice about 200 ms apart (FSEvents, #233). The first
+    /// report reaches `b` 20 ms after `a` (a busy daemon writing its log):
+    /// the thread of `a` then began well before the repeat. Each pipeline
+    /// takes the change once, and is done with it.
+    fn one_edit_reported_twice() -> BTreeMap<&'static str, Duration> {
         let (_d, _rt, sup) = two_after_a_job();
 
         sup.changed("a", PATH);
@@ -551,23 +548,50 @@ mod tests {
         assert_eq!(fired.len(), 2, "both took their changes: {fired:?}");
         for (name, at) in &fired {
             assert!(*at >= deadline, "{name} fired before the quiet period");
-            let late = *at - deadline;
-            assert!(
-                late < Duration::from_millis(100),
-                "{name} fired {late:?} after its deadline"
-            );
         }
-        let (a, b) = (fired["a"], fired["b"]);
-        let apart = a.max(b) - a.min(b);
-        assert!(apart < Duration::from_millis(100), "{apart:?} apart");
-        // Each pipeline took the change once, and is done with it.
-        std::thread::sleep(Duration::from_millis(300));
+        let done = Instant::now();
+        loop {
+            let finished = {
+                let changes = sup.changes.lock().unwrap();
+                ["a", "b"].iter().all(|n| !changes[*n].worker)
+            };
+            if finished || done.elapsed() > Duration::from_secs(5) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
         for name in ["a", "b"] {
             let changes = sup.changes.lock().unwrap();
             let c = &changes[name];
             assert_eq!(c.epoch, 2, "{name}");
             assert!(!c.worker && c.last.is_none(), "{name}");
         }
+        fired
+            .into_iter()
+            .map(|(n, at)| (n, at - deadline))
+            .collect()
+    }
+
+    /// One edit reported twice makes one deadline for every service it
+    /// concerns: two services after the same job take their candidates at
+    /// the same moment, the second report's time plus the quiet period, not
+    /// one of them a poll later. A pipeline that looked every 200 ms from
+    /// when its thread began missed the deadline of `a` by one look, at every
+    /// try. A machine that oversleeps (the macOS runner, a VM, once 153 ms)
+    /// makes one try late now and then, not every one: a late try is tried
+    /// again, three times at most.
+    #[test]
+    fn a_change_reported_twice_makes_one_deadline_for_every_service() {
+        let mut tries = Vec::new();
+        for _ in 0..3 {
+            let late = one_edit_reported_twice();
+            let on_time = late.values().all(|l| *l < Duration::from_millis(100));
+            tries.push(late);
+            if on_time {
+                return;
+            }
+        }
+        panic!("late past the deadline at every try: {tries:?}");
     }
 
     /// A change reported after a restart began waits for the restart, past

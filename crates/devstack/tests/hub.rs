@@ -22,12 +22,23 @@ impl Drop for Hub {
     }
 }
 
+/// A port nothing listens on, and that no other test of this binary was
+/// given: the tests start together, and the kernel may hand a port it just
+/// handed out to the next `bind(0)` again.
 fn free_port() -> u16 {
-    std::net::TcpListener::bind(("127.0.0.1", 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    static GIVEN: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+    loop {
+        let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let mut given = GIVEN.lock().unwrap();
+        if !given.contains(&port) {
+            given.push(port);
+            return port;
+        }
+    }
 }
 
 fn start() -> Hub {
@@ -55,12 +66,28 @@ fn start_env(home: tempfile::TempDir, port: u16, extra: &[(&str, std::ffi::OsStr
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    let mut hub = Hub { child, port, home };
+    // Up once it wrote hub.json, right after it bound the port. That the port
+    // takes a connection says nothing yet: a socket of another test, or of
+    // anything else on the machine, may have it for a moment (a CI run where
+    // `a_hub_answers_once_its_port_takes_connections` connected 6 ms after
+    // it spawned a hub that waits 4 s before it binds).
+    let info = hub.home.path().join("devstack/hub/hub.json");
     let t0 = Instant::now();
-    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+    loop {
+        let ours = std::fs::read_to_string(&info)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .is_some_and(|v| v["pid"] == hub.child.id() && v["port"] == port);
+        if ours && std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            return hub;
+        }
+        if let Some(status) = hub.child.try_wait().unwrap() {
+            panic!("hub on port {port} exited before it was up: {status}");
+        }
         assert!(t0.elapsed() < Duration::from_secs(15), "hub did not start");
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(50));
     }
-    Hub { child, port, home }
 }
 
 /// A raw HTTP/1.1 request; returns (status, headers lowercased, body).
