@@ -11,6 +11,12 @@ and listed with their assets on the
 
 ### Added
 
+- **The dashboard's sidebar can be hidden and resized.** A button in the
+  top bar, Ctrl+B (Cmd+B) or the command palette shows and hides it; on a
+  wide screen it stays as it was left, on a narrow one it opens as a drawer
+  over the page and closes again when a stack or worktree is chosen, on
+  Escape or a click beside it. Its edge is dragged for its width (arrow keys
+  too, a double click sets it back), kept across reloads.
 - **A tray icon on Windows, Linux and macOS** (ADR-0060, #1). The hub
   starts `devstack tray`: the dashboard's mark in the notification area
   (Windows), as a StatusNotifierItem (Linux: KDE, Xfce, GNOME with the

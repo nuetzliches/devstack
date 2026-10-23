@@ -7,11 +7,13 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
+import { useUi } from '@/stores/ui';
 import Icon from './icons/Icon.vue';
 import type { IconName } from './icons/icons';
 
 const hub = useHub();
 const stack = useStack();
+const ui = useUi();
 const router = useRouter();
 
 const open = ref(false);
@@ -41,6 +43,7 @@ const items = computed<Item[]>(() => {
     ] as [string, string, IconName][])
       out.push({ id: `view:${name}`, label, hint: 'view', icon, run: () => go(name) });
   }
+  out.push({ id: 'ui:sidebar', label: `${ui.sidebarShown ? 'Hide' : 'Show'} sidebar`, hint: 'layout · Ctrl+B', icon: 'panelLeft', run: () => ui.toggleSidebar() });
   for (const s of hub.stacks)
     if (s.id !== sid) out.push({ id: `stack:${s.id}`, label: s.name, hint: `stack${s.running ? '' : ', stopped'}`, icon: 'layers', run: () => router.push({ name: 'overview', params: { stack: s.id } }) });
   // Someone else's lane (ADR-0040) is viewed: nothing that would change it is offered.

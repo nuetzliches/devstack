@@ -159,7 +159,10 @@ function laneTitle(s: StackEntry, l: LaneView): string {
   return `${l.path}\n${laneCounts(s, l)} · ${where}${l.owns_main ? ' · serves the main ports' : ''}`;
 }
 
+// Choosing where to go closes the drawer of a narrow screen, even when only
+// the shown stack's lane changes and the route stays.
 function openStack(s: StackEntry) {
+  ui.drawerOpen = false;
   if (s.id === stack.id && stack.lane) stack.selectLane(null);
   persist.set(`lane.${s.id}`, null);
   void router.push({ name: 'overview', params: { stack: s.id } });
@@ -168,6 +171,7 @@ function openStack(s: StackEntry) {
 // A lane not started is shown with its start options (here, a node, the
 // pool), never started by navigating to it.
 async function openLane(s: StackEntry, l: LaneView) {
+  ui.drawerOpen = false;
   if (s.id === stack.id) {
     stack.selectLane(l.name);
     void router.push({ name: 'overview', params: { stack: s.id } });
