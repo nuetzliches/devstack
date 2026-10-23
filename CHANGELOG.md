@@ -9,6 +9,17 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **The tray's window comes to the front on Wayland.** On GNOME (and KDE)
+  the tray's *Open Dashboard*, *Open in Dashboard* and the browser it starts
+  now bring the window forward, where GNOME showed "… is ready" instead.
+  The tray takes the activation token the desktop offers with a click
+  (`ProvideXdgActivationToken`) and hands it to the program the click
+  starts (`XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID`), once, and only
+  within ten seconds of the click. *Open Folder*, which the hub opens,
+  is not covered yet.
+
 ## [0.22.0] - 2026-10-24
 
 The dashboard opens in its installed app (ADR-0061): with the dashboard

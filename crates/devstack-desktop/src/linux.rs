@@ -176,11 +176,17 @@ pub fn pick_folder() -> Result<Option<String>, String> {
 pub const URL_OPENER: &str = "xdg-open";
 
 pub fn open_browser(url: &str) -> std::io::Result<()> {
-    Command::new("xdg-open").arg(url).spawn().map(drop)
+    let mut cmd = Command::new("xdg-open");
+    cmd.arg(url);
+    crate::activation::apply(&mut cmd);
+    cmd.spawn().map(drop)
 }
 
 pub fn start_browser(program: &str, url: &str) -> std::io::Result<bool> {
-    Command::new(program).arg(url).status().map(|_| true)
+    let mut cmd = Command::new(program);
+    cmd.arg(url);
+    crate::activation::apply(&mut cmd);
+    cmd.status().map(|_| true)
 }
 
 /// The launcher of the installed web app `id` (ADR-0061): a `.desktop` file
@@ -342,6 +348,7 @@ pub fn github_desktop_open(_exe: &Path, _path: &str) -> Result<(), String> {
 /// Start `cmd` and let it go; a thread waits for it, so it leaves no
 /// zombie behind.
 fn detach(mut cmd: Command, what: &str) -> Result<(), String> {
+    crate::activation::apply(&mut cmd);
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::null())

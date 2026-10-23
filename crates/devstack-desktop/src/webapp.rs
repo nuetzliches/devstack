@@ -33,6 +33,7 @@ impl WebApp {
     pub fn open(&self, url: &str) -> std::io::Result<()> {
         let mut cmd = Command::new(&self.program);
         cmd.args(self.args(url));
+        crate::activation::apply(&mut cmd);
         let mut child = cmd.spawn()?;
         // Reaped, so a long-lived caller (the tray) keeps no zombie.
         std::thread::spawn(move || child.wait());
