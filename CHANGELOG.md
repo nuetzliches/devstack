@@ -9,6 +9,13 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-10-24
+
+Fixes of the tray: it comes back after an update on Linux, its menu on
+Windows has no empty column and even marks, and what it opens comes to the
+front on Wayland where the browser lets it. The overview's last row keeps
+the card's round corners.
+
 ### Fixed
 
 - **What the tray opens comes to the front on Wayland**, where the
@@ -1590,7 +1597,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.22.1...HEAD
+[0.22.1]: https://github.com/nuetzliches/devstack/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/nuetzliches/devstack/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/nuetzliches/devstack/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/nuetzliches/devstack/compare/v0.19.0...v0.20.0
