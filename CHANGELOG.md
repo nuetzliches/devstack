@@ -58,6 +58,10 @@ and listed with their assets on the
   0.19.0" while every side ran 0.20.0. The daemon now carries the
   coordinator's release instead and makes the warning again; a lane carried
   by 0.20.0 loses the coordinator's part, which only that daemon knew.
+- **The dashboard's prompts ask which branch a commit goes on.** They said
+  to ask before committing, not where: a coding agent took the branch
+  checked out, which may be another piece of work's. Each prompt now has
+  the agent name the branch when it asks.
 
 ## [0.20.0] - 2026-10-23
 

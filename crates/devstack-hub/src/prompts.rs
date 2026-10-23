@@ -52,7 +52,7 @@ pub fn text(p: &Prompt) -> String {
     let v = devstack_config::VERSION;
     let at = format!("{REPO_URL}/blob/v{v}");
     let about = "devstack (https://github.com/nuetzliches/devstack) runs a local development stack from a devstack.toml in the repository root: containers from the Compose files, native services built in the background, a change goes live once it is healthy.";
-    let careful = "Ask me before running anything that deletes data, and before committing.";
+    let careful = "Ask me before running anything that deletes data, and before committing, naming the branch: the branch checked out may hold other work.";
     match *p {
         Prompt::Setup { repo, drafted } => format!(
             "Set up devstack for the repository at {repo}.
@@ -287,6 +287,11 @@ mod tests {
     fn the_prompts_name_their_versions_and_references() {
         let p = all("boom");
         assert!(p[0].contains("Run `devstack init`"));
+        assert!(
+            p.iter()
+                .all(|q| q.contains("before committing, naming the branch")),
+            "every prompt asks before a commit, and on which branch"
+        );
         assert!(p[1].contains("A draft devstack.toml exists"));
         assert!(p[2].contains("```\nboom\n```"));
         assert!(p[3].contains("last brought up to date with devstack 0.1.0"));
