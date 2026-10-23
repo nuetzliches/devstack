@@ -401,13 +401,21 @@ impl Inner {
             .collect()
     }
 
+    /// Written next to it and renamed into place: the end of a lease writes
+    /// it while the lane's next lease may already read it (`admit`), and a
+    /// file read half-written made that lease start without its kept data.
     fn note_slot(&self, slot: &str, info: &SlotInfo) {
         let dir = self.slots().join(slot);
         let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::write(
-            dir.join("slot.json"),
-            serde_json::to_vec_pretty(info).unwrap_or_default(),
-        );
+        let tmp = dir.join(format!(
+            "slot.json.{}.tmp",
+            crate::coordinator::random_hex(4)
+        ));
+        let written = std::fs::write(&tmp, serde_json::to_vec_pretty(info).unwrap_or_default())
+            .and_then(|_| std::fs::rename(&tmp, dir.join("slot.json")));
+        if written.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
     }
 
     /// A lane kept in `slot`, run as nothing: to remove it.
