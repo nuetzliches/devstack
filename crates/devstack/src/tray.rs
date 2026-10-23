@@ -196,11 +196,11 @@ fn stack_menu(s: &Value) -> Entry {
     let state = s["state"].as_str().unwrap_or("");
     let running = s["running"] == true;
     let (mark, said) = match state {
-        "ok" => ("●", "running"),
-        "attention" => ("▲", "needs attention"),
-        "starting" => ("◌", "starting"),
-        "stopping" => ("◌", "stopping"),
-        _ => ("○", "stopped"),
+        "ok" => (Tone::Ok, "running"),
+        "attention" => (Tone::Attention, "needs attention"),
+        "starting" => (Tone::Busy, "starting"),
+        "stopping" => (Tone::Busy, "stopping"),
+        _ => (Tone::Idle, "stopped"),
     };
     let mut children = Vec::new();
     if running {
@@ -247,7 +247,8 @@ fn stack_menu(s: &Value) -> Entry {
     }
     children.push(action("Open Folder", format!("folder:{id}"), true));
     Entry::Submenu {
-        label: format!("{mark} {name}: {said}"),
+        label: format!("{name}: {said}"),
+        mark: Some(mark),
         entries: children,
     }
 }

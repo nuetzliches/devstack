@@ -101,6 +101,22 @@ pub fn rgba(size: u32, tone: Tone) -> Vec<u8> {
             1.0,
         ),
     ];
+    paint(size, &shapes)
+}
+
+/// A state's dot alone, `size`×`size` RGBA with straight alpha: the mark
+/// before a stack in the menu where the platform shows images (Windows).
+pub fn dot(size: u32, tone: Tone) -> Vec<u8> {
+    let shape = Shape::Dot {
+        x: 256.0,
+        y: 256.0,
+        r: 150.0,
+    };
+    paint(size, &[(shape, colour(tone), 1.0)])
+}
+
+/// The shapes, each over the last, sampled 4×4 per pixel.
+fn paint(size: u32, shapes: &[(Shape, [u8; 3], f32)]) -> Vec<u8> {
     const SAMPLES: u32 = 4;
     let unit = 512.0 / size as f32;
     let mut out = Vec::with_capacity((size * size * 4) as usize);
@@ -114,7 +130,7 @@ pub fn rgba(size: u32, tone: Tone) -> Vec<u8> {
                     let y = (py as f32 + (sy as f32 + 0.5) / SAMPLES as f32) * unit;
                     let mut c = [0.0f32; 3];
                     let mut alpha = 0.0f32;
-                    for (shape, col, op) in &shapes {
+                    for (shape, col, op) in shapes {
                         if shape.inside(x, y) {
                             let k = *op;
                             for (ci, &cc) in c.iter_mut().zip(col) {
@@ -153,6 +169,19 @@ mod tests {
     fn pixel(img: &[u8], size: u32, x: u32, y: u32) -> [u8; 4] {
         let i = ((y * size + x) * 4) as usize;
         [img[i], img[i + 1], img[i + 2], img[i + 3]]
+    }
+
+    #[test]
+    fn a_menu_dot_is_round_and_every_tone_the_same_size() {
+        let size = 16;
+        let opaque = |t: Tone| dot(size, t).chunks(4).filter(|p| p[3] > 127).count();
+        let ok = dot(size, Tone::Ok);
+        assert_eq!(pixel(&ok, size, 8, 8), [0x3e, 0xcf, 0x8e, 255]);
+        assert_eq!(pixel(&ok, size, 0, 0)[3], 0, "a corner is clear");
+        let n = opaque(Tone::Ok);
+        for t in [Tone::Idle, Tone::Busy, Tone::Attention] {
+            assert_eq!(opaque(t), n, "{t:?}");
+        }
     }
 
     #[test]

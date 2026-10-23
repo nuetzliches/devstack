@@ -204,9 +204,10 @@ fn tree(entries: &[Entry], next: &mut i32) -> Vec<Node> {
                 }
                 Entry::Submenu {
                     label: text,
+                    mark,
                     entries,
                 } => {
-                    props.insert("label".into(), label(text));
+                    props.insert("label".into(), label(&super::marked(text, *mark)));
                     props.insert("children-display".into(), owned("submenu"));
                     children = tree(entries, next);
                 }
@@ -517,6 +518,7 @@ mod tests {
                 Entry::Separator,
                 Entry::Submenu {
                     label: "shop_app".into(),
+                    mark: None,
                     entries: vec![Entry::Action {
                         label: "Stop".into(),
                         id: "stop:ab12".into(),
