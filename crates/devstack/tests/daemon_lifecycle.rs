@@ -1698,6 +1698,103 @@ fn an_edit_while_exited_follows_the_restart() {
     s.ok(&["down"]);
 }
 
+/// `restart_on` naming a bare folder restarts a dev server for a file created,
+/// saved or deleted in it, within the debounce, and the daemon log says for
+/// which path and when the change was seen (#221: on Windows the restart came
+/// seconds to minutes late, with whatever reported the folder itself). What
+/// Python compiles next to the sources (`__pycache__`) restarts nothing.
+#[test]
+fn restart_on_a_folder_restarts_for_each_file_in_it() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    let server = s.dir.path().join("src/server");
+    std::fs::create_dir_all(server.join("__pycache__")).unwrap();
+    std::fs::write(
+        s.file(),
+        format!(
+            "version = 1\n[stack]\nname = \"restarts\"\n[services.dev]\nkind = \"devserver\"\nrun = \"{}\"\nrestart_on = [\"src/server\"]\n",
+            runs_for(600)
+        ),
+    )
+    .unwrap();
+    s.ok(&["up"]);
+    let fired = || {
+        s.daemon_log()
+            .lines()
+            .filter(|l| l.contains("\"event\":\"restart_on\""))
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let probe = server.join("probe.txt");
+    let steps: [(&str, &dyn Fn()); 3] = [
+        ("created", &|| std::fs::write(&probe, "probe 1\n").unwrap()),
+        ("saved", &|| {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&probe)
+                .unwrap();
+            f.write_all(b"probe 2\n").unwrap();
+        }),
+        ("deleted", &|| std::fs::remove_file(&probe).unwrap()),
+    ];
+    // Running again, as a new process (a restart stops the old one first).
+    let pid = || s.service_view("dev")["pid"].as_u64();
+    let up = |old: Option<u64>| {
+        wait_for(
+            || s.state("dev") == "running" && pid().is_some() && pid() != old,
+            Duration::from_secs(60),
+        )
+    };
+    let mut old = None;
+    for (what, step) in steps {
+        assert!(up(old), "{}", s.diag());
+        old = pid();
+        let before = fired().len();
+        let at = Instant::now();
+        step();
+        assert!(
+            wait_for(|| fired().len() > before, Duration::from_secs(10)),
+            "a file {what} in the folder restarted the dev server within the debounce\n{}",
+            s.diag()
+        );
+        let took = at.elapsed();
+        let line: Value = serde_json::from_str(&fired()[before]).unwrap();
+        assert_eq!(line["service"], "dev", "{line}");
+        // With the folder itself, when the OS reports it as well.
+        let paths = line["paths"].as_array().unwrap();
+        assert!(paths.contains(&"src/server/probe.txt".into()), "{line}");
+        assert!(line["first_change"].is_string(), "{line}");
+        let waited = line["waited_ms"].as_u64().unwrap();
+        assert!(
+            (1900..6000).contains(&waited),
+            "fired one debounce after the change was seen ({what}, after {took:?}): {line}"
+        );
+    }
+    // A change while that restart still stops or starts the dev server is
+    // not dropped: it restarts it once more when it is up.
+    std::fs::write(server.join("during.txt"), "x").unwrap();
+    assert!(
+        wait_for(
+            || fired()
+                .iter()
+                .any(|l| l.contains("\"src/server/during.txt\"")),
+            Duration::from_secs(60)
+        ),
+        "a change during a restart restarted it again\n{}",
+        s.diag()
+    );
+    assert!(up(old), "{}", s.diag());
+    let before = fired().len();
+    std::fs::write(server.join("__pycache__/app.cpython-313.pyc"), "x").unwrap();
+    std::thread::sleep(Duration::from_secs(4));
+    assert_eq!(fired().len(), before, "a compiled module restarts nothing");
+    s.ok(&["down"]);
+}
+
 /// A `stop` while a candidate's migrator runs: the service stays stopped,
 /// the candidate does not start it again (ADR-0003).
 #[test]

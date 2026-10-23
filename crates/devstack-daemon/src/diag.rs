@@ -308,7 +308,8 @@ pub fn rotated(path: &Path) -> PathBuf {
     PathBuf::from(p)
 }
 
-fn now() -> String {
+/// The local time as a line's `at` writes it.
+pub(crate) fn now() -> String {
     jiff::Zoned::now()
         .strftime("%Y-%m-%dT%H:%M:%S%.3f%:z")
         .to_string()
