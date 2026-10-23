@@ -57,7 +57,7 @@ stay.
 | [0006](0006-dashboard-vue-same-origin.md) | The dashboard is a Vue 3 SPA served same-origin by the daemon | Accepted; who serves it replaced by ADR-0021 (the hub) |
 | [0007](0007-one-http-api-is-the-control-surface.md) | One HTTP API is the control surface; CLI, MCP and dashboard are its clients | Accepted |
 | [0008](0008-background-workers-run-only-in-the-active-slot.md) | Background workers run only in the active slot | Accepted |
-| [0009](0009-the-daemon-owns-every-process-tree.md) | The daemon owns every process tree it starts | Accepted |
+| [0009](0009-the-daemon-owns-every-process-tree.md) | The daemon owns every process tree it starts | Accepted; what a service starts outside its tree is ended by its `stop` command, ADR-0059 (Proposed) |
 | [0010](0010-promotion-mechanism.md) | Promotion mechanism: restart on the fixed port or switch a reverse proxy | Accepted (option B, the reverse proxy; measured) |
 | [0011](0011-platform-windows-native-first.md) | Windows-native first; WSL is decided by measurement | Accepted; macOS added as a preview by ADR-0054 |
 | [0012](0012-shared-infrastructure-between-lanes.md) | Which infrastructure may be shared between lanes | Decided by ADR-0030 |
@@ -107,3 +107,4 @@ stay.
 | [0056](0056-a-lane-on-a-node-relays-its-udp-ports-through-a-tunnel-per-session.md) | A lane on a node relays its UDP ports, a tunnel per client, a datagram per frame | Accepted |
 | [0057](0057-a-port-a-container-announces-moves-inside-it-too.md) | A port a container announces moves inside the container too, and Compose is told its number | Accepted |
 | [0058](0058-a-profile-can-leave-out-containers-and-services.md) | A profile can leave out containers, whole Compose groups and services | Accepted |
+| [0059](0059-a-services-stop-command-ends-what-its-run-started.md) | A service's `stop` command ends what its `run` started outside its process tree | Proposed |

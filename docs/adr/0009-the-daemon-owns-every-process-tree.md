@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
 - **Deciders:** project owner
-- **Related:** [ADR-0005](0005-rust-for-daemon-and-cli.md), plan phase 0 spike (a)
+- **Related:** [ADR-0005](0005-rust-for-daemon-and-cli.md), plan phase 0 spike (a), [ADR-0059](0059-a-services-stop-command-ends-what-its-run-started.md) (Proposed: a service's `stop` command ends what its process started outside the tree, a container say)
 
 ## Context
 
