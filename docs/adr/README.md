@@ -103,4 +103,4 @@ stay.
 | [0052](0052-a-restart-carries-the-lanes-over.md) | A restart of the stack carries its lanes over to the next daemon | Accepted |
 | [0053](0053-whoever-a-lane-is-shared-with-connects-to-it.md) | Whoever a lane is shared with connects to it, and disconnects again | Accepted |
 | [0054](0054-macos-is-a-developer-platform-in-preview.md) | macOS is a developer platform in preview, installed by Homebrew, checked by CI and by its testers | Accepted |
-| [0055](0055-a-lane-without-a-stack-file-says-so-and-can-be-given-one.md) | A lane whose branch has no stack file runs with the main tree's, says so, and can be given one | Proposed |
+| [0055](0055-a-lane-without-a-stack-file-says-so-and-can-be-given-one.md) | A lane whose branch has no stack file runs with the main tree's, says so, and can be given one | Accepted |
