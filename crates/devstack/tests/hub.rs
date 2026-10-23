@@ -35,8 +35,14 @@ fn start() -> Hub {
 }
 
 fn start_in(home: tempfile::TempDir, port: u16) -> Hub {
+    start_env(home, port, &[])
+}
+
+/// A hub as [`start_in`] starts it, with `extra` in its environment.
+fn start_env(home: tempfile::TempDir, port: u16, extra: &[(&str, std::ffi::OsString)]) -> Hub {
     let child = Command::new(BIN)
         .arg("hub")
+        .envs(extra.iter().map(|(k, v)| (k, v)))
         .env("DEVSTACK_HUB_PORT", port.to_string())
         .env("LOCALAPPDATA", home.path())
         .env("XDG_STATE_HOME", home.path())
@@ -393,6 +399,34 @@ fn ping_is_public_but_tells_only_the_landing_page() {
     let proof = v["proof"].as_str().expect("a proof");
     assert_eq!(proof.len(), 64);
     assert!(!body.contains(&token(&h)));
+}
+
+/// A hub whose port takes a connection answers it: its setup before (a first
+/// `docker version` slow on a busy machine, up to 5 s) is over by then. Bound
+/// first, it took connections it did not answer for seconds, and the CLI,
+/// which waits 3 s for `/hub/ping`, said another user's program had the port.
+#[cfg(unix)]
+#[test]
+fn a_hub_answers_once_its_port_takes_connections() {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = tempfile::tempdir().unwrap();
+    let docker = bin.path().join("docker");
+    std::fs::write(&docker, "#!/bin/sh\nsleep 4\n").unwrap();
+    std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut path = std::ffi::OsString::from(bin.path());
+    path.push(":");
+    path.push(std::env::var_os("PATH").unwrap_or_default());
+    let h = start_env(tempfile::tempdir().unwrap(), free_port(), &[("PATH", path)]);
+    let out = Command::new(BIN)
+        .args(["hub", "status"])
+        .env("DEVSTACK_HUB_PORT", h.port.to_string())
+        .env("LOCALAPPDATA", h.home.path())
+        .env("XDG_STATE_HOME", h.home.path())
+        .env("DEVSTACK_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("hub running"), "{text}");
 }
 
 /// H-3: the CLI sends the token only to a hub that proves it knows it. A

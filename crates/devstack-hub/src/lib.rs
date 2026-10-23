@@ -355,22 +355,6 @@ pub fn serve() -> Result<(), String> {
     let token = devstack_daemon::token::load_or_create().map_err(|e| format!("token: {e}"))?;
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     rt.block_on(async move {
-        let v4 = tokio::net::TcpListener::bind(("127.0.0.1", port))
-            .await
-            .map_err(|e| format!("port {port}: {e}"))?;
-        let v6 = tokio::net::TcpListener::bind(("::1", port)).await.ok();
-        let info = HubInfo {
-            pid: std::process::id(),
-            port,
-            version: VERSION.into(),
-            started: now_ms(),
-        };
-        std::fs::write(
-            dir.join("hub.json"),
-            serde_json::to_vec_pretty(&info).unwrap(),
-        )
-        .map_err(|e| e.to_string())?;
-
         let (tx, rx) = watch::channel(Vec::new());
         let start_errors: StartErrors = Arc::default();
         let errors = start_errors.clone();
@@ -428,6 +412,25 @@ pub fn serve() -> Result<(), String> {
             shutdown: shutdown.clone(),
             notify,
         };
+        // The port last: what accepts a connection answers it. Bound before
+        // the setup above (a first `docker version` alone may take 5 s), the
+        // port took connections it did not answer, and the CLI, which asks
+        // `/hub/ping` for 3 s, took this hub for another user's program.
+        let v4 = tokio::net::TcpListener::bind(("127.0.0.1", port))
+            .await
+            .map_err(|e| format!("port {port}: {e}"))?;
+        let v6 = tokio::net::TcpListener::bind(("::1", port)).await.ok();
+        let info = HubInfo {
+            pid: std::process::id(),
+            port,
+            version: VERSION.into(),
+            started: now_ms(),
+        };
+        std::fs::write(
+            dir.join("hub.json"),
+            serde_json::to_vec_pretty(&info).unwrap(),
+        )
+        .map_err(|e| e.to_string())?;
         notify::start(state.clone());
         let app = router(state);
         if let Some(v6) = v6 {

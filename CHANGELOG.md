@@ -25,6 +25,17 @@ and listed with their assets on the
   header names each service's port here and one that is not the owner's.
   A lane no longer shared with this machine is disconnected.
 
+### Fixed
+
+- **A hub that is still starting is no longer taken for another user's
+  program.** The hub bound its port before its setup, of which a first
+  `docker version` alone may take 5 s on a busy machine or while Docker
+  Desktop starts; the port took connections it did not answer, and a CLI
+  command in that time (`devstack ui`, `devstack hub status`, `devstack
+  open`), which waits 3 s for the hub's answer, said "port … answers, but
+  not as a devstack hub of this user" and gave up. The hub now binds its
+  port last: what accepts a connection answers it.
+
 ## [0.19.0] - 2026-10-22
 
 A restart of the stack carries its lanes over to the next daemon
