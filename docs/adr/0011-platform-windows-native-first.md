@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
 - **Deciders:** project owner
-- **Related:** plan phase 0 spike (d)
+- **Related:** plan phase 0 spike (d); macOS added as a preview by [ADR-0054](0054-macos-is-a-developer-platform-in-preview.md)
 
 ## Context
 
