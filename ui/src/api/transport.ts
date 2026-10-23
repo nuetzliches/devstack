@@ -73,6 +73,7 @@ export const paths = {
   worktreeStackFile: (stack: string) => `/hub/stacks/${enc(stack)}/worktrees/stack-file`,
   fetch: (stack: string) => `/hub/stacks/${enc(stack)}/fetch`,
   skills: (stack: string) => `/hub/stacks/${enc(stack)}/skills`,
+  upgrade: (stack: string) => `/hub/stacks/${enc(stack)}/upgrade`,
   pool: '/hub/pool',
   pools: '/hub/pools',
   poolShared: '/hub/pool/shared',

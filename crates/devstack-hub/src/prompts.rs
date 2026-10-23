@@ -20,11 +20,14 @@ pub enum Prompt<'a> {
         file: &'a Path,
         error: &'a str,
     },
-    /// A repository set up with an older devstack (its agent skills say).
+    /// A stack file last brought up to date with an older devstack
+    /// (`[stack] reviewed`, or the agent skills' version without it).
     Upgrade {
         repo: &'a Path,
         file: &'a Path,
         from: Option<&'a str>,
+        /// `from` is `[stack] reviewed`, not the skills' guess.
+        reviewed: bool,
         current: &'a str,
     },
     /// A lane's worktree without a stack file of its own, which runs with
@@ -87,18 +90,33 @@ pub fn text(p: &Prompt) -> String {
             repo,
             file,
             from,
+            reviewed,
             current,
         } => {
-            let since = from.map_or_else(
-                || "an earlier devstack".to_string(),
-                |f| format!("devstack {f}"),
-            );
+            let since = match from {
+                Some(f) if reviewed => format!(
+                    "Its stack file was last brought up to date with devstack {f} (`reviewed` in `[stack]`)."
+                ),
+                Some(f) => format!(
+                    "It was set up with devstack {f} (the version its generated agent skills name; the stack file does not say)."
+                ),
+                None => "It was set up with an earlier devstack.".to_string(),
+            };
             let changes = match from {
                 Some(f) => format!("the sections after {f}, up to {current}, in {at}/CHANGELOG.md"),
                 None => format!("the newest sections of {at}/CHANGELOG.md"),
             };
+            // A file without the key gets it now: an older devstack fails on it.
+            let requires = if reviewed {
+                String::new()
+            } else {
+                format!(
+                    " A devstack before {v} does not know the key: raise `requires` to at least \"{v}\" too.",
+                    v = devstack_config::REVIEWED_SINCE
+                )
+            };
             format!(
-                "Bring the devstack setup of the repository at {repo} up to devstack {current}. It was last set up with {since} (the version its generated agent skills name).
+                "Bring the devstack setup of the repository at {repo} up to devstack {current}. {since}
 
 {about}
 
@@ -106,8 +124,9 @@ pub fn text(p: &Prompt) -> String {
 2. Hold {file} against the stack file reference of {current}: {at}/docs/stack-file.md
 3. Run `devstack check` (and `devstack check --compose`) and `devstack doctor`, and fix every error and warning.
 4. Tell me which new features would help this stack, and add only those I agree to. Raise `[stack] requires` only when the file uses something an older devstack does not know: it shuts out everyone still on one.
-5. Run `devstack skills install` to refresh the generated skills. Check the project's own skills, CLAUDE.md and AGENTS.md for anything that contradicts devstack {current}.
-6. Restart the stack (`devstack down`, then `devstack up`) and check that every service becomes healthy. {careful}",
+5. Set `reviewed = \"{current}\"` in `[stack]`: the stack file is up to date with devstack {current} then, and the dashboard stops offering this.{requires}
+6. Run `devstack skills install` to refresh the generated skills. Check the project's own skills, CLAUDE.md and AGENTS.md for anything that contradicts devstack {current}.
+7. Restart the stack (`devstack down`, then `devstack up`) and check that every service becomes healthy. {careful}",
                 repo = display(repo),
                 file = display(file),
             )
@@ -203,12 +222,21 @@ mod tests {
                 repo,
                 file,
                 from: Some("0.1.0"),
+                reviewed: true,
                 current: "0.2.0",
             }),
             text(&Prompt::Upgrade {
                 repo,
                 file,
                 from: None,
+                reviewed: false,
+                current: "0.2.0",
+            }),
+            text(&Prompt::Upgrade {
+                repo,
+                file,
+                from: Some("0.1.0"),
+                reviewed: false,
                 current: "0.2.0",
             }),
             text(&Prompt::StartFailed {
@@ -261,12 +289,20 @@ mod tests {
         assert!(p[0].contains("Run `devstack init`"));
         assert!(p[1].contains("A draft devstack.toml exists"));
         assert!(p[2].contains("```\nboom\n```"));
-        assert!(p[3].contains("last set up with devstack 0.1.0"));
+        assert!(p[3].contains("last brought up to date with devstack 0.1.0"));
         assert!(p[3].contains("the sections after 0.1.0, up to 0.2.0"));
+        assert!(p[3].contains("Set `reviewed = \"0.2.0\"`"));
+        assert!(!p[3].contains("raise `requires`"), "the file has the key");
         assert!(p[4].contains("an earlier devstack"));
-        assert!(p[5].contains("up-x.log"));
-        assert!(p[6].contains("feat-x (branch feat/x) has no devstack stack file"));
-        assert!(p[6].contains("devstack.toml, which may not fit this branch"));
+        assert!(p[5].contains("its generated agent skills name"));
+        let since = format!(
+            "raise `requires` to at least \"{}\"",
+            devstack_config::REVIEWED_SINCE
+        );
+        assert!(p[4].contains(&since) && p[5].contains(&since));
+        assert!(p[6].contains("up-x.log"));
+        assert!(p[7].contains("feat-x (branch feat/x) has no devstack stack file"));
+        assert!(p[7].contains("devstack.toml, which may not fit this branch"));
         let reference = format!(
             "{REPO_URL}/blob/v{}/docs/stack-file.md",
             devstack_config::VERSION

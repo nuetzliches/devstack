@@ -6,7 +6,7 @@
 //   ?mock=configchanged  the shop stack's file changed since it started
 //   ?mock=newer      a newer release (0.5.0) is out
 //   ?mock=hubtrouble the hub's last release check failed, and devstack's name is not registered for notifications
-//   ?mock=skills     shop was set up with an older devstack, crm's agent skills miss a stack file change
+//   ?mock=skills     shop's stack file and agent skills are from an older devstack, crm's skills miss a stack file change
 //   ?mock=startfailed  the docs stack's last start from the dashboard failed
 //   Add a stack with a path containing "broken": a stack file that does not load
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
@@ -84,6 +84,8 @@ class MockHub {
   laneNotices = false;
   /** The agent skills in each stack's repository: the devstack that wrote them, and whether they differ from what it would write now. */
   skills: Record<string, { from: string; outdated: boolean }> = {};
+  /** `[stack] reviewed` of each stack's file (`null`: not set; not listed: this devstack). */
+  reviewed: Record<string, string | null> = {};
   pool = new MockPool(new URLSearchParams(location.search).get('mock') ?? '');
   private streams = new Set<{ reconnect(): void }>();
 
@@ -116,6 +118,7 @@ class MockHub {
     if (q.includes('configchanged')) shop.view.config_changed = true;
     if (q.includes('startfailed')) docs.entry.start_error = 'Error: port 4000 (site) is taken by another process (node.exe, pid 4242)\n  devstack doctor names it; stop it or change the port in devstack.toml';
     // `?mock=skills`: shop was set up with an older devstack, crm's stack file changed since.
+    if (q.includes('skills')) this.reviewed[shop.entry.id] = null;
     this.skills[shop.entry.id] = q.includes('skills') ? { from: '0.1.4', outdated: true } : { from: MOCK_VERSION, outdated: false };
     this.skills[crm.entry.id] = { from: MOCK_VERSION, outdated: q.includes('skills') };
     if (q.includes('notices')) {
@@ -559,6 +562,13 @@ export class MockTransport implements Transport {
       const k = hub.skills[stack.entry.id];
       const names = ['devstack', 'devstack-config'];
       return json(200, { found: k ? names : [], outdated: k?.outdated ? names : [], from: k?.from ?? null, current: MOCK_VERSION, ahead: false, ...(method === 'POST' ? { kept: [] } : {}) });
+    }
+    if (rest === '/upgrade' && method === 'GET') {
+      const r = hub.reviewed[stack.entry.id];
+      const reviewed = r === undefined ? MOCK_VERSION : r;
+      const k = hub.skills[stack.entry.id];
+      const from = reviewed ?? (k && k.from !== MOCK_VERSION ? k.from : null);
+      return json(200, { reviewed, from, current: MOCK_VERSION, behind: reviewed !== MOCK_VERSION });
     }
     if (rest === '/up' && method === 'POST') {
       if (!stack.running) void stack.goUp();

@@ -41,6 +41,37 @@ fn a_malformed_requirement_is_a_validation_error() {
 }
 
 #[test]
+fn reviewed_is_a_version_and_wants_requires_at_its_first_devstack() {
+    use devstack_config::{REVIEWED_SINCE, validate::warnings};
+    let err = from_str(
+        &file(VERSION, "reviewed = \"lately\"\n"),
+        Path::new("devstack.toml"),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("stack.reviewed"), "{err}");
+
+    // A devstack before REVIEWED_SINCE would fail on the key itself.
+    let mut s = from_str(
+        &file("0.1.0", "reviewed = \"0.1.0\"\n"),
+        Path::new("devstack.toml"),
+    )
+    .unwrap();
+    assert_eq!(s.stack.reviewed.as_deref(), Some("0.1.0"));
+    let w = warnings(&s);
+    assert!(
+        w.iter()
+            .any(|i| i.path == "stack.reviewed" && i.message.contains(REVIEWED_SINCE)),
+        "{w:?}"
+    );
+    s.stack.requires = Some(REVIEWED_SINCE.into());
+    assert!(warnings(&s).is_empty());
+    s.stack.requires = None;
+    assert!(!warnings(&s).is_empty());
+    s.stack.reviewed = None;
+    assert!(warnings(&s).is_empty());
+}
+
+#[test]
 fn a_pre_release_comes_before_its_release() {
     use devstack_config::version_order;
     assert_eq!(version_triple("0.9.8-rc1"), Some((0, 9, 8)));

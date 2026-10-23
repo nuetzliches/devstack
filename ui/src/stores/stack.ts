@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref, shallowRef, triggerRef, watch } from 'vue';
 import { api, paths, sharedRef, v1, type GroupAction, type ServiceAction, type StreamState, type Subscription } from '@/api';
-import type { Branches, LaneView, Point, Pruned, Run, ServiceView, SkillsState, StackEvent, StackView, UsageReport } from '@/api/types';
+import type { Branches, LaneView, Point, Pruned, Run, ServiceView, SkillsState, StackEvent, StackView, UpgradeState, UsageReport } from '@/api/types';
 import { laneLabel, restartLanesText, restartPlan, samePath } from '@/lib/lanes';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
@@ -167,7 +167,9 @@ export const useStack = defineStore('stack', () => {
     goneLane.value = null;
     branches.value = null;
     skills.value = null;
+    upgrade.value = null;
     void loadSkills();
+    void loadUpgrade();
     persist.saveLastStack(next);
     lane.value = persist.get<string | null>(`lane.${next}`) ?? null;
     reset(next);
@@ -348,6 +350,21 @@ export const useStack = defineStore('stack', () => {
       if (r.ok && r.body && sid === id.value) skills.value = r.body;
     } finally {
       delete busy.value.skills;
+    }
+  }
+
+  /** How far the stack file is behind this devstack (`GET /hub/stacks/{id}/upgrade`): `[stack] reviewed`, not the skills. */
+  const upgrade = shallowRef<UpgradeState | null>(null);
+
+  async function loadUpgrade() {
+    const sid = id.value;
+    if (!sid || foreign.value) return;
+    try {
+      const res = await api().request<UpgradeState>('GET', paths.upgrade(sid));
+      const b = res.body;
+      if (sid === id.value && res.ok && b && typeof b === 'object' && typeof b.behind === 'boolean') upgrade.value = b;
+    } catch {
+      // nothing shown; the next visit asks again
     }
   }
 
@@ -986,6 +1003,8 @@ export const useStack = defineStore('stack', () => {
     skills,
     loadSkills,
     refreshSkills,
+    upgrade,
+    loadUpgrade,
     branches,
     loadBranches,
     fetchBranches,

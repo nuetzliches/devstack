@@ -37,6 +37,10 @@ pub enum LoadError {
 /// Version of this devstack.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The first devstack that knows `[stack] reviewed`: a file that sets it
+/// wants `requires` at least this.
+pub const REVIEWED_SINCE: &str = "0.20.0";
+
 /// `"1.2.3"`, `"v1.2"`, `"1"` as numbers; `None` when malformed. A
 /// pre-release or build suffix (`1.2.3-rc1`, `1.2.3+abc`) is ignored here;
 /// [`version_order`] takes it into account.

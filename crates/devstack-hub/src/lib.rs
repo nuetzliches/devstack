@@ -508,6 +508,7 @@ fn router(state: AppState) -> axum::Router {
             "/hub/stacks/{id}/skills",
             get(stack_skills).post(stack_skills_install),
         )
+        .route("/hub/stacks/{id}/upgrade", get(stack_upgrade))
         .route("/hub/stacks/{id}/api/{*rest}", any(forward))
         .route("/hub/pool", get(pool::overview))
         .route("/hub/pool/share", get(share::get))
@@ -1682,8 +1683,8 @@ async fn stack_fetch(State(s): State<AppState>, Path(id): Path<String>) -> Respo
 }
 
 /// The agent skills `devstack skills install` wrote into the stack's
-/// repository, held against what this devstack would write: the version they
-/// name is the one the repository was last set up with.
+/// repository, held against what this devstack would write, and the
+/// devstack that wrote them.
 fn skills_view(e: &StackEntry) -> serde_json::Value {
     let i = devstack_skills::installed(&e.file);
     let current = devstack_config::VERSION;
@@ -1698,6 +1699,59 @@ fn skills_view(e: &StackEntry) -> serde_json::Value {
         "current": current,
         "ahead": ahead,
     })
+}
+
+/// How far the stack file is behind this devstack (ADR-0046): apart from the
+/// agent skills, which a refresh brings up to date without the file.
+struct Upgrade {
+    /// `[stack] reviewed`.
+    reviewed: Option<String>,
+    /// The devstack to read the changes after: `reviewed`, or for a file
+    /// that predates the key the agent skills' version when it is older.
+    from: Option<String>,
+    /// `reviewed` is older than this devstack, or not set.
+    behind: bool,
+}
+
+/// [`Upgrade`] for a stack file; `None` when it does not load.
+fn upgrade_of(file: &std::path::Path) -> Option<Upgrade> {
+    let stack = devstack_config::load(file).ok()?;
+    let current = devstack_config::version_order(devstack_config::VERSION);
+    let older = |v: &str| devstack_config::version_order(v) < current;
+    let reviewed = stack.stack.reviewed;
+    let (from, behind) = match &reviewed {
+        Some(r) => (Some(r.clone()), older(r)),
+        None => (
+            devstack_skills::installed(file).from.filter(|f| older(f)),
+            true,
+        ),
+    };
+    Some(Upgrade {
+        reviewed,
+        from,
+        behind,
+    })
+}
+
+/// `GET /hub/stacks/{id}/upgrade`.
+async fn stack_upgrade(State(s): State<AppState>, Path(id): Path<String>) -> Response {
+    let Some(e) = entry(&s, &id) else {
+        return err(StatusCode::NOT_FOUND, "no such stack");
+    };
+    let view = tokio::task::spawn_blocking(move || {
+        let u = upgrade_of(&e.file);
+        serde_json::json!({
+            "reviewed": u.as_ref().and_then(|u| u.reviewed.clone()),
+            "from": u.as_ref().and_then(|u| u.from.clone()),
+            "current": devstack_config::VERSION,
+            "behind": u.is_some_and(|u| u.behind),
+        })
+    })
+    .await;
+    match view {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 /// `GET /hub/stacks/{id}/skills`.
@@ -1884,11 +1938,12 @@ fn write_prompt(s: &AppState, q: &PromptQuery) -> Result<Written, Refusal> {
         }
         "upgrade" => {
             let e = stack()?;
-            let i = devstack_skills::installed(&e.file);
+            let u = upgrade_of(&e.file);
             let text = prompts::text(&Prompt::Upgrade {
                 repo: &e.repo,
                 file: &e.file,
-                from: i.from.as_deref(),
+                from: u.as_ref().and_then(|u| u.from.as_deref()),
+                reviewed: u.as_ref().is_some_and(|u| u.reviewed.is_some()),
                 current: devstack_config::VERSION,
             });
             (text, e.repo, e.file)
@@ -3157,6 +3212,64 @@ mod guard_tests {
         strip_hop_by_hop(&mut h);
         assert_eq!(h.len(), 1, "{h:?}");
         assert!(h.contains_key("content-type"));
+    }
+
+    #[test]
+    fn the_upgrade_goes_by_reviewed_not_by_the_refreshed_skills() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("devstack.toml");
+        let write = |stack: &str| {
+            std::fs::write(
+                &file,
+                format!("version = 1\n[stack]\nname = \"t\"\n{stack}"),
+            )
+            .unwrap();
+        };
+        let version = devstack_config::VERSION;
+
+        // No `reviewed`, no skills: behind, from nothing known.
+        write("");
+        let u = upgrade_of(&file).unwrap();
+        assert!(u.behind && u.from.is_none() && u.reviewed.is_none());
+
+        // Skills an older devstack wrote name how far back.
+        let stack = devstack_config::load(&file).unwrap();
+        devstack_skills::install(&stack, &file, None, false).unwrap();
+        let skill = d.path().join(".claude/skills/devstack/SKILL.md");
+        let text = std::fs::read_to_string(&skill).unwrap();
+        std::fs::write(
+            &skill,
+            text.replace(
+                &format!("generated by devstack {version} "),
+                "generated by devstack 0.1.0 ",
+            ),
+        )
+        .unwrap();
+        assert_eq!(upgrade_of(&file).unwrap().from.as_deref(), Some("0.1.0"));
+
+        // Refreshed, they no longer say how far back; the file is still behind.
+        devstack_skills::install(&stack, &file, None, false).unwrap();
+        let u = upgrade_of(&file).unwrap();
+        assert!(u.behind && u.from.is_none());
+
+        write("reviewed = \"0.1.0\"\n");
+        let u = upgrade_of(&file).unwrap();
+        assert!(u.behind);
+        assert_eq!(u.from.as_deref(), Some("0.1.0"));
+
+        write(&format!("reviewed = \"{version}\"\n"));
+        let u = upgrade_of(&file).unwrap();
+        assert!(!u.behind);
+        assert_eq!(u.reviewed.as_deref(), Some(version));
+
+        write("reviewed = \"999.0.0\"\n");
+        assert!(
+            !upgrade_of(&file).unwrap().behind,
+            "a teammate's newer devstack"
+        );
+
+        write("reviewed = \"soon\"\n");
+        assert!(upgrade_of(&file).is_none(), "a file that does not load");
     }
 }
 

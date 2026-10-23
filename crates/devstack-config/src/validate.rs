@@ -267,6 +267,14 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
             format!("`{r}` is not a version like `0.1.0`"),
         );
     }
+    if let Some(r) = &stack.stack.reviewed
+        && crate::version_triple(r).is_none()
+    {
+        c.err(
+            "stack.reviewed",
+            format!("`{r}` is not a version like `0.20.0`"),
+        );
+    }
     for (i, f) in stack.stack.env_files.iter().enumerate() {
         c.repo_path(&format!("stack.env_files[{i}]"), f);
     }
@@ -885,13 +893,30 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
 const FIRST_LANES: u32 = 3;
 
 /// What a valid stack file may want changed (`devstack check` prints them):
-/// two services whose ports differ by one of the first few multiples of
-/// `[lanes] port_step`, so that one of the first lanes would run one of
-/// them on the other's port. The daemon skips such lane numbers, so lane 1
-/// is not on `port + port_step` as the file suggests.
+/// `[stack] reviewed` without the `requires` that keeps an older devstack
+/// from failing on it; two services whose ports differ by one of the first
+/// few multiples of `[lanes] port_step`, so that one of the first lanes
+/// would run one of them on the other's port. The daemon skips such lane
+/// numbers, so lane 1 is not on `port + port_step` as the file suggests.
 pub fn warnings(stack: &Stack) -> Vec<Issue> {
     let step = u32::from(stack.lanes.port_step);
     let mut out = Vec::new();
+    let since = crate::version_order(crate::REVIEWED_SINCE);
+    if stack.stack.reviewed.is_some()
+        && stack
+            .stack
+            .requires
+            .as_deref()
+            .is_none_or(|r| crate::version_order(r) < since)
+    {
+        out.push(Issue {
+            path: "stack.reviewed".into(),
+            message: format!(
+                "a devstack before {v} does not know this key and fails on it with \"unknown field\": `requires = \"{v}\"` makes it ask to be updated instead",
+                v = crate::REVIEWED_SINCE
+            ),
+        });
+    }
     if step == 0 {
         return out;
     }

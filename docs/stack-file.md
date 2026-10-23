@@ -28,7 +28,8 @@ version = 1
 
 [stack]
 name      = "shop"              # display name, prefix of the daemon's state
-requires  = "0.2.0"             # oldest devstack that can run this file
+requires  = "0.20.0"            # oldest devstack that can run this file
+reviewed  = "0.20.0"            # devstack this file was last brought up to date with
 env_files = [".env.defaults", ".env"]   # for ${VAR} everywhere; missing files are skipped
 ```
 
@@ -38,6 +39,15 @@ updated instead of failing on a key it does not know. Raise it when the file
 starts using something new. A pre-release devstack (`0.9.8-rc1`) counts as
 older than its release (`0.9.8`). Next comes `version`: a file of another
 schema version says so, not which of its keys is unknown.
+
+`reviewed` names the devstack the file was last brought up to date with:
+what changed since read, the file held against this reference. While it is
+older than the devstack installed, or not set, the dashboard offers a
+coding agent the upgrade, whose prompt sets it at the end; `devstack init`
+writes it. It is not the agent skills' version: refreshing them (`devstack
+skills install`) does not bring the file up to date. A devstack before
+0.20.0 does not know the key: `devstack check` warns while `requires` is
+lower than that.
 
 ### Names, paths, env files
 

@@ -248,13 +248,26 @@ export type GroupView = { name: string; label: string; order: number | null; mem
 export type SkillsState = {
   found: string[];
   outdated: string[];
-  /** The devstack they were written by: the one the repository was last set up with. */
+  /** The devstack that wrote them (the oldest, when they differ). */
   from: string | null;
   current: string;
   /** Written by a newer devstack than this one: refreshing would go back. */
   ahead: boolean;
   /** After `POST`: skills of the same name the project wrote itself, left alone. */
   kept?: string[];
+};
+
+/**
+ * `GET /hub/stacks/{id}/upgrade`: the devstack the stack file was last brought
+ * up to date with (`[stack] reviewed`), apart from the agent skills.
+ */
+export type UpgradeState = {
+  reviewed: string | null;
+  /** The devstack to read the changes after: `reviewed`, or for a file without it the agent skills' version when older. */
+  from: string | null;
+  current: string;
+  /** `reviewed` is older than this devstack, or not set; `false` for a file that does not load. */
+  behind: boolean;
 };
 
 export type CommandView = { name: string; description: string; confirm: string | null; requires: string[] };
