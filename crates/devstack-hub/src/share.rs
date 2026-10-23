@@ -364,6 +364,12 @@ mod tests {
                 max_memory: Some(4 << 30),
             },
             dedicated: false,
+            // Fixed, so that a busy machine running the test does not
+            // shrink the offer below what the lane needs.
+            free: Some(Amount {
+                cpus: 8.0,
+                memory: 8 << 30,
+            }),
         };
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
         let agent = std::thread::spawn(move || {
