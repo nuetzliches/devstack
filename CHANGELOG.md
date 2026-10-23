@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-23
+
+macOS as a developer platform in preview, installed with Homebrew on macOS
+and Linux, with arm64 Linux builds (ADR-0054). A lane on a node relays its
+UDP ports (ADR-0056); a port a container announces moves with its lane
+(ADR-0057); commands reach the tree's own containers
+(`{compose.<group>.project}`). A lane whose branch has no stack file says
+so (ADR-0055); whoever a lane is shared with connects to it (ADR-0053); the
+dashboard's upgrade goes by `[stack] reviewed`. Fixed: `restart_on` for the
+files in a folder, ports held on `0.0.0.0` on Windows, the hub and a node
+agent reporting over each other, a job run twice for one edit.
+
 ### Added
 
 - **macOS, in preview** (ADR-0054, #66): release builds for Apple Silicon
@@ -34,9 +46,46 @@ and listed with their assets on the
   the branch (the prompt `lane-file`). A stack file below the repository's
   root (`-f config/devstack.toml`) is now found in a lane at the same path,
   not only at the worktree's root.
+- **UDP ports of a lane on a node are relayed** (ADR-0056, #219). A
+  container port published as UDP (`53/udp`, a game's voice port) on a lane
+  running on a pool node now reaches `localhost:<port>` here like its TCP
+  ports. Each client gets a tunnel of its own through the node, which ends
+  after 60 s without a datagram; datagrams that arrive before the container
+  answers are lost, as on a network, and the client's next one tries again.
+  A node with a devstack before 0.20.0 relays no UDP: the lane's page and
+  `devstack lane list` name such ports as not forwarded and say why
+  (`not_forwarded_reason` in `GET /v1/lanes`). The main slot still moves TCP
+  ports only.
+- **A port a container announces moves with its lane** (ADR-0057, #222). A
+  server that tells its clients its own port (a WebRTC media server's ICE
+  candidates, a broker's advertised listeners) sent a lane's clients to the
+  main tree's server, since a lane moved only the host side of a published
+  port. Name such ports in the Compose group, `announced_ports =
+  ["media:7881", "media:7882/udp"]`, each published 1:1 (`7881:7881`): a
+  lane moves them inside the container too (`7981:7981`). Every `docker
+  compose` call of the group and every `exec` step of a command gets
+  `DEVSTACK_PORT_MEDIA_7881` with the number clients reach in this tree;
+  pass it to the server's listen and announce settings with the files' port
+  as default (`${DEVSTACK_PORT_MEDIA_7881:-7881}`), so the files still run
+  without devstack. `{compose.app.media.7881.port}` is `7981` in the first
+  lane; a lane on a node works the same. `devstack check` rejects entries
+  not published 1:1 and warns about variables misspelt, unused or read
+  without a default. A file that uses the key needs `requires = "0.20.0"`.
+- **`{compose.<group>.project}`: a Compose group's project as this tree
+  runs it** (#222): `<project>` in the main working tree, `<project>-<lane>`
+  in a lane. `docker compose -p {compose.app.project} exec -T db ...` in a
+  command acts on the lane's own database in a lane; with the project name
+  written out it acted on the main tree's. The reference's `reset-db`
+  example uses it now. `devstack check` warns about a dev server whose
+  folder has a `package.json` and no `prepare`.
 
 ### Changed
 
+- **`devstack status` lists Compose containers apart from services**
+  (#184): containers have their own `CONTAINER` / `STATE` / `PORTS` table,
+  by group; the `SERVICE` table shows only when the stack has
+  `[services.*]` entries, which is what "service" means in the stack file
+  and in "main ports".
 - **The dashboard's upgrade goes by the stack file, `[stack] reviewed`, not
   by the agent skills** (ADR-0046 amended). "Refresh skills" rewrote the
   version the skills name, and the banner that offered a coding agent the
@@ -74,6 +123,51 @@ and listed with their assets on the
 
 ### Fixed
 
+- **`restart_on` restarts a dev server for every file in a folder it
+  names, and says why** (#221). `restart_on = ["src/api"]` matched only the
+  folder's own path, so a file created, saved or deleted in it restarted
+  nothing until the OS happened to report the folder itself: on Windows
+  seconds to minutes later, on Linux never. A folder in `restart_on` (dev
+  servers and Compose services) now covers what it holds, as `src/api/**`
+  does, and the restart follows within the 2 s debounce. A change made while
+  the dev server starts or restarts restarts it once more when it is up;
+  Python's caches (`__pycache__`, `.pytest_cache`, `.mypy_cache`,
+  `.ruff_cache`) never count. The daemon log has a `restart_on` line per
+  restart with the paths, when the first changed and how long it waited.
+- **On Windows, a port another program holds on every address counts as
+  taken** (#226). A dev server on `0.0.0.0` or a port Docker Desktop
+  publishes held the port unnoticed: Windows lets a bind on `127.0.0.1`
+  succeed beside it, and the service devstack started then failed with
+  "address in use". devstack reads the system's table of listeners (well
+  under a millisecond, no port opened, no firewall prompt).
+- **The hub and a node agent on the same machine no longer report over each
+  other** (#170). Both reported to the coordinator as the same member; after
+  each of the hub's reports the machine showed no node agent and its leases
+  came back new, without their sharing. The agent holds `node/lock` while it
+  runs, the hub does not report for that pool then (`agent` in `GET
+  /hub/pool/share`), and a second agent of the same member is refused.
+- **Lanes: commands and dev servers** (#222). A command's `start`, `stop` or
+  `restart` step on a `lanes = false` service is skipped in a lane, with a
+  line in the run's log, instead of failing the command. When the installed
+  devstack is new enough but the main tree's daemon is older, a stack file
+  that needs the new one says to restart that daemon ("Restart stack"), not
+  to update devstack. A dev server without `prepare` that ends in a lane
+  before it is ready says the lane's copy has no `node_modules`. The
+  reference adds that `{port}` in a dev server's `env` works in a lane, and
+  covers cookies shared across ports on `localhost` and Origin checks.
+- **One edit makes one candidate per service, at the same moment** (#233).
+  The watcher reports a change more than once (macOS above all), and a
+  service could start building 200 ms after another for the same edit: two
+  services after the same job then ran the job twice. A change reported
+  while `devstack restart` of its service is still under way waits for it,
+  and is dropped when the restart built it already.
+- **A lane on a node keeps its data across a quick release and lease**: the
+  node wrote `slot.json` in place, and the next lease could read it half
+  written and start fresh. It is written whole now.
+- **The overview's usage card names the lane shown**: for a lane on a node
+  it said "Lane main" (the lane's own daemon there calls its tree `main`).
+  CPU reads with one decimal up to 100% (4.5% next to 23.0%), whole numbers
+  above.
 - **A hub that is still starting is no longer taken for another user's
   program.** The hub bound its port before its setup, of which a first
   `docker version` alone may take 5 s on a busy machine or while Docker
@@ -1373,7 +1467,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/nuetzliches/devstack/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/nuetzliches/devstack/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/nuetzliches/devstack/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/nuetzliches/devstack/compare/v0.16.0...v0.17.0

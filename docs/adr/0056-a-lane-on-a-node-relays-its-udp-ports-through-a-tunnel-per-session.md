@@ -1,6 +1,6 @@
 # ADR-0056: A lane on a node relays its UDP ports, a tunnel per client, a datagram per frame
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-23)
 - **Date:** 2026-10-23
 - **Deciders:** project owner
 - **Related:** [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) (point 4 extended to UDP here), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0048](0048-a-containers-main-port-can-move-with-the-main-slot.md) (point 6: the main slot moves TCP only), [ADR-0052](0052-a-restart-carries-the-lanes-over.md), [ADR-0053](0053-whoever-a-lane-is-shared-with-connects-to-it.md), [#192](https://github.com/nuetzliches/devstack/issues/192), [#219](https://github.com/nuetzliches/devstack/issues/219)
