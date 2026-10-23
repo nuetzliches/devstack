@@ -28,6 +28,9 @@ and listed with their assets on the
   taking it down, the second lease's end marked the slot free too early: a
   purge then removed it, and the first end wrote it back. The node counts
   what keeps a slot busy now.
+- **The tray's menu on Windows follows dark mode.** It was light with the
+  system's apps set to dark. It takes the mode of apps now, and follows a
+  change while it runs; before Windows 10 1809 it stays light.
 
 ## [0.21.0] - 2026-10-23
 
