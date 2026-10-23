@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **What the tray opens comes to the front on Wayland**, where the
+  browser lets it: the tray takes the activation token GNOME and KDE offer
+  with a click (`ProvideXdgActivationToken`) and hands it to the program
+  the click starts (`XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID`), once,
+  and only within ten seconds of the click. A dashboard opened in a browser
+  tab now comes forward instead of GNOME saying "… is ready". The installed
+  app already open in the background still gets that notice: Chromium
+  applies a handed-over token to new tabs only, not to an app window it
+  reuses. *Open Folder*, which the hub opens, is not covered yet.
+
 ## [0.22.0] - 2026-10-24
 
 The dashboard opens in its installed app (ADR-0061): with the dashboard

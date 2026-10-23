@@ -136,6 +136,12 @@ impl Item {
     fn secondary_activate(&self, _x: i32, _y: i32) {}
     fn context_menu(&self, _x: i32, _y: i32) {}
     fn scroll(&self, _delta: i32, _orientation: &str) {}
+    /// The host's leave for the window the click it sends next opens to
+    /// come to the front (GNOME's AppIndicator extension, KDE): kept for
+    /// that launch.
+    fn provide_xdg_activation_token(&self, token: String) {
+        crate::activation::provide(token);
+    }
 
     #[zbus(signal)]
     async fn new_icon(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;

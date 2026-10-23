@@ -14,6 +14,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+pub mod activation;
 pub mod channel;
 // The macOS module's text, built and tested everywhere.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
