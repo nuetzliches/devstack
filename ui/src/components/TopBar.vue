@@ -55,8 +55,21 @@ const mismatch = computed(() => {
 </script>
 
 <template>
-  <header class="topbar">
+  <header class="topbar" :class="{ 'side-open': ui.sidebarOpen }">
     <div class="topbar-inner">
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm btn-icon side-toggle"
+        :aria-expanded="ui.sidebarShown"
+        aria-controls="sidebar"
+        :title="`${ui.sidebarShown ? 'Hide' : 'Show'} the sidebar (Ctrl+B)`"
+        :aria-label="`${ui.sidebarShown ? 'Hide' : 'Show'} the sidebar`"
+        aria-keyshortcuts="Control+B Meta+B"
+        data-testid="sidebar-toggle"
+        @click="ui.toggleSidebar()"
+      >
+        <Icon name="panelLeft" />
+      </button>
       <RouterLink to="/" class="brand" aria-label="devstack home">
         <svg width="22" height="22" viewBox="0 0 512 512" aria-hidden="true">
           <rect width="512" height="512" rx="112" fill="#0f1115" stroke="var(--border-strong)" stroke-width="16" />
@@ -159,9 +172,9 @@ const mismatch = computed(() => {
   margin-left: 4px;
   font-family: inherit;
 }
-/* The sidebar lists the stacks on a wide screen (App.vue). */
+/* The sidebar lists the stacks on a wide screen, unless hidden (App.vue). */
 @media (min-width: 1000px) {
-  .switcher-narrow {
+  .side-open .switcher-narrow {
     display: none;
   }
 }
@@ -188,6 +201,10 @@ const mismatch = computed(() => {
     padding: 0 var(--space-3);
     gap: 6px;
   }
+}
+.side-toggle {
+  margin-left: -6px;
+  flex: none;
 }
 .brand {
   display: inline-flex;

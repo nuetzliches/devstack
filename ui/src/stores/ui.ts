@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import { computed, ref, watchEffect } from 'vue';
+import { persist } from '@/lib/persist';
 
 export type ThemePref = 'system' | 'light' | 'dark';
 export type ToastKind = 'success' | 'error' | 'info' | 'warning';
@@ -20,6 +21,12 @@ export type ConfirmOption = { label: string; hint?: string; checked: boolean };
 export type ProblemRequest = { title: string; message: string; hint?: string };
 
 const THEME_KEY = 'devstack.theme';
+
+/** Below this width the sidebar is a drawer (keep in step with App.vue and TopBar.vue). */
+export const SIDEBAR_BREAKPOINT = 1000;
+export const SIDEBAR_DEFAULT = 248;
+export const SIDEBAR_MIN = 180;
+export const SIDEBAR_MAX = 520;
 
 function readTheme(): ThemePref {
   try {
@@ -92,5 +99,53 @@ export const useUi = defineStore('ui', () => {
 
   const pendingOpen = ref(false);
 
-  return { theme, effectiveTheme, cycleTheme, toasts, toast, dismiss, confirmRequest, confirm, problem, showProblem, pendingOpen };
+  // ---------------------------------------------------------- sidebar
+  // On a wide screen the sidebar sits beside the page and stays hidden or
+  // shown as it was left; on a narrow one it is a drawer over the page that
+  // opens on request and closes again (App.vue). Its width is dragged and
+  // kept for both.
+  const wideQuery = window.matchMedia(`(min-width: ${SIDEBAR_BREAKPOINT}px)`);
+  const wide = ref(wideQuery.matches);
+  wideQuery.addEventListener('change', (e) => {
+    wide.value = e.matches;
+    drawerOpen.value = false;
+  });
+  const sidebarOpen = ref(persist.get<boolean>('sidebar.open') ?? true);
+  const drawerOpen = ref(false);
+  const sidebarShown = computed(() => (wide.value ? sidebarOpen.value : drawerOpen.value));
+  function toggleSidebar() {
+    wide.value = wideQuery.matches;
+    if (wide.value) {
+      sidebarOpen.value = !sidebarOpen.value;
+      persist.set('sidebar.open', sidebarOpen.value);
+    } else drawerOpen.value = !drawerOpen.value;
+  }
+  const clampWidth = (px: number) => Math.round(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, px)));
+  const sidebarWidth = ref(clampWidth(persist.get<number>('sidebar.width') ?? SIDEBAR_DEFAULT));
+  /** While dragging, `save` is false: only the last width is kept. */
+  function setSidebarWidth(px: number, save = true) {
+    sidebarWidth.value = clampWidth(px);
+    if (save) persist.set('sidebar.width', sidebarWidth.value);
+  }
+
+  return {
+    theme,
+    effectiveTheme,
+    cycleTheme,
+    toasts,
+    toast,
+    dismiss,
+    confirmRequest,
+    confirm,
+    problem,
+    showProblem,
+    pendingOpen,
+    wide,
+    sidebarOpen,
+    drawerOpen,
+    sidebarShown,
+    toggleSidebar,
+    sidebarWidth,
+    setSidebarWidth,
+  };
 });
