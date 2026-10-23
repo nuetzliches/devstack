@@ -457,6 +457,40 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                 );
             }
         }
+        // ADR-0057: one variable a port number, TCP and UDP of one sharing it.
+        let mut variables: BTreeMap<String, (String, u16)> = BTreeMap::new();
+        let mut seen = BTreeSet::new();
+        for (i, entry) in group.announced_ports.iter().enumerate() {
+            let at = format!("{p}.announced_ports[{i}]");
+            let a = match crate::model::AnnouncedPort::parse(entry) {
+                Ok(a) => a,
+                Err(e) => {
+                    c.err(at, e);
+                    continue;
+                }
+            };
+            if !group.services.contains(&a.service) {
+                c.err(
+                    at,
+                    format!("`{}` is not in this group's `services`", a.service),
+                );
+                continue;
+            }
+            if !seen.insert(a.clone()) {
+                c.err(at, format!("`{entry}` is named twice"));
+                continue;
+            }
+            let var = a.variable();
+            match variables.get(&var) {
+                Some((s, port)) if *s != a.service || *port != a.port => c.err(
+                    at,
+                    format!("`{entry}` and `{s}:{port}` would both be told in `{var}`"),
+                ),
+                _ => {
+                    variables.insert(var, (a.service.clone(), a.port));
+                }
+            }
+        }
     }
     if let Some(cycle) = find_cycle(
         stack
@@ -920,6 +954,23 @@ pub fn warnings(stack: &Stack) -> Vec<Issue> {
             ),
         });
     }
+    let announced = crate::version_order(crate::ANNOUNCED_SINCE);
+    let old_requires = stack
+        .stack
+        .requires
+        .as_deref()
+        .is_none_or(|r| crate::version_order(r) < announced);
+    for (g, group) in &stack.compose {
+        if old_requires && !group.announced_ports.is_empty() {
+            out.push(Issue {
+                path: format!("compose.{g}.announced_ports"),
+                message: format!(
+                    "a devstack before {v} does not know this key and fails on it with \"unknown field\": `requires = \"{v}\"` makes it ask to be updated instead",
+                    v = crate::ANNOUNCED_SINCE
+                ),
+            });
+        }
+    }
     if step == 0 {
         return out;
     }
@@ -976,6 +1027,126 @@ pub fn repo_warnings(stack: &Stack, repo: &std::path::Path) -> Vec<Issue> {
                 ),
             });
         }
+    }
+    for (g, group) in &stack.compose {
+        let texts: Vec<(&str, String)> = group
+            .files
+            .iter()
+            .chain(&group.env_files)
+            .filter_map(|f| Some((f.as_str(), std::fs::read_to_string(repo.join(f)).ok()?)))
+            .collect();
+        out.extend(announced_warnings(g, group, &texts));
+    }
+    out
+}
+
+/// What the text of a group's Compose files and env files (`texts`, by
+/// path) says against its `announced_ports` (ADR-0057): a `DEVSTACK_PORT_*`
+/// no entry defines (a typo, or the key missing: a lane would announce the
+/// main tree's port), one Compose reads without a default (the files would
+/// not run without devstack, ADR-0015), and an entry whose variable no file
+/// names (a lane's server would not listen on the port it publishes).
+pub fn announced_warnings(
+    name: &str,
+    group: &crate::model::ComposeGroup,
+    texts: &[(&str, String)],
+) -> Vec<Issue> {
+    let defined: BTreeMap<String, String> = group
+        .announced()
+        .into_iter()
+        .map(|a| (a.variable(), format!("{}:{}", a.service, a.port)))
+        .collect();
+    let path = format!("compose.{name}.announced_ports");
+    let mut out = Vec::new();
+    let mut used = BTreeSet::new();
+    let mut said = BTreeSet::new();
+    for (file, text) in texts {
+        for (var, how) in port_variable_uses(text) {
+            if how != Mention::Sets {
+                used.insert(var.clone());
+            }
+            if !defined.contains_key(&var) {
+                if said.insert((file.to_string(), var.clone(), "undefined")) {
+                    out.push(Issue {
+                        path: path.clone(),
+                        message: format!(
+                            "`{file}` uses `{var}`, which no entry of `announced_ports` defines: a lane would announce the main tree's port (a typo, or the entry is missing)"
+                        ),
+                    });
+                }
+            } else if how == Mention::Bare && said.insert((file.to_string(), var.clone(), "bare")) {
+                let port = var.rsplit('_').next().unwrap_or("");
+                out.push(Issue {
+                    path: path.clone(),
+                    message: format!(
+                        "`{file}` reads `{var}` without a default: the files do not run without devstack; write `${{{var}:-{port}}}`"
+                    ),
+                });
+            }
+        }
+    }
+    for (var, entry) in &defined {
+        if !used.contains(var) {
+            out.push(Issue {
+                path: path.clone(),
+                message: format!(
+                    "no Compose file or env file of the group uses `{var}` (`{entry}`): in a lane the server would neither listen on nor announce the port devstack publishes"
+                ),
+            });
+        }
+    }
+    out
+}
+
+/// How a text names a `DEVSTACK_PORT_*`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mention {
+    /// Compose reads it without a default: `${VAR}`, `$VAR`.
+    Bare,
+    /// A name being set (`VAR=1` in an env file, `VAR:` as a YAML key):
+    /// not a use.
+    Sets,
+    /// Anything else: with a default (`${VAR:-7881}`, `${VAR-7881}`), for
+    /// the container's shell (`$$VAR`), passed on by name
+    /// (`environment: [VAR]`).
+    Uses,
+}
+
+/// Each `DEVSTACK_PORT_*` a text names, and how.
+fn port_variable_uses(text: &str) -> Vec<(String, Mention)> {
+    let prefix = crate::model::PORT_VARIABLE_PREFIX;
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(at) = text[from..].find(prefix).map(|i| from + i) {
+        let end = at
+            + text[at..]
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(text.len() - at);
+        from = end;
+        // Part of a longer name (`MY_DEVSTACK_PORT_X`): not this one.
+        if at > 0 && (bytes[at - 1].is_ascii_alphanumeric() || bytes[at - 1] == b'_') {
+            continue;
+        }
+        let var = text[at..end].to_string();
+        let braced = at >= 2 && &text[at - 2..at] == "${";
+        let dollar = if braced { at - 2 } else { at.wrapping_sub(1) };
+        let compose = (braced || (at >= 1 && bytes[at - 1] == b'$'))
+            && !(dollar >= 1 && bytes[dollar - 1] == b'$');
+        let rest = &text[end..];
+        let dollar_before = braced || (at >= 1 && bytes[at - 1] == b'$');
+        let how = if compose {
+            if braced && (rest.starts_with(":-") || rest.starts_with('-')) {
+                Mention::Uses
+            } else {
+                Mention::Bare
+            }
+        } else if !dollar_before && (rest.starts_with('=') || rest.starts_with(':')) {
+            Mention::Sets
+        } else {
+            Mention::Uses
+        };
+        out.push((var, how));
     }
     out
 }

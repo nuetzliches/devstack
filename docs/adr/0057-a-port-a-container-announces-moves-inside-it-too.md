@@ -1,6 +1,6 @@
 # ADR-0057: A port a container announces moves inside the container too, and Compose is told its number
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-23)
 - **Date:** 2026-10-23
 - **Deciders:** project owner
 - **Related:** [#222](https://github.com/nuetzliches/devstack/issues/222) (item 3), [ADR-0004](0004-infrastructure-is-delegated-to-compose.md), [ADR-0014](0014-native-services-take-their-configuration-from-compose.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0023](0023-stack-file-compatibility.md), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md), [ADR-0048](0048-a-containers-main-port-can-move-with-the-main-slot.md), [ADR-0056](0056-a-lane-on-a-node-relays-its-udp-ports-through-a-tunnel-per-session.md)
@@ -46,7 +46,14 @@ itself, ADR-0029, ADR-0056), and the node reaches the container at
    The user's files pass it to the server's listen and announce settings
    (`environment:` or `command:`) with the files' port as default
    (`${DEVSTACK_PORT_MEDIA_7881:-7881}`), so they run without devstack
-   (ADR-0015). `ports` stays literal: devstack owns the mapping.
+   (ADR-0015). `ports` stays literal: devstack owns the mapping. A
+   lane's `shared` service is the main tree's container: its value there
+   is the files' port, and the lane's overlay leaves it alone.
+   **`exec` steps** of commands get the variables of every group as the
+   tree the command runs in has them, so a `docker compose` from a
+   command step (`docker compose -p {compose.app.project} up -d media`)
+   keeps the moved port instead of recreating the container on the
+   files' one.
 4. **A lane on a node** gets the same values: the node's agent sets them
    for its Compose calls from the lane's offset, its view of the lane's
    ports uses the moved container port, and the requester forwards and
@@ -59,16 +66,23 @@ itself, ADR-0029, ADR-0056), and the node reaches the container at
    session's media to another tree.
 6. **devstack keeps its own names.** Placeholders, ADR-0014 rewriting and
    the dashboard key the port by the files' number (`{compose.app.media.7881.port}`
-   is `7981` in lane 1).
-7. **`devstack check`.** Errors: an entry that is not `service:port[/udp]`,
-   names no service of `services`, or a port not published 1:1 on a fixed
-   port (a range, a Docker-assigned port, `17881:7881`; checked where the
-   model is read, at a start too); two entries with one variable name.
-   Warnings, from the group's files and env files as text: a
-   `DEVSTACK_PORT_*` no entry defines (a typo, or the key missing: the lane
-   would announce the main tree's port), one used without a default, and an
-   entry whose variable no file uses (the lane's server would not listen
-   on the published port).
+   is `7981` in lane 1). The moved number reaches the same address as
+   well, so an environment built from the variable
+   (`media:${DEVSTACK_PORT_MEDIA_7881:-7881}`, `media:7981` in lane 1) is
+   rewritten too.
+7. **`devstack check`.** Errors: an entry that is not `service:port[/udp]`
+   (a port range among them: ranges stay out), names no service of
+   `services`, or a port not published 1:1 on a fixed port (a range, a
+   Docker-assigned port, `17881:7881`; checked where the model is read: at
+   every start, by a node's agent, and by `devstack check --compose`); an
+   entry named twice; two entries with one variable name. A lane's start
+   refuses an announced port whose moved number another port of the same
+   service already has inside. Warnings, from the group's files and env
+   files as text: a `DEVSTACK_PORT_*` no entry defines (a typo, or the key
+   missing: the lane would announce the main tree's port), one Compose
+   reads without a default, and an entry whose variable no file uses (the
+   lane's server would not listen on the published port); and a file with
+   the key whose `requires` is below the release that brings it.
 
 ## Alternatives considered
 
@@ -91,32 +105,35 @@ itself, ADR-0029, ADR-0056), and the node reaches the container at
 
 - Inside a lane's network the announced port is the moved one: a container
   or health check addressing `media:7881` must use the variable too.
-- `docker compose` run by hand (or in an `exec` step) without the
-  variables recreates the container on the default port.
+- `docker compose` run by hand without the variables recreates the
+  container on the default port; an `exec` step has them.
 - A group with `announced_ports` reads its model (`compose config`) at
   every start in the main tree too, for the 1:1 check.
 - `DEVSTACK_PORT_*` is devstack's: a file that set such a name itself
   before gets devstack's value for a named port. Additive otherwise
   (ADR-0023): a file without the key loads and runs as before; one with it
   raises `requires` to the release that brings it.
-- Port ranges cannot be announced yet.
+- Port ranges cannot be announced: `devstack check` rejects them.
 
 ## Enforced by
 
-Will live in: `crates/devstack-config` (`announced_ports`, the variable
-name, the checks), `crates/devstack-compose/src/lib.rs` (`Group` carries
-the variables; `overlay` keeps them 1:1; `main_overlay` skips them),
-`crates/devstack-daemon/src/supervisor/infra.rs` (the values,
-`published_ports` keyed by the files' port), `crates/devstack-node/src/lanerun.rs`
-(the agent's variables, `initial_infra`), `crates/devstack/src/dispatch/stack.rs`
-(the model and text checks), `docs/stack-file.md`, `docs/pool.md`,
-`skills/devstack-config/SKILL.md`, an integration test beside
-`a_lane_has_its_own_containers`.
+`crates/devstack-config` (`announced_ports`, `AnnouncedPort::variable`,
+`ComposeGroup::port_variables`; in `validate.rs` the errors and
+`announced_warnings`), `crates/devstack-compose/src/lib.rs` (`Group::env`,
+set on every call; `overlay` keeps announced ports 1:1; `main_overlay`
+skips them; `check_announced`), `crates/devstack-daemon/src/supervisor/infra.rs`
+(the values per tree, the 1:1 check at a start, `files_port` and
+`publish`: the published ports keyed by the files' port),
+`crates/devstack-daemon/src/commands.rs` (`exec_env`),
+`crates/devstack-node/src/lanerun.rs` and `confine.rs` (the agent's
+variables, its check, `initial_infra`), `crates/devstack/src/dispatch/stack.rs`
+(`check --compose`), `docs/stack-file.md`, `docs/pool.md`,
+`skills/devstack-config/SKILL.md`, and the integration test
+`an_announced_port_moves_inside_a_lanes_container`.
 
 ## What this ADR does not say
 
 - Which address a server announces, or anything about ports a server is
   told by another channel (a config file it reads itself is not
   interpolated by Compose).
-- That `exec` steps get the variables.
-- How port ranges (a TURN relay range) are announced.
+- How port ranges (a TURN relay range) could be announced: they are not.

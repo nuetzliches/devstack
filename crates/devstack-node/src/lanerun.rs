@@ -19,6 +19,7 @@
 use crate::policy::Network;
 use crate::safefs;
 use devstack_compose::{Docker, Group, Model, budget};
+use devstack_config::model::AnnouncedPort;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -173,11 +174,14 @@ impl InfraUp {
 /// runs (#164): each group `created`, each service's environment and the
 /// addresses of its ports as the stack file's Compose files have them
 /// (`model`, read before the overlay that publishes nothing): the lane
-/// container reaches every target port by the service's name. And the ports
-/// the requester forwards, TCP and (`relay_udp`, ADR-0056) UDP: where a
-/// local lane would publish them.
+/// container reaches every target port by the service's name, an
+/// `announced` one (ADR-0057) at the number the lane's offset moved it to
+/// inside the container, keyed by the files' number all the same. And the
+/// ports the requester forwards, TCP and (`relay_udp`, ADR-0056) UDP:
+/// where a local lane would publish them.
 fn initial_infra(
     groups: &[(String, Group, Model)],
+    announced: &BTreeMap<String, Vec<AnnouncedPort>>,
     port_offset: u16,
     relay_udp: bool,
 ) -> (serde_json::Value, Vec<u16>, Vec<u16>) {
@@ -192,10 +196,18 @@ fn initial_infra(
                 // What the group starts; the rest is parked (an environment
                 // source only), without a state.
                 let starts = g.services.is_empty() || g.services.contains(svc);
+                let mine = announced.get(name).map_or(&[][..], |a| &a[..]);
                 let ports: BTreeMap<String, String> = m
                     .ports
                     .iter()
-                    .map(|p| (port_key(p), format!("{svc}:{}", p.target)))
+                    .map(|p| {
+                        let inside = if devstack_compose::is_announced(mine, svc, p) {
+                            p.target.saturating_add(port_offset)
+                        } else {
+                            p.target
+                        };
+                        (port_key(p), format!("{svc}:{inside}"))
+                    })
                     .collect();
                 // Where a local lane would publish each port: the host port
                 // of the Compose files, moved by the lane's offset.
@@ -477,7 +489,19 @@ impl LaneRun {
         let mut g = Group::from_config(name, &stack.compose[name], &self.src());
         g.project = p.project;
         g.networks = p.networks;
+        g.env = self.port_variables(stack, name);
         g
+    }
+
+    /// The `DEVSTACK_PORT_*` of a group's announced ports (ADR-0057): the
+    /// files' ports moved by the lane's offset, the numbers its requester
+    /// forwards and relays. A `shared` service is the lane's own here.
+    fn port_variables(
+        &self,
+        stack: &devstack_config::Stack,
+        name: &str,
+    ) -> BTreeMap<String, String> {
+        stack.compose[name].port_variables(self.port_offset, &[])
     }
 
     /// A group as the node runs it: the model the agent checked and its
@@ -496,6 +520,7 @@ impl LaneRun {
             networks: p.networks,
             services: stack.compose[name].services.clone(),
             dir,
+            env: self.port_variables(stack, name),
         }
     }
 
@@ -670,6 +695,8 @@ impl LaneRun {
             let raw = self.config(&mirror)?;
             let model: Model = serde_json::from_value(raw.clone())
                 .map_err(|e| RunError::Config(format!("compose group `{name}`: {e}")))?;
+            devstack_compose::check_announced(&model, &stack.compose[&name].announced())
+                .map_err(|e| RunError::Config(format!("compose group `{name}`: {e}")))?;
             crate::confine::check(
                 &name,
                 &raw,
@@ -771,8 +798,13 @@ impl LaneRun {
         // The lane's daemon starts before its containers do (#164): it
         // reads them as created, and waits for each group as the agent
         // brings it up after answering ([`InfraUp::run`]).
+        let announced: BTreeMap<String, Vec<AnnouncedPort>> = stack
+            .compose
+            .iter()
+            .map(|(n, g)| (n.clone(), g.announced()))
+            .collect();
         let (infra, infra_ports, infra_udp_ports) =
-            initial_infra(&groups, self.port_offset, self.relay_udp);
+            initial_infra(&groups, &announced, self.port_offset, self.relay_udp);
         let io = |p: &str| {
             let p = src.join(p);
             move |e| RunError::Io(p, e)
@@ -1158,8 +1190,10 @@ mod tests {
             networks: Vec::new(),
             services: vec!["db".into(), "cache".into()],
             dir: PathBuf::from("/compose"),
+            env: BTreeMap::new(),
         };
-        let (infra, ports, udp) = initial_infra(&[("app".into(), g, model)], 100, true);
+        let (infra, ports, udp) =
+            initial_infra(&[("app".into(), g, model)], &BTreeMap::new(), 100, true);
         assert!(udp.is_empty());
         let app = &infra["groups"]["app"];
         assert_eq!(app["state"], crate::laneinfra::CREATED);
@@ -1195,9 +1229,10 @@ mod tests {
             networks: Vec::new(),
             services: Vec::new(),
             dir: PathBuf::from("/compose"),
+            env: BTreeMap::new(),
         };
         let groups = [("app".to_string(), g, model)];
-        let (infra, ports, udp) = initial_infra(&groups, 100, false);
+        let (infra, ports, udp) = initial_infra(&groups, &BTreeMap::new(), 100, false);
         assert!(udp.is_empty(), "an older requester did not ask");
         assert!(infra.get("udp").is_none());
         let dns = &infra["groups"]["app"]["services"]["dns"];
@@ -1210,10 +1245,62 @@ mod tests {
         assert_eq!(voice["published"]["5060/udp"], 5160);
         assert_eq!(ports, [5453, 8180], "TCP only, each once");
         // Asked for (ADR-0056): the UDP ones beside, and the daemon told.
-        let (infra, ports, udp) = initial_infra(&groups, 100, true);
+        let (infra, ports, udp) = initial_infra(&groups, &BTreeMap::new(), 100, true);
         assert_eq!(ports, [5453, 8180]);
         assert_eq!(udp, [5160, 5453]);
         assert_eq!(infra["udp"], true);
+    }
+
+    #[test]
+    fn an_announced_port_is_reached_where_the_lane_moved_it() {
+        let model = devstack_compose::parse_config(
+            r#"{"name":"rtc","services":{
+                "media":{"image":"sfu","ports":[
+                    {"target":7880,"published":"7880"},
+                    {"target":7881,"published":"7881"},
+                    {"target":7882,"published":"7882","protocol":"udp"}]}}}"#,
+        )
+        .unwrap();
+        let stack = devstack_config::from_str(
+            "version = 1\n[stack]\nname = \"t\"\n[compose.app]\nproject = \"rtc\"\nfiles = [\"c.yml\"]\nservices = [\"media\"]\nannounced_ports = [\"media:7881\", \"media:7882/udp\"]\n",
+            Path::new("t.toml"),
+        )
+        .unwrap();
+        let g = Group::from_config("app", &stack.compose["app"], Path::new("/src"));
+        let announced: BTreeMap<String, Vec<AnnouncedPort>> =
+            [("app".to_string(), stack.compose["app"].announced())].into();
+        let groups = [("app".to_string(), g, model)];
+        let (infra, ports, udp) = initial_infra(&groups, &announced, 100, true);
+        let media = &infra["groups"]["app"]["services"]["media"];
+        // Keyed by the files' number, reached inside at the moved one.
+        assert_eq!(media["ports"]["7880"], "media:7880");
+        assert_eq!(media["ports"]["7881"], "media:7981");
+        assert_eq!(media["ports"]["7882/udp"], "media:7982");
+        // Forwarded and relayed on that same number.
+        assert_eq!(media["published"]["7881"], 7981);
+        assert_eq!(ports, [7980, 7981]);
+        assert_eq!(udp, [7982]);
+        // The model is read with the lane's numbers.
+        let lane = devstack_config::from_str(
+            "version = 1\n[stack]\nname = \"t\"\n[compose.app]\nproject = \"rtc\"\nfiles = [\"c.yml\"]\nservices = [\"media\"]\nannounced_ports = [\"media:7881\"]\n",
+            Path::new("t.toml"),
+        )
+        .unwrap();
+        let mut g = Group::from_config("app", &lane.compose["app"], Path::new("/src"));
+        g.env = lane.compose["app"].port_variables(100, &[]);
+        let args: Vec<String> = crate::confine::config_args(&g, Path::new("/src"), "img", &[])
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let at = args
+            .iter()
+            .position(|a| a == "DEVSTACK_PORT_MEDIA_7881=7981")
+            .unwrap_or_else(|| panic!("{args:?}"));
+        assert_eq!(args[at - 1], "-e");
+        assert!(
+            at < args.iter().position(|a| a == "img").unwrap(),
+            "{args:?}"
+        );
     }
 
     #[test]

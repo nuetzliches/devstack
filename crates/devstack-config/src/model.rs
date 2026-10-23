@@ -581,6 +581,104 @@ pub struct ComposeGroup {
     /// entry every published port links to `http://localhost:<port>`.
     #[serde(default)]
     pub urls: BTreeMap<String, String>,
+    /// Of `services`, ports whose number the server tells its clients
+    /// (ADR-0057): `"media:7881"` (TCP), `"media:7882/udp"`, each published
+    /// 1:1 on a fixed port in the Compose files (`7881:7881`). A lane moves
+    /// them inside the container too, and every `docker compose` call (and
+    /// every `exec` step) gets `DEVSTACK_PORT_<SERVICE>_<PORT>` with the
+    /// number clients reach in this tree.
+    #[serde(default)]
+    pub announced_ports: Vec<String>,
+}
+
+/// An entry of `[compose.<group>] announced_ports` (ADR-0057).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AnnouncedPort {
+    pub service: String,
+    /// The port as the Compose files have it, inside and outside.
+    pub port: u16,
+    pub udp: bool,
+}
+
+impl AnnouncedPort {
+    /// `service:port` or `service:port/udp`; why not otherwise.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        let shape = || format!("`{s}`: an entry is `service:port`, or `service:port/udp`");
+        let (service, rest) = s.split_once(':').ok_or_else(shape)?;
+        let (port, udp) = match rest.split_once('/') {
+            None => (rest, false),
+            Some((p, "udp")) => (p, true),
+            Some(_) => return Err(shape()),
+        };
+        if service.is_empty() {
+            return Err(shape());
+        }
+        if port.contains('-') {
+            return Err(format!("`{s}`: a port range cannot be announced"));
+        }
+        let port: u16 = port
+            .parse()
+            .ok()
+            .filter(|p| *p != 0)
+            .ok_or_else(|| format!("`{s}`: `{port}` is no port"))?;
+        Ok(Self {
+            service: service.to_string(),
+            port,
+            udp,
+        })
+    }
+
+    /// The variable Compose is told the port's number in:
+    /// `DEVSTACK_PORT_<SERVICE>_<PORT>`, the service upper-cased with `-`
+    /// (and anything else a variable name cannot have) as `_`, the port as
+    /// the files have it. TCP and UDP of one number share it.
+    pub fn variable(&self) -> String {
+        let service: String = self
+            .service
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_uppercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        format!("{PORT_VARIABLE_PREFIX}{service}_{}", self.port)
+    }
+}
+
+/// What every variable of an announced port starts with (ADR-0057):
+/// devstack's own.
+pub const PORT_VARIABLE_PREFIX: &str = "DEVSTACK_PORT_";
+
+impl ComposeGroup {
+    /// `announced_ports`, each that parses (`devstack check` rejects the rest).
+    pub fn announced(&self) -> Vec<AnnouncedPort> {
+        self.announced_ports
+            .iter()
+            .filter_map(|s| AnnouncedPort::parse(s).ok())
+            .collect()
+    }
+
+    /// The `DEVSTACK_PORT_*` variables of a tree whose ports are moved by
+    /// `offset` (0 in the main tree): each announced port's number, moved
+    /// unless its service is in `fixed` (a lane's `shared` services, which
+    /// the main tree runs). A port moved beyond 65535 is left out: the
+    /// lane's overlay refuses it.
+    pub fn port_variables(&self, offset: u16, fixed: &[String]) -> BTreeMap<String, String> {
+        self.announced()
+            .into_iter()
+            .filter_map(|a| {
+                let by = if fixed.contains(&a.service) {
+                    0
+                } else {
+                    offset
+                };
+                Some((a.variable(), a.port.checked_add(by)?.to_string()))
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]

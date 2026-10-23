@@ -93,6 +93,7 @@ restart_on = { db = ["deploy/dev/db/init/**"] }          # a change restarts tha
 urls      = { scheduler = "http://localhost:5100/ui", db = "" }   # dashboard links (below)
 shared    = ["mailbox"]                                  # lanes use the main tree's (see [lanes])
 main_ports = ["web"]                                     # their fixed ports move with `promote --lane` (below)
+announced_ports = ["media:7881", "media:7882/udp"]       # ports the server tells its clients (below)
 ```
 
 `main_ports` names the services whose published TCP ports devstack holds in
@@ -105,7 +106,48 @@ offset), `--lane main` back; the main tree's container keeps running, and the
 main tree's services still reach it. Name what you reach directly from the
 host (the UI, the API the browser calls), not what those use. The port answers
 only while the stack's daemon runs. UDP ports stay Docker's and do not move
-([#192](https://github.com/nuetzliches/devstack/issues/192)).
+([#192](https://github.com/nuetzliches/devstack/issues/192)), and so do
+`announced_ports`: a client learns those from the server it signalled with,
+so it reaches that tree's server anyway.
+
+`announced_ports` names ports whose number the server tells its clients
+([ADR-0057](adr/0057-a-port-a-container-announces-moves-inside-it-too.md)): a WebRTC media server's ICE
+candidates, a broker's advertised listeners, an "external port" setting.
+`"media:7881"` is TCP, `"media:7882/udp"` UDP. Each is published 1:1 on a
+fixed port in the Compose files (`7881:7881`). A lane moves such a port
+inside the container too (`7981:7981` in the first lane), so the server
+listens on, and announces, the lane's number. Every `docker compose` call for
+the group, and every `exec` step of a command, gets
+`DEVSTACK_PORT_<SERVICE>_<PORT>` (the service upper-cased, `-` as `_`; the
+port as the files have it; TCP and UDP of one number share it) with the
+number clients reach in this tree: the files' port in the main tree, moved by
+the lane's offset in a lane (a `shared` service's stays the main tree's). It
+wins over an env file's value. Pass it to the server's listen and announce
+settings, with the files' port as default so the files run without devstack;
+`ports` stays literal, devstack moves it:
+
+```yaml
+services:
+  media:
+    ports: ["7881:7881", "7882:7882/udp"]
+    environment:
+      RTC_TCP_PORT: ${DEVSTACK_PORT_MEDIA_7881:-7881}
+      RTC_UDP_PORT: ${DEVSTACK_PORT_MEDIA_7882:-7882}
+```
+
+devstack keeps calling the port by the files' number:
+`{compose.app.media.7881.port}` is `7981` in the first lane, and the
+dashboard shows `7881->127.0.0.1:7981`. Inside the lane's network the server
+listens on the moved number: another container, or a health check, that
+addresses `media:7881` uses the variable too (`media:${DEVSTACK_PORT_MEDIA_7881:-7881}`,
+which a native service's `rewrite_hosts` rewrites as well). A `docker
+compose` run by hand without the variable recreates the container on the
+files' port. Port ranges cannot be announced. `devstack check` warns about a
+`DEVSTACK_PORT_*` the group's files or env files use that no entry defines
+(a typo, or the entry missing: the lane would announce the main tree's
+port), one read without a default, and an entry whose variable no file
+uses. A file with `announced_ports` should say `requires = "0.20.0"` in
+`[stack]`.
 
 The dashboard links every published port of a container to
 `http://localhost:<port>`, as Docker Desktop does. `urls` sets the link of a
@@ -132,6 +174,10 @@ Rules `devstack check` enforces:
 - `shared`, `main_ports`, `restart_on` and `urls` name services of
   `services`; `main_ports` none of `shared`; `urls`
   are `http://` or `https://` addresses or `""`; `restart_on` holds globs.
+- `announced_ports` entries are `service:port` or `service:port/udp` (no
+  range), name services of `services`, each once, and no two give one
+  variable name. Each is published 1:1 on a fixed port in the Compose files:
+  `devstack check --compose` checks that on the model, as every start does.
 - `after` names other groups, without cycles.
 
 ## `[services.<name>]`: native processes
@@ -499,7 +545,8 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
 - A lane's containers are a Compose project of their own,
   `<project>-<lane>`, from its worktree's Compose files, with an overlay
   devstack writes (`.devstack/lane-<name>/compose/<group>.yml`): host ports
-  moved by the lane's offset, no fixed `container_name`, fixed-name networks
+  moved by the lane's offset (an `announced_ports` port inside the container
+  too), no fixed `container_name`, fixed-name networks
   and volumes renamed `<name>-<lane>`. Its first start migrates and seeds its
   own data. `lane stop` removes its containers and keeps their volumes; a
   removed worktree takes them all. `{compose.<group>.project}` is the
@@ -568,7 +615,8 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
 - `devstack promote --lane <name>` lets a lane's services answer on the main
   ports (dev servers through a TCP forward); `--lane main` gives them back.
   The main ports are the fixed ports of `[services.*]` and of the
-  containers `[compose.<group>] main_ports` names; any other container's
+  containers `[compose.<group>] main_ports` names, but for their
+  `announced_ports`; any other container's
   published port is Docker's and stays with the main tree's container, so a
   stack with nothing of either has nothing to move, and `promote --lane`
   refuses it.
@@ -618,7 +666,9 @@ the same command runs in a lane, whose containers are the project
 stop the lane's API and drop the **main tree's** database. `docker compose
 -p <project> exec` finds a running project's containers without its files.
 A file that uses `{compose.<group>.project}` should say `requires =
-"0.20.0"` in `[stack]`.
+"0.20.0"` in `[stack]`. An `exec` step gets the `DEVSTACK_PORT_*` of every
+group's `announced_ports` as the tree has them, so `docker compose -p
+{compose.app.project} up -d media` in a lane keeps the moved port.
 In a lane, a `start`, `stop` or `restart` step on a `lanes = false` service
 is skipped (the main tree's instance serves the lane), with a line in the
 run's log.

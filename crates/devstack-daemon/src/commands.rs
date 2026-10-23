@@ -250,6 +250,23 @@ pub fn start(
 /// The error of a run that was cancelled.
 const CANCELLED: &str = "cancelled";
 
+/// What an `exec` step gets on top of the daemon's environment: a
+/// profile's variables (ADR-0041), with the tree's own addresses, and the
+/// `DEVSTACK_PORT_*` of the tree's announced ports (ADR-0057), so a
+/// `docker compose` there keeps the moved ports. devstack's names win.
+fn exec_env(
+    sup: &Supervisor,
+    ctx: &CommandContext,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut step_env = BTreeMap::new();
+    for (k, v) in sup.stack.profile.iter().flat_map(|p| &p.env) {
+        step_env.insert(k.clone(), expand(v, ctx, env).map_err(|e| e.to_string())?);
+    }
+    step_env.extend(sup.port_variables());
+    Ok(step_env)
+}
+
 fn execute(
     sup: &Arc<Supervisor>,
     runs: &Runs,
@@ -304,10 +321,7 @@ fn execute(
                 let file = out.try_clone().map_err(|e| e.to_string())?;
                 // A profile's variables reach its commands too (ADR-0041),
                 // with the tree's own addresses.
-                let mut step_env = BTreeMap::new();
-                for (k, v) in sup.stack.profile.iter().flat_map(|p| &p.env) {
-                    step_env.insert(k.clone(), expand(v, &ctx, &env).map_err(|e| e.to_string())?);
-                }
+                let step_env = exec_env(sup, &ctx, &env)?;
                 let spec = devstack_proc::Spec {
                     name: "command".into(),
                     command,
@@ -448,6 +462,64 @@ lanes = false
             main_tree_only(&stack, "feat-x", &StepAction::Run("worker")),
             None
         );
+    }
+
+    #[test]
+    fn an_exec_step_gets_the_trees_announced_ports() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let text = STACK.replace(
+            "services = [\"db\"]\n",
+            "services = [\"db\", \"media\", \"mail\"]\nshared = [\"mail\"]\nannounced_ports = [\"media:7881\", \"media:7882/udp\", \"mail:1025\"]\n",
+        );
+        let stack = devstack_config::from_str(&text, std::path::Path::new("t")).unwrap();
+        for (lane, media, mail) in [("", "7881", "1025"), ("feat-x", "7981", "1025")] {
+            let d = tempfile::tempdir().unwrap();
+            let file = d.path().join("devstack.toml");
+            let state = d.path().join(".devstack");
+            let sup = if lane.is_empty() {
+                Supervisor::new(
+                    stack.clone(),
+                    file,
+                    d.path().to_path_buf(),
+                    state,
+                    devstack_proc::Options::default(),
+                    rt.handle().clone(),
+                )
+            } else {
+                Supervisor::new_lane(
+                    stack.clone(),
+                    file,
+                    d.path().to_path_buf(),
+                    state.join(format!("lane-{lane}")),
+                    devstack_proc::Options::default(),
+                    rt.handle().clone(),
+                    lane.into(),
+                    100,
+                    Arc::new(Mutex::new(None)),
+                    None,
+                )
+            }
+            .unwrap();
+            let ctx = CommandContext {
+                repo: d.path().to_path_buf(),
+                urls: BTreeMap::new(),
+                published: BTreeMap::new(),
+                projects: sup.compose_projects(),
+                lane: lane.into(),
+            };
+            let env = exec_env(&sup, &ctx, &|_| None).unwrap();
+            assert_eq!(env["DEVSTACK_PORT_MEDIA_7881"], media, "lane `{lane}`");
+            assert_eq!(
+                env["DEVSTACK_PORT_MEDIA_7882"],
+                if lane.is_empty() { "7882" } else { "7982" }
+            );
+            // `shared`: the main tree's container, on the files' port.
+            assert_eq!(env["DEVSTACK_PORT_MAIL_1025"], mail, "lane `{lane}`");
+            assert_eq!(env.len(), 3, "{env:?}");
+        }
     }
 
     #[test]

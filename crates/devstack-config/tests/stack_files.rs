@@ -905,3 +905,123 @@ fn a_dev_server_with_a_package_json_and_no_prepare_is_a_warning() {
     assert!(warnings(&main_only).is_empty());
     assert!(warnings(&text.replace("cwd = \"web\"", "cwd = \"api\"")).is_empty());
 }
+
+#[test]
+fn an_announced_port_names_a_started_service_and_gets_a_variable_of_its_own() {
+    use devstack_config::model::AnnouncedPort;
+    let group = |entries: &str| {
+        format!(
+            "{MINIMAL}\n[compose.media]\nproject = \"media-dev\"\nfiles = [\"c.yml\"]\nservices = [\"media\", \"turn-relay\", \"turn_relay\", \"mail\"]\nshared = [\"mail\"]\nannounced_ports = [{entries}]\n"
+        )
+    };
+    let s = from_str(
+        &group(r#""media:7881", "media:7882/udp", "media:7882", "turn-relay:3478", "mail:1025""#),
+        Path::new("t"),
+    )
+    .unwrap();
+    let g = &s.compose["media"];
+    assert_eq!(
+        g.announced()[1],
+        AnnouncedPort {
+            service: "media".into(),
+            port: 7882,
+            udp: true
+        }
+    );
+    assert_eq!(g.announced()[3].variable(), "DEVSTACK_PORT_TURN_RELAY_3478");
+    // The main tree: the files' ports. A lane: moved, but not a `shared`
+    // service's, which the main tree runs. TCP and UDP share a variable.
+    let main = g.port_variables(0, &[]);
+    assert_eq!(main.len(), 4, "{main:?}");
+    assert_eq!(main["DEVSTACK_PORT_MEDIA_7881"], "7881");
+    let lane = g.port_variables(100, &g.shared);
+    assert_eq!(lane["DEVSTACK_PORT_MEDIA_7881"], "7981");
+    assert_eq!(lane["DEVSTACK_PORT_MEDIA_7882"], "7982");
+    assert_eq!(lane["DEVSTACK_PORT_MAIL_1025"], "1025");
+    assert!(g.port_variables(65000, &[]).is_empty(), "beyond 65535");
+
+    let all = invalid(&group(
+        r#""media", "media:7881/tcp", "media:7881-7890", "media:0", "nope:1", "media:7881", "media:7881", "turn-relay:3478", "turn_relay:3478""#,
+    ))
+    .join("\n");
+    for want in [
+        "announced_ports[0]: `media`: an entry is `service:port`",
+        "announced_ports[1]: `media:7881/tcp`: an entry is",
+        "announced_ports[2]: `media:7881-7890`: a port range cannot be announced",
+        "announced_ports[3]: `media:0`: `0` is no port",
+        "announced_ports[4]: `nope` is not in this group's `services`",
+        "announced_ports[6]: `media:7881` is named twice",
+        "announced_ports[8]: `turn_relay:3478` and `turn-relay:3478` would both be told in `DEVSTACK_PORT_TURN_RELAY_3478`",
+    ] {
+        assert!(all.contains(want), "{want}\n{all}");
+    }
+}
+
+#[test]
+fn announced_ports_want_requires_at_their_first_devstack() {
+    use devstack_config::{ANNOUNCED_SINCE, validate::warnings};
+    let text = MINIMAL.replace(
+        "services = [\"db\", \"queue\"]\n",
+        "services = [\"db\", \"queue\"]\nannounced_ports = [\"db:5432\"]\n",
+    );
+    let mut s = from_str(&text, Path::new("t")).unwrap();
+    let w = warnings(&s);
+    assert!(
+        w.iter()
+            .any(|i| i.path == "compose.app.announced_ports" && i.message.contains(ANNOUNCED_SINCE)),
+        "{w:?}"
+    );
+    s.stack.requires = Some(ANNOUNCED_SINCE.into());
+    assert!(warnings(&s).is_empty());
+}
+
+#[test]
+fn the_files_text_is_held_against_the_announced_ports() {
+    use devstack_config::validate::announced_warnings;
+    let text = MINIMAL.replace(
+        "services = [\"db\", \"queue\"]\n",
+        "services = [\"db\", \"queue\"]\nannounced_ports = [\"db:5432\", \"queue:5672\", \"queue:5673\"]\n",
+    );
+    let s = from_str(&text, Path::new("t")).unwrap();
+    let compose = r#"
+services:
+  db:
+    ports: ["5432:5432"]
+    command: ["postgres", "-p", "${DEVSTACK_PORT_DB_5432:-5432}"]
+  queue:
+    environment:
+      LISTEN: ${DEVSTACK_PORT_QUEUE_5672}
+      ADVERTISED: $DEVSTACK_PORT_QUEUE_5672
+      TYPO: ${DEVSTACK_PORT_QEUE_5672:-5672}
+      SHELL: sh -c "echo $${DEVSTACK_PORT_QUEUE_5672}"
+      MY_DEVSTACK_PORT_X: "1"
+"#
+    .to_string();
+    let env = "DEVSTACK_PORT_QUEUE_5673=5673\n".to_string();
+    let w: Vec<String> = announced_warnings(
+        "app",
+        &s.compose["app"],
+        &[("compose.yml", compose), (".env", env)],
+    )
+    .iter()
+    .map(|i| i.to_string())
+    .collect();
+    let all = w.join("\n");
+    assert!(
+        all.contains("`compose.yml` uses `DEVSTACK_PORT_QEUE_5672`, which no entry"),
+        "{all}"
+    );
+    assert!(
+        all.contains("`compose.yml` reads `DEVSTACK_PORT_QUEUE_5672` without a default")
+            && all.contains("${DEVSTACK_PORT_QUEUE_5672:-5672}"),
+        "{all}"
+    );
+    // Set in an env file, used nowhere: the server would not listen there.
+    assert!(
+        all.contains("uses `DEVSTACK_PORT_QUEUE_5673` (`queue:5673`)"),
+        "{all}"
+    );
+    assert!(!all.contains("DEVSTACK_PORT_DB_5432"), "{all}");
+    assert!(!all.contains("DEVSTACK_PORT_X"), "{all}");
+    assert_eq!(w.len(), 3, "each once: {all}");
+}
