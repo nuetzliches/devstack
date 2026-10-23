@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 const FILE: &str = "tray.json";
 
@@ -75,19 +76,19 @@ pub fn running() -> Option<u32> {
 
 /// End the running tray, and wait up to `wait` for it to go. Whether none
 /// runs now.
-pub fn stop(wait: std::time::Duration) -> bool {
+pub fn stop(wait: Duration) -> bool {
     if running().is_none() {
         return true;
     }
     if std::fs::write(stop_path(), b"").is_err() {
         return false;
     }
-    let t0 = std::time::Instant::now();
+    let t0 = Instant::now();
     while t0.elapsed() < wait {
         if running().is_none() {
             return true;
         }
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        std::thread::sleep(Duration::from_millis(200));
     }
     running().is_none()
 }
@@ -105,6 +106,16 @@ pub fn why_not() -> Option<String> {
 
 /// Start `devstack tray` in the background; its output goes to `tray.out`.
 pub fn spawn() -> Result<(), String> {
+    let mut child = spawn_child()?;
+    // A second tray exits at once; a long-lived hub must not keep it as a
+    // zombie.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+fn spawn_child() -> Result<std::process::Child, String> {
     let exe = crate::devstack_exe().map_err(|e| e.to_string())?;
     let dir = crate::state_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -120,15 +131,13 @@ pub fn spawn() -> Result<(), String> {
         .stdin(std::process::Stdio::null())
         .stdout(out.try_clone().map_err(|e| e.to_string())?)
         .stderr(out);
-    let mut child =
-        devstack_proc::spawn_detached(&mut cmd).map_err(|e| format!("start the tray: {e}"))?;
-    // A second tray exits at once; a long-lived hub must not keep it as a
-    // zombie.
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
+    devstack_proc::spawn_detached(&mut cmd).map_err(|e| format!("start the tray: {e}"))
 }
+
+/// A tray that ends this soon gave way to one that runs already.
+const GAVE_WAY: Duration = Duration::from_secs(5);
+/// How long the hub looks after the tray it gave way to.
+const WATCH: Duration = Duration::from_secs(60);
 
 /// At the hub's start: the tray, unless it is off; a failure is logged.
 pub(crate) fn start_quietly() {
@@ -136,7 +145,47 @@ pub(crate) fn start_quietly() {
         devstack_daemon::diag::info("tray_not_started", serde_json::json!({ "why": why }));
         return;
     }
-    if let Err(e) = spawn() {
-        devstack_daemon::diag::warn("tray_start_failed", serde_json::json!({ "error": e }));
+    let mut child = match spawn_child() {
+        Ok(child) => child,
+        Err(e) => {
+            devstack_daemon::diag::warn("tray_start_failed", serde_json::json!({ "error": e }));
+            return;
+        }
+    };
+    std::thread::spawn(move || {
+        let t0 = Instant::now();
+        let _ = child.wait();
+        if t0.elapsed() < GAVE_WAY && running().is_some() {
+            watch_the_older();
+        }
+    });
+}
+
+/// This hub's tray gave way to one that ran already, a tray of the devstack
+/// before an update: that one hands over to this hub's devstack by starting
+/// it, and may fail to (one before 0.22.1 on Linux started its replaced
+/// binary, `<path> (deleted)`), which left no tray. Once it is gone, the
+/// hub starts its own, unless the tray was switched off meanwhile.
+fn watch_the_older() {
+    let t0 = Instant::now();
+    while t0.elapsed() < WATCH {
+        std::thread::sleep(Duration::from_secs(2));
+        if why_not().is_some() {
+            return;
+        }
+        // Its hand-over takes a moment to hold the lock.
+        if running().is_none() {
+            std::thread::sleep(Duration::from_secs(2));
+            if running().is_none() && why_not().is_none() {
+                devstack_daemon::diag::info("tray_restarted", serde_json::json!({}));
+                if let Err(e) = spawn() {
+                    devstack_daemon::diag::warn(
+                        "tray_start_failed",
+                        serde_json::json!({ "error": e }),
+                    );
+                }
+            }
+            return;
+        }
     }
 }

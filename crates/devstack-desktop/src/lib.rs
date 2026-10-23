@@ -44,6 +44,7 @@ compile_error!(
 
 pub use channel::{
     homebrew_prefix, install_dir, is_cargo_install, is_dev_build, is_winget_install, stable_exe,
+    undeleted,
 };
 
 // ------------------------------------------------------------- processes
