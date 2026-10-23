@@ -95,7 +95,7 @@ stay.
 | [0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) | A lane's prepared directories can be linked into its worktree | Accepted |
 | [0045](0045-the-hub-notifies-the-desktop.md) | The hub notifies the desktop of what needs attention, without a tray | Accepted, amended 2026-10-21 (`guest_lane`) |
 | [0046](0046-the-hub-opens-a-worktree-in-the-users-programs.md) | The hub opens a stack's worktree in the user's own programs, from a fixed list | Accepted, amended 2026-10-21 (the program opens in front on Windows; GitHub Desktop), 2026-10-22 (an agent started with a prompt the hub writes) |
-| [0047](0047-the-dashboard-makes-a-lane-from-a-branch.md) | The dashboard makes a lane from a branch; the main tree's checkout stays the user's | Accepted |
+| [0047](0047-the-dashboard-makes-a-lane-from-a-branch.md) | The dashboard makes a lane from a branch; the main tree's checkout stays the user's | Accepted; a branch without a stack file by ADR-0055 |
 | [0048](0048-a-containers-main-port-can-move-with-the-main-slot.md) | A container's main port can be devstack's, and then moves with the main slot | Accepted |
 | [0049](0049-a-lanes-need-is-measured-disk-included.md) | A lane's need is measured where it ran, disk included; the stack file sets a floor | Accepted, amended 2026-10-21 (point 9: what a lane here checks) |
 | [0050](0050-what-no-request-reports-reaches-the-dashboard-as-a-notice.md) | What no request reports reaches the dashboard as a notice, not as a log view | Accepted |
@@ -103,3 +103,4 @@ stay.
 | [0052](0052-a-restart-carries-the-lanes-over.md) | A restart of the stack carries its lanes over to the next daemon | Accepted |
 | [0053](0053-whoever-a-lane-is-shared-with-connects-to-it.md) | Whoever a lane is shared with connects to it, and disconnects again | Accepted |
 | [0054](0054-macos-is-a-developer-platform-in-preview.md) | macOS is a developer platform in preview, installed by Homebrew, checked by CI and by its testers | Accepted |
+| [0055](0055-a-lane-without-a-stack-file-says-so-and-can-be-given-one.md) | A lane whose branch has no stack file runs with the main tree's, says so, and can be given one | Proposed |

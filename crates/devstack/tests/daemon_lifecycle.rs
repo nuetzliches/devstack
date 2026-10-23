@@ -1997,6 +1997,20 @@ fn a_worktree_runs_as_a_lane() {
         row.contains("lane-test") && row.contains("stopped"),
         "{list}"
     );
+    // A worktree without a stack file of its own runs with the main tree's,
+    // and says so (ADR-0055).
+    let main_file = || {
+        s.daemon_get("/v1/lanes")
+            .as_array()
+            .and_then(|a| a.iter().find(|l| l["name"] == lane.as_str()).cloned())
+            .is_some_and(|l| l["main_stack_file"] == true)
+    };
+    assert!(!main_file(), "its branch has one");
+    let (own, aside) = (wt.join("devstack.toml"), wt.join("devstack.toml.aside"));
+    std::fs::rename(&own, &aside).unwrap();
+    assert!(main_file(), "without its own");
+    std::fs::rename(&aside, &own).unwrap();
+    assert!(!main_file(), "its own again");
 
     // A start on a node that failed (there is no pool here) is said with
     // the lane until it is stopped, or started another way.

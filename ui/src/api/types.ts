@@ -168,6 +168,8 @@ export type LaneView = {
   moving?: LaneMove;
   /** Its worktree is gone: it stops and its data goes (ADR-0024 point 7); it leaves the list after. */
   removing?: boolean;
+  /** Its worktree has no stack file of its own: it runs with the main working tree's (ADR-0055). Older daemons omit it. */
+  main_stack_file?: boolean;
   /** The dashboard's own: the daemon no longer lists it, it is shown as it was last. */
   gone?: boolean;
   /** Its notices (ADR-0050): its tree's while it runs here, and what the main tree knows of it (`worktree_missing`). */
@@ -295,6 +297,8 @@ export type BranchView = {
   main: boolean;
   /** Its last commit, Unix seconds. */
   date: number;
+  /** It has a stack file at the main one's path (ADR-0055): in its worktree, else in its last commit. Older hubs omit it. */
+  stack_file?: boolean;
 };
 
 export type Branches = { branches: BranchView[]; fetched?: number };
@@ -551,9 +555,9 @@ export type Opener = {
 };
 
 /** The prompts the hub writes for a coding agent (`GET /hub/prompt`, ADR-0046 amendment 2026-10-22). */
-export type PromptKind = 'setup' | 'fix-file' | 'upgrade' | 'start-failed';
-/** What a prompt is about: a registered stack, or a folder before it is one. */
-export type PromptTarget = { stack: string } | { path: string };
+export type PromptKind = 'setup' | 'fix-file' | 'upgrade' | 'start-failed' | 'lane-file';
+/** What a prompt is about: a registered stack, a folder before it is one, or a worktree of a stack (`lane-file`). */
+export type PromptTarget = { stack: string } | { path: string } | { stack: string; path: string };
 
 /** A kind of desktop notification and whether it is on (ADR-0045). */
 export type NotifyKind = { kind: string; label: string; on: boolean; default: boolean };

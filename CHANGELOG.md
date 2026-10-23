@@ -20,6 +20,20 @@ and listed with their assets on the
   reports (`/private/tmp`, a symlinked project folder) back under the
   repository, and a port another process listens on with every address
   (`*:port`) counts as taken.
+- **A lane whose branch has no stack file says so, and can be given one**
+  (ADR-0055). Such a lane ran with the main working tree's stack file
+  without saying so, and failed on a node of the pool (`the stack file
+  'devstack.toml': …`), since the node found none in the synced worktree.
+  Now the main tree's file is synced to the node as well, so a lane runs
+  with the same file there as here. The branch picker marks a branch without
+  one (`stack_file` in `GET /hub/stacks/{id}/branches`), and the lane's page
+  says that the lane runs with the main tree's file (`main_stack_file` in
+  `GET /v1/lanes`). From there the main tree's file can be copied into the
+  worktree (`POST /hub/stacks/{id}/worktrees/stack-file`; never over a
+  file, nothing committed), or a coding agent can be started to adapt it to
+  the branch (the prompt `lane-file`). A stack file below the repository's
+  root (`-f config/devstack.toml`) is now found in a lane at the same path,
+  not only at the worktree's root.
 
 ### Changed
 

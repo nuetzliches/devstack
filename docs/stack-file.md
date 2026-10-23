@@ -461,6 +461,15 @@ ports (moved by `port_step` times the lane's number), **its own containers**
 workers (`devstack up --workers` turns them on). Every devstack command and the
 MCP server in the worktree act on its lane.
 
+A lane runs with its worktree's own stack file, at the main one's path
+(`devstack.toml`, or where `-f` names it below the repository). A branch
+without one (older than devstack in the repository, or the file was never
+committed) runs with the main working tree's, on a node of the pool too
+([ADR-0055](adr/0055-a-lane-without-a-stack-file-says-so-and-can-be-given-one.md)).
+The dashboard says so: the branch picker marks such a branch, and the lane's
+page offers to copy the main tree's file into the worktree (to change for the
+branch and commit with it), or a prompt for a coding agent that adapts it.
+
 Worktrees are git's (or your tool's): devstack never creates or removes one,
 and nothing of a lane runs inside its worktree. Builds run in the lane's
 snapshot, and so do its dev servers, tools and hot-reload mode; the snapshot

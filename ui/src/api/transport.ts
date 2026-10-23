@@ -58,8 +58,8 @@ export const paths = {
   pickFolder: '/hub/pick-folder',
   openers: '/hub/openers',
   open: '/hub/open',
-  prompt: (kind: string, target: { stack: string } | { path: string }) =>
-    `/hub/prompt?kind=${encodeURIComponent(kind)}&${'stack' in target ? `stack=${encodeURIComponent(target.stack)}` : `path=${encodeURIComponent(target.path)}`}`,
+  prompt: (kind: string, target: { stack?: string; path?: string }) =>
+    `/hub/prompt?kind=${encodeURIComponent(kind)}${target.stack !== undefined ? `&stack=${encodeURIComponent(target.stack)}` : ''}${target.path !== undefined ? `&path=${encodeURIComponent(target.path)}` : ''}`,
   agent: '/hub/agent',
   scanStacks: '/hub/stacks/scan',
   stackInit: '/hub/stacks/init',
@@ -70,6 +70,7 @@ export const paths = {
   branches: (stack: string) => `/hub/stacks/${enc(stack)}/branches`,
   worktrees: (stack: string) => `/hub/stacks/${enc(stack)}/worktrees`,
   worktreeRemove: (stack: string) => `/hub/stacks/${enc(stack)}/worktrees/remove`,
+  worktreeStackFile: (stack: string) => `/hub/stacks/${enc(stack)}/worktrees/stack-file`,
   fetch: (stack: string) => `/hub/stacks/${enc(stack)}/fetch`,
   skills: (stack: string) => `/hub/stacks/${enc(stack)}/skills`,
   pool: '/hub/pool',

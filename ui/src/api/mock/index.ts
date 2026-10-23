@@ -523,6 +523,7 @@ export class MockTransport implements Transport {
         'fix-file': `The devstack stack file in ${target} does not load.`,
         upgrade: `Bring the devstack setup of ${target} up to devstack ${MOCK_VERSION}.`,
         'start-failed': `The devstack stack ${target} does not start.`,
+        'lane-file': `The git worktree ${url.searchParams.get('path')} has no devstack stack file of its own.`,
       };
       if (!kind || !what[kind]) return json(400, { error: `no prompt \`${kind}\`` });
       return json(200, { text: `${what[kind]}
@@ -576,7 +577,7 @@ export class MockTransport implements Transport {
     // mock makes and removes no worktree; it answers as the hub would.
     if (rest === '/branches' && method === 'GET') {
       const day = Math.floor(Date.now() / 1000) - 86_400;
-      const tree = (b: string, path: string) => ({ name: b, main: false, worktree: path, upstream: `origin/${b}` });
+      const tree = (b: string, path: string) => ({ name: b, main: false, worktree: path, upstream: `origin/${b}`, stack_file: !stack.noStackFile.has(path) });
       return json(200, {
         fetched: day + 80_000,
         branches: [
@@ -586,8 +587,8 @@ export class MockTransport implements Transport {
           { ...tree('review-cart', 'C:\\work\\shop-review-cart'), date: day + 50_000 },
           { ...tree('agent/checkout-totals', 'C:\\work\\_wt\\1242'), date: day + 40_000 },
           { ...tree('agent/i18n-de', 'C:\\work\\_wt\\1333'), date: day + 30_000 },
-          { name: 'spike/search', main: false, date: day },
-          { name: 'origin/release/2.4', remote: 'origin', main: false, date: day - 90_000 },
+          { name: 'spike/search', main: false, date: day, stack_file: false },
+          { name: 'origin/release/2.4', remote: 'origin', main: false, date: day - 90_000, stack_file: false },
           { name: 'origin/fix/vat-rounding', remote: 'origin', main: false, date: day - 200_000 },
         ],
       });
@@ -600,6 +601,12 @@ export class MockTransport implements Transport {
       await sleep(600);
       const name = String(body?.new ?? body?.branch ?? '').replace(/^origin\//, '').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
       return json(200, { path: `C:\\work\\shop.worktrees\\${name}` });
+    }
+    if (rest === '/worktrees/stack-file' && method === 'POST') {
+      await sleep(300);
+      const at = String(body?.path ?? '');
+      if (!stack.noStackFile.delete(at)) return json(409, { error: `${at}\\devstack.toml is there already` });
+      return json(200, { file: `${at}\\devstack.toml` });
     }
     if (rest === '/worktrees/remove' && method === 'POST') return json(409, { error: 'error: worktree contains modified or untracked files, use --force to delete it' });
     if (!rest.startsWith('/api/')) return json(404, { error: 'no route' });
@@ -646,7 +653,8 @@ export class MockTransport implements Transport {
                     ],
                   }
                 : {};
-            return { ...l, active, owns_main: owns, running: active ? (l.name === 'agent-login-fix' ? 3 : 5) : 0, services: 5, ...node, ...notices };
+            const file = s.noStackFile.has(l.path) ? { main_stack_file: true } : {};
+            return { ...l, active, owns_main: owns, running: active ? (l.name === 'agent-login-fix' ? 3 : 5) : 0, services: 5, ...node, ...notices, ...file };
           })
           .filter((l) => l !== null)
         : [];

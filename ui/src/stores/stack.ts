@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { computed, ref, shallowRef, triggerRef, watch } from 'vue';
 import { api, paths, sharedRef, v1, type GroupAction, type ServiceAction, type StreamState, type Subscription } from '@/api';
 import type { Branches, LaneView, Point, Pruned, Run, ServiceView, SkillsState, StackEvent, StackView, UsageReport } from '@/api/types';
-import { restartLanesText, restartPlan, samePath } from '@/lib/lanes';
+import { laneLabel, restartLanesText, restartPlan, samePath } from '@/lib/lanes';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
@@ -430,6 +430,28 @@ export const useStack = defineStore('stack', () => {
     if (shown && samePath(shown.path, path)) selectLane(null);
     await loadBranches();
     await loadLanes();
+  }
+
+  /**
+   * The main working tree's stack file, copied into a lane's worktree that
+   * has none (ADR-0055): the lane then has its own, to change for its branch.
+   */
+  async function giveStackFile(l: LaneView) {
+    if (refuseReadOnly() || !id.value) return;
+    const key = `stack-file:${l.name}`;
+    busy.value[key] = 'copy';
+    try {
+      const r = await act<{ file: string }>({
+        label: `Stack file for ${laneLabel(l)}`,
+        path: paths.worktreeStackFile(id.value),
+        body: { path: l.path },
+        success: (b) =>
+          `Copied to ${b?.file ?? l.path}: change it for the branch and commit it there.${l.active !== false ? ' The lane takes it at its next start.' : ''}`,
+      });
+      if (r.ok) await Promise.all([loadLanes(), loadBranches()]);
+    } finally {
+      delete busy.value[key];
+    }
   }
 
   async function resetLane(name: string) {
@@ -968,6 +990,7 @@ export const useStack = defineStore('stack', () => {
     loadBranches,
     fetchBranches,
     newLane,
+    giveStackFile,
     removeWorktree,
     followLink,
     runningLanes,

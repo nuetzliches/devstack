@@ -8,13 +8,15 @@
 //! - `POST /hub/stacks/{id}/worktrees/remove {path}`: `git worktree remove`,
 //!   without `--force`.
 //! - `POST /hub/stacks/{id}/fetch`: `git fetch --all --prune`.
+//! - `POST /hub/stacks/{id}/worktrees/stack-file {path}`: the main working
+//!   tree's stack file, copied into a worktree that has none (ADR-0055).
 //!
 //! The page names a branch the hub lists and a worktree git lists; the
 //! folder of a new one is the hub's. git never asks: no prompt, no window,
 //! and a time limit.
 
 use serde::Serialize;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -41,6 +43,9 @@ pub struct Branch {
     pub main: bool,
     /// Its last commit, Unix seconds.
     pub date: i64,
+    /// It has a stack file at the main one's path (ADR-0055): in its
+    /// worktree, else in its last commit.
+    pub stack_file: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -51,7 +56,8 @@ pub struct Branches {
     pub fetched: Option<i64>,
 }
 
-/// Why a request was refused: the page's mistake, or git's answer.
+/// Why a request was refused: the page's mistake, or git's (or the file
+/// system's) answer.
 #[derive(Debug)]
 pub enum Error {
     Bad(String),
@@ -61,16 +67,36 @@ pub enum Error {
 /// `git` in `repo`, without a prompt or a window, ended after `limit`:
 /// its output, or what it said on failure.
 fn git(repo: &Path, args: &[&str], limit: Duration) -> Result<String, String> {
+    git_with(repo, args, None, limit)
+}
+
+/// [`git`], with `input` on its standard input.
+fn git_with(
+    repo: &Path,
+    args: &[&str],
+    input: Option<Vec<u8>>,
+    limit: Duration,
+) -> Result<String, String> {
     let mut cmd = Command::new("git");
     cmd.args(args)
         .current_dir(repo)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     crate::no_window(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| format!("run git: {e}"))?;
+    // Written while it runs, and closed: git reads to the end.
+    if let (Some(mut stdin), Some(input)) = (child.stdin.take(), input) {
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        });
+    }
     // Read both pipes while it runs: a full pipe would stop it.
     let drain = |p: Option<Box<dyn Read + Send>>| {
         std::thread::spawn(move || {
@@ -126,8 +152,9 @@ fn common_dir(repo: &Path) -> Result<PathBuf, String> {
 }
 
 /// The branches of `repo`, local ones first, then each group by its last
-/// commit, newest first.
-pub fn list(repo: &Path) -> Result<Branches, Error> {
+/// commit, newest first; `stack_file` the stack file's path relative to the
+/// repository.
+pub fn list(repo: &Path, stack_file: &Path) -> Result<Branches, Error> {
     let refs = git(
         repo,
         &[
@@ -141,6 +168,7 @@ pub fn list(repo: &Path) -> Result<Branches, Error> {
     .map_err(Error::Git)?;
     let trees = devstack_daemon::lanes::worktree_branches(repo).unwrap_or_default();
     let mut branches = parse(&refs, &trees, repo);
+    has_stack_file(repo, stack_file, &mut branches);
     branches.sort_by(|a, b| {
         (a.remote.is_some(), -a.date, &a.name).cmp(&(b.remote.is_some(), -b.date, &b.name))
     });
@@ -179,6 +207,7 @@ fn parse(refs: &str, trees: &[(PathBuf, Option<String>)], repo: &Path) -> Vec<Br
                     .is_some_and(|t| devstack_daemon::lanes::same_tree(t, repo)),
                 worktree: tree,
                 date,
+                stack_file: false,
             });
         } else if let Some(name) = r.strip_prefix("refs/remotes/") {
             let Some((rem, short)) = name.split_once('/') else {
@@ -194,6 +223,7 @@ fn parse(refs: &str, trees: &[(PathBuf, Option<String>)], repo: &Path) -> Vec<Br
                 worktree: None,
                 main: false,
                 date,
+                stack_file: false,
             });
         }
     }
@@ -205,6 +235,48 @@ fn parse(refs: &str, trees: &[(PathBuf, Option<String>)], repo: &Path) -> Vec<Br
     });
     local.extend(remote);
     local
+}
+
+/// Which of `branches` have a stack file at `rel` (ADR-0055 point 3): one
+/// with a worktree there, on disk (it may not be committed); any other in
+/// its last commit, all asked of one `git cat-file`. Unknown when git fails:
+/// none is marked.
+fn has_stack_file(repo: &Path, rel: &Path, branches: &mut [Branch]) {
+    let rel_git = rel.to_string_lossy().replace('\\', "/");
+    let mut asked = Vec::new();
+    let mut input = String::new();
+    for (i, b) in branches.iter_mut().enumerate() {
+        match &b.worktree {
+            Some(t) => b.stack_file = t.join(rel).is_file(),
+            None => {
+                let kind = if b.remote.is_some() {
+                    "remotes"
+                } else {
+                    "heads"
+                };
+                input.push_str(&format!("refs/{kind}/{}:{rel_git}\n", b.name));
+                asked.push(i);
+            }
+        }
+    }
+    if asked.is_empty() {
+        return;
+    }
+    let Ok(out) = git_with(
+        repo,
+        &["cat-file", "--batch-check=%(objecttype)"],
+        Some(input.into_bytes()),
+        LOCAL,
+    ) else {
+        for i in asked {
+            branches[i].stack_file = true;
+        }
+        return;
+    };
+    // One line per line asked, in order: `blob`, or `<what> missing`.
+    for (i, line) in asked.into_iter().zip(out.lines()) {
+        branches[i].stack_file = line.trim() == "blob";
+    }
 }
 
 /// Where a new worktree for `name` goes (ADR-0047 point 3): beside the
@@ -261,7 +333,7 @@ fn folder(repo: &Path, name: &str) -> Result<PathBuf, String> {
 /// A worktree on `branch` (one [`list`] gives), or on a new branch `new`
 /// made from it: its folder.
 pub fn add(repo: &Path, branch: &str, new: Option<&str>) -> Result<PathBuf, Error> {
-    let all = list(repo)?.branches;
+    let all = list(repo, Path::new("devstack.toml"))?.branches;
     let Some(b) = all.iter().find(|b| b.name == branch) else {
         return Err(Error::Bad(format!(
             "no branch `{branch}` in this repository"
@@ -318,6 +390,46 @@ pub fn remove(repo: &Path, path: &Path) -> Result<(), Error> {
     let t = tree.to_string_lossy();
     git(repo, &["worktree", "remove", "--", &t], LOCAL).map_err(Error::Git)?;
     Ok(())
+}
+
+/// The main working tree's stack file `main_file`, copied to `rel` in the
+/// linked worktree of `repo` at `path` (ADR-0055 point 4), as it is on disk:
+/// never over a file, never into the main working tree. Where it went.
+pub fn give_stack_file(
+    repo: &Path,
+    main_file: &Path,
+    rel: &Path,
+    path: &Path,
+) -> Result<PathBuf, Error> {
+    let Some(tree) = devstack_daemon::lanes::worktree_of(repo, path) else {
+        return Err(Error::Bad("not a worktree of this stack".into()));
+    };
+    if devstack_daemon::lanes::same_tree(&tree, repo) {
+        return Err(Error::Bad("the main working tree has its own".into()));
+    }
+    let to = tree.join(rel);
+    let text = std::fs::read(main_file).map_err(|e| {
+        Error::Git(format!(
+            "the main working tree's {}: {e}",
+            main_file.display()
+        ))
+    })?;
+    if let Some(p) = to.parent() {
+        std::fs::create_dir_all(p).map_err(|e| Error::Git(format!("{}: {e}", p.display())))?;
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&to)
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::AlreadyExists => {
+                Error::Git(format!("{} is there already", to.display()))
+            }
+            _ => Error::Git(format!("{}: {e}", to.display())),
+        })?;
+    f.write_all(&text)
+        .map_err(|e| Error::Git(format!("{}: {e}", to.display())))?;
+    Ok(to)
 }
 
 /// `git fetch --all --prune`, without a prompt.
@@ -380,7 +492,7 @@ mod tests {
         let dir = add(&repo, "feat/login", None).unwrap();
         assert_eq!(dir, tmp.path().join("app.worktrees").join("feat-login"));
         assert!(dir.join("a.txt").is_file());
-        let b = list(&repo).unwrap().branches;
+        let b = list(&repo, Path::new("devstack.toml")).unwrap().branches;
         let feat = b.iter().find(|b| b.name == "feat/login").unwrap();
         assert!(feat.worktree.is_some() && !feat.main);
         // Checked out already: refused, not a second worktree.
@@ -413,13 +525,13 @@ mod tests {
                 clone.to_str().unwrap(),
             ],
         );
-        let b = list(&clone).unwrap().branches;
+        let b = list(&clone, Path::new("devstack.toml")).unwrap().branches;
         assert!(b.iter().any(|b| b.name == "origin/feat/login"));
         // `main` is local, so `origin/main` is not listed of its own.
         assert!(!b.iter().any(|b| b.name == "origin/main"));
         let dir = add(&clone, "origin/feat/login", None).unwrap();
         assert!(dir.ends_with("feat-login"));
-        let b = list(&clone).unwrap().branches;
+        let b = list(&clone, Path::new("devstack.toml")).unwrap().branches;
         let feat = b.iter().find(|b| b.name == "feat/login").unwrap();
         assert_eq!(feat.upstream.as_deref(), Some("origin/feat/login"));
         assert!(feat.worktree.is_some());
@@ -439,6 +551,54 @@ mod tests {
             add(&repo, "main", Some("feat/login")),
             Err(Error::Bad(_))
         ));
+    }
+
+    #[test]
+    fn a_branch_says_whether_it_has_a_stack_file_and_a_worktree_can_be_given_one() {
+        let (_tmp, repo) = repo();
+        // Committed on `main` after `feat/login` and `old` branched off.
+        git_ok(&repo, &["branch", "old"]);
+        std::fs::write(repo.join("devstack.toml"), "version = 1").unwrap();
+        git_ok(&repo, &["add", "."]);
+        git_ok(&repo, &["commit", "-q", "-m", "devstack"]);
+        git_ok(&repo, &["branch", "with-file"]);
+        let rel = Path::new("devstack.toml");
+        let has = |name: &str| {
+            list(&repo, rel)
+                .unwrap()
+                .branches
+                .into_iter()
+                .find(|b| b.name == name)
+                .unwrap()
+                .stack_file
+        };
+        assert!(has("main") && has("with-file"));
+        assert!(!has("feat/login") && !has("old"));
+
+        // Its worktree is asked, not the commit.
+        let dir = add(&repo, "feat/login", None).unwrap();
+        assert!(!has("feat/login"));
+        let to = give_stack_file(&repo, &repo.join("devstack.toml"), rel, &dir).unwrap();
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "version = 1");
+        assert!(has("feat/login"));
+        // Never over a file, never into the main working tree.
+        assert!(matches!(
+            give_stack_file(&repo, &repo.join("devstack.toml"), rel, &dir),
+            Err(Error::Git(_))
+        ));
+        assert!(matches!(
+            give_stack_file(&repo, &repo.join("devstack.toml"), rel, &repo),
+            Err(Error::Bad(_))
+        ));
+        assert!(matches!(
+            give_stack_file(&repo, &repo.join("devstack.toml"), rel, _tmp.path()),
+            Err(Error::Bad(_))
+        ));
+        // Below the root, where the main one is.
+        let nested = Path::new("config").join("devstack.toml");
+        let dir = add(&repo, "old", None).unwrap();
+        let to = give_stack_file(&repo, &repo.join("devstack.toml"), &nested, &dir).unwrap();
+        assert!(to.ends_with(&nested) && to.is_file());
     }
 
     #[test]
