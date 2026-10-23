@@ -51,6 +51,10 @@ pub const ANNOUNCED_SINCE: &str = "0.20.0";
 /// file that sets it wants `requires` at least this.
 pub const SKIP_SINCE: &str = "0.21.0";
 
+/// The first devstack that knows `[services.<name>] stop` (ADR-0059): a
+/// file that sets it wants `requires` at least this.
+pub const STOP_SINCE: &str = "0.21.0";
+
 /// `"1.2.3"`, `"v1.2"`, `"1"` as numbers; `None` when malformed. A
 /// pre-release or build suffix (`1.2.3-rc1`, `1.2.3+abc`) is ignored here;
 /// [`version_order`] takes it into account.

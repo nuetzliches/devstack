@@ -131,6 +131,8 @@ pub struct ServiceProfile {
     pub build: Option<String>,
     pub output: Option<String>,
     pub run: Option<String>,
+    /// What ends what `run` started outside its process tree (ADR-0059).
+    pub stop: Option<String>,
     pub spa: Option<bool>,
     pub cwd: Option<String>,
     pub health: Option<Health>,
@@ -256,6 +258,7 @@ impl Stack {
                 // gives itself is set below.
                 if k == Kind::Static {
                     svc.run = String::new();
+                    svc.stop = None;
                 }
                 if k != Kind::Devserver {
                     svc.rebuild = None;
@@ -287,6 +290,9 @@ impl Stack {
             }
             if let Some(r) = &o.run {
                 svc.run = r.clone();
+            }
+            if o.stop.is_some() {
+                svc.stop = o.stop.clone();
             }
             if o.spa.is_some() {
                 svc.spa = o.spa;
@@ -838,6 +844,12 @@ pub struct Service {
     /// serves the artifact itself).
     #[serde(default)]
     pub run: String,
+    /// Command run whenever an instance ends, before the graceful signal
+    /// (ADR-0059): for what `run` started outside its process tree, a
+    /// container (`docker rm -f api{lane_suffix}-{port}`). The instance's
+    /// placeholders, as `run`; at most 30 s; a failure does not hold up the
+    /// stop.
+    pub stop: Option<String>,
     /// `kind = "static"`: answer paths without a file extension with
     /// `index.html` (client-side routes of a single-page app). Default `true`.
     pub spa: Option<bool>,

@@ -212,15 +212,13 @@ The running instance was left as it was."
             Err(e) => return fail(e),
         };
         if let Err(e) = self.wait_instance(svc, &mut candidate, &cancel) {
-            candidate.tree.kill();
-            self.forget_record(&candidate.record);
+            self.end(&mut candidate, None);
             return fail(e);
         }
         // A lane took the main ports meanwhile (`promote --lane`): the
         // proxy forwards there now, and stays so.
         if let Some(e) = self.main_ports_elsewhere(name, svc) {
-            candidate.tree.kill();
-            self.forget_record(&candidate.record);
+            self.end(&mut candidate, None);
             return fail(e);
         }
 
@@ -241,8 +239,7 @@ The running instance was left as it was."
                 Err(e) => return self.running_without_workers(name, svc, e),
             };
             if let Err(e) = self.wait_instance(svc, &mut fin, &cancel) {
-                fin.tree.kill();
-                self.forget_record(&fin.record);
+                self.end(&mut fin, None);
                 return self.running_without_workers(name, svc, e);
             }
             let without_workers = self.switch_to(name, &proxy, fin);
@@ -294,8 +291,7 @@ The running instance was left as it was."
             if let Some(port) = old.port {
                 proxy.drain(port, Duration::from_secs(5));
             }
-            old.tree.stop(Duration::from_secs(10));
-            self.forget_record(&old.record);
+            self.end(&mut old, Some(Duration::from_secs(10)));
         }
     }
 

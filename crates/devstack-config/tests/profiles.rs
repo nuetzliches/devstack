@@ -294,3 +294,28 @@ fn skip_wants_requires_at_its_first_devstack() {
     s.stack.requires = Some(SKIP_SINCE.into());
     assert!(warnings(&s).iter().all(|i| i.path != "profiles.lite.skip"));
 }
+
+#[test]
+fn a_profile_sets_a_services_stop_and_a_static_one_drops_it() {
+    let s = load(
+        r#"
+[services.ocr]
+run  = "docker run --rm --init --name ocr{lane_suffix}-{port} -p {port}:8000 ocr:dev"
+stop = "docker rm -f ocr{lane_suffix}-{port}"
+port = 5100
+
+[profiles.acceptance.services.mailer]
+stop = "mailer --stop"
+
+[profiles.acceptance.services.ocr]
+kind   = "static"
+build  = "npm run build"
+output = "dist"
+"#,
+    )
+    .unwrap();
+    let a = s.with_profile("acceptance").unwrap();
+    assert_eq!(a.services["mailer"].stop.as_deref(), Some("mailer --stop"));
+    assert_eq!(a.services["ocr"].stop, None);
+    assert!(s.services["mailer"].stop.is_none());
+}
