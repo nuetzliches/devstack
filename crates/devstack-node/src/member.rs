@@ -68,6 +68,24 @@ fn agent(tls: ureq::tls::TlsConfig) -> ureq::Agent {
         .new_agent()
 }
 
+/// `GET` `url`, and once more when the connection broke before an answer:
+/// on macOS a socket the peer reset fails the next `setsockopt` with
+/// EINVAL, which ureq makes right after the connect and before each read.
+/// A `GET` changes nothing, so asking again is safe; an answer, an error
+/// status included, is taken as it is.
+fn fetch(
+    agent: &ureq::Agent,
+    url: &str,
+) -> std::result::Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+    match agent.get(url).call() {
+        Err(ureq::Error::Io(_)) => {
+            std::thread::sleep(Duration::from_millis(100));
+            agent.get(url).call()
+        }
+        r => r,
+    }
+}
+
 fn tls_builder() -> ureq::tls::TlsConfigBuilder {
     ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::Rustls)
 }
@@ -270,7 +288,7 @@ impl Local {
         // The CA, over a connection that proves nothing by itself: the
         // fingerprint is what makes it trustworthy.
         let blind = agent(tls_builder().disable_verification(true).build());
-        let ca = body(blind.get(&format!("{coordinator}/v1/ca")).call()?)?;
+        let ca = body(fetch(&blind, &format!("{coordinator}/v1/ca"))?)?;
         let got = pki::fingerprint(&ca)?;
         if got != fp {
             return Err(MemberError::Other(format!(
@@ -338,11 +356,10 @@ impl Local {
         let m = self.need()?;
         let ca = std::fs::read_to_string(self.path("ca.pem")).map_err(io(&self.path("ca.pem")))?;
         let verified = agent(tls_builder().root_certs(roots(&ca)?).build());
-        let a: JoinAnswer = json(&body(
-            verified
-                .get(&format!("{}/v1/join/{}", m.coordinator, m.id))
-                .call()?,
-        )?)?;
+        let a: JoinAnswer = json(&body(fetch(
+            &verified,
+            &format!("{}/v1/join/{}", m.coordinator, m.id),
+        )?)?)?;
         self.take(&m, a)
     }
 
@@ -380,7 +397,7 @@ impl Local {
     /// `GET` a coordinator path as this member.
     pub fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
         let (m, a) = self.client()?;
-        json(&body(a.get(&format!("{}{path}", m.coordinator)).call()?)?)
+        json(&body(fetch(&a, &format!("{}{path}", m.coordinator))?)?)
     }
 
     /// `POST` JSON to a coordinator path as this member; an empty answer
@@ -623,6 +640,29 @@ impl Local {
 
 #[cfg(test)]
 mod tests {
+
+    /// A connection that breaks before an answer is asked once more; an
+    /// answer, an error status included, is not.
+    #[test]
+    fn a_get_is_asked_again_when_its_connection_breaks() {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", l.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            // The first connection goes without a word.
+            drop(l.accept().unwrap().0);
+            // Then a 503, then nothing: asked once more at most.
+            let (mut c, _) = l.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = c.read(&mut buf).unwrap();
+            c.write_all(b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 4\r\nconnection: close\r\n\r\nbusy")
+                .unwrap();
+        });
+        let a = agent(tls_builder().build());
+        let r = fetch(&a, &url).unwrap();
+        assert_eq!(r.status(), 503);
+        server.join().unwrap();
+    }
 
     #[test]
     fn where_lanes_start_by_default() {

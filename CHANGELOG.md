@@ -9,6 +9,14 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **A pool call that only reads survives a connection the other side
+  broke**: `devstack join`, asking whether this machine is admitted, and
+  what a member reads from the coordinator ask once more when the
+  connection broke before an answer, instead of failing. On macOS this
+  showed as `Invalid argument (os error 22)`.
+
 ## [0.22.1] - 2026-10-24
 
 Fixes of the tray: it comes back after an update on Linux, its menu on
