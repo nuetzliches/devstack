@@ -1021,6 +1021,7 @@ impl Inner {
             display_root: None,
             port_offset: 0,
             profile: None,
+            relay_udp: false,
             memory_limit: None,
             cpu_limit: None,
             network: crate::policy::Network::Lan,
@@ -1936,6 +1937,11 @@ pub struct Start {
     /// The profile it runs with (ADR-0041); absent: none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// The requester relays the lane's UDP ports (ADR-0056): the lane's
+    /// daemon is told, and the lane's state names them. An older requester
+    /// does not send it, an older agent does not read it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub relay_udp: bool,
 }
 
 fn default_stack_file() -> String {
@@ -1960,6 +1966,10 @@ pub struct LaneState {
     /// requester's machine.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub infra_ports: Vec<u16>,
+    /// Those published as UDP, when the start asked for them (`relay_udp`,
+    /// ADR-0056). An older agent does not send it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub infra_udp_ports: Vec<u16>,
     /// The phases of its last start that are over, in order, each with how
     /// long it took, measured here (the requester polls, so it would see a
     /// phase only to within its polling interval, or not at all). A failed
@@ -1992,9 +2002,17 @@ async fn start(
             format!("{} cannot run lanes: its agent is no Linux build", s.name),
         ));
     };
-    let (stack_file, display_root, port_offset, profile) = body.map_or_else(
-        || (default_stack_file(), None, 0, None),
-        |Json(b)| (b.stack_file, b.display_root, b.port_offset, b.profile),
+    let (stack_file, display_root, port_offset, profile, relay_udp) = body.map_or_else(
+        || (default_stack_file(), None, 0, None, false),
+        |Json(b)| {
+            (
+                b.stack_file,
+                b.display_root,
+                b.port_offset,
+                b.profile,
+                b.relay_udp,
+            )
+        },
     );
     if let Some(p) = &profile
         && !p
@@ -2076,6 +2094,7 @@ async fn start(
         run.display_root = display_root;
         run.port_offset = port_offset;
         run.profile = profile;
+        run.relay_udp = relay_udp;
         let policies = s2.policies();
         let all: Vec<&crate::policy::NodePolicy> = policies.iter().collect();
         if let Some(p) = crate::policy::NodePolicy::strictest(&all) {
@@ -2256,7 +2275,7 @@ async fn lane_state(
         .lock()
         .unwrap()
         .get(&id)
-        .map(|d| d.infra_ports.clone());
+        .map(|d| (d.infra_ports.clone(), d.infra_udp_ports.clone()));
     let s2 = s.clone();
     let running = tokio::task::spawn_blocking(move || s2.run(&l).running())
         .await
@@ -2265,7 +2284,11 @@ async fn lane_state(
         started: true,
         running,
         ready: running && infra_ports.is_some(),
-        infra_ports: infra_ports.unwrap_or_default(),
+        infra_udp_ports: infra_ports
+            .as_ref()
+            .map(|p| p.1.clone())
+            .unwrap_or_default(),
+        infra_ports: infra_ports.map(|p| p.0).unwrap_or_default(),
         phases,
         ..LaneState::default()
     }))

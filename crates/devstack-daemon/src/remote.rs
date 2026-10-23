@@ -43,8 +43,12 @@ pub struct RemoteState {
     /// Its services that run now (healthy or running), by name.
     pub active: Vec<String>,
     /// Its containers' published ports this machine does not forward
-    /// (`5353/udp`): devstack forwards TCP only (#192).
+    /// (`5353/udp`): another protocol than TCP and UDP (#192), or UDP where
+    /// the node, or the daemon that started the lane, does not relay it
+    /// (ADR-0056).
     pub not_forwarded: Vec<String>,
+    /// Why, when there are such ports.
+    pub not_forwarded_reason: Option<String>,
 }
 
 impl RemoteState {
@@ -82,6 +86,8 @@ pub struct RemoteLane {
     stopped: tokio::sync::watch::Sender<bool>,
     /// The lane's ports, `(on the node, here)`.
     ports: Vec<(u16, u16)>,
+    /// Its containers' UDP ports, `(on the node, here)`, relayed (ADR-0056).
+    udp_ports: Vec<(u16, u16)>,
     /// Whether this machine listens on them for the lane now: a lane that
     /// moves here takes them over before its old placement goes.
     listening: tokio::sync::watch::Sender<bool>,
@@ -427,6 +433,7 @@ struct Parts<'a> {
     extra: &'a [String],
     client: NodeClient,
     ports: Vec<(u16, u16)>,
+    udp_ports: Vec<(u16, u16)>,
     hashes: HashCache,
 }
 
@@ -439,6 +446,10 @@ pub struct Carried {
     pub lease: String,
     /// Its ports, `(on the node, here)`, its containers' included.
     pub ports: Vec<(u16, u16)>,
+    /// Its containers' UDP ports, relayed (ADR-0056); absent from a daemon
+    /// before that, whose lane relays none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub udp_ports: Vec<(u16, u16)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
 }
@@ -704,6 +715,9 @@ impl RemoteLane {
                     Some(&display),
                     port_offset,
                     profile,
+                    // This machine relays UDP (ADR-0056); an older node
+                    // does not read it, and its lane names none.
+                    true,
                     Duration::from_secs(1800),
                     &|p| {
                         step(3, &format!("on {node}: {p}"));
@@ -731,6 +745,7 @@ impl RemoteLane {
                 ports.push((p, p));
             }
         }
+        let udp_ports = started.infra_udp_ports.iter().map(|p| (*p, *p)).collect();
         crate::diag::info(
             "remote_lane_started",
             serde_json::json!({ "lane": name, "node": offer.node.name, "lease": offer.id,
@@ -749,6 +764,7 @@ impl RemoteLane {
                 extra,
                 client,
                 ports,
+                udp_ports,
                 hashes,
             },
         );
@@ -782,6 +798,7 @@ impl RemoteLane {
             state: Mutex::new(RemoteState::default()),
             stopped: tokio::sync::watch::channel(false).0,
             ports: p.ports,
+            udp_ports: p.udp_ports,
             listening: tokio::sync::watch::channel(false).0,
             gone: tokio::sync::watch::channel(false).0,
             dirty: dirty.clone(),
@@ -832,6 +849,7 @@ impl RemoteLane {
             node: self.node.clone(),
             lease: self.lease.clone(),
             ports: self.ports.clone(),
+            udp_ports: self.udp_ports.clone(),
             warning: self.warning.clone(),
         }
     }
@@ -887,6 +905,7 @@ impl RemoteLane {
                 extra,
                 client,
                 ports: c.ports,
+                udp_ports: c.udp_ports,
                 hashes: HashCache::default(),
             },
         );
@@ -1223,6 +1242,7 @@ impl RemoteLane {
                 st.containers = all.len();
                 st.active = active;
                 st.not_forwarded = not_forwarded(&all);
+                st.not_forwarded_reason = self.not_forwarded_reason(&st.not_forwarded);
             }
             if !self.tick(STATE_EVERY).await {
                 return;
@@ -1233,7 +1253,8 @@ impl RemoteLane {
     /// Listen on the lane's ports here (again): each on loopback, IPv4 and,
     /// where there is one, IPv6, every connection carried to its port of the
     /// lane on its node, bytes unchanged, so WebSockets, hot module
-    /// replacement and TLS dev servers work as they do locally.
+    /// replacement and TLS dev servers work as they do locally. Its UDP
+    /// ports are relayed alike, a tunnel per client (ADR-0056).
     pub fn start_forwarding(self: &Arc<Self>, rt: &tokio::runtime::Handle) {
         if self.listening.send_replace(true) {
             return;
@@ -1241,6 +1262,10 @@ impl RemoteLane {
         for &(there, here) in &self.ports {
             let l = self.clone();
             rt.spawn(async move { l.forward_port(there, here).await });
+        }
+        for &(there, here) in &self.udp_ports {
+            let l = self.clone();
+            rt.spawn(async move { l.forward_udp(there, here).await });
         }
     }
 
@@ -1250,10 +1275,14 @@ impl RemoteLane {
         self.listening.send_replace(false);
         let until = Instant::now() + Duration::from_secs(2);
         while Instant::now() < until
-            && self
+            && (self
                 .ports
                 .iter()
                 .any(|(_, here)| crate::supervisor::port_in_use(*here))
+                || self
+                    .udp_ports
+                    .iter()
+                    .any(|(_, here)| std::net::UdpSocket::bind(("127.0.0.1", *here)).is_err()))
         {
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -1293,26 +1322,29 @@ impl RemoteLane {
         }
     }
 
-    async fn forward_port(self: Arc<Self>, there: u16, here: u16) {
-        let mut listeners = Vec::new();
-        // A port something else still holds (a container on its way out) is
-        // tried again: every second for half a minute, then every 15 s, as
-        // long as the lane forwards. The lane says so meanwhile.
+    /// Bind with `bind`, tried again while something else holds the port
+    /// (a container on its way out): every second for half a minute, then
+    /// every 15 s, as long as the lane forwards. The lane says so meanwhile,
+    /// under `about` (`port 3000`). `None`: it no longer forwards.
+    async fn bind_retrying<T, F, Fut>(&self, about: &str, bind: F) -> Option<T>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = std::io::Result<T>>,
+    {
         let t0 = Instant::now();
         let mut stopped = self.stopped.subscribe();
         let mut listening = self.listening.subscribe();
         loop {
-            match tokio::net::TcpListener::bind(("127.0.0.1", here)).await {
+            match bind().await {
                 Ok(l) => {
-                    listeners.push(l);
-                    self.trouble(&format!("port {here}"), None);
-                    break;
+                    self.trouble(about, None);
+                    return Some(l);
                 }
                 Err(e) => {
                     self.trouble(
-                        &format!("port {here}"),
+                        about,
                         Some(format!(
-                            "port {here} here: {e} (something else holds it; tried again until it is free)"
+                            "{about} here: {e} (something else holds it; tried again until it is free)"
                         )),
                     );
                     let wait = if t0.elapsed() < Duration::from_secs(30) {
@@ -1322,12 +1354,24 @@ impl RemoteLane {
                     };
                     tokio::select! {
                         _ = tokio::time::sleep(wait) => {}
-                        _ = stopped.wait_for(|s| *s) => return,
-                        _ = listening.wait_for(|l| !*l) => return,
+                        _ = stopped.wait_for(|s| *s) => return None,
+                        _ = listening.wait_for(|l| !*l) => return None,
                     }
                 }
             }
         }
+    }
+
+    async fn forward_port(self: Arc<Self>, there: u16, here: u16) {
+        let Some(l) = self
+            .bind_retrying(&format!("port {here}"), || {
+                tokio::net::TcpListener::bind(("127.0.0.1", here))
+            })
+            .await
+        else {
+            return;
+        };
+        let mut listeners = vec![l];
         if let Ok(l) = tokio::net::TcpListener::bind(("::1", here)).await {
             listeners.push(l);
         }
@@ -1368,14 +1412,99 @@ impl RemoteLane {
         }
     }
 
+    /// Relay a UDP port of the lane's containers here (ADR-0056): each
+    /// client's datagrams through a tunnel of its own to the lane daemon,
+    /// which sends them on to the container, until the lane no longer
+    /// forwards.
+    async fn forward_udp(self: Arc<Self>, there: u16, here: u16) {
+        let Some(s) = self
+            .bind_retrying(&format!("port {here}/udp"), || {
+                tokio::net::UdpSocket::bind(("127.0.0.1", here))
+            })
+            .await
+        else {
+            return;
+        };
+        let mut sockets = vec![s];
+        if let Ok(s) = tokio::net::UdpSocket::bind(("::1", here)).await {
+            sockets.push(s);
+        }
+        for socket in sockets {
+            let me = self.clone();
+            tokio::spawn(async move {
+                let mut stopped = me.stopped.subscribe();
+                let mut listening = me.listening.subscribe();
+                let opener = me.clone();
+                let open = move || {
+                    let me = opener.clone();
+                    async move { me.open_udp(there).await }
+                };
+                let (name, key) = (
+                    me.name.clone(),
+                    format!("remote_lane_udp:{}:{there}", me.name),
+                );
+                let report = Arc::new(move |e: String| {
+                    crate::diag::warn_limited(
+                        &key,
+                        "remote_lane_udp",
+                        serde_json::json!({ "lane": name, "port": there, "error": e }),
+                    );
+                });
+                let limits = crate::udprelay::Limits::default();
+                // Dropped, the relay ends its sessions and lets the port go.
+                tokio::select! {
+                    _ = crate::udprelay::relay(socket, open, limits, report) => {}
+                    _ = stopped.wait_for(|s| *s) => {}
+                    _ = listening.wait_for(|l| !*l) => {}
+                    _ = me.over() => {}
+                }
+            });
+        }
+    }
+
+    /// A UDP session's tunnel, through the node agent to the lane daemon.
+    async fn open_udp(
+        &self,
+        port: u16,
+    ) -> Result<crate::udprelay::Opened<hyper_util::rt::TokioIo<hyper::upgrade::Upgraded>>, String>
+    {
+        let stream = self.open_tunnel(port, crate::udprelay::PROTOCOL).await?;
+        let open = crate::telemetry::Tunnel::open(&self.name, &self.node.name);
+        Ok(crate::udprelay::Opened {
+            stream,
+            closed: Some(Box::new(move |bytes| open.closed(bytes))),
+        })
+    }
+
     /// One connection, through the node agent to the lane daemon's tunnel.
     async fn tunnel(&self, mut tcp: tokio::net::TcpStream, port: u16) -> Result<(), String> {
         let _ = tcp.set_nodelay(true);
+        let mut up = self.open_tunnel(port, crate::api::TUNNEL_PROTOCOL).await?;
+        let open = crate::telemetry::Tunnel::open(&self.name, &self.node.name);
+        match tokio::io::copy_bidirectional(&mut up, &mut tcp).await {
+            Ok((a, b)) => {
+                open.closed(a + b);
+                Ok(())
+            }
+            // One end hung up without a goodbye (a browser closing a tab or
+            // a dev server's WebSocket): how connections end, not a fault.
+            Err(e) if closed_by_a_peer(&e) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// A tunnel to `port` of the lane, through the node agent to the lane
+    /// daemon's `/v1/tunnel/{port}`, upgraded to `protocol`.
+    async fn open_tunnel(
+        &self,
+        port: u16,
+        protocol: &str,
+    ) -> Result<hyper_util::rt::TokioIo<hyper::upgrade::Upgraded>, String> {
         let req = axum::http::Request::builder()
             .method("GET")
             .uri(format!("/v1/tunnel/{port}"))
             .header(axum::http::header::CONNECTION, "upgrade")
-            .header(axum::http::header::UPGRADE, crate::api::TUNNEL_PROTOCOL)
+            .header(axum::http::header::UPGRADE, protocol)
             .body(http_body_util::Empty::<bytes::Bytes>::new())
             .map_err(|e| e.to_string())?;
         let mut res = self
@@ -1401,18 +1530,12 @@ impl RemoteLane {
         let up = hyper::upgrade::on(&mut res)
             .await
             .map_err(|e| e.to_string())?;
-        let mut up = hyper_util::rt::TokioIo::new(up);
-        let open = crate::telemetry::Tunnel::open(&self.name, &self.node.name);
-        match tokio::io::copy_bidirectional(&mut up, &mut tcp).await {
-            Ok((a, b)) => {
-                open.closed(a + b);
-                Ok(())
-            }
-            // One end hung up without a goodbye (a browser closing a tab or
-            // a dev server's WebSocket): how connections end, not a fault.
-            Err(e) if closed_by_a_peer(&e) => Ok(()),
-            Err(e) => Err(e.to_string()),
-        }
+        Ok(hyper_util::rt::TokioIo::new(up))
+    }
+
+    /// Why its `not_forwarded` ports are not (ADR-0056 point 7).
+    fn not_forwarded_reason(&self, ports: &[String]) -> Option<String> {
+        not_forwarded_reason(ports, &self.node.name, self.node_release.as_ref())
     }
 
     /// Why the node cannot do what `method` on the lane daemon's `path`
@@ -1525,6 +1648,31 @@ fn not_forwarded(containers: &[serde_json::Value]) -> Vec<String> {
     });
     out.dedup();
     out
+}
+
+/// The release from which a node relays a lane's UDP ports (ADR-0056).
+const RELAYS_UDP: &str = "0.20.0";
+
+/// Why a lane's ports `not_forwarded` (`5353/udp`) are not: `None` when
+/// there are none. A UDP port is relayed unless the node is older than
+/// [`RELAYS_UDP`], or the lane was started by a daemon that was.
+fn not_forwarded_reason(ports: &[String], node: &str, release: Option<&Release>) -> Option<String> {
+    if ports.is_empty() {
+        return None;
+    }
+    if !ports.iter().any(|p| p.ends_with("/udp")) {
+        return Some("devstack forwards TCP and UDP only".into());
+    }
+    if !version::at_least(release, RELAYS_UDP) {
+        return Some(format!(
+            "the node {node} runs {}, which forwards TCP only: devstack {RELAYS_UDP} or later there relays UDP",
+            version::describe(release)
+        ));
+    }
+    Some(
+        "the lane was started by an earlier devstack here, which forwards TCP only: start it again to relay UDP"
+            .into(),
+    )
 }
 
 /// What a lease offer says of the node's and the coordinator's devstack:
@@ -1891,5 +2039,51 @@ members = ["api"]
             super::not_forwarded(&containers[2..]).is_empty(),
             "an older lane daemon's"
         );
+    }
+
+    #[test]
+    fn a_udp_port_not_relayed_says_which_side_is_too_old() {
+        use super::not_forwarded_reason as why;
+        let at = |v: &str| Release {
+            version: v.into(),
+            protocol: version::PROTOCOL,
+        };
+        let udp = ["5453/udp".to_string()];
+        assert_eq!(why(&[], "build-1", None), None, "nothing to say");
+        let old = why(&udp, "build-1", Some(&at("0.18.2"))).unwrap();
+        assert!(
+            old.contains("the node build-1 runs devstack 0.18.2")
+                && old.contains("0.20.0 or later there relays UDP"),
+            "{old}"
+        );
+        let unknown = why(&udp, "build-1", None).unwrap();
+        assert!(unknown.contains("does not say its version"), "{unknown}");
+        // The node relays: the lane was started before this machine did.
+        let here = why(&udp, "build-1", Some(&at("0.20.1"))).unwrap();
+        assert!(here.contains("start it again"), "{here}");
+        assert_eq!(
+            why(&["9100/sctp".to_string()], "build-1", Some(&at("0.20.0"))).as_deref(),
+            Some("devstack forwards TCP and UDP only")
+        );
+    }
+
+    #[test]
+    fn a_lane_carried_over_keeps_its_udp_ports() {
+        let c: super::Carried = serde_json::from_str(
+            r#"{"pool":"default","node":{"id":"n1","name":"build-1","api":"https://n"},
+                "lease":"l1","ports":[[3000,3100]]}"#,
+        )
+        .unwrap();
+        assert!(
+            c.udp_ports.is_empty(),
+            "a daemon before ADR-0056 relays none"
+        );
+        let c = super::Carried {
+            udp_ports: vec![(5453, 5453)],
+            ..c
+        };
+        let again: super::Carried =
+            serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(again.udp_ports, [(5453, 5453)]);
     }
 }

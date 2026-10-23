@@ -138,9 +138,9 @@ pub struct ContainerView {
     /// container may look healthy. A restart of the container fixes it.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub unreachable: Vec<String>,
-    /// Of a lane on a node, its published ports of another protocol than
-    /// TCP (`5353/udp`): devstack forwards TCP only, so the developer's
-    /// machine does not reach them (#192).
+    /// Of a lane on a node, its published ports the developer's machine
+    /// does not reach (`5353/udp`): another protocol than TCP (#192), UDP
+    /// too unless the requester relays it (ADR-0056).
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub not_forwarded: Vec<String>,
     /// Its fixed ports devstack holds (`main_ports`, ADR-0048): `port` the

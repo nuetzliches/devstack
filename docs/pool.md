@@ -203,10 +203,18 @@ devstack leases the lane, syncs the worktree to the node (by content, only
 what changed: a change within two seconds of saving, and everything compared
 every 30 s besides), starts it there and forwards its ports to your machine:
 `localhost:<port>` reaches it as if it ran locally, its containers' ports too.
-Forwarding carries TCP only: a container port published as UDP (`53/udp`,
-a game's voice port) runs on the node but is not forwarded here. The lane's
-page, its container's row and `devstack lane list` say so ("UDP port 5353 is
-not forwarded to this machine"); keep such a lane local (#192).
+A container port published as UDP (`53/udp`, a game's voice port) is
+relayed too ([ADR-0056](adr/0056-a-lane-on-a-node-relays-its-udp-ports-through-a-tunnel-per-session.md)):
+a datagram to `localhost:<port>` reaches it, each client through a tunnel of its own,
+which ends after 60 s without a datagram. Nothing is held while the container
+starts: a datagram before it answers is lost, as on a network, and the
+client's next one tries again. A datagram crosses whole, up to 64 KiB; the
+container sees it come from the lane daemon, one source port per client.
+A node older than 0.20.0 relays no UDP: the lane's page, its container's row
+and `devstack lane list` say so ("UDP port 5353 is not forwarded to this
+machine (the node … runs devstack 0.19.0, which forwards TCP only …)"); update
+devstack on the node, or keep such a lane local. Ports of another protocol
+(SCTP) are not forwarded (#192).
 The dashboard shows where each lane runs, its start step by step, and offers
 **Start here / on a node / in the pool** for a lane that is not started.
 

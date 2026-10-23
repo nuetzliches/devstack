@@ -1397,7 +1397,8 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
         if let Some(w) = l["node_warning"].as_str() {
             troubles.push(format!("{name}: {w}"));
         }
-        if let Some(t) = not_forwarded_line(&l["not_forwarded"]) {
+        if let Some(t) = not_forwarded_line(&l["not_forwarded"], l["not_forwarded_reason"].as_str())
+        {
             troubles.push(format!("{name}: {t}"));
         }
         println!(
@@ -1422,8 +1423,9 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
 }
 
 /// A lane's `not_forwarded` (`["5353/udp"]`) as a line: `UDP port 5353 is
-/// not forwarded ...`; `None` when there is none (#192).
-fn not_forwarded_line(ports: &Value) -> Option<String> {
+/// not forwarded ...`, with the daemon's reason (ADR-0056); `None` when
+/// there is none (#192).
+fn not_forwarded_line(ports: &Value, reason: Option<&str>) -> Option<String> {
     let ports: Vec<(String, String)> = ports
         .as_array()?
         .iter()
@@ -1443,8 +1445,14 @@ fn not_forwarded_line(ports: &Value) -> Option<String> {
         format!("ports {}", each.join(", "))
     };
     let are = if ports.len() == 1 { "is" } else { "are" };
+    // A daemon before ADR-0056 gives no reason: it relays no UDP.
+    let reason = reason.unwrap_or(if ports.iter().any(|(p, _)| p == "UDP") {
+        "an older devstack forwards TCP only"
+    } else {
+        "devstack forwards TCP and UDP only"
+    });
     Some(format!(
-        "{listed} {are} not forwarded to this machine (devstack forwards TCP only)"
+        "{listed} {are} not forwarded to this machine ({reason})"
     ))
 }
 
@@ -2448,24 +2456,34 @@ data: {\"type\":\"line\",\"text\":\"c\"}\n\n";
 
     #[test]
     fn a_lanes_ports_not_forwarded_are_said() {
-        let line = |v: Value| not_forwarded_line(&v);
+        let line = |v: Value| not_forwarded_line(&v, None);
         assert_eq!(line(serde_json::json!(null)), None, "an older daemon");
         assert_eq!(line(serde_json::json!([])), None);
         assert_eq!(
             line(serde_json::json!(["5353/udp"])).as_deref(),
-            Some("UDP port 5353 is not forwarded to this machine (devstack forwards TCP only)")
+            Some(
+                "UDP port 5353 is not forwarded to this machine (an older devstack forwards TCP only)"
+            )
         );
         assert_eq!(
             line(serde_json::json!(["5060/udp", "5353/udp"])).as_deref(),
             Some(
-                "UDP ports 5060, 5353 are not forwarded to this machine (devstack forwards TCP only)"
+                "UDP ports 5060, 5353 are not forwarded to this machine (an older devstack forwards TCP only)"
             )
         );
         assert_eq!(
-            line(serde_json::json!(["5353/udp", "9000/sctp"])).as_deref(),
+            line(serde_json::json!(["9000/sctp"])).as_deref(),
             Some(
-                "ports UDP 5353, SCTP 9000 are not forwarded to this machine (devstack forwards TCP only)"
+                "SCTP port 9000 is not forwarded to this machine (devstack forwards TCP and UDP only)"
             )
+        );
+        // The daemon's reason (ADR-0056): the node is too old to relay.
+        let why = "the node build-1 runs devstack 0.19.0, which forwards TCP only: devstack 0.20.0 or later there relays UDP";
+        assert_eq!(
+            not_forwarded_line(&serde_json::json!(["5353/udp", "9000/sctp"]), Some(why)),
+            Some(format!(
+                "ports UDP 5353, SCTP 9000 are not forwarded to this machine ({why})"
+            ))
         );
     }
 }

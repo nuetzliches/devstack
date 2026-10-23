@@ -597,7 +597,62 @@ fn memory_fits(
 /// listen on its container's loopback, and the requester forwards its
 /// local ports through the node agent to here. Only the ports of the stack's
 /// services, behind the API's token like every route.
-async fn tunnel(State(s): State<AppState>, Path(port): Path<u16>, mut req: Request) -> Response {
+///
+/// With `Upgrade: devstack-udp` the connection is a UDP session to the
+/// container published on `port` as UDP (ADR-0056): datagrams as frames,
+/// sent from a socket of the session's own.
+async fn tunnel(State(s): State<AppState>, Path(port): Path<u16>, req: Request) -> Response {
+    let udp = req
+        .headers()
+        .get(header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case(crate::udprelay::PROTOCOL));
+    if udp {
+        udp_tunnel(&s, port, req).await
+    } else {
+        tcp_tunnel(&s, port, req).await
+    }
+}
+
+/// [`tunnel`] for a UDP session (ADR-0056 point 4).
+async fn udp_tunnel(s: &AppState, port: u16, mut req: Request) -> Response {
+    let Some(addr) = s.sup.infra_udp(port) else {
+        return err(
+            StatusCode::FORBIDDEN,
+            format!(
+                "port {port} is no container's UDP port in this stack (devstack {} here)",
+                env!("CARGO_PKG_VERSION")
+            ),
+        );
+    };
+    // The container's name resolves once it runs: before, the datagram is
+    // dropped on the requester, and the next one tries again (no hold).
+    let socket = match crate::udprelay::connect(&addr).await {
+        Ok(x) => x,
+        Err(e) => {
+            return err(
+                StatusCode::BAD_GATEWAY,
+                format!("nothing answers at {addr}/udp: {e}"),
+            );
+        }
+    };
+    let upgrade = hyper::upgrade::on(&mut req);
+    tokio::spawn(async move {
+        let Ok(up) = upgrade.await else { return };
+        // A backstop: the requester ends an idle session first.
+        let idle = crate::udprelay::Limits::default().idle * 2;
+        crate::udprelay::serve(hyper_util::rt::TokioIo::new(up), socket, idle).await;
+    });
+    Response::builder()
+        .status(StatusCode::SWITCHING_PROTOCOLS)
+        .header(header::CONNECTION, "upgrade")
+        .header(header::UPGRADE, crate::udprelay::PROTOCOL)
+        .body(axum::body::Body::empty())
+        .expect("a valid response")
+}
+
+/// [`tunnel`] for a TCP connection.
+async fn tcp_tunnel(s: &AppState, port: u16, mut req: Request) -> Response {
     // A service's port on this machine's loopback, or (a lane on a node) a
     // container's, at its address on the lane's network.
     let container = s.sup.infra_tunnel(port);

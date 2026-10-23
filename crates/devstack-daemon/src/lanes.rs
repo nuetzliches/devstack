@@ -91,9 +91,13 @@ pub struct LaneView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_warning: Option<String>,
     /// Of a lane on a node, its containers' published ports this machine
-    /// does not forward (`5353/udp`): devstack forwards TCP only (#192).
+    /// does not forward (`5353/udp`): another protocol than TCP and UDP
+    /// (#192), or UDP the node does not relay (ADR-0056).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub not_forwarded: Vec<String>,
+    /// Why they are not, when there are such ports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_forwarded_reason: Option<String>,
     /// A start on a node or a move under way, or one that failed lately.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub moving: Option<LaneMove>,
@@ -1698,6 +1702,9 @@ impl Lanes {
                         .as_ref()
                         .map(|st| st.not_forwarded.clone())
                         .unwrap_or_default(),
+                    not_forwarded_reason: node_state
+                        .as_ref()
+                        .and_then(|st| st.not_forwarded_reason.clone()),
                     node_warning: on_node
                         .and_then(|r| r.warning.clone())
                         .or_else(|| moves.get(&k.entry.name).and_then(|m| m.warning.clone())),

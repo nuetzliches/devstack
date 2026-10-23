@@ -67,6 +67,9 @@ pub struct LaneRun {
     pub port_offset: u16,
     /// The profile it runs with (ADR-0041, `DEVSTACK_PROFILE`).
     pub profile: Option<String>,
+    /// Its requester relays UDP ports (ADR-0056): the lane's daemon is told,
+    /// and the start answers with them.
+    pub relay_udp: bool,
     /// The memory limit of each of its containers (ADR-0033), bytes.
     pub memory_limit: Option<u64>,
     /// Their CPU limit, cores.
@@ -88,6 +91,8 @@ pub struct DaemonAddr {
     /// (the Compose files' host ports moved by the lane's offset): the
     /// requester forwards them like the services' (ADR-0029 point 4).
     pub infra_ports: Vec<u16>,
+    /// Those published as UDP, when the requester relays them (ADR-0056).
+    pub infra_udp_ports: Vec<u16>,
 }
 
 /// A lane whose daemon answers: where it is, and what is left of its start.
@@ -169,13 +174,16 @@ impl InfraUp {
 /// addresses of its ports as the stack file's Compose files have them
 /// (`model`, read before the overlay that publishes nothing): the lane
 /// container reaches every target port by the service's name. And the ports
-/// the requester forwards: where a local lane would publish them.
+/// the requester forwards, TCP and (`relay_udp`, ADR-0056) UDP: where a
+/// local lane would publish them.
 fn initial_infra(
     groups: &[(String, Group, Model)],
     port_offset: u16,
-) -> (serde_json::Value, Vec<u16>) {
+    relay_udp: bool,
+) -> (serde_json::Value, Vec<u16>, Vec<u16>) {
     let mut infra = BTreeMap::new();
     let mut infra_ports = Vec::new();
+    let mut udp_ports = Vec::new();
     for (name, g, model) in groups {
         let services: BTreeMap<String, serde_json::Value> = model
             .services
@@ -199,15 +207,17 @@ fn initial_infra(
                         Some((port_key(p), host.checked_add(port_offset)?))
                     })
                     .collect();
-                // The requester forwards TCP only (#192): a UDP port stays
-                // listed, for the daemon to say it is not forwarded.
+                // TCP is forwarded, UDP relayed when the requester asked
+                // (ADR-0056); every port stays listed, for the daemon to
+                // say which are not forwarded (#192).
                 if starts {
-                    infra_ports.extend(
-                        published
-                            .iter()
-                            .filter(|(key, _)| !key.contains('/'))
-                            .map(|(_, host)| *host),
-                    );
+                    for (key, host) in &published {
+                        match key.split_once('/') {
+                            None => infra_ports.push(*host),
+                            Some((_, "udp")) if relay_udp => udp_ports.push(*host),
+                            Some(_) => {}
+                        }
+                    }
                 }
                 (
                     svc.clone(),
@@ -232,7 +242,13 @@ fn initial_infra(
     }
     infra_ports.sort_unstable();
     infra_ports.dedup();
-    (serde_json::json!({ "groups": infra }), infra_ports)
+    udp_ports.sort_unstable();
+    udp_ports.dedup();
+    let mut file = serde_json::json!({ "groups": infra });
+    if relay_udp {
+        file["udp"] = true.into();
+    }
+    (file, infra_ports, udp_ports)
 }
 
 /// A Compose port without a protocol, or `tcp`, is TCP.
@@ -755,7 +771,8 @@ impl LaneRun {
         // The lane's daemon starts before its containers do (#164): it
         // reads them as created, and waits for each group as the agent
         // brings it up after answering ([`InfraUp::run`]).
-        let (infra, infra_ports) = initial_infra(&groups, self.port_offset);
+        let (infra, infra_ports, infra_udp_ports) =
+            initial_infra(&groups, self.port_offset, self.relay_udp);
         let io = |p: &str| {
             let p = src.join(p);
             move |e| RunError::Io(p, e)
@@ -883,6 +900,7 @@ impl LaneRun {
                 addr,
                 token,
                 infra_ports,
+                infra_udp_ports,
             },
             infra: InfraUp {
                 groups: groups.into_iter().map(|(n, g, _)| (n, g)).collect(),
@@ -943,6 +961,7 @@ impl LaneRun {
             addr: self.address(&networks, agent)?,
             token: self.wait_token(Duration::from_secs(5))?,
             infra_ports: Vec::new(),
+            infra_udp_ports: Vec::new(),
         })
     }
 
@@ -1140,7 +1159,8 @@ mod tests {
             services: vec!["db".into(), "cache".into()],
             dir: PathBuf::from("/compose"),
         };
-        let (infra, ports) = initial_infra(&[("app".into(), g, model)], 100);
+        let (infra, ports, udp) = initial_infra(&[("app".into(), g, model)], 100, true);
+        assert!(udp.is_empty());
         let app = &infra["groups"]["app"];
         assert_eq!(app["state"], crate::laneinfra::CREATED);
         assert_eq!(app["project"], "shop-ab12");
@@ -1176,7 +1196,10 @@ mod tests {
             services: Vec::new(),
             dir: PathBuf::from("/compose"),
         };
-        let (infra, ports) = initial_infra(&[("app".into(), g, model)], 100);
+        let groups = [("app".to_string(), g, model)];
+        let (infra, ports, udp) = initial_infra(&groups, 100, false);
+        assert!(udp.is_empty(), "an older requester did not ask");
+        assert!(infra.get("udp").is_none());
         let dns = &infra["groups"]["app"]["services"]["dns"];
         assert_eq!(dns["ports"]["53"], "dns:53");
         assert_eq!(dns["ports"]["53/udp"], "dns:53", "not folded into 53/tcp");
@@ -1186,6 +1209,11 @@ mod tests {
         let voice = &infra["groups"]["app"]["services"]["voice"];
         assert_eq!(voice["published"]["5060/udp"], 5160);
         assert_eq!(ports, [5453, 8180], "TCP only, each once");
+        // Asked for (ADR-0056): the UDP ones beside, and the daemon told.
+        let (infra, ports, udp) = initial_infra(&groups, 100, true);
+        assert_eq!(ports, [5453, 8180]);
+        assert_eq!(udp, [5160, 5453]);
+        assert_eq!(infra["udp"], true);
     }
 
     #[test]
