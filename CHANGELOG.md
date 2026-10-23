@@ -29,6 +29,11 @@ and listed with their assets on the
   the ones recorded. `docs/stack-file.md` describes a container as a
   service (`--init`, `--rm`, a name per instance). A file with `stop` says
   `requires = "0.21.0"`.
+- **An optional native macOS menu bar** (`devstack menubar`, proposed
+  ADR-0060): see the hub and registered stacks, open the paired dashboard,
+  start or stop the hub or a stack, and open a stack's folder. Lifecycle
+  actions use the existing CLI; quitting the menu leaves stacks and the hub
+  running. No login integration is installed by this command.
 
 ## [0.20.0] - 2026-10-23
 

@@ -1,7 +1,7 @@
 //! The hub and the dashboard (ADR-0021): `devstack ui`, `devstack hub`, and
 //! the `devstack://` links the system hands over.
 
-use crate::{Cmd, HubAction, NotifyAction, hubcmd, integration};
+use crate::{Cmd, HubAction, NotifyAction, hubcmd, integration, menubar};
 use anyhow::Result;
 use std::path::Path;
 
@@ -14,6 +14,7 @@ pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
             browser,
         } => hubcmd::ui(file, lane.as_deref(), link, print, browser.as_deref()),
         Cmd::Hub { action } => hub(action),
+        Cmd::Menubar => menubar::run(),
         Cmd::OpenUrl { url } => integration::open_url(&url),
         _ => super::misrouted(),
     }

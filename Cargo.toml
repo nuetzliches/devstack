@@ -31,6 +31,36 @@ jiff = "0.2"
 libc = "0.2"
 # Mach host and time calls on macOS that libc marks deprecated (ADR-0054).
 mach2 = "0.7"
+# The optional macOS menu client (ADR-0060), linked on macOS only.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSApplication",
+    "NSButton",
+    "NSControl",
+    "NSEvent",
+    "NSGraphicsContext",
+    "NSImage",
+    "NSMenu",
+    "NSMenuItem",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSStatusBar",
+    "NSStatusBarButton",
+    "NSStatusItem",
+    "NSView",
+    "objc2-core-foundation",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSData",
+    "NSDate",
+    "NSGeometry",
+    "NSObject",
+    "NSRunLoop",
+    "NSString",
+    "NSTimer",
+] }
 notify = "8"
 rand = "0.10"
 raw-window-handle = "0.6"

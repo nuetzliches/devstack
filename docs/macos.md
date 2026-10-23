@@ -25,6 +25,7 @@ with a browser is blocked until `xattr -d com.apple.quarantine devstack`.
 | | |
 |---|---|
 | CLI, daemon, hub and dashboard; lanes on the Mac | yes |
+| An optional native menu bar | `devstack menubar` (see below); explicit start, no extra login integration |
 | The hub at login | a LaunchAgent (`~/Library/LaunchAgents/it.nuetzliche.devstack.hub.plist`), for a Homebrew install too, not `brew services` |
 | Folder picker, "Open in" (Finder, Terminal, editors, GitHub Desktop), browsers | `osascript`, `open`, `open -a` |
 | Starting Docker | Docker Desktop or OrbStack; Colima: `colima start` yourself |
@@ -32,6 +33,61 @@ with a browser is blocked until `xattr -d com.apple.quarantine devstack`.
 | Requesting a lane on a Linux node of a pool | expected to work, not checked yet |
 | Desktop notifications, the `devstack://` link | not yet: both need a signed app bundle |
 | A Mac as a pool node | not yet |
+
+## Menu bar
+
+```sh
+devstack menubar
+```
+
+Keep the command running, or launch it in the background from your shell.
+It adds a native status item without a Dock window. It does not require a
+stack file in the current folder: it lists stacks already registered by
+`devstack up`, including stopped ones, for this user's state directory.
+
+The menu opens and pairs the dashboard, shows the hub's status, starts or
+stops the dashboard hub, and provides a submenu for each registered stack:
+open its dashboard, start it, stop it together with its Compose containers,
+or open its folder in Finder. Status refreshes periodically and can also be
+refreshed manually. Work is done away from the native UI thread, with
+progress and errors shown in the menu.
+
+**Give Feedback…** opens this project's GitHub issue chooser in the default
+browser. It sends no logs or report contents automatically and remains
+available while the dashboard hub is stopped.
+
+**Quit Menu Bar leaves the hub and stacks running.** Stop Dashboard Hub
+also leaves stacks running. Stopping a stack uses `down --infra`, without
+`--all`: active worktree lanes keep their existing lifecycle semantics.
+Use the dashboard for individual services, lanes, logs and more detailed
+operations. This command installs no LaunchAgent and changes no login
+settings. On Windows and Linux it reports that it is macOS-only.
+
+The menu respects `DEVSTACK_HUB_PORT` and `XDG_STATE_HOME`, like the CLI.
+The existing `DEVSTACK_NO_HUB_INTEGRATION` setting still controls whether
+other lifecycle commands register login integration.
+
+The status item uses devstack's three-stroke-and-dot logo as a transparent
+template image, so macOS renders it for the current menu bar appearance.
+
+![Native macOS menu with example stacks](images/macos-menu-bar.png)
+
+### Verify on a real Mac
+
+- Start a small stack, then run `devstack menubar` from another directory.
+  There is one icon, its native menu opens, and the stack's status matches
+  the dashboard. Starting the command again should report it already runs.
+- Open Dashboard: the browser is paired automatically. Stop the hub from
+  the menu: the stack still answers and refresh leaves the hub stopped.
+  Start the hub again and open the stack's dashboard.
+- Stop a stack from its submenu: its HTTP ports close. Start it again: its
+  health check passes. While an action runs the menu remains responsive.
+- A failed action or an unreachable daemon shows an error rather than a
+  healthy or stopped state. A missing stack folder cannot be started.
+- Quit Menu Bar while a stack runs: only the icon disappears; the stack
+  still answers, and the hub still serves its dashboard.
+- Capture screenshots using a generic demo stack and a separate state
+  directory, so private stack names and paths do not enter a public report.
 
 ## Checklist for testers
 

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="18" viewBox="0 0 20 18">
+  <!-- The dashboard favicon mark, without its background, for a template image. -->
+  <g fill="none" stroke="#000" stroke-linecap="round" stroke-width="2.4">
+    <path d="M2 3.667h16M2 9h11.2M2 14.333h16"/>
+  </g>
+  <circle cx="17.2" cy="9" r="2"/>
+</svg>

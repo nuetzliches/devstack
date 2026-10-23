@@ -14,6 +14,7 @@ mod hubcmd;
 mod init;
 mod integration;
 mod mcp;
+mod menubar;
 mod poolcmd;
 mod selfcmd;
 use devstack_skills as skills;
@@ -219,6 +220,9 @@ enum Cmd {
     },
     /// MCP server on stdio for coding agents; a client of the daemon like the CLI.
     Mcp,
+    /// Show a native macOS menu bar for the dashboard and registered stacks.
+    /// Optional; quitting the menu leaves the hub and stacks running.
+    Menubar,
     /// Open the dashboard: starts the hub if needed and pairs the browser
     /// (ADR-0021). In a repository it opens on this stack, in a worktree on
     /// its lane.
@@ -701,7 +705,7 @@ fn main() -> Result<()> {
         cmd @ (Cmd::Node { .. } | Cmd::Join { .. } | Cmd::Pool { .. } | Cmd::Open { .. }) => {
             dispatch::pool::run(&file, cmd)
         }
-        cmd @ (Cmd::Ui { .. } | Cmd::Hub { .. } | Cmd::OpenUrl { .. }) => {
+        cmd @ (Cmd::Ui { .. } | Cmd::Hub { .. } | Cmd::OpenUrl { .. } | Cmd::Menubar) => {
             dispatch::hub::run(&file, cmd)
         }
         cmd @ (Cmd::Update { .. } | Cmd::Myself { .. }) => dispatch::myself::run(cmd),
@@ -736,6 +740,12 @@ mod tests {
     #[test]
     fn the_definition_is_consistent() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn the_menu_bar_is_an_explicit_command_without_a_stack_file() {
+        assert!(matches!(parse(&["menubar"]).cmd, Cmd::Menubar));
+        assert_eq!(refused(&["menubar", "--all"]), ErrorKind::UnknownArgument);
     }
 
     #[test]

@@ -12,6 +12,7 @@
 *.ico binary
 *.gif binary
 *.webp binary
+*.pdf binary
 *.woff binary
 *.woff2 binary
 *.exe binary

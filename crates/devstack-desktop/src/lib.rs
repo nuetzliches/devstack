@@ -18,6 +18,7 @@ pub mod channel;
 // The macOS module's text, built and tested everywhere.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod mac;
+pub mod menubar;
 pub mod notify;
 
 #[cfg(target_os = "linux")]
