@@ -6,7 +6,7 @@ use devstack_config::model::Service;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 impl Supervisor {
     /// The watcher saw `path` change, and `name` watches it. Debounced: a
@@ -60,10 +60,11 @@ impl Supervisor {
     fn pipeline(self: &Arc<Self>, name: &str) {
         loop {
             let (paths, epoch) = loop {
-                {
+                let left = {
                     let mut changes = self.changes.lock().unwrap();
                     let c = changes.get_mut(name).expect("changed() created it");
-                    if c.last.is_some_and(|t| t.elapsed() >= DEBOUNCE) {
+                    let left = super::quiet_left(c.last, DEBOUNCE);
+                    if left.is_zero() {
                         if c.absorbed >= c.epoch {
                             // A manual restart already took these changes in.
                             c.paths.clear();
@@ -75,8 +76,9 @@ impl Supervisor {
                         }
                         break (std::mem::take(&mut c.paths), c.epoch);
                     }
-                }
-                std::thread::sleep(Duration::from_millis(200));
+                    left
+                };
+                std::thread::sleep(left);
             };
             let superseded = self.candidate_from(name, &paths, epoch);
             let mut changes = self.changes.lock().unwrap();
@@ -459,4 +461,90 @@ fn hold_reason(svc: &Service, paths: &BTreeSet<String>) -> Option<String> {
         .map(String::as_str)
         .collect();
     (!hit.is_empty()).then(|| format!("changes schema inputs ({})", hit.join(", ")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// One edit, reported twice about 200 ms apart (FSEvents, #233), makes
+    /// one deadline for every service it concerns: two services after the
+    /// same job take their candidates at the same moment, the second report's
+    /// time plus the quiet period, not one of them a poll later. The first
+    /// report reaches the second service 20 ms after the first service (a
+    /// busy daemon writing its log): the thread of the first then began well
+    /// before the repeat, which made it miss its deadline by one poll.
+    #[test]
+    fn a_change_reported_twice_makes_one_deadline_for_every_service() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("devstack.toml");
+        let built = "build = \"git --version\"\noutput = \"src/Site\"\nwatch = [\"src/Site/**\"]\nrun = \"x\"\nafter = [\"seed\"]\n";
+        let text = format!(
+            "version = 1\n[stack]\nname = \"s\"\n[services.seed]\nkind = \"job\"\nrun = \"x\"\n[services.a]\n{built}[services.b]\n{built}"
+        );
+        let stack = devstack_config::from_str(&text, &file).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let sup = Arc::new(
+            Supervisor::new(
+                stack,
+                file,
+                d.path().to_path_buf(),
+                d.path().join(".devstack"),
+                devstack_proc::Options::default(),
+                rt.handle().clone(),
+            )
+            .unwrap(),
+        );
+        let path = "src/Site/index.html";
+        let taken = |name: &str| {
+            sup.changes
+                .lock()
+                .unwrap()
+                .get(name)
+                .is_some_and(|c| c.paths.is_empty())
+        };
+
+        sup.changed("a", path);
+        std::thread::sleep(Duration::from_millis(20));
+        sup.changed("b", path);
+        std::thread::sleep(Duration::from_millis(200));
+        let repeat = Instant::now();
+        sup.changed("a", path);
+        sup.changed("b", path);
+        let deadline = repeat + DEBOUNCE;
+
+        let mut fired: BTreeMap<&str, Instant> = BTreeMap::new();
+        while fired.len() < 2 && repeat.elapsed() < DEBOUNCE * 3 {
+            for name in ["a", "b"] {
+                if !fired.contains_key(name) && taken(name) {
+                    fired.insert(name, Instant::now());
+                }
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(fired.len(), 2, "both took their changes: {fired:?}");
+        for (name, at) in &fired {
+            assert!(*at >= deadline, "{name} fired before the quiet period");
+            let late = *at - deadline;
+            assert!(
+                late < Duration::from_millis(100),
+                "{name} fired {late:?} after its deadline"
+            );
+        }
+        let (a, b) = (fired["a"], fired["b"]);
+        let apart = a.max(b) - a.min(b);
+        assert!(apart < Duration::from_millis(100), "{apart:?} apart");
+        // Each pipeline took the change once, and is done with it.
+        std::thread::sleep(Duration::from_millis(300));
+        for name in ["a", "b"] {
+            let changes = sup.changes.lock().unwrap();
+            let c = &changes[name];
+            assert_eq!(c.epoch, 2, "{name}");
+            assert!(!c.worker && c.last.is_none(), "{name}");
+        }
+    }
 }
