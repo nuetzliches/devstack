@@ -59,7 +59,7 @@ stay.
 | [0008](0008-background-workers-run-only-in-the-active-slot.md) | Background workers run only in the active slot | Accepted |
 | [0009](0009-the-daemon-owns-every-process-tree.md) | The daemon owns every process tree it starts | Accepted |
 | [0010](0010-promotion-mechanism.md) | Promotion mechanism: restart on the fixed port or switch a reverse proxy | Accepted (option B, the reverse proxy; measured) |
-| [0011](0011-platform-windows-native-first.md) | Windows-native first; WSL is decided by measurement | Accepted |
+| [0011](0011-platform-windows-native-first.md) | Windows-native first; WSL is decided by measurement | Accepted; macOS added as a preview by ADR-0054 |
 | [0012](0012-shared-infrastructure-between-lanes.md) | Which infrastructure may be shared between lanes | Decided by ADR-0030 |
 | [0013](0013-schema-changes-hold-promotion.md) | A build that changes schema inputs is not promoted automatically | Accepted, amended (how long a candidate stays held) |
 | [0014](0014-native-services-take-their-configuration-from-compose.md) | Native services take their configuration from the Compose service they replace | Accepted |
@@ -102,3 +102,4 @@ stay.
 | [0051](0051-a-pool-can-grow-by-nodes-a-provisioner-makes.md) | A pool can grow by nodes a provisioner makes for one member's lane, and gives back when it is removed | Proposed |
 | [0052](0052-a-restart-carries-the-lanes-over.md) | A restart of the stack carries its lanes over to the next daemon | Accepted |
 | [0053](0053-whoever-a-lane-is-shared-with-connects-to-it.md) | Whoever a lane is shared with connects to it, and disconnects again | Accepted |
+| [0054](0054-macos-is-a-developer-platform-in-preview.md) | macOS is a developer platform in preview, installed by Homebrew, checked by CI and by its testers | Accepted |
