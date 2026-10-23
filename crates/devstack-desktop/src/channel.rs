@@ -100,17 +100,48 @@ pub fn brew(prefix: &Path) -> PathBuf {
 }
 
 /// What starts this devstack again later (the hub at logon, the hub after an
-/// update): `exe`, or for a copy Homebrew installed the path Homebrew keeps.
+/// update, the tray handing over to the hub's devstack): `exe`, or for a copy
+/// Homebrew installed the path Homebrew keeps. A binary replaced since it
+/// started is found at its path ([`undeleted`]).
 pub fn stable_exe(exe: &Path) -> PathBuf {
-    match homebrew_prefix(exe) {
+    let exe = undeleted(exe.to_path_buf());
+    match homebrew_prefix(&exe) {
         Some(prefix) => brew_bin(&prefix),
-        None => exe.to_path_buf(),
+        None => exe,
+    }
+}
+
+/// The path a running binary was started from. Linux names a binary that was
+/// replaced since it started (`devstack update` while the hub, the tray or an
+/// agent runs) `<path> (deleted)`; the new file is at `<path>`.
+pub fn undeleted(exe: PathBuf) -> PathBuf {
+    match exe.to_str().and_then(|s| s.strip_suffix(" (deleted)")) {
+        Some(p) if cfg!(target_os = "linux") => PathBuf::from(p),
+        _ => exe,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_replaced_running_binary_is_found_at_its_path() {
+        let gone = PathBuf::from("/home/me/.local/bin/devstack (deleted)");
+        let want = if cfg!(target_os = "linux") {
+            PathBuf::from("/home/me/.local/bin/devstack")
+        } else {
+            gone.clone()
+        };
+        assert_eq!(undeleted(gone.clone()), want);
+        assert_eq!(
+            stable_exe(&gone),
+            want,
+            "the tray's hand-over after an update"
+        );
+        let here = PathBuf::from("/home/me/.local/bin/devstack");
+        assert_eq!(undeleted(here.clone()), here);
+    }
 
     #[test]
     fn a_homebrew_install_is_recognised() {

@@ -28,6 +28,12 @@ and listed with their assets on the
   stack (`●`, `○`, ...) came from different fonts, in different sizes. A
   stack's state is a dot in the icon's colours now, in a column of its own;
   the other menus have no column. Linux and macOS keep the marks as text.
+- **The tray comes back after an update on Linux.** The tray of the old
+  devstack hands over to the hub's new one by starting itself again, but
+  Linux names a binary replaced while it runs `<path> (deleted)`: the start
+  failed ("No such file or directory"), and the new hub's tray had already
+  given way to the old one, so none was left. It starts the binary at its
+  path now. `devstack hub tray on` brings it back on 0.22.0.
 
 ## [0.22.0] - 2026-10-24
 

@@ -154,7 +154,7 @@ pub fn for_node(
             "{target} is older than the {current} this node runs: an admin orders a downgrade explicitly"
         ));
     }
-    let exe = undeleted(std::env::current_exe().map_err(|e| e.to_string())?);
+    let exe = devstack_desktop::undeleted(std::env::current_exe().map_err(|e| e.to_string())?);
     if devstack_desktop::is_dev_build(&exe) {
         return Err(format!(
             "this agent is a build from source ({})",
@@ -173,16 +173,6 @@ pub fn for_node(
     install(&target, &exe)
         .map(Some)
         .map_err(|e| format!("{e:#}"))
-}
-
-/// The path a running binary was started from. Linux names a binary that was
-/// replaced since it started (`devstack update` in a shell, while the agent
-/// runs) `<path> (deleted)`; the new file is at `<path>`.
-fn undeleted(exe: PathBuf) -> PathBuf {
-    match exe.to_str().and_then(|s| s.strip_suffix(" (deleted)")) {
-        Some(p) if cfg!(target_os = "linux") => PathBuf::from(p),
-        _ => exe,
-    }
 }
 
 /// Download, check and put release `version` in place of `target`; returns
@@ -485,18 +475,5 @@ mod tests {
         );
         let unc = PathBuf::from(r"\\?\UNC\host\share\devstack.exe");
         assert_eq!(plain(unc.clone()), unc);
-    }
-
-    #[test]
-    fn a_replaced_running_binary_is_found_at_its_path() {
-        let gone = PathBuf::from("/usr/local/bin/devstack (deleted)");
-        let want = if cfg!(target_os = "linux") {
-            PathBuf::from("/usr/local/bin/devstack")
-        } else {
-            gone.clone()
-        };
-        assert_eq!(undeleted(gone), want);
-        let here = PathBuf::from("/usr/local/bin/devstack");
-        assert_eq!(undeleted(here.clone()), here);
     }
 }
