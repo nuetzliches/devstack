@@ -74,16 +74,24 @@ impl Supervisor {
     }
 
     /// The main tree's overlay for `group`'s `main_ports` (ADR-0048), written
-    /// from its Compose files as they stand now: the ports it holds.
+    /// from its Compose files as they stand now: the ports it holds. Its
+    /// announced ports (ADR-0057) are checked on the same model.
     fn write_main_overlay(&self, group: &str) -> Result<Vec<devstack_compose::HeldPort>, String> {
         let file = self.main_overlay_file(group);
         let _ = std::fs::remove_file(&file);
-        let names = &self.stack.compose[group].main_ports;
-        if names.is_empty() {
+        let cfg = &self.stack.compose[group];
+        let names = &cfg.main_ports;
+        let announced = cfg.announced();
+        if names.is_empty() && announced.is_empty() {
             return Ok(Vec::new());
         }
         let g = self.compose_group(group);
         let model = self.docker.config(&g).map_err(|e| e.to_string())?;
+        devstack_compose::check_announced(&model, &announced)
+            .map_err(|e| format!("compose group `{group}`: {e}"))?;
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
         // The main slot moves TCP only (ADR-0048 point 6; a lane on a node
         // relays UDP, ADR-0056): a UDP port stays Docker's.
         for name in names {
@@ -99,7 +107,7 @@ impl Supervisor {
                 }
             }
         }
-        let Some((text, held)) = devstack_compose::main_overlay(&model, names)
+        let Some((text, held)) = devstack_compose::main_overlay(&model, names, &announced)
             .map_err(|e| format!("compose group `{group}`: {e}"))?
         else {
             return Ok(Vec::new());
@@ -221,6 +229,7 @@ impl Supervisor {
     pub(super) fn compose_group(&self, name: &str) -> Group {
         let cfg = &self.stack.compose[name];
         let mut g = Group::from_config(name, cfg, &self.repo);
+        g.env = self.group_port_variables(name);
         if self.lane.is_empty() {
             let overlay = self.main_overlay_file(name);
             if !cfg.main_ports.is_empty() && overlay.is_file() {
@@ -242,6 +251,78 @@ impl Supervisor {
         g
     }
 
+    /// The `DEVSTACK_PORT_*` of `group`'s announced ports in this tree
+    /// (ADR-0057): the files' ports in the main tree, moved by the lane's
+    /// offset in a lane, except a `shared` service's, which the main tree
+    /// runs (on a node there is no main tree: every one moves).
+    fn group_port_variables(&self, group: &str) -> BTreeMap<String, String> {
+        let cfg = &self.stack.compose[group];
+        if self.external_infra().is_some() {
+            // A lane on a node runs as a main tree on its developer's
+            // ports: the offset its agent gave it.
+            let offset = std::env::var("DEVSTACK_PORT_OFFSET")
+                .ok()
+                .and_then(|v| v.trim().parse::<u16>().ok())
+                .unwrap_or(0);
+            return cfg.port_variables(offset, &[]);
+        }
+        let fixed: &[String] = if self.lane.is_empty() {
+            &[]
+        } else {
+            &cfg.shared
+        };
+        cfg.port_variables(self.port_offset, fixed)
+    }
+
+    /// The `DEVSTACK_PORT_*` of every group as this tree runs them: what
+    /// an `exec` step of a command gets, so `docker compose` there keeps
+    /// the moved ports (ADR-0057).
+    pub(crate) fn port_variables(&self) -> BTreeMap<String, String> {
+        self.stack
+            .compose
+            .keys()
+            .flat_map(|g| self.group_port_variables(g))
+            .collect()
+    }
+
+    /// The port the Compose files give `service` of `group` for container
+    /// port `target`, as devstack keys it (ADR-0057 point 6): in a lane an
+    /// announced port is moved inside the container too, and is known by
+    /// the files' number all the same. `None`: `target` is the files' own.
+    fn files_port(&self, group: &str, service: &str, target: u16) -> Option<u16> {
+        if self.lane.is_empty() || self.port_offset == 0 {
+            return None;
+        }
+        let cfg = self.stack.compose.get(group)?;
+        if cfg.shared.iter().any(|s| s == service) {
+            return None;
+        }
+        cfg.announced()
+            .into_iter()
+            .find(|a| a.service == service && a.port.checked_add(self.port_offset) == Some(target))
+            .map(|a| a.port)
+    }
+
+    /// Note container port `target` of `service` at `addr`: keyed by the
+    /// files' port ([`Self::files_port`]); a moved one by its own number as
+    /// well, for an environment that names it as the files tell it
+    /// (`media:${DEVSTACK_PORT_MEDIA_7881:-7881}` is `media:7981` in a lane,
+    /// rewritten as ADR-0014 says).
+    fn publish(
+        &self,
+        published: &mut BTreeMap<(String, String, u16), String>,
+        group: &str,
+        service: &str,
+        target: u16,
+        addr: String,
+    ) {
+        let key = |port| (group.to_string(), service.to_string(), port);
+        if let Some(port) = self.files_port(group, service, target) {
+            published.insert(key(port), addr.clone());
+        }
+        published.insert(key(target), addr);
+    }
+
     fn lane_overlay_file(&self, group: &str) -> PathBuf {
         self.state_dir.join("compose").join(format!("{group}.yml"))
     }
@@ -254,16 +335,21 @@ impl Supervisor {
         let _ = std::fs::remove_file(&file);
         let g = self.compose_group(group);
         let model = self.docker.config(&g).map_err(|e| e.to_string())?;
-        let shared = &self.stack.compose[group].shared;
-        let text = devstack_compose::lane_overlay(
-            &model,
-            &g.project,
-            &self.lane,
-            self.port_offset,
-            shared,
-            &self.stack.compose[group].networks,
-        )
-        .map_err(|e| format!("compose group `{group}`: {e}"))?;
+        let cfg = &self.stack.compose[group];
+        let announced = cfg.announced();
+        let text = devstack_compose::check_announced(&model, &announced)
+            .and_then(|()| {
+                devstack_compose::lane_overlay(
+                    &model,
+                    &g.project,
+                    &self.lane,
+                    self.port_offset,
+                    &cfg.shared,
+                    &cfg.networks,
+                    &announced,
+                )
+            })
+            .map_err(|e| format!("compose group `{group}`: {e}"))?;
         std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;
         std::fs::write(&file, text).map_err(|e| e.to_string())
     }
@@ -418,14 +504,18 @@ impl Supervisor {
         let mut ports = Vec::new();
         for p in &c.publishers {
             if let Some(addr) = c.published(p.target_port) {
-                let key = (group.to_string(), c.service.clone(), p.target_port);
+                // An announced port a lane moved is shown by the files' number.
+                let port = self
+                    .files_port(group, &c.service, p.target_port)
+                    .unwrap_or(p.target_port);
+                let key = (group.to_string(), c.service.clone(), port);
                 // A held port shows as the fixed one: that is its address.
                 let shown = match fronts.get(&key) {
                     Some(h) => format!("{}:{}", h.host_ip.as_deref().unwrap_or("0.0.0.0"), h.fixed),
                     None => addr.clone(),
                 };
-                published.insert(key, addr);
-                let s = format!("{}->{shown}", p.target_port);
+                self.publish(published, group, &c.service, p.target_port, addr);
+                let s = format!("{port}->{shown}");
                 if !ports.contains(&s) {
                     ports.push(s);
                 }
@@ -548,13 +638,16 @@ impl Supervisor {
                 Ok(model) => {
                     for (svc, m) in model.services {
                         for p in &m.ports {
-                            let key = (g.clone(), svc.clone(), p.target);
                             match &p.published {
-                                Some(pubd) => {
-                                    cache.published.insert(key, format!("127.0.0.1:{pubd}"));
-                                }
+                                Some(pubd) => self.publish(
+                                    &mut cache.published,
+                                    &g,
+                                    &svc,
+                                    p.target,
+                                    format!("127.0.0.1:{pubd}"),
+                                ),
                                 None => {
-                                    cache.pending.insert(key);
+                                    cache.pending.insert((g.clone(), svc.clone(), p.target));
                                 }
                             }
                         }
@@ -782,7 +875,10 @@ impl Supervisor {
             .unwrap()
             .published
             .iter()
-            .filter(|((g, s, _), _)| g == group && s == service)
+            .filter(|((g, s, t), _)| {
+                // A moved announced port once, by the files' number.
+                g == group && s == service && self.files_port(g, s, *t).is_none()
+            })
             .map(|((_, _, t), addr)| format!("{t}->{addr}"))
             .collect()
     }
@@ -1124,6 +1220,20 @@ impl Supervisor {
                                 }
                                 _ => addr.clone(),
                             };
+                            // An announced port the node moved inside the
+                            // container (ADR-0057) is reached by the moved
+                            // number too, as [`Self::publish`] has it.
+                            if let Some(inside) = addr
+                                .rsplit(':')
+                                .next()
+                                .and_then(|p| p.parse::<u16>().ok())
+                                .filter(|p| *p != key.port)
+                            {
+                                cache
+                                    .published
+                                    .entry((g.clone(), svc.clone(), inside))
+                                    .or_insert(at.clone());
+                            }
                             // A port's TCP entry comes first, and stays.
                             cache
                                 .published
@@ -1543,6 +1653,92 @@ mod tests {
     }
 
     const BLOBS: &str = r#"{"Service":"blobs","Name":"shop-blobs","State":"running","Health":"","ExitCode":0,"Publishers":[]}"#;
+
+    /// A supervisor of `lane` (the main tree: empty) of a stack whose
+    /// `media` announces 7881 and whose `shared` `mail` 1025.
+    fn rtc(
+        lane: &str,
+        rt: &tokio::runtime::Runtime,
+    ) -> (tempfile::TempDir, std::sync::Arc<Supervisor>) {
+        let stack = devstack_config::from_str(
+            "version = 1\n[stack]\nname = \"t\"\n[compose.app]\nproject = \"rtc\"\nfiles = [\"c.yml\"]\nservices = [\"media\", \"mail\"]\nshared = [\"mail\"]\nannounced_ports = [\"media:7881\", \"mail:1025\"]\n",
+            Path::new("t.toml"),
+        )
+        .unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("devstack.toml");
+        let state = d.path().join(".devstack");
+        let sup = if lane.is_empty() {
+            Supervisor::new(
+                stack,
+                file,
+                d.path().to_path_buf(),
+                state,
+                devstack_proc::Options::default(),
+                rt.handle().clone(),
+            )
+        } else {
+            Supervisor::new_lane(
+                stack,
+                file,
+                d.path().to_path_buf(),
+                state.join(format!("lane-{lane}")),
+                devstack_proc::Options::default(),
+                rt.handle().clone(),
+                lane.into(),
+                100,
+                std::sync::Arc::new(std::sync::Mutex::new(None)),
+                None,
+            )
+        }
+        .unwrap();
+        (d, sup)
+    }
+
+    #[test]
+    fn a_moved_announced_port_is_known_by_the_files_number() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (_d, sup) = rtc("feat-x", &rt);
+        let g = sup.compose_group("app");
+        assert_eq!(g.env["DEVSTACK_PORT_MEDIA_7881"], "7981");
+        assert_eq!(g.env["DEVSTACK_PORT_MAIL_1025"], "1025", "the main tree's");
+        // `compose ps` of the lane: 7881 is 7981 inside and out, 7880 moved
+        // on the host only.
+        let c = devstack_compose::parse_ps(
+            r#"{"Service":"media","Name":"rtc-feat-x-media-1","State":"running","Publishers":[
+                {"URL":"127.0.0.1","TargetPort":7981,"PublishedPort":7981},
+                {"URL":"127.0.0.1","TargetPort":7880,"PublishedPort":7980}]}"#
+                .replace('\n', "")
+                .as_str(),
+        )
+        .unwrap()
+        .remove(0);
+        let mut published = BTreeMap::new();
+        let view = sup.container_view("app", c, &mut published);
+        assert_eq!(
+            view.ports,
+            ["7881->127.0.0.1:7981", "7880->127.0.0.1:7980"],
+            "the dashboard: by the files' number"
+        );
+        let at = |p: u16| published.get(&("app".to_string(), "media".to_string(), p));
+        // `{compose.app.media.7881.port}` is 7981; `media:7981`, as an
+        // environment from the variable has it, is rewritten as well.
+        assert_eq!(at(7881).map(String::as_str), Some("127.0.0.1:7981"));
+        assert_eq!(at(7981).map(String::as_str), Some("127.0.0.1:7981"));
+        assert_eq!(at(7880).map(String::as_str), Some("127.0.0.1:7980"));
+        // A shared service's port is the main tree's: not moved.
+        assert_eq!(sup.files_port("app", "mail", 1125), None);
+        // The main tree moves nothing.
+        let (_m, main) = rtc("", &rt);
+        assert_eq!(main.files_port("app", "media", 7981), None);
+        assert_eq!(
+            main.compose_group("app").env["DEVSTACK_PORT_MEDIA_7881"],
+            "7881"
+        );
+    }
 
     #[test]
     fn an_explicit_container_name_is_addressed_by_its_service() {

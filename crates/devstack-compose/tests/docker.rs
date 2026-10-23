@@ -39,6 +39,7 @@ fn up_ps_published_ports_and_parked_services() {
         networks: vec![format!("{project}-edge")],
         services: vec!["db".into()],
         dir: dir.path().into(),
+        env: Default::default(),
     };
     let docker = Docker::default();
     docker.validate(&g).unwrap();

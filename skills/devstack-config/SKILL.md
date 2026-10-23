@@ -107,6 +107,15 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   `main_ports = ["web", "api"]`: devstack then holds their published TCP
   ports and points them at the lane. Name what the developer reaches directly
   from the host (UI, the API the browser calls), not what those use.
+- **Ports a server announces** (a WebRTC media server's ICE candidates, a
+  broker's advertised listeners) go into the Compose group's
+  `announced_ports = ["media:7881", "media:7882/udp"]`, each published 1:1
+  (`7881:7881`). A lane then moves them inside the container too, and
+  Compose (and every `exec` step) gets `DEVSTACK_PORT_MEDIA_7881` with this
+  tree's number: pass it to the server's listen and announce settings with
+  the files' port as default (`${DEVSTACK_PORT_MEDIA_7881:-7881}`); keep
+  `ports` literal. Without the key, a lane's server announces the main
+  tree's port. Add `requires = "0.20.0"` to `[stack]`.
 - **Paths** are relative to the repository root; use `{repo}` where a process
   needs an absolute one. Generated directories (`bin`, `obj`, `node_modules`,
   `target`, `.git`, `.devstack`) never count as changes. Compose files, env

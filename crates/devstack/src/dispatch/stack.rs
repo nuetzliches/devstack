@@ -101,8 +101,23 @@ fn check(file: &Path, compose: bool) -> Result<()> {
         let mut failed = false;
         for (name, g) in &stack.compose {
             let group = devstack_compose::Group::from_config(name, g, &repo);
-            match docker.validate(&group) {
-                Ok(()) => println!("compose.{name}: ok"),
+            // Announced ports (ADR-0057) are published 1:1 on fixed ports:
+            // what a start checks, on the model it reads.
+            let announced = g.announced();
+            let checked = docker.validate(&group).and_then(|()| {
+                if announced.is_empty() {
+                    return Ok(Ok(()));
+                }
+                docker
+                    .config(&group)
+                    .map(|m| devstack_compose::check_announced(&m, &announced))
+            });
+            match checked {
+                Ok(Err(e)) => {
+                    failed = true;
+                    eprintln!("compose.{name}: {e}");
+                }
+                Ok(Ok(())) => println!("compose.{name}: ok"),
                 Err(e) => {
                     failed = true;
                     eprintln!("compose.{name}: {e}");

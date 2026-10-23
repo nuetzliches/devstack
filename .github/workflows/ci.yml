@@ -192,12 +192,12 @@ jobs:
         include:
           - os: windows-latest
             # The Compose variants need Linux containers: not run, not "passed".
-            skip: --skip lifecycle_with_compose --skip a_lane_has_its_own_containers
+            skip: --skip lifecycle_with_compose --skip a_lane_has_its_own_containers --skip an_announced_port_moves_inside_a_lanes_container
           - os: ubuntu-latest
             skip: ''
           # No Docker on the macOS runners (ADR-0054).
           - os: macos-14
-            skip: --skip lifecycle_with_compose --skip a_lane_has_its_own_containers
+            skip: --skip lifecycle_with_compose --skip a_lane_has_its_own_containers --skip an_announced_port_moves_inside_a_lanes_container
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

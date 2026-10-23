@@ -8,7 +8,7 @@
 //! `ps --format json` prints one JSON object per line, with `Publishers`.
 
 pub mod engine;
-use devstack_config::model::ComposeGroup;
+use devstack_config::model::{AnnouncedPort, ComposeGroup};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -51,9 +51,15 @@ pub struct Group {
     pub services: Vec<String>,
     /// Working directory for every call: the repository root.
     pub dir: PathBuf,
+    /// Set for every call of the group, over an env file's value: the
+    /// `DEVSTACK_PORT_*` of its announced ports as this tree runs them
+    /// (ADR-0057).
+    pub env: BTreeMap<String, String>,
 }
 
 impl Group {
+    /// The group as the main tree runs it: its announced ports' variables
+    /// are the files' ports.
     pub fn from_config(name: &str, g: &ComposeGroup, repo: &Path) -> Self {
         Self {
             name: name.into(),
@@ -63,6 +69,7 @@ impl Group {
             networks: g.networks.clone(),
             services: g.services.clone(),
             dir: repo.to_path_buf(),
+            env: g.port_variables(0, &[]),
         }
     }
 
@@ -506,28 +513,38 @@ impl Docker {
         }
     }
 
-    fn command(&self, dir: &Path, args: &[OsString]) -> Command {
+    /// The Docker CLI with `args` in `dir`, `env` set over what it gets of
+    /// this process (a group's `DEVSTACK_PORT_*`, also with
+    /// [`clean_env`]).
+    fn command(&self, dir: &Path, args: &[OsString], env: &BTreeMap<String, String>) -> Command {
         let mut cmd = Command::new(&self.program);
         cmd.args(args).current_dir(dir);
         if self.clean_env {
             clean_env(&mut cmd);
         }
+        cmd.envs(env);
         no_window(&mut cmd);
         cmd
     }
 
     fn run(&self, dir: &Path, args: &[OsString], budget: Duration) -> Result<Output> {
-        self.run_until(dir, args, budget, &|| false)
+        self.run_until(dir, args, &BTreeMap::new(), budget, &|| false)
+    }
+
+    /// A call of group `g`: in its directory, with its variables.
+    fn run_group(&self, g: &Group, args: &[OsString], budget: Duration) -> Result<Output> {
+        self.run_until(&g.dir, args, &g.env, budget, &|| false)
     }
 
     fn run_until(
         &self,
         dir: &Path,
         args: &[OsString],
+        env: &BTreeMap<String, String>,
         budget: Duration,
         stop: &dyn Fn() -> bool,
     ) -> Result<Output> {
-        let out = output_until(self.command(dir, args), budget, stop)
+        let out = output_until(self.command(dir, args, env), budget, stop)
             .map_err(|source| ComposeError::Spawn {
                 program: self.program.clone(),
                 source,
@@ -578,7 +595,7 @@ impl Docker {
             "json".into(),
         ]);
         a.extend(flags.iter().map(OsString::from));
-        let out = self.run(&g.dir, &a, budget::QUICK)?;
+        let out = self.run_group(g, &a, budget::QUICK)?;
         parse_config(&String::from_utf8_lossy(&out.stdout)).map_err(|message| ComposeError::Parse {
             command: describe(&self.program, &a),
             message,
@@ -589,7 +606,7 @@ impl Docker {
     pub fn validate(&self, g: &Group) -> Result<()> {
         let mut a = g.base_args();
         a.extend(["config".into(), "-q".into()]);
-        self.run(&g.dir, &a, budget::QUICK).map(|_| ())
+        self.run_group(g, &a, budget::QUICK).map(|_| ())
     }
 
     /// Create the group's own networks unless they exist.
@@ -621,7 +638,7 @@ impl Docker {
         let mut a = g.base_args();
         a.extend(["create".into(), "--no-recreate".into()]);
         a.extend(g.services.iter().map(OsString::from));
-        self.run(&g.dir, &a, budget::PULL).map(|_| ())
+        self.run_group(g, &a, budget::PULL).map(|_| ())
     }
 
     /// Start exactly the group's selected services without waiting for
@@ -632,7 +649,7 @@ impl Docker {
         let mut a = g.base_args();
         a.extend(["up".into(), "-d".into(), "--no-deps".into()]);
         a.extend(g.services.iter().map(OsString::from));
-        self.run(&g.dir, &a, budget::PULL).map(|_| ())
+        self.run_group(g, &a, budget::PULL).map(|_| ())
     }
 
     /// Start exactly the group's selected services and wait until they are
@@ -650,7 +667,7 @@ impl Docker {
             "--no-deps".into(),
         ]);
         a.extend(g.services.iter().map(OsString::from));
-        self.run(&g.dir, &a, budget::PULL + timeout).map(|_| ())
+        self.run_group(g, &a, budget::PULL + timeout).map(|_| ())
     }
 
     /// Start the group's created services as they are, without building
@@ -677,7 +694,7 @@ impl Docker {
         a.extend(["--no-deps".into(), "--no-build".into()]);
         a.extend(g.services.iter().map(OsString::from));
         let budget = budget::PULL + wait.unwrap_or_default();
-        self.run_until(&g.dir, &a, budget, stop).map(|_| ())
+        self.run_until(&g.dir, &a, &g.env, budget, stop).map(|_| ())
     }
 
     pub fn ps(&self, g: &Group) -> Result<Vec<Container>> {
@@ -688,7 +705,7 @@ impl Docker {
             "--format".into(),
             "json".into(),
         ]);
-        let out = self.run(&g.dir, &a, budget::QUICK)?;
+        let out = self.run_group(g, &a, budget::QUICK)?;
         parse_ps(&String::from_utf8_lossy(&out.stdout)).map_err(|message| ComposeError::Parse {
             command: describe(&self.program, &a),
             message,
@@ -698,7 +715,7 @@ impl Docker {
     pub fn restart(&self, g: &Group, service: &str) -> Result<()> {
         let mut a = g.base_args();
         a.extend(["restart".into(), service.into()]);
-        self.run(&g.dir, &a, budget::STOP).map(|_| ())
+        self.run_group(g, &a, budget::STOP).map(|_| ())
     }
 
     /// `docker compose logs --follow` of one container: the last `tail`
@@ -721,7 +738,7 @@ impl Docker {
             tail.to_string().into(),
             service.into(),
         ]);
-        self.command(&g.dir, &a)
+        self.command(&g.dir, &a, &g.env)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -741,7 +758,7 @@ impl Docker {
             "10".into(),
             service.into(),
         ]);
-        self.run(&g.dir, &a, budget::STOP).map(|_| ())
+        self.run_group(g, &a, budget::STOP).map(|_| ())
     }
 
     /// Stop a container by its name (`docker stop`), whether or not the
@@ -781,7 +798,7 @@ impl Docker {
             a.extend(["--since".into(), s.into()]);
         }
         a.push(service.into());
-        let out = self.run(&g.dir, &a, budget::QUICK)?;
+        let out = self.run_group(g, &a, budget::QUICK)?;
         Ok(merge_by_time(
             &String::from_utf8_lossy(&out.stdout),
             &String::from_utf8_lossy(&out.stderr),
@@ -793,7 +810,7 @@ impl Docker {
     pub fn down(&self, g: &Group) -> Result<()> {
         let mut a = g.base_args();
         a.extend(["down".into(), "--timeout".into(), "10".into()]);
-        self.run(&g.dir, &a, budget::STOP).map(|_| ())
+        self.run_group(g, &a, budget::STOP).map(|_| ())
     }
 
     /// Remove the group's containers, its volumes and the networks devstack
@@ -807,7 +824,7 @@ impl Docker {
             "--timeout".into(),
             "10".into(),
         ]);
-        self.run(&g.dir, &a, budget::STOP)?;
+        self.run_group(g, &a, budget::STOP)?;
         for n in &g.networks {
             let _ = self.run(
                 &g.dir,
@@ -829,8 +846,10 @@ impl Docker {
 /// external volumes, which hold data someone put there on purpose. `model`
 /// is the group's configuration under the lane's `project`, whose own names
 /// (`<project>_<key>`) are its own already. `keep` are services the lane does
-/// not run (`shared`); they are left alone. YAML, with the merge tags of
-/// Compose 2.24 (`!override`, `!reset`).
+/// not run (`shared`); they are left alone. An `announced` port (ADR-0057)
+/// moves inside the container too, published 1:1 (`7981:7981`): the server
+/// listens on, and announces, the lane's number. YAML, with the merge tags
+/// of Compose 2.24 (`!override`, `!reset`).
 pub fn lane_overlay(
     model: &Model,
     project: &str,
@@ -838,8 +857,75 @@ pub fn lane_overlay(
     offset: u16,
     keep: &[String],
     own: &[String],
+    announced: &[AnnouncedPort],
 ) -> std::result::Result<String, String> {
-    Ok(overlay(model, project, lane, Some(offset), keep, own)?.render(lane))
+    Ok(overlay(model, project, lane, Some(offset), keep, own, announced)?.render(lane))
+}
+
+/// Whether `port` of `service` is one of `announced` (ADR-0057).
+pub fn is_announced(announced: &[AnnouncedPort], service: &str, port: &PortModel) -> bool {
+    let udp = port
+        .protocol
+        .as_deref()
+        .is_some_and(|p| p.eq_ignore_ascii_case("udp"));
+    announced
+        .iter()
+        .any(|a| a.service == service && a.port == port.target && a.udp == udp)
+}
+
+/// Each `announced` port (ADR-0057) is a port the Compose files publish
+/// 1:1 on a fixed host port (`7881:7881`, on any address): the number a
+/// client reaches is the number the server listens on, in every tree.
+/// Checked on the model whenever devstack reads it for a start, and by
+/// `devstack check --compose`.
+pub fn check_announced(
+    model: &Model,
+    announced: &[AnnouncedPort],
+) -> std::result::Result<(), String> {
+    let mut bad = Vec::new();
+    for a in announced {
+        let udp = if a.udp { "/udp" } else { "" };
+        let entry = format!("{}:{}{udp}", a.service, a.port);
+        let one_to_one = format!("\"{0}:{0}{udp}\"", a.port);
+        let Some(svc) = model.services.get(&a.service) else {
+            bad.push(format!(
+                "`{entry}`: the Compose files have no service `{}`",
+                a.service
+            ));
+            continue;
+        };
+        let ports: Vec<&PortModel> = svc
+            .ports
+            .iter()
+            .filter(|p| is_announced(std::slice::from_ref(a), &a.service, p))
+            .collect();
+        if ports.is_empty() {
+            bad.push(format!(
+                "`{entry}`: the Compose files do not publish it; publish it 1:1 ({one_to_one})"
+            ));
+            continue;
+        }
+        for p in ports {
+            let fixed = p
+                .published
+                .as_deref()
+                .and_then(|h| h.trim().parse::<u16>().ok());
+            if fixed != Some(a.port) {
+                let how = match p.published {
+                    None => "on a port Docker assigns".to_string(),
+                    Some(_) => format!("as \"{}\"", port_spec(p)),
+                };
+                bad.push(format!(
+                    "`{entry}` is published {how}: an announced port is published 1:1 on a fixed port ({one_to_one}), so the number the server announces is the one clients reach"
+                ));
+            }
+        }
+    }
+    if bad.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("`announced_ports`: {}", bad.join("; ")))
+    }
 }
 
 /// A port of a main-tree container that devstack holds (ADR-0048): the
@@ -856,11 +942,14 @@ pub struct HeldPort {
 /// The main tree's overlay for a group's `main_ports` (ADR-0048): each TCP
 /// port of those services that the Compose files publish on a fixed host
 /// port is published on a loopback port Docker assigns instead, which
-/// devstack forwards the fixed one to. Their UDP ports, port ranges and
-/// ports Docker assigns stay as they are. `None` when nothing is held.
+/// devstack forwards the fixed one to. Their UDP ports, port ranges, ports
+/// Docker assigns and `announced` ports (ADR-0057: a client learns those
+/// from the server it signalled with) stay as they are. `None` when
+/// nothing is held.
 pub fn main_overlay(
     model: &Model,
     services: &[String],
+    announced: &[AnnouncedPort],
 ) -> std::result::Result<Option<(String, Vec<HeldPort>)>, String> {
     let mut o = Overlay::default();
     let mut held = Vec::new();
@@ -879,7 +968,7 @@ pub fn main_overlay(
                 .as_deref()
                 .and_then(|p| p.trim().parse::<u16>().ok());
             let spec = match fixed {
-                Some(fixed) if tcp => {
+                Some(fixed) if tcp && !is_announced(announced, name, port) => {
                     moved = true;
                     held.push(HeldPort {
                         service: name.clone(),
@@ -958,7 +1047,7 @@ pub fn node_overlay(
     lane: &str,
     options: &NodeOptions,
 ) -> std::result::Result<String, String> {
-    let mut o = overlay(model, project, lane, None, &[], &options.own_networks)?;
+    let mut o = overlay(model, project, lane, None, &[], &options.own_networks, &[])?;
     for (name, svc) in &model.services {
         let body = o.services.entry(name.clone()).or_default();
         if options.memory.is_some() || options.cpus.is_some() || options.pids.is_some() {
@@ -1059,7 +1148,8 @@ impl Overlay {
     }
 }
 
-/// `offset`: move published ports by it; `None`: publish none.
+/// `offset`: move published ports by it, an `announced` one inside the
+/// container too; `None`: publish none.
 fn overlay(
     model: &Model,
     project: &str,
@@ -1067,6 +1157,7 @@ fn overlay(
     offset: Option<u16>,
     keep: &[String],
     own: &[String],
+    announced: &[AnnouncedPort],
 ) -> std::result::Result<Overlay, String> {
     let by = offset.unwrap_or(0);
     let shift = |p: &str| -> std::result::Result<String, String> {
@@ -1093,7 +1184,35 @@ fn overlay(
             body.push("    ports: !override".to_string());
             for port in &svc.ports {
                 let mut spec = String::new();
-                if let Some(published) = &port.published {
+                let mut target = port.target;
+                if is_announced(announced, name, port) {
+                    // 1:1, moved on both sides (ADR-0057): the server listens
+                    // on the lane's number, which nothing else of it may have.
+                    let moved = port
+                        .target
+                        .checked_add(by)
+                        .ok_or_else(|| format!("port {} + {by} is beyond 65535", port.target))?;
+                    let proto =
+                        |p: &PortModel| p.protocol.as_deref().unwrap_or("tcp").to_ascii_lowercase();
+                    if by != 0
+                        && let Some(other) = svc
+                            .ports
+                            .iter()
+                            .find(|p| p.target == moved && proto(p) == proto(port))
+                    {
+                        return Err(format!(
+                            "`{name}` announces {}, which moves to {moved} in this lane, and has \"{}\" inside already",
+                            port.target,
+                            port_spec(other)
+                        ));
+                    }
+                    if let Some(ip) = port.host_ip.as_deref().filter(|ip| !ip.is_empty()) {
+                        spec.push_str(ip);
+                        spec.push(':');
+                    }
+                    spec.push_str(&format!("{moved}:"));
+                    target = moved;
+                } else if let Some(published) = &port.published {
                     if let Some(ip) = port.host_ip.as_deref().filter(|ip| !ip.is_empty()) {
                         spec.push_str(ip);
                         spec.push(':');
@@ -1101,7 +1220,7 @@ fn overlay(
                     spec.push_str(&shift(published)?);
                     spec.push(':');
                 }
-                spec.push_str(&port.target.to_string());
+                spec.push_str(&target.to_string());
                 if let Some(proto) = port.protocol.as_deref().filter(|p| *p != "tcp") {
                     spec.push('/');
                     spec.push_str(proto);
@@ -1485,6 +1604,7 @@ mod tests {
             networks: vec![],
             services: vec!["db".into()],
             dir: dir.path().into(),
+            env: BTreeMap::new(),
         };
         let a: Vec<String> = g
             .base_args()
@@ -1515,7 +1635,7 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let (y, held) = main_overlay(&model, &["web".to_string(), "worker".to_string()])
+        let (y, held) = main_overlay(&model, &["web".to_string(), "worker".to_string()], &[])
             .unwrap()
             .unwrap();
         assert!(
@@ -1542,8 +1662,11 @@ mod tests {
             ]
         );
         // Nothing to hold: no overlay.
-        assert_eq!(main_overlay(&model, &["worker".to_string()]).unwrap(), None);
-        assert!(main_overlay(&model, &["nope".to_string()]).is_err());
+        assert_eq!(
+            main_overlay(&model, &["worker".to_string()], &[]).unwrap(),
+            None
+        );
+        assert!(main_overlay(&model, &["nope".to_string()], &[]).is_err());
     }
 
     #[test]
@@ -1570,6 +1693,7 @@ mod tests {
             100,
             &["mail".to_string()],
             &["edge".to_string()],
+            &[],
         )
         .unwrap();
         assert!(y.contains("\"db\":\n    ports: !override\n      - \"127.0.0.1:5532:5432\"\n    container_name: !reset null"), "{y}");
@@ -1592,8 +1716,157 @@ mod tests {
             "{y}"
         );
         assert!(!y.contains("kept"), "external volumes stay: {y}");
-        let over = lane_overlay(&model, "shop-fix", "fix", 65000, &[], &[]);
+        let over = lane_overlay(&model, "shop-fix", "fix", 65000, &[], &[], &[]);
         assert!(over.is_err());
+    }
+
+    fn announced(entries: &[&str]) -> Vec<AnnouncedPort> {
+        entries
+            .iter()
+            .map(|e| AnnouncedPort::parse(e).unwrap())
+            .collect()
+    }
+
+    const MEDIA: &str = r#"{"services":{
+        "media":{"ports":[{"target":7880,"published":"7880","host_ip":"127.0.0.1"},
+                          {"target":7881,"published":"7881","host_ip":"127.0.0.1","protocol":"tcp"},
+                          {"target":7882,"published":"7882","protocol":"udp"}]},
+        "db":{"ports":[{"target":7881,"published":"17881"}]}}}"#;
+
+    #[test]
+    fn a_lane_moves_an_announced_port_inside_the_container_too() {
+        let model = parse_config(MEDIA).unwrap();
+        let a = announced(&["media:7881", "media:7882/udp"]);
+        let y = lane_overlay(&model, "rtc-fix", "fix", 100, &[], &[], &a).unwrap();
+        assert!(
+            y.contains(
+                "\"media\":\n    ports: !override\n      - \"127.0.0.1:7980:7880\"\n      - \"127.0.0.1:7981:7981\"\n      - \"7982:7982/udp\""
+            ),
+            "{y}"
+        );
+        // Another service's port of the same number moves on the host only.
+        assert!(y.contains("- \"17981:7881\""), "{y}");
+        // Without the entry: the host side only, as before.
+        let y = lane_overlay(&model, "rtc-fix", "fix", 100, &[], &[], &[]).unwrap();
+        assert!(y.contains("- \"127.0.0.1:7981:7881\""), "{y}");
+        // A shared service is the main tree's: left alone.
+        let y = lane_overlay(&model, "rtc-fix", "fix", 100, &["media".into()], &[], &a).unwrap();
+        assert!(!y.contains("\"media\""), "{y}");
+        // Moved onto a port the container has already: refused.
+        let e = lane_overlay(
+            &model,
+            "rtc-fix",
+            "fix",
+            1,
+            &[],
+            &[],
+            &announced(&["media:7880"]),
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("moves to 7881") && e.contains("127.0.0.1:7881:7881"),
+            "{e}"
+        );
+        // On a node nothing is published, announced or not.
+        let y = node_overlay(&model, "rtc-ab12", "ab12", &NodeOptions::default()).unwrap();
+        assert!(!y.contains("7981"), "{y}");
+    }
+
+    #[test]
+    fn the_main_slot_leaves_an_announced_port_to_docker() {
+        let model = parse_config(MEDIA).unwrap();
+        let (y, held) = main_overlay(
+            &model,
+            &["media".to_string()],
+            &announced(&["media:7881", "media:7882/udp"]),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            y.contains(
+                "- \"127.0.0.1::7880\"\n      - \"127.0.0.1:7881:7881\"\n      - \"7882:7882/udp\""
+            ),
+            "{y}"
+        );
+        assert_eq!(held.len(), 1, "{held:?}");
+        assert_eq!(held[0].target, 7880);
+        // Only announced ports: nothing held, no overlay.
+        let only = parse_config(
+            r#"{"services":{"media":{"ports":[{"target":7881,"published":"7881"}]}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            main_overlay(&only, &["media".to_string()], &announced(&["media:7881"])).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn an_announced_port_is_published_one_to_one_on_a_fixed_port() {
+        let model = parse_config(
+            r#"{"services":{
+              "media":{"ports":[{"target":7881,"published":"7881"},
+                                {"target":7882,"published":"7882","protocol":"udp"},
+                                {"target":7883,"published":"17883"},
+                                {"target":7884},
+                                {"target":7885,"published":"7885-7890"}]}}}"#,
+        )
+        .unwrap();
+        check_announced(&model, &announced(&["media:7881", "media:7882/udp"])).unwrap();
+        let e = check_announced(
+            &model,
+            &announced(&[
+                "media:7882",
+                "media:7883",
+                "media:7884",
+                "media:7885",
+                "nope:1",
+            ]),
+        )
+        .unwrap_err();
+        for want in [
+            "`media:7882`: the Compose files do not publish it; publish it 1:1 (\"7882:7882\")",
+            "`media:7883` is published as \"17883:7883\"",
+            "`media:7884` is published on a port Docker assigns",
+            "`media:7885` is published as \"7885-7890:7885\"",
+            "`nope:1`: the Compose files have no service `nope`",
+        ] {
+            assert!(e.contains(want), "{want}\n{e}");
+        }
+    }
+
+    #[test]
+    fn every_call_of_a_group_gets_its_port_variables() {
+        let env: BTreeMap<String, String> =
+            [("DEVSTACK_PORT_MEDIA_7881".to_string(), "7981".to_string())].into();
+        for docker in [Docker::default(), Docker::clean()] {
+            let cmd = docker.command(Path::new("."), &[], &env);
+            let set: Vec<(String, String)> = cmd
+                .get_envs()
+                .filter_map(|(k, v)| {
+                    Some((
+                        k.to_string_lossy().into_owned(),
+                        v?.to_string_lossy().into_owned(),
+                    ))
+                })
+                .collect();
+            assert!(
+                set.contains(&("DEVSTACK_PORT_MEDIA_7881".into(), "7981".into())),
+                "clean: {}: {set:?}",
+                docker.clean_env
+            );
+        }
+        // The main tree's group: the files' ports.
+        let stack = devstack_config::from_str(
+            "version = 1\n[stack]\nname = \"t\"\n[compose.rtc]\nproject = \"p\"\nfiles = [\"c.yml\"]\nservices = [\"media\"]\nannounced_ports = [\"media:7881\", \"media:7881/udp\"]\n",
+            Path::new("t.toml"),
+        )
+        .unwrap();
+        let g = Group::from_config("rtc", &stack.compose["rtc"], Path::new("."));
+        assert_eq!(
+            g.env,
+            [("DEVSTACK_PORT_MEDIA_7881".to_string(), "7881".to_string())].into()
+        );
     }
 
     #[test]
@@ -1622,7 +1895,7 @@ mod tests {
                 "networks":{"edge":{"name":"edge","external":true},"proxy":{"name":"proxy","external":true}}}"#,
         )
         .unwrap();
-        let y = lane_overlay(&model, "shop-fix", "fix", 0, &[], &["edge".into()]).unwrap();
+        let y = lane_overlay(&model, "shop-fix", "fix", 0, &[], &["edge".into()], &[]).unwrap();
         assert!(
             y.contains(
                 "\"edge\":

@@ -2782,3 +2782,196 @@ steps = [
         .args(["compose", "-p", &lane_project, "down", "--volumes"])
         .output();
 }
+
+/// ADR-0057: a port the container announces is published 1:1, and a lane
+/// moves it inside the container too. Compose is told the number in
+/// `DEVSTACK_PORT_<SERVICE>_<PORT>`: the server listens on the files' port
+/// in the main tree and on the moved one in a lane, where it is reached;
+/// devstack calls it by the files' number in both, and a command's `exec`
+/// step gets the variable. Docker only (no .NET).
+#[test]
+#[ignore = "needs Docker: DEVSTACK_INTEGRATION_COMPOSE=1, --include-ignored"]
+fn an_announced_port_moves_inside_a_lanes_container() {
+    if !enabled("DEVSTACK_INTEGRATION_COMPOSE") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION_COMPOSE=1 (needs Docker)");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let p = free_port();
+    let project = format!("devstack-it-rtc-{}-{p}", std::process::id());
+    let var = format!("DEVSTACK_PORT_MEDIA_{p}");
+    // The server listens on, and says, the port it is told; `ports` is
+    // literal, 1:1 (Docker publishes it on loopback only).
+    std::fs::write(
+        dir.path().join("compose.yml"),
+        format!(
+            r#"services:
+  media:
+    image: busybox:1.36
+    environment:
+      PORT: ${{{var}:-{p}}}
+    command: ["sh", "-c", "mkdir -p /www && echo announces-$$PORT > /www/index.html && exec httpd -f -p $$PORT -h /www"]
+    ports: ["127.0.0.1:{p}:{p}"]
+"#
+        ),
+    )
+    .unwrap();
+    let echo = if cfg!(windows) {
+        format!("echo port={{compose.app.media.{p}.port}} var=%{var}%")
+    } else {
+        format!("echo port={{compose.app.media.{p}.port}} var=${var}")
+    };
+    std::fs::write(
+        dir.path().join("devstack.toml"),
+        format!(
+            r#"version = 1
+[stack]
+name = "rtc"
+[compose.app]
+project = "{project}"
+files = ["compose.yml"]
+services = ["media"]
+announced_ports = ["media:{p}"]
+[commands.port]
+description = "the announced port"
+steps = [{{ exec = "{echo}" }}]
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join(".gitignore"), ".devstack/\n").unwrap();
+    let cli = |file: &Path, args: &[&str]| {
+        let out = Command::new(BIN)
+            .args(args)
+            .arg("-f")
+            .arg(file)
+            .env("LOCALAPPDATA", home.path())
+            .env("XDG_STATE_HOME", home.path())
+            .env("DEVSTACK_NO_HUB", "1")
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.success(), text)
+    };
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    // What the server answers on a port of this machine.
+    let says = |port: u16| -> String {
+        use std::io::{Read, Write};
+        let Ok(mut s) = std::net::TcpStream::connect(("127.0.0.1", port)) else {
+            return String::new();
+        };
+        let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+        let _ = s.write_all(b"GET / HTTP/1.0\r\n\r\n");
+        let mut body = String::new();
+        let _ = s.read_to_string(&mut body);
+        body
+    };
+    let main_file = dir.path().join("devstack.toml");
+    let wt = dir.path().parent().unwrap().join(format!("wt-rtc-{p}"));
+    let lane = format!("wt-rtc-{p}");
+    let lane_project = format!("{project}-{lane}");
+    let lane_file = wt.join("devstack.toml");
+    // Whatever happens: the daemon, the containers and the worktree go.
+    struct Cleanup<'a>(&'a dyn Fn());
+    impl Drop for Cleanup<'_> {
+        fn drop(&mut self) {
+            (self.0)();
+        }
+    }
+    let clean = || {
+        let _ = cli(&main_file, &["down", "--infra", "--all"]);
+        for pr in [&project, &lane_project] {
+            let _ = Command::new("docker")
+                .args(["compose", "-p", pr, "down", "--volumes"])
+                .output();
+        }
+        let _ = Command::new("git")
+            .args(["worktree", "remove", "--force", wt.to_str().unwrap()])
+            .current_dir(dir.path())
+            .output();
+    };
+    let _cleanup = Cleanup(&clean);
+
+    git(&["init", "-q"]);
+    git(&["config", "core.autocrlf", "false"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "init"]);
+    let (ok, up) = cli(&main_file, &["up"]);
+    assert!(ok, "{up}");
+    // The main tree: the files' port, inside and out.
+    let main_says = format!("announces-{p}");
+    assert!(
+        wait_for(|| says(p).contains(&main_says), Duration::from_secs(30)),
+        "the main tree's server on {p}: {:?}",
+        says(p)
+    );
+    let (_, run) = cli(&main_file, &["run", "port"]);
+    assert!(
+        run.lines()
+            .any(|l| l.trim_end() == format!("port={p} var={p}")),
+        "{run}"
+    );
+
+    git(&["worktree", "add", "-q", "-b", "rtc", wt.to_str().unwrap()]);
+    let (ok, up) = cli(&lane_file, &["up"]);
+    let (_, list) = cli(&main_file, &["lane", "list"]);
+    let offset: u16 = list
+        .lines()
+        .find(|l| l.starts_with(&lane))
+        .and_then(|l| l.split_whitespace().nth(2))
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("lane offset\n{list}\n{up}"));
+    assert!(ok, "{up}");
+    let moved = p + offset;
+    // The lane's server listens on, and says, the moved port; the main
+    // tree's still answers on its own.
+    let lane_says = format!("announces-{moved}");
+    assert!(
+        wait_for(|| says(moved).contains(&lane_says), Duration::from_secs(30)),
+        "the lane's server on {moved}: {:?}\n{up}",
+        says(moved)
+    );
+    assert!(says(p).contains(&main_says), "{:?}", says(p));
+    let ours = compose_ps(&lane_project);
+    assert!(
+        ours.iter().any(|c| c.0 == "media" && c.2 == vec![moved]),
+        "{ours:?}"
+    );
+    // devstack calls it by the files' number, once the lane's daemon read
+    // its containers; an `exec` step gets the lane's value.
+    let shown = format!("{p}->127.0.0.1:{moved}");
+    assert!(
+        wait_for(
+            || cli(&lane_file, &["status"]).1.contains(&shown),
+            Duration::from_secs(30)
+        ),
+        "{}",
+        cli(&lane_file, &["status"]).1
+    );
+    let (_, run) = cli(&lane_file, &["run", "port"]);
+    assert!(
+        run.lines()
+            .any(|l| l.trim_end() == format!("port={moved} var={moved}")),
+        "{run}"
+    );
+    let (ok, stop) = cli(&main_file, &["lane", "stop", &lane]);
+    assert!(ok, "{stop}");
+    assert!(compose_ps(&lane_project).is_empty(), "after lane stop");
+}

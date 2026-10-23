@@ -215,6 +215,13 @@ and `devstack lane list` say so ("UDP port 5353 is not forwarded to this
 machine (the node … runs devstack 0.19.0, which forwards TCP only …)"); update
 devstack on the node, or keep such a lane local. Ports of another protocol
 (SCTP) are not forwarded (#192).
+A port the server tells its clients (`[compose.<group>] announced_ports`,
+[ADR-0057](adr/0057-a-port-a-container-announces-moves-inside-it-too.md)) moves inside the container on the
+node as it does locally: the node's agent gives Compose
+`DEVSTACK_PORT_<SERVICE>_<PORT>` with the files' port plus the lane's offset,
+the container listens there, and your machine forwards and relays that same
+number, so a client that follows what the server announces (an ICE
+candidate on `127.0.0.1:7981`) reaches the lane's server.
 The dashboard shows where each lane runs, its start step by step, and offers
 **Start here / on a node / in the pool** for a lane that is not started.
 

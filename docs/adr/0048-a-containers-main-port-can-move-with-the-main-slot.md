@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-10-21)
 - **Date:** 2026-10-21
 - **Deciders:** project owner
-- **Related:** [#184](https://github.com/nuetzliches/devstack/issues/184) (part 2), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) point 5, [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md), [ADR-0043](0043-a-dev-servers-fixed-port-is-devstacks.md), [ADR-0047](0047-the-dashboard-makes-a-lane-from-a-branch.md)
+- **Related:** [#184](https://github.com/nuetzliches/devstack/issues/184) (part 2), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) point 5, [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md), [ADR-0043](0043-a-dev-servers-fixed-port-is-devstacks.md), [ADR-0047](0047-the-dashboard-makes-a-lane-from-a-branch.md), [ADR-0057](0057-a-port-a-container-announces-moves-inside-it-too.md) (point 2 detailed: an announced port is not held)
 
 ## Context
 

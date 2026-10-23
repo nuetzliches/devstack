@@ -57,13 +57,17 @@ pub fn config_args(g: &Group, src: &Path, image: &str, flags: &[&str]) -> Vec<Os
         &mount,
         "-w",
         &g.dir.to_string_lossy(),
-        "--entrypoint",
-        "docker",
-        image,
     ]
     .iter()
     .map(OsString::from)
     .collect();
+    // The group's `DEVSTACK_PORT_*` (ADR-0057): Compose in the container
+    // interpolates the model with them, nothing else of the agent's.
+    for (k, v) in &g.env {
+        a.push("-e".into());
+        a.push(format!("{k}={v}").into());
+    }
+    a.extend(["--entrypoint", "docker", image].iter().map(OsString::from));
     a.extend(g.base_args());
     a.extend(
         ["--profile", "*", "config", "--format", "json"]
@@ -1148,6 +1152,7 @@ mod tests {
             networks: vec![],
             services: vec![],
             dir: src.clone(),
+            env: Default::default(),
         };
         assert!(
             check_group(
