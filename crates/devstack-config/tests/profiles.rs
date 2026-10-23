@@ -170,3 +170,127 @@ fn a_profiles_env_takes_the_placeholders_of_a_command() {
     );
     load("[profiles.x]\nenv = { U = \"{service.api.url}\", L = \"{lane}\" }\n").unwrap();
 }
+
+/// Two Compose groups for `skip` (ADR-0058): one with a heavy search engine,
+/// one with the database and a scanner.
+const WITH_COMPOSE: &str = r#"
+[compose.search]
+project  = "shop-search"
+files    = ["deploy/search.yml"]
+services = ["engine"]
+
+[compose.app]
+project  = "shop-dev"
+files    = ["deploy/compose.yml"]
+services = ["db", "scanner"]
+"#;
+
+#[test]
+fn a_profile_leaves_out_containers_groups_and_services() {
+    let s = load(&format!(
+        r#"{WITH_COMPOSE}
+[profiles.lite]
+skip = ["compose.search", "compose.app.scanner", "mailer"]
+"#
+    ))
+    .unwrap();
+    assert!(
+        !s.skips("app", "scanner"),
+        "without the profile nothing is left out"
+    );
+    let p = s.with_profile("lite").unwrap();
+    for (g, svc) in [("search", "engine"), ("app", "scanner")] {
+        assert!(p.skips(g, svc), "{g}.{svc}");
+    }
+    assert!(!p.skips("app", "db"));
+    assert!(!p.services["mailer"].autostart);
+    assert!(p.services["api"].autostart, "the rest starts as written");
+    // Still part of the stack: started on demand.
+    assert_eq!(p.compose["app"].services, ["db", "scanner"]);
+}
+
+#[test]
+fn what_a_profile_skips_must_be_there() {
+    let e = load(&format!(
+        "{WITH_COMPOSE}\n[profiles.lite]\nskip = [\"compose.nope\", \"compose.app.cache\", \"ghost\"]\n"
+    ))
+    .unwrap_err()
+    .to_string();
+    for want in [
+        "profiles.lite.skip[0]: no compose group `nope`",
+        "profiles.lite.skip[1]: `cache` is not started by compose group `app`",
+        "profiles.lite.skip[2]: no service `ghost`",
+    ] {
+        assert!(e.contains(want), "{want}\n{e}");
+    }
+    let e = load(&format!(
+        "{WITH_COMPOSE}\n[profiles.lite]\nautostart = [\"api\"]\nskip = [\"api\"]\n"
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(
+        e.contains("profiles.lite.skip[0]") && e.contains("`autostart` too"),
+        "{e}"
+    );
+}
+
+#[test]
+fn a_starting_service_cannot_need_a_skipped_containers_address() {
+    let svc = r#"
+[services.indexer]
+run   = "indexer --search {compose.search.engine.9200}"
+after = ["compose.search.engine"]
+"#;
+    let e = load(&format!(
+        "{WITH_COMPOSE}{svc}\n[profiles.lite]\nskip = [\"compose.search\"]\n"
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(
+        e.contains("profiles.lite (services.indexer.run)")
+            && e.contains("leaves `compose.search.engine` out"),
+        "{e}"
+    );
+    // Left out too, or only waited for: fine.
+    load(&format!(
+        "{WITH_COMPOSE}{svc}\n[profiles.lite]\nskip = [\"compose.search\", \"indexer\"]\n"
+    ))
+    .unwrap();
+    let only_after = r#"
+[services.indexer]
+run   = "indexer"
+after = ["compose.search.engine"]
+"#;
+    load(&format!(
+        "{WITH_COMPOSE}{only_after}\n[profiles.lite]\nskip = [\"compose.search\"]\n"
+    ))
+    .unwrap();
+    // The profile's own env reaches every service.
+    let e = load(&format!(
+        "{WITH_COMPOSE}\n[profiles.lite]\nskip = [\"compose.app.db\"]\nenv = {{ DB = \"{{compose.app.db.5432}}\" }}\n"
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(
+        e.contains("services.api.env.DB") && e.contains("compose.app.db"),
+        "{e}"
+    );
+}
+
+#[test]
+fn skip_wants_requires_at_its_first_devstack() {
+    use devstack_config::{SKIP_SINCE, validate::warnings};
+    let mut s = load(&format!(
+        "{WITH_COMPOSE}\n[profiles.lite]\nskip = [\"compose.search\"]\n"
+    ))
+    .unwrap();
+    assert!(
+        warnings(&s)
+            .iter()
+            .any(|i| i.path == "profiles.lite.skip" && i.message.contains(SKIP_SINCE)),
+        "{:?}",
+        warnings(&s)
+    );
+    s.stack.requires = Some(SKIP_SINCE.into());
+    assert!(warnings(&s).iter().all(|i| i.path != "profiles.lite.skip"));
+}

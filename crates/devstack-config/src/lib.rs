@@ -47,6 +47,10 @@ pub const REVIEWED_SINCE: &str = "0.20.0";
 /// (ADR-0057): a file that sets it wants `requires` at least this.
 pub const ANNOUNCED_SINCE: &str = "0.20.0";
 
+/// The first devstack that knows `[profiles.<name>] skip` (ADR-0058): a
+/// file that sets it wants `requires` at least this.
+pub const SKIP_SINCE: &str = "0.21.0";
+
 /// `"1.2.3"`, `"v1.2"`, `"1"` as numbers; `None` when malformed. A
 /// pre-release or build suffix (`1.2.3-rc1`, `1.2.3+abc`) is ignored here;
 /// [`version_order`] takes it into account.

@@ -699,6 +699,10 @@ need      = { memory = "8G" }            # a lane with it needs at least this, o
 kind   = "static"                        # a build served as files instead of a dev server
 build  = "npm run build -- --configuration e2e"
 output = "dist/web/browser"
+
+[profiles.lite]
+description = "daily work without the heavy containers"
+skip      = ["compose.search", "compose.app.cache", "worker"]   # a group, a container, a service
 ```
 
 ```sh
@@ -709,13 +713,29 @@ devstack lane start <lane> --profile acceptance --run  # from the main tree
 - **What it may set:** `workers`, `data` (`keep`, the default, or
   `fresh`), `env` (for every service and every command's `exec` steps, with
   the placeholders a command has: no `{port}`, `{artifact}` or
-  `{is_main}`), `autostart`, `command` (one of `[commands]`), `need` (as
+  `{is_main}`), `autostart`, `skip` (below), `command` (one of `[commands]`), `need` (as
   `[lanes.need]`, each part the larger of the two; a lane with the profile
   is measured on its own, its runs are the profile's), and
   per service `kind`, `build`, `output`, `run`, `spa`, `cwd`, `health` and
   `env`. A service it does not name runs as the file says. Its `env` is
   added to every service's, a service's own `env` in the profile on top.
   `watch`, `port` and the other keys stay as the file says.
+- **`skip`** ([ADR-0058](adr/0058-a-profile-can-leave-out-containers-and-services.md))
+  leaves out what the profile does not need: a container
+  (`compose.<group>.<service>`, one of the group's `services`), every
+  container of a group (`compose.<group>`), or a service (as `autostart =
+  false`; a name in `autostart` too is an error). A skipped container does
+  not start with the tree, and one an earlier start left running is
+  stopped. It stays part of the stack: `devstack start
+  compose.app.cache` starts it on demand, and a port `main_ports` holds
+  for it stays held and refuses connections while it is down. A service
+  that starts and needs a skipped container's address (a `{compose.…}`
+  placeholder in its `run`, `env`, `workers.env` or `ensure_dirs`, the
+  profile's `env` included, or a `rewrite_hosts` entry) is an error, since
+  its start would fail: skip it too, or keep the container. One that only
+  waits for it (`after`) starts without waiting. On a node a skipped
+  container is not created, so it cannot be started there later in that
+  run. A file with `skip` should say `requires = "0.21.0"` in `[stack]`.
 - **Another `kind` drops what only the old one takes:** a dev server made
   `static` loses its `run` (unless the profile gives one), `rebuild` and
   `restart_on`; a `devserver` or `tool` loses `build` and `output`; `spa`

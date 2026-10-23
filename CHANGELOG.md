@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **A profile can leave out containers, whole Compose groups and services**
+  (ADR-0058, #244). `[profiles.<name>] skip = ["compose.search",
+  "compose.app.scanner", "indexer"]` makes a light profile for daily work:
+  what it skips does not start with the tree, a skipped container an earlier
+  start left running is stopped, and each still starts on demand (`devstack
+  start compose.app.scanner`). A service that starts with the profile and
+  uses a skipped container's address is an error in the profile's check. A
+  lane on a node does not create what its profile skips. A file with `skip`
+  wants `requires = "0.21.0"`.
+
 ## [0.20.0] - 2026-10-23
 
 macOS as a developer platform in preview, installed with Homebrew on macOS
