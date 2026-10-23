@@ -49,6 +49,7 @@ invented service names (`api`, `web`, `worker`, `db`).
 | `docs/stack-file.md` | The stack file reference (keep in step with `crates/devstack-config`) |
 | `docs/pool.md` | The pool: coordinator, nodes, lanes on other machines |
 | `docs/dashboard-api.md` | The hub's and the daemon's HTTP API |
+| `docs/releasing.md` | The release checklist: the release pull request, the tag, what follows |
 | `skills/` | The agent skills `devstack skills install` writes (keep in step with the CLI) |
 | `docs/problem-statement.md` | The failure modes this project removes, and the requirements derived from them |
 | `docs/adr/` | Decision log |

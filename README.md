@@ -272,6 +272,7 @@ dashboard ─────┘    one per repo,   └── services: main slot (f
 | [docs/plan.md](docs/plan.md) | architecture, phases, what is open |
 | [docs/adr/](docs/adr/README.md) | the decision log |
 | [CHANGELOG.md](CHANGELOG.md) | what changed in each release |
+| [docs/releasing.md](docs/releasing.md) | how a release is made: the checklist |
 | [SECURITY.md](SECURITY.md) | what devstack exposes, what leaves the machine, the pool's trust model, reporting a vulnerability |
 
 ## Contributing
