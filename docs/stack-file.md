@@ -451,6 +451,49 @@ server reloads itself).
 | `ensure_dirs = ["{repo}/data/files"]` | created before start |
 | `prepare = { run = "npm ci", inputs = ["web/package-lock.json"] }` | installs what a copy of the source lacks (see below) |
 | `timeout = "10m"` | `kind = "job"` only: how long it may run before it counts as failed and is stopped; default 30 minutes. `devstack stop <job>` ends it at once |
+| `stop = "docker rm -f api{lane_suffix}-{port}"` | ends what `run` started outside its process tree, a container ([ADR-0059](adr/0059-a-services-stop-command-ends-what-its-run-started.md), below); not for `kind = "static"` |
+
+### A container as a service (`docker run`)
+
+A service whose runtime needs Linux tools can run as a container and still
+get `watch`, candidates and a lane's own port, which a Compose container
+does not:
+
+```toml
+[services.ocr]
+build = "docker build -t ocr:dev ocr"
+run   = "docker run --rm --init --name ocr{lane_suffix}-{port} -p {port}:8000 ocr:dev"
+stop  = "docker rm -f ocr{lane_suffix}-{port}"
+port  = 5100
+health = { http = "/health", timeout = "60s" }
+watch = ["ocr/**"]
+```
+
+devstack owns the `docker` CLI's process tree, not the container, which
+runs in Docker's VM ([ADR-0009](adr/0009-the-daemon-owns-every-process-tree.md)):
+
+- **The graceful stop reaches the container** through the CLI, which
+  passes it on: `CTRL_BREAK` on Windows arrives there as `SIGINT`,
+  `SIGTERM` elsewhere as `SIGTERM`. The process in the container must end
+  on it: a container's PID 1 ignores a signal it has no handler for, so
+  use `--init` or an entrypoint that handles both. Otherwise the CLI is
+  killed after 20 s and the container keeps running.
+- **`--rm`** removes the container once it ended.
+- **A name with `{lane_suffix}-{port}`** (`{port}` is the instance's own,
+  internal behind the proxy) keeps a candidate apart from the main instance
+  and a lane from the main tree. A fixed name, or a `docker rm -f` before
+  `docker run` in `run`, would remove the main instance while a candidate
+  starts.
+- **`stop`** runs whenever an instance ends (a stop, a restart, the old
+  instance a candidate replaced, a start that failed, one that ended on its
+  own), before the graceful signal, with that instance's placeholders, at
+  most 30 s; its output and a failure go into the instance's log, and the
+  stop goes on regardless. After the daemon died, its next start runs the
+  `stop` of every instance it had (with devstack's environment, not the
+  service's). It covers what the signal does not: a process that ignores
+  it, a CLI that ended by itself. In hot-reload mode it does not apply.
+
+A file with `stop` should say `requires = "0.21.0"` in `[stack]`.
 
 ### `prepare`: what a copy of the source lacks
 
@@ -699,6 +742,10 @@ need      = { memory = "8G" }            # a lane with it needs at least this, o
 kind   = "static"                        # a build served as files instead of a dev server
 build  = "npm run build -- --configuration e2e"
 output = "dist/web/browser"
+
+[profiles.lite]
+description = "daily work without the heavy containers"
+skip      = ["compose.search", "compose.app.cache", "worker"]   # a group, a container, a service
 ```
 
 ```sh
@@ -709,15 +756,31 @@ devstack lane start <lane> --profile acceptance --run  # from the main tree
 - **What it may set:** `workers`, `data` (`keep`, the default, or
   `fresh`), `env` (for every service and every command's `exec` steps, with
   the placeholders a command has: no `{port}`, `{artifact}` or
-  `{is_main}`), `autostart`, `command` (one of `[commands]`), `need` (as
+  `{is_main}`), `autostart`, `skip` (below), `command` (one of `[commands]`), `need` (as
   `[lanes.need]`, each part the larger of the two; a lane with the profile
   is measured on its own, its runs are the profile's), and
-  per service `kind`, `build`, `output`, `run`, `spa`, `cwd`, `health` and
-  `env`. A service it does not name runs as the file says. Its `env` is
+  per service `kind`, `build`, `output`, `run`, `stop`, `spa`, `cwd`,
+  `health` and `env`. A service it does not name runs as the file says. Its `env` is
   added to every service's, a service's own `env` in the profile on top.
   `watch`, `port` and the other keys stay as the file says.
+- **`skip`** ([ADR-0058](adr/0058-a-profile-can-leave-out-containers-and-services.md))
+  leaves out what the profile does not need: a container
+  (`compose.<group>.<service>`, one of the group's `services`), every
+  container of a group (`compose.<group>`), or a service (as `autostart =
+  false`; a name in `autostart` too is an error). A skipped container does
+  not start with the tree, and one an earlier start left running is
+  stopped. It stays part of the stack: `devstack start
+  compose.app.cache` starts it on demand, and a port `main_ports` holds
+  for it stays held and refuses connections while it is down. A service
+  that starts and needs a skipped container's address (a `{compose.…}`
+  placeholder in its `run`, `env`, `workers.env` or `ensure_dirs`, the
+  profile's `env` included, or a `rewrite_hosts` entry) is an error, since
+  its start would fail: skip it too, or keep the container. One that only
+  waits for it (`after`) starts without waiting. On a node a skipped
+  container is not created, so it cannot be started there later in that
+  run. A file with `skip` should say `requires = "0.21.0"` in `[stack]`.
 - **Another `kind` drops what only the old one takes:** a dev server made
-  `static` loses its `run` (unless the profile gives one), `rebuild` and
+  `static` loses its `run` and `stop` (unless the profile gives them), `rebuild` and
   `restart_on`; a `devserver` or `tool` loses `build` and `output`; `spa`
   stays with `static` only, `hot_reload` with `service`, `timeout` with
   `job`; a `job` or `tool` loses `health` and `proxy`. What the profile sets

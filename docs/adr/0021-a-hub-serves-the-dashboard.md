@@ -111,7 +111,9 @@ answered in 2 ms over WebSockets, and not within 8 s once each window held one
   version.
 
 ADR-0018 stands otherwise: a browser page, no desktop wrapper, a tray later.
-The tray belongs to the hub, which is the long-lived process now.
+The tray belongs to the hub, which is the long-lived process now. (Amended
+2026-10-23 by [ADR-0060](0060-the-tray-is-a-client-of-the-hub.md): the hub
+starts the tray as a process of its own and tells it what to show.)
 
 ## Alternatives considered
 

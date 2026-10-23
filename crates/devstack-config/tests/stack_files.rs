@@ -1025,3 +1025,40 @@ services:
     assert!(!all.contains("DEVSTACK_PORT_X"), "{all}");
     assert_eq!(w.len(), 3, "each once: {all}");
 }
+
+#[test]
+fn a_services_stop_takes_the_placeholders_of_its_run() {
+    use devstack_config::{STOP_SINCE, validate::warnings};
+    let text = MINIMAL.replace(
+        "port = 5000\n",
+        "port = 5000\nstop = \"docker rm -f api{lane_suffix}-{port}\"\n",
+    );
+    let mut s = from_str(&text, Path::new("t")).unwrap();
+    assert_eq!(
+        s.services["api"].stop.as_deref(),
+        Some("docker rm -f api{lane_suffix}-{port}")
+    );
+    let w = warnings(&s);
+    assert!(
+        w.iter()
+            .any(|i| i.path == "services.api.stop" && i.message.contains(STOP_SINCE)),
+        "{w:?}"
+    );
+    s.stack.requires = Some(STOP_SINCE.into());
+    assert!(warnings(&s).is_empty());
+
+    // An unknown placeholder, an empty command and a static service's stop.
+    let all = invalid(&MINIMAL.replace("port = 5000\n", "port = 5000\nstop = \"rm {nope}\"\n"))
+        .join("\n");
+    assert!(all.contains("services.api.stop"), "{all}");
+    let all = invalid(&MINIMAL.replace("port = 5000\n", "port = 5000\nstop = \" \"\n")).join("\n");
+    assert!(all.contains("services.api.stop: is empty"), "{all}");
+    let all = invalid(&format!(
+        "{MINIMAL}[services.site]\nkind = \"static\"\nbuild = \"npm run build\"\noutput = \"dist\"\nport = 4300\nstop = \"true\"\n"
+    ))
+    .join("\n");
+    assert!(
+        all.contains("services.site.stop: kind `static` has no `stop`"),
+        "{all}"
+    );
+}

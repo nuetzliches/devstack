@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { useHub } from '@/stores/hub';
+import { SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, useUi } from '@/stores/ui';
 import { ago, useNow } from '@/lib/format';
 import TopBar from '@/components/TopBar.vue';
 import Toasts from '@/components/Toasts.vue';
@@ -12,6 +14,8 @@ import GuestBanner from '@/components/GuestBanner.vue';
 import UnpairedView from '@/views/UnpairedView.vue';
 
 const hub = useHub();
+const ui = useUi();
+const route = useRoute();
 const now = useNow();
 
 onMounted(() => void hub.init());
@@ -29,6 +33,54 @@ watch(banners, (el, old) => {
   else document.documentElement.style.setProperty('--banners-h', '0px');
 });
 onBeforeUnmount(() => bannersObserver.disconnect());
+
+// The sidebar: Ctrl+B (Cmd+B) or the top bar's button shows and hides it;
+// the drawer of a narrow screen closes when a link in it is followed, on
+// Escape and on a click beside it. Its edge is dragged for its width, arrow
+// keys move it too, a double click sets it back.
+function onGlobalKey(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'b') {
+    const t = e.target as HTMLElement | null;
+    if (t?.closest('input, textarea, [contenteditable]')) return;
+    e.preventDefault();
+    ui.toggleSidebar();
+  } else if (e.key === 'Escape' && ui.drawerOpen) ui.drawerOpen = false;
+}
+onMounted(() => window.addEventListener('keydown', onGlobalKey));
+onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKey));
+watch(
+  () => route.fullPath,
+  () => (ui.drawerOpen = false),
+);
+
+const resizing = ref(false);
+function startResize(e: PointerEvent) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  const handle = e.currentTarget as HTMLElement;
+  handle.setPointerCapture(e.pointerId);
+  const startX = e.clientX;
+  const startW = ui.sidebarWidth;
+  resizing.value = true;
+  const move = (ev: PointerEvent) => ui.setSidebarWidth(startW + ev.clientX - startX, false);
+  const end = () => {
+    handle.removeEventListener('pointermove', move);
+    handle.removeEventListener('pointerup', end);
+    handle.removeEventListener('pointercancel', end);
+    resizing.value = false;
+    ui.setSidebarWidth(ui.sidebarWidth);
+  };
+  handle.addEventListener('pointermove', move);
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
+}
+function resizeKey(e: KeyboardEvent) {
+  const step = e.shiftKey ? 64 : 16;
+  const to = { ArrowLeft: ui.sidebarWidth - step, ArrowRight: ui.sidebarWidth + step, Home: SIDEBAR_MIN, End: SIDEBAR_MAX }[e.key];
+  if (to === undefined) return;
+  e.preventDefault();
+  ui.setSidebarWidth(to);
+}
 
 const hubDown = computed(() => hub.status === 'unreachable' || (hub.status === 'ok' && hub.stream === 'error'));
 const booting = computed(() => hub.status === 'loading' && !hub.stacks.length);
@@ -88,8 +140,32 @@ async function startHub() {
       </div>
       <GuestBanner v-if="!hubDown" />
     </div>
-    <div class="shell">
-      <Sidebar v-if="!booting" class="side" />
+    <div
+      class="shell"
+      :class="{ 'side-open': ui.sidebarOpen, drawer: ui.drawerOpen, resizing }"
+      :style="{ '--sidebar-w': `${ui.sidebarWidth}px` }"
+    >
+      <template v-if="!booting">
+        <div v-if="ui.drawerOpen" class="scrim" aria-hidden="true" @click="ui.drawerOpen = false" />
+        <div class="side-wrap">
+          <Sidebar id="sidebar" class="side" />
+          <div
+            class="resizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Sidebar width"
+            :aria-valuenow="ui.sidebarWidth"
+            :aria-valuemin="SIDEBAR_MIN"
+            :aria-valuemax="SIDEBAR_MAX"
+            tabindex="0"
+            title="Drag to resize, double-click to reset"
+            data-testid="sidebar-resizer"
+            @pointerdown="startResize"
+            @dblclick="ui.setSidebarWidth(SIDEBAR_DEFAULT)"
+            @keydown="resizeKey"
+          />
+        </div>
+      </template>
       <main id="main" tabindex="-1">
         <div v-if="booting" class="boot" aria-busy="true">
           <span class="spinner" /> Connecting to the devstack hub…
@@ -121,25 +197,70 @@ main {
   outline: none;
   min-width: 0;
 }
-/* Stacks and worktrees on the left on a wide screen; the stack switcher in
-   the top bar does that job on a narrow one. */
+/* Stacks and worktrees on the left on a wide screen, unless hidden; on a
+   narrow one (or with it hidden) the stack switcher in the top bar does that
+   job and the sidebar is a drawer over the page. */
 .shell {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
 }
-.side {
+.side-wrap {
   display: none;
+  position: relative;
+  top: calc(var(--topbar-h) + var(--banners-h));
+  height: calc(100vh - var(--topbar-h) - var(--banners-h));
+}
+.side {
+  flex: 1;
+}
+.shell.drawer .side-wrap {
+  display: flex;
+  position: fixed;
+  left: 0;
+  z-index: 28;
+  width: min(var(--sidebar-w), 85vw);
+  box-shadow: var(--shadow-lg);
+}
+.scrim {
+  position: fixed;
+  inset: calc(var(--topbar-h) + var(--banners-h)) 0 0 0;
+  z-index: 27;
+  background: rgb(0 0 0 / 0.35);
 }
 @media (min-width: 1000px) {
-  .shell {
-    grid-template-columns: 248px minmax(0, 1fr);
+  .shell.side-open {
+    grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
   }
-  .side {
+  .shell.side-open .side-wrap {
     display: flex;
     position: sticky;
-    top: calc(var(--topbar-h) + var(--banners-h));
-    height: calc(100vh - var(--topbar-h) - var(--banners-h));
   }
+}
+.resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  width: 6px;
+  z-index: 1;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+.resizer::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  transition: background 0.12s;
+}
+.resizer:hover::after,
+.resizer:focus-visible::after,
+.resizing .resizer::after {
+  background: var(--accent);
+}
+.resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 .banners {
   position: sticky;

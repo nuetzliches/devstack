@@ -1556,6 +1556,66 @@ run = "{brief}"
     s.ok(&["down"]);
 }
 
+/// A service's `stop` (ADR-0059) runs when devstack stops an instance, with
+/// that instance's port, into its log; after the daemon died, the next start
+/// runs the one it recorded.
+#[test]
+fn a_services_stop_ends_what_its_run_started() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    let stopped = s.dir.path().join("stopped.txt");
+    // No digit before `>>`: `sh` would read it as a file descriptor.
+    let stop = format!("echo stopped-{{port}} >> \"{}\"", stopped.display());
+    std::fs::write(
+        s.file(),
+        format!(
+            r#"version = 1
+[stack]
+name = "stops"
+[services.box]
+run = "{run}"
+stop = '{stop}'
+port = {port}
+"#,
+            run = runs_for(300),
+            port = s.port,
+        ),
+    )
+    .unwrap();
+    let stops = || std::fs::read_to_string(&stopped).unwrap_or_default();
+    let instance_port = || s.service_view("box")["instance_port"].as_u64().unwrap_or(0);
+
+    s.ok(&["up"]);
+    let first = instance_port();
+    assert!(first != 0, "{}", s.diag());
+    s.ok(&["stop", "box"]);
+    assert!(
+        stops().contains(&format!("stopped-{first}")),
+        "the stop of {first}: {}\n{}",
+        stops(),
+        s.diag()
+    );
+    let log = s.ok(&["logs", "box"]);
+    assert!(log.contains("[devstack] stop: echo stopped-"), "{log}");
+
+    // The daemon dies hard: the next start runs the recorded stop.
+    s.ok(&["start", "box"]);
+    let second = instance_port();
+    assert!(second != 0 && second != first, "{}", s.diag());
+    kill_hard(s.daemon_pid());
+    s.ok(&["up"]);
+    assert!(
+        stops().contains(&format!("stopped-{second}")),
+        "the stop {second} recorded: {}\n{}",
+        stops(),
+        s.diag()
+    );
+    s.ok(&["down"]);
+}
+
 /// A command that runs for about `s` seconds.
 fn runs_for(s: u32) -> String {
     if cfg!(windows) {
@@ -2974,4 +3034,159 @@ steps = [{{ exec = "{echo}" }}]
     let (ok, stop) = cli(&main_file, &["lane", "stop", &lane]);
     assert!(ok, "{stop}");
     assert!(compose_ps(&lane_project).is_empty(), "after lane stop");
+}
+
+/// A profile's `skip` (ADR-0058): the containers it leaves out do not start
+/// with the tree, one an earlier start left running is stopped, and each
+/// still starts on demand. Docker only (no .NET).
+#[test]
+#[ignore = "needs Docker: DEVSTACK_INTEGRATION_COMPOSE=1, --include-ignored"]
+fn a_profile_leaves_out_containers() {
+    if !enabled("DEVSTACK_INTEGRATION_COMPOSE") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION_COMPOSE=1 (needs Docker)");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let id = format!("{}-{}", std::process::id(), free_port());
+    let (app, heavy) = (
+        format!("devstack-it-skip-app-{id}"),
+        format!("devstack-it-skip-heavy-{id}"),
+    );
+    let sleeper = "    image: busybox:1.36\n    command: [\"sleep\", \"600\"]\n    init: true\n";
+    std::fs::write(
+        dir.path().join("app.yml"),
+        format!("services:\n  db:\n{sleeper}  scanner:\n{sleeper}"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("heavy.yml"),
+        format!("services:\n  engine:\n{sleeper}"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("devstack.toml"),
+        format!(
+            r#"version = 1
+[stack]
+name = "skip"
+[compose.app]
+project = "{app}"
+files = ["app.yml"]
+services = ["db", "scanner"]
+[compose.heavy]
+project = "{heavy}"
+files = ["heavy.yml"]
+services = ["engine"]
+[profiles.lite]
+skip = ["compose.heavy", "compose.app.scanner"]
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join(".gitignore"), ".devstack/\n").unwrap();
+    let file = dir.path().join("devstack.toml");
+    let cli = |args: &[&str]| {
+        let out = Command::new(BIN)
+            .args(args)
+            .arg("-f")
+            .arg(&file)
+            .env("LOCALAPPDATA", home.path())
+            .env("XDG_STATE_HOME", home.path())
+            .env("DEVSTACK_NO_HUB", "1")
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.success(), text)
+    };
+    // The services of `project` that run now.
+    let running = |project: &str| -> Vec<String> {
+        let out = Command::new("docker")
+            .args([
+                "compose",
+                "-p",
+                project,
+                "ps",
+                "--services",
+                "--status",
+                "running",
+            ])
+            .output()
+            .unwrap();
+        let mut s: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+        s.sort();
+        s
+    };
+    struct Cleanup<'a>(&'a dyn Fn());
+    impl Drop for Cleanup<'_> {
+        fn drop(&mut self) {
+            (self.0)();
+        }
+    }
+    let clean = || {
+        let _ = cli(&["down", "--infra"]);
+        for p in [&app, &heavy] {
+            let _ = Command::new("docker")
+                .args(["compose", "-p", p, "down", "--volumes", "--timeout", "1"])
+                .output();
+        }
+    };
+    let _cleanup = Cleanup(&clean);
+    let ok = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(dir.path())
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok, "git init");
+
+    // Without the profile everything runs; `down` leaves the containers.
+    let (ok, up) = cli(&["up"]);
+    assert!(ok, "{up}");
+    // `up` answers before the containers run when no service waits for them.
+    assert!(
+        wait_for(
+            || running(&app) == ["db", "scanner"] && running(&heavy) == ["engine"],
+            Duration::from_secs(60)
+        ),
+        "{:?} {:?}",
+        running(&app),
+        running(&heavy)
+    );
+    let (ok, down) = cli(&["down"]);
+    assert!(ok, "{down}");
+    assert_eq!(running(&heavy), ["engine"], "`down` keeps the containers");
+
+    // With it, what it leaves out goes, and the rest runs.
+    let (ok, up) = cli(&["up", "--profile", "lite"]);
+    assert!(ok, "{up}");
+    assert!(
+        wait_for(
+            || running(&app) == ["db"] && running(&heavy).is_empty(),
+            Duration::from_secs(60)
+        ),
+        "{:?} {:?}",
+        running(&app),
+        running(&heavy)
+    );
+
+    // On demand it starts all the same.
+    let (ok, start) = cli(&["start", "compose.app.scanner"]);
+    assert!(ok, "{start}");
+    assert!(
+        wait_for(
+            || running(&app) == ["db", "scanner"],
+            Duration::from_secs(30)
+        ),
+        "{:?}",
+        running(&app)
+    );
 }

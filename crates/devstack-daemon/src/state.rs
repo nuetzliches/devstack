@@ -354,10 +354,26 @@ pub struct Persisted {
     /// Process trees to clean up after a crash (Linux; ADR-0016).
     #[serde(default)]
     pub records: Vec<devstack_proc::Record>,
+    /// The `stop` command of every running instance that has one
+    /// (ADR-0059), expanded: what the next start runs after a crash.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stops: Vec<StopRecord>,
     /// Service -> the candidate a promotion gate holds (ADR-0013), so the
     /// gate outlives a daemon restart.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub held: BTreeMap<String, HeldRecord>,
+}
+
+/// An instance's expanded `stop` command (ADR-0059) as `state.json` keeps
+/// it, without the instance's environment (it can hold secrets).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StopRecord {
+    /// The instance's cleanup record (`<service>@<port>`).
+    pub record: String,
+    pub command: String,
+    pub cwd: PathBuf,
+    /// The instance's log, which its output goes to.
+    pub log: PathBuf,
 }
 
 /// A held candidate as `state.json` keeps it.

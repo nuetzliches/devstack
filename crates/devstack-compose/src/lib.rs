@@ -761,6 +761,18 @@ impl Docker {
         self.run_group(g, &a, budget::STOP).map(|_| ())
     }
 
+    /// Stop the group's selected services (`g.services`) where they run;
+    /// none selected: nothing (Compose would stop every one).
+    pub fn stop_selected(&self, g: &Group) -> Result<()> {
+        if g.services.is_empty() {
+            return Ok(());
+        }
+        let mut a = g.base_args();
+        a.extend(["stop".into(), "--timeout".into(), "10".into()]);
+        a.extend(g.services.iter().map(OsString::from));
+        self.run_group(g, &a, budget::STOP).map(|_| ())
+    }
+
     /// Stop a container by its name (`docker stop`), whether or not the
     /// loaded Compose model knows its service.
     pub fn stop_container(&self, dir: &Path, name: &str) -> Result<()> {

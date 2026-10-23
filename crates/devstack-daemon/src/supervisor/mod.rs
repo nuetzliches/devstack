@@ -44,6 +44,16 @@ struct Instance {
     record: String,
     /// When it was spawned: how long it ran, when it exits by itself.
     started: Instant,
+    /// Its `stop` command, expanded when it started (ADR-0059).
+    stop: Option<StopCmd>,
+}
+
+/// An instance's `stop` command (ADR-0059): what ends what its `run`
+/// started outside its tree, with the instance's directory and environment.
+struct StopCmd {
+    command: String,
+    cwd: PathBuf,
+    env: BTreeMap<String, String>,
 }
 
 pub(crate) struct Slot {
@@ -419,6 +429,26 @@ impl Supervisor {
         let persisted = Persisted::load(&state_dir);
         // ADR-0016: kill what a crashed previous instance left (Linux; a no-op on Windows).
         devstack_proc::cleanup(&persisted.records);
+        // ADR-0059: and end what its `stop` commands were for (a container
+        // its process started), with devstack's own environment.
+        std::thread::scope(|scope| {
+            for s in &persisted.stops {
+                let (lane, opts) = (&lane, &proc_opts);
+                scope.spawn(move || {
+                    let service = s.record.split('@').next().unwrap_or(&s.record);
+                    lifecycle::run_stop(
+                        lane,
+                        service,
+                        &s.record,
+                        &s.command,
+                        &s.cwd,
+                        &BTreeMap::new(),
+                        &s.log,
+                        opts,
+                    );
+                });
+            }
+        });
         // A held candidate stays held across a daemon restart (ADR-0013).
         let held = persisted
             .held
@@ -456,6 +486,7 @@ impl Supervisor {
             persisted: Mutex::new(Persisted {
                 main: persisted.main,
                 records: Vec::new(),
+                stops: Vec::new(),
                 held: persisted.held,
             }),
             seq: AtomicU64::new(0),

@@ -221,6 +221,70 @@ impl Check<'_> {
     }
 }
 
+/// What a service that starts with the profile needs of a container the
+/// profile leaves out (ADR-0058 point 4): an address in its `run`, `env`,
+/// worker switches or `ensure_dirs`, or a host it rewrites. Its start would
+/// fail on it. `after` is not: the service starts without waiting.
+fn skipped_needs(c: &mut Check, stack: &Stack) {
+    let Some(skip) = stack.profile.as_ref().map(|p| &p.skip) else {
+        return;
+    };
+    if skip.is_empty() {
+        return;
+    }
+    let skipped = |g: &str, s: &str| skip.contains(&(g.to_string(), s.to_string()));
+    for (s, svc) in stack.services.iter().filter(|(_, svc)| svc.autostart) {
+        let p = format!("services.{s}");
+        let why = |g: &str, svc: &str| {
+            format!(
+                "the profile leaves `compose.{g}.{svc}` out, so it has no address here (skip `{s}` too, or keep the container)"
+            )
+        };
+        let mut texts: Vec<(String, &str)> = vec![(format!("{p}.run"), svc.run.as_str())];
+        texts.extend(
+            svc.env
+                .iter()
+                .map(|(k, v)| (format!("{p}.env.{k}"), v.as_str())),
+        );
+        if let Some(w) = &svc.workers {
+            texts.extend(
+                w.env
+                    .iter()
+                    .map(|(k, v)| (format!("{p}.workers.env.{k}"), v.as_str())),
+            );
+        }
+        texts.extend(
+            svc.ensure_dirs
+                .iter()
+                .enumerate()
+                .map(|(i, d)| (format!("{p}.ensure_dirs[{i}]"), d.as_str())),
+        );
+        for (at, t) in texts {
+            let Ok(segs) = interpolate::parse(t) else {
+                continue; // reported where the text is checked
+            };
+            for ph in interpolate::placeholders(&segs) {
+                if let Placeholder::ComposePort { group, service, .. } = ph
+                    && skipped(group, service)
+                {
+                    c.err(&at, format!("`{ph}`: {}", why(group, service)));
+                }
+            }
+        }
+        if let Some(r) = &svc.compose {
+            for (i, h) in svc.rewrite_hosts.iter().enumerate() {
+                let (group, service) = h.split_once('.').unwrap_or((r.group.as_str(), h.as_str()));
+                if skipped(group, service) {
+                    c.err(
+                        format!("{p}.rewrite_hosts[{i}]"),
+                        format!("`{h}`: {}", why(group, service)),
+                    );
+                }
+            }
+        }
+    }
+}
+
 pub fn validate(stack: &Stack) -> Vec<Issue> {
     let mut c = Check {
         stack,
@@ -538,6 +602,19 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                 "missing `run`: the command that starts the service",
             );
         }
+        if let Some(stop) = &svc.stop {
+            if svc.kind == Kind::Static {
+                c.err(
+                    format!("{p}.stop"),
+                    "kind `static` has no `stop`: devstack serves the built files itself, nothing runs",
+                );
+            } else if stop.trim().is_empty() {
+                c.err(
+                    format!("{p}.stop"),
+                    "is empty: leave it out, or give the command that ends what `run` started (ADR-0059)",
+                );
+            }
+        }
         if svc.spa.is_some() && svc.kind != Kind::Static {
             c.err(format!("{p}.spa"), "`spa` belongs to `kind = \"static\"`");
         }
@@ -733,6 +810,9 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
             artifact: svc.build.is_some(),
         };
         c.text(&format!("{p}.run"), &svc.run, scope);
+        if let Some(stop) = &svc.stop {
+            c.text(&format!("{p}.stop"), stop, scope);
+        }
         for (k, field) in [("build", &svc.build), ("output", &svc.output)] {
             if let Some(v) = field {
                 c.text(&format!("{p}.{k}"), v, Scope::Build);
@@ -802,6 +882,7 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
             format!("`after` forms a cycle: {}", cycle.join(" -> ")),
         );
     }
+    skipped_needs(&mut c, stack);
 
     // ---------------------------------------------------------------- commands
     for (n, cmd) in &stack.commands {
@@ -930,8 +1011,9 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
 const FIRST_LANES: u32 = 3;
 
 /// What a valid stack file may want changed (`devstack check` prints them):
-/// `[stack] reviewed` without the `requires` that keeps an older devstack
-/// from failing on it; two services whose ports differ by one of the first
+/// a newer key (`[stack] reviewed`, `announced_ports`, a service's `stop`)
+/// without the `requires` that keeps an older devstack from failing on it;
+/// two services whose ports differ by one of the first
 /// few multiples of `[lanes] port_step`, so that one of the first lanes
 /// would run one of them on the other's port. The daemon skips such lane
 /// numbers, so lane 1 is not on `port + port_step` as the file suggests.
@@ -967,6 +1049,59 @@ pub fn warnings(stack: &Stack) -> Vec<Issue> {
                 message: format!(
                     "a devstack before {v} does not know this key and fails on it with \"unknown field\": `requires = \"{v}\"` makes it ask to be updated instead",
                     v = crate::ANNOUNCED_SINCE
+                ),
+            });
+        }
+    }
+    let skip = crate::version_order(crate::SKIP_SINCE);
+    if stack
+        .stack
+        .requires
+        .as_deref()
+        .is_none_or(|r| crate::version_order(r) < skip)
+    {
+        for name in stack
+            .profiles
+            .iter()
+            .filter(|(_, p)| !p.skip.is_empty())
+            .map(|(n, _)| n)
+        {
+            out.push(Issue {
+                path: format!("profiles.{name}.skip"),
+                message: format!(
+                    "a devstack before {v} does not know this key and fails on it with \"unknown field\": `requires = \"{v}\"` makes it ask to be updated instead",
+                    v = crate::SKIP_SINCE
+                ),
+            });
+        }
+    }
+    let stop = crate::version_order(crate::STOP_SINCE);
+    if stack
+        .stack
+        .requires
+        .as_deref()
+        .is_none_or(|r| crate::version_order(r) < stop)
+    {
+        let in_profiles = stack.profiles.iter().flat_map(|(p, profile)| {
+            profile
+                .services
+                .iter()
+                .filter(|(_, o)| o.stop.is_some())
+                .map(move |(n, _)| format!("profiles.{p}.services.{n}.stop"))
+        });
+        let paths: Vec<String> = stack
+            .services
+            .iter()
+            .filter(|(_, svc)| svc.stop.is_some())
+            .map(|(n, _)| format!("services.{n}.stop"))
+            .chain(in_profiles)
+            .collect();
+        for path in paths {
+            out.push(Issue {
+                path,
+                message: format!(
+                    "a devstack before {v} does not know this key and fails on it with \"unknown field\": `requires = \"{v}\"` makes it ask to be updated instead",
+                    v = crate::STOP_SINCE
                 ),
             });
         }

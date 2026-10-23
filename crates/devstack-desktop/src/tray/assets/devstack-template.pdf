@@ -1,0 +1,40 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 20 18] /Resources << >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 231 >>
+stream
+0 G 0 g 2.4 w 1 J
+2 14.333 m 18 14.333 l S
+2 9 m 13.2 9 l S
+2 3.667 m 18 3.667 l S
+19.2 9 m
+19.2 10.10457 18.30457 11 17.2 11 c
+16.09543 11 15.2 10.10457 15.2 9 c
+15.2 7.89543 16.09543 7 17.2 7 c
+18.30457 7 19.2 7.89543 19.2 9 c f
+endstream
+endobj
+5 0 obj
+<< /Title (devstack menu bar template) /Creator (devstack) >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000217 00000 n 
+0000000498 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R /Info 5 0 R >>
+startxref
+575
+%%EOF

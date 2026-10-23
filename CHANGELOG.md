@@ -9,6 +9,45 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **The dashboard's sidebar can be hidden and resized.** A button in the
+  top bar, Ctrl+B (Cmd+B) or the command palette shows and hides it; on a
+  wide screen it stays as it was left, on a narrow one it opens as a drawer
+  over the page and closes again when a stack or worktree is chosen, on
+  Escape or a click beside it. Its edge is dragged for its width (arrow keys
+  too, a double click sets it back), kept across reloads.
+- **A tray icon on Windows, Linux and macOS** (ADR-0060, #1). The hub
+  starts `devstack tray`: the dashboard's mark in the notification area
+  (Windows), as a StatusNotifierItem (Linux: KDE, Xfce, GNOME with the
+  AppIndicator extension; the binary stays static) or in the menu bar
+  (macOS, from the menu bar client contributed in #248). Green when
+  something runs, amber while a stack starts or stops, red when something
+  needs attention, grey when nothing runs. Its menu opens the dashboard,
+  lists every stack with what needs attention (a click opens that service
+  in the dashboard), and starts, stops or opens a stack's folder. It is a
+  client of the hub, which says what it shows (`GET /hub/summary`, the same
+  as what notifies); quitting it stops nothing. `devstack hub tray off`
+  keeps it off, `on` brings it back; `DEVSTACK_NO_TRAY` too.
+- **A profile can leave out containers, whole Compose groups and services**
+  (ADR-0058, #244). `[profiles.<name>] skip = ["compose.search",
+  "compose.app.scanner", "indexer"]` makes a light profile for daily work:
+  what it skips does not start with the tree, a skipped container an earlier
+  start left running is stopped, and each still starts on demand (`devstack
+  start compose.app.scanner`). A service that starts with the profile and
+  uses a skipped container's address is an error in the profile's check. A
+  lane on a node does not create what its profile skips. A file with `skip`
+  wants `requires = "0.21.0"`.
+- **A service's `stop` command** (ADR-0059, #245): `[services.<name>]
+  stop = "docker rm -f api{lane_suffix}-{port}"` ends what `run` started
+  outside its process tree, a container of a `docker run` service. It
+  runs whenever an instance ends (a stop, a replacement, a failed start,
+  one that ended by itself), before the graceful signal, with the
+  instance's placeholders, at most 30 s; after a crash the next start runs
+  the ones recorded. `docs/stack-file.md` describes a container as a
+  service (`--init`, `--rm`, a name per instance). A file with `stop` says
+  `requires = "0.21.0"`.
+
 ### Fixed
 
 - **A lane on a node carried over a restart is warned about against the

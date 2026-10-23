@@ -446,6 +446,7 @@ async fn follow_stack(s: AppState, id: String, name: String) {
         let mut lanes = Lanes::default();
         let mut scope = Scope::default();
         let mut followed: HashMap<String, Task> = HashMap::new();
+        let held = s.board.hold(&id, None);
         if let Some(mut events) = open(&s, &id, "/v1/events").await {
             if let Some(v) = get_json(&s, &id, "/v1/lanes").await {
                 lanes.baseline(&v);
@@ -464,12 +465,14 @@ async fn follow_stack(s: AppState, id: String, name: String) {
                     }
                     _ => scope.apply(&ev),
                 };
+                s.board.set(&id, None, scope.glance());
                 for n in notices {
                     s.notify.deliver(&id, &name, None, n);
                 }
             }
         }
         drop(followed);
+        drop(held);
         tokio::time::sleep(wait).await;
         wait = (wait * 2).min(RETRY_MAX);
     }
@@ -504,6 +507,7 @@ async fn follow_lane(s: AppState, id: String, name: String, lane: String) {
     let mut wait = RETRY_MIN;
     loop {
         let mut scope = Scope::default();
+        let held = s.board.hold(&id, Some(&lane));
         if let Some(mut events) = open(&s, &id, &path).await {
             while let Some(text) = events.next().await {
                 wait = RETRY_MIN;
@@ -513,11 +517,14 @@ async fn follow_lane(s: AppState, id: String, name: String, lane: String) {
                 if ev["type"] == "usage" {
                     continue;
                 }
-                for n in scope.apply(&ev) {
+                let notices = scope.apply(&ev);
+                s.board.set(&id, Some(&lane), scope.glance());
+                for n in notices {
                     s.notify.deliver(&id, &name, Some(&lane), n);
                 }
             }
         }
+        drop(held);
         tokio::time::sleep(wait).await;
         wait = (wait * 2).min(RETRY_MAX);
     }

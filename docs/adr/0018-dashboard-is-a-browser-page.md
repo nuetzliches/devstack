@@ -1,6 +1,6 @@
 # ADR-0018: The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper
 
-- **Status:** Accepted (2026-10-14); who serves the dashboard amended by [ADR-0021](0021-a-hub-serves-the-dashboard.md) (the hub); the tray is not built yet; point 2's notifications come from the hub, without a tray ([ADR-0045](0045-the-hub-notifies-the-desktop.md))
+- **Status:** Accepted (2026-10-14); who serves the dashboard amended by [ADR-0021](0021-a-hub-serves-the-dashboard.md) (the hub); point 2's notifications come from the hub, without a tray ([ADR-0045](0045-the-hub-notifies-the-desktop.md)); point 2's tray is a client process the hub starts ([ADR-0060](0060-the-tray-is-a-client-of-the-hub.md))
 - **Date:** 2026-10-14
 - **Deciders:** project owner
 - **Related:** [ADR-0006](0006-dashboard-vue-same-origin.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md), plan §6
@@ -84,3 +84,9 @@ no `--no-tray` yet (plan §13).
 for the tray: the hub sends them ([ADR-0045](0045-the-hub-notifies-the-desktop.md)),
 on Windows as a toast and on Linux over the session bus, and a tray, when it
 comes, adds the icon only.
+
+*Amended 2026-10-23.* Point 2's tray is built, as a process of its own
+that the hub starts, `devstack tray`, on Windows, Linux and macOS
+([ADR-0060](0060-the-tray-is-a-client-of-the-hub.md)): a client of the hub,
+not part of the daemon. It is switched off with `devstack hub tray off`,
+not `--no-tray`, and does not promote candidates.

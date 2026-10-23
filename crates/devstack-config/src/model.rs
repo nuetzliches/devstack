@@ -6,7 +6,7 @@
 
 use schemars::JsonSchema;
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -96,6 +96,11 @@ pub struct Profile {
     /// The services that start, instead of each service's own `autostart`.
     #[serde(default)]
     pub autostart: Option<Vec<String>>,
+    /// What does not start with this profile (ADR-0058): a container
+    /// (`compose.<group>.<service>`), every container of a group
+    /// (`compose.<group>`), or a service. Still started on demand.
+    #[serde(default)]
+    pub skip: Vec<String>,
     /// How single services run with this profile.
     #[serde(default)]
     pub services: BTreeMap<String, ServiceProfile>,
@@ -126,6 +131,8 @@ pub struct ServiceProfile {
     pub build: Option<String>,
     pub output: Option<String>,
     pub run: Option<String>,
+    /// What ends what `run` started outside its process tree (ADR-0059).
+    pub stop: Option<String>,
     pub spa: Option<bool>,
     pub cwd: Option<String>,
     pub health: Option<Health>,
@@ -142,9 +149,48 @@ pub struct Active {
     pub data: DataMode,
     pub env: BTreeMap<String, String>,
     pub command: Option<String>,
+    /// The containers it leaves out, `(group, service)`, a skipped group's
+    /// every one (ADR-0058).
+    pub skip: BTreeSet<(String, String)>,
 }
 
 impl Stack {
+    /// The tree's start leaves container `service` of `group` out: the
+    /// profile it runs with skips it (ADR-0058).
+    pub fn skips(&self, group: &str, service: &str) -> bool {
+        self.profile
+            .as_ref()
+            .is_some_and(|p| p.skip.contains(&(group.to_string(), service.to_string())))
+    }
+
+    /// The containers profile `name` leaves out, `(group, service)`: what
+    /// [`Active::skip`] holds once it is applied. Entries that name nothing
+    /// are left out of it ([`Self::with_profile`] reports them).
+    pub fn skipped_containers(&self, name: &str) -> BTreeSet<(String, String)> {
+        let mut out = BTreeSet::new();
+        let Some(p) = self.profiles.get(name) else {
+            return out;
+        };
+        for e in &p.skip {
+            let Some(rest) = e.strip_prefix("compose.") else {
+                continue;
+            };
+            let (group, one) = match rest.split_once('.') {
+                Some((g, s)) => (g, Some(s)),
+                None => (rest, None),
+            };
+            let Some(g) = self.compose.get(group) else {
+                continue;
+            };
+            for s in &g.services {
+                if one.is_none_or(|o| o == s) {
+                    out.insert((group.to_string(), s.clone()));
+                }
+            }
+        }
+        out
+    }
+
     /// The stack as profile `name` runs it (ADR-0041), checked like a stack
     /// file; the issues name the profile's keys.
     /// What a lane needs at least with `profile` (ADR-0049 point 5):
@@ -212,6 +258,7 @@ impl Stack {
                 // gives itself is set below.
                 if k == Kind::Static {
                     svc.run = String::new();
+                    svc.stop = None;
                 }
                 if k != Kind::Devserver {
                     svc.rebuild = None;
@@ -244,6 +291,9 @@ impl Stack {
             if let Some(r) = &o.run {
                 svc.run = r.clone();
             }
+            if o.stop.is_some() {
+                svc.stop = o.stop.clone();
+            }
             if o.spa.is_some() {
                 svc.spa = o.spa;
             }
@@ -270,6 +320,41 @@ impl Stack {
                 svc.autostart = list.contains(n);
             }
         }
+        for (i, e) in p.skip.iter().enumerate() {
+            let at = format!("profiles.{name}.skip[{i}]");
+            if let Some(rest) = e.strip_prefix("compose.") {
+                let (group, one) = match rest.split_once('.') {
+                    Some((g, s)) => (g, Some(s)),
+                    None => (rest, None),
+                };
+                match (self.compose.get(group), one) {
+                    (None, _) => issues.push(issue(at, format!("no compose group `{group}`"))),
+                    (Some(g), Some(one)) if !g.services.iter().any(|s| s == one) => {
+                        issues.push(issue(
+                            at,
+                            format!("`{one}` is not started by compose group `{group}` (not in its `services`)"),
+                        ))
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            match s.services.get_mut(e) {
+                None => issues.push(issue(
+                    at,
+                    format!(
+                        "no service `{e}` in `[services]` (a container is `compose.<group>.<service>`, a group `compose.<group>`)"
+                    ),
+                )),
+                Some(_) if p.autostart.as_ref().is_some_and(|l| l.contains(e)) => {
+                    issues.push(issue(
+                        at,
+                        format!("`{e}` is in the profile's `autostart` too: it either starts or not"),
+                    ))
+                }
+                Some(svc) => svc.autostart = false,
+            }
+        }
         if let Some(c) = &p.command
             && !s.commands.contains_key(c)
         {
@@ -287,6 +372,7 @@ impl Stack {
             data: p.data.unwrap_or_default(),
             env: p.env.clone(),
             command: p.command.clone(),
+            skip: self.skipped_containers(name),
         });
         Ok(s)
     }
@@ -758,6 +844,12 @@ pub struct Service {
     /// serves the artifact itself).
     #[serde(default)]
     pub run: String,
+    /// Command run whenever an instance ends, before the graceful signal
+    /// (ADR-0059): for what `run` started outside its process tree, a
+    /// container (`docker rm -f api{lane_suffix}-{port}`). The instance's
+    /// placeholders, as `run`; at most 30 s; a failure does not hold up the
+    /// stop.
+    pub stop: Option<String>,
     /// `kind = "static"`: answer paths without a file extension with
     /// `index.html` (client-side routes of a single-page app). Default `true`.
     pub spa: Option<bool>,

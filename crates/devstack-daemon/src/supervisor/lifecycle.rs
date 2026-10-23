@@ -1,11 +1,11 @@
 //! The slot lifecycle: start, stop, monitor.
 
 use super::{
-    Instance, JOB_TIMEOUT, KEEP_BUILD_LOGS, KEEP_RUN_LOGS, STOPPED, Supervisor, free_port,
+    Instance, JOB_TIMEOUT, KEEP_BUILD_LOGS, KEEP_RUN_LOGS, STOPPED, StopCmd, Supervisor, free_port,
     on_this_platform, port_in_use, tail,
 };
 use crate::proxy::{Proxy, Upstream, Waiting};
-use crate::state::{EventBody, Status, now_ms};
+use crate::state::{EventBody, Status, StopRecord, now_ms};
 use devstack_config::model::{Kind, Service};
 use devstack_env::Context;
 use devstack_proc::Spec;
@@ -23,6 +23,80 @@ pub(super) const SETTLE: Duration = Duration::from_millis(500);
 /// that ran this long starts the count again.
 pub(super) const STABLE: Duration = Duration::from_secs(300);
 const MAX_EXITS: u32 = 5;
+
+/// How long a service's `stop` command may run (ADR-0059).
+pub(super) const STOP_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Run an instance's `stop` command (ADR-0059) to its end, at most
+/// [`STOP_COMMAND_TIMEOUT`], its output appended to the instance's `log`.
+/// A failure is said there and as a diagnostic; it never holds up the stop.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn run_stop(
+    lane: &str,
+    service: &str,
+    record: &str,
+    command: &str,
+    cwd: &Path,
+    env: &BTreeMap<String, String>,
+    log: &Path,
+    opts: &devstack_proc::Options,
+) {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)
+        .ok();
+    let outcome = (|| -> Result<(), String> {
+        let out = file
+            .as_mut()
+            .ok_or_else(|| format!("cannot open {}", log.display()))?;
+        let _ = writeln!(out, "\n[devstack] stop: {command}");
+        let spec = Spec {
+            name: format!("{record}-stop"),
+            command: command.to_string(),
+            cwd: cwd.to_path_buf(),
+            env: env.clone(),
+            log: out.try_clone().map_err(|e| e.to_string())?,
+        };
+        let (mut tree, _) = devstack_proc::spawn(spec, opts).map_err(|e| e.to_string())?;
+        let t0 = Instant::now();
+        loop {
+            if let Some(code) = tree.try_exit_code() {
+                // What it left of its own tree goes with it.
+                tree.kill();
+                return match code {
+                    0 => Ok(()),
+                    c => Err(format!(
+                        "exited with code {}",
+                        crate::state::exit_code_text(c)
+                    )),
+                };
+            }
+            if t0.elapsed() >= STOP_COMMAND_TIMEOUT {
+                tree.kill();
+                return Err(format!(
+                    "still ran after {} s, and was ended",
+                    STOP_COMMAND_TIMEOUT.as_secs()
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    })();
+    if let Err(e) = outcome {
+        if let Some(out) = file.as_mut() {
+            let _ = writeln!(out, "[devstack] stop failed: {e}");
+        }
+        crate::diag::warn(
+            "service_stop_failed",
+            serde_json::json!({
+                "lane": lane,
+                "service": service,
+                "error": e,
+            }),
+        );
+    }
+}
 
 impl Supervisor {
     /// Infra, then every autostart service for this platform, in order; a
@@ -196,6 +270,8 @@ impl Supervisor {
                 }
                 s.watch.clear();
                 s.promote = None;
+                // `stop` ends what `run` starts (ADR-0059).
+                s.stop = None;
                 s
             }
             _ => svc.clone(),
@@ -596,8 +672,7 @@ impl Supervisor {
         let ready = match self.wait_instance(svc, &mut inst, &cancel) {
             Ok(s) => s,
             Err(e) => {
-                inst.tree.kill();
-                self.forget_record(&inst.record);
+                self.end(&mut inst, None);
                 refuse(&e);
                 return Err(e);
             }
@@ -609,8 +684,7 @@ impl Supervisor {
         if (proxy.is_some() || fronted)
             && let Some(e) = self.main_ports_elsewhere(name, svc)
         {
-            inst.tree.kill();
-            self.forget_record(&inst.record);
+            self.end(&mut inst, None);
             return Err(e);
         }
         if fronted && let Some(p) = inst.port {
@@ -633,7 +707,9 @@ impl Supervisor {
             self.release_held(name, None);
         }
         if svc.kind == Kind::Job {
-            self.forget_record(&inst.record);
+            // Done: its `stop` all the same (ADR-0059), for a container its
+            // process left.
+            self.end(&mut inst, None);
             self.set_status(name, ready);
             return Ok(());
         }
@@ -674,6 +750,16 @@ impl Supervisor {
         let lookup = |k: &str| ctx.var(k);
         let command = devstack_config::interpolate::expand(&svc.run, &ctx, &lookup)
             .map_err(|e| format!("run: {e}"))?;
+        // Expanded now, so it addresses this instance (its port, its lane)
+        // whenever it ends (ADR-0059).
+        let stop = svc
+            .stop
+            .as_ref()
+            .map(|s| {
+                devstack_config::interpolate::expand(s, &ctx, &lookup)
+                    .map_err(|e| format!("stop: {e}"))
+            })
+            .transpose()?;
         for d in &svc.ensure_dirs {
             let dir = devstack_config::interpolate::expand(d, &ctx, &lookup)
                 .map_err(|e| format!("ensure_dirs: {e}"))?;
@@ -705,6 +791,11 @@ impl Supervisor {
         let dir = log.parent().unwrap();
         crate::diag::prune(dir, "run-", KEEP_RUN_LOGS);
         crate::diag::prune(dir, "build-", KEEP_BUILD_LOGS);
+        let stop = stop.map(|command| StopCmd {
+            command,
+            cwd: cwd.clone(),
+            env: env_map.clone(),
+        });
         let spec = Spec {
             name: record.clone(),
             command,
@@ -717,6 +808,15 @@ impl Supervisor {
             let mut p = self.persisted.lock().unwrap();
             p.records.retain(|r| r.name != record);
             p.records.push(rec);
+            p.stops.retain(|s| s.record != record);
+            if let Some(s) = &stop {
+                p.stops.push(StopRecord {
+                    record: record.clone(),
+                    command: s.command.clone(),
+                    cwd: s.cwd.clone(),
+                    log: log.clone(),
+                });
+            }
             p.save(&self.state_dir);
         }
         Ok(Instance {
@@ -726,13 +826,41 @@ impl Supervisor {
             log,
             record,
             started: Instant::now(),
+            stop,
         })
     }
 
     pub(super) fn forget_record(&self, record: &str) {
         let mut p = self.persisted.lock().unwrap();
         p.records.retain(|r| r.name != record);
+        p.stops.retain(|s| s.record != record);
         p.save(&self.state_dir);
+    }
+
+    /// End an instance, the one way every end goes: its `stop` command first
+    /// (ADR-0059), then the graceful signal and a kill after `graceful`
+    /// (ADR-0009), or a kill at once (`None`); then its records go.
+    pub(super) fn end(&self, inst: &mut Instance, graceful: Option<Duration>) {
+        if let Some(s) = &inst.stop {
+            let service = inst.record.split('@').next().unwrap_or(&inst.record);
+            run_stop(
+                &self.lane,
+                service,
+                &inst.record,
+                &s.command,
+                &s.cwd,
+                &s.env,
+                &inst.log,
+                &self.proc_opts,
+            );
+        }
+        match graceful {
+            Some(t) => {
+                inst.tree.stop(t);
+            }
+            None => inst.tree.kill(),
+        }
+        self.forget_record(&inst.record);
     }
 
     fn context(
@@ -917,8 +1045,7 @@ impl Supervisor {
                             ran = i.started.elapsed();
                             let left = i.tree.pids().len();
                             build = i.build_id.clone();
-                            i.tree.kill();
-                            me.forget_record(&i.record);
+                            me.end(&mut i, None);
                             crate::diag::warn(
                                 "service_exited",
                                 serde_json::json!({
@@ -1019,8 +1146,7 @@ impl Supervisor {
             self.set_front(name, crate::tcpfwd::FrontState::Refuse);
         }
         if let Some(mut i) = inst {
-            i.tree.stop(Duration::from_secs(20));
-            self.forget_record(&i.record);
+            self.end(&mut i, Some(Duration::from_secs(20)));
         }
         self.set_status(name, Status::Stopped);
         Ok(())

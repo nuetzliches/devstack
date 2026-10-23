@@ -1,7 +1,7 @@
 //! `devstack self uninstall`: take devstack off this machine for this user.
 //!
 //! Removes what the installer and devstack itself put into the user's profile:
-//! the hub (stopped), its autostart (on macOS the LaunchAgent) and
+//! the hub and its tray (stopped), its autostart (on macOS the LaunchAgent) and
 //! `devstack://` link, the name its notifications show under (Windows,
 //! ADR-0045), the per-user state (token, registry of stacks, hub log and
 //! sessions), the PATH entry and the installed binary. A binary winget or
@@ -41,14 +41,15 @@ fn pool_state(root: &Path) -> (Option<PathBuf>, Vec<String>) {
     (coordinator, memberships)
 }
 
-/// Other devstack processes of this user, besides this one and the hub
-/// (which is stopped): a node agent, a coordinator, an MCP server. They run
-/// the binary that is to go, and a running one cannot be deleted (Windows).
-fn other_devstack_processes(hub: Option<u32>) -> Vec<u32> {
+/// Other devstack processes of this user, besides this one, the hub and
+/// the tray (both are stopped): a node agent, a coordinator, an MCP server.
+/// They run the binary that is to go, and a running one cannot be deleted
+/// (Windows).
+fn other_devstack_processes(hub: Option<u32>, tray: Option<u32>) -> Vec<u32> {
     let me = std::process::id();
     devstack_desktop::devstack_pids()
         .into_iter()
-        .filter(|p| *p != me && Some(*p) != hub)
+        .filter(|p| *p != me && Some(*p) != hub && Some(*p) != tray)
         .collect()
 }
 
@@ -70,7 +71,10 @@ pub fn uninstall(yes: bool, with_coordinator: bool) -> Result<()> {
             list.join("\n")
         );
     }
-    let others = other_devstack_processes(devstack_hub::read_info().map(|h| h.pid));
+    let others = other_devstack_processes(
+        devstack_hub::read_info().map(|h| h.pid),
+        devstack_hub::tray::running(),
+    );
     if !others.is_empty() {
         let list: Vec<String> = others.iter().map(u32::to_string).collect();
         bail!(
@@ -96,9 +100,9 @@ pub fn uninstall(yes: bool, with_coordinator: bool) -> Result<()> {
     let brew = devstack_desktop::homebrew_prefix(&exe).is_some();
     println!("devstack self uninstall removes:");
     if devstack_desktop::LINK_UNAVAILABLE.is_some() {
-        println!("  - the dashboard hub and its start at logon");
+        println!("  - the dashboard hub, its tray and its start at logon");
     } else {
-        println!("  - the dashboard hub, its start at logon and the devstack:// link");
+        println!("  - the dashboard hub, its tray, its start at logon and the devstack:// link");
     }
     println!("  - {} (token, list of stacks, hub log)", root.display());
     if !memberships.is_empty() {
@@ -143,6 +147,7 @@ pub fn uninstall(yes: bool, with_coordinator: bool) -> Result<()> {
         return Ok(());
     }
 
+    let _ = devstack_hub::tray::stop(std::time::Duration::from_secs(5));
     let _ = crate::hubcmd::stop();
     // The hub holds its log and lock open until it has exited (2 s grace).
     let port = devstack_hub::port();

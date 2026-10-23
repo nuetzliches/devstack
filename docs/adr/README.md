@@ -57,7 +57,7 @@ stay.
 | [0006](0006-dashboard-vue-same-origin.md) | The dashboard is a Vue 3 SPA served same-origin by the daemon | Accepted; who serves it replaced by ADR-0021 (the hub) |
 | [0007](0007-one-http-api-is-the-control-surface.md) | One HTTP API is the control surface; CLI, MCP and dashboard are its clients | Accepted |
 | [0008](0008-background-workers-run-only-in-the-active-slot.md) | Background workers run only in the active slot | Accepted |
-| [0009](0009-the-daemon-owns-every-process-tree.md) | The daemon owns every process tree it starts | Accepted |
+| [0009](0009-the-daemon-owns-every-process-tree.md) | The daemon owns every process tree it starts | Accepted; what a service starts outside its tree is ended by its `stop` command, ADR-0059 |
 | [0010](0010-promotion-mechanism.md) | Promotion mechanism: restart on the fixed port or switch a reverse proxy | Accepted (option B, the reverse proxy; measured) |
 | [0011](0011-platform-windows-native-first.md) | Windows-native first; WSL is decided by measurement | Accepted; macOS added as a preview by ADR-0054 |
 | [0012](0012-shared-infrastructure-between-lanes.md) | Which infrastructure may be shared between lanes | Decided by ADR-0030 |
@@ -66,10 +66,10 @@ stay.
 | [0015](0015-devstack-is-optional.md) | devstack accelerates a stack, it is never required to run one | Accepted |
 | [0016](0016-a-daemon-restart-is-a-clean-restart.md) | A daemon restart is a clean restart from the last promoted artifacts | Accepted |
 | [0017](0017-stack-file-is-toml.md) | The stack file is TOML, without profiles in version 1 | Accepted, amended 2026-10-20 (ADR-0041's profiles are not the environments ruled out) |
-| [0018](0018-dashboard-is-a-browser-page.md) | The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper | Accepted; who serves it amended by ADR-0021; the tray is not built; notifications from the hub by ADR-0045 |
+| [0018](0018-dashboard-is-a-browser-page.md) | The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper | Accepted; who serves it amended by ADR-0021; notifications from the hub by ADR-0045; the tray a client process the hub starts by ADR-0060 |
 | [0019](0019-control-api-security.md) | The control API trusts the user's own processes, never a web page | Accepted, amended (own page for reads too; the hub proves itself; IPv4 loopback and `DEVSTACK_LISTEN`; the cookie is the hub's, no `token rotate`) |
 | [0020](0020-builds-share-one-long-lived-build-job.md) | Builds share one long-lived build job; a cancel ends only the cancelled build's tree | Accepted |
-| [0021](0021-a-hub-serves-the-dashboard.md) | A hub on a fixed port serves the dashboard for every stack | Accepted, amended (streams over WebSocket; the pool area polls) |
+| [0021](0021-a-hub-serves-the-dashboard.md) | A hub on a fixed port serves the dashboard for every stack | Accepted, amended (streams over WebSocket; the pool area polls); the tray is the hub's client, ADR-0060 |
 | [0022](0022-network-egress-sandbox.md) | Outbound network calls of supervised services are visible and need an allow rule | Proposed |
 | [0023](0023-stack-file-compatibility.md) | Stack files stay readable; migrations once devstack has outside users | Accepted |
 | [0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) | A lane is a supervisor in the main working tree's daemon | Accepted, amended twice (lanes are the worktrees, run from a copy); point 4 replaced by ADR-0030; point 1 replaced in part for the hub by ADR-0047; point 7 amended 2026-10-21 (the removal is shown while it runs); point 6 amended by ADR-0052 (a restart carries the lanes over) |
@@ -89,7 +89,7 @@ stay.
 | [0038](0038-a-lanes-data-outlives-its-lease.md) | A lane's mirror and data outlive its lease on a node, for a while, and can be pruned | Accepted |
 | [0039](0039-an-admin-can-update-a-server-node.md) | An admin can have a server node update its devstack, from the dashboard | Accepted, amended 2026-10-20 (a checksum from the release, not a signature; the running binary is replaced; a drain ends, and can be withdrawn) |
 | [0040](0040-a-shared-lane-can-be-watched-like-ones-own.md) | A shared lane can be shared for viewing, and is then shown as one's own lane is | Accepted; amended 2026-10-20 (sharing a lane includes viewing it) |
-| [0041](0041-a-profile-says-how-a-lane-runs-for-a-purpose.md) | A profile says how a lane (or the main tree) runs for a purpose, chosen when it starts | Accepted |
+| [0041](0041-a-profile-says-how-a-lane-runs-for-a-purpose.md) | A profile says how a lane (or the main tree) runs for a purpose, chosen when it starts | Accepted; point 1 extended by ADR-0058 (`skip`) |
 | [0042](0042-a-dev-servers-rebuilds-show-like-builds.md) | A dev server's rebuilds show like builds, read from its output | Accepted |
 | [0043](0043-a-dev-servers-fixed-port-is-devstacks.md) | A dev server's fixed port is devstack's, forwarded to its instance | Accepted |
 | [0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) | A lane's prepared directories can be linked into its worktree | Accepted |
@@ -106,3 +106,6 @@ stay.
 | [0055](0055-a-lane-without-a-stack-file-says-so-and-can-be-given-one.md) | A lane whose branch has no stack file runs with the main tree's, says so, and can be given one | Accepted |
 | [0056](0056-a-lane-on-a-node-relays-its-udp-ports-through-a-tunnel-per-session.md) | A lane on a node relays its UDP ports, a tunnel per client, a datagram per frame | Accepted |
 | [0057](0057-a-port-a-container-announces-moves-inside-it-too.md) | A port a container announces moves inside the container too, and Compose is told its number | Accepted |
+| [0058](0058-a-profile-can-leave-out-containers-and-services.md) | A profile can leave out containers, whole Compose groups and services | Accepted |
+| [0059](0059-a-services-stop-command-ends-what-its-run-started.md) | A service's `stop` command ends what its `run` started outside its process tree | Accepted |
+| [0060](0060-the-tray-is-a-client-of-the-hub.md) | The tray is a client of the hub, a process of its own, on every desktop | Accepted |

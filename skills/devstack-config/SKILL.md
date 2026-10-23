@@ -82,7 +82,13 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   light review: `workers`, `data = "fresh"`, `env` with the tree's
   addresses, `autostart`, per service `kind = "static"` with `build` and
   `output`, and the suite as `command`. Each profile is checked as the stack
-  it makes; add `requires = "0.11.0"` to `[stack]`.
+  it makes; add `requires = "0.11.0"` to `[stack]`. A light profile for
+  daily work leaves heavy containers out with `skip` (ADR-0058):
+  `skip = ["compose.search", "compose.app.scanner", "indexer"]` (a whole
+  group, a container, a service; `requires = "0.21.0"`). What it skips is
+  stopped at the start and still starts on demand (`devstack start
+  compose.app.scanner`); a service that starts and uses a skipped
+  container's address (`{compose.…}`, `rewrite_hosts`) must be skipped too.
 - **Hot reload is opt-in per session.** `[services.<name>.hot_reload]` with
   the watcher's `run` (`dotnet watch run --non-interactive`) only makes
   `devstack hot-reload <name> on` possible; the service still builds by
@@ -116,6 +122,15 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   the files' port as default (`${DEVSTACK_PORT_MEDIA_7881:-7881}`); keep
   `ports` literal. Without the key, a lane's server announces the main
   tree's port. Add `requires = "0.20.0"` to `[stack]`.
+- **A container as a service** (`run = "docker run ..."`, for what needs
+  Linux tools but should get `watch` and candidates) needs three things: a
+  process in it that ends on `SIGINT` and `SIGTERM` (`docker run --init`,
+  or an entrypoint that handles them: devstack's graceful stop reaches the
+  container through the CLI), `--rm`, and a name with
+  `{lane_suffix}-{port}` so a candidate and the main instance do not
+  collide. Add `stop = "docker rm -f <the same name>"`: devstack runs it
+  whenever an instance ends, also after a crash, so no container is left
+  holding the port. Add `requires = "0.21.0"` to `[stack]`.
 - **Paths** are relative to the repository root; use `{repo}` where a process
   needs an absolute one. Generated directories (`bin`, `obj`, `node_modules`,
   `target`, `.git`, `.devstack`) never count as changes. Compose files, env
