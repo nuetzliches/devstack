@@ -11,6 +11,18 @@ and listed with their assets on the
 
 ### Added
 
+- **A tray icon on Windows, Linux and macOS** (ADR-0060, #1). The hub
+  starts `devstack tray`: the dashboard's mark in the notification area
+  (Windows), as a StatusNotifierItem (Linux: KDE, Xfce, GNOME with the
+  AppIndicator extension; the binary stays static) or in the menu bar
+  (macOS, from the menu bar client contributed in #248). Green when
+  something runs, amber while a stack starts or stops, red when something
+  needs attention, grey when nothing runs. Its menu opens the dashboard,
+  lists every stack with what needs attention (a click opens that service
+  in the dashboard), and starts, stops or opens a stack's folder. It is a
+  client of the hub, which says what it shows (`GET /hub/summary`, the same
+  as what notifies); quitting it stops nothing. `devstack hub tray off`
+  keeps it off, `on` brings it back; `DEVSTACK_NO_TRAY` too.
 - **A profile can leave out containers, whole Compose groups and services**
   (ADR-0058, #244). `[profiles.<name>] skip = ["compose.search",
   "compose.app.scanner", "indexer"]` makes a light profile for daily work:

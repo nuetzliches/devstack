@@ -19,6 +19,7 @@ pub mod channel;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod mac;
 pub mod notify;
+pub mod tray;
 
 #[cfg(target_os = "linux")]
 mod linux;
