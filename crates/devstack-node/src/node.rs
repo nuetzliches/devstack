@@ -259,8 +259,9 @@ struct Inner {
     /// What each member's blobs take here, once counted.
     blob_use: Mutex<HashMap<String, u64>>,
     /// Slots a lease's end is taking down, or a purge is removing: a new
-    /// lease of the lane waits for it (ADR-0038 point 1).
-    slot_busy: Mutex<HashSet<String>>,
+    /// lease of the lane waits for it (ADR-0038 point 1). Counted: the end
+    /// of one lease can still run when the next lease of the lane ends.
+    slot_busy: Mutex<HashMap<String, usize>>,
     /// Slots being removed: no lease is admitted to one until it is gone.
     slot_purging: Mutex<HashSet<String>>,
     /// Whether a member may view a lease (ADR-0040), as the coordinator said
@@ -445,6 +446,27 @@ impl Inner {
         run
     }
 
+    /// One more keeps `slot` busy, until its [`Self::slot_done`].
+    fn slot_begin(&self, slot: &str) {
+        *self
+            .slot_busy
+            .lock()
+            .unwrap()
+            .entry(slot.to_string())
+            .or_default() += 1;
+    }
+
+    /// One of what keeps `slot` busy is done.
+    fn slot_done(&self, slot: &str) {
+        let mut busy = self.slot_busy.lock().unwrap();
+        if let Some(n) = busy.get_mut(slot) {
+            *n -= 1;
+            if *n == 0 {
+                busy.remove(slot);
+            }
+        }
+    }
+
     /// Remove slot `slot` and what it holds, unless a lease uses it.
     fn purge_slot(&self, slot: &str, info: &SlotInfo, why: &str) -> bool {
         {
@@ -455,9 +477,10 @@ impl Inner {
                 return false;
             }
             let mut busy = self.slot_busy.lock().unwrap();
-            if !busy.insert(slot.to_string()) {
+            if busy.contains_key(slot) {
                 return false;
             }
+            busy.insert(slot.to_string(), 1);
             self.slot_purging.lock().unwrap().insert(slot.to_string());
         }
         eprintln!(
@@ -468,7 +491,7 @@ impl Inner {
         remove_built_images(slot);
         self.volume_use.lock().unwrap().remove(slot);
         self.slot_purging.lock().unwrap().remove(slot);
-        self.slot_busy.lock().unwrap().remove(slot);
+        self.slot_done(slot);
         true
     }
 
@@ -1081,7 +1104,7 @@ impl Inner {
         // What it needed is on offer again: the coordinator hears it now.
         self.changed.notify_one();
         if let Some(slot) = &l.slot {
-            self.slot_busy.lock().unwrap().insert(slot.clone());
+            self.slot_begin(slot);
         }
         let s = self.clone();
         std::thread::spawn(move || {
@@ -1114,7 +1137,7 @@ impl Inner {
                         remove_built_images(slot);
                         s.slot_use.lock().unwrap().remove(slot);
                     }
-                    s.slot_busy.lock().unwrap().remove(slot);
+                    s.slot_done(slot);
                 }
                 None => {
                     if l.stack_file.is_some() {
@@ -1279,7 +1302,7 @@ async fn slots_purge(
     tokio::task::spawn_blocking(move || {
         // The end of its last lease may still be taking it down.
         let until = Instant::now() + Duration::from_secs(120);
-        while s2.slot_busy.lock().unwrap().contains(&slot) && Instant::now() < until {
+        while s2.slot_busy.lock().unwrap().contains_key(&slot) && Instant::now() < until {
             std::thread::sleep(Duration::from_millis(250));
         }
         if let Some((_, info)) = s2.kept().into_iter().find(|(name, _)| *name == slot) {
@@ -2042,7 +2065,7 @@ async fn start(
         let s2 = s.clone();
         let free = tokio::task::spawn_blocking(move || {
             let until = Instant::now() + Duration::from_secs(120);
-            while s2.slot_busy.lock().unwrap().contains(&slot) {
+            while s2.slot_busy.lock().unwrap().contains_key(&slot) {
                 if Instant::now() > until {
                     return false;
                 }
@@ -3727,7 +3750,7 @@ pub async fn serve(
         local_policy,
         secret,
         blob_use: Mutex::new(HashMap::new()),
-        slot_busy: Mutex::new(HashSet::new()),
+        slot_busy: Mutex::new(HashMap::new()),
         slot_purging: Mutex::new(HashSet::new()),
         kept_use: Mutex::new(None),
         volume_use: Mutex::new(HashMap::new()),
