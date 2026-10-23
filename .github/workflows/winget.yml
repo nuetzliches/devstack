@@ -1,0 +1,52 @@
+name: winget
+
+# Submit a published release to microsoft/winget-pkgs by hand: the
+# manifests of packaging/winget/ for the release's Windows archive (checked
+# against its SHA256SUMS), submitted as the release workflow does
+# (packaging/winget/submit.ps1). For the version then current once the
+# first pull request of the package is merged (the release workflow adds no
+# second one while it is open), or to submit again after a failure.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, e.g. v0.19.0'
+        required: true
+        type: string
+      force:
+        description: 'Submit even while the package is not in the catalog and a pull request for it is open'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  submit:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: manifests
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ($env:TAG -notmatch '^v\d+\.\d+\.\d+$') { throw "tag $($env:TAG): expected vX.Y.Z" }
+          $zip = 'devstack-x86_64-pc-windows-msvc.zip'
+          gh release download $env:TAG -R $env:GITHUB_REPOSITORY -p $zip -p SHA256SUMS -D dist
+          $expected = ((Get-Content dist/SHA256SUMS | Where-Object { $_ -match [regex]::Escape($zip) }) -split '\s+')[0]
+          $actual = (Get-FileHash "dist/$zip" -Algorithm SHA256).Hash
+          if ($actual -ne $expected) { throw "${zip}: checksum $actual, SHA256SUMS says $expected" }
+          $date = (gh release view $env:TAG -R $env:GITHUB_REPOSITORY --json publishedAt --jq .publishedAt).Substring(0, 10)
+          $version = $env:TAG.Substring(1)
+          ./packaging/winget/render.ps1 -Version $version -Zip "dist/$zip" -Out "winget/$version" -Date $date -Validate
+          "MANIFESTS=winget/$version" >> $env:GITHUB_ENV
+          "VERSION=$version" >> $env:GITHUB_ENV
+      - name: submit
+        shell: pwsh
+        env:
+          WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          FORCE: ${{ inputs.force }}
+        run: ./packaging/winget/submit.ps1 -Manifests $env:MANIFESTS -Version $env:VERSION -Force:($env:FORCE -eq 'true')
