@@ -2884,13 +2884,30 @@ steps = [{{ exec = "{echo}" }}]
         body
     };
     let main_file = dir.path().join("devstack.toml");
-    let cleanup = |projects: &[&str]| {
-        for pr in projects {
+    let wt = dir.path().parent().unwrap().join(format!("wt-rtc-{p}"));
+    let lane = format!("wt-rtc-{p}");
+    let lane_project = format!("{project}-{lane}");
+    let lane_file = wt.join("devstack.toml");
+    // Whatever happens: the daemon, the containers and the worktree go.
+    struct Cleanup<'a>(&'a dyn Fn());
+    impl Drop for Cleanup<'_> {
+        fn drop(&mut self) {
+            (self.0)();
+        }
+    }
+    let clean = || {
+        let _ = cli(&main_file, &["down", "--infra", "--all"]);
+        for pr in [&project, &lane_project] {
             let _ = Command::new("docker")
                 .args(["compose", "-p", pr, "down", "--volumes"])
                 .output();
         }
+        let _ = Command::new("git")
+            .args(["worktree", "remove", "--force", wt.to_str().unwrap()])
+            .current_dir(dir.path())
+            .output();
     };
+    let _cleanup = Cleanup(&clean);
 
     git(&["init", "-q"]);
     git(&["config", "core.autocrlf", "false"]);
@@ -2912,15 +2929,7 @@ steps = [{{ exec = "{echo}" }}]
         "{run}"
     );
 
-    let wt = dir
-        .path()
-        .parent()
-        .unwrap()
-        .join(format!("wt-rtc-{p}"));
     git(&["worktree", "add", "-q", "-b", "rtc", wt.to_str().unwrap()]);
-    let lane = format!("wt-rtc-{p}");
-    let lane_project = format!("{project}-{lane}");
-    let lane_file = wt.join("devstack.toml");
     let (ok, up) = cli(&lane_file, &["up"]);
     let (_, list) = cli(&main_file, &["lane", "list"]);
     let offset: u16 = list
@@ -2945,27 +2954,24 @@ steps = [{{ exec = "{echo}" }}]
         ours.iter().any(|c| c.0 == "media" && c.2 == vec![moved]),
         "{ours:?}"
     );
-    // devstack calls it by the files' number; an `exec` step gets the
-    // lane's value.
+    // devstack calls it by the files' number, once the lane's daemon read
+    // its containers; an `exec` step gets the lane's value.
+    let shown = format!("{p}->127.0.0.1:{moved}");
+    assert!(
+        wait_for(
+            || cli(&lane_file, &["status"]).1.contains(&shown),
+            Duration::from_secs(30)
+        ),
+        "{}",
+        cli(&lane_file, &["status"]).1
+    );
     let (_, run) = cli(&lane_file, &["run", "port"]);
     assert!(
         run.lines()
             .any(|l| l.trim_end() == format!("port={moved} var={moved}")),
         "{run}"
     );
-    let (_, status) = cli(&lane_file, &["status"]);
-    assert!(
-        status.contains(&format!("{p}->127.0.0.1:{moved}")),
-        "{status}"
-    );
-
     let (ok, stop) = cli(&main_file, &["lane", "stop", &lane]);
     assert!(ok, "{stop}");
-    let (ok, down) = cli(&main_file, &["down", "--infra"]);
-    assert!(ok, "{down}");
-    cleanup(&[&project, &lane_project]);
-    let _ = Command::new("git")
-        .args(["worktree", "remove", "--force", wt.to_str().unwrap()])
-        .current_dir(dir.path())
-        .output();
+    assert!(compose_ps(&lane_project).is_empty(), "after lane stop");
 }
