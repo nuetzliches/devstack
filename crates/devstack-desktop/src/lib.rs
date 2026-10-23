@@ -20,6 +20,7 @@ pub mod channel;
 mod mac;
 pub mod notify;
 pub mod tray;
+pub mod webapp;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -105,6 +106,25 @@ pub const URL_OPENER: &str = os::URL_OPENER;
 /// browser, in the background.
 pub fn open_browser(url: &str) -> std::io::Result<()> {
     os::open_browser(url)
+}
+
+/// The dashboard's web app, installed from the hub on `origin`
+/// (`http://127.0.0.1:4250`) in a Chromium-family browser, if this
+/// platform's module finds one (ADR-0061).
+pub fn dashboard_app(origin: &str) -> Option<webapp::WebApp> {
+    os::dashboard_app(&webapp::app_id(&webapp::manifest_id(origin)))
+}
+
+/// Open `url` (a page of the hub on its origin) in the dashboard's installed
+/// app when there is one, else in the default browser. `Ok(true)`: in the
+/// app.
+pub fn open_dashboard_page(url: &str) -> std::io::Result<bool> {
+    if let Some(app) = webapp::origin_of(url).and_then(dashboard_app)
+        && app.open(url).is_ok()
+    {
+        return Ok(true);
+    }
+    os::open_browser(url).map(|()| false)
 }
 
 /// Browsers known by name: the names one may give, and the program (Windows,

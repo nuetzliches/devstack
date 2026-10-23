@@ -200,6 +200,12 @@ pub fn pick_folder() -> Result<Option<String>, String> {
 
 pub const URL_OPENER: &str = "open";
 
+/// The installed web app (ADR-0061): not on macOS yet, the dashboard opens
+/// in the browser.
+pub fn dashboard_app(_id: &str) -> Option<crate::webapp::WebApp> {
+    None
+}
+
 pub fn open_browser(url: &str) -> std::io::Result<()> {
     let mut child = Command::new("open").arg(url).stdin(Stdio::null()).spawn()?;
     std::thread::spawn(move || child.wait());

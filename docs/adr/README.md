@@ -109,3 +109,4 @@ stay.
 | [0058](0058-a-profile-can-leave-out-containers-and-services.md) | A profile can leave out containers, whole Compose groups and services | Accepted |
 | [0059](0059-a-services-stop-command-ends-what-its-run-started.md) | A service's `stop` command ends what its `run` started outside its process tree | Accepted |
 | [0060](0060-the-tray-is-a-client-of-the-hub.md) | The tray is a client of the hub, a process of its own, on every desktop | Accepted |
+| [0061](0061-the-dashboard-opens-in-its-installed-app.md) | The dashboard opens in its installed app, when there is one | Proposed |

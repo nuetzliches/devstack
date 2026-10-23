@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **The dashboard opens in its installed app** (ADR-0061, Proposed). With
+  the dashboard installed as an app in Chrome, Edge, Brave or Chromium, the
+  tray's *Open Dashboard*, `devstack ui` and a click on a notification open
+  it there instead of in a browser tab: on Linux found by its launcher (the
+  applications folder and the desktop folder), on Windows by the browser
+  profile it is installed in; not on macOS yet. The app is recognised by
+  the id Chromium derives from the hub's origin. The manifest asks for the
+  open window to be reused (`launch_handler`), and names its `id`.
+  `--browser`, `DEVSTACK_BROWSER` and `BROWSER` still win.
+
 ## [0.21.0] - 2026-10-23
 
 A tray icon on Windows, Linux and macOS, a client of the hub (ADR-0060). A
