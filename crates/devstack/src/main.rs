@@ -16,6 +16,7 @@ mod integration;
 mod mcp;
 mod poolcmd;
 mod selfcmd;
+mod tray;
 use devstack_skills as skills;
 mod topcmd;
 mod update;
@@ -219,6 +220,9 @@ enum Cmd {
     },
     /// MCP server on stdio for coding agents; a client of the daemon like the CLI.
     Mcp,
+    /// The tray icon: the stacks' state, the dashboard, start and stop
+    /// (ADR-0060). The hub starts it; `devstack hub tray off` keeps it off.
+    Tray,
     /// Open the dashboard: starts the hub if needed and pairs the browser
     /// (ADR-0021). In a repository it opens on this stack, in a worktree on
     /// its lane.
@@ -595,6 +599,20 @@ enum HubAction {
         #[command(subcommand)]
         action: Option<NotifyAction>,
     },
+    /// The tray icon the hub starts (ADR-0060); without an action, whether
+    /// it runs.
+    Tray {
+        #[command(subcommand)]
+        action: Option<TrayAction>,
+    },
+}
+
+#[derive(Subcommand)]
+enum TrayAction {
+    /// Start the tray now and with the hub from now on.
+    On,
+    /// End the tray, and do not start it with the hub.
+    Off,
 }
 
 #[derive(Subcommand)]
@@ -701,7 +719,7 @@ fn main() -> Result<()> {
         cmd @ (Cmd::Node { .. } | Cmd::Join { .. } | Cmd::Pool { .. } | Cmd::Open { .. }) => {
             dispatch::pool::run(&file, cmd)
         }
-        cmd @ (Cmd::Ui { .. } | Cmd::Hub { .. } | Cmd::OpenUrl { .. }) => {
+        cmd @ (Cmd::Ui { .. } | Cmd::Hub { .. } | Cmd::OpenUrl { .. } | Cmd::Tray) => {
             dispatch::hub::run(&file, cmd)
         }
         cmd @ (Cmd::Update { .. } | Cmd::Myself { .. }) => dispatch::myself::run(cmd),

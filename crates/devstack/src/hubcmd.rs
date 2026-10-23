@@ -491,6 +491,43 @@ pub fn stop() -> Result<()> {
     Ok(())
 }
 
+/// `devstack hub tray`: whether the tray runs, and why not.
+pub fn tray_text() -> String {
+    use devstack_hub::tray;
+    match (tray::running(), tray::why_not()) {
+        (Some(pid), _) => format!("tray running (pid {pid})"),
+        (None, Some(why)) => format!("tray not running: {why}"),
+        (None, None) => {
+            "tray not running; it starts with the hub (`devstack hub tray on` starts it now)".into()
+        }
+    }
+}
+
+/// `devstack hub tray on`: with the hub from now on, and now.
+pub fn tray_on() -> Result<()> {
+    use devstack_hub::tray;
+    tray::set_off(false).map_err(|e| anyhow!(e))?;
+    if tray::running().is_none() {
+        if let Some(why) = tray::why_not() {
+            bail!("the tray cannot start: {why}");
+        }
+        tray::spawn().map_err(|e| anyhow!(e))?;
+    }
+    println!("tray on: it starts with the hub");
+    Ok(())
+}
+
+/// `devstack hub tray off`: ended now, and not started with the hub.
+pub fn tray_off() -> Result<()> {
+    use devstack_hub::tray;
+    tray::set_off(true).map_err(|e| anyhow!(e))?;
+    if !tray::stop(Duration::from_secs(5)) {
+        bail!("the tray did not end; it ends within a few seconds, or end it yourself");
+    }
+    println!("tray off: `devstack hub tray on` brings it back");
+    Ok(())
+}
+
 /// Start the hub alongside a stack (`devstack up`), unless `DEVSTACK_NO_HUB`
 /// is set. A failure is a note, never a reason to fail `up`.
 pub fn ensure_quietly() {

@@ -31,6 +31,37 @@ jiff = "0.2"
 libc = "0.2"
 # Mach host and time calls on macOS that libc marks deprecated (ADR-0054).
 mach2 = "0.7"
+# The tray's status item on macOS (ADR-0060), linked on macOS only.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSApplication",
+    "NSButton",
+    "NSColor",
+    "NSControl",
+    "NSEvent",
+    "NSGraphicsContext",
+    "NSImage",
+    "NSMenu",
+    "NSMenuItem",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSStatusBar",
+    "NSStatusBarButton",
+    "NSStatusItem",
+    "NSView",
+    "objc2-core-foundation",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSData",
+    "NSDate",
+    "NSGeometry",
+    "NSObject",
+    "NSRunLoop",
+    "NSString",
+    "NSTimer",
+] }
 notify = "8"
 rand = "0.10"
 raw-window-handle = "0.6"
@@ -63,9 +94,10 @@ tar = "0.4"
 # WinRT toasts (ADR-0045); windows-sys has no WinRT.
 windows = { version = "0.62", features = ["Data_Xml_Dom", "Foundation", "UI_Notifications"] }
 # Desktop notifications on Linux over the session bus, pure Rust (ADR-0045).
-zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] }
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
     "Win32_NetworkManagement_IpHelper",
     "Win32_Security",
     "Win32_Storage_FileSystem",
@@ -76,6 +108,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",

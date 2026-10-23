@@ -44,6 +44,8 @@ mod prompts;
 pub mod release;
 mod share;
 mod shared;
+mod summary;
+pub mod tray;
 mod ws;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -150,6 +152,8 @@ struct AppState {
     shutdown: Arc<tokio::sync::Notify>,
     /// Desktop notifications (ADR-0045).
     notify: Arc<notify::Center>,
+    /// What the streams `notify` follows show now, for `/hub/summary`.
+    board: Arc<summary::Board>,
 }
 
 fn now_ms() -> u128 {
@@ -409,6 +413,7 @@ pub fn serve() -> Result<(), String> {
             engine_fast_until,
             shutdown: shutdown.clone(),
             notify,
+            board: Arc::default(),
         };
         // The port last: what accepts a connection answers it. Bound before
         // the setup above (a first `docker version` alone may take 5 s), the
@@ -430,6 +435,7 @@ pub fn serve() -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
         notify::start(state.clone());
+        tray::start_quietly();
         let app = router(state);
         if let Some(v6) = v6 {
             let app6 = app.clone();
@@ -476,6 +482,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/session", get(session))
         .route("/hub/ping", get(ping).options(ping_preflight))
         .route("/hub/stacks", get(stacks))
+        .route("/hub/summary", get(summary::get))
         .route("/hub/docker", get(docker))
         .route("/hub/docker/start", post(docker_start))
         .route("/hub/events", get(events))

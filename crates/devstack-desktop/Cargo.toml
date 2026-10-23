@@ -1,6 +1,6 @@
 [package]
 name = "devstack-desktop"
-description = "The desktop devstack runs on, one module per operating system: the hub at logon, the devstack:// link, notifications, the folder dialog, browsers and programs, starting Docker, how devstack was installed (ADR-0054)"
+description = "The desktop devstack runs on, one module per operating system: the hub at logon, the devstack:// link, notifications, the tray, the folder dialog, browsers and programs, starting Docker, how devstack was installed (ADR-0054)"
 version.workspace = true
 license.workspace = true
 edition.workspace = true
@@ -22,11 +22,17 @@ windows-sys.workspace = true
 # uses osascript there.
 [target.'cfg(target_os = "linux")'.dependencies]
 rfd.workspace = true
+serde.workspace = true
 tokio-stream.workspace = true
 zbus.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-app-kit.workspace = true
+objc2-foundation.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

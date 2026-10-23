@@ -49,6 +49,8 @@ fn start_env(home: tempfile::TempDir, port: u16, extra: &[(&str, std::ffi::OsStr
         .env("DEVSTACK_NO_UPDATE_CHECK", "1")
         // What would notify is logged; nothing shows on the desktop.
         .env("DEVSTACK_NO_NOTIFY", "1")
+        // No tray icon on the desktop of whoever runs the tests.
+        .env("DEVSTACK_NO_TRAY", "1")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -425,6 +427,7 @@ fn a_hub_answers_once_its_port_takes_connections() {
         .env("LOCALAPPDATA", h.home.path())
         .env("XDG_STATE_HOME", h.home.path())
         .env("DEVSTACK_NO_UPDATE_CHECK", "1")
+        .env("DEVSTACK_NO_TRAY", "1")
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
@@ -443,6 +446,7 @@ fn the_token_goes_only_to_this_users_hub() {
             .env("LOCALAPPDATA", h.home.path())
             .env("XDG_STATE_HOME", h.home.path())
             .env("DEVSTACK_NO_UPDATE_CHECK", "1")
+            .env("DEVSTACK_NO_TRAY", "1")
             .output()
             .unwrap()
     };
@@ -822,6 +826,25 @@ fn a_failed_start_is_reported() {
         if let Some(why) = entry["start_error"].as_str() {
             assert!(why.contains("99.0.0"), "{why}");
             assert_eq!(entry["running"], false);
+            // The tray's summary says it too (ADR-0060), to the token.
+            let bearer = format!("Authorization: Bearer {}\r\n", token(&h));
+            let (s, _, body) = get(p, "/hub/summary", &bearer);
+            assert_eq!(s, 200, "{body}");
+            let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(v["state"], "attention", "{body}");
+            let stack = &v["stacks"][0];
+            assert_eq!(
+                (&stack["id"], &stack["state"]),
+                (&id.as_str().into(), &"attention".into())
+            );
+            assert_eq!(stack["attention"][0]["text"], "the start failed");
+            assert!(
+                stack["attention"][0]["detail"]
+                    .as_str()
+                    .unwrap()
+                    .contains("99.0.0"),
+                "{body}"
+            );
             break;
         }
         assert!(

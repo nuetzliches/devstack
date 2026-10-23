@@ -651,8 +651,12 @@ version = "0.20.0"
 dependencies = [
  "devstack-proc",
  "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "raw-window-handle",
  "rfd",
+ "serde",
  "tempfile",
  "tokio",
  "tokio-stream",
@@ -1482,6 +1486,7 @@ dependencies = [
  "bitflags 2.13.2",
  "block2",
  "objc2",
+ "objc2-core-foundation",
  "objc2-foundation",
 ]
 

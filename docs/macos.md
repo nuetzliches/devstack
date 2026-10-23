@@ -28,6 +28,7 @@ with a browser is blocked until `xattr -d com.apple.quarantine devstack`.
 | The hub at login | a LaunchAgent (`~/Library/LaunchAgents/it.nuetzliche.devstack.hub.plist`), for a Homebrew install too, not `brew services` |
 | Folder picker, "Open in" (Finder, Terminal, editors, GitHub Desktop), browsers | `osascript`, `open`, `open -a` |
 | Starting Docker | Docker Desktop or OrbStack; Colima: `colima start` yourself |
+| The tray ([ADR-0060](adr/0060-the-tray-is-a-client-of-the-hub.md)) | a status item in the menu bar, no Dock icon, started by the hub; not checked on a Mac since it became the tray of every platform |
 | `devstack update`, the dashboard's update | a Homebrew copy through `brew upgrade` |
 | Requesting a lane on a Linux node of a pool | expected to work, not checked yet |
 | Desktop notifications, the `devstack://` link | not yet: both need a signed app bundle |
@@ -98,3 +99,22 @@ What CI cannot show. Each step names what to look for; anything else is a bug.
 18. With the hub started at login (step 5), joining or using a pool on your
     LAN works; if macOS asks about Local Network access, say so in the
     report, with what you answered.
+
+**The tray** (ADR-0060; the AppKit part comes from #248, the rest is new)
+
+19. With the hub started (`devstack hub start`), the devstack mark shows in
+    the menu bar within a few seconds, and nothing in the Dock.
+    `devstack hub tray` says it runs; a second `devstack tray` says it runs
+    already.
+20. The icon follows the menu bar's light and dark. It turns orange while a
+    stack starts or stops, red while a service has failed (a stack whose
+    service exits at once), and plain again once that is gone.
+21. Its menu lists every registered stack with its state. *Stop* and
+    *Start* in a stack's submenu work as in the dashboard; *Open Folder*
+    opens Finder; *Open in Dashboard* and a line under "needs attention"
+    open the paired dashboard on that stack or service.
+22. *Quit Tray* ends only the icon: stacks and the hub keep running.
+    `devstack hub tray off` ends it and `devstack hub stop` / `start`
+    leaves it off; `devstack hub tray on` brings it back.
+23. `devstack hub stop` while it runs: the icon stays, says the hub does
+    not run, and *Start Dashboard Hub* starts it again.

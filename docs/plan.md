@@ -426,7 +426,9 @@ checks ([ADR-0019](adr/0019-control-api-security.md)).
 Delivery: a browser page served by the daemon, opened with `devstack ui`; status
 icon and notifications through a tray in the daemon binary ([ADR-0018](adr/0018-dashboard-is-a-browser-page.md)).
 The notifications came without the tray, from the hub
-([ADR-0045](adr/0045-the-hub-notifies-the-desktop.md)).
+([ADR-0045](adr/0045-the-hub-notifies-the-desktop.md)); the tray came as a
+client process the hub starts, on every platform
+([ADR-0060](adr/0060-the-tray-is-a-client-of-the-hub.md)).
 
 - **Overview by group** (§4.4a): one panel per group, ungrouped members under
   "Other", a member shown in every group it belongs to. Per member: state,
@@ -456,7 +458,7 @@ of the current instance (live, filter, pause), service and stack actions,
 commands with confirmation and their run history, resources, the events
 timeline, Docker and stack-file banners, container logs, earlier logs of a
 service, sortable tables, actions per group, the jump to the last failure, a
-candidate's console, a build timeline per service, a command palette, the lane switcher. Open (§13): tray.
+candidate's console, a build timeline per service, a command palette, the lane switcher, the tray (ADR-0060).
 
 ## 7. Phases
 
@@ -957,6 +959,5 @@ What is open, roughly in the order it pays off, and where it comes from.
 | `devstack migrate`, once devstack has outside users | [ADR-0023](adr/0023-stack-file-compatibility.md) | medium |
 | A pull request as a lane, by its number: fetched by refspec, no forge API (`refs/pull/N/head` on GitHub and Forgejo/Gitea, `refs/merge-requests/N/head` on GitLab), the forge told by the remote's URL. A feature that needs the API after all takes its token from `git credential fill` (else `gh`, `glab`, `tea`), never from an OAuth flow of devstack's own: a self-hosted instance has no client ID devstack could ship | [ADR-0047](adr/0047-the-dashboard-makes-a-lane-from-a-branch.md) (what it does not say) | medium |
 | Dead ends link onward, once devstack has outside users: a gap left on purpose names its tracking issue (one per gap, so interest adds up instead of duplicates); an open list (forges, programs to open a tree in) links to a prefilled issue form with the version and the OS only, never hosts or paths. One mechanism for it, such as a notice, not links in every error | [ADR-0023](adr/0023-stack-file-compatibility.md) (the same trigger), [ADR-0050](adr/0050-what-no-request-reports-reaches-the-dashboard-as-a-notice.md) | small |
-| Tray icon with status (deferred; the notifications are the hub's since ADR-0045) | §6, ADR-0018, [#1](https://github.com/nuetzliches/devstack/issues/1) | medium |
 | Network egress sandbox, stage 1 (cooperative proxy) | [ADR-0022](adr/0022-network-egress-sandbox.md) (proposed) | medium |
 | Confine file writes of services to the repository (deferred) | [#2](https://github.com/nuetzliches/devstack/issues/2) | medium |

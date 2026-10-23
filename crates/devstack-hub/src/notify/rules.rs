@@ -89,8 +89,13 @@ const CASCADE_PREFIX: &str = "not started: ";
 struct Svc {
     /// `status.state`.
     state: String,
+    /// `status.reason` and `status.exit_code`, for what the tray shows.
+    reason: String,
+    exit_code: Option<i64>,
     /// The candidate's `state` and `build_id`.
     candidate: Option<(String, Option<String>)>,
+    /// The candidate's `reason`.
+    candidate_reason: String,
 }
 
 /// What one event stream (the main tree's, or one lane's) showed last, per
@@ -114,7 +119,10 @@ impl Scope {
                             s["name"].as_str()?.to_string(),
                             Svc {
                                 state: state_of(&s["status"]),
+                                reason: reason_of(&s["status"]),
+                                exit_code: s["status"]["exit_code"].as_i64(),
                                 candidate: candidate_of(&s["candidate"]),
+                                candidate_reason: reason_of(&s["candidate"]),
                             },
                         ))
                     })
@@ -127,6 +135,8 @@ impl Scope {
                 };
                 let svc = self.services.entry(name.to_string()).or_default();
                 let before = std::mem::replace(&mut svc.state, state_of(&event["status"]));
+                svc.reason = reason_of(&event["status"]);
+                svc.exit_code = event["status"]["exit_code"].as_i64();
                 service_notice(name, &before, &event["status"])
                     .into_iter()
                     .collect()
@@ -138,6 +148,7 @@ impl Scope {
                 let svc = self.services.entry(name.to_string()).or_default();
                 let now = candidate_of(&event["candidate"]);
                 let before = std::mem::replace(&mut svc.candidate, now.clone());
+                svc.candidate_reason = reason_of(&event["candidate"]);
                 candidate_notice(name, before, now.as_ref(), &event["candidate"])
                     .into_iter()
                     .collect()
@@ -145,6 +156,62 @@ impl Scope {
             _ => Vec::new(),
         }
     }
+}
+
+impl Scope {
+    /// What this stream shows now, for the hub's summary (ADR-0060 point 3):
+    /// the services ready of all, whether one starts, and what needs
+    /// attention, the same as what notifies.
+    pub fn glance(&self) -> crate::summary::Glance {
+        let mut g = crate::summary::Glance {
+            total: self.services.len(),
+            ..Default::default()
+        };
+        let mut names: Vec<&String> = self.services.keys().collect();
+        names.sort();
+        for name in names {
+            let svc = &self.services[name];
+            match svc.state.as_str() {
+                "running" | "healthy" => g.ready += 1,
+                "completed" if svc.exit_code == Some(0) => g.ready += 1,
+                "building" | "starting" => g.starting = true,
+                "failed"
+                    if !svc.reason.starts_with(STOPPED_PREFIX)
+                        && !svc.reason.starts_with(CASCADE_PREFIX) =>
+                {
+                    g.attention.push(attention(name, "failed", &svc.reason));
+                }
+                _ => {}
+            }
+            match svc.candidate.as_ref().map(|(s, _)| s.as_str()) {
+                Some("held") => g.attention.push(attention(
+                    name,
+                    "build held for promote",
+                    &svc.candidate_reason,
+                )),
+                Some("failed") => {
+                    g.attention
+                        .push(attention(name, "build failed", &svc.candidate_reason));
+                }
+                _ => {}
+            }
+        }
+        g
+    }
+}
+
+/// `<service>: <what>`, and the first line of why.
+fn attention(service: &str, what: &str, reason: &str) -> crate::summary::Item {
+    crate::summary::Item {
+        lane: None,
+        service: Some(service.to_string()),
+        text: format!("{service}: {what}"),
+        detail: first_lines(reason, 1),
+    }
+}
+
+fn reason_of(v: &Value) -> String {
+    v["reason"].as_str().unwrap_or("").to_string()
 }
 
 fn state_of(status: &Value) -> String {
@@ -380,6 +447,32 @@ mod tests {
 
     fn kinds(n: &[Notice]) -> Vec<Kind> {
         n.iter().map(|n| n.kind).collect()
+    }
+
+    #[test]
+    fn the_glance_counts_ready_services_and_names_what_needs_attention() {
+        let mut s = Scope::default();
+        s.apply(&snapshot(json!([
+            { "name": "api", "status": { "state": "healthy" },
+              "candidate": { "state": "held", "build_id": "b1", "reason": "schema\nmore" } },
+            { "name": "job", "status": { "state": "completed", "exit_code": 0 } },
+            { "name": "web", "status": { "state": "failed", "reason": "not started: api failed" } },
+            { "name": "worker", "status": { "state": "starting" } }
+        ])));
+        let g = s.glance();
+        assert_eq!((g.ready, g.total, g.starting), (2, 4, true));
+        // A service held back by another's failure is not one more thing.
+        assert_eq!(g.attention.len(), 1);
+        assert_eq!(g.attention[0].text, "api: build held for promote");
+        assert_eq!(g.attention[0].detail, "schema");
+        s.apply(&service(
+            "worker",
+            json!({ "state": "failed", "reason": "port taken" }),
+        ));
+        let g = s.glance();
+        assert!(!g.starting);
+        assert_eq!(g.attention[1].text, "worker: failed");
+        assert_eq!(g.attention[1].service.as_deref(), Some("worker"));
     }
 
     #[test]
