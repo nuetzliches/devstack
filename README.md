@@ -154,7 +154,8 @@ devstack up --on build-server        # in a worktree: everything of the lane run
 devstack up --on pool                # the coordinator picks a node
 devstack lane move login-fix --to local
 devstack lane share login-fix --with team:qa
-devstack open login-fix web          # a lane someone shares with you
+devstack open login-fix web          # a lane someone shares with you (connects it)
+devstack pool disconnect login-fix   # its ports here are free again
 ```
 
 One machine runs the coordinator, servers run a node agent; the dashboard's

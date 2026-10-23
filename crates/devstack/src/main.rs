@@ -352,6 +352,18 @@ enum PoolAction {
     Telemetry { state: Option<String> },
     /// The lanes others share with this machine (ADR-0035).
     Shared,
+    /// Connect to a lane someone shares with this machine (ADR-0053): each
+    /// of its services forwarded here, on its owner's port if free.
+    Connect {
+        /// The lane's name (or its lease, see `devstack pool shared`).
+        lane: String,
+    },
+    /// Disconnect from a shared lane: its forwards close, its ports here are
+    /// free again.
+    Disconnect {
+        /// The lane's name (or its lease).
+        lane: String,
+    },
     /// Where this machine's lanes start without `--on` (ADR-0025): `local`
     /// (the default), `pool`, a pool's name, a node or `<pool>:<node>`;
     /// nothing to show it. Setting it is consent to send a worktree there

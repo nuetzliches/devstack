@@ -1,6 +1,6 @@
 # ADR-0035: The pool sees the lanes its members share, and can use them
 
-- **Status:** Accepted (2026-10-16); point 4 extended by [ADR-0040](0040-a-shared-lane-can-be-watched-like-ones-own.md) (2026-10-19: sharing for viewing; amended 2026-10-20: sharing includes viewing)
+- **Status:** Accepted (2026-10-16); point 4 extended by [ADR-0040](0040-a-shared-lane-can-be-watched-like-ones-own.md) (2026-10-19: sharing for viewing; amended 2026-10-20: sharing includes viewing); point 3 amended by [ADR-0053](0053-whoever-a-lane-is-shared-with-connects-to-it.md) (2026-10-22: a member connects to a lane, all its services at once, and disconnects)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) (point 4: forwarded ports), [ADR-0031](0031-a-coordinator-places-lanes.md), [ADR-0033](0033-a-node-decides-what-runs-on-it.md) (tags), [ADR-0034](0034-a-machine-can-belong-to-several-pools.md)
@@ -31,7 +31,9 @@ lane, node, requester).
    the owner's (ADR-0029 point 4), and opens the page. The node lets the
    tunnel through only for members the lane is shared with, checked with
    the coordinator by the caller's certificate, and only to the shared
-   services' ports.
+   services' ports. *Amended by ADR-0053 (2026-10-22): the member connects
+   to the lane, which forwards all its shared services at once, and
+   disconnects it again; opening a service connects its lane.*
 4. **Using is not controlling.** Others reach the shared services; they do
    not start, stop, rebuild or see the logs of someone else's lane, unless
    a later decision says so.

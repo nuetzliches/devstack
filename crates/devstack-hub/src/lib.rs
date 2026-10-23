@@ -508,6 +508,11 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/pool/share", get(share::get))
         .route("/hub/pool/shared", get(shared::list))
         .route("/hub/pool/shared/{lease}/open", post(shared::open))
+        .route("/hub/pool/shared/{lease}/connect", post(shared::connect))
+        .route(
+            "/hub/pool/shared/{lease}/disconnect",
+            post(shared::disconnect),
+        )
         .route("/hub/pool/shared/{lease}/api/{*rest}", get(shared::view))
         .route("/hub/pool/members/{id}/approve", post(pool::approve))
         .route("/hub/pool/members/{id}/remove", post(pool::remove))

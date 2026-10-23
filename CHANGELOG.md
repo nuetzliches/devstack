@@ -9,6 +9,22 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **Whoever a lane is shared with connects to it, and disconnects again**
+  (ADR-0053, ADR-0035 point 3 amended). Seeing or viewing a shared lane
+  opens no port on this machine. *Connect* (in the lane's header, in the
+  pool area, `devstack pool connect <lane>`) forwards every service it
+  shares at once, each on its owner's port if free here, so its services
+  reach each other as on the owner's machine; *Disconnect* (`devstack pool
+  disconnect <lane>`) closes them, connections in flight included, and
+  frees the ports. Opening a service (a link, `devstack open`) connects its
+  lane. Until now each click forwarded one service, on the owner's port,
+  until the hub stopped, unseen: the member's own `devstack up` could fail
+  on that port. The sidebar dims a shared lane that is not connected; the
+  header names each service's port here and one that is not the owner's.
+  A lane no longer shared with this machine is disconnected.
+
 ## [0.19.0] - 2026-10-22
 
 A restart of the stack carries its lanes over to the next daemon

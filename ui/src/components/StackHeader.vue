@@ -10,7 +10,7 @@ import { usePopover } from '@/lib/popover';
 import type { Opener } from '@/api/types';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
-import { usePool } from '@/stores/pool';
+import { connectedTo, usePool } from '@/stores/pool';
 import { useUi } from '@/stores/ui';
 import { useOpenerPrefs } from '@/lib/openers';
 import BranchPicker from './BranchPicker.vue';
@@ -53,6 +53,26 @@ const pathParts = computed(() => {
 // pool's nodes that are online and run lanes.
 const pool = usePool();
 onBeforeUnmount(pool.watch(30_000));
+// A shared lane (ADR-0053): connected, its services forwarded here; one off
+// its owner's port is named, links between its services may not reach it.
+const sharedConn = computed(() => {
+  const l = stack.sharedLane;
+  if (!l) return null;
+  const ports = l.services.filter((s) => s.forwarded).map((s) => ({ name: s.name, port: s.forwarded!, moved: !!s.here && s.forwarded !== s.here, here: s.here }));
+  return { connected: connectedTo(l), ports };
+});
+const connBusy = ref(false);
+async function toggleConnection() {
+  const l = stack.sharedLane;
+  if (!l || connBusy.value) return;
+  connBusy.value = true;
+  try {
+    if (connectedTo(l)) await pool.disconnectShared(l.pool, l.lease);
+    else await pool.connectShared(l.pool, l.lease);
+  } finally {
+    connBusy.value = false;
+  }
+}
 const moveRoot = ref<HTMLElement | null>(null);
 const moveTrigger = ref<HTMLButtonElement | null>(null);
 const { open: moveOpen, close: moveClose } = usePopover(moveRoot, moveTrigger);
@@ -149,7 +169,35 @@ function openWith(o: Opener) {
       <span v-if="stack.sharedLane" class="pill info" data-testid="shared-banner" :title="`Shared with you by ${stack.sharedLane.owner_name}: its state, logs and events, read only. It runs on ${stack.sharedLane.node.name}.`">
         {{ stack.sharedLane.owner_name }}'s lane on {{ stack.sharedLane.node.name }} · read only
       </span>
+      <template v-if="sharedConn && !hubAway">
+        <span
+          v-for="p in sharedConn.ports"
+          :key="p.name"
+          :class="p.moved ? 'pill warn' : 'tag'"
+          :title="p.moved ? `Port ${p.here} is taken here: forwarded to ${p.port}; links between its services that name ${p.here} do not reach it` : `Forwarded here on its owner's port`"
+          data-testid="shared-port"
+        >
+          {{ p.name }} :{{ p.port }}<template v-if="p.moved"> (not :{{ p.here }})</template>
+        </span>
+      </template>
       <span class="grow" />
+      <button
+        v-if="sharedConn && !hubAway"
+        type="button"
+        class="btn btn-sm"
+        :class="{ 'btn-primary': !sharedConn.connected }"
+        :disabled="connBusy"
+        :title="
+          sharedConn.connected
+            ? 'Close its forwards: its ports here are free again'
+            : 'Forward each of its services here, on the port its owner has it on if free (ADR-0053); nothing is forwarded until then'
+        "
+        data-testid="shared-connect"
+        @click="toggleConnection"
+      >
+        <span v-if="connBusy" class="spinner" /><Icon v-else :name="sharedConn.connected ? 'x' : 'globe'" :size="13" />
+        {{ sharedConn.connected ? 'Disconnect' : 'Connect' }}
+      </button>
       <template v-if="!hubAway && !stack.readOnly">
         <button
           v-if="current && !current.owns_main && current.active !== false && !view?.no_main_ports"

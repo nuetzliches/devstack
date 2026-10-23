@@ -347,8 +347,21 @@ pool area) and open its services:
 
 ```sh
 devstack pool shared
-devstack open login-fix web                     # a forward on your machine, then the browser
+devstack open login-fix web                     # connects the lane, then the browser
+devstack pool connect login-fix                 # every service it shares forwarded here
+devstack pool disconnect login-fix              # the forwards close, the ports are free again
 ```
+
+Nothing of a shared lane is forwarded to your machine until you **connect**
+to it ([ADR-0053](adr/0053-whoever-a-lane-is-shared-with-connects-to-it.md)):
+in its header (*Connect*), in the pool area, or by opening one of its
+services. Connecting forwards every service it shares at once, each on the
+port its owner has it on if that is free here (so a front end that calls its
+API on `localhost` works), else on another one, which the header names.
+*Disconnect* closes them, connections in flight too, and the ports are free
+for your own stack again. In the sidebar a shared lane you are not connected
+to is dimmed. A connection ends with the hub, and when the lane is no longer
+shared with you.
 
 Its services are those with a `port` and the Compose containers the dashboard
 links as a web page (a `urls` entry with `http`/`https`, or a published port

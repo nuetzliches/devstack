@@ -19,7 +19,7 @@ vi.mock('@/api', async (importOriginal) => {
 // Imported after the mock, so they get the fake transport.
 const { useHub } = await import('./hub');
 const { useStack } = await import('./stack');
-const { usePool } = await import('./pool');
+const { usePool, connectedTo } = await import('./pool');
 const { useUi } = await import('./ui');
 
 const entry = (id: string, running = true): StackEntry => ({
@@ -488,6 +488,68 @@ describe('pool store', () => {
     await pool.openShared('default', 'bad', 'web');
     expect(opened).toEqual(['http://localhost:4200']);
     expect(useUi().toasts.some((x) => x.title.startsWith('Not opening'))).toBe(true);
+  });
+
+  it('connects to a shared lane and disconnects again, and shows which it is (ADR-0053)', async () => {
+    let connected = false;
+    const lane = () => ({
+      lease: 'ab12',
+      repo: 'crm',
+      lane: 'fix',
+      owner: 'o',
+      owner_name: 'anna',
+      node: { id: 'n', name: 'build', api: 'https://n' },
+      services: [
+        { name: 'web', port: 4300, scheme: 'http', here: 4300, ...(connected ? { forwarded: 4300 } : {}) },
+        { name: 'api', port: 5100, scheme: 'http', here: 5100, ...(connected ? { forwarded: 51000 } : {}) },
+      ],
+    });
+    fake.on('/hub/pool/shared', () => ok([lane()]));
+    fake.on(/\/hub\/pool\/shared\/ab12\/connect/, () => {
+      connected = true;
+      return ok({ services: [{ name: 'web', port: 4300, url: 'http://localhost:4300' }] });
+    });
+    fake.on(/\/hub\/pool\/shared\/ab12\/disconnect/, () => {
+      connected = false;
+      return ok({ closed: 2 });
+    });
+    const pool = usePool();
+    await pool.connectShared('default', 'ab12');
+    const shown = () => pool.shared.find((l) => l.lease === 'ab12')!;
+    expect(connectedTo(shown())).toBe(true);
+    expect(shown().services.map((s) => s.forwarded)).toEqual([4300, 51000]);
+    await pool.disconnectShared('default', 'ab12');
+    expect(connectedTo(shown())).toBe(false);
+    const sent = fake.requests.filter((r) => /\/ab12\/(connect|disconnect)/.test(r.path)).map((r) => [r.method, r.path]);
+    expect(sent).toEqual([
+      ['POST', '/hub/pool/shared/ab12/connect'],
+      ['POST', '/hub/pool/shared/ab12/disconnect'],
+    ]);
+  });
+
+  it('opening a shared service shows its lane connected after (ADR-0053)', async () => {
+    vi.spyOn(window, 'open').mockImplementation(() => null);
+    let connected = false;
+    fake.on('/hub/pool/shared', () =>
+      ok([
+        {
+          lease: 'ab12',
+          repo: 'crm',
+          lane: 'fix',
+          owner: 'o',
+          owner_name: 'anna',
+          node: { id: 'n', name: 'build', api: 'https://n' },
+          services: [{ name: 'web', port: 4300, scheme: 'http', here: 4300, ...(connected ? { forwarded: 4300 } : {}) }],
+        },
+      ]),
+    );
+    fake.on(/\/hub\/pool\/shared\/ab12\/open/, () => {
+      connected = true;
+      return ok({ url: 'http://localhost:4300', port: 4300 });
+    });
+    const pool = usePool();
+    await pool.openShared('default', 'ab12', 'web');
+    await vi.waitFor(() => expect(pool.shared.some((l) => l.lease === 'ab12' && connectedTo(l))).toBe(true));
   });
 
   it('grants and takes back the node role of a member (N-4)', async () => {

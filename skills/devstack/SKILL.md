@@ -65,7 +65,8 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack pool default-on [pool\|<node>\|local]` | where lanes start without `--on`; setting it is the user's consent to send worktrees there without being asked, so only on the user's word |
 | `devstack lane move <name> --to <node\|local>` | move a started lane: a cold start there that takes over once ready; its data comes from the seed jobs again |
 | `devstack lane share <name> --with <id\|tag\|*>` | let others in the pool open the lane's services and view its state, logs and events, read only (they do not control it). Ask the user first: they read what its services print. Without `--with`: nobody again |
-| `devstack pool` / `devstack pool shared` / `devstack open <lane> [service]` | the pools and their machines; lanes others share with you; open one of their services here |
+| `devstack pool` / `devstack pool shared` / `devstack open <lane> [service]` | the pools and their machines; lanes others share with you; open one of their services here (connects the lane) |
+| `devstack pool connect <lane>` / `devstack pool disconnect <lane>` | forward all of a shared lane's services here, on its owner's ports if free; close them again and free the ports |
 | `devstack logs --daemon` | devstack's own log: every decision with its reason (`--grep <service>`, `--hub` for the dashboard hub) |
 | `devstack restart <service>` | rebuild now; the running instance stays until the new one is healthy. `--rebuild` builds again although an artifact for the same inputs exists (an input devstack does not see changed: the SDK, a file outside the repository) |
 | `devstack restart <group>` | every service of a group from the stack file, built at the same time, and its containers (`start`/`stop` take a group too) |

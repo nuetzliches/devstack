@@ -16,7 +16,7 @@ import { laneLabel, orderLanes, nodeLabel, runCounts, runsAnything, started } fr
 import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
 import { useHub } from '@/stores/hub';
-import { usePool } from '@/stores/pool';
+import { connectedTo, usePool } from '@/stores/pool';
 import { useStack } from '@/stores/stack';
 import { useUi } from '@/stores/ui';
 import AddStackDialog from './AddStackDialog.vue';
@@ -47,7 +47,10 @@ const sharedLanes = computed(() =>
 );
 function sharedTitle(l: (typeof pool.shared)[number]): string {
   const node = l.pool === 'default' ? l.node.name : `${l.pool}:${l.node.name}`;
-  return `${l.repo} · ${l.lane}\nshared by ${l.owner_name}, runs on ${node} · read only`;
+  const here = l.services.filter((s) => s.forwarded).map((s) => `${s.name} on localhost:${s.forwarded}`);
+  // ADR-0053: nothing of it is forwarded here until one connects.
+  const conn = here.length ? `connected: ${here.join(', ')}` : 'not connected: none of its ports is open here';
+  return `${l.repo} · ${l.lane}\nshared by ${l.owner_name}, runs on ${node} · read only\n${conn}`;
 }
 const adding = ref(false);
 /** Stacks whose worktrees are folded away; only the toggle changes it. */
@@ -369,12 +372,13 @@ async function copyPath(s: StackEntry) {
             <button
               type="button"
               class="item"
-              :class="{ active: stack.id === sharedId(l.pool, l.lease) }"
+              :class="{ active: stack.id === sharedId(l.pool, l.lease), idle: !connectedTo(l) }"
               :title="sharedTitle(l)"
+              :data-connected="connectedTo(l)"
               data-testid="sidebar-shared-lane"
               @click="router.push({ name: 'overview', params: { stack: sharedId(l.pool, l.lease) } })"
             >
-              <span class="dot on" aria-hidden="true" />
+              <span class="dot" :class="connectedTo(l) ? 'on' : 'off'" aria-hidden="true" />
               <span class="label truncate">{{ l.repo }} · {{ l.lane }}</span>
               <span class="faint small truncate owner" data-testid="sidebar-shared-owner">{{ l.owner_name }}</span>
             </button>
@@ -542,7 +546,8 @@ ul {
 .stack-row > .item {
   font-weight: 600;
 }
-.lane.idle {
+.lane.idle,
+.item.idle {
   color: var(--text-muted);
 }
 .label {
