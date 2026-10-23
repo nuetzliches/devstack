@@ -20,6 +20,9 @@ and listed with their assets on the
   app already open in the background still gets that notice: Chromium
   applies a handed-over token to new tabs only, not to an app window it
   reuses. *Open Folder*, which the hub opens, is not covered yet.
+- **The overview's last row in a group keeps the card's round corners**:
+  a selected or hovered row at the end of a group (a group of one service,
+  say) ended square in the card's rounded bottom.
 
 ## [0.22.0] - 2026-10-24
 

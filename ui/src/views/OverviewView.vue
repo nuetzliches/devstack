@@ -276,6 +276,11 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
   margin: 0;
   padding: 0;
 }
+/* The last row's hover and selection end in the card's rounded corners
+   (inside its 1px border). */
+.members > :last-child {
+  border-radius: 0 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px);
+}
 .unknown {
   display: flex;
   gap: 8px;
