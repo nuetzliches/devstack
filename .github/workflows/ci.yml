@@ -234,6 +234,40 @@ jobs:
           DEVSTACK_INTEGRATION: '1'
           DEVSTACK_INTEGRATION_COMPOSE: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
 
+  # TEMPORARY (#233): the job-runs-once test ten times in a row on macOS.
+  repeat-233:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: no Spotlight
+        run: sudo mdutil -a -i off
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+      - name: build the test
+        run: cargo test --locked -p devstack --test daemon_lifecycle --no-run
+      - name: a_job_runs_once_for_two_candidates, 10 runs
+        shell: bash
+        run: |
+          failed=0
+          for i in $(seq 1 10); do
+            if cargo test --locked -p devstack --test daemon_lifecycle a_job_runs_once_for_two_candidates -- --include-ignored --nocapture > "run-$i.log" 2>&1 && grep -q "test result: ok. 1 passed" "run-$i.log"; then
+              echo "run $i: ok"
+            else
+              echo "run $i: FAILED"; failed=$((failed + 1)); cat "run-$i.log"
+            fi
+          done
+          echo "$failed of 10 failed"
+          test "$failed" -eq 0
+        env:
+          DEVSTACK_INTEGRATION: '1'
+
   remote-lane:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
