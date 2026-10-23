@@ -221,6 +221,70 @@ impl Check<'_> {
     }
 }
 
+/// What a service that starts with the profile needs of a container the
+/// profile leaves out (ADR-0058 point 4): an address in its `run`, `env`,
+/// worker switches or `ensure_dirs`, or a host it rewrites. Its start would
+/// fail on it. `after` is not: the service starts without waiting.
+fn skipped_needs(c: &mut Check, stack: &Stack) {
+    let Some(skip) = stack.profile.as_ref().map(|p| &p.skip) else {
+        return;
+    };
+    if skip.is_empty() {
+        return;
+    }
+    let skipped = |g: &str, s: &str| skip.contains(&(g.to_string(), s.to_string()));
+    for (s, svc) in stack.services.iter().filter(|(_, svc)| svc.autostart) {
+        let p = format!("services.{s}");
+        let why = |g: &str, svc: &str| {
+            format!(
+                "the profile leaves `compose.{g}.{svc}` out, so it has no address here (skip `{s}` too, or keep the container)"
+            )
+        };
+        let mut texts: Vec<(String, &str)> = vec![(format!("{p}.run"), svc.run.as_str())];
+        texts.extend(
+            svc.env
+                .iter()
+                .map(|(k, v)| (format!("{p}.env.{k}"), v.as_str())),
+        );
+        if let Some(w) = &svc.workers {
+            texts.extend(
+                w.env
+                    .iter()
+                    .map(|(k, v)| (format!("{p}.workers.env.{k}"), v.as_str())),
+            );
+        }
+        texts.extend(
+            svc.ensure_dirs
+                .iter()
+                .enumerate()
+                .map(|(i, d)| (format!("{p}.ensure_dirs[{i}]"), d.as_str())),
+        );
+        for (at, t) in texts {
+            let Ok(segs) = interpolate::parse(t) else {
+                continue; // reported where the text is checked
+            };
+            for ph in interpolate::placeholders(&segs) {
+                if let Placeholder::ComposePort { group, service, .. } = ph
+                    && skipped(group, service)
+                {
+                    c.err(&at, format!("`{ph}`: {}", why(group, service)));
+                }
+            }
+        }
+        if let Some(r) = &svc.compose {
+            for (i, h) in svc.rewrite_hosts.iter().enumerate() {
+                let (group, service) = h.split_once('.').unwrap_or((r.group.as_str(), h.as_str()));
+                if skipped(group, service) {
+                    c.err(
+                        format!("{p}.rewrite_hosts[{i}]"),
+                        format!("`{h}`: {}", why(group, service)),
+                    );
+                }
+            }
+        }
+    }
+}
+
 pub fn validate(stack: &Stack) -> Vec<Issue> {
     let mut c = Check {
         stack,
@@ -802,6 +866,7 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
             format!("`after` forms a cycle: {}", cycle.join(" -> ")),
         );
     }
+    skipped_needs(&mut c, stack);
 
     // ---------------------------------------------------------------- commands
     for (n, cmd) in &stack.commands {
@@ -967,6 +1032,28 @@ pub fn warnings(stack: &Stack) -> Vec<Issue> {
                 message: format!(
                     "a devstack before {v} does not know this key and fails on it with \"unknown field\": `requires = \"{v}\"` makes it ask to be updated instead",
                     v = crate::ANNOUNCED_SINCE
+                ),
+            });
+        }
+    }
+    let skip = crate::version_order(crate::SKIP_SINCE);
+    if stack
+        .stack
+        .requires
+        .as_deref()
+        .is_none_or(|r| crate::version_order(r) < skip)
+    {
+        for name in stack
+            .profiles
+            .iter()
+            .filter(|(_, p)| !p.skip.is_empty())
+            .map(|(n, _)| n)
+        {
+            out.push(Issue {
+                path: format!("profiles.{name}.skip"),
+                message: format!(
+                    "a devstack before {v} does not know this key and fails on it with \"unknown field\": `requires = \"{v}\"` makes it ask to be updated instead",
+                    v = crate::SKIP_SINCE
                 ),
             });
         }

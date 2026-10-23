@@ -363,6 +363,13 @@ impl Supervisor {
             .collect()
     }
 
+    /// The tree's profile leaves every container of `group` out (ADR-0058).
+    fn left_out(&self, group: &str) -> bool {
+        self.stack.compose.get(group).is_some_and(|g| {
+            !g.services.is_empty() && g.services.iter().all(|s| self.stack.skips(group, s))
+        })
+    }
+
     /// Compose groups in `after` order.
     pub(super) fn group_order(&self) -> Vec<String> {
         topo(
@@ -407,7 +414,37 @@ impl Supervisor {
             } else {
                 Vec::new()
             };
-            let group = self.compose_group(&g);
+            let mut group = self.compose_group(&g);
+            // What the tree's profile leaves out (ADR-0058) does not start,
+            // and one an earlier start left running is stopped.
+            let skipped: Vec<String> = group
+                .services
+                .iter()
+                .filter(|s| self.stack.skips(&g, s))
+                .cloned()
+                .collect();
+            if !skipped.is_empty() {
+                let mut off = group.clone();
+                off.services = skipped.clone();
+                let message = match self.docker.stop_selected(&off) {
+                    Ok(()) => format!("{}: left out by the profile", skipped.join(", ")),
+                    Err(e) => format!(
+                        "{}: left out by the profile, but could not be stopped: {e}",
+                        skipped.join(", ")
+                    ),
+                };
+                self.emit(EventBody::Infra {
+                    group: g.clone(),
+                    message,
+                });
+                group.services.retain(|s| !skipped.contains(s));
+            }
+            if !skipped.is_empty() && group.services.is_empty() {
+                if self.lane.is_empty() {
+                    self.hold_ports(&g, &held);
+                }
+                continue;
+            }
             if let Err(e) = self.docker.up(&group, Duration::from_secs(300)) {
                 let msg = e.to_string();
                 self.emit(EventBody::Infra {
@@ -436,7 +473,13 @@ impl Supervisor {
     /// [`NODE_GROUP_WAIT`] counts as failed. A file of an older agent,
     /// written once everything was up, says so at once.
     fn node_infra_up(&self, file: &Path) -> Result<(), String> {
-        let order = self.group_order();
+        // A group the profile leaves out completely is not made there
+        // (ADR-0058 point 5): nothing to wait for.
+        let order: Vec<String> = self
+            .group_order()
+            .into_iter()
+            .filter(|g| !self.left_out(g))
+            .collect();
         let mut follow = NodeBringUp::default();
         let mut moved = Instant::now();
         loop {

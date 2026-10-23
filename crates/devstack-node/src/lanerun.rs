@@ -490,7 +490,25 @@ impl LaneRun {
         g.project = p.project;
         g.networks = p.networks;
         g.env = self.port_variables(stack, name);
+        g.services = self.started(stack, name);
         g
+    }
+
+    /// The services of group `name` the lane starts: its `services` but
+    /// those its profile leaves out (ADR-0058 point 5), which are neither
+    /// checked nor created here.
+    fn started(&self, stack: &devstack_config::Stack, name: &str) -> Vec<String> {
+        let skip = self
+            .profile
+            .as_deref()
+            .map(|p| stack.skipped_containers(p))
+            .unwrap_or_default();
+        stack.compose[name]
+            .services
+            .iter()
+            .filter(|s| !skip.contains(&(name.to_string(), (*s).clone())))
+            .cloned()
+            .collect()
     }
 
     /// The `DEVSTACK_PORT_*` of a group's announced ports (ADR-0057): the
@@ -518,7 +536,7 @@ impl LaneRun {
             ],
             env_files: Vec::new(),
             networks: p.networks,
-            services: stack.compose[name].services.clone(),
+            services: self.started(stack, name),
             dir,
             env: self.port_variables(stack, name),
         }
@@ -685,6 +703,11 @@ impl LaneRun {
         // rules go in first.
         let mut groups: Vec<(String, Group, Model)> = Vec::new();
         for name in order(&stack) {
+            if self.started(&stack, &name).is_empty() {
+                // Its profile leaves every container out: nothing is made.
+                phase(&format!("infrastructure: {name}: left out by the profile"));
+                continue;
+            }
             phase(&format!("infrastructure: {name}: checking"));
             let mirror = self.mirror_group(&stack, &name);
             for f in [format!("{name}.json"), format!("{name}.yml")] {

@@ -82,7 +82,13 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   light review: `workers`, `data = "fresh"`, `env` with the tree's
   addresses, `autostart`, per service `kind = "static"` with `build` and
   `output`, and the suite as `command`. Each profile is checked as the stack
-  it makes; add `requires = "0.11.0"` to `[stack]`.
+  it makes; add `requires = "0.11.0"` to `[stack]`. A light profile for
+  daily work leaves heavy containers out with `skip` (ADR-0058):
+  `skip = ["compose.search", "compose.app.scanner", "indexer"]` (a whole
+  group, a container, a service; `requires = "0.21.0"`). What it skips is
+  stopped at the start and still starts on demand (`devstack start
+  compose.app.scanner`); a service that starts and uses a skipped
+  container's address (`{compose.…}`, `rewrite_hosts`) must be skipped too.
 - **Hot reload is opt-in per session.** `[services.<name>.hot_reload]` with
   the watcher's `run` (`dotnet watch run --non-interactive`) only makes
   `devstack hot-reload <name> on` possible; the service still builds by
