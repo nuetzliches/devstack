@@ -1033,6 +1033,8 @@ fn topo(deps: BTreeMap<String, Vec<String>>) -> Vec<String> {
 /// Taken on IPv4 or IPv6 loopback. A dev server bound to `localhost` may hold
 /// only `::1` (Node on Windows); binding `127.0.0.1` would still succeed. A host
 /// without IPv6 fails the `::1` bind with another error, which is not "in use".
+/// A port held on every address (`0.0.0.0`) is told on Windows by the table
+/// of listeners, on macOS by a connect (#226).
 pub fn port_in_use(port: u16) -> bool {
     // Windows reports a port held exclusively by another process as access denied.
     let taken = |r: std::io::Result<std::net::TcpListener>| {
@@ -1045,6 +1047,7 @@ pub fn port_in_use(port: u16) -> bool {
     };
     taken(std::net::TcpListener::bind(("127.0.0.1", port)))
         || taken(std::net::TcpListener::bind(("::1", port)))
+        || (cfg!(windows) && devstack_proc::tcp_listening(port))
         || (cfg!(target_os = "macos") && answers_locally(port))
 }
 
@@ -1236,14 +1239,11 @@ mod port_tests {
         assert!(!super::port_in_use(port));
     }
 
-    // Not on Windows: there a bind on 127.0.0.1 succeeds too while the same
-    // user listens on 0.0.0.0, and a connect probe would take seconds per
-    // closed port; not covered yet.
-    #[cfg(not(windows))]
     #[test]
     fn a_port_held_on_every_address_is_in_use() {
-        // Docker's published ports, a dev server on 0.0.0.0. With BSD sockets
-        // (macOS) a bind on 127.0.0.1 still succeeds; the connect tells.
+        // Docker's published ports, a dev server on 0.0.0.0. On Windows and
+        // with BSD sockets (macOS) a bind on 127.0.0.1 still succeeds; the
+        // table of listeners tells (Windows), or a connect (macOS).
         let l = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
         let port = l.local_addr().unwrap().port();
         assert!(super::port_in_use(port));

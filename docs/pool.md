@@ -71,7 +71,11 @@ and is gone until it does
 ([#171](https://github.com/nuetzliches/devstack/issues/171); on Windows,
 which cannot run the Linux lanes yet,
 [#168](https://github.com/nuetzliches/devstack/issues/168)). The hub reports
-the machine (online, what it has, its devstack) and offers nothing.
+the machine (online, what it has, its devstack) and offers nothing. While a
+node agent of the same membership runs on the machine, the hub does not
+report for that pool and the agent reports the machine: the agent holds
+`node/lock` in the membership's folder while it runs
+([#170](https://github.com/nuetzliches/devstack/issues/170)).
 
 Lanes of other members on your machine always show: a banner below the
 dashboard's top bar (it can be hidden until a lane comes or goes), a tile in

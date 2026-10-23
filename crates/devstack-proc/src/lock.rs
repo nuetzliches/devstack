@@ -48,6 +48,17 @@ impl StateLock {
         let _ = write!(file, "{}", std::process::id());
         Ok(Self { _file: file, path })
     }
+
+    /// Whether a process holds the lock in `state_dir` now. Asked with a
+    /// shared lock for a moment, so one who acquires it meanwhile is refused
+    /// and tries again. Without a lock file, nobody holds it; nothing is
+    /// created.
+    pub fn held(state_dir: &Path) -> bool {
+        let Ok(file) = OpenOptions::new().read(true).open(state_dir.join("lock")) else {
+            return false;
+        };
+        matches!(file.try_lock_shared(), Err(TryLockError::WouldBlock))
+    }
 }
 
 #[cfg(test)]
@@ -57,7 +68,10 @@ mod tests {
     #[test]
     fn second_acquire_is_refused_until_the_first_is_dropped() {
         let dir = tempfile::tempdir().unwrap();
+        assert!(!StateLock::held(dir.path()), "no lock file");
+        assert!(!dir.path().join("lock").exists());
         let first = StateLock::acquire(dir.path()).unwrap();
+        assert!(StateLock::held(dir.path()));
         assert!(matches!(
             StateLock::acquire(dir.path()),
             Err(LockError::Held(_))

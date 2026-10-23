@@ -516,6 +516,81 @@ pub(crate) fn raise_open_files() -> Option<u64> {
     None
 }
 
+/// A listener on `port` in the TCP tables (IPv4, then IPv6) whose address is
+/// the wildcard or loopback. A listener on another address of the machine
+/// (`192.168.1.5`) does not hold the port for a service on loopback.
+pub(crate) fn tcp_listening(port: u16) -> bool {
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        MIB_TCP_STATE_LISTEN, MIB_TCP6ROW_OWNER_PID, MIB_TCPROW_OWNER_PID,
+    };
+    // `AF_INET`, `AF_INET6` (WinSock).
+    const AF_INET: u32 = 2;
+    const AF_INET6: u32 = 23;
+    // Ports are in network byte order in the low 16 bits.
+    let port_of = |p: u32| u16::from_be(p as u16);
+    let listen = MIB_TCP_STATE_LISTEN as u32;
+    let v4 = listeners::<MIB_TCPROW_OWNER_PID>(AF_INET).is_some_and(|rows| {
+        rows.iter().any(|r| {
+            // The address in network byte order: its bytes as they are.
+            let a = r.dwLocalAddr.to_ne_bytes();
+            r.dwState == listen && port_of(r.dwLocalPort) == port && (a == [0; 4] || a[0] == 127)
+        })
+    });
+    v4 || listeners::<MIB_TCP6ROW_OWNER_PID>(AF_INET6).is_some_and(|rows| {
+        rows.iter().any(|r| {
+            let a = std::net::Ipv6Addr::from(r.ucLocalAddr);
+            r.dwState == listen
+                && port_of(r.dwLocalPort) == port
+                && (a.is_unspecified()
+                    || a.is_loopback()
+                    || a.to_ipv4_mapped().is_some_and(|v| v.is_loopback()))
+        })
+    })
+}
+
+/// The rows of `GetExtendedTcpTable(TCP_TABLE_OWNER_PID_LISTENER)` for one
+/// address family; `Row` is that family's `MIB_TCP*ROW_OWNER_PID`. The table
+/// is a row count followed by the rows; it is read into `u32`s, which aligns
+/// both row types.
+fn listeners<Row: Copy>(family: u32) -> Option<Vec<Row>> {
+    use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetExtendedTcpTable, TCP_TABLE_OWNER_PID_LISTENER,
+    };
+    let mut size: u32 = 0;
+    let mut buf: Vec<u32> = Vec::new();
+    // The table can grow between asking its size and reading it.
+    for _ in 0..4 {
+        // SAFETY: `buf` holds at least `size` bytes, as the call is told.
+        let r = unsafe {
+            GetExtendedTcpTable(
+                buf.as_mut_ptr().cast(),
+                &mut size,
+                0,
+                family,
+                TCP_TABLE_OWNER_PID_LISTENER,
+                0,
+            )
+        };
+        match r {
+            NO_ERROR => {
+                let n = *buf.first()? as usize;
+                let bytes = buf.len() * 4;
+                if 4 + n * mem::size_of::<Row>() > bytes || mem::align_of::<Row>() > 4 {
+                    return None;
+                }
+                // SAFETY: `n` rows of `Row` follow the count, within `buf`
+                // (checked above), at an offset aligned for `Row`.
+                let rows = unsafe { std::slice::from_raw_parts(buf.as_ptr().add(1).cast(), n) };
+                return Some(rows.to_vec());
+            }
+            ERROR_INSUFFICIENT_BUFFER => buf = vec![0; (size as usize).div_ceil(4) + 1],
+            _ => return None,
+        }
+    }
+    None
+}
+
 fn memory_status() -> Option<windows_sys::Win32::System::SystemInformation::MEMORYSTATUSEX> {
     use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
     let mut m: MEMORYSTATUSEX = unsafe { mem::zeroed() };
@@ -605,5 +680,25 @@ mod tests {
             short.display(),
             back.display()
         );
+    }
+
+    #[test]
+    fn a_listener_on_the_wildcard_or_loopback_is_in_the_table() {
+        use std::net::TcpListener;
+        for addr in ["0.0.0.0", "127.0.0.1", "::", "::1"] {
+            let Ok(l) = TcpListener::bind((addr, 0)) else {
+                continue; // no IPv6 on this host
+            };
+            let port = l.local_addr().unwrap().port();
+            assert!(super::tcp_listening(port), "{addr}:{port}");
+            drop(l);
+            assert!(!super::tcp_listening(port), "{addr}:{port} after close");
+        }
+        // Cheap enough for a scan of a range of ports.
+        let t0 = std::time::Instant::now();
+        for p in 0..100 {
+            super::tcp_listening(40000 + p);
+        }
+        eprintln!("100 reads of the table: {:?}", t0.elapsed());
     }
 }

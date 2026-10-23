@@ -48,7 +48,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | Command | Effect |
 | --- | --- |
 | `devstack up` | Docker check, infrastructure, jobs, every autostart service; starts the dashboard hub. First run takes minutes (images, builds), later ones well under a minute |
-| `devstack status` | state per service and container; `-> not yet active: …` means the latest change is not running yet |
+| `devstack status` | state per service (`SERVICE`: the `[services.*]` entries) and per Compose container (`CONTAINER`, by group); `-> not yet active: …` means the latest change is not running yet |
 | `devstack logs <service> --follow` | console output, then every new line (`-n 500` for more history, `--grep X` for matching lines only) |
 | `devstack logs --grep <text>` | matching lines of every service's log ("where did this error come from"); with a service only its log |
 | `devstack logs <service> --since 2h` | every instance of that time, not only the current one: what a crashed or replaced instance printed (`--build <id>`: that build's log and its instances; `--list`, `--log <file>`) |

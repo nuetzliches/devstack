@@ -377,6 +377,12 @@ pub(crate) fn disk_free(path: &Path) -> Option<u64> {
     ok.then(|| s.f_bavail as u64 * s.f_frsize as u64)
 }
 
+/// A bind on loopback tells on Linux; macOS asks with a connect. The
+/// daemon's `port_in_use` does both.
+pub(crate) fn tcp_listening(_port: u16) -> bool {
+    false
+}
+
 pub(crate) fn raise_open_files() -> Option<u64> {
     let mut l: libc::rlimit = unsafe { std::mem::zeroed() };
     // SAFETY: `l` is an rlimit to fill.
