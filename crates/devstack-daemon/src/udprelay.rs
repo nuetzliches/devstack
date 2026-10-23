@@ -407,16 +407,19 @@ where
 
 /// A UDP socket for a session towards `addr` (`dns:53`, a container on the
 /// lane's network): bound to any port of the address's family, connected,
-/// so only `addr` is heard.
+/// so only `addr` is heard. Towards a loopback address it is bound there:
+/// a socket on every address makes Windows' firewall ask (the tests relay to
+/// a local echo).
 pub async fn connect(addr: &str) -> std::io::Result<UdpSocket> {
     let to = tokio::net::lookup_host(addr)
         .await?
         .next()
         .ok_or_else(|| std::io::Error::other(format!("{addr} has no address")))?;
-    let any: SocketAddr = if to.is_ipv4() {
-        (std::net::Ipv4Addr::UNSPECIFIED, 0).into()
-    } else {
-        (std::net::Ipv6Addr::UNSPECIFIED, 0).into()
+    let any: SocketAddr = match (to.ip().is_loopback(), to.is_ipv4()) {
+        (true, true) => (std::net::Ipv4Addr::LOCALHOST, 0).into(),
+        (true, false) => (std::net::Ipv6Addr::LOCALHOST, 0).into(),
+        (false, true) => (std::net::Ipv4Addr::UNSPECIFIED, 0).into(),
+        (false, false) => (std::net::Ipv6Addr::UNSPECIFIED, 0).into(),
     };
     let socket = UdpSocket::bind(any).await?;
     room_for_any_datagram(&socket);
