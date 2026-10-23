@@ -685,7 +685,13 @@ mod tests {
     #[test]
     fn a_listener_on_the_wildcard_or_loopback_is_in_the_table() {
         use std::net::TcpListener;
+        // A listener on every address makes the firewall ask the person at
+        // the machine, for each new build of this test binary: only in CI.
+        let wildcard = std::env::var_os("CI").is_some();
         for addr in ["0.0.0.0", "127.0.0.1", "::", "::1"] {
+            if !wildcard && matches!(addr, "0.0.0.0" | "::") {
+                continue;
+            }
             let Ok(l) = TcpListener::bind((addr, 0)) else {
                 continue; // no IPv6 on this host
             };
