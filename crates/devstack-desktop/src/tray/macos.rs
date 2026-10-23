@@ -204,8 +204,12 @@ fn build_menu(target: &MenuTarget, entries: &[Entry]) -> Retained<NSMenu> {
                 }
                 item
             }
-            Entry::Submenu { label, entries } => {
-                let item = new_item(target.mtm(), label, false);
+            Entry::Submenu {
+                label,
+                mark,
+                entries,
+            } => {
+                let item = new_item(target.mtm(), &super::marked(label, *mark), false);
                 item.setSubmenu(Some(&build_menu(target, entries)));
                 item.setEnabled(true);
                 item

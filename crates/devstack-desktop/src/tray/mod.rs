@@ -17,7 +17,7 @@ mod macos;
 #[cfg(windows)]
 mod windows;
 
-pub use icon::rgba;
+pub use icon::{dot, rgba};
 
 /// What the icon says, in the state's colour (ADR-0060 point 4).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -54,8 +54,30 @@ pub enum Entry {
     },
     Submenu {
         label: String,
+        /// A state's mark before the label: a coloured dot where the
+        /// platform shows images (Windows), else [`mark_text`].
+        mark: Option<Tone>,
         entries: Vec<Entry>,
     },
+}
+
+/// A state's mark as text, where the menu shows no image: the same shape
+/// for every tone would say nothing without colour.
+pub fn mark_text(tone: Tone) -> &'static str {
+    match tone {
+        Tone::Ok => "●",
+        Tone::Attention => "▲",
+        Tone::Busy => "◌",
+        Tone::Idle => "○",
+    }
+}
+
+/// `label` with its mark as text in front, for the platforms without images.
+pub fn marked(label: &str, mark: Option<Tone>) -> String {
+    match mark {
+        Some(tone) => format!("{} {label}", mark_text(tone)),
+        None => label.to_string(),
+    }
 }
 
 /// The action id that ends [`run`] (after it was sent to the owner).

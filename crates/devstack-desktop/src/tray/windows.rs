@@ -8,6 +8,9 @@ use super::{Entry, Menu, QUIT, Tone};
 use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::{
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateDIBSection, DIB_RGB_COLORS, DeleteObject, HBITMAP,
+};
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
 use windows_sys::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
@@ -15,12 +18,13 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
-    DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics,
-    HICON, HMENU, KillTimer, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, PostMessageW,
-    PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SM_CXSMICON, SetForegroundWindow,
-    SetTimer, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
-    WM_APP, WM_DESTROY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW,
-    WS_POPUP,
+    DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, GetMenuItemCount, GetMessageW,
+    GetSystemMetrics, HICON, HMENU, KillTimer, MENUINFO, MENUITEMINFOW, MF_GRAYED, MF_POPUP,
+    MF_SEPARATOR, MF_STRING, MIIM_BITMAP, MIM_APPLYTOSUBMENUS, MIM_STYLE, MNS_NOCHECK, MSG,
+    PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SM_CXMENUCHECK,
+    SM_CXSMICON, SetForegroundWindow, SetMenuInfo, SetMenuItemInfoW, SetTimer, TPM_NONOTIFY,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_DESTROY,
+    WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_POPUP,
 };
 
 /// The icon's messages to its window.
@@ -157,7 +161,51 @@ fn menu_text(label: &str) -> Vec<u16> {
 }
 
 /// The popup menu for `entries`; command ids from 1, their actions in `ids`.
-fn build(entries: &[Entry], ids: &mut Vec<String>) -> HMENU {
+/// A state's dot for a menu item: 32-bit with premultiplied alpha, as menus
+/// draw it. Deleted by the caller once the menu is gone.
+fn make_dot(tone: Tone) -> HBITMAP {
+    // SAFETY: plain GDI calls; `bits` is the section's own buffer of
+    // size×size pixels, written before the bitmap is used.
+    unsafe {
+        let size = GetSystemMetrics(SM_CXMENUCHECK).clamp(12, 32) as u32;
+        let rgba = super::dot(size, tone);
+        let mut bmi: BITMAPINFO = std::mem::zeroed();
+        bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        bmi.bmiHeader.biWidth = size as i32;
+        // Negative: rows from the top, as drawn.
+        bmi.bmiHeader.biHeight = -(size as i32);
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+        let bitmap = CreateDIBSection(
+            std::ptr::null_mut(),
+            &bmi,
+            DIB_RGB_COLORS,
+            &mut bits,
+            std::ptr::null_mut(),
+            0,
+        );
+        if bitmap.is_null() || bits.is_null() {
+            return std::ptr::null_mut();
+        }
+        let out = std::slice::from_raw_parts_mut(bits.cast::<u8>(), rgba.len());
+        for (o, p) in out
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(rgba.as_chunks::<4>().0)
+        {
+            let a = u16::from(p[3]);
+            let pre = |c: u8| ((u16::from(c) * a + 127) / 255) as u8;
+            *o = [pre(p[2]), pre(p[1]), pre(p[0]), p[3]];
+        }
+        bitmap
+    }
+}
+
+/// The popup menu; `bitmaps` gets the dots it shows, to delete after it.
+fn build(entries: &[Entry], ids: &mut Vec<String>, bitmaps: &mut Vec<HBITMAP>) -> HMENU {
     // SAFETY: plain Win32 calls; the menu is destroyed by the caller (with
     // its submenus).
     unsafe {
@@ -179,14 +227,41 @@ fn build(entries: &[Entry], ids: &mut Vec<String>) -> HMENU {
                     };
                     AppendMenuW(menu, flags, ids.len(), menu_text(label).as_ptr());
                 }
-                Entry::Submenu { label, entries } => {
-                    let sub = build(entries, ids);
+                Entry::Submenu {
+                    label,
+                    mark,
+                    entries,
+                } => {
+                    let sub = build(entries, ids, bitmaps);
                     AppendMenuW(
                         menu,
                         MF_STRING | MF_POPUP,
                         sub as usize,
                         menu_text(label).as_ptr(),
                     );
+                    let dot = mark.map(make_dot).filter(|b| !b.is_null());
+                    match dot {
+                        Some(dot) => {
+                            bitmaps.push(dot);
+                            let mut item: MENUITEMINFOW = std::mem::zeroed();
+                            item.cbSize = std::mem::size_of::<MENUITEMINFOW>() as u32;
+                            item.fMask = MIIM_BITMAP;
+                            item.hbmpItem = dot;
+                            let last = (GetMenuItemCount(menu) - 1) as u32;
+                            SetMenuItemInfoW(menu, last, 1, &item);
+                        }
+                        None => {
+                            // No image: the mark as text, as elsewhere.
+                            let text = super::marked(label, *mark);
+                            let mut item: MENUITEMINFOW = std::mem::zeroed();
+                            item.cbSize = std::mem::size_of::<MENUITEMINFOW>() as u32;
+                            item.fMask = windows_sys::Win32::UI::WindowsAndMessaging::MIIM_STRING;
+                            let wide = menu_text(&text);
+                            item.dwTypeData = wide.as_ptr() as *mut u16;
+                            let last = (GetMenuItemCount(menu) - 1) as u32;
+                            SetMenuItemInfoW(menu, last, 1, &item);
+                        }
+                    }
                 }
             }
         }
@@ -204,7 +279,18 @@ fn popup(hwnd: HWND) {
         return;
     };
     let mut ids = Vec::new();
-    let menu = build(&entries, &mut ids);
+    let mut bitmaps = Vec::new();
+    let menu = build(&entries, &mut ids, &mut bitmaps);
+    // No column for check marks: none is used. The dots, where a menu has
+    // them, get a column of their own.
+    // SAFETY: our own menu; MENUINFO is plain data.
+    unsafe {
+        let mut info: MENUINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<MENUINFO>() as u32;
+        info.fMask = MIM_STYLE | MIM_APPLYTOSUBMENUS;
+        info.dwStyle = MNS_NOCHECK;
+        SetMenuInfo(menu, &info);
+    }
     // SAFETY: our own window and menu. The window must be in front, or the
     // menu does not close when the user clicks elsewhere; WM_NULL afterwards
     // as Microsoft documents for notification-area menus.
@@ -223,6 +309,9 @@ fn popup(hwnd: HWND) {
         );
         PostMessageW(hwnd, WM_NULL, 0, 0);
         DestroyMenu(menu);
+        for b in bitmaps {
+            DeleteObject(b);
+        }
         chosen
     };
     if chosen <= 0 {

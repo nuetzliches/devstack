@@ -23,6 +23,11 @@ and listed with their assets on the
 - **The overview's last row in a group keeps the card's round corners**:
   a selected or hovered row at the end of a group (a group of one service,
   say) ended square in the card's rounded bottom.
+- **The tray's menu on Windows: no empty column, even marks.** The menu
+  kept a column for check marks it never shows, and the marks before each
+  stack (`●`, `○`, ...) came from different fonts, in different sizes. A
+  stack's state is a dot in the icon's colours now, in a column of its own;
+  the other menus have no column. Linux and macOS keep the marks as text.
 
 ## [0.22.0] - 2026-10-24
 
