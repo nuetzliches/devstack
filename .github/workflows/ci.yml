@@ -267,6 +267,26 @@ jobs:
           test "$failed" -eq 0
         env:
           DEVSTACK_INTEGRATION: '1'
+      - name: prime the .NET CLI
+        shell: bash
+        run: |
+          cp -r examples/fixture-stack/src/Api "$RUNNER_TEMP/prime-api"
+          dotnet build "$RUNNER_TEMP/prime-api/Api.csproj" -nologo -v q
+      - name: lifecycle_services_only, 5 runs
+        shell: bash
+        run: |
+          failed=0
+          for i in $(seq 1 5); do
+            if cargo test --locked -p devstack --test daemon_lifecycle lifecycle_services_only -- --include-ignored --nocapture > "life-$i.log" 2>&1 && grep -q "test result: ok. 1 passed" "life-$i.log"; then
+              echo "run $i: ok"
+            else
+              echo "run $i: FAILED"; failed=$((failed + 1)); cat "life-$i.log"
+            fi
+          done
+          echo "$failed of 5 failed"
+          test "$failed" -eq 0
+        env:
+          DEVSTACK_INTEGRATION: '1'
 
   remote-lane:
     needs: changes
