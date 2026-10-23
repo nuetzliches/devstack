@@ -1,5 +1,6 @@
 /target/
-node_modules/
+# No trailing slash: a lane's linked node_modules (a symlink) is ignored too.
+node_modules
 /ui/dist/
 .devstack/
 *.stackdump
@@ -28,6 +29,7 @@ __pycache__/
 # Local notes (reviews, telemetry findings): they may name downstream stacks.
 *.local.md
 
-# Agent session state; only the project's own skills are tracked.
+# Agent session state; the skills are tracked (the project's own and those
+# `devstack skills install` writes).
 /.claude/*
 !/.claude/skills/

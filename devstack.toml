@@ -16,5 +16,7 @@ run = "npx vite --mode mock --host 127.0.0.1 --port {port} --strictPort"
 port = 5199
 health = { http = "/", timeout = "90s" }
 restart_on = ["ui/vite.config.ts", "ui/package.json"]
-# A lane's copy has no node_modules (ignored files are not copied).
-prepare = { run = "npm ci", inputs = ["ui/package-lock.json"] }
+# A lane's copy has no node_modules (ignored files are not copied); `link`
+# makes the copy's available in the lane's worktree too (stop the lane before
+# `git worktree remove`).
+prepare = { run = "npm ci", inputs = ["ui/package-lock.json"], link = ["ui/node_modules"] }
