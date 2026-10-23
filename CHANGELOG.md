@@ -42,6 +42,13 @@ and listed with their assets on the
   service (`--init`, `--rm`, a name per instance). A file with `stop` says
   `requires = "0.21.0"`.
 
+### Fixed
+
+- **The dashboard's prompts ask which branch a commit goes on.** They said
+  to ask before committing, not where: a coding agent took the branch
+  checked out, which may be another piece of work's. Each prompt now has
+  the agent name the branch when it asks.
+
 ## [0.20.0] - 2026-10-23
 
 macOS as a developer platform in preview, installed with Homebrew on macOS

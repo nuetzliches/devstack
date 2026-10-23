@@ -533,7 +533,7 @@ export class MockTransport implements Transport {
 
 1. Read the stack file reference.
 2. Run \`devstack check\` and \`devstack doctor\`.
-3. Ask me before committing.`, path: target });
+3. Ask me before committing, naming the branch: the branch checked out may hold other work.`, path: target });
     }
     if (p === '/hub/agent' && method === 'POST') {
       await sleep(400);
