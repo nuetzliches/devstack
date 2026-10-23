@@ -477,10 +477,32 @@ fn is_refused(e: &anyhow::Error) -> bool {
 }
 
 pub fn error_text(body: &str) -> String {
-    serde_json::from_str::<Value>(body)
+    let text = serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|v| v["error"].as_str().map(str::to_string))
-        .unwrap_or_else(|| body.to_string())
+        .unwrap_or_else(|| body.to_string());
+    daemon_older_than_file(&text, devstack_config::VERSION).unwrap_or(text)
+}
+
+/// A daemon older than the stack file it loads says "Update devstack"
+/// (`LoadError::TooOld`). When this devstack (`ours`) is new enough, what is
+/// old is the running daemon, which the lanes run in too: restarting the
+/// main tree's daemon is what helps, as for a route it does not know.
+fn daemon_older_than_file(text: &str, ours: &str) -> Option<String> {
+    const UPDATE: &str = ". Update devstack (README, \"Install\").";
+    let (file, rest) = text.split_once(" needs devstack ")?;
+    let (required, rest) = rest.split_once(" or newer, this is ")?;
+    let (daemon, after) = rest.split_once(UPDATE)?;
+    let order = devstack_config::version_order;
+    if order(ours)? < order(required)? {
+        return None;
+    }
+    Some(format!(
+        "{file} needs devstack {required} or newer; the running daemon is {daemon}, this devstack is {ours}. \
+         Restart the main working tree's daemon to run it: \"Restart stack\" in the dashboard, or \
+         `devstack down` + `devstack up` in the main working tree (`devstack down --all` while lanes run). \
+         The main tree's services stop for a moment.{after}"
+    ))
 }
 
 /// Start the daemon in the background unless it runs; wait until it answers.
@@ -2339,6 +2361,42 @@ data: {\"type\":\"line\",\"text\":\"c\"}\n\n";
             no_route_text("/v1/x", devstack_config::VERSION),
             "the daemon has no `/v1/x` (HTTP 404)"
         );
+    }
+
+    #[test]
+    fn a_daemon_older_than_the_file_is_restarted_not_updated() {
+        // As an older daemon words it (`LoadError::TooOld`).
+        let old = devstack_config::LoadError::TooOld {
+            path: "wt/devstack.toml".into(),
+            required: "0.9.0".into(),
+            have: "0.8.0".into(),
+        }
+        .to_string();
+        assert!(old.contains("Update devstack"), "{old}");
+        // This devstack is new enough: the daemon has to restart.
+        let text = daemon_older_than_file(&old, "0.9.0").unwrap();
+        assert!(
+            text.starts_with("wt/devstack.toml needs devstack 0.9.0 or newer")
+                && text.contains("the running daemon is 0.8.0, this devstack is 0.9.0")
+                && text.contains("`devstack down` + `devstack up` in the main working tree")
+                && text.contains("\"Restart stack\"")
+                && !text.contains("Update devstack"),
+            "{text}"
+        );
+        // Through `error_text`, as the daemon answers it.
+        let body = serde_json::json!({ "error": format!("lane `feat`: {old}") }).to_string();
+        let ours = devstack_config::VERSION;
+        let mine = devstack_config::LoadError::TooOld {
+            path: "wt/devstack.toml".into(),
+            required: ours.into(),
+            have: "0.0.1".into(),
+        };
+        let body_mine = serde_json::json!({ "error": mine.to_string() }).to_string();
+        assert!(error_text(&body_mine).contains("Restart the main working tree's daemon"));
+        assert!(error_text(&body).starts_with("lane `feat`: wt/devstack.toml"));
+        // This devstack is too old as well: updating is still the answer.
+        assert_eq!(daemon_older_than_file(&old, "0.8.5"), None);
+        assert_eq!(daemon_older_than_file("another error", "0.9.0"), None);
     }
 
     #[test]

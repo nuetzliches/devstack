@@ -29,6 +29,10 @@ pub fn context_for(
         is_main: true,
         ..Default::default()
     };
+    // Without a daemon this is the main tree: each group's own project.
+    for (g, cfg) in &stack.compose {
+        ctx.projects.insert(g.clone(), cfg.project.clone());
+    }
     for (n, s) in &stack.services {
         if let Some(p) = s.port {
             let tls = s.health.as_ref().is_some_and(|h| h.insecure_tls);

@@ -370,6 +370,7 @@ Closed set; an unknown placeholder is an error.
 | `{compose.<group>.<service>.<container port>}` | `http://127.0.0.1:<published host port>` |
 | `{service.<name>.port}`, `{compose.<group>.<service>.<port>.host}` / `.port` / `.address` | One part of an address |
 | `{lane}`, `{lane_suffix}` | The lane's name; `_<lane>` in a lane, empty in the main tree |
+| `{compose.<group>.project}` | The group's Compose project as the tree runs it: `<project>`, `<project>-<lane>` in a lane |
 | `${VAR}`, `${VAR:-default}` | From the process environment and the group's env files |
 
 Resolution order: `{…}` first, then `${…}`, so a default may contain a placeholder.

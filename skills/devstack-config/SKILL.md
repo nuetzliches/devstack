@@ -52,10 +52,14 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   ports moved (`[lanes] port_step`) and its own Compose project, so its
   database is its own and needs no `{lane_suffix}`; services that hold nothing
   per lane (a telemetry dashboard, a fake SMTP server) can stay shared:
-  `[compose.<group>] shared = ["mailbox"]`. A dev server's `run` needs
-  `{port}` to run in a lane.
+  `[compose.<group>] shared = ["mailbox"]`. A dev server needs `{port}`
+  (in `run`, or in `env` for a config that reads it) to run in a lane. A
+  command names a Compose project as `{compose.<group>.project}`, never
+  literally (`docker compose -p {compose.app.project} exec -T db ...`): in a
+  lane that is the lane's own project, not the main tree's.
 - **A lane's worktree has no `node_modules`**: the lane runs from a copy,
-  where `prepare` installs. When git hooks need it (`npx eslint` in a
+  where `prepare` installs (`devstack check` warns about a dev server with
+  a `package.json` and no `prepare`). When git hooks need it (`npx eslint` in a
   pre-commit hook), `prepare.link = ["web/node_modules"]` links it into the
   worktree; `.gitignore` then needs `node_modules` without a trailing slash.
 - **Lanes on other machines** (`devstack up --on <node>`) run in a Linux

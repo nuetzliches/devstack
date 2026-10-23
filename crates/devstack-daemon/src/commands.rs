@@ -86,12 +86,13 @@ impl Runs {
     }
 }
 
-/// Placeholders a command may use: repository, service URLs and the
-/// published addresses of Compose services.
+/// Placeholders a command may use: repository, service URLs, the
+/// published addresses of Compose services and the groups' projects.
 struct CommandContext {
     repo: PathBuf,
     urls: BTreeMap<String, String>,
     published: BTreeMap<(String, String, u16), String>,
+    projects: BTreeMap<String, String>,
     lane: String,
 }
 
@@ -122,9 +123,35 @@ impl Resolve for CommandContext {
                 .get(&(group.clone(), service.clone(), *port))
                 .map(|a| part.of(a))
                 .ok_or_else(|| format!("port {port} of `{group}/{service}` is not published")),
+            Placeholder::ComposeProject(group) => self
+                .projects
+                .get(group)
+                .cloned()
+                .ok_or_else(|| format!("no compose group `{group}`")),
             other => Err(format!("`{other}` is not available in a command")),
         }
     }
+}
+
+/// A `start`, `stop` or `restart` step on a service that runs in the main
+/// working tree only (`lanes = false`) has nothing to act on in a lane: the
+/// main tree's instance serves it. The step is skipped, and the run's log
+/// says why, as `after` skips such a service: a command written for both
+/// trees does not end as failed in a lane after everything it needed ran.
+fn main_tree_only(
+    stack: &devstack_config::Stack,
+    lane: &str,
+    action: &StepAction,
+) -> Option<String> {
+    let (StepAction::Start(name) | StepAction::Stop(name) | StepAction::Restart(name)) = action
+    else {
+        return None;
+    };
+    (!lane.is_empty() && stack.services.get(*name).is_some_and(|s| !s.lanes)).then(|| {
+        format!(
+            "`{name}` runs in the main working tree only (`lanes = false`); its instance there serves this lane"
+        )
+    })
 }
 
 /// Run logs kept per command.
@@ -246,6 +273,7 @@ fn execute(
         repo: root.clone(),
         urls,
         published: sup.published_ports(),
+        projects: sup.compose_projects(),
         lane: sup.lane.clone(),
     };
     let vars = devstack_env::variables(&sup.stack, None, &sup.repo);
@@ -262,6 +290,10 @@ fn execute(
         }
         let action = step.action().map_err(|_| format!("step {i} is invalid"))?;
         let _ = writeln!(out, "--- step {} : {action:?}", i + 1);
+        if let Some(why) = main_tree_only(&sup.stack, &sup.lane, &action) {
+            let _ = writeln!(out, "--- skipped: {why}");
+            continue;
+        }
         let r = match action {
             StepAction::Exec { command, cwd } => {
                 let command = expand(command, &ctx, &env).map_err(|e| e.to_string())?;
@@ -366,4 +398,109 @@ fn execute(
     }
     let _ = writeln!(out, "--- done");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STACK: &str = r#"
+version = 1
+[stack]
+name = "s"
+[compose.app]
+project = "shop-dev"
+files = ["compose.yml"]
+services = ["db"]
+[services.api]
+run = "x"
+[services.worker]
+run = "x"
+lanes = false
+"#;
+
+    fn stack() -> devstack_config::Stack {
+        devstack_config::from_str(STACK, std::path::Path::new("t")).unwrap()
+    }
+
+    #[test]
+    fn a_main_tree_only_service_is_skipped_in_a_lane() {
+        let stack = stack();
+        for action in [
+            StepAction::Start("worker"),
+            StepAction::Stop("worker"),
+            StepAction::Restart("worker"),
+        ] {
+            let why = main_tree_only(&stack, "feat-x", &action);
+            assert!(
+                why.as_deref()
+                    .is_some_and(|w| w.contains("main working tree only")),
+                "{action:?}: {why:?}"
+            );
+            assert_eq!(main_tree_only(&stack, "", &action), None, "the main tree");
+        }
+        // A service a lane runs, and a `run` step, are acted on.
+        assert_eq!(
+            main_tree_only(&stack, "feat-x", &StepAction::Start("api")),
+            None
+        );
+        assert_eq!(
+            main_tree_only(&stack, "feat-x", &StepAction::Run("worker")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_groups_project_is_the_one_this_tree_runs() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for (lane, project) in [("", "shop-dev"), ("feat-x", "shop-dev-feat-x")] {
+            let d = tempfile::tempdir().unwrap();
+            let file = d.path().join("devstack.toml");
+            let state = d.path().join(".devstack");
+            let sup = if lane.is_empty() {
+                Supervisor::new(
+                    stack(),
+                    file,
+                    d.path().to_path_buf(),
+                    state,
+                    devstack_proc::Options::default(),
+                    rt.handle().clone(),
+                )
+            } else {
+                Supervisor::new_lane(
+                    stack(),
+                    file,
+                    d.path().to_path_buf(),
+                    state.join(format!("lane-{lane}")),
+                    devstack_proc::Options::default(),
+                    rt.handle().clone(),
+                    lane.into(),
+                    100,
+                    Arc::new(Mutex::new(None)),
+                    None,
+                )
+            }
+            .unwrap();
+            let ctx = CommandContext {
+                repo: d.path().to_path_buf(),
+                urls: BTreeMap::new(),
+                published: BTreeMap::new(),
+                projects: sup.compose_projects(),
+                lane: lane.into(),
+            };
+            assert_eq!(
+                expand(
+                    "docker compose -p {compose.app.project} exec -T db true",
+                    &ctx,
+                    &|_| None
+                )
+                .unwrap(),
+                format!("docker compose -p {project} exec -T db true"),
+                "lane `{lane}`"
+            );
+        }
+    }
 }

@@ -35,6 +35,10 @@ pub enum Placeholder {
         port: u16,
         part: AddrPart,
     },
+    /// `{compose.<group>.project}`: the group's Compose project as this tree
+    /// runs it: `<project>` in the main tree, the lane's own in a lane (for
+    /// `docker compose -p {compose.app.project} exec ...`).
+    ComposeProject(String),
 }
 
 /// Which part of a published address a `{compose.…}` placeholder gives.
@@ -89,6 +93,7 @@ impl fmt::Display for Placeholder {
                 };
                 write!(f, "{{compose.{group}.{service}.{port}{suffix}}}")
             }
+            Placeholder::ComposeProject(g) => write!(f, "{{compose.{g}.project}}"),
         }
     }
 }
@@ -106,7 +111,7 @@ pub enum Segment {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum InterpError {
     #[error(
-        "unknown placeholder `{{{0}}}` (allowed: repo, artifact, port, is_main, lane, lane_suffix, service.<name>.url, service.<name>.port, compose.<group>.<service>.<port> with an optional .host, .port or .address)"
+        "unknown placeholder `{{{0}}}` (allowed: repo, artifact, port, is_main, lane, lane_suffix, service.<name>.url, service.<name>.port, compose.<group>.project, compose.<group>.<service>.<port> with an optional .host, .port or .address)"
     )]
     UnknownPlaceholder(String),
     #[error("unclosed `{0}`")]
@@ -225,6 +230,9 @@ fn placeholder(body: &str) -> Result<Placeholder, InterpError> {
         ["service", name, "port"] if !name.is_empty() => {
             Ok(Placeholder::ServicePort(name.to_string()))
         }
+        ["compose", group, "project"] if !group.is_empty() => {
+            Ok(Placeholder::ComposeProject(group.to_string()))
+        }
         ["compose", group, service, port, rest @ ..]
             if !group.is_empty() && !service.is_empty() && rest.len() <= 1 =>
         {
@@ -315,6 +323,7 @@ mod tests {
                 Placeholder::LaneSuffix => "_feat-x".into(),
                 Placeholder::ServiceUrl(s) => format!("http://127.0.0.1:1/{s}"),
                 Placeholder::ServicePort(_) => "1".into(),
+                Placeholder::ComposeProject(g) => format!("shop-{g}-feat-x"),
                 Placeholder::ComposePort {
                     service,
                     port,
@@ -415,6 +424,19 @@ mod tests {
         );
         assert_eq!(get("{compose.app.db.5432.address}"), "127.0.0.1:95432");
         assert_eq!(get("{service.api.port}"), "1");
+        assert_eq!(
+            get("docker compose -p {compose.app.project} exec -T db"),
+            "docker compose -p shop-app-feat-x exec -T db"
+        );
+        assert_eq!(
+            placeholder("compose.app.project").unwrap(),
+            Placeholder::ComposeProject("app".into())
+        );
+        assert_eq!(
+            placeholder("compose.app.project").unwrap().to_string(),
+            "{compose.app.project}"
+        );
+        assert!(parse("{compose..project}").is_err());
         assert!(parse("{compose.app.db.5432.scheme}").is_err());
         assert_eq!(
             placeholder("compose.app.db.5432.port").unwrap().to_string(),

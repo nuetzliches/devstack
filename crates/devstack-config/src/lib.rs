@@ -23,7 +23,9 @@ pub enum LoadError {
     Parse { path: PathBuf, message: String },
     #[error("{path}: {} problem(s)\n{}", .issues.len(), .issues.iter().map(|i| format!("  - {i}")).collect::<Vec<_>>().join("\n"))]
     Invalid { path: PathBuf, issues: Vec<Issue> },
-    /// `[stack].requires` names a newer devstack than this one.
+    /// `[stack].requires` names a newer devstack than this one. The CLI
+    /// recognises this wording in a daemon's answer (an older daemon's too)
+    /// and says to restart the daemon when it is new enough itself: keep it.
     #[error(
         "{path} needs devstack {required} or newer, this is {have}. Update devstack (README, \"Install\")."
     )]
