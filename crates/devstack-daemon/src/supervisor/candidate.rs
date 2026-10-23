@@ -8,6 +8,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// How often a candidate whose quiet period is over looks whether a restart
+/// of its service is still under way.
+const RESTART_POLL: Duration = Duration::from_millis(100);
+
 impl Supervisor {
     /// The watcher saw `path` change, and `name` watches it. Debounced: a
     /// pipeline thread builds a candidate once the tree has been quiet for a
@@ -60,10 +64,11 @@ impl Supervisor {
     fn pipeline(self: &Arc<Self>, name: &str) {
         loop {
             let (paths, epoch) = loop {
-                {
+                let left = {
                     let mut changes = self.changes.lock().unwrap();
                     let c = changes.get_mut(name).expect("changed() created it");
-                    if c.last.is_some_and(|t| t.elapsed() >= DEBOUNCE) {
+                    let left = super::quiet_left(c.last, DEBOUNCE);
+                    if left.is_zero() {
                         if c.absorbed >= c.epoch {
                             // A manual restart already took these changes in.
                             c.paths.clear();
@@ -73,10 +78,22 @@ impl Supervisor {
                             self.clear_changed(name);
                             return;
                         }
-                        break (std::mem::take(&mut c.paths), c.epoch);
+                        // A restart under way may cover the change: one asked
+                        // for right after an edit builds the tree with it, but
+                        // the report can come after the restart began (FSEvents
+                        // takes a few milliseconds, #233). Built now, the
+                        // candidate is no build of main yet and takes over
+                        // again, its jobs with it; built once the restart is
+                        // done, it is the build main has and is dropped.
+                        if !self.restart_under_way(name) {
+                            break (std::mem::take(&mut c.paths), c.epoch);
+                        }
+                        RESTART_POLL
+                    } else {
+                        left
                     }
-                }
-                std::thread::sleep(Duration::from_millis(200));
+                };
+                std::thread::sleep(left);
             };
             let superseded = self.candidate_from(name, &paths, epoch);
             let mut changes = self.changes.lock().unwrap();
@@ -459,4 +476,123 @@ fn hold_reason(svc: &Service, paths: &BTreeSet<String>) -> Option<String> {
         .map(String::as_str)
         .collect();
     (!hit.is_empty()).then(|| format!("changes schema inputs ({})", hit.join(", ")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PATH: &str = "src/Site/index.html";
+
+    /// A supervisor of `seed`, a job, and `a` and `b`, built services after
+    /// it that watch [`PATH`]; none of them running.
+    fn two_after_a_job() -> (tempfile::TempDir, tokio::runtime::Runtime, Arc<Supervisor>) {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("devstack.toml");
+        let built = "build = \"git --version\"\noutput = \"src/Site\"\nwatch = [\"src/Site/**\"]\nrun = \"x\"\nafter = [\"seed\"]\n";
+        let text = format!(
+            "version = 1\n[stack]\nname = \"s\"\n[services.seed]\nkind = \"job\"\nrun = \"x\"\n[services.a]\n{built}[services.b]\n{built}"
+        );
+        let stack = devstack_config::from_str(&text, &file).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let sup = Supervisor::new(
+            stack,
+            file,
+            d.path().to_path_buf(),
+            d.path().join(".devstack"),
+            devstack_proc::Options::default(),
+            rt.handle().clone(),
+        )
+        .unwrap();
+        (d, rt, sup)
+    }
+
+    /// Has the pipeline of `name` taken the changes it waited for?
+    fn taken(sup: &Supervisor, name: &str) -> bool {
+        sup.changes
+            .lock()
+            .unwrap()
+            .get(name)
+            .is_some_and(|c| c.paths.is_empty())
+    }
+
+    /// One edit, reported twice about 200 ms apart (FSEvents, #233), makes
+    /// one deadline for every service it concerns: two services after the
+    /// same job take their candidates at the same moment, the second report's
+    /// time plus the quiet period, not one of them a poll later. The first
+    /// report reaches the second service 20 ms after the first service (a
+    /// busy daemon writing its log): the thread of the first then began well
+    /// before the repeat, which made it miss its deadline by one poll.
+    #[test]
+    fn a_change_reported_twice_makes_one_deadline_for_every_service() {
+        let (_d, _rt, sup) = two_after_a_job();
+
+        sup.changed("a", PATH);
+        std::thread::sleep(Duration::from_millis(20));
+        sup.changed("b", PATH);
+        std::thread::sleep(Duration::from_millis(200));
+        let repeat = Instant::now();
+        sup.changed("a", PATH);
+        sup.changed("b", PATH);
+        let deadline = repeat + DEBOUNCE;
+
+        let mut fired: BTreeMap<&str, Instant> = BTreeMap::new();
+        while fired.len() < 2 && repeat.elapsed() < DEBOUNCE * 3 {
+            for name in ["a", "b"] {
+                if !fired.contains_key(name) && taken(&sup, name) {
+                    fired.insert(name, Instant::now());
+                }
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(fired.len(), 2, "both took their changes: {fired:?}");
+        for (name, at) in &fired {
+            assert!(*at >= deadline, "{name} fired before the quiet period");
+            let late = *at - deadline;
+            assert!(
+                late < Duration::from_millis(100),
+                "{name} fired {late:?} after its deadline"
+            );
+        }
+        let (a, b) = (fired["a"], fired["b"]);
+        let apart = a.max(b) - a.min(b);
+        assert!(apart < Duration::from_millis(100), "{apart:?} apart");
+        // Each pipeline took the change once, and is done with it.
+        std::thread::sleep(Duration::from_millis(300));
+        for name in ["a", "b"] {
+            let changes = sup.changes.lock().unwrap();
+            let c = &changes[name];
+            assert_eq!(c.epoch, 2, "{name}");
+            assert!(!c.worker && c.last.is_none(), "{name}");
+        }
+    }
+
+    /// A change reported after a restart began waits for the restart, past
+    /// its quiet period: the restart may have built it already (#233).
+    #[test]
+    fn a_candidate_waits_for_a_restart_under_way() {
+        let (_d, _rt, sup) = two_after_a_job();
+        *sup.restarts_under_way
+            .lock()
+            .unwrap()
+            .entry("a".into())
+            .or_default() += 1;
+        sup.changed("a", PATH);
+        std::thread::sleep(DEBOUNCE + Duration::from_millis(500));
+        assert!(!taken(&sup, "a"), "it waits for the restart");
+        *sup.restarts_under_way.lock().unwrap().get_mut("a").unwrap() -= 1;
+        let done = Instant::now();
+        while !taken(&sup, "a") && done.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(taken(&sup, "a"), "taken once the restart is done");
+        assert!(
+            done.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            done.elapsed()
+        );
+    }
 }

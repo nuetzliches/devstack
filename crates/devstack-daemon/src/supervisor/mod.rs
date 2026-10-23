@@ -903,13 +903,17 @@ impl Supervisor {
             .name(format!("debounce-{key}"))
             .spawn(move || {
                 loop {
-                    std::thread::sleep((quiet / 4).min(Duration::from_millis(200)));
-                    let mut q = me.quiet.lock().unwrap();
-                    let e = q.get_mut(&key).expect("inserted above");
-                    if e.0.elapsed() >= quiet {
-                        e.1 = false;
-                        break;
-                    }
+                    let left = {
+                        let mut q = me.quiet.lock().unwrap();
+                        let e = q.get_mut(&key).expect("inserted above");
+                        let left = quiet_left(Some(e.0), quiet);
+                        if left.is_zero() {
+                            e.1 = false;
+                            break;
+                        }
+                        left
+                    };
+                    std::thread::sleep(left);
                 }
                 action(&me);
             });
@@ -995,6 +999,36 @@ const DEBOUNCE: Duration = Duration::from_secs(2);
 /// How long a lane's worktree has to be quiet before its copy follows: short,
 /// a dev server's hot reload waits for it.
 const COPY_QUIET: Duration = Duration::from_millis(150);
+
+/// How much of a quiet period of `quiet` since the last change, at `last`, is
+/// still to come; zero once it is over. A waiter (a candidate's pipeline, a
+/// debounce) sleeps exactly this long and asks again: it wakes at the
+/// deadline itself, wherever a later change moved it.
+///
+/// It used to look every 200 ms instead, from when its thread began, and that
+/// made one change two deadlines (#233). The OS reports a change more than
+/// once: notify turns one FSEvents record into an event per flag (created,
+/// modified, metadata), FSEvents may send a second record a moment later,
+/// inotify reports the truncation and the write of one save apart. Each
+/// report calls `changed()` for every service it concerns, one after the
+/// other, so each of them is re-armed by about the same moment. But a
+/// service whose thread began a millisecond before the repeat missed its
+/// deadline at its tenth look and fired at its eleventh, 200 ms after one
+/// whose thread began a few microseconds before it: two services after the
+/// same job built for one edit 240 ms apart, the job's run for the first had
+/// begun by then, and it ran again for the second (macOS CI).
+///
+/// Not chosen: dropping a report whose file looks as it did at the last
+/// report (mtime, length) asks the file system about every event, which the
+/// watcher avoids (`watch.rs`, `LIST_NEW_DIRS`); FAT and exFAT keep the mtime
+/// to 2 s, and a lane's copy, quiet for only 150 ms, would miss a second save
+/// of the same length. Not moving a deadline for a path already waiting
+/// would build while an editor is still saving, on every OS. A repeat moves
+/// the deadline by the time between the reports, the same for every service;
+/// the debounce is there to absorb it.
+fn quiet_left(last: Option<Instant>, quiet: Duration) -> Duration {
+    last.map_or(quiet, |t| quiet.saturating_sub(t.elapsed()))
+}
 
 /// A free local port for an instance behind the proxy.
 fn free_port() -> Result<u16, String> {
