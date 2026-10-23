@@ -21,6 +21,14 @@ and listed with their assets on the
   open window to be reused (`launch_handler`), and names its `id`.
   `--browser`, `DEVSTACK_BROWSER` and `BROWSER` still win.
 
+### Fixed
+
+- **A lane its owner threw away on a node no longer comes back.** When a
+  lane was leased again while the end of its previous lease was still
+  taking it down, the second lease's end marked the slot free too early: a
+  purge then removed it, and the first end wrote it back. The node counts
+  what keeps a slot busy now.
+
 ## [0.21.0] - 2026-10-23
 
 A tray icon on Windows, Linux and macOS, a client of the hub (ADR-0060). A
