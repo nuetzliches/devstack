@@ -89,7 +89,7 @@ stay.
 | [0038](0038-a-lanes-data-outlives-its-lease.md) | A lane's mirror and data outlive its lease on a node, for a while, and can be pruned | Accepted |
 | [0039](0039-an-admin-can-update-a-server-node.md) | An admin can have a server node update its devstack, from the dashboard | Accepted, amended 2026-10-20 (a checksum from the release, not a signature; the running binary is replaced; a drain ends, and can be withdrawn) |
 | [0040](0040-a-shared-lane-can-be-watched-like-ones-own.md) | A shared lane can be shared for viewing, and is then shown as one's own lane is | Accepted; amended 2026-10-20 (sharing a lane includes viewing it) |
-| [0041](0041-a-profile-says-how-a-lane-runs-for-a-purpose.md) | A profile says how a lane (or the main tree) runs for a purpose, chosen when it starts | Accepted; point 1 extended by ADR-0058 (Proposed: `skip`) |
+| [0041](0041-a-profile-says-how-a-lane-runs-for-a-purpose.md) | A profile says how a lane (or the main tree) runs for a purpose, chosen when it starts | Accepted; point 1 extended by ADR-0058 (`skip`) |
 | [0042](0042-a-dev-servers-rebuilds-show-like-builds.md) | A dev server's rebuilds show like builds, read from its output | Accepted |
 | [0043](0043-a-dev-servers-fixed-port-is-devstacks.md) | A dev server's fixed port is devstack's, forwarded to its instance | Accepted |
 | [0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) | A lane's prepared directories can be linked into its worktree | Accepted |
@@ -106,4 +106,4 @@ stay.
 | [0055](0055-a-lane-without-a-stack-file-says-so-and-can-be-given-one.md) | A lane whose branch has no stack file runs with the main tree's, says so, and can be given one | Accepted |
 | [0056](0056-a-lane-on-a-node-relays-its-udp-ports-through-a-tunnel-per-session.md) | A lane on a node relays its UDP ports, a tunnel per client, a datagram per frame | Accepted |
 | [0057](0057-a-port-a-container-announces-moves-inside-it-too.md) | A port a container announces moves inside the container too, and Compose is told its number | Accepted |
-| [0058](0058-a-profile-can-leave-out-containers-and-services.md) | A profile can leave out containers, whole Compose groups and services | Proposed |
+| [0058](0058-a-profile-can-leave-out-containers-and-services.md) | A profile can leave out containers, whole Compose groups and services | Accepted |

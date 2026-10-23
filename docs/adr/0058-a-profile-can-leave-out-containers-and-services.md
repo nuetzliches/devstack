@@ -1,6 +1,6 @@
 # ADR-0058: A profile can leave out containers, whole Compose groups and services
 
-- **Status:** Proposed (2026-10-23)
+- **Status:** Accepted (2026-10-23)
 - **Date:** 2026-10-23
 - **Deciders:** project owner
 - **Related:** [#244](https://github.com/nuetzliches/devstack/issues/244), [ADR-0004](0004-infrastructure-is-delegated-to-compose.md), [ADR-0023](0023-stack-file-compatibility.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md), [ADR-0041](0041-a-profile-says-how-a-lane-runs-for-a-purpose.md), [ADR-0048](0048-a-containers-main-port-can-move-with-the-main-slot.md)
