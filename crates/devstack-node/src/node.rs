@@ -3601,6 +3601,37 @@ fn restart_on(binary: &Path) -> String {
     }
 }
 
+/// Whether a node agent runs for the membership in `dir` (`pool/` or
+/// `pools/<name>/` in devstack's per-user state): it holds `node/lock`
+/// while it runs. The hub on the same machine then does not report for that
+/// pool; the agent reports the machine (#170).
+pub fn agent_runs(dir: &Path) -> bool {
+    devstack_proc::StateLock::held(&dir.join("node"))
+}
+
+/// The agent's lock in `root` (its `node/` directory). Held a moment longer
+/// by the agent it replaces (a restart after an update, on Windows a new
+/// process) or by a hub that looks whether it is held: tried again for a few
+/// seconds.
+async fn agent_lock(root: &Path) -> Result<devstack_proc::StateLock, NodeError> {
+    let t0 = Instant::now();
+    loop {
+        match devstack_proc::StateLock::acquire(root) {
+            Ok(l) => return Ok(l),
+            Err(devstack_proc::LockError::Held(_)) if t0.elapsed() < Duration::from_secs(10) => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            Err(devstack_proc::LockError::Held(p)) => {
+                return Err(NodeError::Other(format!(
+                    "a node agent of this member runs already ({} is held)",
+                    p.display()
+                )));
+            }
+            Err(e) => return Err(NodeError::Other(e.to_string())),
+        }
+    }
+}
+
 /// Run the node agent of the member in `config.dir` on `listener` until
 /// `stop` resolves.
 pub async fn serve(
@@ -3629,6 +3660,9 @@ pub async fn serve(
     )
     .map_err(|e| NodeError::Other(e.to_string()))?;
     let root = config.dir.join("node");
+    // One reporter per machine and pool (#170): while it is held, the hub
+    // does not report for this membership.
+    let _lock = agent_lock(&root).await?;
     std::fs::create_dir_all(root.join("lanes")).map_err(|e| NodeError::Io(root.clone(), e))?;
     let leases: HashMap<String, NodeLease> = std::fs::read(root.join("leases.json"))
         .ok()

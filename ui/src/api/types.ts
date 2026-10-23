@@ -486,6 +486,8 @@ export type ShareStatus = {
   /** Unix ms of the last report that reached the coordinator. */
   reported_at: number | null;
   error: string | null;
+  /** A node agent of the same membership runs here and reports the machine, not the hub (#170); absent from an older hub. */
+  agent?: boolean;
   /** The devstack the coordinator runs, from its answer to the last report; absent from an older one. */
   coordinator?: PoolRelease;
   /** Why this machine offers the pool nothing (a node agent runs lanes; #171, on Windows #168). */
