@@ -1,13 +1,14 @@
 //! Windows: an icon in the notification area (`Shell_NotifyIconW`) owned by
 //! a hidden window of this thread, with a popup menu on either click
 //! (ADR-0060). A timer on that window takes the owner's menus; Explorer's
-//! `TaskbarCreated` (it restarted) adds the icon again.
+//! `TaskbarCreated` (it restarted) adds the icon again. The menu follows the
+//! system's dark or light mode for apps ([`dark_menus`]).
 
 use super::{Entry, Menu, QUIT, Tone};
 use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
 use windows_sys::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
     Shell_NotifyIconW,
@@ -18,7 +19,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     HICON, HMENU, KillTimer, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, PostMessageW,
     PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SM_CXSMICON, SetForegroundWindow,
     SetTimer, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
-    WM_APP, WM_DESTROY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_POPUP,
+    WM_APP, WM_DESTROY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW,
+    WS_POPUP,
 };
 
 /// The icon's messages to its window.
@@ -41,6 +43,56 @@ struct State {
 
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
+}
+
+/// Popup menus in the system's dark mode for apps, light otherwise. Windows
+/// documents no API for it: `uxtheme.dll` exports by ordinal only
+/// `SetPreferredAppMode` (135; `AllowDarkModeForApp` with the same argument
+/// on 1809), `AllowDarkModeForWindow` (133) and `FlushMenuThemes` (136), as
+/// Explorer and the other programs with dark menus use them. Where one is
+/// missing (before Windows 10 1809) the menu stays light. Called again on
+/// `WM_SETTINGCHANGE` "ImmersiveColorSet": the menus follow a change of mode.
+fn dark_menus(hwnd: HWND) {
+    type AppMode = unsafe extern "system" fn(i32) -> i32;
+    type ForWindow = unsafe extern "system" fn(HWND, i32) -> i32;
+    type Flush = unsafe extern "system" fn();
+    // `AllowDark`: dark when the system's apps are dark.
+    const ALLOW_DARK: i32 = 1;
+    // SAFETY: uxtheme.dll stays loaded for the process (it is not freed);
+    // each ordinal is called with the signature it has had since 1809, and
+    // only when it exists.
+    unsafe {
+        let lib = LoadLibraryW(wide("uxtheme.dll").as_ptr());
+        if lib.is_null() {
+            return;
+        }
+        let by_ordinal = |n: usize| GetProcAddress(lib, n as *const u8);
+        let (Some(app), Some(window), Some(flush)) =
+            (by_ordinal(135), by_ordinal(133), by_ordinal(136))
+        else {
+            return;
+        };
+        let app: AppMode = std::mem::transmute(app);
+        let window: ForWindow = std::mem::transmute(window);
+        let flush: Flush = std::mem::transmute(flush);
+        app(ALLOW_DARK);
+        window(hwnd, 1);
+        flush();
+    }
+}
+
+/// Whether `WM_SETTINGCHANGE` says the colours of apps changed.
+fn colours_changed(lp: LPARAM) -> bool {
+    if lp == 0 {
+        return false;
+    }
+    let want = wide("ImmersiveColorSet");
+    // SAFETY: for WM_SETTINGCHANGE a non-zero lParam is a NUL-terminated
+    // wide string; it is read only up to the length compared.
+    unsafe {
+        let p = lp as *const u16;
+        (0..want.len()).all(|i| *p.add(i) == want[i])
+    }
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -249,6 +301,10 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             poll(hwnd);
             0
         }
+        WM_SETTINGCHANGE if colours_changed(lp) => {
+            dark_menus(hwnd);
+            0
+        }
         WM_DESTROY => {
             STATE.with(|s| {
                 if let Some(s) = s.borrow().as_ref() {
@@ -314,6 +370,7 @@ pub fn run(initial: Menu, updates: Receiver<Menu>, actions: Sender<String>) -> R
         if hwnd.is_null() {
             return Err("Windows could not create the tray's window".into());
         }
+        dark_menus(hwnd);
         let state = State {
             hwnd,
             icon: make_icon(initial.tone),
