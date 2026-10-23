@@ -1,6 +1,6 @@
 # ADR-0061: The dashboard opens in its installed app, when there is one
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-24)
 - **Date:** 2026-10-23
 - **Deciders:** project owner
 - **Related:** [ADR-0018](0018-dashboard-is-a-browser-page.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md) (the hub's origin, the PWA, pairing), [ADR-0045](0045-the-hub-notifies-the-desktop.md) (a click on a notification), [ADR-0060](0060-the-tray-is-a-client-of-the-hub.md) (the tray's *Open Dashboard*), [ADR-0011](0011-platform-windows-native-first.md), [ADR-0054](0054-macos-is-a-developer-platform-in-preview.md)

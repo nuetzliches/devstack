@@ -9,9 +9,17 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-24
+
+The dashboard opens in its installed app (ADR-0061): with the dashboard
+installed in Chrome, Edge, Brave or Chromium, the tray, `devstack ui` and a
+notification open it there, on Linux and Windows, instead of a browser tab.
+Fixed: the tray's menu on Windows follows dark mode; a lane its owner threw
+away on a node no longer comes back.
+
 ### Added
 
-- **The dashboard opens in its installed app** (ADR-0061, Proposed). With
+- **The dashboard opens in its installed app** (ADR-0061). With
   the dashboard installed as an app in Chrome, Edge, Brave or Chromium, the
   tray's *Open Dashboard*, `devstack ui` and a click on a notification open
   it there instead of in a browser tab: on Linux found by its launcher (the
@@ -1554,7 +1562,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/nuetzliches/devstack/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/nuetzliches/devstack/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/nuetzliches/devstack/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/nuetzliches/devstack/compare/v0.18.0...v0.19.0
