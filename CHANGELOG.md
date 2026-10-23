@@ -9,6 +9,17 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **A lane on a node carried over a restart is warned about against the
+  devstack that runs it now.** The warning that the node or the coordinator
+  runs another release was made once, when the lane was leased, and carried
+  over a restart as a text (ADR-0052): after an update to 0.20.0 the lane
+  still read "the node … runs devstack 0.20.0, this machine devstack
+  0.19.0" while every side ran 0.20.0. The daemon now carries the
+  coordinator's release instead and makes the warning again; a lane carried
+  by 0.20.0 loses the coordinator's part, which only that daemon knew.
+
 ## [0.20.0] - 2026-10-23
 
 macOS as a developer platform in preview, installed with Homebrew on macOS
