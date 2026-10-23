@@ -2238,8 +2238,13 @@ fn a_worktree_runs_as_a_lane() {
     );
     assert_ne!(s.daemon_pid(), daemon, "a new daemon");
     assert_ne!(lane_info()["pid"], lane_pid, "the lane started again");
+    // Logged once the lane's `up` is through, which waits for every service;
+    // its api answers before that.
     assert!(
-        s.daemon_log().contains("\"lane_carried\""),
+        wait_for(
+            || s.daemon_log().contains("\"lane_carried\""),
+            Duration::from_secs(60)
+        ),
         "{}",
         s.daemon_log()
     );
