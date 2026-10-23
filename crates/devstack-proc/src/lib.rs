@@ -274,6 +274,17 @@ pub fn raise_open_files() -> Option<u64> {
     backend::raise_open_files()
 }
 
+/// Windows: does a process listen on TCP `port` on the wildcard address
+/// (`0.0.0.0`, `::`) or on loopback? Read from the system's table of
+/// listeners. There a bind on `127.0.0.1` succeeds while a process of the
+/// same user listens on `0.0.0.0`, and a connect to a closed loopback port
+/// takes seconds of retries, so neither tells. `false` elsewhere, where a
+/// bind tells (Linux) or a connect (macOS), and when the table cannot be
+/// read.
+pub fn tcp_listening(port: u16) -> bool {
+    backend::tcp_listening(port)
+}
+
 /// Windows: the long form of a path (`C:\Users\RUNNER~1` becomes
 /// `C:\Users\runneradmin`). Compilers report long paths; a repository known
 /// by its 8.3 name would not be recognised in their messages. Unlike
