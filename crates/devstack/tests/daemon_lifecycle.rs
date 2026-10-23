@@ -1556,6 +1556,66 @@ run = "{brief}"
     s.ok(&["down"]);
 }
 
+/// A service's `stop` (ADR-0059) runs when devstack stops an instance, with
+/// that instance's port, into its log; after the daemon died, the next start
+/// runs the one it recorded.
+#[test]
+fn a_services_stop_ends_what_its_run_started() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    let stopped = s.dir.path().join("stopped.txt");
+    // No digit before `>>`: `sh` would read it as a file descriptor.
+    let stop = format!("echo stopped-{{port}} >> \"{}\"", stopped.display());
+    std::fs::write(
+        s.file(),
+        format!(
+            r#"version = 1
+[stack]
+name = "stops"
+[services.box]
+run = "{run}"
+stop = '{stop}'
+port = {port}
+"#,
+            run = runs_for(300),
+            port = s.port,
+        ),
+    )
+    .unwrap();
+    let stops = || std::fs::read_to_string(&stopped).unwrap_or_default();
+    let instance_port = || s.service_view("box")["instance_port"].as_u64().unwrap_or(0);
+
+    s.ok(&["up"]);
+    let first = instance_port();
+    assert!(first != 0, "{}", s.diag());
+    s.ok(&["stop", "box"]);
+    assert!(
+        stops().contains(&format!("stopped-{first}")),
+        "the stop of {first}: {}\n{}",
+        stops(),
+        s.diag()
+    );
+    let log = s.ok(&["logs", "box"]);
+    assert!(log.contains("[devstack] stop: echo stopped-"), "{log}");
+
+    // The daemon dies hard: the next start runs the recorded stop.
+    s.ok(&["start", "box"]);
+    let second = instance_port();
+    assert!(second != 0 && second != first, "{}", s.diag());
+    kill_hard(s.daemon_pid());
+    s.ok(&["up"]);
+    assert!(
+        stops().contains(&format!("stopped-{second}")),
+        "the stop {second} recorded: {}\n{}",
+        stops(),
+        s.diag()
+    );
+    s.ok(&["down"]);
+}
+
 /// A command that runs for about `s` seconds.
 fn runs_for(s: u32) -> String {
     if cfg!(windows) {

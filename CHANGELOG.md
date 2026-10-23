@@ -20,6 +20,15 @@ and listed with their assets on the
   uses a skipped container's address is an error in the profile's check. A
   lane on a node does not create what its profile skips. A file with `skip`
   wants `requires = "0.21.0"`.
+- **A service's `stop` command** (ADR-0059, #245): `[services.<name>]
+  stop = "docker rm -f api{lane_suffix}-{port}"` ends what `run` started
+  outside its process tree, a container of a `docker run` service. It
+  runs whenever an instance ends (a stop, a replacement, a failed start,
+  one that ended by itself), before the graceful signal, with the
+  instance's placeholders, at most 30 s; after a crash the next start runs
+  the ones recorded. `docs/stack-file.md` describes a container as a
+  service (`--init`, `--rm`, a name per instance). A file with `stop` says
+  `requires = "0.21.0"`.
 
 ## [0.20.0] - 2026-10-23
 

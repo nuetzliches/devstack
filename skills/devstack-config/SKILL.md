@@ -122,6 +122,15 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   the files' port as default (`${DEVSTACK_PORT_MEDIA_7881:-7881}`); keep
   `ports` literal. Without the key, a lane's server announces the main
   tree's port. Add `requires = "0.20.0"` to `[stack]`.
+- **A container as a service** (`run = "docker run ..."`, for what needs
+  Linux tools but should get `watch` and candidates) needs three things: a
+  process in it that ends on `SIGINT` and `SIGTERM` (`docker run --init`,
+  or an entrypoint that handles them: devstack's graceful stop reaches the
+  container through the CLI), `--rm`, and a name with
+  `{lane_suffix}-{port}` so a candidate and the main instance do not
+  collide. Add `stop = "docker rm -f <the same name>"`: devstack runs it
+  whenever an instance ends, also after a crash, so no container is left
+  holding the port. Add `requires = "0.21.0"` to `[stack]`.
 - **Paths** are relative to the repository root; use `{repo}` where a process
   needs an absolute one. Generated directories (`bin`, `obj`, `node_modules`,
   `target`, `.git`, `.devstack`) never count as changes. Compose files, env
