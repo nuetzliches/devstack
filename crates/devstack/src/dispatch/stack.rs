@@ -92,6 +92,9 @@ fn check(file: &Path, compose: bool) -> Result<()> {
     for w in devstack_config::validate::warnings(&stack) {
         println!("warning: {w}");
     }
+    for w in devstack_config::validate::repo_warnings(&stack, &repo_of(file)?) {
+        println!("warning: {w}");
+    }
     if compose {
         let repo = repo_of(file)?;
         let docker = devstack_compose::Docker::default();

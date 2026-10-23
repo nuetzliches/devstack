@@ -193,6 +193,9 @@ impl Check<'_> {
                 Placeholder::ComposePort { group, service, .. } => {
                     self.compose_service(path, &format!("{p}"), group, service)
                 }
+                Placeholder::ComposeProject(group) if !self.stack.compose.contains_key(group) => {
+                    self.err(path, format!("`{p}`: no compose group `{group}`"))
+                }
                 _ => {}
             }
         }
@@ -941,6 +944,37 @@ pub fn warnings(stack: &Stack) -> Vec<Issue> {
                     ),
                 });
             }
+        }
+    }
+    out
+}
+
+/// What `devstack check` warns about from the repository's files (`repo`,
+/// the stack file's directory): a dev server a lane runs whose `cwd` has a
+/// `package.json` and which has no `prepare`. A lane runs it from a copy
+/// without the ignored files (ADR-0024), `node_modules` among them, and it
+/// fails there with only its toolchain's message ("vite is not recognized").
+pub fn repo_warnings(stack: &Stack, repo: &std::path::Path) -> Vec<Issue> {
+    let mut out = Vec::new();
+    for (name, svc) in &stack.services {
+        if svc.kind != Kind::Devserver || !svc.lanes || svc.prepare.is_some() {
+            continue;
+        }
+        let cwd = svc.cwd.as_deref().unwrap_or(".");
+        if cwd.contains('{') || cwd.contains("${") {
+            continue;
+        }
+        if repo.join(cwd).join("package.json").is_file() {
+            let lock = match cwd.trim_end_matches(['/', '\\']) {
+                "." | "" => "package-lock.json".to_string(),
+                dir => format!("{}/package-lock.json", dir.replace('\\', "/")),
+            };
+            out.push(Issue {
+                path: format!("services.{name}"),
+                message: format!(
+                    "`{cwd}` has a package.json and the dev server no `prepare`: a lane runs it from a copy without the ignored files (node_modules), where it fails; add `prepare = {{ run = \"npm ci\", inputs = [\"{lock}\"] }}`"
+                ),
+            });
         }
     }
     out

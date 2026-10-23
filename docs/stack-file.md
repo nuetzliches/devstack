@@ -495,7 +495,9 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
   moved by the lane's offset, no fixed `container_name`, fixed-name networks
   and volumes renamed `<name>-<lane>`. Its first start migrates and seeds its
   own data. `lane stop` removes its containers and keeps their volumes; a
-  removed worktree takes them all.
+  removed worktree takes them all. `{compose.<group>.project}` is the
+  project as the tree runs it: a command's `docker compose -p` with it
+  reaches the lane's containers in a lane (see `[commands]`).
 - `share`: a lane on a node is private unless shared (ADR-0035): this is
   whom it is shared with until its owner says otherwise (`devstack lane
   share <lane> --with <id|tag|*>`, or the lane's share button). Members it
@@ -533,10 +535,29 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
   for a name that shows up outside the stack; data needs them no longer.
 - `lanes = false` keeps a service in the main working tree: a lane neither
   starts it nor waits for it (`after`), `devstack start` refuses it there, and
-  the main tree's instance serves every lane. It keeps its background workers
-  while a lane holds the main slot, and `promote --lane` leaves it alone.
-- A dev server runs in a lane only if its `run` takes `{port}` (otherwise its
-  fixed port is the main tree's).
+  the main tree's instance serves every lane. A command's `start`, `stop` or
+  `restart` step on it is skipped in a lane, with a line in the run's log,
+  so a command written for both trees does not fail there. It keeps its
+  background workers while a lane holds the main slot, and `promote --lane`
+  leaves it alone.
+- A dev server runs in a lane only if it takes `{port}`, in its `run` or in
+  its `env` (a Vite or Angular config that reads its port from a variable):
+  otherwise its fixed port is the main tree's. In `env` only, it binds the
+  lane's port itself (as with `proxy = false`); a `run` with `{port}` gets
+  devstack's forward (ADR-0043).
+- A dev server in a lane runs from the lane's copy, without the ignored
+  files: one that needs `node_modules` needs `prepare` (`devstack check`
+  warns about a dev server whose `cwd` has a `package.json` and no
+  `prepare`). Without `prepare`, one that ends in a lane before it is
+  ready says in its error that the copy lacks the ignored files.
+- The main tree and every lane are on `localhost`, and browsers do not tell
+  cookies apart by port: a login in a lane's frontend replaces the main
+  tree's in the same browser. A cookie name with `{lane_suffix}` (in the
+  service's `env`) keeps them apart.
+- `{service.<name>.url}` is `http://127.0.0.1:<port>`, while the dashboard
+  links `http://localhost:<port>`: an Origin check (CORS, CSRF) built from
+  the URL refuses a browser that came through the dashboard's link. Build
+  the allowed origins from `{service.<name>.port}`, with both hosts.
 - `devstack promote --lane <name>` lets a lane's services answer on the main
   ports (dev servers through a TCP forward); `--lane main` gives them back.
   The main ports are the fixed ports of `[services.*]` and of the
@@ -562,7 +583,7 @@ confirm     = "The local database will be dropped. Continue?"   # nothing runs w
 requires    = ["api"]                                           # enabled only while these are healthy
 steps = [
   { stop = "api" },
-  { exec = "docker compose -p shop-dev exec -T db dropdb -U dev shop", cwd = "." },
+  { exec = "docker compose -p {compose.app.project} exec -T db dropdb -U dev shop" },
   { run = "migrate" },                                          # a job service, to completion
   { start = "api" },
   { http = "POST {service.api.url}/dev/seed", headers = { "X-Dev" = "1" }, timeout = "60s" },
@@ -580,8 +601,21 @@ service of kind `job`). A key of another action (`cwd` on an `http` step,
 to it; in a lane in the lane's copy, never in its worktree, and `{repo}` is
 that copy. Steps may use `{repo}`, `{lane}`, `{lane_suffix}`,
 `{service.<name>.url}`, `{service.<name>.port}`, `{compose.…}` (the
-published address of a Compose service's port, as for services) and
-`${VAR}`; `{port}`, `{artifact}` and `{is_main}` have no value in a command.
+published address of a Compose service's port, as for services, and
+`{compose.<group>.project}`) and `${VAR}`; `{port}`, `{artifact}` and
+`{is_main}` have no value in a command.
+
+Name a Compose project with `{compose.<group>.project}`, never literally:
+the same command runs in a lane, whose containers are the project
+`<project>-<lane>`. With `-p shop-dev` written out, the example above would
+stop the lane's API and drop the **main tree's** database. `docker compose
+-p <project> exec` finds a running project's containers without its files.
+A file that uses `{compose.<group>.project}` should say `requires =
+"0.20.0"` in `[stack]`.
+In a lane, a `start`, `stop` or `restart` step on a `lanes = false` service
+is skipped (the main tree's instance serves the lane), with a line in the
+run's log.
+
 Commands run with
 `devstack run <name>`, from the dashboard and through MCP (`run_command`). A
 command with `confirm` runs from MCP only with `confirm: true`, which an agent
@@ -695,6 +729,7 @@ project wrote itself is never touched.
 | `{lane_suffix}` | empty in the main working tree, `_<lane>` in a lane: `app{lane_suffix}` keeps the main tree's name |
 | `{service.<name>.url}` | URL of that service's main slot (`http(s)://127.0.0.1:<port>`) |
 | `{service.<name>.port}` | that service's port |
+| `{compose.<group>.project}` | the group's Compose project as this tree runs it: `project` in the main working tree, `<project>-<lane>` in a lane (for `docker compose -p` in a command; a `shared` service stays in the main tree's) |
 | `{compose.<group>.<service>.<port>}` | where a container port is published, as a URL (`http://127.0.0.1:15432`) |
 | `{compose.<group>.<service>.<port>.host}`, `.port`, `.address` | its host (`127.0.0.1`), its port (`15432`), or both (`127.0.0.1:15432`), for connection strings: `Server={compose.app.sql.1433.host},{compose.app.sql.1433.port}`, `Host=…host;Port=…port`. In a lane: the lane's own container, or the main tree's for a `shared` one |
 | `${VAR}`, `${VAR:-default}` | from the env files and the process environment; placeholders inside a default are resolved too |
@@ -706,7 +741,8 @@ number is seconds).
 Where they have a value: `{port}` only in a service with a `port`,
 `{artifact}` only in a service with `build` (not in `hot_reload.run`),
 `{service.<name>.…}` only for a service with a `port`, `{compose.…}` only
-for a service its group starts. `build` and `output` take `{repo}` and
+for a service its group starts (`{compose.<group>.project}`: for a group
+the file has). `build` and `output` take `{repo}` and
 `${VAR}` only (every lane shares the artifact); commands (their `exec`, an
 `exec` step's `cwd` included) no `{port}`, `{artifact}` or `{is_main}`; a
 service's `cwd`, `prepare.run`, `prepare.cwd` and `hot_reload.cwd` none at

@@ -105,6 +105,10 @@ pub struct Context {
     pub service_urls: BTreeMap<String, String>,
     /// `(group, service, container port)` -> `127.0.0.1:<published>`.
     pub published: BTreeMap<(String, String, u16), String>,
+    /// Compose group -> its project as this tree runs it
+    /// (`{compose.<group>.project}`): the stack file's `project` in the main
+    /// tree, [`lane_project`] in a lane.
+    pub projects: BTreeMap<String, String>,
     /// `${VAR}` lookups: the process environment and the group's env files, merged by the caller.
     pub vars: BTreeMap<String, String>,
     /// Ports published on an address Docker assigns at start, while not running.
@@ -150,6 +154,11 @@ impl Resolve for Context {
                 .ok_or_else(|| {
                     format!("`{p}`: port {port} of `{group}/{service}` is not published")
                 }),
+            Placeholder::ComposeProject(group) => self
+                .projects
+                .get(group)
+                .cloned()
+                .ok_or_else(|| format!("`{p}`: no compose group `{group}`")),
         }
     }
 }
@@ -199,6 +208,16 @@ pub fn lane_suffix(lane: &str) -> String {
     match lane_name(lane) {
         "main" => String::new(),
         l => format!("_{l}"),
+    }
+}
+
+/// A Compose group's project as a tree runs it: `project` in the main tree,
+/// `<project>-<lane>` in a lane (ADR-0030).
+pub fn lane_project(project: &str, lane: &str) -> String {
+    if lane.is_empty() {
+        project.to_string()
+    } else {
+        format!("{project}-{lane}")
     }
 }
 
@@ -790,6 +809,27 @@ mod tests {
         assert_eq!(env["DEF"].value, "5000");
         assert!(!env.contains_key("UNSET"));
         assert!(!env.contains_key("DEVSTACK_SLOT"));
+    }
+
+    #[test]
+    fn a_groups_project_is_the_one_this_tree_runs() {
+        let s = svc(&[], &[("PROJECT", "{compose.app.project}")]);
+        let ce = compose_env(&[]);
+        let mut main = ctx();
+        main.projects
+            .insert("app".into(), lane_project("shop-dev", &main.lane));
+        let env = compose("api", &s, &main, &ce, false).unwrap();
+        assert_eq!(env["PROJECT"].value, "shop-dev");
+
+        let mut lane = ctx();
+        lane.lane = "feat-x".into();
+        lane.projects
+            .insert("app".into(), lane_project("shop-dev", &lane.lane));
+        let env = compose("api", &s, &lane, &ce, false).unwrap();
+        assert_eq!(env["PROJECT"].value, "shop-dev-feat-x");
+
+        let s = svc(&[], &[("PROJECT", "{compose.other.project}")]);
+        assert!(compose("api", &s, &lane, &ce, false).is_err());
     }
 
     #[test]

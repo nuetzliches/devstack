@@ -92,6 +92,9 @@ struct InfraCache {
     pending: BTreeSet<(String, String, u16)>,
     envs: ComposeEnvs,
     views: Vec<InfraView>,
+    /// Each group's Compose project as this tree runs it
+    /// (`{compose.<group>.project}`).
+    projects: BTreeMap<String, String>,
 }
 
 pub struct Supervisor {
@@ -1302,5 +1305,67 @@ mod notice_tests {
             }
         }
         assert_eq!(told, [1, 1, 0], "set, changed, cleared");
+    }
+}
+
+#[cfg(test)]
+mod copy_note_tests {
+    use super::*;
+
+    #[test]
+    fn a_dev_server_that_ends_in_a_lane_points_to_prepare() {
+        let text = "version = 1\n[stack]\nname = \"s\"\n[services.web]\nkind = \"devserver\"\nrun = \"npm run dev\"\nport = 5173\n[services.api]\nrun = \"x\"\n";
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for lane in ["", "feat-x"] {
+            let d = tempfile::tempdir().unwrap();
+            let file = d.path().join("devstack.toml");
+            let stack = devstack_config::from_str(text, &file).unwrap();
+            let state = d.path().join(".devstack");
+            let sup = Supervisor::new_lane(
+                stack,
+                file,
+                d.path().to_path_buf(),
+                if lane.is_empty() {
+                    state
+                } else {
+                    state.join(format!("lane-{lane}"))
+                },
+                devstack_proc::Options::default(),
+                rt.handle().clone(),
+                lane.into(),
+                if lane.is_empty() { 0 } else { 100 },
+                Arc::new(Mutex::new(None)),
+                None,
+            )
+            .unwrap();
+            let web = sup.stack.services["web"].clone();
+            let note = sup.copy_note(&web);
+            if lane.is_empty() {
+                assert_eq!(note, "", "the main tree runs it in place");
+            } else {
+                assert!(note.contains("see `prepare`"), "{note}");
+                let prepared = devstack_config::from_str(
+                    &text.replace(
+                        "port = 5173\n",
+                        "port = 5173\nprepare = { run = \"npm ci\" }\n",
+                    ),
+                    Path::new("t"),
+                )
+                .unwrap();
+                assert_eq!(
+                    sup.copy_note(&prepared.services["web"]),
+                    "",
+                    "it has `prepare`"
+                );
+                assert_eq!(
+                    sup.copy_note(&sup.stack.services["api"]),
+                    "",
+                    "no dev server"
+                );
+            }
+        }
     }
 }

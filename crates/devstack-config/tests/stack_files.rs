@@ -473,6 +473,26 @@ fn placeholders_need_a_value_where_they_are_used() {
         !issues.iter().any(|i| i.contains("{compose.app.db.5432}")),
         "a command may use a Compose service's address: {issues:?}"
     );
+
+    // A group's project as this tree runs it, for `docker compose -p`.
+    from_str(
+        &format!(
+            "{MINIMAL}\n[commands.c]\ndescription = \"d\"\nsteps = [{{ exec = \"docker compose -p {{compose.app.project}} exec -T db true\" }}]\n"
+        ),
+        Path::new("t"),
+    )
+    .unwrap();
+    let issues = invalid(&format!(
+        "{MINIMAL}\n[commands.c]\ndescription = \"d\"\nsteps = [{{ exec = \"docker compose -p {{compose.other.project}} ps\" }}]\n"
+    ));
+    assert!(
+        has(
+            &issues,
+            "commands.c.steps[0].exec",
+            "`{compose.other.project}`: no compose group `other`"
+        ),
+        "{issues:?}"
+    );
 }
 
 #[test]
@@ -850,4 +870,38 @@ fn agent_skill_folders_default_to_claude_code_and_stay_in_the_repository() {
     );
     let none = invalid(&format!("{MINIMAL}\n[agents]\nskills = []\n")).join("\n");
     assert!(none.contains("at least one folder"), "{none}");
+}
+
+#[test]
+fn a_dev_server_with_a_package_json_and_no_prepare_is_a_warning() {
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(repo.path().join("web")).unwrap();
+    std::fs::write(repo.path().join("web/package.json"), "{}").unwrap();
+    let text = format!(
+        "{MINIMAL}[services.web]\nkind = \"devserver\"\ncwd = \"web\"\nrun = \"npm run dev\"\nport = 5173\n"
+    );
+    let warnings = |text: &str| -> Vec<String> {
+        let s = from_str(text, Path::new("t.toml")).unwrap();
+        devstack_config::validate::repo_warnings(&s, repo.path())
+            .iter()
+            .map(|i| i.to_string())
+            .collect()
+    };
+    let w = warnings(&text);
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(
+        w[0].starts_with("services.web:")
+            && w[0].contains("node_modules")
+            && w[0].contains("web/package-lock.json"),
+        "{w:?}"
+    );
+    // With `prepare`, in the main tree only, or without a package.json: none.
+    let prepared = text.replace(
+        "port = 5173\n",
+        "port = 5173\nprepare = { run = \"npm ci\" }\n",
+    );
+    assert!(warnings(&prepared).is_empty());
+    let main_only = text.replace("port = 5173\n", "port = 5173\nlanes = false\n");
+    assert!(warnings(&main_only).is_empty());
+    assert!(warnings(&text.replace("cwd = \"web\"", "cwd = \"api\"")).is_empty());
 }

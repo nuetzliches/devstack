@@ -36,6 +36,26 @@ impl Supervisor {
         self.infra.lock().unwrap().published.clone()
     }
 
+    /// Each group's Compose project as this tree runs it
+    /// (`{compose.<group>.project}`): the stack file's in the main tree, the
+    /// lane's own in a lane (`<project>-<lane>`), the one its node runs for
+    /// a lane on a node. What `docker compose -p` in a command step needs to
+    /// reach this tree's containers, not the main tree's.
+    pub(crate) fn compose_projects(&self) -> BTreeMap<String, String> {
+        let known = self.infra.lock().unwrap().projects.clone();
+        self.stack
+            .compose
+            .keys()
+            .map(|g| {
+                let p = known
+                    .get(g)
+                    .cloned()
+                    .unwrap_or_else(|| self.compose_group(g).project);
+                (g.clone(), p)
+            })
+            .collect()
+    }
+
     /// As [`Self::published_ports`], but a held port as the fixed one the
     /// Compose files name: what a lane moves by its offset (ADR-0030), and
     /// what its range must not meet.
@@ -207,7 +227,7 @@ impl Supervisor {
             }
             return g;
         }
-        g.project = format!("{}-{}", cfg.project, self.lane);
+        g.project = devstack_env::lane_project(&cfg.project, &self.lane);
         g.networks = cfg
             .networks
             .iter()
@@ -516,6 +536,7 @@ impl Supervisor {
         let mut cache = InfraCache::default();
         for g in self.group_order() {
             let group = self.compose_group(&g);
+            cache.projects.insert(g.clone(), group.project.clone());
             let mut view = InfraView {
                 group: g.clone(),
                 project: group.project.clone(),
@@ -1068,6 +1089,9 @@ impl Supervisor {
                 Ok(ext) => {
                     let eg = ext.groups.get(&g).cloned().unwrap_or_default();
                     view.project = eg.project.clone();
+                    if !eg.project.is_empty() {
+                        cache.projects.insert(g.clone(), eg.project.clone());
+                    }
                     // Its node could not bring it up (#164): shown as a
                     // local group that failed, its containers beside.
                     if let crate::external::GroupPhase::Failed(e) = eg.phase() {

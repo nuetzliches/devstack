@@ -1881,6 +1881,9 @@ fn a_worktree_runs_as_a_lane() {
     toml.push_str(&format!(
         "\n[services.tray]\nkind = \"tool\"\nlanes = false\nrun = '\"{BIN}\" serve-static src/Site --port {{port}}'\nport = {tray_port}\n"
     ));
+    toml.push_str(
+        "\n[commands.tray-cycle]\ndescription = \"t\"\nsteps = [{ restart = \"tray\" }, { start = \"tray\" }]\n",
+    );
     std::fs::write(s.file(), toml).unwrap();
     s.cli(&["up"], None); // `broken` fails, the API runs
     assert!(
@@ -2093,6 +2096,13 @@ fn a_worktree_runs_as_a_lane() {
     );
     let refused = wt_cli(&["start", "tray"]);
     assert!(refused.contains("main working tree only"), "{refused}");
+    // A command step on it is skipped in the lane, with a line in the
+    // run's log, and the command does not fail for it (#222).
+    let run = wt_cli(&["run", "tray-cycle"]);
+    assert!(
+        run.contains("--- skipped") && run.contains("--- done") && !run.contains("failed"),
+        "{run}"
+    );
     // Asked of the lane, not of a port: another of its processes (a dev
     // server behind its forward, ADR-0043) may hold `tray_port + offset`
     // by chance and serve the same page.
@@ -2501,6 +2511,16 @@ fn a_lane_has_its_own_containers() {
         "services = [\"db\", \"cache\"]\n",
         "services = [\"db\", \"cache\"]\nshared = [\"cache\"]\n",
     );
+    // A command that reaches the tree's own containers (#222).
+    let toml = toml
+        + r#"
+[commands.project]
+description = "the tree's Compose project"
+steps = [
+  { exec = "docker compose -p {compose.app.project} exec -T db true" },
+  { exec = "echo project={compose.app.project}" },
+]
+"#;
     std::fs::write(s.file(), toml).unwrap();
     s.cli(&["up"], None); // `broken` fails, the rest runs
 
@@ -2592,6 +2612,35 @@ fn a_lane_has_its_own_containers() {
     assert!(
         main.iter().any(|c| c.1 == main_db && c.2 == vec![db_port]),
         "{main:?}"
+    );
+    // `{compose.app.project}` is the tree's own project: a command's
+    // `docker compose -p` reaches the lane's containers in the lane.
+    let run = |file: &Path| {
+        let out = Command::new(BIN)
+            .args(["run", "project", "-f"])
+            .arg(file)
+            .env("LOCALAPPDATA", s.token_home.path())
+            .env("XDG_STATE_HOME", s.token_home.path())
+            .env("DEVSTACK_NO_HUB", "1")
+            .output()
+            .unwrap();
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+    let in_lane = run(&wt.join("devstack.toml"));
+    assert!(
+        in_lane.contains(&format!("project={lane_project}")) && in_lane.contains("--- done"),
+        "{in_lane}"
+    );
+    let in_main = run(&s.file());
+    assert!(
+        in_main
+            .lines()
+            .any(|l| l.trim_end() == format!("project={project}")),
+        "{in_main}"
     );
 
     // Restarting the main tree's db does not touch the lane's.

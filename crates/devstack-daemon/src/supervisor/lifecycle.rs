@@ -742,6 +742,7 @@ impl Supervisor {
         port: Option<u16>,
         is_main: bool,
     ) -> Context {
+        let projects = self.compose_projects();
         let infra = self.infra.lock().unwrap();
         let mut ctx = Context {
             repo: self.run_root(),
@@ -755,6 +756,7 @@ impl Supervisor {
             candidate: !is_main,
             lane: self.lane.clone(),
             published: infra.published.clone(),
+            projects,
             pending: infra.pending.clone(),
             ..Default::default()
         };
@@ -823,7 +825,8 @@ impl Supervisor {
                         }
                         if let Some(code) = inst.tree.try_exit_code() {
                             return Err(format!(
-                                "exited with code {code} before it became healthy\n{}",
+                                "exited with code {code} before it became healthy{}\n{}",
+                                self.copy_note(svc),
                                 tail(&inst.log, 15),
                                 code = crate::state::exit_code_text(code)
                             ));
@@ -847,7 +850,8 @@ impl Supervisor {
                     std::thread::sleep(SETTLE);
                     if let Some(code) = inst.tree.try_exit_code() {
                         return Err(format!(
-                            "exited with code {code} right after start\n{}",
+                            "exited with code {code} right after start{}\n{}",
+                            self.copy_note(svc),
                             tail(&inst.log, 15),
                             code = crate::state::exit_code_text(code)
                         ));
@@ -855,6 +859,18 @@ impl Supervisor {
                     Ok(Status::Running)
                 }
             },
+        }
+    }
+
+    /// Why a dev server that ended before it was ready may have: in a lane
+    /// it runs from a copy without the ignored files (ADR-0024), and one
+    /// without `prepare` fails there with only its toolchain's message
+    /// ("vite is not recognized"). Empty elsewhere.
+    pub(super) fn copy_note(&self, svc: &Service) -> &'static str {
+        if svc.kind == Kind::Devserver && svc.prepare.is_none() && self.runs_from_copy() {
+            " (the lane's copy has no ignored files such as node_modules: see `prepare`)"
+        } else {
+            ""
         }
     }
 
