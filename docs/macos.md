@@ -67,28 +67,34 @@ What CI cannot show. Each step names what to look for; anything else is a bug.
    "port in use".
 9. The dashboard's usage figures (CPU, memory per service, the machine's
    memory) are not zero, and roughly match Activity Monitor.
+10. Spotlight: during builds and lane starts, do `mds`, `mds_stores` or
+    `mdworker_shared` take much CPU in Activity Monitor? devstack's own data
+    is in the hidden `.devstack/`, which Spotlight search skips; on CI runners
+    20 000 files cost Spotlight the same in a hidden, a `.noindex` and a
+    plain folder, so devstack names nothing `.noindex` until a real Mac shows
+    a cost.
 
 **Files and ports**
 
-10. A stack in `/tmp/...` or in a symlinked project folder: an edit makes a
+11. A stack in `/tmp/...` or in a symlinked project folder: an edit makes a
     candidate (the watcher sees it).
-11. Edits from your editor and from a coding agent both make candidates; an
+12. Edits from your editor and from a coding agent both make candidates; an
     `npm install` or `git checkout` of many files ends in one rebuild.
-12. A program that listens on `0.0.0.0:<port>` that the stack wants: devstack
+13. A program that listens on `0.0.0.0:<port>` that the stack wants: devstack
     says the port is taken, and by whom.
 
 **Desktop**
 
-13. "Add a stack" in the dashboard: the folder dialog comes up in front.
+14. "Add a stack" in the dashboard: the folder dialog comes up in front.
     Cancel does nothing.
-14. `devstack ui`, `devstack ui --browser chrome`, `--browser firefox`.
-15. "Open in": Finder, Terminal, and your editor open the worktree; GitHub
+15. `devstack ui`, `devstack ui --browser chrome`, `--browser firefox`.
+16. "Open in": Finder, Terminal, and your editor open the worktree; GitHub
     Desktop both when it is closed and when it runs.
-16. Docker Desktop quit, then `devstack up`: Docker starts in the background.
+17. Docker Desktop quit, then `devstack up`: Docker starts in the background.
     With OrbStack instead: OrbStack starts.
 
 **Network**
 
-17. With the hub started at login (step 5), joining or using a pool on your
+18. With the hub started at login (step 5), joining or using a pool on your
     LAN works; if macOS asks about Local Network access, say so in the
     report, with what you answered.
