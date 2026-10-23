@@ -812,9 +812,16 @@ fn lifecycle(with_compose: bool) {
         second["workers"], true,
         "the relay ends with workers on (ADR-0008)"
     );
+    // A watcher may report an edit twice (FSEvents does, late): the second
+    // report is checked against the build id and dropped as unchanged, a few
+    // milliseconds after the switch.
     assert!(
-        s.service_view("api")["candidate"].is_null(),
-        "nothing pending after the switch"
+        wait_for(
+            || s.service_view("api")["candidate"].is_null(),
+            Duration::from_secs(10)
+        ),
+        "nothing pending after the switch: {}",
+        s.service_view("api")["candidate"]
     );
     let tagged = ureq::get(&format!("http://127.0.0.1:{}/health", s.port))
         .call()
