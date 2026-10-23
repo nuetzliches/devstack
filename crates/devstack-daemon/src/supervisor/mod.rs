@@ -1290,6 +1290,12 @@ mod port_tests {
 
     #[test]
     fn a_port_held_on_every_address_is_in_use() {
+        // A listener on every address makes Windows' firewall ask the person
+        // at the machine, for each new build of this test binary: on Windows
+        // only where nobody is asked (CI).
+        if cfg!(windows) && std::env::var_os("CI").is_none() {
+            return;
+        }
         // Docker's published ports, a dev server on 0.0.0.0. On Windows and
         // with BSD sockets (macOS) a bind on 127.0.0.1 still succeeds; the
         // table of listeners tells (Windows), or a connect (macOS).
