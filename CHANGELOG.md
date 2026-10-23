@@ -11,6 +11,16 @@ and listed with their assets on the
 
 ### Changed
 
+- **The release adds no second winget pull request for the new package**:
+  while `nuetzliches.devstack` is not in the winget catalog and a pull
+  request for it is open, a release does not submit another one (each did:
+  0.16.0 to 0.19.0 opened four). A version already in the catalog or
+  already submitted is not submitted again. The title says *New package*
+  until the package is in, *New version* after. A new `winget` workflow
+  submits a published release by hand (`gh workflow run winget.yml -f
+  tag=vX.Y.Z`), for the version then current once the first pull request is
+  merged; `force` submits despite an open one. The steps live in
+  `packaging/winget/render.ps1` and `submit.ps1`, used by both workflows.
 - **Whoever a lane is shared with connects to it, and disconnects again**
   (ADR-0053, ADR-0035 point 3 amended). Seeing or viewing a shared lane
   opens no port on this machine. *Connect* (in the lane's header, in the

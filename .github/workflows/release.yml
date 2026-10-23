@@ -171,20 +171,18 @@ jobs:
 
   winget:
     # The manifests of packaging/winget/ with this release's version and the
-    # checksum of the archive just built, checked, and on a tag submitted to
-    # microsoft/winget-pkgs by wingetcreate (Microsoft, MIT; pinned by
+    # checksum of the archive just built (render.ps1), checked, and on a tag
+    # submitted to microsoft/winget-pkgs (submit.ps1, wingetcreate pinned by
     # version and checksum). Its review takes days; `winget upgrade` offers
     # the release once it is merged. The pull request comes from the fork of
     # winget-pkgs of the account whose token is the secret WINGET_TOKEN (a
     # classic token with `public_repo`); without the secret the job says so
-    # and ends.
+    # and ends. While the package is not in the catalog and a pull request
+    # for it is open, it does not add another one: the winget workflow
+    # submits the version then current once the first is merged.
     needs: [build, publish]
     if: ${{ !cancelled() && needs.build.result == 'success' && needs.publish.result != 'failure' }}
     runs-on: windows-latest
-    env:
-      WINGETCREATE_VERSION: 1.12.13.0
-      WINGETCREATE_SHA256: 24042BD37915805615E6CF969AC57C6439124C3FE85823327F5F3FB24BD9FFEA
-      HAS_TOKEN: ${{ secrets.WINGET_TOKEN != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -195,55 +193,12 @@ jobs:
         shell: pwsh
         run: |
           $version = if ($env:GITHUB_REF -like 'refs/tags/v*') { $env:GITHUB_REF_NAME.Substring(1) } else { (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value }
-          $sha = (Get-FileHash dist/devstack-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
-          $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
-          $out = "winget/$version"
-          New-Item -ItemType Directory -Force $out | Out-Null
-          foreach ($f in Get-ChildItem packaging/winget -Filter *.yaml) {
-            $text = [IO.File]::ReadAllText($f.FullName) -replace '\{\{version\}\}', $version -replace '\{\{sha256\}\}', $sha -replace '\{\{date\}\}', $date
-            if ($text -match '\{\{') { throw "$($f.Name): a placeholder is left" }
-            [IO.File]::WriteAllText((Join-Path $out $f.Name), $text, [Text.UTF8Encoding]::new($false))
-          }
-          # The archive holds what the manifest names.
-          Expand-Archive dist/devstack-x86_64-pc-windows-msvc.zip -DestinationPath unpacked
-          if (-not (Test-Path unpacked/devstack.exe)) { throw 'devstack.exe is not at the root of the archive' }
-          "MANIFESTS=$out" >> $env:GITHUB_ENV
-          Get-Content "$out/nuetzliches.devstack.installer.yaml"
-      - name: validate
-        shell: pwsh
-        run: |
-          if (Get-Command winget -ErrorAction SilentlyContinue) {
-            "winget $(winget --version)"
-            # An older winget on the runner warns about a newer schema in the
-            # header comment, and exits non-zero for that too: only a failed
-            # validation fails the job.
-            $out = winget validate --manifest $env:MANIFESTS --disable-interactivity 2>&1 | Out-String
-            $out
-            if ($LASTEXITCODE -ne 0 -and $out -notmatch 'succeeded with warnings') { exit 1 }
-            exit 0 # the step would end with winget's exit code otherwise
-          } else {
-            "::notice::no winget on this runner; wingetcreate checks the manifests when it submits them"
-          }
+          ./packaging/winget/render.ps1 -Version $version -Zip dist/devstack-x86_64-pc-windows-msvc.zip -Out "winget/$version" -Validate
+          "MANIFESTS=winget/$version" >> $env:GITHUB_ENV
+          "VERSION=$version" >> $env:GITHUB_ENV
       - name: submit
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
           WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
-        run: |
-          if ($env:HAS_TOKEN -ne 'true') { "::warning::no WINGET_TOKEN: not submitted to winget"; exit 0 }
-          # The pull request comes from the token owner's fork of winget-pkgs;
-          # wingetcreate fails on a fork far behind ("Sync your fork"), and
-          # winget-pkgs moves thousands of commits a day: bring it up first.
-          $env:GH_TOKEN = $env:WINGET_CREATE_GITHUB_TOKEN
-          $owner = gh api user --jq .login
-          gh api "repos/$owner/winget-pkgs" --silent 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            gh api -X POST "repos/$owner/winget-pkgs/merge-upstream" -f branch=master --jq .message
-            if ($LASTEXITCODE -ne 0) { "::warning::could not sync $owner/winget-pkgs with microsoft/winget-pkgs" }
-          }
-          $global:LASTEXITCODE = 0
-          Invoke-WebRequest "https://github.com/microsoft/winget-create/releases/download/v$env:WINGETCREATE_VERSION/wingetcreate.exe" -OutFile wingetcreate.exe
-          $hash = (Get-FileHash wingetcreate.exe -Algorithm SHA256).Hash
-          if ($hash -ne $env:WINGETCREATE_SHA256) { throw "wingetcreate.exe: checksum $hash, expected $env:WINGETCREATE_SHA256" }
-          ./wingetcreate.exe submit --no-open --prtitle "New version: nuetzliches.devstack version $($env:GITHUB_REF_NAME.Substring(1))" $env:MANIFESTS
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        run: ./packaging/winget/submit.ps1 -Manifests $env:MANIFESTS -Version $env:VERSION

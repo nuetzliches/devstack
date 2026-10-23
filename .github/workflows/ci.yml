@@ -50,6 +50,7 @@ jobs:
             scripts:
               - 'install.ps1'
               - 'install.sh'
+              - 'packaging/**'
               - 'site/**'
               - '.github/workflows/**'
               - '.github/dependabot.yml'
@@ -276,18 +277,22 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Windows PowerShell 5.1 is what `irm | iex` runs in on a fresh machine.
-      - name: install.ps1 parses (Windows PowerShell 5.1)
+      - name: install.ps1 and the winget scripts parse (Windows PowerShell 5.1)
         shell: powershell
         run: |
-          $errors = $null
-          [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\install.ps1", [ref]$null, [ref]$errors)
-          if ($errors) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
-      - name: PSScriptAnalyzer install.ps1
+          $failed = $false
+          foreach ($f in @('install.ps1') + (Get-ChildItem packaging/winget -Filter *.ps1 | ForEach-Object { $_.FullName })) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors)
+            if ($errors) { $errors | ForEach-Object { Write-Error "${f}: $($_.Message)" -ErrorAction Continue }; $failed = $true }
+          }
+          if ($failed) { exit 1 }
+      - name: PSScriptAnalyzer install.ps1 and the winget scripts
         shell: pwsh
         run: |
           if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
             Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
           }
-          $found = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Error
+          $found = @('install.ps1', 'packaging/winget/render.ps1', 'packaging/winget/submit.ps1') | ForEach-Object { Invoke-ScriptAnalyzer -Path $_ -Severity Error }
           $found | Format-Table -AutoSize
           if ($found) { exit 1 }
