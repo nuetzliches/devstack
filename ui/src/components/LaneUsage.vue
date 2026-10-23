@@ -7,7 +7,9 @@ import { useStack } from '@/stores/stack';
 import Sparkline from '@/components/Sparkline.vue';
 import Icon from '@/components/icons/Icon.vue';
 
-defineProps<{ lane: Lane; link?: boolean }>();
+// `title`: the lane as the page names it. A lane on a node reports from its
+// own daemon there, to which it is the main tree (`main`).
+defineProps<{ lane: Lane; link?: boolean; title?: string }>();
 
 const stack = useStack();
 
@@ -35,7 +37,7 @@ function diskTotal(d: LaneDisk) {
   <section class="card lane" :data-testid="`lane-${lane.name}`">
     <header class="card-header">
       <Icon name="gitBranch" :size="16" class="muted" />
-      <h2>Lane {{ lane.name }}</h2>
+      <h2>Lane {{ title ?? lane.name }}</h2>
       <template v-if="link">
         <span class="grow" />
         <RouterLink class="more" :to="{ name: 'usage', params: { stack: stack.id ?? '' } }" title="Every service, container and build job" data-testid="usage-link">
