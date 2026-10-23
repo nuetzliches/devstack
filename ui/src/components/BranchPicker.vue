@@ -171,6 +171,13 @@ function create() {
             >
               <span class="dot" :class="r.b.main || (r.lane && r.lane.active !== false) ? 'on' : r.b.worktree ? 'off' : 'none'" />
               <span class="grow truncate">{{ r.b.name }}</span>
+              <span
+                v-if="r.b.stack_file === false && !r.b.main"
+                class="pill sm outline"
+                title="This branch has no devstack.toml: its lane runs with the main working tree's until it has its own"
+                data-testid="branch-no-stack-file"
+                >no devstack.toml</span
+              >
               <span v-if="r.lane?.owns_main || (r.b.main && !stack.lanes.some((l) => l.owns_main))" class="pill sm ok">main ports</span>
               <span v-else class="faint small">{{ hint(r) }}</span>
             </button>

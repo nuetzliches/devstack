@@ -275,6 +275,19 @@ describe('stack store', () => {
     expect(stack.lane).toBeNull();
   });
 
+  it("a lane without a stack file of its own gets a copy of the main tree's (ADR-0055)", async () => {
+    const stack = await shownStack();
+    const lane = { name: 'old', path: '/src/old', branch: 'old', number: 1, active: false, port_offset: 100, owns_main: false, running: 0, services: 3, main_stack_file: true };
+    fake.stream('/hub/stacks/shop/api/v1/events').handlers.onMessage({ type: 'lanes', lanes: [lane] });
+    fake.on('/hub/stacks/shop/worktrees/stack-file', ok({ file: '/src/old/devstack.toml' }));
+    fake.on('/hub/stacks/shop/branches', ok({ branches: [] }));
+    fake.on('/hub/stacks/shop/api/v1/lanes', ok([{ ...lane, main_stack_file: undefined }]));
+    await stack.giveStackFile(stack.lanes[0]);
+    const sent = fake.requests.filter((r) => r.path === '/hub/stacks/shop/worktrees/stack-file');
+    expect(sent.map((r) => r.body)).toEqual([{ path: '/src/old' }]);
+    expect(stack.lanes[0].main_stack_file).toBeUndefined();
+  });
+
   it("someone else's lane gets no branches and makes none", async () => {
     fake.on('/hub/session', ok({ version: '0.9.8' }));
     fake.on('/hub/pools', ok([{ name: 'default', joined: true, state: 'approved', coordinator: 'https://c' }]));

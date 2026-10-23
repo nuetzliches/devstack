@@ -221,6 +221,25 @@ fn files(
     let mut elsewhere = Elsewhere::new();
     let mut have: std::collections::HashSet<String> = list.iter().cloned().collect();
     for pattern in extra {
+        // A path without a wildcard (the stack file, ADR-0055) is looked up,
+        // not walked for: a walk from the root reads the whole tree.
+        if !pattern.contains(['*', '?', '[', '{']) {
+            let skipped = pattern.split('/').any(|c| NOT_WALKED.contains(&c));
+            if skipped || have.contains(pattern.as_str()) {
+                continue;
+            }
+            if let Some(root) = [worktree, main]
+                .into_iter()
+                .find(|r| r.join(pattern).is_file())
+            {
+                if root != worktree {
+                    elsewhere.insert(pattern.clone(), root.join(pattern));
+                }
+                have.insert(pattern.clone());
+                list.push(pattern.clone());
+            }
+            continue;
+        }
         let Ok(glob) = globset::GlobBuilder::new(pattern)
             .literal_separator(true)
             .build()
@@ -1739,6 +1758,38 @@ mod tests {
         assert_eq!(list, ["certs/a.pem", "certs/b.pem", "src/main.rs"]);
         assert_eq!(elsewhere.len(), 1);
         assert_eq!(elsewhere["certs/b.pem"], main.path().join("certs/b.pem"));
+    }
+
+    #[test]
+    fn a_worktree_without_a_stack_file_is_synced_with_the_main_trees() {
+        let main = tempfile::tempdir().unwrap();
+        let wt = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let put = |root: &std::path::Path, rel: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, rel).unwrap();
+        };
+        put(wt.path(), "src/main.rs");
+        put(main.path(), "config/devstack.toml");
+        let extra = ["config/devstack.toml".to_string()];
+        let (list, elsewhere) =
+            super::files(wt.path(), main.path(), &extra, scratch.path()).unwrap();
+        assert!(list.contains(&"config/devstack.toml".to_string()));
+        assert_eq!(
+            elsewhere["config/devstack.toml"],
+            main.path().join("config/devstack.toml")
+        );
+
+        // Once it has its own, its own is synced.
+        put(wt.path(), "config/devstack.toml");
+        let (list, elsewhere) =
+            super::files(wt.path(), main.path(), &extra, scratch.path()).unwrap();
+        assert_eq!(
+            list.iter().filter(|f| *f == "config/devstack.toml").count(),
+            1
+        );
+        assert!(elsewhere.is_empty());
     }
 
     #[test]

@@ -1204,6 +1204,70 @@ fn the_hub_writes_the_prompts_and_starts_only_agents_with_them() {
     let (s, _, _) = get(p, "/hub/prompt?kind=whatever&stack=x", &with);
     assert_eq!(s, 400);
 
+    // A worktree whose branch has no stack file (ADR-0055): the prompt to
+    // adapt one, and the main tree's copied in, once.
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(&shop)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    };
+    std::fs::write(shop.join("readme.md"), "shop").unwrap();
+    git(&["init", "-q", "-b", "main"]);
+    git(&["add", "readme.md"]);
+    git(&["commit", "-qm", "old"]);
+    let wt = h.home.path().join("shop-old");
+    git(&["worktree", "add", "-q", "-b", "old", wt.to_str().unwrap()]);
+    let (s, _, body) = get(p, &format!("/hub/stacks/{id}/branches"), &with);
+    assert_eq!(s, 200, "{body}");
+    let b: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let of = |name: &str| {
+        b["branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["name"] == name)
+            .unwrap()["stack_file"]
+            .clone()
+    };
+    assert_eq!(of("main"), true, "on disk in the main tree: {body}");
+    assert_eq!(of("old"), false, "{body}");
+    let wt_enc = enc(&wt.to_string_lossy());
+    let (s, _, body) = get(
+        p,
+        &format!("/hub/prompt?kind=lane-file&stack={id}&path={wt_enc}"),
+        &with,
+    );
+    assert_eq!(s, 200, "{body}");
+    assert!(text(&body).contains("(branch old)"), "{body}");
+    let (s, _, _) = get(
+        p,
+        &format!("/hub/prompt?kind=lane-file&stack={id}&path={dir}"),
+        &with,
+    );
+    assert_eq!(s, 400, "not a worktree of the stack");
+    let give = format!(
+        "{{\"path\":{}}}",
+        serde_json::to_string(&wt.to_string_lossy()).unwrap()
+    );
+    let (s, _, body) = post(&format!("/hub/stacks/{id}/worktrees/stack-file"), &give);
+    assert_eq!(s, 200, "{body}");
+    assert_eq!(
+        std::fs::read_to_string(wt.join("devstack.toml")).unwrap(),
+        std::fs::read_to_string(shop.join("devstack.toml")).unwrap()
+    );
+    let (s, _, body) = post(&format!("/hub/stacks/{id}/worktrees/stack-file"), &give);
+    assert_eq!(s, 409, "never over a file: {body}");
+    let main = format!(
+        "{{\"path\":{}}}",
+        serde_json::to_string(&shop.to_string_lossy()).unwrap()
+    );
+    let (s, _, body) = post(&format!("/hub/stacks/{id}/worktrees/stack-file"), &main);
+    assert_eq!(s, 400, "never into the main working tree: {body}");
+
     // The page never sends text, and only an agent that takes a prompt is
     // started: a folder opener or a program not found is refused.
     for opener in ["files", "nosuch"] {

@@ -79,6 +79,11 @@ const notices = computed(() => {
   const lane = stack.lane ? (stack.lanes.find((l) => l.name === stack.lane)?.notices ?? []) : [];
   return [...own, ...lane.filter((n) => !own.some((o) => o.id === n.id))];
 });
+/** The shown lane runs with the main tree's stack file: its branch has none of its own (ADR-0055). */
+const borrowedFile = computed(() => {
+  const l = stack.shownLane;
+  return l?.main_stack_file && !stack.readOnly ? l : null;
+});
 /** Docker is down and this stack has containers (or we do not know yet). */
 const dockerDown = computed(() => {
   const d = hub.docker;
@@ -168,6 +173,27 @@ function isActive(name: string) {
       <div v-for="n in hubDown ? [] : notices" :key="n.id" class="banner notice" :class="n.level === 'error' ? 'danger' : 'warn'" data-testid="notice" :data-notice="n.id">
         <Icon name="alert" :size="18" />
         <span class="grow">{{ n.text }} <span class="faint">({{ ago(n.since, now) }})</span></span>
+      </div>
+      <div v-if="!hubDown && borrowedFile" class="banner info" data-testid="lane-main-stack-file">
+        <Icon name="file" :size="18" />
+        <span class="grow">
+          <strong>{{ borrowedFile.branch ?? 'This worktree' }} has no devstack.toml of its own.</strong>
+          The lane runs with the main working tree's<template v-if="borrowedFile.node">, on {{ borrowedFile.node }} as well</template>. Where the branch differs, give it its own: a copy to change for the branch, and commit with it.
+          <details v-if="stack.id && hub.reachable" class="lane-file-agent">
+            <summary>Let a coding agent adapt it to the branch</summary>
+            <AgentPrompt kind="lane-file" :target="{ stack: stack.id, path: borrowedFile.path }" />
+          </details>
+        </span>
+        <button
+          type="button"
+          class="btn btn-sm"
+          :disabled="!hub.reachable || !!stack.busy[`stack-file:${borrowedFile.name}`]"
+          :title="`Copy the main working tree's stack file into ${borrowedFile.path}; nothing is committed`"
+          data-testid="action-lane-stack-file"
+          @click="stack.giveStackFile(borrowedFile)"
+        >
+          <span v-if="stack.busy[`stack-file:${borrowedFile.name}`]" class="spinner" /><Icon v-else name="copy" :size="14" /> Copy the main tree's
+        </button>
       </div>
       <SkillsBanner v-if="!hubDown && stack.entry && !stack.foreign" />
       <div v-if="unknown" class="banner neutral">
@@ -316,6 +342,9 @@ function isActive(name: string) {
 /* No button to wrap: its text stays beside the icon. */
 .banners .banner.notice {
   flex-wrap: nowrap;
+}
+.lane-file-agent {
+  margin-top: 6px;
 }
 .start-error-head {
   display: block;

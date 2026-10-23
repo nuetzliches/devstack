@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-10-21)
 - **Date:** 2026-10-21
 - **Deciders:** project owner
-- **Related:** [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (point 1 and its second amendment, which this replaces in part), [ADR-0040](0040-a-shared-lane-can-be-watched-like-ones-own.md), [ADR-0046](0046-the-hub-opens-a-worktree-in-the-users-programs.md)
+- **Related:** [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (point 1 and its second amendment, which this replaces in part), [ADR-0040](0040-a-shared-lane-can-be-watched-like-ones-own.md), [ADR-0046](0046-the-hub-opens-a-worktree-in-the-users-programs.md), [ADR-0055](0055-a-lane-without-a-stack-file-says-so-and-can-be-given-one.md) (a branch without a stack file)
 
 ## Context
 

@@ -101,6 +101,10 @@ pub struct LaneView {
     /// services stop, its data goes): nothing can be done with it any more.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub removing: bool,
+    /// Its worktree has no stack file of its own: it runs with the main
+    /// working tree's (ADR-0055).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub main_stack_file: bool,
     /// Its notices (ADR-0050): its own tree's while it runs here, and what
     /// the main tree's daemon knows of it (its worktree missing).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -109,7 +113,7 @@ pub struct LaneView {
 
 /// Of a lane, what the lists show that changes on its own: name, services
 /// and containers running and all, its node's error, whether it moves, its
-/// notices, its ports not forwarded.
+/// notices, its ports not forwarded, whether it has a stack file.
 type Shown = (
     String,
     [usize; 4],
@@ -117,6 +121,7 @@ type Shown = (
     bool,
     Vec<Notice>,
     Vec<String>,
+    bool,
 );
 
 /// The notice of a lane whose worktree git lists but is not there, missing
@@ -1099,6 +1104,7 @@ impl Lanes {
                     v.moving.is_some(),
                     v.notices,
                     v.not_forwarded,
+                    v.main_stack_file,
                 )
             })
             .collect()
@@ -1487,20 +1493,34 @@ impl Lanes {
         }
     }
 
+    /// The main stack file's path relative to the repository: where a
+    /// worktree has its own (ADR-0055 point 1).
+    fn stack_file_rel(&self) -> PathBuf {
+        let file = self.main.stack_file();
+        file.strip_prefix(&self.main.repo)
+            .or_else(|_| file.strip_prefix(devstack_proc::long_path(&self.main.repo)))
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|_| PathBuf::from(file.file_name().unwrap_or("devstack.toml".as_ref())))
+    }
+
     /// The lane's own stack file when its branch has one (it may have changed
-    /// it), else the main working tree's.
+    /// it), else the main working tree's (ADR-0055).
     fn stack_file_of(&self, repo: &Path) -> PathBuf {
-        let own = repo.join(
-            self.main
-                .stack_file()
-                .file_name()
-                .unwrap_or("devstack.toml".as_ref()),
-        );
+        let own = repo.join(self.stack_file_rel());
         if own.is_file() {
             own
         } else {
             self.main.stack_file().to_path_buf()
         }
+    }
+
+    /// What a lane on a node takes along besides its worktree's files:
+    /// `[lanes] sync`, and the stack file, from the main tree while the
+    /// worktree has none of its own (ADR-0055 point 2).
+    fn synced(&self) -> Vec<String> {
+        let mut extra = self.main.stack.lanes.sync.clone();
+        extra.push(self.stack_file_rel().to_string_lossy().replace('\\', "/"));
+        extra
     }
 
     /// Whether the worktree at `path` can run with `profile` (ADR-0041): its
@@ -1625,6 +1645,7 @@ impl Lanes {
         };
         let services = self.main.stack.services.len();
         let forgetting = self.forgetting.lock().unwrap().clone();
+        let stack_file = self.stack_file_rel();
         self.known
             .lock()
             .unwrap()
@@ -1682,6 +1703,8 @@ impl Lanes {
                         .or_else(|| moves.get(&k.entry.name).and_then(|m| m.warning.clone())),
                     moving: moves.get(&k.entry.name).cloned(),
                     removing: forgetting.contains(&k.entry.name),
+                    main_stack_file: k.entry.path.is_dir()
+                        && !k.entry.path.join(&stack_file).is_file(),
                     notices: {
                         let mut n = lane.map(|l| l.sup.notices()).unwrap_or_default();
                         if let Some(t) = missing.get(&k.entry.name)
@@ -2386,7 +2409,7 @@ impl Lanes {
             c,
             &devstack_proc::long_path(&entry.path),
             &self.main.repo,
-            &self.main.stack.lanes.sync,
+            &self.synced(),
             self.sharing_of(&entry),
             &self.state_dir(&l.name).join("remote"),
         );
@@ -2804,12 +2827,8 @@ impl Lanes {
         step: &(dyn Fn(u8, &str) + Send + Sync),
         f: impl FnOnce(crate::remote::RemoteSpec<'_>) -> Result<T, String>,
     ) -> Result<T, String> {
-        let stack_file = self
-            .main
-            .stack_file()
-            .strip_prefix(&self.main.repo)
-            .map(|p| p.to_string_lossy().replace('\\', "/"))
-            .unwrap_or_else(|_| "devstack.toml".into());
+        let stack_file = self.stack_file_rel().to_string_lossy().replace('\\', "/");
+        let synced = self.synced();
         let scratch = self.state_dir(&entry.name).join("remote");
         let profile = self.profiles.lock().unwrap().get(&entry.name).cloned();
         // What the lane's own stack file declares it needs at least, with
@@ -2826,7 +2845,7 @@ impl Lanes {
             repo: &self.main.stack.stack.name,
             worktree: &worktree,
             main: &self.main.repo,
-            extra: &self.main.stack.lanes.sync,
+            extra: &synced,
             sharing: self.sharing_of(entry),
             stack_file: &stack_file,
             on,

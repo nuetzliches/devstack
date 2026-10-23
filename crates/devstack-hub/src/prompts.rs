@@ -27,6 +27,14 @@ pub enum Prompt<'a> {
         from: Option<&'a str>,
         current: &'a str,
     },
+    /// A lane's worktree without a stack file of its own, which runs with
+    /// the main working tree's (ADR-0055 point 5).
+    LaneFile {
+        tree: &'a Path,
+        branch: Option<&'a str>,
+        main_file: &'a Path,
+        file: &'a Path,
+    },
     /// The last `devstack up` the hub ran failed.
     StartFailed {
         name: &'a str,
@@ -104,6 +112,25 @@ pub fn text(p: &Prompt) -> String {
                 file = display(file),
             )
         }
+        Prompt::LaneFile {
+            tree,
+            branch,
+            main_file,
+            file,
+        } => format!(
+            "The git worktree {tree}{on} has no devstack stack file of its own. Its devstack lane runs with the main working tree's, {main_file}, which may not fit this branch.
+
+{about} Each other worktree of the repository is a lane: the same stack on its own ports.
+
+1. Read the stack file reference: {at}/docs/stack-file.md
+2. Copy {main_file} to {file}, unless it is there by now. Hold it against this branch: services, projects, paths, ports, Compose files and commands that differ here or do not exist yet. Change it to fit the branch. Where it does not fit at all, write a draft with `devstack init` in the worktree instead, and work through its TODOs.
+3. Validate with `devstack check` (and `devstack check --compose`) in the worktree.
+4. Start the lane with `devstack up` in the worktree and fix what fails. Change nothing in the main working tree. {careful}",
+            tree = display(tree),
+            on = branch.map(|b| format!(" (branch {b})")).unwrap_or_default(),
+            main_file = display(main_file),
+            file = display(file),
+        ),
         Prompt::StartFailed {
             name,
             repo,
@@ -191,6 +218,12 @@ mod tests {
                 output: error,
                 log,
             }),
+            text(&Prompt::LaneFile {
+                tree: Path::new("/src/shop.worktrees/feat-x"),
+                branch: Some("feat/x"),
+                main_file: file,
+                file: Path::new("/src/shop.worktrees/feat-x/devstack.toml"),
+            }),
         ]
     }
 
@@ -232,6 +265,8 @@ mod tests {
         assert!(p[3].contains("the sections after 0.1.0, up to 0.2.0"));
         assert!(p[4].contains("an earlier devstack"));
         assert!(p[5].contains("up-x.log"));
+        assert!(p[6].contains("feat-x (branch feat/x) has no devstack stack file"));
+        assert!(p[6].contains("devstack.toml, which may not fit this branch"));
         let reference = format!(
             "{REPO_URL}/blob/v{}/docs/stack-file.md",
             devstack_config::VERSION

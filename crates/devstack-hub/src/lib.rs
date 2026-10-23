@@ -499,6 +499,10 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/stacks/{id}/branches", get(stack_branches))
         .route("/hub/stacks/{id}/worktrees", post(worktree_add))
         .route("/hub/stacks/{id}/worktrees/remove", post(worktree_remove))
+        .route(
+            "/hub/stacks/{id}/worktrees/stack-file",
+            post(worktree_stack_file),
+        )
         .route("/hub/stacks/{id}/fetch", post(stack_fetch))
         .route(
             "/hub/stacks/{id}/skills",
@@ -1567,17 +1571,17 @@ async fn openers() -> Response {
     }
 }
 
-/// Run `f` on the repository of stack `id`, git being slow: its answer as
+/// Run `f` on stack `id` (its repository), git being slow: its answer as
 /// JSON, `400` for what the page got wrong, `409` with what git said.
 async fn with_repo<T: serde::Serialize + Send + 'static>(
     s: &AppState,
     id: &str,
-    f: impl FnOnce(&std::path::Path) -> Result<T, branches::Error> + Send + 'static,
+    f: impl FnOnce(&StackEntry) -> Result<T, branches::Error> + Send + 'static,
 ) -> Response {
     let Some(e) = entry(s, id) else {
         return err(StatusCode::NOT_FOUND, "no such stack");
     };
-    match tokio::task::spawn_blocking(move || f(&e.repo)).await {
+    match tokio::task::spawn_blocking(move || f(&e)).await {
         Ok(Ok(v)) => Json(v).into_response(),
         Ok(Err(branches::Error::Bad(m))) => err(StatusCode::BAD_REQUEST, m),
         Ok(Err(branches::Error::Git(m))) => {
@@ -1588,9 +1592,18 @@ async fn with_repo<T: serde::Serialize + Send + 'static>(
     }
 }
 
+/// The stack file's path relative to the repository: where a worktree has
+/// its own (ADR-0055 point 1).
+fn stack_file_rel(e: &StackEntry) -> PathBuf {
+    e.file.strip_prefix(&e.repo).map_or_else(
+        |_| PathBuf::from(e.file.file_name().unwrap_or("devstack.toml".as_ref())),
+        PathBuf::from,
+    )
+}
+
 /// `GET /hub/stacks/{id}/branches` (ADR-0047).
 async fn stack_branches(State(s): State<AppState>, Path(id): Path<String>) -> Response {
-    with_repo(&s, &id, branches::list).await
+    with_repo(&s, &id, |e| branches::list(&e.repo, &stack_file_rel(e))).await
 }
 
 #[derive(Deserialize)]
@@ -1607,14 +1620,16 @@ async fn worktree_add(
     Path(id): Path<String>,
     Json(b): Json<WorktreeAdd>,
 ) -> Response {
-    with_repo(&s, &id, move |repo| {
-        branches::add(repo, &b.branch, b.new.as_deref()).map(|p| serde_json::json!({ "path": p }))
+    with_repo(&s, &id, move |e| {
+        branches::add(&e.repo, &b.branch, b.new.as_deref())
+            .map(|p| serde_json::json!({ "path": p }))
     })
     .await
 }
 
+/// A worktree the page names, to remove or to give a stack file.
 #[derive(Deserialize)]
-struct WorktreeRemove {
+struct WorktreePath {
     path: String,
 }
 
@@ -1623,22 +1638,45 @@ struct WorktreeRemove {
 async fn worktree_remove(
     State(s): State<AppState>,
     Path(id): Path<String>,
-    Json(b): Json<WorktreeRemove>,
+    Json(b): Json<WorktreePath>,
 ) -> Response {
     let raw = PathBuf::from(&b.path);
     if !raw.is_absolute() || !local_path(&b.path, &raw) {
         return err(StatusCode::BAD_REQUEST, "a folder on this machine");
     }
-    with_repo(&s, &id, move |repo| {
-        branches::remove(repo, &raw).map(|()| serde_json::json!({}))
+    with_repo(&s, &id, move |e| {
+        branches::remove(&e.repo, &raw).map(|()| serde_json::json!({}))
+    })
+    .await
+}
+
+/// `POST /hub/stacks/{id}/worktrees/stack-file {path}`: the main working
+/// tree's stack file, copied into a linked worktree that has none
+/// (ADR-0055 point 4): `{file}`.
+async fn worktree_stack_file(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<WorktreePath>,
+) -> Response {
+    let raw = PathBuf::from(&b.path);
+    if !raw.is_absolute() || !local_path(&b.path, &raw) {
+        return err(StatusCode::BAD_REQUEST, "a folder on this machine");
+    }
+    with_repo(&s, &id, move |e| {
+        let file = branches::give_stack_file(&e.repo, &e.file, &stack_file_rel(e), &raw)?;
+        diag::info(
+            "lane_stack_file_given",
+            serde_json::json!({ "stack": e.id, "file": file }),
+        );
+        Ok(serde_json::json!({ "file": file }))
     })
     .await
 }
 
 /// `POST /hub/stacks/{id}/fetch`: `git fetch --all --prune`, no prompt.
 async fn stack_fetch(State(s): State<AppState>, Path(id): Path<String>) -> Response {
-    with_repo(&s, &id, |repo| {
-        branches::fetch(repo).map(|()| serde_json::json!({}))
+    with_repo(&s, &id, |e| {
+        branches::fetch(&e.repo).map(|()| serde_json::json!({}))
     })
     .await
 }
@@ -1779,10 +1817,11 @@ struct PromptQuery {
     path: Option<String>,
 }
 
-/// A prompt written, and where its agent works: the repository and its stack
-/// file.
+/// A prompt written, and where its agent works: the tree (the repository,
+/// or a worktree of it), the repository and the tree's stack file.
 struct Written {
     text: String,
+    tree: PathBuf,
     repo: PathBuf,
     file: PathBuf,
 }
@@ -1810,6 +1849,7 @@ fn write_prompt(s: &AppState, q: &PromptQuery) -> Result<Written, Refusal> {
             .ok_or_else(|| bad(format!("`{}` needs `stack`", q.kind)))?;
         entry(s, id).ok_or_else(|| (StatusCode::NOT_FOUND, "no such stack".to_string()))
     };
+    let mut tree = None;
     let (text, repo, file) = match q.kind.as_str() {
         "setup" => {
             let (repo, file) = folder()?;
@@ -1871,15 +1911,50 @@ fn write_prompt(s: &AppState, q: &PromptQuery) -> Result<Written, Refusal> {
             });
             (text, e.repo, e.file)
         }
+        "lane-file" => {
+            let e = stack()?;
+            let p = q
+                .path
+                .as_deref()
+                .ok_or_else(|| bad("`lane-file` needs `path`".to_string()))?;
+            let raw = PathBuf::from(p);
+            if !raw.is_absolute() || !local_path(p, &raw) {
+                return Err(bad("a folder on this machine".to_string()));
+            }
+            let Some(lane) = devstack_daemon::lanes::worktree_of(&e.repo, &raw)
+                .filter(|t| !devstack_daemon::lanes::same_tree(t, &e.repo))
+            else {
+                return Err(bad("not a linked worktree of this stack".to_string()));
+            };
+            let file = lane.join(stack_file_rel(&e));
+            let branch = devstack_daemon::lanes::worktree_branches(&e.repo)
+                .unwrap_or_default()
+                .into_iter()
+                .find(|(t, _)| devstack_daemon::lanes::same_tree(t, &lane))
+                .and_then(|(_, b)| b);
+            let text = prompts::text(&Prompt::LaneFile {
+                tree: &lane,
+                branch: branch.as_deref(),
+                main_file: &e.file,
+                file: &file,
+            });
+            tree = Some(lane);
+            (text, e.repo, file)
+        }
         other => return Err(bad(format!("no prompt `{other}`"))),
     };
-    Ok(Written { text, repo, file })
+    Ok(Written {
+        text,
+        tree: tree.unwrap_or_else(|| repo.clone()),
+        repo,
+        file,
+    })
 }
 
 /// `GET /hub/prompt?kind=&stack=|path=`: the prompt, to show and copy.
 async fn prompt(State(s): State<AppState>, Query(q): Query<PromptQuery>) -> Response {
     match tokio::task::spawn_blocking(move || write_prompt(&s, &q)).await {
-        Ok(Ok(w)) => Json(serde_json::json!({ "text": w.text, "path": w.repo })).into_response(),
+        Ok(Ok(w)) => Json(serde_json::json!({ "text": w.text, "path": w.tree })).into_response(),
         Ok(Err((status, msg))) => err(status, msg),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
@@ -1897,7 +1972,7 @@ struct AgentQuery {
 async fn agent(State(s): State<AppState>, Json(q): Json<AgentQuery>) -> Response {
     let started = tokio::task::spawn_blocking(move || {
         let w = write_prompt(&s, &q.prompt)?;
-        open::agent(&q.with, &w.repo, &w.repo, &w.file, &w.text).map_err(|e| match e {
+        open::agent(&q.with, &w.tree, &w.repo, &w.file, &w.text).map_err(|e| match e {
             open::OpenError::Unknown => (
                 StatusCode::BAD_REQUEST,
                 format!("{} is not a program this machine has", q.with),
@@ -1910,7 +1985,7 @@ async fn agent(State(s): State<AppState>, Json(q): Json<AgentQuery>) -> Response
         })?;
         diag::info(
             "agent_started",
-            serde_json::json!({ "with": q.with, "kind": q.prompt.kind, "repo": w.repo }),
+            serde_json::json!({ "with": q.with, "kind": q.prompt.kind, "repo": w.tree }),
         );
         Ok::<_, Refusal>(())
     })
