@@ -296,6 +296,14 @@ members = [\"api\", \"command.ping\"]
         serde_json::from_str(&self.api("/info").expect("api answers /info")).unwrap()
     }
 
+    fn daemon_port(&self) -> u16 {
+        let info: Value = serde_json::from_slice(
+            &std::fs::read(self.dir.path().join(".devstack/daemon.json")).unwrap(),
+        )
+        .unwrap();
+        info["port"].as_u64().unwrap() as u16
+    }
+
     fn daemon_pid(&self) -> u32 {
         let info: Value = serde_json::from_slice(
             &std::fs::read(self.dir.path().join(".devstack/daemon.json")).unwrap(),
@@ -1605,7 +1613,16 @@ port = {port}
     s.ok(&["start", "box"]);
     let second = instance_port();
     assert!(second != 0 && second != first, "{}", s.diag());
+    let daemon_port = s.daemon_port();
     kill_hard(s.daemon_pid());
+    // Until it is gone, `up` may still reach the dying daemon.
+    assert!(
+        wait_for(
+            || std::net::TcpStream::connect(("127.0.0.1", daemon_port)).is_err(),
+            Duration::from_secs(10)
+        ),
+        "the daemon survived its kill"
+    );
     s.ok(&["up"]);
     assert!(
         stops().contains(&format!("stopped-{second}")),

@@ -70,6 +70,9 @@ pub struct RemoteLane {
     pub warning: Option<String>,
     /// What the node runs, as the lease offer said (`None`: it does not say).
     node_release: Option<Release>,
+    /// What the coordinator runs, as the lease offer said: carried over a
+    /// restart, so the next daemon warns against its own release.
+    coordinator_release: Option<Release>,
     worktree: PathBuf,
     /// Where `[lanes] sync` files come from when the worktree has none.
     main: PathBuf,
@@ -428,6 +431,7 @@ struct Parts<'a> {
     node: NodeRef,
     lease: String,
     warning: Option<String>,
+    coordinator: Option<Release>,
     worktree: &'a Path,
     main: &'a Path,
     extra: &'a [String],
@@ -450,8 +454,12 @@ pub struct Carried {
     /// before that, whose lane relays none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub udp_ports: Vec<(u16, u16)>,
+    /// What the coordinator ran when it granted the lease; absent from a
+    /// daemon before 0.20.1, which carried its warning as a text. The next
+    /// daemon makes the warning again against its own release
+    /// ([`carried_warning`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub warning: Option<String>,
+    pub coordinator: Option<Release>,
 }
 
 /// Watch `worktree` for changes to sync (ADR-0029 point 2): `dirty` is set
@@ -759,6 +767,7 @@ impl RemoteLane {
                 node: offer.node,
                 lease: offer.id,
                 warning,
+                coordinator: offer.coordinator,
                 worktree,
                 main,
                 extra,
@@ -789,6 +798,7 @@ impl RemoteLane {
             lease: p.lease,
             warning: p.warning,
             node_release,
+            coordinator_release: p.coordinator,
             worktree: p.worktree.to_path_buf(),
             main: p.main.to_path_buf(),
             extra: p.extra.to_vec(),
@@ -850,7 +860,7 @@ impl RemoteLane {
             lease: self.lease.clone(),
             ports: self.ports.clone(),
             udp_ports: self.udp_ports.clone(),
-            warning: self.warning.clone(),
+            coordinator: self.coordinator_release.clone(),
         }
     }
 
@@ -892,6 +902,7 @@ impl RemoteLane {
             }
             Err(e) => return Err(format!("renewing its lease on {}: {e}", c.node.name)),
         };
+        let warning = carried_warning(&c);
         let lane = Self::assemble(
             rt,
             Parts {
@@ -899,7 +910,8 @@ impl RemoteLane {
                 pool: c.pool,
                 node: c.node,
                 lease: c.lease,
-                warning: c.warning,
+                warning,
+                coordinator: c.coordinator,
                 worktree,
                 main,
                 extra,
@@ -1700,6 +1712,23 @@ fn release_warning(
     Ok((!notes.is_empty()).then(|| notes.join("; ")))
 }
 
+/// The warning of a lane a daemon before this one followed (ADR-0052), made
+/// against this machine's release: the daemon that leased it compared with
+/// its own (`this machine devstack 0.19.0` after an update to 0.20.0). The
+/// coordinator's release is known from a daemon that carried it (0.20.1).
+fn carried_warning(c: &Carried) -> Option<String> {
+    let node = format!("the node {}", c.node.name);
+    let notes: Vec<String> = version::note(&node, c.node.devstack.as_ref())
+        .into_iter()
+        .chain(
+            c.coordinator
+                .as_ref()
+                .and_then(|r| version::note("the coordinator", Some(r))),
+        )
+        .collect();
+    (!notes.is_empty()).then(|| notes.join("; "))
+}
+
 /// Did a connection of a tunnel end because one end hung up (reset, aborted,
 /// a write to a closed socket)? Windows says "aborted" (10053) where a
 /// browser closes a connection it kept alive.
@@ -2085,5 +2114,55 @@ members = ["api"]
         let again: super::Carried =
             serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(again.udp_ports, [(5453, 5453)]);
+    }
+
+    #[test]
+    fn a_lane_carried_over_is_warned_about_against_this_release() {
+        use super::carried_warning;
+        let this = Release::this();
+        let older = Release {
+            version: "0.0.1".into(),
+            ..this.clone()
+        };
+        // A 0.20.0 daemon carried the text its 0.19.0 predecessor made; the
+        // node and the coordinator run this release by now.
+        let c: super::Carried = serde_json::from_str(&format!(
+            r#"{{"pool":"default","lease":"l1","ports":[],
+                "node":{{"id":"n1","name":"build-1","api":"https://n",
+                         "devstack":{{"version":"{v}","protocol":{p}}}}},
+                "warning":"the node build-1 runs devstack {v}, this machine devstack 0.0.1"}}"#,
+            v = this.version,
+            p = this.protocol
+        ))
+        .unwrap();
+        assert_eq!(carried_warning(&c), None, "the same release everywhere");
+        let c = super::Carried {
+            coordinator: Some(older.clone()),
+            ..c
+        };
+        let w = carried_warning(&c).unwrap();
+        assert!(
+            w.starts_with("the coordinator runs devstack 0.0.1") && w.contains(version::VERSION),
+            "{w}"
+        );
+        let c = super::Carried {
+            node: NodeRef {
+                devstack: None,
+                ..c.node
+            },
+            coordinator: Some(this),
+            ..c
+        };
+        let w = carried_warning(&c).unwrap();
+        assert!(w.contains("build-1") && w.contains("does not say"), "{w}");
+        let again: super::Carried = serde_json::from_str(
+            &serde_json::to_string(&super::Carried {
+                coordinator: Some(older.clone()),
+                ..c
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(again.coordinator, Some(older));
     }
 }
