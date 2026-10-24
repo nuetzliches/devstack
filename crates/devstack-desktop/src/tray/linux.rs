@@ -29,10 +29,18 @@ pub fn unavailable() -> Option<String> {
     (!address && !socket).then(|| "no desktop session (no D-Bus session bus)".into())
 }
 
-/// What both objects read: the menu shown, and its layout's revision.
+/// What both objects read: the menu shown, its layout's revision, and the
+/// id its items are numbered after.
 struct Shared {
     menu: Menu,
     revision: u32,
+    first: i32,
+}
+
+impl Shared {
+    fn root(&self) -> Node {
+        root(&self.menu, self.first)
+    }
 }
 
 /// The icon, in ARGB32 with the bytes in network order, as the spec wants.
@@ -174,8 +182,8 @@ fn label(text: &str) -> OwnedVariant {
     owned(text.replace('_', "__"))
 }
 
-/// The menu as a tree of nodes, numbered depth first from 1 (the root is
-/// 0), the same numbers for the same menu.
+/// The menu as a tree of nodes, numbered depth first after `next` (the root
+/// is 0), the same numbers for the same menu.
 fn tree(entries: &[Entry], next: &mut i32) -> Vec<Node> {
     entries
         .iter()
@@ -222,15 +230,37 @@ fn tree(entries: &[Entry], next: &mut i32) -> Vec<Node> {
         .collect()
 }
 
-fn root(menu: &Menu) -> Node {
+fn root(menu: &Menu, first: i32) -> Node {
     let mut props = HashMap::new();
     props.insert("children-display".into(), owned("submenu"));
     Node {
         id: 0,
         props,
         action: None,
-        children: tree(&menu.entries, &mut 0),
+        children: tree(&menu.entries, &mut first.clone()),
     }
+}
+
+/// How many items `entries` has, submenus' included.
+fn count(entries: &[Entry]) -> i32 {
+    entries
+        .iter()
+        .map(|e| match e {
+            Entry::Submenu { entries, .. } => 1 + count(entries),
+            _ => 1,
+        })
+        .sum()
+}
+
+/// Where a new layout's numbers start: after the old one's, so that no id
+/// names another item than before. GNOME's AppIndicator extension keeps an
+/// item whose id it knows with the properties it had, and a separator that
+/// took the place of `Quit Tray` would show its label.
+fn renumber(first: i32, old: &[Entry]) -> i32 {
+    first
+        .checked_add(count(old))
+        .filter(|n| *n < i32::MAX / 2)
+        .unwrap_or(0)
 }
 
 fn find(node: &Node, id: i32) -> Option<&Node> {
@@ -272,7 +302,7 @@ impl DbusMenu {
     fn clicked(&self, id: i32) {
         let action = {
             let s = self.shared.lock().unwrap();
-            find(&root(&s.menu), id).and_then(|n| n.action.clone())
+            find(&s.root(), id).and_then(|n| n.action.clone())
         };
         let Some(action) = action else {
             return;
@@ -312,7 +342,7 @@ impl DbusMenu {
         _property_names: Vec<String>,
     ) -> zbus::fdo::Result<(u32, Layout)> {
         let s = self.shared.lock().unwrap();
-        let root = root(&s.menu);
+        let root = s.root();
         let node = find(&root, parent_id)
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs(format!("no item {parent_id}")))?;
         Ok((s.revision, layout(node, recursion_depth)))
@@ -324,7 +354,7 @@ impl DbusMenu {
         _property_names: Vec<String>,
     ) -> Vec<(i32, HashMap<String, OwnedVariant>)> {
         let s = self.shared.lock().unwrap();
-        let root = root(&s.menu);
+        let root = s.root();
         ids.into_iter()
             .filter_map(|id| find(&root, id).map(|n| (id, n.props.clone())))
             .collect()
@@ -332,7 +362,7 @@ impl DbusMenu {
 
     fn get_property(&self, id: i32, name: &str) -> zbus::fdo::Result<OwnedVariant> {
         let s = self.shared.lock().unwrap();
-        find(&root(&s.menu), id)
+        find(&s.root(), id)
             .and_then(|n| n.props.get(name).cloned())
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs(format!("no {name} on item {id}")))
     }
@@ -388,6 +418,7 @@ async fn serve(
     let shared = Arc::new(Mutex::new(Shared {
         menu: initial,
         revision: 1,
+        first: 0,
     }));
     let stop = Arc::new(tokio::sync::Notify::new());
     let name = format!("org.kde.StatusNotifierItem-{}-1", std::process::id());
@@ -454,6 +485,7 @@ async fn serve(
             let layout = s.menu.entries != next.entries;
             if layout {
                 s.revision += 1;
+                s.first = renumber(s.first, &s.menu.entries);
             }
             s.menu = next;
             (icon, tip, layout, s.revision)
@@ -536,7 +568,7 @@ mod tests {
 
     #[test]
     fn items_are_numbered_depth_first_and_find_their_action() {
-        let root = root(&menu());
+        let root = root(&menu(), 0);
         assert_eq!(
             find(&root, 4).and_then(|n| n.action.as_deref()),
             Some("stop:ab12")
@@ -550,6 +582,22 @@ mod tests {
         );
         assert_eq!(layout(&root, -1).children.len(), 4);
         assert!(layout(&root, 0).children.is_empty());
+    }
+
+    #[test]
+    fn a_new_layout_reuses_no_id() {
+        let old = menu();
+        let first = renumber(0, &old.entries);
+        assert_eq!(first, 5);
+        let mut new = menu();
+        new.entries.insert(1, Entry::Label("1 lane started".into()));
+        let root = root(&new, first);
+        assert!(find(&root, 5).is_none());
+        assert_eq!(
+            find(&root, 11).and_then(|n| n.action.as_deref()),
+            Some(QUIT)
+        );
+        assert_eq!(renumber(i32::MAX - 2, &old.entries), 0);
     }
 
     #[test]
