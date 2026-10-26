@@ -453,11 +453,20 @@ fn a_lane_runs_on_a_node_of_the_pool() {
                 .map(str::to_string)
         };
         if let (Some(_), Some(remote)) = (line("local"), line("remote")) {
-            // With the ref's files synced, its inputs give the lane's key:
-            // the node's store has it (#298).
+            // With the ref's files synced, its inputs give the lane's key
+            // (#298): the warm at the daemon's start made the entry the lane
+            // then copied, and this commit's has it (from the store, or its
+            // copy there prepared already). One key, one entry; without the
+            // ref's files the warm would have keyed an entry of its own.
             assert!(
-                remote.contains("from the store"),
-                "the node prepared a key of its own: {remote}\nthe lanes on the node:\n{}",
+                remote.contains("from the store") || remote.contains("prepared before"),
+                "{remote}\nthe lanes on the node:\n{}",
+                lane_logs(node.path(), "prepare")
+            );
+            assert_eq!(
+                store_entries(node.path()),
+                1,
+                "the node's store:\n{}",
                 lane_logs(node.path(), "prepare")
             );
             break;
