@@ -1219,6 +1219,11 @@ impl Lanes {
     }
 
     fn forget_claimed(&self, name: &str, why: &str) {
+        // A lane on a node syncs its worktree no more: what goes of it now
+        // is not the lane's to lose there while the main slot comes back.
+        if let Some(r) = self.remote(name) {
+            r.hold_sync();
+        }
         if self.main.served_by().as_deref() == Some(name)
             && let Err(e) = self.take_main("main")
         {

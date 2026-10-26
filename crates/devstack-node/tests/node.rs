@@ -332,6 +332,58 @@ fn a_lane_is_leased_admitted_and_synced() {
         .unwrap();
     assert_eq!((s3.uploaded, s3.written, s3.removed), (0, 0, 0));
 
+    // A file that changes, or goes, after it was hashed: the sync still
+    // lands (the changed one with what it holds now), not refused whole
+    // for a blob it never sent.
+    let moving = ["src/a.txt", "src/b.txt"];
+    for (step, change) in [("changed", true), ("deleted", false)] {
+        for f in moving {
+            write(tree.path(), f, &format!("{f} before {step}\n"));
+        }
+        let list: Vec<String> = files(tree.path())
+            .into_iter()
+            .chain(moving.iter().map(|f| f.to_string()))
+            .collect();
+        let root = tree.path().to_path_buf();
+        let touched = std::sync::atomic::AtomicBool::new(false);
+        let s = rt
+            .block_on(client.sync_with(&lease.id, tree.path(), &list, &|_, _, _| {
+                // After the first upload, the other one is no longer what
+                // was hashed.
+                if !touched.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    for f in moving {
+                        if change {
+                            write(&root, f, &format!("{f} after {step}\n"));
+                        } else {
+                            let _ = std::fs::remove_file(root.join(f));
+                        }
+                    }
+                }
+            }))
+            .unwrap_or_else(|e| panic!("{step}: {e}"));
+        assert!(s.failed.is_empty(), "{step}: {:?}", s.failed);
+        let after: Vec<Option<String>> = moving
+            .iter()
+            .map(|f| std::fs::read_to_string(mirror.join(f)).ok())
+            .collect();
+        if change {
+            assert!(
+                after.iter().any(|t| t
+                    .as_deref()
+                    .is_some_and(|t| t.ends_with(" after changed\n"))),
+                "{after:?}"
+            );
+            assert!(after.iter().all(Option::is_some), "{after:?}");
+        } else {
+            assert!(after.iter().any(Option::is_none), "{after:?}");
+        }
+        for f in moving {
+            let _ = std::fs::remove_file(tree.path().join(f));
+        }
+    }
+    rt.block_on(client.sync(&lease.id, tree.path(), &files(tree.path())))
+        .unwrap();
+
     let renewed = rt.block_on(client.renew(&lease.id)).unwrap();
     assert!(renewed.expires >= lease.expires);
     let view = rt.block_on(client.node()).unwrap();
