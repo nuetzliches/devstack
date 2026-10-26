@@ -1,6 +1,6 @@
 # ADR-0037: Telemetry goes to the pool's collector, if the pool has one and the member agrees
 
-- **Status:** Accepted (2026-10-16); addendum 2026-10-26 proposed (a lane's own daemon on a node: its lines go through its requester, #287)
+- **Status:** Accepted (2026-10-16); addendum 2026-10-26 accepted (a lane's own daemon on a node: its lines go through its requester, #287)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0031](0031-a-coordinator-places-lanes.md) (the coordinator, member certificates), [ADR-0034](0034-a-machine-can-belong-to-several-pools.md), [ADR-0036](0036-the-pool-shows-its-capacity-over-time.md), plan §11 (the diagnostic log)
@@ -142,7 +142,7 @@ Point 2's "the member stops sending" now holds at once: a `404` to a send
 marks the pool as not collecting until it is asked again (10 minutes),
 where before the member sent on until then.
 
-## Addendum 2026-10-26 (proposed): a lane's own daemon on a node
+## Addendum 2026-10-26: a lane's own daemon on a node
 
 *[#287](https://github.com/nuetzliches/devstack/issues/287).* The daemon in
 a node's lane container sent nothing: a daemon sends to the pools its state
