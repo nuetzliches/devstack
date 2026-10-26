@@ -15,10 +15,29 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// How often the refs are read.
-pub(crate) const EVERY: Duration = Duration::from_secs(60);
+const EVERY: Duration = Duration::from_secs(60);
 /// How long a ref's new commit stays before it is warmed: a fetch, a pull,
 /// a merge done.
 const QUIET: Duration = Duration::from_secs(120);
+
+/// [`EVERY`], or `DEVSTACK_WARM_EVERY_MS` (tests).
+pub(crate) fn every() -> Duration {
+    from_env("DEVSTACK_WARM_EVERY_MS").unwrap_or(EVERY)
+}
+
+/// [`QUIET`], or `DEVSTACK_WARM_QUIET_MS` (tests).
+fn quiet() -> Duration {
+    from_env("DEVSTACK_WARM_QUIET_MS").unwrap_or(QUIET)
+}
+
+fn from_env(k: &str) -> Option<Duration> {
+    std::env::var(k)
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+        .map(Duration::from_millis)
+}
 
 /// In a warm lease's container: what its `prepare` runs did, once done.
 static LANE: std::sync::Mutex<Option<Vec<serde_json::Value>>> = std::sync::Mutex::new(None);
@@ -71,7 +90,7 @@ impl Watch {
             if e.0 != commit {
                 *e = (commit.clone(), Instant::now());
             }
-            if e.1.elapsed() >= QUIET && done.get(r) != Some(&commit) {
+            if e.1.elapsed() >= quiet() && done.get(r) != Some(&commit) {
                 out.push((r.clone(), commit));
             }
         }

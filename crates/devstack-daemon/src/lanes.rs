@@ -1126,7 +1126,7 @@ impl Lanes {
             .spawn(move || {
                 let mut watch = crate::warm::Watch::default();
                 loop {
-                    std::thread::sleep(crate::warm::EVERY);
+                    std::thread::sleep(crate::warm::every());
                     let Some(me) = weak.upgrade() else { return };
                     if me.main.closed() {
                         return;
