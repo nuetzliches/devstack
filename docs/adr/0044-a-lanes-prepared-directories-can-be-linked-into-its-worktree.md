@@ -1,9 +1,9 @@
 # ADR-0044: A lane's prepared directories can be linked into its worktree
 
-- **Status:** Accepted (2026-10-21)
+- **Status:** Accepted (2026-10-21); point 5 replaced for lanes on a node by [ADR-0063](0063-a-lane-on-a-node-links-its-worktree-to-a-copy-from-the-local-store.md); `link` names a subset of `outputs` by [ADR-0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md)
 - **Date:** 2026-10-21
 - **Deciders:** project owner
-- **Related:** [#159](https://github.com/nuetzliches/devstack/issues/159), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (a lane runs from a copy), plan §3.5
+- **Related:** [#159](https://github.com/nuetzliches/devstack/issues/159), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (a lane runs from a copy), plan §3.5, [ADR-0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md), [ADR-0063](0063-a-lane-on-a-node-links-its-worktree-to-a-copy-from-the-local-store.md)
 
 ## Context
 

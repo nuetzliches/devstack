@@ -1,6 +1,6 @@
 # ADR-0038: A lane's mirror and data outlive its lease on a node, for a while, and can be pruned
 
-- **Status:** Accepted (2026-10-19)
+- **Status:** Accepted (2026-10-19); noted 2026-10-26 (a member's store of [ADR-0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md) counts towards point 3's cap)
 - **Date:** 2026-10-19
 - **Deciders:** project owner
 - **Related:** [#99](https://github.com/nuetzliches/devstack/issues/99), [ADR-0025](0025-a-lane-can-run-on-another-node.md) (points 5 and 7 amended here), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) (point 2 and its Consequences), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md), [ADR-0033](0033-a-node-decides-what-runs-on-it.md), [ADR-0034](0034-a-machine-can-belong-to-several-pools.md)
@@ -172,6 +172,11 @@ ran on are noted in the lane's state as `lane-<name>/nodes.json` (`ran_on`,
 `note_ran_on`), not `remote/slots.json`; `purge_slot`, `slots_on`.
 `crates/devstack-daemon/src/lanes.rs`: purge on `forget`, `reset`,
 `prune`. `[lanes] keep_data` in `crates/devstack-config/src/model.rs`.
+
+*Noted 2026-10-26.* A member's store of what `prepare` makes
+([ADR-0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md), point 9), per member and repository on a node, counts
+towards point 3's disk cap and retention like a slot, least recently used
+entry first, and goes with the member.
 
 ## What this ADR does not say
 

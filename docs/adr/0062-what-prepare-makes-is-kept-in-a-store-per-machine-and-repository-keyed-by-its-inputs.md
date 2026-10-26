@@ -1,6 +1,6 @@
 # ADR-0062: What `prepare` makes is kept in a store per machine and repository, keyed by its inputs
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-26)
 - **Date:** 2026-10-26
 - **Deciders:** project owner
 - **Related:** [#277](https://github.com/nuetzliches/devstack/issues/277), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (a lane runs from a copy), [ADR-0028](0028-lane-images.md) (point 3), [ADR-0033](0033-a-node-decides-what-runs-on-it.md), [ADR-0034](0034-a-machine-can-belong-to-several-pools.md), [ADR-0038](0038-a-lanes-data-outlives-its-lease.md) (slots, the member's disk cap), [ADR-0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md), [ADR-0049](0049-a-lanes-need-is-measured-disk-included.md), [ADR-0063](0063-a-lane-on-a-node-links-its-worktree-to-a-copy-from-the-local-store.md)

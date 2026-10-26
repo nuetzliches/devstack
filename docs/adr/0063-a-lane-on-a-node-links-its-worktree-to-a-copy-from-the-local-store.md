@@ -1,6 +1,6 @@
 # ADR-0063: A lane on a node links its worktree to a copy from the local store
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-26)
 - **Date:** 2026-10-26
 - **Deciders:** project owner
 - **Related:** [#277](https://github.com/nuetzliches/devstack/issues/277), [#159](https://github.com/nuetzliches/devstack/issues/159), [ADR-0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) (point 5 replaced here for lanes on a node), [ADR-0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md)
