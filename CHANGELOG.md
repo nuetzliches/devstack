@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-26
+
+One `npm ci` per lockfile and machine instead of one per lane: what
+`prepare` makes is kept in a store per machine and repository, keyed by its
+inputs, the platform and the toolchain's version, and the next lane or build
+with the same key copies it (ADR-0062; on Windows 5 s instead of 23 s for a
+`node_modules` of 24,500 files). Compose files are told the lane they run
+for, and a lane on a node gives its native services its name (ADR-0064), so
+a login cookie stays apart per tree in containers too. Fixed: a lane on a
+node keeps its lease through a long first sync and is said when a reboot
+lost it; a Linux tray menu shows no stale item.
+
 ### Added
 
 - **`prepare.outputs` and `prepare.version`** (ADR-0062, #277), checked by
@@ -53,6 +65,26 @@ and listed with their assets on the
   what a member reads from the coordinator ask once more when the
   connection broke before an answer, instead of failing. On macOS this
   showed as `Invalid argument (os error 22)`.
+- **A lane on a node keeps its lease through a long first sync** (#276):
+  a start whose first sync took 90 s lost its lease, since nothing renewed
+  it between the grant and the first renewal of the followed lane; it is
+  renewed from the grant on. A file that changed between hashing and upload
+  no longer makes the node refuse the whole sync, a sync the lane's end
+  overtakes is dropped instead of reported as failed, and a lane being
+  removed (or whose worktree lost its `.git`) syncs no more, so a worktree
+  on its way out is not mirrored to the node as deleted.
+- **A lane on a node lost to a reboot is said** (#275, ADR-0052 point 6):
+  after the developer's machine restarted, the next daemon showed such a
+  lane as merely stopped. It now finds the note the lane left while it was
+  followed, releases the lease if it still runs, and says with the lane why
+  it is gone and how to start it again. The first sync to a node hashes
+  files without a cached hash on several threads (22 to 90 s for 7,200
+  files on a machine with a slow virus scanner), and `node_lease_ended`
+  says why: released, expired or ended by an admin.
+- **A Linux tray menu item keeps no label of the item before it** (#272):
+  when a stack started and its submenu grew, GNOME's AppIndicator extension
+  showed a second, greyed `Quit Tray`; each new menu layout now numbers its
+  items after the old one's.
 
 ## [0.22.1] - 2026-10-24
 
@@ -1642,7 +1674,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.22.1...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/nuetzliches/devstack/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/nuetzliches/devstack/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/nuetzliches/devstack/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/nuetzliches/devstack/compare/v0.20.0...v0.21.0
