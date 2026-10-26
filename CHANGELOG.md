@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-26
+
+A lane on a pool node now gets what its `prepare` makes without a second
+install: its worktree here is linked to a copy from this machine's store, so
+a pre-commit hook with `npx eslint` runs there (ADR-0063), and the node keeps
+a store per member and repository, so the next lane with the same lockfile
+copies `node_modules` instead of running `npm ci` (ADR-0062). The daemon in a
+lane's container sends its own lines through its requester, under the
+member's consent (ADR-0037 addendum).
+
 ### Added
 
 - **A pool node keeps a store of what `prepare` makes** (ADR-0062, #277),
@@ -1704,7 +1714,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/nuetzliches/devstack/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/nuetzliches/devstack/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/nuetzliches/devstack/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/nuetzliches/devstack/compare/v0.21.0...v0.22.0
