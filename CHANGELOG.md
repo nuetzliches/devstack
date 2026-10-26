@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **`prepare.outputs` and `prepare.version`** (ADR-0062, #277), checked by
+  `devstack check`: the directories `prepare` makes, inside the repository,
+  and a command whose output keys them (`node --version`), for the store
+  that keeps them per machine and repository so a second lane with the same
+  lockfile skips `npm ci`. With `outputs`, each `link` is one of them or
+  inside one; `version` needs `outputs`. The store itself is not built yet.
+  A file with either says `requires = "0.23.0"`.
+
 ### Fixed
 
 - **A pool call that only reads survives a connection the other side
