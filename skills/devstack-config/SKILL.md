@@ -63,6 +63,10 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   a `package.json` and no `prepare`). When git hooks need it (`npx eslint` in a
   pre-commit hook), `prepare.link = ["web/node_modules"]` links it into the
   worktree; `.gitignore` then needs `node_modules` without a trailing slash.
+  Name what it makes as `outputs = ["web/node_modules"]` (and `version =
+  "node --version"`): the next lane with the same lockfile copies it from
+  the machine's store instead of running `npm ci` again. `link` must be
+  one of `outputs` then; add `requires = "0.23.0"` to `[stack]`.
 - **Lanes on other machines** (`devstack up --on <node>`) run in a Linux
   container: `[lanes] image` (a toolchain image) or `[lanes] dockerfile`. Files
   git ignores do not go there unless `[lanes] sync` names them (a dev

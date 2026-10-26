@@ -2,13 +2,14 @@
 
 use super::{COPY_QUIET, KEEP_BUILD_LOGS, STOPPED, Supervisor, tail};
 use crate::state::{NoticeLevel, now_ms};
+use crate::store::Store;
 use devstack_build::Snapshot;
-use devstack_config::model::Service;
+use devstack_config::model::{Prepare, Service};
 use devstack_proc::Spec;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 impl Supervisor {
     /// A lane runs from a copy of its worktree, never from the worktree itself
@@ -70,7 +71,222 @@ impl Supervisor {
             mark,
             cwd: cwd.map_or_else(|| snap.dir.clone(), |c| snap.dir.join(c)),
             run: p.run.clone(),
+            store: self.store_use(name, p, snap),
         }))
+    }
+
+    /// The store of what `prepare` makes (ADR-0062): in the main tree's
+    /// state, shared by its builds and its lanes.
+    pub(crate) fn store(&self) -> Store {
+        let devstack = self
+            .layout
+            .artifacts_root
+            .parent()
+            .unwrap_or(&self.state_dir);
+        Store::new(devstack.join("store"))
+    }
+
+    /// Whether `prepare` of `name` goes through the store: it names
+    /// `outputs`, none of them is tracked by git (a copy from the store
+    /// would overwrite the source), and the lane is on this machine (a
+    /// node's store is the node's).
+    fn store_use(&self, name: &str, p: &Prepare, snap: &Snapshot) -> Option<StoreUse> {
+        if p.outputs.is_empty() || crate::remote_lane() {
+            return None;
+        }
+        let id = format!("prepare.store.{name}");
+        let tracked = p.outputs.iter().find(|o| {
+            let dir = format!("{}/", o.replace('\\', "/").trim_matches('/'));
+            let dir = dir.trim_start_matches("./");
+            snap.manifest.files.keys().any(|f| f.starts_with(dir))
+        });
+        if let Some(o) = tracked {
+            self.set_notice(
+                &id,
+                NoticeLevel::Warn,
+                format!(
+                    "`prepare` of {name} runs in every copy: its output `{o}` holds files git tracks, which a copy from the store would overwrite."
+                ),
+            );
+            return None;
+        }
+        Some(StoreUse {
+            root: snap.dir.clone(),
+            outputs: p.outputs.clone(),
+            version: p.version.clone(),
+        })
+    }
+
+    /// The store's key of `job`: its inputs, this machine's platform and
+    /// the output of `version` (ADR-0062 point 2). `None`: `version` failed,
+    /// the store is not used this time.
+    fn store_key(
+        &self,
+        name: &str,
+        job: &PrepareJob,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<Option<String>, String> {
+        let Some(s) = &job.store else {
+            return Ok(None);
+        };
+        let mut h = blake3::Hasher::new();
+        h.update(job.key.as_bytes());
+        h.update(std::env::consts::OS.as_bytes());
+        h.update(std::env::consts::ARCH.as_bytes());
+        if let Some(cmd) = &s.version {
+            match self.run_version(name, cmd, &job.cwd, cancel) {
+                Ok(out) => {
+                    h.update(out.trim().as_bytes());
+                }
+                Err(e) if cancel() => return Err(e),
+                Err(e) => {
+                    crate::diag::warn(
+                        "prepare_store_version_failed",
+                        serde_json::json!({ "lane": self.lane, "service": name, "version": cmd, "error": e }),
+                    );
+                    self.set_notice(
+                        &format!("prepare.store.{name}"),
+                        NoticeLevel::Warn,
+                        format!(
+                            "`prepare` of {name} ran without the store: its `version` (`{cmd}`) failed: {e}"
+                        ),
+                    );
+                    return Ok(None);
+                }
+            }
+        }
+        // Short: Windows paths below it are long already (`node_modules`).
+        Ok(Some(h.finalize().to_hex()[..20].to_string()))
+    }
+
+    /// `prepare.version` of `name`, run in `cwd` like `prepare`; its output.
+    fn run_version(
+        &self,
+        name: &str,
+        cmd: &str,
+        cwd: &Path,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<String, String> {
+        let out = self.log_dir(name).join("prepare-version.out");
+        let file = std::fs::File::create(&out).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(cwd).map_err(|e| e.to_string())?;
+        let spec = Spec {
+            name: format!("{name}-prepare-version"),
+            command: cmd.to_string(),
+            cwd: cwd.to_path_buf(),
+            env: BTreeMap::new(),
+            log: file,
+        };
+        let (mut tree, _) =
+            devstack_proc::spawn(spec, &self.proc_opts).map_err(|e| e.to_string())?;
+        let t0 = Instant::now();
+        let code = loop {
+            if let Some(code) = tree.try_exit_code() {
+                break code;
+            }
+            if cancel() {
+                tree.kill();
+                return Err(format!("`{cmd}`: {STOPPED}"));
+            }
+            if t0.elapsed() > VERSION_TIMEOUT {
+                tree.kill();
+                return Err(format!("`{cmd}` did not end within {VERSION_TIMEOUT:?}"));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let text = std::fs::read_to_string(&out).unwrap_or_default();
+        if code != 0 {
+            return Err(format!("`{cmd}` exited with code {code}: {}", text.trim()));
+        }
+        Ok(text)
+    }
+
+    /// A hit of `key`: its entry copied into the copy, unless the last copy
+    /// out of it took longer than its `prepare` (ADR-0062 point 6). `false`:
+    /// `prepare` runs.
+    fn prepare_from_store(
+        &self,
+        name: &str,
+        store: &Store,
+        key: &str,
+        root: &Path,
+        log: &Path,
+    ) -> bool {
+        let miss = |why: &str| {
+            crate::diag::info(
+                "prepare_store_miss",
+                serde_json::json!({ "lane": self.lane, "service": name, "key": key, "why": why }),
+            );
+            false
+        };
+        let Some(meta) = store.get(name, key) else {
+            return miss("no entry for these inputs on this machine");
+        };
+        if store
+            .copy_ms(name, key)
+            .is_some_and(|c| c > meta.prepare_ms)
+        {
+            return miss("copying the entry took longer than running prepare");
+        }
+        match store.copy_into(name, key, root) {
+            Ok(stats) => {
+                let _ = std::fs::write(
+                    log,
+                    format!(
+                        "prepare: from store ({key}): {} files, {} MiB in {:.1} s; prepare took {:.1} s when it made them\n",
+                        stats.files,
+                        stats.bytes >> 20,
+                        stats.elapsed.as_secs_f64(),
+                        meta.prepare_ms as f64 / 1000.0
+                    ),
+                );
+                crate::diag::info(
+                    "prepare_store_hit",
+                    serde_json::json!({ "lane": self.lane, "service": name, "key": key,
+                        "files": stats.files, "bytes": stats.bytes,
+                        "ms": stats.elapsed.as_millis() as u64, "prepare_ms": meta.prepare_ms }),
+                );
+                true
+            }
+            Err(e) => {
+                crate::diag::warn(
+                    "prepare_store_copy_failed",
+                    serde_json::json!({ "lane": self.lane, "service": name, "key": key, "error": e.to_string() }),
+                );
+                false
+            }
+        }
+    }
+
+    /// After a `prepare` that succeeded: its outputs into the store.
+    fn store_put(&self, name: &str, store: &Store, key: &str, s: &StoreUse, took: Duration) {
+        let id = format!("prepare.store.{name}");
+        let t0 = Instant::now();
+        match store.put(name, key, &s.root, &s.outputs, took) {
+            Ok(meta) => {
+                self.clear_notice(&id);
+                crate::diag::info(
+                    "prepare_store_put",
+                    serde_json::json!({ "lane": self.lane, "service": name, "key": key,
+                        "files": meta.files, "bytes": meta.bytes,
+                        "ms": t0.elapsed().as_millis() as u64, "prepare_ms": meta.prepare_ms }),
+                );
+            }
+            Err(e) => {
+                crate::diag::warn(
+                    "prepare_store_put_failed",
+                    serde_json::json!({ "lane": self.lane, "service": name, "key": key, "error": e.to_string() }),
+                );
+                self.set_notice(
+                    &id,
+                    NoticeLevel::Warn,
+                    format!(
+                        "What `prepare` of {name} made is not in the store, the next copy runs it again: {e}"
+                    ),
+                );
+            }
+        }
+        sweep_store(store);
     }
 
     /// Run a `prepare` to completion; its output goes to a log of its own.
@@ -86,6 +302,25 @@ impl Supervisor {
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         crate::diag::prune(&dir, "prepare-", KEEP_BUILD_LOGS);
         let log = dir.join(format!("prepare-{}.log", now_ms()));
+        // Through the store (ADR-0062): one copy of a key prepares, the
+        // others wait for it and copy what it made.
+        let store = self.store();
+        let key = self.store_key(name, &job, cancel)?;
+        let _key = match &key {
+            Some(k) => Some(
+                store
+                    .lock(name, k, cancel)
+                    .ok_or_else(|| format!("prepare `{}`: {STOPPED}", job.run))?,
+            ),
+            None => None,
+        };
+        if let (Some(k), Some(s)) = (&key, &job.store)
+            && self.prepare_from_store(name, &store, k, &s.root, &log)
+        {
+            self.clear_notice(&format!("prepare.store.{name}"));
+            return job.done();
+        }
+        let t0 = Instant::now();
         let file = std::fs::File::create(&log).map_err(|e| e.to_string())?;
         crate::diag::info(
             "prepare",
@@ -95,7 +330,7 @@ impl Supervisor {
         let spec = Spec {
             name: format!("{name}-prepare"),
             command: job.run.clone(),
-            cwd: job.cwd,
+            cwd: job.cwd.clone(),
             env: BTreeMap::new(),
             log: file,
         };
@@ -118,10 +353,10 @@ impl Supervisor {
                 tail(&log, 15)
             ));
         }
-        if let Some(parent) = job.mark.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        if let (Some(k), Some(s)) = (&key, &job.store) {
+            self.store_put(name, &store, k, s, t0.elapsed());
         }
-        std::fs::write(&job.mark, job.key).map_err(|e| e.to_string())
+        job.done()
     }
 
     /// A lane's copy, current and prepared for `svc`, before it starts from it.
@@ -327,6 +562,55 @@ pub(super) struct PrepareJob {
     mark: PathBuf,
     cwd: PathBuf,
     run: String,
+    /// What the store needs, when it is used (ADR-0062).
+    store: Option<StoreUse>,
+}
+
+impl PrepareJob {
+    /// The copy is prepared for `key`: the next start does not prepare it.
+    fn done(&self) -> Result<(), String> {
+        if let Some(parent) = self.mark.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&self.mark, &self.key).map_err(|e| e.to_string())
+    }
+}
+
+/// A `prepare` that goes through the store.
+struct StoreUse {
+    /// The copy's root, where `outputs` are.
+    root: PathBuf,
+    outputs: Vec<String>,
+    version: Option<String>,
+}
+
+/// How long `prepare.version` (`node --version`) may take.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long an entry of the store is kept unused (ADR-0062 point 9).
+const STORE_KEEP: Duration = Duration::from_secs(14 * 24 * 3600);
+
+/// The store's unused entries removed, at most once a day per process, in
+/// the background: the first time the store is written after a daemon
+/// starts, then daily.
+fn sweep_store(store: &Store) {
+    static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+    {
+        let mut last = LAST.lock().unwrap();
+        if last.is_some_and(|t| t.elapsed() < Duration::from_secs(24 * 3600)) {
+            return;
+        }
+        *last = Some(Instant::now());
+    }
+    let store = Store::new(store.root().to_path_buf());
+    std::thread::spawn(move || {
+        for s in store.sweep(STORE_KEEP, false) {
+            crate::diag::info(
+                "prepare_store_swept",
+                serde_json::json!({ "service": s.service, "key": s.key, "bytes": s.bytes,
+                    "idle_h": s.idle.as_secs() / 3600, "error": s.error }),
+            );
+        }
+    });
 }
 
 /// A directory link at `link` to `target`: a junction on Windows (no

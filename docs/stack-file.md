@@ -579,9 +579,21 @@ worktree to a copy from this machine's store
 prepare = { run = "npm ci", inputs = ["web/package-lock.json"], outputs = ["web/node_modules"], link = ["web/node_modules"], version = "node --version" }
 ```
 
-**Not built yet:** this devstack checks `outputs` and `version` and does
-nothing else with them; `prepare` runs in every copy as above. A file with
-either should say `requires = "0.23.0"` in `[stack]`.
+A hit copies many files at once (`prepare-*.log` says `prepare: from
+store`, with the time); measured on Windows, a `node_modules` of 24,500 files
+took 23 s to `npm ci` on NTFS and 5 s to copy, 45 s and 2 to 3 s on a Dev
+Drive. Where a copy of an entry once took longer than the `prepare` that
+made it, `prepare` runs instead; an output that holds files git tracks
+keeps `prepare` out of the store (a notice says so). A second copy that needs a key another one
+is preparing waits for it and copies what it made. Entries no copy used for
+14 days go by themselves; `devstack lane prune --older-than <age>` removes
+them sooner. A copy never shares a file with the store: what a dev server
+writes into its `node_modules` stays in its copy.
+
+Built so far: the store on the developer's machine, for lanes and for
+builds. A lane on a node prepares in every copy as before, and its worktree
+gets no link yet. A file with `outputs` or `version` should say
+`requires = "0.23.0"` in `[stack]`.
 
 ## `[lanes]`: other worktrees ([ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0030](adr/0030-each-lane-has-its-own-infrastructure.md); on other machines [ADR-0025](adr/0025-a-lane-can-run-on-another-node.md), [ADR-0028](adr/0028-lane-images.md), [ADR-0029](adr/0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0035](adr/0035-lanes-can-be-shared-with-the-pool.md), and [pool.md](pool.md))
 
@@ -722,7 +734,8 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
   containers and volumes, here and on the nodes it ran on), so it starts
   fresh; `devstack lane prune [--older-than 7d] [--dry-run]` removes what
   lanes whose worktree is gone left behind, here and on the pool's nodes
-  (ADR-0038).
+  (ADR-0038); with `--older-than`, also entries of the store of `prepare`
+  that no copy used for as long (ADR-0062).
 
 ## `[commands.<name>]`: operations
 
