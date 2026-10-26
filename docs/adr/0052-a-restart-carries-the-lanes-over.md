@@ -1,6 +1,6 @@
 # ADR-0052: A restart of the stack carries its lanes over to the next daemon
 
-- **Status:** Accepted (2026-10-22)
+- **Status:** Accepted (2026-10-22), amended 2026-10-26 (point 6: a lane on a node the daemon ended without stopping is said, not silently gone)
 - **Date:** 2026-10-22
 - **Deciders:** project owner
 - **Related:** [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md) (a daemon restart is clean), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) point 6 (lanes start only with `devstack up`), [ADR-0025](0025-a-lane-can-run-on-another-node.md) point 7 (a daemon restart releases the lanes on nodes), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) (sync and ports of a lane on a node), [ADR-0037](0037-telemetry-goes-to-the-pools-collector-with-consent.md) (telemetry)
@@ -79,6 +79,20 @@ What a restart costs a lane differs by where it runs:
    that a daemon runs another devstack than the hub (`daemon_outdated`),
    so how long stacks stay on an old release shows in the pool's data.
 
+6. **A lane on a node lost to an unclean end is said** (amended
+   2026-10-26). While a daemon follows a lane on a node, the lane's state
+   holds a note of it (`.devstack/lane-<name>/followed.json`: pool, node,
+   lease, ports). Stopping the lane, or seeing its lease end, removes the
+   note; a restart leaves it for the next daemon, which takes the lane up
+   (point 2) and writes it again. A note the next daemon finds for a lane it
+   did not take up comes from a daemon that ended without stopping the lane
+   (it crashed or was killed, the machine shut down or restarted): the
+   lease is released on the node if it still runs (point 3: as a stop), the
+   note goes, the log says `remote_lane_unfollowed` (lane, node, lease), and
+   the lane shows the start that failed, with the reason and how to start it
+   again (`devstack up --on <node>`, from its data kept there, ADR-0038). The
+   lane is not started again by itself.
+
 This amends ADR-0024 point 6 and ADR-0025 point 7 for a restart; ADR-0016's
 rule that the daemon re-attaches to no process stays: nothing of a lane on
 a node is a process of the daemon, and a lane here is started again, not
@@ -97,6 +111,12 @@ re-attached.
   daemon gets (point 4), by hand.
 - **Re-attach local lanes' processes.** Rejected by ADR-0016 (orphans, a
   shim per process).
+- **Start a lane lost to an unclean end again by itself** (point 6). Seen
+  on 2026-10-26: a member's machine restarted overnight, its lane on a node
+  had run for 2.8 days, and its lease expired two minutes after the machine
+  went down. Starting it again on the next `up` would take a node's CPU and
+  memory nobody asked for after a reboot; the kept data makes the start by
+  hand fast. Rejected for now; the note would allow it.
 - **Hand the lease to the new daemon by asking the node.** The node would
   have to know about restarts; renewing the same lease from the next daemon
   needs nothing new there.
@@ -115,7 +135,8 @@ re-attached.
 ## Implemented
 
 `crates/devstack-daemon/src/lanes.rs` (`Lanes::carry`, `Lanes::take_up`),
-`crates/devstack-daemon/src/remote.rs` (`RemoteLane::adopt`),
+`crates/devstack-daemon/src/remote.rs` (`RemoteLane::adopt`; point 6:
+`followed`, `forget_followed`, `Lanes::unfollowed` in `lanes.rs`),
 `crates/devstack-daemon/src/api.rs` (`/v1/shutdown?restart=true`),
 `crates/devstack-hub/src/lib.rs` (`down?restart=true`, `daemon_outdated`),
 `ui/src/stores/stack.ts` (`restartStack`).

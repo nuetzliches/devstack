@@ -614,6 +614,46 @@ fn executable(meta: &std::fs::Metadata) -> bool {
     }
 }
 
+/// How many files are read at once to hash them: on Windows each open waits
+/// for the virus scanner, one after the other took over a minute for the
+/// 7,000 files of a lane's first sync.
+fn hash_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(2, 16)
+}
+
+/// Hash `paths` on [`hash_threads`] threads, each result at its path's index.
+fn hash_files(paths: &[&Path]) -> Vec<std::io::Result<String>> {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let threads = hash_threads().min(paths.len());
+    let mut out: Vec<Option<std::io::Result<String>>> = (0..paths.len()).map(|_| None).collect();
+    std::thread::scope(|s| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                s.spawn(|| {
+                    let mut done = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(p) = paths.get(i) else { break };
+                        done.push((i, hash_file(p)));
+                    }
+                    done
+                })
+            })
+            .collect();
+        for w in workers {
+            for (i, r) in w.join().expect("a hashing thread panicked") {
+                out[i] = Some(r);
+            }
+        }
+    });
+    out.into_iter()
+        .map(|r| r.expect("every index hashed"))
+        .collect()
+}
+
 /// Hash every listed file that exists (a file deleted since it was listed is
 /// simply not there), taking the hash from `cache` when the file's size and
 /// modification time are what they were. `cache` is left with exactly the
@@ -625,9 +665,9 @@ fn hash_all(
     cache: &mut HashCache,
     read: &mut usize,
 ) -> Result<Vec<(FileEntry, std::path::PathBuf, u64)>> {
-    let mut out = Vec::with_capacity(files.len());
-    let mut next = std::collections::HashMap::with_capacity(files.len());
-    let now = std::time::SystemTime::now();
+    // What each file is, and its hash when the cache knows it; the others
+    // are read together afterwards.
+    let mut found = Vec::with_capacity(files.len());
     for rel in files {
         let path = elsewhere
             .get(rel)
@@ -639,16 +679,29 @@ fn hash_all(
         if !meta.is_file() {
             continue;
         }
-        let modified = meta.modified().ok();
         let cached = cache
             .0
             .remove(&path)
-            .filter(|k| k.len == meta.len() && Some(k.modified) == modified);
+            .filter(|k| k.len == meta.len() && Some(k.modified) == meta.modified().ok())
+            .map(|k| k.hash);
+        found.push((rel, path, meta, cached));
+    }
+    let unknown: Vec<&Path> = found
+        .iter()
+        .filter(|(_, _, _, h)| h.is_none())
+        .map(|(_, p, _, _)| p.as_path())
+        .collect();
+    let mut hashed = hash_files(&unknown).into_iter();
+    let mut out = Vec::with_capacity(found.len());
+    let mut next = std::collections::HashMap::with_capacity(found.len());
+    let now = std::time::SystemTime::now();
+    for (rel, path, meta, cached) in found {
+        let modified = meta.modified().ok();
         let hash = match cached {
-            Some(k) => k.hash,
+            Some(h) => h,
             // Gone since it was listed (a package manager rewriting
             // `node_modules`): not sent now; the next sync sees what is there.
-            None => match hash_file(&path) {
+            None => match hashed.next().expect("one result per unknown file") {
                 Ok(h) => {
                     *read += 1;
                     h
@@ -693,6 +746,34 @@ fn hash_file(path: &Path) -> std::io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn files_read_together_keep_their_hashes_in_order() {
+        let d = tempfile::tempdir().unwrap();
+        let list: Vec<String> = (0..200).map(|i| format!("f{i}.txt")).collect();
+        for (i, rel) in list.iter().enumerate() {
+            std::fs::write(d.path().join(rel), format!("content {i}")).unwrap();
+        }
+        // One listed file is not there: left out, the others not shifted.
+        let mut listed = list.clone();
+        listed.insert(100, "gone.txt".into());
+        let mut read = 0;
+        let out = hash_all(
+            d.path(),
+            &listed,
+            &Elsewhere::new(),
+            &mut HashCache::default(),
+            &mut read,
+        )
+        .unwrap();
+        assert_eq!(read, 200);
+        assert_eq!(out.len(), 200);
+        for (i, (entry, _, _)) in out.iter().enumerate() {
+            assert_eq!(entry.path, format!("f{i}.txt"));
+            let want = blake3::hash(format!("content {i}").as_bytes());
+            assert_eq!(entry.hash, want.to_hex().to_string());
+        }
+    }
 
     #[test]
     fn unchanged_files_are_not_hashed_again() {

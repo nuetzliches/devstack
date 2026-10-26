@@ -474,6 +474,48 @@ fn a_lane_runs_on_a_node_of_the_pool() {
         "GET /health on {port} after `down`: {body}"
     );
 
+    // A daemon that ends without stopping the lane (killed, as by a reboot):
+    // the next one says with the lane that it is gone, and its lease goes
+    // (ADR-0052 point 6).
+    let info: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(main.join(".devstack").join("daemon.json")).expect("daemon.json"),
+    )
+    .expect("daemon.json is JSON");
+    let pid = info["pid"].as_u64().expect("the daemon's pid");
+    let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+    let until = Instant::now() + Duration::from_secs(30);
+    while Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .is_ok_and(|s| s.success())
+    {
+        assert!(Instant::now() < until, "the daemon did not die");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = std::fs::remove_file(main.join(".devstack").join("daemon.json"));
+    cli(&main, &["up"]);
+    let until = Instant::now() + Duration::from_secs(120);
+    loop {
+        let lane = api("/v1/lanes")
+            .and_then(|v| v.as_array()?.iter().find(|l| l["name"] == "wt").cloned());
+        if let Some(l) = &lane
+            && let Some(e) = l["moving"]["error"].as_str()
+        {
+            assert!(e.contains("ended without stopping it"), "{l}");
+            assert_ne!(l["active"], true, "{l}");
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "the lane nobody followed was not said: {lane:?}"
+        );
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    let log =
+        std::fs::read_to_string(main.join(".devstack").join("daemon.log")).unwrap_or_default();
+    assert!(log.contains("\"remote_lane_unfollowed\""), "{log}");
+    node_is_clear();
+
     // `down --all`: the daemon ends, and the lane on the node goes with it
     // (ADR-0025 point 7).
     cli(&main, &["down", "--all"]);
