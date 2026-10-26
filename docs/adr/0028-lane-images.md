@@ -1,6 +1,6 @@
 # ADR-0028: A remote lane runs in a stack-provided toolchain image; the node supplies devstack
 
-- **Status:** Accepted (2026-10-16), amended 2026-10-16 (a Dockerfile the node builds)
+- **Status:** Accepted (2026-10-16), amended 2026-10-16 (a Dockerfile the node builds); point 3 noted 2026-10-26 (what `prepare` makes is in a store, [ADR-0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md))
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0023](0023-stack-file-compatibility.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md)
@@ -31,6 +31,12 @@ belongs to the node and the requester and must match their protocol.
    that order: toolchains; dependency caches keyed by the lockfiles; optionally
    a warm build state of the main branch (`obj/`, framework caches), which the
    lane's snapshot then starts from.
+   *Noted 2026-10-26.* The lane's copy is a bind mount at `/src` and `HOME`
+   is the slot's `home/`: nothing the image holds there shows in the copy.
+   Dependency caches in the image help only where the image puts them
+   outside `HOME` (`NPM_CONFIG_CACHE`, `NUGET_PACKAGES`). What `prepare`
+   makes (`node_modules`) is kept in the node's store
+   ([ADR-0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md)), not in the image.
 4. **The project builds and publishes the image** (its CI, its registry); nodes
    pull it. A node that already holds its layers is preferred by placement
    (ADR-0026).

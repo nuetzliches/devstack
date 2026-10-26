@@ -76,7 +76,7 @@ stay.
 | [0025](0025-a-lane-can-run-on-another-node.md) | A lane can run on another node, as a Linux container with its own infrastructure | Accepted; point 10 (showing and moving a lane) amended; amended 2026-10-19 (a start on a node answers once leased; its phases are timed); noted 2026-10-21 (its daemon starts first, its containers come up under it); points 5 and 7 amended by ADR-0038; point 7 amended by ADR-0052 (a restart keeps the lanes on nodes) |
 | [0026](0026-placement-by-the-requester-admission-by-the-node.md) | The requester places a lane; the node admits it, under a lease | Accepted; points 1, 3 replaced by ADR-0031 |
 | [0027](0027-trust-between-nodes.md) | Nodes and requesters trust each other by pinned keys, never by network location | Accepted; points 1, 2 replaced by ADR-0031; point 5 amended |
-| [0028](0028-lane-images.md) | A remote lane runs in a stack-provided toolchain image; the node supplies devstack | Accepted, amended (a Dockerfile the node builds) |
+| [0028](0028-lane-images.md) | A remote lane runs in a stack-provided toolchain image; the node supplies devstack | Accepted, amended (a Dockerfile the node builds); point 3 noted 2026-10-26 (`prepare`'s results are in ADR-0062's store) |
 | [0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) | A remote lane works on a mirror of the requester's tree; ports and API come back over one connection | Accepted; point 2 amended (`[lanes] sync`); Consequences built by ADR-0038; point 4 extended to UDP by ADR-0056 |
 | [0030](0030-each-lane-has-its-own-infrastructure.md) | Each lane has its own infrastructure | Accepted; point 2 detailed by ADR-0057 (an announced port moves inside the container too) |
 | [0031](0031-a-coordinator-places-lanes.md) | A coordinator places lanes and admits members; nodes admit leases; data goes directly | Accepted, amended (one binary: `devstack node`), amended 2026-10-19 (versions in the pool), amended 2026-10-21 (no share switch) |
@@ -86,13 +86,13 @@ stay.
 | [0035](0035-lanes-can-be-shared-with-the-pool.md) | The pool sees the lanes its members share, and can use them | Accepted; point 4 extended by ADR-0040 (sharing for viewing; since 2026-10-20 sharing includes viewing); point 3 amended by ADR-0053 (a member connects to a lane and disconnects) |
 | [0036](0036-the-pool-shows-its-capacity-over-time.md) | The pool shows its capacity, GPUs included, and how it changed | Accepted |
 | [0037](0037-telemetry-goes-to-the-pools-collector-with-consent.md) | Telemetry goes to the pool's collector, if the pool has one and the member agrees | Accepted |
-| [0038](0038-a-lanes-data-outlives-its-lease.md) | A lane's mirror and data outlive its lease on a node, for a while, and can be pruned | Accepted |
+| [0038](0038-a-lanes-data-outlives-its-lease.md) | A lane's mirror and data outlive its lease on a node, for a while, and can be pruned | Accepted; noted 2026-10-26 (a member's store, ADR-0062, counts towards the cap) |
 | [0039](0039-an-admin-can-update-a-server-node.md) | An admin can have a server node update its devstack, from the dashboard | Accepted, amended 2026-10-20 (a checksum from the release, not a signature; the running binary is replaced; a drain ends, and can be withdrawn) |
 | [0040](0040-a-shared-lane-can-be-watched-like-ones-own.md) | A shared lane can be shared for viewing, and is then shown as one's own lane is | Accepted; amended 2026-10-20 (sharing a lane includes viewing it) |
 | [0041](0041-a-profile-says-how-a-lane-runs-for-a-purpose.md) | A profile says how a lane (or the main tree) runs for a purpose, chosen when it starts | Accepted; point 1 extended by ADR-0058 (`skip`) |
 | [0042](0042-a-dev-servers-rebuilds-show-like-builds.md) | A dev server's rebuilds show like builds, read from its output | Accepted |
 | [0043](0043-a-dev-servers-fixed-port-is-devstacks.md) | A dev server's fixed port is devstack's, forwarded to its instance | Accepted |
-| [0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) | A lane's prepared directories can be linked into its worktree | Accepted |
+| [0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) | A lane's prepared directories can be linked into its worktree | Accepted; point 5 replaced for lanes on a node by ADR-0063; `link` ⊆ `outputs` by ADR-0062 |
 | [0045](0045-the-hub-notifies-the-desktop.md) | The hub notifies the desktop of what needs attention, without a tray | Accepted, amended 2026-10-21 (`guest_lane`) |
 | [0046](0046-the-hub-opens-a-worktree-in-the-users-programs.md) | The hub opens a stack's worktree in the user's own programs, from a fixed list | Accepted, amended 2026-10-21 (the program opens in front on Windows; GitHub Desktop), 2026-10-22 (an agent started with a prompt the hub writes) |
 | [0047](0047-the-dashboard-makes-a-lane-from-a-branch.md) | The dashboard makes a lane from a branch; the main tree's checkout stays the user's | Accepted; a branch without a stack file by ADR-0055 |
@@ -110,3 +110,5 @@ stay.
 | [0059](0059-a-services-stop-command-ends-what-its-run-started.md) | A service's `stop` command ends what its `run` started outside its process tree | Accepted |
 | [0060](0060-the-tray-is-a-client-of-the-hub.md) | The tray is a client of the hub, a process of its own, on every desktop | Accepted |
 | [0061](0061-the-dashboard-opens-in-its-installed-app.md) | The dashboard opens in its installed app, when there is one | Accepted |
+| [0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md) | What `prepare` makes is kept in a store per machine and repository, keyed by its inputs | Accepted |
+| [0063](0063-a-lane-on-a-node-links-its-worktree-to-a-copy-from-the-local-store.md) | A lane on a node links its worktree to a copy from the local store | Accepted |
