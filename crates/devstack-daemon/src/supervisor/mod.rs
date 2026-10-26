@@ -26,7 +26,9 @@ use tokio::sync::broadcast;
 mod artifacts;
 mod candidate;
 mod copy;
-pub use copy::{NodeLink, StoreEntryView, StoreRemoveError, StoreView, store_remove, store_view};
+pub use copy::{
+    NodeLink, StoreEntryView, StoreRemoveError, StoreView, Warmed, store_remove, store_view,
+};
 mod handover;
 mod infra;
 pub use infra::ContainerTarget;

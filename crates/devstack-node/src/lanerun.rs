@@ -84,6 +84,9 @@ pub struct LaneRun {
     /// (ADR-0062 point 3), mounted read-only at [`STORE_MOUNT`]; `None`:
     /// the lane gets none.
     pub store: Option<PathBuf>,
+    /// A warm lease (ADR-0065 point 5): no infrastructure, and the lane's
+    /// daemon runs only `prepare` (`DEVSTACK_WARM`).
+    pub warm: bool,
 }
 
 /// Where a lane's container sees its member's store (read-only).
@@ -717,7 +720,9 @@ impl LaneRun {
         // written, its containers created; nothing runs yet, so the network
         // rules go in first.
         let mut groups: Vec<(String, Group, Model)> = Vec::new();
-        for name in order(&stack) {
+        // A warm lease runs `prepare` only: no group is made.
+        let names = if self.warm { Vec::new() } else { order(&stack) };
+        for name in names {
             if self.started(&stack, &name).is_empty() {
                 // Its profile leaves every container out: nothing is made.
                 phase(&format!("infrastructure: {name}: left out by the profile"));
@@ -955,6 +960,9 @@ impl LaneRun {
         if let Some([mount, store, out, image]) = &store_args {
             args.extend(["-v", mount.as_str(), "-e", store.as_str()]);
             args.extend(["-e", out.as_str(), "-e", image.as_str()]);
+        }
+        if self.warm {
+            args.extend(["-e", "DEVSTACK_WARM=1"]);
         }
         if let Some(n) = networks.first() {
             args.extend(["--network", n.as_str()]);
@@ -1357,6 +1365,7 @@ mod tests {
             network: Network::Lan,
             secret: "s".into(),
             store: None,
+            warm: false,
         };
         let g = run.mirror_group(&lane, "app");
         // Every call of the group gets them: the node's own (`group`) too.

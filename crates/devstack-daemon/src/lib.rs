@@ -23,6 +23,7 @@ pub mod timeline;
 pub mod token;
 pub mod udprelay;
 pub mod usage;
+pub(crate) mod warm;
 pub mod watch;
 
 use serde::{Deserialize, Serialize};
@@ -293,6 +294,10 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     let _watcher = watch::start(sup.clone());
     // A dev server's rebuilds, from its output (ADR-0042).
     sup.follow_rebuilds();
+    // A warm lease on a node runs `prepare` only (ADR-0065 point 5).
+    if warm::warm_lease() {
+        warm::run_lane(sup.clone());
+    }
 
     let served = rt.block_on(async move {
         let listener = match listen_addr()? {

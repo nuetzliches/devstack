@@ -620,6 +620,93 @@ impl Supervisor {
         report(&views);
     }
 
+    /// `prepare` of `name` for a ref checked out at `root` (ADR-0065
+    /// points 3, 4): there are the files of its `inputs` at least, and
+    /// `complete` checks out the rest. The key is a copy's, over those
+    /// files as git checked them out. `Ok(Warmed::Had)` when the store has
+    /// it; else the checkout is completed and prepared, and its outputs go
+    /// into the store.
+    pub(crate) fn warm_service(
+        &self,
+        name: &str,
+        svc: &Service,
+        root: &Path,
+        complete: Box<dyn Fn() -> Result<(), String> + Send>,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<Warmed, String> {
+        let Some(p) = svc.prepare.as_ref().filter(|p| !p.outputs.is_empty()) else {
+            return Err("its `prepare` names no `outputs`".into());
+        };
+        let globs = devstack_build::watch_set(&p.inputs).map_err(|e| e.to_string())?;
+        let mut files: Vec<(String, String)> = Vec::new();
+        let wanted = |rel: &str| globs.as_ref().is_some_and(|g| g.is_match(rel));
+        collect_files(root, root, &wanted, &mut files);
+        files.sort();
+        let hashed = files.iter().map(|(rel, hash)| (rel.as_str(), hash.clone()));
+        let key = prepare_key(p, svc, hashed)?;
+        let cwd = p.cwd.as_ref().or(svc.cwd.as_ref());
+        let job = PrepareJob {
+            key,
+            mark: root.parent().unwrap_or(root).join("prepared").join(name),
+            cwd: cwd.map_or_else(|| root.to_path_buf(), |c| root.join(c)),
+            run: p.run.clone(),
+            store: Ok(StoreUse {
+                root: root.to_path_buf(),
+                outputs: p.outputs.clone(),
+                version: p.version.clone(),
+            }),
+            before_run: Some(complete),
+        };
+        let key = match self.store_key(name, &job, cancel)? {
+            Ok(k) => k,
+            Err(why) => return Err(why.unwrap_or_else(|| "it does not use the store".into())),
+        };
+        if self.store().get(name, &key).is_some() {
+            return Ok(Warmed::Had(key));
+        }
+        let t0 = Instant::now();
+        self.run_prepare(name, job, cancel)?;
+        Ok(Warmed::Made(key, t0.elapsed()))
+    }
+
+    /// In a warm lease's container (ADR-0065 point 5): `prepare` of every
+    /// service whose `prepare` names `outputs`, in the lane's copy, from the
+    /// member's store or run into it; what each did, for the requester.
+    pub(crate) fn warm_lane(&self, cancel: &dyn Fn() -> bool) -> Vec<serde_json::Value> {
+        let mut out = Vec::new();
+        for (name, svc) in &self.stack.services {
+            if svc.prepare.as_ref().is_none_or(|p| p.outputs.is_empty()) {
+                continue;
+            }
+            let t0 = Instant::now();
+            let job = {
+                let mut snap = self.snapshot.lock().unwrap();
+                snap.sync()
+                    .map_err(|e| e.to_string())
+                    .and_then(|_| self.prepare_job(name, svc, &snap))
+            };
+            let done = match job {
+                Ok(None) => Ok("prepared before"),
+                Ok(Some(job)) => self.run_prepare(name, job, cancel).map(|v| {
+                    let how = if v.source == "store" {
+                        "from the store"
+                    } else {
+                        "prepared"
+                    };
+                    self.set_prepare(name, v);
+                    how
+                }),
+                Err(e) => Err(e),
+            };
+            out.push(match done {
+                Ok(how) => serde_json::json!({ "service": name, "done": how,
+                    "ms": t0.elapsed().as_millis() as u64 }),
+                Err(e) => serde_json::json!({ "service": name, "error": e }),
+            });
+        }
+        out
+    }
+
     /// The links [`Self::link_node_lane`] made in `worktree`, removed: the
     /// lane stopped, moved or went (ADR-0044 point 3 holds for them too).
     pub(crate) fn unlink_node_lane(
@@ -1013,6 +1100,40 @@ pub struct NodeLink {
     pub why: Option<String>,
 }
 
+/// What [`Supervisor::warm_service`] did, with the store's key.
+pub enum Warmed {
+    /// The store had it.
+    Had(String),
+    /// Prepared, in this long.
+    Made(String, Duration),
+}
+
+/// The files below `dir` that `keep` wants, as paths below `root` with `/`
+/// and the blake3 of their content: what a copy's manifest says of them.
+fn collect_files(
+    root: &Path,
+    dir: &Path,
+    keep: &dyn Fn(&str) -> bool,
+    out: &mut Vec<(String, String)>,
+) {
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = e.path();
+        if e.file_type().is_ok_and(|t| t.is_dir()) {
+            collect_files(root, &path, keep, out);
+            continue;
+        }
+        let Ok(rel) = path.strip_prefix(root) else {
+            continue;
+        };
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        if keep(&rel)
+            && let Ok(bytes) = std::fs::read(&path)
+        {
+            out.push((rel, blake3::hash(&bytes).to_hex().to_string()));
+        }
+    }
+}
+
 /// What [`link_one`] did.
 enum Linked {
     Made,
@@ -1234,6 +1355,118 @@ mod tests {
             "{last:?}"
         );
         assert!(std::fs::symlink_metadata(wt.join("deps")).is_err());
+    }
+
+    /// A repository with one commit of `files`, and its main tree's
+    /// supervisor for `stack`.
+    fn warm_repo(
+        d: &Path,
+        stack: &str,
+        files: &[(&str, &str)],
+        rt: &tokio::runtime::Runtime,
+    ) -> Arc<Supervisor> {
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(d)
+                .status()
+                .unwrap();
+            assert!(ok.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["config", "core.autocrlf", "false"]);
+        std::fs::write(d.join(".gitignore"), ".devstack\ndeps\n").unwrap();
+        for (rel, text) in files {
+            std::fs::write(d.join(rel), text).unwrap();
+        }
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "init"]);
+        let stack = devstack_config::from_str(stack, Path::new("t")).unwrap();
+        Supervisor::new(
+            stack,
+            d.join("devstack.toml"),
+            d.to_path_buf(),
+            d.join(".devstack"),
+            devstack_proc::Options::default(),
+            rt.handle().clone(),
+        )
+        .unwrap()
+    }
+
+    const WARM_STACK: &str = "version = 1\n[stack]\nname = \"t\"\n[prepare]\nwarm = [\"HEAD\"]\n[services.web]\nkind = \"devserver\"\nrun = \"x\"\nport = 4200\nprepare = { run = \"mkdir deps && echo made> deps\\\\made.txt\", inputs = [\"package-lock.json\"], outputs = [\"deps\"] }\n";
+
+    #[test]
+    fn a_ref_whose_key_the_store_has_is_warm_after_its_inputs_are_read() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let sup = warm_repo(
+            d.path(),
+            WARM_STACK,
+            &[("package-lock.json", "{\"v\":1}"), ("app.js", "1")],
+            &rt,
+        );
+        let svc = &sup.stack.services["web"];
+        let p = svc.prepare.as_ref().unwrap();
+        let key = prepare_key(
+            p,
+            svc,
+            [(
+                "package-lock.json",
+                blake3::hash(b"{\"v\":1}").to_hex().to_string(),
+            )]
+            .into_iter(),
+        )
+        .unwrap();
+        let made = d.path().join("made");
+        std::fs::create_dir_all(made.join("deps")).unwrap();
+        std::fs::write(made.join("deps/a.txt"), "a").unwrap();
+        sup.store()
+            .put(
+                "web",
+                &store_key_of(&key, None),
+                &made,
+                &p.outputs,
+                Duration::ZERO,
+            )
+            .unwrap();
+        let co = crate::warm::warm_here(&sup, "HEAD", "HEAD", &|| false).unwrap();
+        // Only the inputs were checked out: the store had the key.
+        assert!(co.src.join("package-lock.json").is_file());
+        assert!(!co.src.join("app.js").exists());
+        assert_eq!(sup.store().entries().len(), 1);
+        assert!(sup.notices().is_empty(), "{:?}", sup.notices());
+        let dir = co.src.parent().unwrap().to_path_buf();
+        drop(co);
+        assert!(!dir.exists(), "the checkout goes");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_ref_whose_key_the_store_lacks_is_prepared_into_it() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let sup = warm_repo(
+            d.path(),
+            WARM_STACK,
+            &[("package-lock.json", "{\"v\":2}"), ("app.js", "1")],
+            &rt,
+        );
+        let co = crate::warm::warm_here(&sup, "HEAD", "HEAD", &|| false).unwrap();
+        assert!(co.src.join("app.js").is_file(), "the whole ref, to prepare");
+        let entries = sup.store().entries();
+        assert_eq!(entries.len(), 1, "{:?}", sup.notices());
+        assert_eq!(entries[0].0.outputs, ["deps"]);
+        // A second look: the store has it now.
+        drop(co);
+        let co = crate::warm::warm_here(&sup, "HEAD", "HEAD", &|| false).unwrap();
+        assert!(!co.src.join("app.js").exists());
     }
 
     #[test]

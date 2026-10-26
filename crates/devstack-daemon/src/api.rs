@@ -38,6 +38,7 @@ pub fn router(state: AppState) -> axum::Router {
     axum::Router::new()
         .route("/v1/stack", get(stack))
         .route("/v1/telemetry/take", post(telemetry_take))
+        .route("/v1/warm", get(warm_view))
         .route("/v1/up", post(up))
         .route("/v1/down", post(down))
         .route("/v1/shutdown", post(shutdown))
@@ -219,6 +220,12 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 async fn stack(State(s): State<AppState>) -> Response {
     Json(s.sup.view()).into_response()
+}
+
+/// `GET /v1/warm`: in a warm lease's container on a node, whether its
+/// `prepare` runs are done and what each did (ADR-0065 point 5).
+async fn warm_view() -> Response {
+    Json(crate::warm::lane_view()).into_response()
 }
 
 /// `POST /v1/telemetry/take`: in the daemon of a lane on a node, the

@@ -334,6 +334,33 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
     if stack.stack.name.trim().is_empty() {
         c.err("stack.name", "must not be empty");
     }
+    // A ref devstack hands to git as it is: never an option, never a range.
+    for r in &stack.prepare.warm {
+        let bad = r.trim().is_empty()
+            || r.starts_with('-')
+            || r.contains("..")
+            || r.chars()
+                .any(|ch| ch.is_whitespace() || "~^:?*[\\".contains(ch));
+        if bad {
+            c.err(
+                "prepare.warm",
+                format!("`{r}`: a ref such as `origin/main`"),
+            );
+        }
+        c.literal("prepare.warm", r);
+    }
+    if !stack.prepare.warm.is_empty()
+        && !stack
+            .services
+            .values()
+            .filter_map(|s| s.prepare.as_ref())
+            .any(|p| !p.outputs.is_empty())
+    {
+        c.err(
+            "prepare.warm",
+            "no service's `prepare` names `outputs`: nothing would be kept to warm",
+        );
+    }
     if let Some(r) = &stack.stack.requires
         && crate::version_triple(r).is_none()
     {
@@ -1114,6 +1141,22 @@ pub fn warnings(stack: &Stack) -> Vec<Issue> {
                 ),
             });
         }
+    }
+    let warm = crate::version_order(crate::WARM_SINCE);
+    if !stack.prepare.warm.is_empty()
+        && stack
+            .stack
+            .requires
+            .as_deref()
+            .is_none_or(|r| crate::version_order(r) < warm)
+    {
+        out.push(Issue {
+            path: "prepare.warm".into(),
+            message: format!(
+                "a devstack before {v} does not know this key and fails on it with \"unknown field\": `requires = \"{v}\"` makes it ask to be updated instead",
+                v = crate::WARM_SINCE
+            ),
+        });
     }
     let stop = crate::version_order(crate::STOP_SINCE);
     if stack
