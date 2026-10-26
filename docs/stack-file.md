@@ -618,6 +618,33 @@ lanes prepare in every copy.
 A file with `outputs` or `version` should say `requires = "0.23.0"` in
 `[stack]`.
 
+### `[prepare] warm`: the store made ahead for a ref
+
+```toml
+[prepare]
+warm = ["origin/main"]
+```
+
+([ADR-0065](adr/0065-the-store-is-warmed-for-a-ref-before-a-lane-needs-it.md))
+The first lane after a lockfile change pays the whole `prepare`; with
+`warm`, the main tree's daemon pays it ahead, in the background. It reads
+each ref's commit every minute and never fetches: whoever fetches decides
+when the ref moves. A new commit, unchanged for two minutes, is checked
+out under `.devstack/warm/` as git checks it out (line endings and filters,
+so the key is a checkout's), with an index of its own: your worktree, your
+index and the list of worktrees stay as they are. First only each
+service's `inputs`: when the store has their key, that is all. Otherwise
+the whole ref is checked out there and `prepare` runs once, under the same
+one-at-a-time lock as every `prepare` (a lane that needs the key meanwhile
+waits and copies), and its `outputs` go into the store. Then the nodes this
+repository's lanes ran on, while one of them is kept or runs there, get a
+**warm lease**: a short lease of yours that runs only the `prepare` their
+store lacks, without containers, and ends ([pool.md](pool.md)). A commit is
+warmed once (also over a restart); a failure is a notice, retried at the
+next commit. Each service whose `prepare` names `outputs` is warmed; a
+`warm` without such a service is an error. A file with `warm` should say
+`requires = "0.24.0"` in `[stack]`.
+
 ## `[lanes]`: other worktrees ([ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0030](adr/0030-each-lane-has-its-own-infrastructure.md); on other machines [ADR-0025](adr/0025-a-lane-can-run-on-another-node.md), [ADR-0028](adr/0028-lane-images.md), [ADR-0029](adr/0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0035](adr/0035-lanes-can-be-shared-with-the-pool.md), and [pool.md](pool.md))
 
 ```toml

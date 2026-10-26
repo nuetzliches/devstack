@@ -120,7 +120,8 @@ why. A member that only shares from the dashboard is no node.
   server deployed as code. It holds on top of the admin's: both must admit
   a lane, the smaller limits and the stricter network win. Beyond an
   admin's fields it takes `keep_lanes_hours` and `keep_lanes_gib`: how long
-  and how much of stopped lanes it keeps (ADR-0038).
+  and how much of stopped lanes it keeps (ADR-0038), and `warm`: `false`
+  refuses warm leases (ADR-0065), which an admin's policy can say too.
 - It reads each lane's Compose model in a throwaway `docker:cli` container
   (`DEVSTACK_NODE_COMPOSE_IMAGE` names another image with `docker
   compose`), pulled once.
@@ -343,7 +344,13 @@ The node keeps a stopped lane a week if it is dedicated, a day otherwise
 (`keep_lanes_hours` in its policy), and at most 20 GiB of one member's kept
 lanes, mirrors, builds and volumes together (`keep_lanes_gib`; the least
 recently used goes first); it removes them at once when the pool no longer
-lists the member. A member's store of what `prepare` makes
+lists the member. A stack with `[prepare] warm` (ADR-0065) asks the nodes
+its lanes ran on for a **warm lease** after the ref moved: placed and
+admitted like a lane, on the ref's checkout as its mirror (its slot is the
+ref's, `warm--<ref>`), its container runs only the `prepare` the member's
+store there lacks, starts no container of the stack, and the lease ends
+when it is done. A node before 0.24.0 is not asked (it would start a whole
+lane); a node whose policy says `warm = false` refuses it. A member's store of what `prepare` makes
 ([ADR-0062](adr/0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md)),
 one per repository on the node, counts with its kept lanes: an entry no lane
 used for as long as a stopped lane is kept goes, and over the room the

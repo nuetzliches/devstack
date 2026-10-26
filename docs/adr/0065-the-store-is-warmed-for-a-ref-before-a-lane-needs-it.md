@@ -1,6 +1,6 @@
 # ADR-0065: The store is warmed for a ref before a lane needs it
 
-- **Status:** Accepted (2026-10-26)
+- **Status:** Accepted (2026-10-26); built, noted 2026-10-26
 - **Date:** 2026-10-26
 - **Deciders:** project owner
 - **Related:** [#290](https://github.com/nuetzliches/devstack/issues/290), [#277](https://github.com/nuetzliches/devstack/issues/277), [ADR-0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md) (the store, its key), [ADR-0063](0063-a-lane-on-a-node-links-its-worktree-to-a-copy-from-the-local-store.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md), [ADR-0033](0033-a-node-decides-what-runs-on-it.md), [ADR-0038](0038-a-lanes-data-outlives-its-lease.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0023](0023-stack-file-compatibility.md)
@@ -106,6 +106,24 @@ Where it will live:
   ended), `crates/devstack-node` (a lease of kind `warm`: the container runs
   `prepare` only; `warm` in the node policy).
 - `docs/stack-file.md`, `docs/pool.md`, the store view of #291.
+
+*Paths as built, noted 2026-10-26.* `crates/devstack-config`
+(`PrepareSettings::warm`, validated as a ref devstack hands to git: no
+option, no range, no whitespace; an error without a service whose `prepare`
+names `outputs`; `WARM_SINCE`). `crates/devstack-daemon/src/warm.rs`:
+`Watch` (every minute, two minutes quiet, the last commit warmed in
+`.devstack/warm/done.json`), `Checkout` (`read-tree`, `checkout-index` with
+`GIT_INDEX_FILE`; inputs first, `completer` for the rest), `warm_here`,
+and in a warm lease's container `run_lane` and `GET /v1/warm`.
+`supervisor/copy.rs`: `warm_service` (the key over the checked-out inputs),
+`warm_lane`. `lanes.rs`: `follow_warm`, `warm_nodes` (the nodes of
+`ran_on` whose slots hold a lane of the repository; a checkout of its own,
+without this machine's outputs; the lane name `warm--<ref>`). `remote.rs`:
+`RemoteLane::warm` (lease with `warm`, a node before 0.24.0 refused, sync,
+start, `GET /v1/warm` until done, release). `crates/devstack-node`:
+`warm` in `LeaseRequest`, `Lease`, `NodeLease`, `NodePolicy` (`false`
+anywhere wins); `lanerun.rs` makes no Compose group for a warm lease and
+sets `DEVSTACK_WARM`.
 
 ## What this ADR does not say
 

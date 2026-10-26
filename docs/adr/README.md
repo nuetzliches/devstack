@@ -113,4 +113,4 @@ stay.
 | [0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md) | What `prepare` makes is kept in a store per machine and repository, keyed by its inputs | Accepted; measured and built on the developer's machine, and on nodes, noted 2026-10-26 |
 | [0063](0063-a-lane-on-a-node-links-its-worktree-to-a-copy-from-the-local-store.md) | A lane on a node links its worktree to a copy from the local store | Accepted; built, noted 2026-10-26 |
 | [0064](0064-every-compose-call-is-told-the-lane-it-runs-for.md) | Every Compose call is told the lane it runs for | Accepted; addendum 2026-10-26 (a lane on a node: native `{lane}`, `{lane_suffix}`, `DEVSTACK_LANE` follow its name) |
-| [0065](0065-the-store-is-warmed-for-a-ref-before-a-lane-needs-it.md) | The store is warmed for a ref before a lane needs it | Accepted |
+| [0065](0065-the-store-is-warmed-for-a-ref-before-a-lane-needs-it.md) | The store is warmed for a ref before a lane needs it | Accepted; built, noted 2026-10-26 |
