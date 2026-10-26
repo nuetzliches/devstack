@@ -684,13 +684,12 @@ impl RemoteLane {
             elsewhere,
             ..
         } = Self::lease(rt, &spec)?;
-        // A node that does not know warm leases would start a whole lane.
-        let knows = offer
-            .node
-            .devstack
-            .as_ref()
-            .and_then(|r| devstack_config::version_order(&r.version))
-            >= devstack_config::version_order(WARM_SINCE_NODE);
+        // A node that does not know warm leases would start a whole lane: it
+        // runs this release or a later one, or exactly this devstack.
+        let node_version = offer.node.devstack.as_ref().map(|r| r.version.as_str());
+        let knows = node_version.and_then(devstack_config::version_order)
+            >= devstack_config::version_order(WARM_SINCE_NODE)
+            || node_version == Some(devstack_config::VERSION);
         if !knows {
             let _ = rt.block_on(client.release(&offer.id));
             return Err(format!(
