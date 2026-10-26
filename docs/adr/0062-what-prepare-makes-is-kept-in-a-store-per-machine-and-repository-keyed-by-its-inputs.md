@@ -180,6 +180,13 @@ daemon (`supervisor/copy.rs`, `node_store`) uses the store when the node
 gives it one, and does not sweep it. Still not built: the hit named in the
 dashboard (#291).
 
+*Noted 2026-10-26 (#297).* Point 2's key covers the `outputs` as well, and
+an entry is found under any service that made it: the same command in the
+same directory with the same inputs and outputs makes the same, whichever
+service names it (two services of one `node_modules`, a dev server and an
+end-to-end tool). Entries made before have another key; the sweep removes
+them.
+
 ## What this ADR does not say
 
 - That the main working tree uses the store. It runs in place, with the

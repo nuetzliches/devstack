@@ -116,12 +116,19 @@ impl Store {
     /// Where the entry of `key` is, and what it says: the store's, else
     /// one in the outbox not taken in yet.
     fn found(&self, service: &str, key: &str) -> Option<(PathBuf, Meta)> {
-        let at = self.entry(service, key);
-        if let Some(m) = read_meta(&at) {
-            return Some((at, m));
-        }
-        let at = self.outbox.as_ref()?.join(service).join(key);
-        read_meta(&at).map(|m| (at, m))
+        let within = |base: &Path| {
+            let at = base.join(service).join(key);
+            if let Some(m) = read_meta(&at) {
+                return Some((at, m));
+            }
+            // Another service's entry of the key: the same command in the
+            // same directory, the same inputs and outputs made it (#297).
+            std::fs::read_dir(base).ok()?.flatten().find_map(|s| {
+                let at = s.path().join(key);
+                read_meta(&at).map(|m| (at, m))
+            })
+        };
+        within(&self.root).or_else(|| within(self.outbox.as_ref()?))
     }
 
     /// The entry of `key`, if it is complete.
@@ -147,9 +154,12 @@ impl Store {
                 .ok()
                 .and_then(|s| s.trim().parse().ok())
         };
-        self.used_note(service, key)
+        let service = self
+            .found(service, key)
+            .map_or_else(|| service.to_string(), |(_, m)| m.service);
+        self.used_note(&service, key)
             .and_then(read)
-            .or_else(|| read(self.entry(service, key).join(USED)))
+            .or_else(|| read(self.entry(&service, key).join(USED)))
     }
 
     /// The key, for this process: one `prepare` of a key at a time, the
@@ -236,9 +246,11 @@ impl Store {
         for rel in &meta.outputs {
             remove_path(&to.join(rel))?;
         }
-        let stats = copy_dirs(&at, &self.entry(service, key), to, to, &meta.outputs)?;
+        // Links point to where the entry is as its maker's service has it.
+        let home = self.entry(&meta.service, key);
+        let stats = copy_dirs(&at, &home, to, to, &meta.outputs)?;
         let ms = (stats.elapsed.as_millis() as u64).to_string();
-        match self.used_note(service, key) {
+        match self.used_note(&meta.service, key) {
             Some(note) => {
                 if let Some(dir) = note.parent() {
                     let _ = std::fs::create_dir_all(dir);
@@ -751,6 +763,24 @@ mod tests {
         assert!(!outbox.join("web/k").exists());
         agent.remove("web", "k").unwrap();
         assert!(agent.entries().is_empty());
+    }
+
+    #[test]
+    fn a_key_one_service_made_is_found_for_another() {
+        let d = tempfile::tempdir().unwrap();
+        let (a, b) = (d.path().join("a"), d.path().join("b"));
+        tree(&a);
+        let store = Store::new(d.path().join("store"));
+        let outputs = vec!["web/node_modules".to_string()];
+        store
+            .put("web", "k", &a, &outputs, Duration::from_secs(5))
+            .unwrap();
+        let meta = store.get("e2e", "k").expect("the same key, made by `web`");
+        assert_eq!(meta.service, "web");
+        store.copy_into("e2e", "k", &b).unwrap();
+        assert!(b.join("web/node_modules/pkg/index.js").is_file());
+        assert!(store.copy_ms("e2e", "k").is_some());
+        assert!(store.get("e2e", "other").is_none());
     }
 
     #[test]

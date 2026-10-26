@@ -428,16 +428,47 @@ fn a_lane_runs_on_a_node_of_the_pool() {
             "the branch moves",
         ],
     );
+    let moved = String::from_utf8_lossy(
+        &Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&main)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
     let until = Instant::now() + Duration::from_secs(300);
     loop {
         let log =
             std::fs::read_to_string(main.join(".devstack").join("daemon.log")).unwrap_or_default();
-        let warmed = |place: &str| {
-            log.lines().any(|l| {
-                l.contains("\"prepare_warmed\"") && l.contains(&format!("\"place\":\"{place}\""))
-            })
+        // This commit's: the daemon's start warmed its first one already.
+        let line = |place: &str| {
+            log.lines()
+                .find(|l| {
+                    l.contains("\"prepare_warmed\"")
+                        && l.contains(&moved)
+                        && l.contains(&format!("\"place\":\"{place}\""))
+                })
+                .map(str::to_string)
         };
-        if warmed("local") && warmed("remote") {
+        if let (Some(_), Some(remote)) = (line("local"), line("remote")) {
+            // With the ref's files synced, its inputs give the lane's key
+            // (#298): the warm at the daemon's start made the entry the lane
+            // then copied, and this commit's has it (from the store, or its
+            // copy there prepared already). One key, one entry; without the
+            // ref's files the warm would have keyed an entry of its own.
+            assert!(
+                remote.contains("from the store") || remote.contains("prepared before"),
+                "{remote}\nthe lanes on the node:\n{}",
+                lane_logs(node.path(), "prepare")
+            );
+            assert_eq!(
+                store_entries(node.path()),
+                1,
+                "the node's store:\n{}",
+                lane_logs(node.path(), "prepare")
+            );
             break;
         }
         assert!(
@@ -826,6 +857,31 @@ fn with_prepare(main: &Path) {
     let mut text = std::fs::read_to_string(&ignore).unwrap();
     text.push_str("deps\n");
     std::fs::write(&ignore, text).unwrap();
+}
+
+/// The lines with `what` of every lane daemon's log on the node under `dir`.
+fn lane_logs(dir: &Path, what: &str) -> String {
+    fn walk(p: &Path, what: &str, out: &mut Vec<String>) {
+        for e in std::fs::read_dir(p).into_iter().flatten().flatten() {
+            let path = e.path();
+            if path.is_dir() && !path.is_symlink() {
+                if e.file_name() != "node_modules" {
+                    walk(&path, what, out);
+                }
+            } else if e.file_name() == "daemon.log" {
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                out.push(format!("== {}", path.display()));
+                out.extend(
+                    text.lines()
+                        .filter(|l| l.contains(what))
+                        .map(str::to_string),
+                );
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, what, &mut out);
+    out.join("\n")
 }
 
 /// The entries of every member store the node agent keeps under `dir`.
