@@ -1,6 +1,6 @@
 # ADR-0064: Every Compose call is told the lane it runs for
 
-- **Status:** Accepted (2026-10-26); addendum 2026-10-26 proposed (on a node, `{lane}`, `{lane_suffix}` and a native process's `DEVSTACK_LANE` follow the lane's name, [#284](https://github.com/nuetzliches/devstack/issues/284))
+- **Status:** Accepted (2026-10-26); addendum 2026-10-26 accepted (on a node, `{lane}`, `{lane_suffix}` and a native process's `DEVSTACK_LANE` follow the lane's name, [#284](https://github.com/nuetzliches/devstack/issues/284))
 - **Date:** 2026-10-26
 - **Deciders:** project owner
 - **Related:** [#280](https://github.com/nuetzliches/devstack/issues/280), [ADR-0014](0014-native-services-take-their-configuration-from-compose.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0023](0023-stack-file-compatibility.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md), [ADR-0057](0057-a-port-a-container-announces-moves-inside-it-too.md)
@@ -103,7 +103,7 @@ the main tree's; `Group::env`, set on every call),
 - Whether `{lane}` and `{lane_suffix}` of a native service on a node should
   be the lane's name (see Consequences).
 
-## Addendum 2026-10-26 (proposed): the native side of a lane on a node
+## Addendum 2026-10-26: the native side of a lane on a node
 
 *Answers the last point of Consequences and of "What this ADR does not
 say" ([#284](https://github.com/nuetzliches/devstack/issues/284)).*
