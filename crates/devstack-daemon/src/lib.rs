@@ -16,7 +16,6 @@ pub mod registry;
 pub mod remote;
 pub mod state;
 pub mod staticsrv;
-pub mod store;
 pub mod supervisor;
 pub mod tcpfwd;
 pub mod telemetry;

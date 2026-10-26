@@ -4,6 +4,10 @@
 //! temporary directory, its metadata written last, renamed to its key. A hit
 //! is copied into a copy, never shared with one: tools write into what
 //! `prepare` made.
+//!
+//! On a node (ADR-0062 points 3, 4) a lane's daemon reads the member's store
+//! mounted read-only and writes what it adds into an outbox in its slot
+//! ([`Store::with_outbox`]); the node's agent takes it in ([`Store::take_in`]).
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -25,6 +29,9 @@ const COPY_THREADS: usize = 32;
 /// A temporary directory this old is left over from a daemon that ended
 /// while it wrote an entry.
 const TMP_STALE: Duration = Duration::from_secs(24 * 3600);
+/// In an outbox: the notes of hits on entries of the store
+/// (`<outbox>/.used/<service>/<key>`, the copy's milliseconds).
+const USED_NOTES: &str = ".used";
 
 /// What an entry holds and how it came about.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -63,31 +70,86 @@ pub struct Swept {
 
 pub struct Store {
     root: PathBuf,
+    /// Where new entries and the notes of hits go when `root` is not this
+    /// process's to write (a node's store, mounted read-only into a lane).
+    outbox: Option<PathBuf>,
+}
+
+/// Unix milliseconds.
+fn now_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
 }
 
 impl Store {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            outbox: None,
+        }
+    }
+
+    /// A store read at `root` and written to `outbox`, whose entries the
+    /// owner of `root` takes in ([`Self::take_in`]): a lane on a node.
+    pub fn with_outbox(root: impl Into<PathBuf>, outbox: impl Into<PathBuf>) -> Self {
+        Self {
+            root: root.into(),
+            outbox: Some(outbox.into()),
+        }
     }
 
     pub fn root(&self) -> &Path {
         &self.root
     }
 
+    /// Whether this process writes the store itself (and sweeps it).
+    pub fn owned(&self) -> bool {
+        self.outbox.is_none()
+    }
+
     fn entry(&self, service: &str, key: &str) -> PathBuf {
         self.root.join(service).join(key)
     }
 
+    /// Where the entry of `key` is, and what it says: the store's, else
+    /// one in the outbox not taken in yet.
+    fn found(&self, service: &str, key: &str) -> Option<(PathBuf, Meta)> {
+        let at = self.entry(service, key);
+        if let Some(m) = read_meta(&at) {
+            return Some((at, m));
+        }
+        let at = self.outbox.as_ref()?.join(service).join(key);
+        read_meta(&at).map(|m| (at, m))
+    }
+
     /// The entry of `key`, if it is complete.
     pub fn get(&self, service: &str, key: &str) -> Option<Meta> {
-        read_meta(&self.entry(service, key))
+        self.found(service, key).map(|(_, m)| m)
+    }
+
+    /// The note of a hit on `key` in the outbox.
+    fn used_note(&self, service: &str, key: &str) -> Option<PathBuf> {
+        Some(
+            self.outbox
+                .as_ref()?
+                .join(USED_NOTES)
+                .join(service)
+                .join(key),
+        )
     }
 
     /// How long the last copy out of the entry took.
     pub fn copy_ms(&self, service: &str, key: &str) -> Option<u64> {
-        std::fs::read_to_string(self.entry(service, key).join(USED))
-            .ok()
-            .and_then(|s| s.trim().parse().ok())
+        let read = |p: PathBuf| {
+            std::fs::read_to_string(p)
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+        };
+        self.used_note(service, key)
+            .and_then(read)
+            .or_else(|| read(self.entry(service, key).join(USED)))
     }
 
     /// The key, for this process: one `prepare` of a key at a time, the
@@ -125,25 +187,24 @@ impl Store {
         outputs: &[String],
         prepare: Duration,
     ) -> io::Result<Meta> {
-        let entry = self.entry(service, key);
-        if let Some(meta) = read_meta(&entry) {
+        if let Some((_, meta)) = self.found(service, key) {
             return Ok(meta);
         }
-        let dir = self.root.join(service);
+        // Links point to where the entry is read from, as the store's: not
+        // to `tmp`, nor to the outbox it passes through.
+        let home = self.entry(service, key);
+        let base = self.outbox.as_ref().unwrap_or(&self.root);
+        let entry = base.join(service).join(key);
+        let dir = base.join(service);
         std::fs::create_dir_all(&dir)?;
-        let tmp = dir.join(format!(
-            ".tmp-{key}-{}-{}",
-            std::process::id(),
-            crate::state::now_ms()
-        ));
+        let tmp = dir.join(format!(".tmp-{key}-{}-{}", std::process::id(), now_ms()));
         let written = (|| {
-            // Links point to where the entry will be, not to `tmp`.
-            let stats = copy_dirs(from, &tmp, &entry, outputs)?;
+            let stats = copy_dirs(from, from, &tmp, &home, outputs)?;
             let meta = Meta {
                 service: service.to_string(),
                 key: key.to_string(),
                 outputs: outputs.to_vec(),
-                created: crate::state::now_ms(),
+                created: now_ms(),
                 prepare_ms: prepare.as_millis() as u64,
                 files: stats.files,
                 bytes: stats.bytes,
@@ -169,56 +230,152 @@ impl Store {
     /// Copy the entry's outputs into the copy at `to` (its repository
     /// root), replacing what is there under those paths.
     pub fn copy_into(&self, service: &str, key: &str, to: &Path) -> io::Result<CopyStats> {
-        let entry = self.entry(service, key);
-        let meta = read_meta(&entry)
+        let (at, meta) = self
+            .found(service, key)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such entry"))?;
         for rel in &meta.outputs {
             remove_path(&to.join(rel))?;
         }
-        let stats = copy_dirs(&entry, to, to, &meta.outputs)?;
-        let _ = std::fs::write(
-            entry.join(USED),
-            (stats.elapsed.as_millis() as u64).to_string(),
-        );
+        let stats = copy_dirs(&at, &self.entry(service, key), to, to, &meta.outputs)?;
+        let ms = (stats.elapsed.as_millis() as u64).to_string();
+        match self.used_note(service, key) {
+            Some(note) => {
+                if let Some(dir) = note.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                let _ = std::fs::write(note, ms);
+            }
+            None => {
+                let _ = std::fs::write(at.join(USED), ms);
+            }
+        }
         Ok(stats)
+    }
+
+    /// What a lane put into `outbox` ([`Self::with_outbox`]), taken into
+    /// this store: complete entries moved in (one the store has already is
+    /// dropped), notes of hits applied to their entries. The keys taken in.
+    /// `outbox` and the store are on one filesystem: a move is a rename.
+    pub fn take_in(&self, outbox: &Path) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let Ok(services) = std::fs::read_dir(outbox) else {
+            return out;
+        };
+        for svc in services.flatten() {
+            let service = svc.file_name().to_string_lossy().into_owned();
+            if service == USED_NOTES {
+                continue;
+            }
+            let Ok(keys) = std::fs::read_dir(svc.path()) else {
+                continue;
+            };
+            for k in keys.flatten() {
+                let key = k.file_name().to_string_lossy().into_owned();
+                if key.starts_with(".tmp-") {
+                    if age(&k.path()).is_some_and(|a| a >= TMP_STALE) {
+                        let _ = std::fs::remove_dir_all(k.path());
+                    }
+                    continue;
+                }
+                // Not done yet, or not an entry: left alone.
+                if read_meta(&k.path()).is_none() {
+                    continue;
+                }
+                let to = self.entry(&service, &key);
+                let moved = read_meta(&to).is_none()
+                    && std::fs::create_dir_all(self.root.join(&service)).is_ok()
+                    && (!to.exists() || std::fs::remove_dir_all(&to).is_ok())
+                    && rename_dir(&k.path(), &to).is_ok();
+                if moved {
+                    out.push((service.clone(), key));
+                } else {
+                    let _ = std::fs::remove_dir_all(k.path());
+                }
+            }
+        }
+        let notes = outbox.join(USED_NOTES);
+        for svc in std::fs::read_dir(&notes).into_iter().flatten().flatten() {
+            for n in std::fs::read_dir(svc.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                let entry = self.root.join(svc.file_name()).join(n.file_name());
+                if entry.join(META).is_file()
+                    && let Ok(ms) = std::fs::read_to_string(n.path())
+                {
+                    let _ = std::fs::write(entry.join(USED), ms);
+                }
+                let _ = std::fs::remove_file(n.path());
+            }
+        }
+        out
+    }
+
+    /// The store's complete entries: what each takes, and how long it was
+    /// not used.
+    pub fn entries(&self) -> Vec<(Meta, Duration)> {
+        let mut out = Vec::new();
+        for svc in std::fs::read_dir(&self.root)
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            for k in std::fs::read_dir(svc.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                let path = k.path();
+                if let Some(meta) = read_meta(&path) {
+                    let idle = age(&path.join(USED))
+                        .or_else(|| age(&path.join(META)))
+                        .unwrap_or_default();
+                    out.push((meta, idle));
+                }
+            }
+        }
+        out
+    }
+
+    /// What the store's entries take.
+    pub fn bytes(&self) -> u64 {
+        self.entries().iter().map(|(m, _)| m.bytes).sum()
+    }
+
+    /// The entry of `key` removed: moved out of the way first, so a copy
+    /// that starts meanwhile finds none rather than half of one.
+    pub fn remove(&self, service: &str, key: &str) -> io::Result<()> {
+        let path = self.entry(service, key);
+        let gone = self.root.join(service).join(format!(".tmp-gone-{key}"));
+        rename_dir(&path, &gone).and_then(|()| std::fs::remove_dir_all(&gone))
     }
 
     /// Entries not used for `older_than`, removed unless `dry_run`; and
     /// temporary directories a daemon that ended left behind.
     pub fn sweep(&self, older_than: Duration, dry_run: bool) -> Vec<Swept> {
-        let now = SystemTime::now();
-        let mut out = Vec::new();
-        let Ok(services) = std::fs::read_dir(&self.root) else {
-            return out;
-        };
-        for svc in services.flatten() {
-            let Ok(keys) = std::fs::read_dir(svc.path()) else {
-                continue;
-            };
-            for k in keys.flatten() {
-                let path = k.path();
-                let name = k.file_name().to_string_lossy().into_owned();
-                let age = |p: &Path| {
-                    std::fs::metadata(p)
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|t| now.duration_since(t).ok())
-                };
-                if name.starts_with(".tmp-") {
-                    if !dry_run && age(&path).is_some_and(|a| a >= TMP_STALE) {
-                        let _ = std::fs::remove_dir_all(&path);
+        if !dry_run {
+            for svc in std::fs::read_dir(&self.root)
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                for k in std::fs::read_dir(svc.path())
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                {
+                    let stale = age(&k.path()).is_some_and(|a| a >= TMP_STALE);
+                    if k.file_name().to_string_lossy().starts_with(".tmp-") && stale {
+                        let _ = std::fs::remove_dir_all(k.path());
                     }
-                    continue;
                 }
-                let Some(meta) = read_meta(&path) else {
-                    continue;
-                };
-                let idle = age(&path.join(USED))
-                    .or_else(|| age(&path.join(META)))
-                    .unwrap_or_default();
-                if idle < older_than {
-                    continue;
-                }
+            }
+        }
+        self.entries()
+            .into_iter()
+            .filter(|(_, idle)| *idle >= older_than)
+            .map(|(meta, idle)| {
                 let mut swept = Swept {
                     service: meta.service,
                     key: meta.key,
@@ -228,18 +385,14 @@ impl Store {
                     error: None,
                 };
                 if !dry_run {
-                    // Out of the way first: a copy that starts meanwhile
-                    // finds no entry rather than half of one.
-                    let gone = svc.path().join(format!(".tmp-gone-{name}"));
-                    match rename_dir(&path, &gone).and_then(|()| std::fs::remove_dir_all(&gone)) {
+                    match self.remove(&swept.service, &swept.key) {
                         Ok(()) => swept.removed = true,
                         Err(e) => swept.error = Some(e.to_string()),
                     }
                 }
-                out.push(swept);
-            }
-        }
-        out
+                swept
+            })
+            .collect()
     }
 }
 
@@ -255,6 +408,12 @@ impl Drop for KeyGuard {
         self.busy.lock().unwrap().remove(&self.path);
         self.freed.notify_all();
     }
+}
+
+/// How long ago `p` was last written.
+fn age(p: &Path) -> Option<Duration> {
+    let t = std::fs::metadata(p).and_then(|m| m.modified()).ok()?;
+    SystemTime::now().duration_since(t).ok()
 }
 
 fn read_meta(entry: &Path) -> Option<Meta> {
@@ -300,12 +459,13 @@ fn remove_path(p: &Path) -> io::Result<()> {
 }
 
 /// The directories `rels` of `from` copied to the same paths under `to`,
-/// files many at once. A link stays a link; one that points into `from`
-/// points to the same place under `links_to` (npm's links to a workspace's
-/// packages are absolute junctions on Windows): `to` itself, or where `to`
-/// is renamed to.
+/// files many at once. A link stays a link; one that points into
+/// `links_from` (where `from` is as its links see it) points to the same
+/// place under `links_to` (where `to` is as its links will see it). npm's
+/// links to a workspace's packages are absolute junctions on Windows.
 pub fn copy_dirs(
     from: &Path,
+    links_from: &Path,
     to: &Path,
     links_to: &Path,
     rels: &[String],
@@ -320,7 +480,7 @@ pub fn copy_dirs(
                 format!("`{rel}` is no directory in {}", from.display()),
             ));
         }
-        walk(from, links_to, &src, &to.join(rel), &mut files)?;
+        walk(links_from, links_to, &src, &to.join(rel), &mut files)?;
     }
     let next = AtomicUsize::new(0);
     let bytes = AtomicU64::new(0);
@@ -535,6 +695,62 @@ mod tests {
         let swept = store.sweep(Duration::ZERO, false);
         assert!(swept[0].removed, "{swept:?}");
         assert!(store.get("web", "k").is_none());
+    }
+
+    #[test]
+    fn a_lane_on_a_node_writes_its_outbox_and_the_agent_takes_it_in() {
+        let d = tempfile::tempdir().unwrap();
+        let (a, b) = (d.path().join("a"), d.path().join("b"));
+        tree(&a);
+        std::fs::create_dir_all(b.join("packages/shared")).unwrap();
+        std::fs::write(b.join("packages/shared/index.js"), "b's shared").unwrap();
+        let (root, outbox) = (d.path().join("store"), d.path().join("slot/out"));
+        std::fs::create_dir_all(&root).unwrap();
+        let lane = Store::with_outbox(&root, &outbox);
+        assert!(!lane.owned());
+        let outputs = vec!["web/node_modules".to_string()];
+        lane.put("web", "k", &a, &outputs, Duration::from_secs(20))
+            .unwrap();
+        assert!(
+            !root.join("web/k").exists(),
+            "the store is not the lane's to write"
+        );
+        // The lane finds its own entry before the agent took it in.
+        assert!(lane.get("web", "k").is_some());
+        lane.copy_into("web", "k", &b).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(b.join("web/node_modules/shared/index.js")).unwrap(),
+            "b's shared"
+        );
+        // The agent takes it in; the note of the hit goes with it.
+        let agent = Store::new(&root);
+        assert_eq!(
+            agent.take_in(&outbox),
+            vec![("web".to_string(), "k".to_string())]
+        );
+        assert!(agent.get("web", "k").is_some());
+        assert!(agent.copy_ms("web", "k").is_some());
+        assert!(!outbox.join("web/k").exists());
+        assert_eq!(agent.bytes(), agent.get("web", "k").unwrap().bytes);
+        // The next lane hits the store itself, links and all.
+        let c = d.path().join("c");
+        std::fs::create_dir_all(c.join("packages/shared")).unwrap();
+        std::fs::write(c.join("packages/shared/index.js"), "c's shared").unwrap();
+        let next = Store::with_outbox(&root, d.path().join("slot2/out"));
+        next.copy_into("web", "k", &c).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(c.join("web/node_modules/shared/index.js")).unwrap(),
+            "c's shared"
+        );
+        // A second lane's entry for a key the store has: dropped.
+        let again = Store::with_outbox(d.path().join("other"), &outbox);
+        again
+            .put("web", "k", &a, &outputs, Duration::from_secs(1))
+            .unwrap();
+        assert!(agent.take_in(&outbox).is_empty());
+        assert!(!outbox.join("web/k").exists());
+        agent.remove("web", "k").unwrap();
+        assert!(agent.entries().is_empty());
     }
 
     #[test]

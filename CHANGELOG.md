@@ -11,6 +11,15 @@ and listed with their assets on the
 
 ### Added
 
+- **A pool node keeps a store of what `prepare` makes** (ADR-0062, #277),
+  per member and repository: a lane on the node reads it (read-only) and
+  copies an entry with the same inputs, platform and lane image instead of
+  running `npm ci`; what it prepares goes into its slot's outbox, and the
+  node takes it into the store within 15 s. Entries go after the node's
+  retention for kept lanes, count with the member's kept lanes (the least
+  recently used go first over the room) and go with the member. Needs the
+  node on this version.
+
 - **The worktree of a lane on a node gets `prepare.link` too** (ADR-0063,
   #277): a pre-commit hook with `npx eslint` there no longer needs a
   hand-run `npm ci`. With `outputs`, devstack checks the worktree's inputs

@@ -84,6 +84,7 @@ volumes:
         cpu_limit: None,
         network: Network::Lan,
         secret: "s".into(),
+        store: None,
     };
     let project = format!("dsltest-{tag}");
     let label = format!("label=com.docker.compose.project={project}");
