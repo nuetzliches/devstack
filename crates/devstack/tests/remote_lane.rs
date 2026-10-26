@@ -449,7 +449,7 @@ fn a_lane_runs_on_a_node_of_the_pool() {
                     .filter(|l| l.contains("warm"))
                     .collect::<Vec<_>>()
                     .join("\n"),
-                lane_logs(node.path(), "prepare")
+                lane_logs(node.path(), "\"service\":\"api\"")
             );
             break;
         }
