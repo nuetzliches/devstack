@@ -428,28 +428,37 @@ fn a_lane_runs_on_a_node_of_the_pool() {
             "the branch moves",
         ],
     );
+    let moved = String::from_utf8_lossy(
+        &Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&main)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
     let until = Instant::now() + Duration::from_secs(300);
     loop {
         let log =
             std::fs::read_to_string(main.join(".devstack").join("daemon.log")).unwrap_or_default();
-        let warmed = |place: &str| {
-            log.lines().any(|l| {
-                l.contains("\"prepare_warmed\"") && l.contains(&format!("\"place\":\"{place}\""))
-            })
+        // This commit's: the daemon's start warmed its first one already.
+        let line = |place: &str| {
+            log.lines()
+                .find(|l| {
+                    l.contains("\"prepare_warmed\"")
+                        && l.contains(&moved)
+                        && l.contains(&format!("\"place\":\"{place}\""))
+                })
+                .map(str::to_string)
         };
-        if warmed("local") && warmed("remote") {
+        if let (Some(_), Some(remote)) = (line("local"), line("remote")) {
             // With the ref's files synced, its inputs give the lane's key:
             // the node's store has it (#298).
             assert!(
-                log.lines().any(|l| l.contains("\"prepare_warmed\"")
-                    && l.contains("\"place\":\"remote\"")
-                    && l.contains("from the store")),
-                "the node prepared a key of its own: {}\nthe lanes on the node:\n{}",
-                log.lines()
-                    .filter(|l| l.contains("warm"))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-                lane_logs(node.path(), "\"service\":\"api\"")
+                remote.contains("from the store"),
+                "the node prepared a key of its own: {remote}\nthe lanes on the node:\n{}",
+                lane_logs(node.path(), "prepare")
             );
             break;
         }
