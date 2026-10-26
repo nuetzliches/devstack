@@ -421,6 +421,9 @@ fn a_lane_runs_on_a_node_of_the_pool() {
             "-c",
             "user.name=ci",
             "commit",
+            // The hook of the worktree's commit above wants `deps`, which
+            // the main tree, running in place, has not.
+            "--no-verify",
             "-qm",
             "the branch moves",
         ],
