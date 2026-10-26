@@ -1176,8 +1176,10 @@ impl Lanes {
         }
         // A checkout of its own: the one warmed here holds this machine's
         // outputs, which are not the node's.
+        // Its files from its index: git ignores `.devstack/`, where it is.
         let checkout = match crate::warm::Checkout::new(&self.main, r, commit, "node")
             .and_then(|co| co.completer()().map(|()| co))
+            .and_then(|co| co.files().map(|f| (co, f)))
         {
             Ok(co) => co,
             Err(e) => {
@@ -1215,7 +1217,7 @@ impl Lanes {
             let spec = crate::remote::RemoteSpec {
                 name: &lane,
                 repo: &repo,
-                worktree: &checkout.src,
+                worktree: &checkout.0.src,
                 main: &self.main.repo,
                 extra: &synced,
                 sharing: None,
@@ -1230,6 +1232,7 @@ impl Lanes {
                 step: &|_, _| {},
                 profile: None,
                 warm: true,
+                files: Some(&checkout.1),
             };
             match RemoteLane::warm(&self.rt, spec, cancel) {
                 Ok(results) => {
@@ -3237,6 +3240,7 @@ impl Lanes {
             step,
             profile: profile.as_deref(),
             warm: false,
+            files: None,
         })
     }
 

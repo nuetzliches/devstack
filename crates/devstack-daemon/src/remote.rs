@@ -251,17 +251,21 @@ impl RemoteLane {
 /// What the worktree's files look like now: path, size, modification time.
 type Fingerprint = BTreeMap<String, (u64, Option<SystemTime>)>;
 
-/// The files to sync: what git does not ignore, and what `[lanes] sync`
-/// names, from the worktree or else from the main tree.
+/// The files to sync: what git does not ignore (or `listed`), and what
+/// `[lanes] sync` names, from the worktree or else from the main tree.
 fn files(
     worktree: &Path,
     main: &Path,
     extra: &[String],
     scratch: &Path,
+    listed: Option<&[String]>,
 ) -> Result<(Vec<String>, Elsewhere), String> {
-    let mut list = devstack_build::snapshot::Snapshot::open(worktree, scratch)
-        .and_then(|s| s.list())
-        .map_err(|e| e.to_string())?;
+    let mut list = match listed {
+        Some(l) => l.to_vec(),
+        None => devstack_build::snapshot::Snapshot::open(worktree, scratch)
+            .and_then(|s| s.list())
+            .map_err(|e| e.to_string())?,
+    };
     let mut elsewhere = Elsewhere::new();
     let mut have: std::collections::HashSet<String> = list.iter().cloned().collect();
     for pattern in extra {
@@ -394,6 +398,9 @@ pub struct RemoteSpec<'a> {
     pub profile: Option<&'a str>,
     /// A warm lease (ADR-0065 point 5): only `prepare`, no infrastructure.
     pub warm: bool,
+    /// The files of `worktree` to sync, when git cannot tell them: a ref's
+    /// checkout under `.devstack/`, which git ignores (#298).
+    pub files: Option<&'a [String]>,
 }
 
 /// What a lane is expected to need as this machine estimates it (ADR-0049
@@ -558,7 +565,13 @@ impl RemoteLane {
         (spec.step)(1, &format!("lease on {}", spec.on));
         let (pool, node) = resolve_on(spec.on)?;
         let local = local_member(&pool);
-        let (list, elsewhere) = files(spec.worktree, spec.main, spec.extra, spec.scratch)?;
+        let (list, elsewhere) = files(
+            spec.worktree,
+            spec.main,
+            spec.extra,
+            spec.scratch,
+            spec.files,
+        )?;
         let offer = local
             .lease(&LeaseRequest {
                 node,
@@ -1275,7 +1288,7 @@ impl RemoteLane {
             let (wt, main, extra) = (self.worktree.clone(), self.main.clone(), self.extra.clone());
             let sc = scratch.clone();
             let listed = tokio::task::spawn_blocking(move || {
-                let (list, elsewhere) = files(&wt, &main, &extra, &sc)?;
+                let (list, elsewhere) = files(&wt, &main, &extra, &sc, None)?;
                 let fp = fingerprint(&wt, &list, &elsewhere);
                 Ok::<_, String>((list, elsewhere, fp))
             })
@@ -2179,7 +2192,7 @@ mod tests {
         put(main.path(), "certs/readme.txt");
         let extra = ["certs/*.pem".to_string()];
         let (mut list, elsewhere) =
-            super::files(wt.path(), main.path(), &extra, scratch.path()).unwrap();
+            super::files(wt.path(), main.path(), &extra, scratch.path(), None).unwrap();
         list.sort();
         assert_eq!(list, ["certs/a.pem", "certs/b.pem", "src/main.rs"]);
         assert_eq!(elsewhere.len(), 1);
@@ -2200,7 +2213,7 @@ mod tests {
         put(main.path(), "config/devstack.toml");
         let extra = ["config/devstack.toml".to_string()];
         let (list, elsewhere) =
-            super::files(wt.path(), main.path(), &extra, scratch.path()).unwrap();
+            super::files(wt.path(), main.path(), &extra, scratch.path(), None).unwrap();
         assert!(list.contains(&"config/devstack.toml".to_string()));
         assert_eq!(
             elsewhere["config/devstack.toml"],
@@ -2210,7 +2223,7 @@ mod tests {
         // Once it has its own, its own is synced.
         put(wt.path(), "config/devstack.toml");
         let (list, elsewhere) =
-            super::files(wt.path(), main.path(), &extra, scratch.path()).unwrap();
+            super::files(wt.path(), main.path(), &extra, scratch.path(), None).unwrap();
         assert_eq!(
             list.iter().filter(|f| *f == "config/devstack.toml").count(),
             1

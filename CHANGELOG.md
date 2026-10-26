@@ -9,6 +9,21 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **A second service with the same `prepare` warms, and shares the entry**
+  (#297): a service whose `prepare` never ran here had no log directory, so
+  its `version` (`node --version`) failed with "path not found" and it was
+  not warmed, again at every commit. Its log directory is made first. A
+  store key now covers the `outputs` too, and a service finds the entry
+  another service made with the same `run`, `cwd`, inputs, outputs and
+  `version`, instead of running `npm ci` once more. Entries made before
+  have another key and are not hit once more; the sweep removes them.
+- **A warm lease on a node gets the ref's files** (#298): its checkout lies
+  under `.devstack/`, which git ignores, so the sync sent nearly nothing,
+  and a stack with `[lanes] dockerfile` failed to build its lane image
+  ("dockerfile not found"). The files come from the checkout's own index.
+
 ## [0.24.0] - 2026-10-26
 
 A lane on a pool node now gets what its `prepare` makes without a second

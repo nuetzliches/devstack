@@ -178,7 +178,7 @@ impl Supervisor {
                 }
             }
         }
-        Ok(Ok(store_key_of(&job.key, version.as_deref())))
+        Ok(Ok(store_key_of(&job.key, &s.outputs, version.as_deref())))
     }
 
     /// `prepare.version` of `name`, run in `cwd` like `prepare`; its output.
@@ -189,8 +189,11 @@ impl Supervisor {
         cwd: &Path,
         cancel: &dyn Fn() -> bool,
     ) -> Result<String, String> {
-        let out = self.log_dir(name).join("prepare-version.out");
-        let file = std::fs::File::create(&out).map_err(|e| e.to_string())?;
+        // A service that never ran has no log directory yet (#297).
+        let dir = self.log_dir(name);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let out = dir.join("prepare-version.out");
+        let file = std::fs::File::create(&out).map_err(|e| format!("{}: {e}", out.display()))?;
         std::fs::create_dir_all(cwd).map_err(|e| e.to_string())?;
         let spec = Spec {
             name: format!("{name}-prepare-version"),
@@ -890,9 +893,15 @@ fn prepare_key<'a>(
 /// The store's key of a `prepare` whose key is `key` on this machine, with
 /// the output of its `version` (ADR-0062 point 2). Short: Windows paths below
 /// it are long already (`node_modules`).
-fn store_key_of(key: &str, version: Option<&str>) -> String {
+fn store_key_of(key: &str, outputs: &[String], version: Option<&str>) -> String {
     let mut h = blake3::Hasher::new();
     h.update(key.as_bytes());
+    // What it keeps: two services whose `prepare` is the same and keeps the
+    // same directories share an entry (#297).
+    for o in outputs {
+        h.update(b"\0");
+        h.update(o.as_bytes());
+    }
     h.update(std::env::consts::OS.as_bytes());
     h.update(std::env::consts::ARCH.as_bytes());
     if let Some(v) = version {
@@ -1307,7 +1316,7 @@ mod tests {
         sup.store()
             .put(
                 "web",
-                &store_key_of(&key, None),
+                &store_key_of(&key, &p.outputs, None),
                 &made,
                 &p.outputs,
                 Duration::from_secs(60),
@@ -1427,7 +1436,7 @@ mod tests {
         sup.store()
             .put(
                 "web",
-                &store_key_of(&key, None),
+                &store_key_of(&key, &p.outputs, None),
                 &made,
                 &p.outputs,
                 Duration::ZERO,
@@ -1442,6 +1451,35 @@ mod tests {
         let dir = co.src.parent().unwrap().to_path_buf();
         drop(co);
         assert!(!dir.exists(), "the checkout goes");
+    }
+
+    // #297: a second service with the same `prepare` and `version`, which
+    // never ran (no log directory), is warm from the first one's entry.
+    #[cfg(windows)]
+    #[test]
+    fn two_services_with_the_same_prepare_warm_from_one_entry() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let prep = "prepare = { run = \"mkdir deps && echo made> deps\\\\made.txt\", inputs = [\"package-lock.json\"], outputs = [\"deps\"], version = \"git --version\" }";
+        let stack = format!(
+            "version = 1\n[stack]\nname = \"t\"\n[prepare]\nwarm = [\"HEAD\"]\n[services.web]\nkind = \"devserver\"\nrun = \"x\"\nport = 4200\n{prep}\n[services.e2e]\nkind = \"tool\"\nautostart = false\nrun = \"x\"\n{prep}\n"
+        );
+        let sup = warm_repo(
+            d.path(),
+            &stack,
+            &[("package-lock.json", "{\"v\":3}"), ("app.js", "1")],
+            &rt,
+        );
+        let co = crate::warm::warm_here(&sup, "HEAD", "HEAD", &|| false).unwrap();
+        drop(co);
+        assert!(sup.notices().is_empty(), "{:?}", sup.notices());
+        let entries = sup.store().entries();
+        assert_eq!(entries.len(), 1, "one entry for both: {entries:?}");
+        let log = std::fs::read_to_string(sup.state_dir.join("daemon.log")).unwrap_or_default();
+        assert!(!log.contains("prepare_warm_failed"), "{log}");
     }
 
     #[cfg(windows)]
@@ -1544,7 +1582,7 @@ mod tests {
             }),
             before_run: None,
         };
-        let key = store_key_of("inputs", None);
+        let key = store_key_of("inputs", &["deps".to_string()], None);
 
         // The first copy runs it: the store has no entry yet, and gets one.
         let ran = sup.run_prepare("web", job(), &|| false).unwrap();

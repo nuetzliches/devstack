@@ -438,6 +438,18 @@ fn a_lane_runs_on_a_node_of_the_pool() {
             })
         };
         if warmed("local") && warmed("remote") {
+            // With the ref's files synced, its inputs give the lane's key:
+            // the node's store has it (#298).
+            assert!(
+                log.lines().any(|l| l.contains("\"prepare_warmed\"")
+                    && l.contains("\"place\":\"remote\"")
+                    && l.contains("from the store")),
+                "the node prepared a key of its own: {}",
+                log.lines()
+                    .filter(|l| l.contains("warm"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
             break;
         }
         assert!(

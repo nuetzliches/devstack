@@ -571,7 +571,9 @@ lane with the same lockfile starts without `npm ci`. Name everything
 `prepare` makes that the service needs: what it writes elsewhere is not in
 the store. `version` is a command whose output, run in `prepare`'s `cwd`,
 is part of the key too, so that a toolchain update makes a new entry
-(`node --version` for native packages); it needs `outputs`. With `outputs`,
+(`node --version` for native packages); it needs `outputs`. The key
+covers `outputs` too: two services whose `prepare` has the same `run`, `cwd`,
+inputs, `outputs` and `version` share one entry. With `outputs`,
 each `link` is one of them or inside one: a lane on a node links its
 worktree to a copy from this machine's store
 ([ADR-0063](adr/0063-a-lane-on-a-node-links-its-worktree-to-a-copy-from-the-local-store.md)).
