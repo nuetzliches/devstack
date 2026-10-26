@@ -168,7 +168,8 @@ impl Supervisor {
             building(Some(id.clone()));
             if let Some(job) = self.prepare_job(name, svc, &snap)? {
                 drop(snap);
-                self.run_prepare(name, job, cancel)?;
+                let view = self.run_prepare(name, job, cancel)?;
+                self.set_prepare(name, view);
                 snap = self.snapshot.lock().unwrap();
             }
             self.link_prepared(name, svc);

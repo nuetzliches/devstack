@@ -428,8 +428,13 @@ pub fn valid_version(v: &str) -> bool {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Kept {
     pub lanes: usize,
-    /// Their directories (mirrors, builds, caches); volumes not counted.
+    /// Their directories (mirrors, builds, caches) and the members' stores
+    /// of what `prepare` makes; volumes not counted.
     pub bytes: u64,
+    /// Of `bytes`, the members' stores of what `prepare` makes (ADR-0062).
+    /// Older nodes do not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store_bytes: Option<u64>,
 }
 
 /// One moment of a node's capacity, or the pool's (ADR-0036): what it has,
@@ -2273,6 +2278,28 @@ pub async fn stop_signal() {
     }
     #[cfg(not(unix))]
     let _ = tokio::signal::ctrl_c().await;
+}
+
+#[cfg(test)]
+mod kept_tests {
+    use super::*;
+
+    #[test]
+    fn what_a_node_keeps_names_its_store_and_older_nodes_need_not() {
+        let old: Kept = serde_json::from_str(r#"{"lanes":2,"bytes":100}"#).unwrap();
+        assert_eq!(old.store_bytes, None);
+        assert_eq!(
+            serde_json::to_string(&old).unwrap(),
+            r#"{"lanes":2,"bytes":100}"#
+        );
+        let new = Kept {
+            lanes: 0,
+            bytes: 40,
+            store_bytes: Some(40),
+        };
+        let back: Kept = serde_json::from_str(&serde_json::to_string(&new).unwrap()).unwrap();
+        assert_eq!(back, new);
+    }
 }
 
 #[cfg(test)]

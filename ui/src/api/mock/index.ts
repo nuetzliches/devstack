@@ -706,6 +706,13 @@ export class MockTransport implements Transport {
     const view = () => json(200, s.view);
     if (p === '/v1/stack' && method === 'GET') return view();
     if (p === '/v1/usage' && method === 'GET') return json(200, s.usageWithHistory());
+    // The store of what `prepare` makes (ADR-0062).
+    if (p === '/v1/store' && method === 'GET') {
+      const entries = s.storeEntries();
+      return json(200, { owned: true, bytes: entries.reduce((n, e) => n + e.bytes, 0), entries });
+    }
+    const se = /^\/v1\/store\/([^/]+)\/([^/]+)$/.exec(p);
+    if (se && method === 'DELETE') return s.removeStoreEntry(decodeURIComponent(se[1]), decodeURIComponent(se[2])) ? empty(204) : json(404, { error: 'no such entry in the store' });
     if (p === '/v1/up' && method === 'POST') return empty(202);
     if (p === '/v1/down' && method === 'POST') return empty(204);
 

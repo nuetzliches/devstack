@@ -1,7 +1,7 @@
 //! A lane's copy of its worktree, and `prepare`.
 
 use super::{COPY_QUIET, KEEP_BUILD_LOGS, STOPPED, Supervisor, tail};
-use crate::state::{NoticeLevel, now_ms};
+use crate::state::{NoticeLevel, PrepareView, now_ms};
 use devstack_build::Snapshot;
 use devstack_build::store::Store;
 use devstack_config::model::{Prepare, Service};
@@ -69,6 +69,27 @@ impl Supervisor {
         }))
     }
 
+    /// Where `name`'s last `prepare` outputs came from, on its view.
+    pub(super) fn set_prepare(&self, name: &str, view: PrepareView) {
+        if let Some(slot) = self.slots.lock().unwrap().get_mut(name) {
+            slot.view.prepare = Some(view);
+        }
+    }
+
+    /// Of each service, the store key its last `prepare` outputs came from
+    /// or went to (ADR-0062).
+    pub(crate) fn prepared_keys(&self) -> Vec<(String, String)> {
+        self.slots
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(name, slot)| {
+                let key = slot.view.prepare.as_ref()?.key.clone()?;
+                Some((name.clone(), key))
+            })
+            .collect()
+    }
+
     /// The store of what `prepare` makes (ADR-0062): in the main tree's
     /// state, shared by its builds and its lanes.
     pub(crate) fn store(&self) -> Store {
@@ -86,10 +107,19 @@ impl Supervisor {
     /// Whether `prepare` of `name` goes through the store: it names
     /// `outputs`, none of them is tracked by git (a copy from the store
     /// would overwrite the source), and, in a lane on a node, the node
-    /// gives it the member's store (an older node does not).
-    fn store_use(&self, name: &str, p: &Prepare, snap: &Snapshot) -> Option<StoreUse> {
-        if p.outputs.is_empty() || (crate::remote_lane() && node_store().is_none()) {
-            return None;
+    /// gives it the member's store (an older node does not). `Err`: why
+    /// not, `None` when it names no `outputs`.
+    fn store_use(
+        &self,
+        name: &str,
+        p: &Prepare,
+        snap: &Snapshot,
+    ) -> Result<StoreUse, Option<String>> {
+        if p.outputs.is_empty() {
+            return Err(None);
+        }
+        if crate::remote_lane() && node_store().is_none() {
+            return Err(Some("the node gives this lane no store".into()));
         }
         let id = format!("prepare.store.{name}");
         let tracked = p.outputs.iter().find(|o| {
@@ -105,9 +135,9 @@ impl Supervisor {
                     "`prepare` of {name} runs in every copy: its output `{o}` holds files git tracks, which a copy from the store would overwrite."
                 ),
             );
-            return None;
+            return Err(Some(format!("its output `{o}` holds files git tracks")));
         }
-        Some(StoreUse {
+        Ok(StoreUse {
             root: snap.dir.clone(),
             outputs: p.outputs.clone(),
             version: p.version.clone(),
@@ -115,16 +145,17 @@ impl Supervisor {
     }
 
     /// The store's key of `job`: its inputs, this machine's platform and
-    /// the output of `version` (ADR-0062 point 2). `None`: `version` failed,
-    /// the store is not used this time.
+    /// the output of `version` (ADR-0062 point 2). `Ok(Err(why))`: the store
+    /// is not used this time (`None`: the `prepare` does not use it).
     fn store_key(
         &self,
         name: &str,
         job: &PrepareJob,
         cancel: &dyn Fn() -> bool,
-    ) -> Result<Option<String>, String> {
-        let Some(s) = &job.store else {
-            return Ok(None);
+    ) -> Result<Result<String, Option<String>>, String> {
+        let s = match &job.store {
+            Ok(s) => s,
+            Err(why) => return Ok(Err(why.clone())),
         };
         let mut version = None;
         if let Some(cmd) = &s.version {
@@ -143,11 +174,11 @@ impl Supervisor {
                             "`prepare` of {name} ran without the store: its `version` (`{cmd}`) failed: {e}"
                         ),
                     );
-                    return Ok(None);
+                    return Ok(Err(Some(format!("its `version` (`{cmd}`) failed"))));
                 }
             }
         }
-        Ok(Some(store_key_of(&job.key, version.as_deref())))
+        Ok(Ok(store_key_of(&job.key, version.as_deref())))
     }
 
     /// `prepare.version` of `name`, run in `cwd` like `prepare`; its output.
@@ -193,8 +224,8 @@ impl Supervisor {
     }
 
     /// A hit of `key`: its entry copied into the copy, unless the last copy
-    /// out of it took longer than its `prepare` (ADR-0062 point 6). `false`:
-    /// `prepare` runs.
+    /// out of it took longer than its `prepare` (ADR-0062 point 6). `Err`:
+    /// why not, `prepare` runs.
     fn prepare_from_store(
         &self,
         name: &str,
@@ -202,13 +233,13 @@ impl Supervisor {
         key: &str,
         root: &Path,
         log: &Path,
-    ) -> bool {
+    ) -> Result<PrepareView, String> {
         let miss = |why: &str| {
             crate::diag::info(
                 "prepare_store_miss",
                 serde_json::json!({ "lane": self.lane, "service": name, "key": key, "why": why }),
             );
-            false
+            Err(why.to_string())
         };
         let Some(meta) = store.get(name, key) else {
             return miss("no entry for these inputs on this machine");
@@ -237,23 +268,39 @@ impl Supervisor {
                         "files": stats.files, "bytes": stats.bytes,
                         "ms": stats.elapsed.as_millis() as u64, "prepare_ms": meta.prepare_ms }),
                 );
-                true
+                Ok(PrepareView {
+                    source: "store",
+                    at: now_ms(),
+                    ms: stats.elapsed.as_millis() as u64,
+                    key: Some(key.to_string()),
+                    prepare_ms: Some(meta.prepare_ms),
+                    miss: None,
+                    stored: false,
+                })
             }
             Err(e) => {
                 crate::diag::warn(
                     "prepare_store_copy_failed",
                     serde_json::json!({ "lane": self.lane, "service": name, "key": key, "error": e.to_string() }),
                 );
-                false
+                Err(format!("copying the entry failed: {e}"))
             }
         }
     }
 
-    /// After a `prepare` that succeeded: its outputs into the store.
-    fn store_put(&self, name: &str, store: &Store, key: &str, s: &StoreUse, took: Duration) {
+    /// After a `prepare` that succeeded: its outputs into the store. Whether
+    /// they are there.
+    fn store_put(
+        &self,
+        name: &str,
+        store: &Store,
+        key: &str,
+        s: &StoreUse,
+        took: Duration,
+    ) -> bool {
         let id = format!("prepare.store.{name}");
         let t0 = Instant::now();
-        match store.put(name, key, &s.root, &s.outputs, took) {
+        let stored = match store.put(name, key, &s.root, &s.outputs, took) {
             Ok(meta) => {
                 self.clear_notice(&id);
                 crate::diag::info(
@@ -262,6 +309,7 @@ impl Supervisor {
                         "files": meta.files, "bytes": meta.bytes,
                         "ms": t0.elapsed().as_millis() as u64, "prepare_ms": meta.prepare_ms }),
                 );
+                true
             }
             Err(e) => {
                 crate::diag::warn(
@@ -275,19 +323,22 @@ impl Supervisor {
                         "What `prepare` of {name} made is not in the store, the next copy runs it again: {e}"
                     ),
                 );
+                false
             }
-        }
+        };
         sweep_store(store);
+        stored
     }
 
     /// Run a `prepare` to completion; its output goes to a log of its own.
-    /// `cancel`: a stop came in, the prepare is killed.
+    /// `cancel`: a stop came in, the prepare is killed. Where its outputs
+    /// came from: the store or the run.
     pub(super) fn run_prepare(
         &self,
         name: &str,
         job: PrepareJob,
         cancel: &dyn Fn() -> bool,
-    ) -> Result<bool, String> {
+    ) -> Result<PrepareView, String> {
         let _one = self.preparing.lock().unwrap();
         let dir = self.log_dir(name);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -296,7 +347,10 @@ impl Supervisor {
         // Through the store (ADR-0062): one copy of a key prepares, the
         // others wait for it and copy what it made.
         let store = self.store();
-        let key = self.store_key(name, &job, cancel)?;
+        let (key, mut miss) = match self.store_key(name, &job, cancel)? {
+            Ok(k) => (Some(k), None),
+            Err(why) => (None, why),
+        };
         let _key = match &key {
             Some(k) => Some(
                 store
@@ -305,11 +359,14 @@ impl Supervisor {
             ),
             None => None,
         };
-        if let (Some(k), Some(s)) = (&key, &job.store)
-            && self.prepare_from_store(name, &store, k, &s.root, &log)
-        {
-            self.clear_notice(&format!("prepare.store.{name}"));
-            return job.done().map(|()| true);
+        if let (Some(k), Ok(s)) = (&key, &job.store) {
+            match self.prepare_from_store(name, &store, k, &s.root, &log) {
+                Ok(view) => {
+                    self.clear_notice(&format!("prepare.store.{name}"));
+                    return job.done().map(|()| view);
+                }
+                Err(why) => miss = Some(why),
+            }
         }
         if let Some(f) = &job.before_run {
             f()?;
@@ -347,10 +404,20 @@ impl Supervisor {
                 tail(&log, 15)
             ));
         }
-        if let (Some(k), Some(s)) = (&key, &job.store) {
-            self.store_put(name, &store, k, s, t0.elapsed());
-        }
-        job.done().map(|()| false)
+        let took = t0.elapsed();
+        let stored = match (&key, &job.store) {
+            (Some(k), Ok(s)) => self.store_put(name, &store, k, s, took),
+            _ => false,
+        };
+        job.done().map(|()| PrepareView {
+            source: "run",
+            at: now_ms(),
+            ms: took.as_millis() as u64,
+            key: key.filter(|_| stored),
+            prepare_ms: None,
+            miss,
+            stored,
+        })
     }
 
     /// A lane's copy, current and prepared for `svc`, before it starts from it.
@@ -367,7 +434,8 @@ impl Supervisor {
             self.prepare_job(name, svc, &snap)?
         };
         if let Some(job) = job {
-            self.run_prepare(name, job, cancel)?;
+            let view = self.run_prepare(name, job, cancel)?;
+            self.set_prepare(name, view);
         }
         self.link_prepared(name, svc);
         Ok(())
@@ -510,7 +578,7 @@ impl Supervisor {
                     mark,
                     cwd: cwd.map_or_else(|| root.clone(), |c| root.join(c)),
                     run: p.run.clone(),
-                    store: Some(StoreUse {
+                    store: Ok(StoreUse {
                         root: root.clone(),
                         outputs: p.outputs.clone(),
                         version: p.version.clone(),
@@ -524,8 +592,8 @@ impl Supervisor {
                     })),
                 };
                 match self.run_prepare(name, job, cancel) {
-                    Ok(true) => state = "linked (store)",
-                    Ok(false) => {}
+                    Ok(v) if v.source == "store" => state = "linked (store)",
+                    Ok(_) => {}
                     Err(e) => {
                         views.extend(at("not linked", Some(e)));
                         continue;
@@ -582,15 +650,16 @@ impl Supervisor {
             mark: root.parent().unwrap_or(root).join("prepared").join(name),
             cwd: cwd.map_or_else(|| root.to_path_buf(), |c| root.join(c)),
             run: p.run.clone(),
-            store: Some(StoreUse {
+            store: Ok(StoreUse {
                 root: root.to_path_buf(),
                 outputs: p.outputs.clone(),
                 version: p.version.clone(),
             }),
             before_run: Some(complete),
         };
-        let Some(key) = self.store_key(name, &job, cancel)? else {
-            return Err("its `version` failed".into());
+        let key = match self.store_key(name, &job, cancel)? {
+            Ok(k) => k,
+            Err(why) => return Err(why.unwrap_or_else(|| "it does not use the store".into())),
         };
         if self.store().get(name, &key).is_some() {
             return Ok(Warmed::Had(key));
@@ -618,9 +687,15 @@ impl Supervisor {
             };
             let done = match job {
                 Ok(None) => Ok("prepared before"),
-                Ok(Some(job)) => self
-                    .run_prepare(name, job, cancel)
-                    .map(|hit| if hit { "from the store" } else { "prepared" }),
+                Ok(Some(job)) => self.run_prepare(name, job, cancel).map(|v| {
+                    let how = if v.source == "store" {
+                        "from the store"
+                    } else {
+                        "prepared"
+                    };
+                    self.set_prepare(name, v);
+                    how
+                }),
                 Err(e) => Err(e),
             };
             out.push(match done {
@@ -773,7 +848,8 @@ pub(super) struct PrepareJob {
     cwd: PathBuf,
     run: String,
     /// What the store needs, when it is used (ADR-0062).
-    store: Option<StoreUse>,
+    /// `Err`: why not (`None`: it names no `outputs`).
+    store: Result<StoreUse, Option<String>>,
     /// Runs before `prepare` itself does, not before a hit: the copy of a
     /// worktree linked for a lane on a node gets its source only when it
     /// has to prepare (ADR-0063).
@@ -887,6 +963,130 @@ fn sweep_store(store: &Store) {
         }
     });
 }
+
+/// The store of what `prepare` makes (ADR-0062) as `GET /v1/store` shows it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StoreView {
+    /// This daemon writes and sweeps it; `false`: a node's, read-only here.
+    pub owned: bool,
+    /// The largest first.
+    pub entries: Vec<StoreEntryView>,
+    /// What all entries take.
+    pub bytes: u64,
+}
+
+/// An entry of the store.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StoreEntryView {
+    pub service: String,
+    pub key: String,
+    /// The directories it holds, relative to the repository.
+    pub outputs: Vec<String>,
+    pub bytes: u64,
+    pub files: u64,
+    /// Unix ms.
+    pub created: u128,
+    /// Unix ms of its last use (a copy out of it), else of its making.
+    pub last_used: u128,
+    /// How long the `prepare` that made it took.
+    pub prepare_ms: u64,
+    /// How long the last copy out of it took.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copy_ms: Option<u64>,
+    /// The trees whose service's last `prepare` outputs came from it or
+    /// went into it, since their daemon started: lane names, `""` the main
+    /// working tree (its builds).
+    pub used_by: Vec<String>,
+}
+
+/// `store`'s entries; `used`: (tree, service, key) of the last `prepare`
+/// of each service of each tree ([`Supervisor::prepared_keys`]).
+pub fn store_view(store: &Store, used: &[(String, String, String)]) -> StoreView {
+    let now = now_ms();
+    let mut entries: Vec<StoreEntryView> = store
+        .entries()
+        .into_iter()
+        .map(|(m, idle)| StoreEntryView {
+            copy_ms: store.copy_ms(&m.service, &m.key),
+            used_by: used
+                .iter()
+                .filter(|(_, s, k)| *s == m.service && *k == m.key)
+                .map(|(t, _, _)| t.clone())
+                .collect(),
+            last_used: now.saturating_sub(idle.as_millis()),
+            service: m.service,
+            key: m.key,
+            outputs: m.outputs,
+            bytes: m.bytes,
+            files: m.files,
+            created: m.created,
+            prepare_ms: m.prepare_ms,
+        })
+        .collect();
+    entries.sort_by(|a, b| {
+        b.bytes
+            .cmp(&a.bytes)
+            .then_with(|| (&a.service, &a.key).cmp(&(&b.service, &b.key)))
+    });
+    StoreView {
+        owned: store.owned(),
+        bytes: entries.iter().map(|e| e.bytes).sum(),
+        entries,
+    }
+}
+
+/// Why `DELETE /v1/store/{service}/{key}` did not remove an entry.
+#[derive(Debug, PartialEq, Eq)]
+pub enum StoreRemoveError {
+    /// No such entry (or a name that cannot be one).
+    NotFound(String),
+    /// Not this daemon's to change, or a `prepare` of the key under way.
+    Refused(String),
+    Failed(String),
+}
+
+/// A segment of a store path as an entry's service or key may be: no
+/// separator, nothing hidden or relative.
+fn store_name_ok(s: &str) -> bool {
+    !s.is_empty() && !s.starts_with('.') && !s.contains(['/', '\\', ':']) && !s.contains("..")
+}
+
+/// The entry `service`/`key` removed from `store`, unless a `prepare` of
+/// the key in this daemon copies out of it or puts it right now.
+pub fn store_remove(store: &Store, service: &str, key: &str) -> Result<(), StoreRemoveError> {
+    if !store_name_ok(service) || !store_name_ok(key) {
+        return Err(StoreRemoveError::NotFound(format!(
+            "no entry {service}/{key}"
+        )));
+    }
+    if !store.owned() {
+        return Err(StoreRemoveError::Refused(
+            "the node's store is its agent's to change".into(),
+        ));
+    }
+    if store.get(service, key).is_none() {
+        return Err(StoreRemoveError::NotFound(format!(
+            "no entry {service}/{key} in the store"
+        )));
+    }
+    let t0 = Instant::now();
+    let Some(_guard) = store.lock(service, key, &|| t0.elapsed() > STORE_REMOVE_WAIT) else {
+        return Err(StoreRemoveError::Refused(format!(
+            "a `prepare` of {service} uses the entry {key} right now"
+        )));
+    };
+    store
+        .remove(service, key)
+        .map_err(|e| StoreRemoveError::Failed(e.to_string()))?;
+    crate::diag::info(
+        "prepare_store_removed",
+        serde_json::json!({ "service": service, "key": key }),
+    );
+    Ok(())
+}
+
+/// How long a removal waits for a `prepare` of the key to end.
+const STORE_REMOVE_WAIT: Duration = Duration::from_secs(5);
 
 /// A path of a lane on a node's worktree, linked (or not) to a copy on this
 /// machine (ADR-0063): what `devstack status` and the dashboard show.
@@ -1267,5 +1467,133 @@ mod tests {
         drop(co);
         let co = crate::warm::warm_here(&sup, "HEAD", "HEAD", &|| false).unwrap();
         assert!(!co.src.join("app.js").exists());
+    }
+
+    #[test]
+    fn the_store_lists_its_entries_with_who_used_them_and_removes_one() {
+        let d = tempfile::tempdir().unwrap();
+        let made = d.path().join("made");
+        std::fs::create_dir_all(made.join("deps")).unwrap();
+        std::fs::write(made.join("deps/index.js"), "made").unwrap();
+        let store = Store::new(d.path().join("store"));
+        store
+            .put("web", "k1", &made, &["deps".into()], Duration::from_secs(3))
+            .unwrap();
+        let used = vec![("fix-login".to_string(), "web".to_string(), "k1".to_string())];
+        let v = store_view(&store, &used);
+        assert!(v.owned);
+        assert_eq!(v.entries.len(), 1);
+        let e = &v.entries[0];
+        assert_eq!((e.service.as_str(), e.key.as_str()), ("web", "k1"));
+        assert_eq!((e.files, e.prepare_ms), (1, 3000));
+        assert_eq!(e.used_by, vec!["fix-login".to_string()]);
+        assert_eq!(v.bytes, e.bytes);
+        assert!(matches!(
+            store_remove(&store, "web", "../web"),
+            Err(StoreRemoveError::NotFound(_))
+        ));
+        store_remove(&store, "web", "k1").unwrap();
+        assert!(store_view(&store, &used).entries.is_empty());
+        assert!(matches!(
+            store_remove(&store, "web", "k1"),
+            Err(StoreRemoveError::NotFound(_))
+        ));
+        // A node's store is its agent's.
+        let lane = Store::with_outbox(d.path().join("store"), d.path().join("out"));
+        assert!(!store_view(&lane, &[]).owned);
+        assert!(matches!(
+            store_remove(&lane, "web", "k1"),
+            Err(StoreRemoveError::Refused(_))
+        ));
+    }
+
+    // `prepare` runs as a process: without devstack's shim, on Windows only.
+    #[cfg(windows)]
+    #[test]
+    fn a_service_says_where_its_prepare_came_from_and_the_store_lists_and_removes_entries() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let main = d.path().join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        let text = "version = 1\n[stack]\nname = \"t\"\n[services.web]\nkind = \"devserver\"\nrun = \"x\"\nport = 4200\nprepare = { run = \"git --version\", inputs = [\"package-lock.json\"], outputs = [\"deps\"] }\n";
+        let stack = devstack_config::from_str(text, Path::new("t")).unwrap();
+        let sup = Supervisor::new(
+            stack,
+            main.join("devstack.toml"),
+            main.clone(),
+            main.join(".devstack"),
+            devstack_proc::Options::default(),
+            rt.handle().clone(),
+        )
+        .unwrap();
+        let copy = d.path().join("copy");
+        std::fs::create_dir_all(copy.join("deps")).unwrap();
+        std::fs::write(copy.join("deps/index.js"), "made").unwrap();
+        let job = || PrepareJob {
+            key: "inputs".into(),
+            mark: d.path().join("mark"),
+            cwd: copy.clone(),
+            run: "git --version".into(),
+            store: Ok(StoreUse {
+                root: copy.clone(),
+                outputs: vec!["deps".into()],
+                version: None,
+            }),
+            before_run: None,
+        };
+        let key = store_key_of("inputs", None);
+
+        // The first copy runs it: the store has no entry yet, and gets one.
+        let ran = sup.run_prepare("web", job(), &|| false).unwrap();
+        assert_eq!(ran.source, "run");
+        assert!(ran.stored);
+        assert_eq!(ran.key.as_deref(), Some(key.as_str()));
+        assert!(ran.miss.as_deref().unwrap().contains("no entry"), "{ran:?}");
+
+        // The next one copies it out of the store.
+        let hit = sup.run_prepare("web", job(), &|| false).unwrap();
+        assert_eq!(hit.source, "store", "{hit:?}");
+        assert_eq!(hit.key.as_deref(), Some(key.as_str()));
+        assert!(hit.prepare_ms.is_some() && hit.miss.is_none());
+        sup.set_prepare("web", hit.clone());
+        assert_eq!(sup.view().services[0].prepare.as_ref(), Some(&hit));
+        assert_eq!(sup.prepared_keys(), vec![("web".to_string(), key.clone())]);
+
+        // Without the store: why, and nothing stored.
+        let mut off = job();
+        off.store = Err(Some("its `version` (`node --version`) failed".into()));
+        let plain = sup.run_prepare("web", off, &|| false).unwrap();
+        assert_eq!(plain.source, "run");
+        assert!(!plain.stored && plain.key.is_none());
+        assert!(plain.miss.as_deref().unwrap().contains("version"));
+
+        // The store as the dashboard lists it, with who used an entry.
+        let store = sup.store();
+        let used = vec![("fix-login".to_string(), "web".to_string(), key.clone())];
+        let v = store_view(&store, &used);
+        assert!(v.owned);
+        assert_eq!(v.entries.len(), 1);
+        let e = &v.entries[0];
+        assert_eq!((e.service.as_str(), e.key.as_str()), ("web", key.as_str()));
+        assert_eq!(e.outputs, vec!["deps".to_string()]);
+        assert_eq!(e.files, 1);
+        assert_eq!(v.bytes, e.bytes);
+        assert!(e.copy_ms.is_some());
+        assert_eq!(e.used_by, vec!["fix-login".to_string()]);
+
+        // Removed: gone from the list; a name that is no entry is refused.
+        assert!(matches!(
+            store_remove(&store, "web", "../web"),
+            Err(StoreRemoveError::NotFound(_))
+        ));
+        store_remove(&store, "web", &key).unwrap();
+        assert!(store_view(&store, &used).entries.is_empty());
+        assert!(matches!(
+            store_remove(&store, "web", &key),
+            Err(StoreRemoveError::NotFound(_))
+        ));
     }
 }

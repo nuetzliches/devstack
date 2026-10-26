@@ -11,6 +11,7 @@ import type {
   StackEventBody,
   StackView,
   Status,
+  StoreEntry,
   UsageReport,
 } from '../types';
 import { buildId, buildLog, logLine, startupLines, type MockStackSeed } from './data';
@@ -418,6 +419,36 @@ export class MockStack {
     for (const g of r.groups) add(`grp:${g.name}`, g);
     for (const l of r.lanes) add(`lane:${l.name}`, l);
     this.lastUsage = r;
+  }
+
+  /** The store of what `prepare` makes (ADR-0062): the entries the services' last `prepare` used or made, and an older one. */
+  private storeGone = new Set<string>();
+  storeEntries(): StoreEntry[] {
+    const now = Date.now();
+    const used = this.view.services.flatMap((s) => (s.prepare?.key ? [{ s: s.name, k: s.prepare.key }] : []));
+    const all: StoreEntry[] = [
+      ...used.map(({ s, k }, i) => ({
+        service: s,
+        key: k,
+        outputs: s === 'web' ? ['web/node_modules'] : [`${s}/obj`],
+        bytes: (i + 1) * 410 * 2 ** 20,
+        files: (i + 1) * 24_500,
+        created: now - (3 + i) * 3_600_000,
+        last_used: now - 26 * 60_000,
+        prepare_ms: 162_000,
+        copy_ms: 2400,
+        used_by: ['', 'agent-login-fix'],
+      })),
+      { service: 'web', key: '0c77d2e1b9a4f3605d18', outputs: ['web/node_modules'], bytes: 395 * 2 ** 20, files: 24_100, created: now - 9 * 86_400_000, last_used: now - 6 * 86_400_000, prepare_ms: 158_000, used_by: [] },
+    ];
+    return all.filter((e) => !this.storeGone.has(`${e.service}/${e.key}`)).sort((a, b) => b.bytes - a.bytes);
+  }
+
+  removeStoreEntry(service: string, key: string): boolean {
+    const id = `${service}/${key}`;
+    if (!this.storeEntries().some((e) => `${e.service}/${e.key}` === id)) return false;
+    this.storeGone.add(id);
+    return true;
   }
 
   usageWithHistory(): UsageReport {

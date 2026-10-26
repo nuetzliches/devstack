@@ -708,10 +708,11 @@ impl Inner {
                 .or_default()
                 .push((slot, info, bytes));
         }
+        let store_bytes = stored.values().flatten().map(|e| e.3).sum::<u64>();
         *self.kept_use.lock().unwrap() = Some(crate::coordinator::Kept {
             lanes: by_member.values().map(Vec::len).sum(),
-            bytes: by_member.values().flatten().map(|s| s.2).sum::<u64>()
-                + stored.values().flatten().map(|e| e.3).sum::<u64>(),
+            bytes: by_member.values().flatten().map(|s| s.2).sum::<u64>() + store_bytes,
+            store_bytes: Some(store_bytes),
         });
         // A member with only a store here counts too.
         for member in stored.keys() {
