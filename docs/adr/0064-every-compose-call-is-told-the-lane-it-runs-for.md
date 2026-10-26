@@ -1,6 +1,6 @@
 # ADR-0064: Every Compose call is told the lane it runs for
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-26)
 - **Date:** 2026-10-26
 - **Deciders:** project owner
 - **Related:** [#280](https://github.com/nuetzliches/devstack/issues/280), [ADR-0014](0014-native-services-take-their-configuration-from-compose.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0023](0023-stack-file-compatibility.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md), [ADR-0057](0057-a-port-a-container-announces-moves-inside-it-too.md)
