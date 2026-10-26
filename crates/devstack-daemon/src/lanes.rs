@@ -1246,7 +1246,8 @@ impl Lanes {
                             event,
                             serde_json::json!({ "service": x["service"], "ref": r,
                                 "commit": commit, "place": "remote", "node": on.node.name,
-                                "done": x["done"], "error": x["error"], "ms": x["ms"] }),
+                                "done": x["done"], "key": x["key"], "miss": x["miss"],
+                                "error": x["error"], "ms": x["ms"] }),
                         );
                     }
                 }

@@ -689,21 +689,22 @@ impl Supervisor {
                     .and_then(|_| self.prepare_job(name, svc, &snap))
             };
             let done = match job {
-                Ok(None) => Ok("prepared before"),
+                Ok(None) => Ok(("prepared before", None, None)),
                 Ok(Some(job)) => self.run_prepare(name, job, cancel).map(|v| {
                     let how = if v.source == "store" {
                         "from the store"
                     } else {
                         "prepared"
                     };
+                    let (key, miss) = (v.key.clone(), v.miss.clone());
                     self.set_prepare(name, v);
-                    how
+                    (how, key, miss)
                 }),
                 Err(e) => Err(e),
             };
             out.push(match done {
-                Ok(how) => serde_json::json!({ "service": name, "done": how,
-                    "ms": t0.elapsed().as_millis() as u64 }),
+                Ok((how, key, miss)) => serde_json::json!({ "service": name, "done": how,
+                    "key": key, "miss": miss, "ms": t0.elapsed().as_millis() as u64 }),
                 Err(e) => serde_json::json!({ "service": name, "error": e }),
             });
         }
