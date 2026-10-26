@@ -719,6 +719,7 @@ pub fn run_lane(file: &Path, on: &str, lane: &str, keep: bool) -> Result<()> {
         floor: devstack_daemon::remote::floor_of(&stack.lane_need(None)),
         profile: None,
         devstack: Some(devstack_node::version::Release::this()),
+        warm: false,
     })?;
     println!(
         "lease {} on {} ({})",

@@ -145,6 +145,7 @@ fn a_lane_is_leased_admitted_and_synced() {
         floor: None,
         profile: None,
         devstack: None,
+        warm: false,
     });
     assert!(not_yet.unwrap_err().to_string().starts_with("409"));
     assert!(
@@ -158,6 +159,7 @@ fn a_lane_is_leased_admitted_and_synced() {
                 floor: None,
                 profile: None,
                 devstack: None,
+                warm: false,
             })
             .is_err(),
         "the pool places on granted nodes only"
@@ -192,6 +194,7 @@ fn a_lane_is_leased_admitted_and_synced() {
         floor: None,
         profile: None,
         devstack: None,
+        warm: false,
     });
     assert!(too_much.unwrap_err().to_string().starts_with("409"));
 
@@ -211,6 +214,7 @@ fn a_lane_is_leased_admitted_and_synced() {
             floor: None,
             profile: None,
             devstack: None,
+            warm: false,
         })
         .unwrap();
     assert_eq!(placed.node.id, node_id, "the coordinator picks the node");
@@ -229,6 +233,7 @@ fn a_lane_is_leased_admitted_and_synced() {
             floor: None,
             profile: None,
             devstack: None,
+            warm: false,
         })
         .unwrap();
     assert_eq!(offer.node.api, api);
@@ -486,6 +491,7 @@ fn a_lane_is_leased_admitted_and_synced() {
             floor: None,
             profile: None,
             devstack: None,
+            warm: false,
         })
         .unwrap();
     assert!(matches!(
@@ -537,6 +543,7 @@ fn a_lane_is_leased_admitted_and_synced() {
             floor: None,
             profile: None,
             devstack: None,
+            warm: false,
         })
         .unwrap();
     let lease2 = rt.block_on(client.admit(&again)).unwrap();
@@ -629,6 +636,7 @@ fn an_admin_pauses_a_node_and_ends_a_lease() {
             floor: None,
             profile: None,
             devstack: None,
+            warm: false,
         })
     };
 

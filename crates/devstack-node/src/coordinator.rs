@@ -428,8 +428,13 @@ pub fn valid_version(v: &str) -> bool {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Kept {
     pub lanes: usize,
-    /// Their directories (mirrors, builds, caches); volumes not counted.
+    /// Their directories (mirrors, builds, caches) and the members' stores
+    /// of what `prepare` makes; volumes not counted.
     pub bytes: u64,
+    /// Of `bytes`, the members' stores of what `prepare` makes (ADR-0062).
+    /// Older nodes do not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store_bytes: Option<u64>,
 }
 
 /// One moment of a node's capacity, or the pool's (ADR-0036): what it has,
@@ -622,6 +627,10 @@ pub struct LeaseRequest {
     /// node with the same pool protocol only. Absent from older requesters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub devstack: Option<Release>,
+    /// A warm lease (ADR-0065 point 5): the lane's container runs only the
+    /// `prepare` its member's store lacks, no infrastructure, then ends.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub warm: bool,
 }
 
 /// A member that runs lanes, as a requester reaches it.
@@ -683,6 +692,10 @@ pub struct Lease {
     /// Whom its owner shares the lane with, and which services (ADR-0035).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared: Option<Sharing>,
+    /// A warm lease (ADR-0065 point 5): the lane's container runs only the
+    /// `prepare` its member's store lacks, no infrastructure, then ends.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub warm: bool,
 }
 
 /// A lane shared with others in the pool (ADR-0035).
@@ -1264,6 +1277,7 @@ async fn report(
                         created: store::now(),
                         expires_in: Some(x.expires_in),
                         shared: None,
+                        warm: false,
                     },
                     // Admitted already: no node asks for it by token again.
                     random_hex(24),
@@ -1482,6 +1496,7 @@ async fn placement(
         floor: None,
         profile: q.profile.filter(|p| !p.is_empty()),
         devstack: Some(Release::this()),
+        warm: false,
     };
     Ok(Json(placement_for(&s, &ms, &me, &r, true)))
 }
@@ -1668,6 +1683,7 @@ async fn lease_create(
             created: store::now(),
             expires_in: None,
             shared: None,
+            warm: r.warm,
         };
         leases.insert(
             id.clone(),
@@ -2265,6 +2281,28 @@ pub async fn stop_signal() {
 }
 
 #[cfg(test)]
+mod kept_tests {
+    use super::*;
+
+    #[test]
+    fn what_a_node_keeps_names_its_store_and_older_nodes_need_not() {
+        let old: Kept = serde_json::from_str(r#"{"lanes":2,"bytes":100}"#).unwrap();
+        assert_eq!(old.store_bytes, None);
+        assert_eq!(
+            serde_json::to_string(&old).unwrap(),
+            r#"{"lanes":2,"bytes":100}"#
+        );
+        let new = Kept {
+            lanes: 0,
+            bytes: 40,
+            store_bytes: Some(40),
+        };
+        let back: Kept = serde_json::from_str(&serde_json::to_string(&new).unwrap()).unwrap();
+        assert_eq!(back, new);
+    }
+}
+
+#[cfg(test)]
 mod history_tests {
     use super::*;
 
@@ -2516,6 +2554,7 @@ mod placement_tests {
                         created: 0,
                         expires_in: None,
                         shared: None,
+                        warm: false,
                     },
                     String::new(),
                     std::time::Instant::now(),

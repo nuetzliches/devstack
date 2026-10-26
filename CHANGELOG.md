@@ -21,6 +21,28 @@ member's consent (ADR-0037 addendum).
 
 ### Added
 
+- **The store is warmed for a ref before a lane needs it** (ADR-0065,
+  #290): `[prepare] warm = ["origin/main"]`. devstack reads the ref every
+  minute (it never fetches); a new commit, quiet for two minutes, is
+  checked out under `.devstack/warm/` as git checks it out, with an index
+  of its own, and each service's `prepare` with `outputs` is made into the
+  store unless it has the key, in the background. The nodes this
+  repository's lanes ran on get a warm lease that runs only `prepare` into
+  the member's store there and ends; a node's policy can refuse them
+  (`warm = false`), a node before 0.24.0 is not asked. A file with `warm`
+  says `requires = "0.24.0"`.
+- **The dashboard shows the store of what `prepare` makes** (ADR-0062,
+  #291). A service's detail view says where its last `prepare` outputs came
+  from: copied out of the store (the key, the copy's time, what `prepare`
+  took when it made the entry) or a run (its time, and why the store gave
+  nothing: no entry for these inputs, copying slower than running, `version`
+  failed, an output git tracks). The usage page has a line with the store's
+  entries and size, which opens the list (service, key, outputs, size, last
+  used, which lanes use it) with a remove action per entry. The pool view
+  shows a node's store beside what it keeps. API: `ServiceView.prepare`,
+  `GET /v1/store`, `DELETE /v1/store/{service}/{key}`, and `kept.store_bytes`
+  in a node's report (older nodes omit it).
+
 - **A pool node keeps a store of what `prepare` makes** (ADR-0062, #277),
   per member and repository: a lane on the node reads it (read-only) and
   copies an entry with the same inputs, platform and lane image instead of

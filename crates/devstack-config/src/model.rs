@@ -42,10 +42,26 @@ pub struct Stack {
     /// repository.
     #[serde(default)]
     pub agents: Agents,
+    /// `[prepare]`: the store of what `prepare` makes, beyond one service
+    /// (ADR-0065).
+    #[serde(default)]
+    pub prepare: PrepareSettings,
     /// The profile this stack runs with, once applied ([`Stack::with_profile`]).
     #[serde(skip)]
     #[schemars(skip)]
     pub profile: Option<Active>,
+}
+
+/// `[prepare]`: the store of what `prepare` makes (ADR-0062), beyond one
+/// service.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PrepareSettings {
+    /// Refs whose `prepare` outputs are made ahead into the store, here and
+    /// on the nodes this repository's lanes use, e.g. `["origin/main"]`
+    /// (ADR-0065): devstack watches them, it never fetches.
+    #[serde(default)]
+    pub warm: Vec<String>,
 }
 
 /// `[agents]`: what devstack writes for the coding agents that work in the

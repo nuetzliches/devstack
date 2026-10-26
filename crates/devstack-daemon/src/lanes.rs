@@ -256,6 +256,9 @@ struct Worktree {
 /// or removable drive gone for a moment) before its lane is forgotten, with
 /// its containers and volumes. A worktree removed with git goes at once.
 const MISSING_GRACE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+/// The lane name of a warm lease (ADR-0065 point 5), then the ref: a
+/// worktree's lane name never has `--` (`lane_name` folds them).
+const WARM_LANE: &str = "warm--";
 /// How often the worktrees of lanes on nodes are checked for their links
 /// (ADR-0063): their inputs read, a copy or `prepare` only when they changed.
 const NODE_LINKS_EVERY: std::time::Duration = std::time::Duration::from_secs(15);
@@ -888,6 +891,7 @@ impl Lanes {
         }));
         me.follow();
         me.follow_node_links();
+        me.follow_warm();
         me
     }
 
@@ -1107,6 +1111,150 @@ impl Lanes {
                     }
                 }
             });
+    }
+
+    /// Warm the store for the refs of `[prepare] warm` (ADR-0065): here,
+    /// then on the nodes this repository's lanes use. One ref at a time, in
+    /// the background, under the one-`prepare`-at-a-time lock.
+    pub fn follow_warm(self: &Arc<Self>) {
+        if self.main.stack.prepare.warm.is_empty() || crate::remote_lane() {
+            return;
+        }
+        let weak = Arc::downgrade(self);
+        let _ = std::thread::Builder::new()
+            .name("lanes-warm".into())
+            .spawn(move || {
+                let mut watch = crate::warm::Watch::default();
+                loop {
+                    std::thread::sleep(crate::warm::every());
+                    let Some(me) = weak.upgrade() else { return };
+                    if me.main.closed() {
+                        return;
+                    }
+                    for (r, commit) in watch.due(&me.main) {
+                        let closed = || me.main.closed();
+                        match crate::warm::warm_here(&me.main, &r, &commit, &closed) {
+                            Ok(checkout) => {
+                                drop(checkout);
+                                me.warm_nodes(&r, &commit, &closed);
+                                crate::warm::note_done(&me.main, &r, &commit);
+                            }
+                            Err(e) => crate::diag::warn(
+                                "prepare_warm_failed",
+                                serde_json::json!({ "ref": r, "commit": commit, "error": e }),
+                            ),
+                        }
+                    }
+                }
+            });
+    }
+
+    /// The nodes this repository's lanes use, warmed for the commit checked
+    /// out at `checkout` (ADR-0065 point 5).
+    fn warm_nodes(&self, r: &str, commit: &str, cancel: &dyn Fn() -> bool) {
+        let repo = self.main.stack.stack.name.clone();
+        // The nodes this repository's lanes ran on, while one of them is
+        // kept or runs there, and that know warm leases.
+        let mut nodes: Vec<crate::remote::RanOn> = Vec::new();
+        let names: Vec<String> = self.known.lock().unwrap().keys().cloned().collect();
+        for name in names {
+            for on in crate::remote::ran_on(&self.state_dir(&name)) {
+                if !nodes.iter().any(|n| n.node.id == on.node.id) {
+                    nodes.push(on);
+                }
+            }
+        }
+        nodes.retain(|on| {
+            crate::remote::slots_on(&self.rt, &on.pool, on.node.clone()).is_ok_and(|slots| {
+                slots
+                    .iter()
+                    .any(|s| s.repo == repo && !s.lane.starts_with(WARM_LANE))
+            })
+        });
+        if nodes.is_empty() {
+            return;
+        }
+        // A checkout of its own: the one warmed here holds this machine's
+        // outputs, which are not the node's.
+        let checkout = match crate::warm::Checkout::new(&self.main, r, commit, "node")
+            .and_then(|co| co.completer()().map(|()| co))
+        {
+            Ok(co) => co,
+            Err(e) => {
+                crate::diag::warn(
+                    "prepare_warm_failed",
+                    serde_json::json!({ "ref": r, "commit": commit, "place": "remote", "error": e }),
+                );
+                return;
+            }
+        };
+        let slug: String = r
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let lane = format!("{WARM_LANE}{slug}");
+        let stack_file = self.stack_file_rel().to_string_lossy().replace('\\', "/");
+        let synced = self.synced();
+        let scratch = self
+            .main
+            .state_dir
+            .join("warm")
+            .join(format!("{slug}-remote"));
+        let need = crate::remote::Expected::default();
+        for on in nodes {
+            if cancel() {
+                return;
+            }
+            let t0 = std::time::Instant::now();
+            let spec = crate::remote::RemoteSpec {
+                name: &lane,
+                repo: &repo,
+                worktree: &checkout.src,
+                main: &self.main.repo,
+                extra: &synced,
+                sharing: None,
+                stack_file: &stack_file,
+                on: &on.node.id,
+                need: &need,
+                floor: None,
+                scratch: &scratch,
+                ports: Vec::new(),
+                port_offset: 0,
+                forward: false,
+                step: &|_, _| {},
+                profile: None,
+                warm: true,
+            };
+            match RemoteLane::warm(&self.rt, spec, cancel) {
+                Ok(results) => {
+                    for x in results {
+                        let event = if x["error"].is_string() {
+                            "prepare_warm_failed"
+                        } else {
+                            "prepare_warmed"
+                        };
+                        crate::diag::info(
+                            event,
+                            serde_json::json!({ "service": x["service"], "ref": r,
+                                "commit": commit, "place": "remote", "node": on.node.name,
+                                "done": x["done"], "error": x["error"], "ms": x["ms"] }),
+                        );
+                    }
+                }
+                Err(e) => crate::diag::warn(
+                    "prepare_warm_failed",
+                    serde_json::json!({ "ref": r, "commit": commit, "place": "remote",
+                        "node": on.node.name, "error": e,
+                        "ms": t0.elapsed().as_millis() as u64 }),
+                ),
+            }
+        }
     }
 
     /// Keep the worktree of every lane on a node linked to a copy on this
@@ -2288,6 +2436,27 @@ impl Lanes {
         }
     }
 
+    /// Of the main tree and each lane started here, the store key each
+    /// service's last `prepare` outputs came from or went into (ADR-0062):
+    /// (tree, service, key), the main tree as `""`.
+    pub fn prepared_keys(&self) -> Vec<(String, String, String)> {
+        let mut sups: Vec<(String, Arc<Supervisor>)> = vec![(String::new(), self.main.clone())];
+        sups.extend(
+            self.map
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(n, l)| (n.clone(), l.sup.clone())),
+        );
+        sups.into_iter()
+            .flat_map(|(tree, sup)| {
+                sup.prepared_keys()
+                    .into_iter()
+                    .map(move |(s, k)| (tree.clone(), s, k))
+            })
+            .collect()
+    }
+
     /// The lanes started, or starting, here and on nodes: while there is
     /// one, the main tree's `down` keeps the daemon they live in (ADR-0024).
     pub fn active(&self) -> Vec<String> {
@@ -3067,6 +3236,7 @@ impl Lanes {
             forward,
             step,
             profile: profile.as_deref(),
+            warm: false,
         })
     }
 

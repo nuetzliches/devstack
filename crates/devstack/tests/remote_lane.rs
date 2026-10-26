@@ -231,6 +231,8 @@ fn a_lane_runs_on_a_node_of_the_pool() {
             .env("XDG_STATE_HOME", state.path())
             .env("DEVSTACK_NO_HUB", "1")
             .env("DEVSTACK_NO_UPDATE_CHECK", "1")
+            .env("DEVSTACK_WARM_EVERY_MS", "2000")
+            .env("DEVSTACK_WARM_QUIET_MS", "0")
             .output()
             .unwrap();
         let both = format!(
@@ -251,6 +253,8 @@ fn a_lane_runs_on_a_node_of_the_pool() {
         .env("XDG_STATE_HOME", state.path())
         .env("DEVSTACK_NO_HUB", "1")
         .env("DEVSTACK_NO_UPDATE_CHECK", "1")
+        .env("DEVSTACK_WARM_EVERY_MS", "2000")
+        .env("DEVSTACK_WARM_QUIET_MS", "0")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -403,6 +407,47 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     let until = Instant::now() + Duration::from_secs(120);
     while store_entries(node.path()) == 0 {
         assert!(Instant::now() < until, "the node's store took nothing in");
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    // The main tree's branch moves: its commit is warmed here, then on the
+    // node the lane ran on, by a warm lease (ADR-0065).
+    std::fs::write(main.join("moved.txt"), "1").unwrap();
+    git(&main, &["add", "moved.txt"]);
+    git(
+        &main,
+        &[
+            "-c",
+            "user.email=ci@example.invalid",
+            "-c",
+            "user.name=ci",
+            "commit",
+            // The hook of the worktree's commit above wants `deps`, which
+            // the main tree, running in place, has not.
+            "--no-verify",
+            "-qm",
+            "the branch moves",
+        ],
+    );
+    let until = Instant::now() + Duration::from_secs(300);
+    loop {
+        let log =
+            std::fs::read_to_string(main.join(".devstack").join("daemon.log")).unwrap_or_default();
+        let warmed = |place: &str| {
+            log.lines().any(|l| {
+                l.contains("\"prepare_warmed\"") && l.contains(&format!("\"place\":\"{place}\""))
+            })
+        };
+        if warmed("local") && warmed("remote") {
+            break;
+        }
+        assert!(
+            Instant::now() < until && !log.contains("\"prepare_warm_failed\""),
+            "the commit was not warmed here and on the node:\n{}",
+            log.lines()
+                .filter(|l| l.contains("warm"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
         std::thread::sleep(Duration::from_secs(1));
     }
 
@@ -774,6 +819,8 @@ fn with_prepare(main: &Path) {
         ),
         1,
     );
+    // The main tree's commit warmed ahead, here and on the node (ADR-0065).
+    let toml = format!("{toml}\n[prepare]\nwarm = [\"HEAD\"]\n");
     std::fs::write(&file, toml).unwrap();
     let ignore = main.join(".gitignore");
     let mut text = std::fs::read_to_string(&ignore).unwrap();

@@ -38,6 +38,7 @@ pub fn router(state: AppState) -> axum::Router {
     axum::Router::new()
         .route("/v1/stack", get(stack))
         .route("/v1/telemetry/take", post(telemetry_take))
+        .route("/v1/warm", get(warm_view))
         .route("/v1/up", post(up))
         .route("/v1/down", post(down))
         .route("/v1/shutdown", post(shutdown))
@@ -62,6 +63,11 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/infra/check", post(infra_check))
         .route("/v1/events", get(events))
         .route("/v1/usage", get(usage))
+        .route("/v1/store", get(store_list))
+        .route(
+            "/v1/store/{service}/{key}",
+            axum::routing::delete(store_delete),
+        )
         .route("/v1/commands/{name}", post(run_command))
         .route("/v1/commands/{name}/runs", get(command_runs))
         .route("/v1/runs/{id}", get(run_info))
@@ -214,6 +220,12 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 async fn stack(State(s): State<AppState>) -> Response {
     Json(s.sup.view()).into_response()
+}
+
+/// `GET /v1/warm`: in a warm lease's container on a node, whether its
+/// `prepare` runs are done and what each did (ADR-0065 point 5).
+async fn warm_view() -> Response {
+    Json(crate::warm::lane_view()).into_response()
 }
 
 /// `POST /v1/telemetry/take`: in the daemon of a lane on a node, the
@@ -1338,6 +1350,49 @@ struct UsageQuery {
 /// `?history=true` adds the last ten minutes per series.
 async fn usage(State(s): State<AppState>, Query(q): Query<UsageQuery>) -> Response {
     Json(s.usage.report(&s.sup, q.history)).into_response()
+}
+
+/// `GET /v1/store`: the store of what `prepare` makes (ADR-0062), its
+/// entries and what they take. One per repository and machine: a lane's API
+/// answers from the same store (on a node, the member's store there).
+async fn store_list(State(s): State<AppState>) -> Response {
+    let r = tokio::task::spawn_blocking(move || {
+        let used = match &s.lanes {
+            Some(l) => l.prepared_keys(),
+            None => s
+                .sup
+                .prepared_keys()
+                .into_iter()
+                .map(|(svc, k)| (s.sup.lane.clone(), svc, k))
+                .collect(),
+        };
+        crate::supervisor::store_view(&s.sup.store(), &used)
+    })
+    .await;
+    match r {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `DELETE /v1/store/{service}/{key}`: an entry of the store removed. The
+/// next `prepare` of its inputs runs and makes it again.
+async fn store_delete(
+    State(s): State<AppState>,
+    Path((service, key)): Path<(String, String)>,
+) -> Response {
+    use crate::supervisor::StoreRemoveError as E;
+    let r = tokio::task::spawn_blocking(move || {
+        crate::supervisor::store_remove(&s.sup.store(), &service, &key)
+    })
+    .await;
+    match r {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(E::NotFound(e))) => err(StatusCode::NOT_FOUND, e),
+        Ok(Err(E::Refused(e))) => err(StatusCode::CONFLICT, e),
+        Ok(Err(E::Failed(e))) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 #[derive(Deserialize, Default)]

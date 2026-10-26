@@ -104,6 +104,10 @@ pub struct NodePolicy {
     /// (ADR-0039); only this node's own `policy.json` says `false`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_update: Option<bool>,
+    /// Whether this node takes warm leases (ADR-0065 point 5): a member's
+    /// `prepare` run ahead into its store here. Not set: yes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warm: Option<bool>,
 }
 
 impl NodePolicy {
@@ -173,6 +177,11 @@ impl NodePolicy {
                     keep_lanes_hours: lower(a.keep_lanes_hours, p.keep_lanes_hours),
                     keep_lanes_gib: lower(a.keep_lanes_gib, p.keep_lanes_gib),
                     remote_update: a.remote_update.or(p.remote_update),
+                    // `false` anywhere wins.
+                    warm: match (a.warm, p.warm) {
+                        (Some(false), _) | (_, Some(false)) => Some(false),
+                        (x, y) => x.or(y),
+                    },
                 },
             })
         })

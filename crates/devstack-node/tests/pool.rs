@@ -211,6 +211,7 @@ fn the_pool_knows_which_devstack_each_party_runs() {
             floor: None,
             profile: None,
             devstack,
+            warm: false,
         })
     };
     let newer = Release {

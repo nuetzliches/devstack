@@ -783,6 +783,45 @@ fn prepare_outputs_are_directories_inside_the_repository_and_hold_its_links() {
 }
 
 #[test]
+fn prepare_warm_names_refs_and_needs_outputs_to_warm() {
+    use devstack_config::{WARM_SINCE, validate::warnings};
+    let with = |warm: &str, outputs: bool| {
+        let prep = if outputs {
+            "{ run = \"npm ci\", outputs = [\"web/node_modules\"] }"
+        } else {
+            "{ run = \"npm ci\" }"
+        };
+        format!(
+            "{}\n[prepare]\nwarm = {warm}\n",
+            MINIMAL.replace("port = 5000", &format!("port = 5000\nprepare = {prep}"))
+        )
+    };
+    let mut s = from_str(&with("[\"origin/main\"]", true), Path::new("t")).unwrap();
+    assert_eq!(s.prepare.warm, ["origin/main"]);
+    assert!(
+        warnings(&s)
+            .iter()
+            .any(|i| i.path == "prepare.warm" && i.message.contains(WARM_SINCE))
+    );
+    s.stack.requires = Some(WARM_SINCE.into());
+    assert!(warnings(&s).iter().all(|i| i.path != "prepare.warm"));
+    for bad in ["--upload-pack=x", "main..dev", "a b", "HEAD~1", "x:y", " "] {
+        let issues = invalid(&with(&format!("[\"{bad}\"]"), true));
+        assert!(
+            issues.iter().any(|i| i.contains("prepare.warm")),
+            "{bad}: {issues:?}"
+        );
+    }
+    let issues = invalid(&with("[\"origin/main\"]", false));
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.contains("nothing would be kept to warm")),
+        "{issues:?}"
+    );
+}
+
+#[test]
 fn working_directories_and_the_output_stay_inside_the_repository() {
     let issues = invalid(&format!(
         "{MINIMAL}cwd = \"../outside\"\n[services.api.prepare]\nrun = \"npm ci\"\ncwd = \"/abs\"\n[services.api.hot_reload]\nrun = \"dotnet watch run\"\ncwd = \"C:/elsewhere\"\n"

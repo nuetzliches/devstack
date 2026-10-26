@@ -141,6 +141,10 @@ pub struct NodeLease {
     /// (Unix seconds); `None`: a fresh start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept: Option<u64>,
+    /// A warm lease (ADR-0065 point 5): the lane's container runs only the
+    /// `prepare` its member's store lacks, no infrastructure, then ends.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub warm: bool,
 }
 
 /// What a slot keeps about itself (`slots/<slot>/slot.json`).
@@ -446,6 +450,7 @@ impl Inner {
             stack_file: None,
             slot: Some(slot.to_string()),
             kept: None,
+            warm: false,
         });
         // Its stack file, wherever it was: the default unless one is there.
         if let Some(f) = ["devstack.toml"]
@@ -703,10 +708,11 @@ impl Inner {
                 .or_default()
                 .push((slot, info, bytes));
         }
+        let store_bytes = stored.values().flatten().map(|e| e.3).sum::<u64>();
         *self.kept_use.lock().unwrap() = Some(crate::coordinator::Kept {
             lanes: by_member.values().map(Vec::len).sum(),
-            bytes: by_member.values().flatten().map(|s| s.2).sum::<u64>()
-                + stored.values().flatten().map(|e| e.3).sum::<u64>(),
+            bytes: by_member.values().flatten().map(|s| s.2).sum::<u64>() + store_bytes,
+            store_bytes: Some(store_bytes),
         });
         // A member with only a store here counts too.
         for member in stored.keys() {
@@ -1114,6 +1120,7 @@ impl Inner {
             cpu_limit: None,
             network: crate::policy::Network::Lan,
             store: self.prepare_store(&l.member, &l.repo),
+            warm: l.warm,
         }
     }
 
@@ -1586,6 +1593,14 @@ async fn admit(
     if let Err(why) = crate::policy::NodePolicy::admits_all(&all, &who, &tags, &lease.repo) {
         return Err(err(StatusCode::FORBIDDEN, format!("{}: {why}", s.name)));
     }
+    if lease.warm
+        && crate::policy::NodePolicy::strictest(&all).is_some_and(|p| p.warm == Some(false))
+    {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            format!("{} takes no warm leases (its policy)", s.name),
+        ));
+    }
     // The node admits against what it has now (ADR-0031 point 4), and takes
     // a lane to need at least the least; checked below, with the lease
     // recorded in the same step.
@@ -1642,6 +1657,7 @@ async fn admit(
         stack_file: None,
         slot: Some(slot.clone()),
         kept,
+        warm: lease.warm,
     };
     let mut leases = s.leases.lock().unwrap();
     let free = s.available_in(&leases);

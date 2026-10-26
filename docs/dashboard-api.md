@@ -136,6 +136,7 @@ type PoolOverview = {
       total?: { cpus: number; memory: number };        // what the machine has (ADR-0036)
       used?: { cpus: number; memory: number };         // what its lanes use
       gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean }[];
+      kept?: { lanes: number; bytes: number; store_bytes?: number }; // stopped lanes it keeps (ADR-0038) and the members' stores of what `prepare` makes (ADR-0062), together in `bytes`; `store_bytes` the stores' part (older nodes omit it)
       devstack?: PoolRelease;                           // what it runs; absent from a release before version reporting
     };
   }[];
@@ -212,6 +213,16 @@ type ServiceView = {
   rebuild?: Rebuild;                     // a dev server's last rebuild, from its output (ADR-0042): {state: rebuilding|ok|failed, since, ms?, tool, errors?}; an ok one for a minute, a failed one until the next
   hot_reload: boolean;                   // the toolchain's watcher runs it now
   hot_reload_available: boolean;         // the stack file has `hot_reload` for it
+  prepare?: PrepareView;                 // where its last `prepare` outputs came from (ADR-0062), since the daemon started; absent before its first `prepare` (and from older daemons)
+};
+type PrepareView = {
+  source: "store" | "run";               // copied out of the store, or `prepare` ran
+  at: number;                            // unix ms, when it was done
+  ms: number;                            // how long: the copy, or the run
+  key?: string;                          // the store's key: of the entry copied, or of the one the run put
+  prepare_ms?: number;                   // `store`: how long the `prepare` that made the entry took
+  miss?: string;                         // `run`: why the store gave nothing (no entry for these inputs on this machine; copying the entry took longer than running prepare; its `version` failed; an output git tracks; the node gives the lane no store); absent: the `prepare` names no `outputs`
+  stored?: true;                         // `run`: what it made went into the store
 };
 type Status =
   | { state: "stopped" | "starting" | "running" | "healthy" }
@@ -307,6 +318,36 @@ type UsageReport = {
 };
 ```
 
+### The store of what `prepare` makes
+
+One per repository and machine
+([ADR-0062](adr/0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md)),
+in the main working tree's `.devstack/store/`. A lane's API (`/v1/lanes/{lane}/v1/store`)
+answers from the same store; a lane on a node from the member's store on its
+node, read-only there.
+
+| Method and path | Answer |
+|---|---|
+| `GET /v1/store` | JSON `StoreView` |
+| `DELETE /v1/store/{service}/{key}` | `204`: the entry is gone; the next `prepare` of its inputs runs and makes it again. `404` for no such entry, `409` when a `prepare` of that key in this daemon uses it (for more than 5 s) or the store is a node's. `POST /v1/lanes/prune` with `older_than` removes entries not used for that long too |
+
+```ts
+type StoreView = {
+  owned: boolean;          // this daemon writes and sweeps it; false: a node's store, seen from a lane there
+  bytes: number;           // all entries
+  entries: {               // the largest first
+    service: string; key: string;   // `key`: 20 hex digits, the entry's directory
+    outputs: string[];              // its directories, relative to the repository
+    bytes: number; files: number;
+    created: number;                // unix ms
+    last_used: number;              // unix ms of the last copy out of it, else of its making
+    prepare_ms: number;             // how long the `prepare` that made it took
+    copy_ms?: number;               // how long the last copy out of it took
+    used_by: string[];              // the trees (lane names, "" the main tree's builds) whose service's last `prepare` came from it or went into it, since the daemon started
+  }[];
+};
+```
+
 ### Logs
 
 | Method and path | Answer |
@@ -345,6 +386,7 @@ type UsageReport = {
 | `GET /v1/services/{name}/env?export=false` | JSON, its environment with each variable's origin (`devstack env`); `export=true`: only what Compose and the stack file give, for running it without devstack |
 | `GET /v1/runs/{id}/log` | text, a command run's output so far (the last 20 000 lines) |
 | `POST /v1/runs/{id}/cancel` | `202`; the run stops: its `exec` step's process tree is killed, its `run` step's job stopped, no further step starts; it ends `failed` with error `cancelled`. `409` when it is not running, `404` for no such run |
+| `GET /v1/warm` | `{"warm": bool, "done": bool, "results": [{"service", "done"?: "from the store" \| "prepared" \| "prepared before", "error"?, "ms"?}]}`: in the daemon of a warm lease on a node ([ADR-0065](adr/0065-the-store-is-warmed-for-a-ref-before-a-lane-needs-it.md)), whether its `prepare` runs are done and what each did; `warm: false` in any other daemon |
 | `POST /v1/telemetry/take` | `{"lines": [...]}`: in the daemon of a lane on a node, the diagnostic lines it kept since the last take, which its requester sends with its own telemetry, under its consent ([ADR-0037](adr/0037-telemetry-goes-to-the-pools-collector-with-consent.md), addendum 2026-10-26); `{"lines": []}` in any other daemon |
 | `GET /v1/tunnel/{port}` with `Upgrade: devstack-tcp` | a raw TCP connection to that port on the daemon's machine (ADR-0029 point 4): a service's port on its loopback, or a lane's container port on the lane's network; other ports `403`. How the requester reaches the services of its lane on a node: each port it forwards here connects, through the node agent, to the lane daemon's tunnel there |
 | `GET /v1/tunnel/{port}` with `Upgrade: devstack-udp` | a UDP session to the lane's container published on `port` as UDP ([ADR-0056](adr/0056-a-lane-on-a-node-relays-its-udp-ports-through-a-tunnel-per-session.md)): each datagram a frame, its length as two bytes big-endian, then its bytes, both ways; the daemon sends them from a socket of the session's own. Other ports `403`, a container that does not resolve yet `502`. The requester opens one per client address of a UDP port it relays, and ends it after 60 s without a datagram either way |

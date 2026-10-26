@@ -22,6 +22,10 @@ const FULL_SYNC_EVERY: Duration = Duration::from_secs(30);
 const RENEW_EVERY: Duration = Duration::from_secs(30);
 /// How long a lease lives without a renewal (the node's TTL), and a margin.
 const LEASE_LIVES: Duration = Duration::from_secs(150);
+/// How long a warm lease's `prepare` runs may take (ADR-0065 point 5).
+const WARM_WITHIN: Duration = Duration::from_secs(30 * 60);
+/// The first devstack whose node takes warm leases.
+const WARM_SINCE_NODE: &str = "0.24.0";
 /// How often the lane's state is read for the lists.
 const STATE_EVERY: Duration = Duration::from_secs(5);
 /// How often what the lane's daemon logged is taken for telemetry (#287):
@@ -388,6 +392,8 @@ pub struct RemoteSpec<'a> {
     pub step: &'a (dyn Fn(u8, &str) + Send + Sync),
     /// The profile it runs with (ADR-0041).
     pub profile: Option<&'a str>,
+    /// A warm lease (ADR-0065 point 5): only `prepare`, no infrastructure.
+    pub warm: bool,
 }
 
 /// What a lane is expected to need as this machine estimates it (ADR-0049
@@ -563,6 +569,7 @@ impl RemoteLane {
                 floor: spec.floor,
                 profile: spec.profile.map(str::to_string),
                 devstack: Some(Release::this()),
+                warm: spec.warm,
             })
             .map_err(|e| format!("lease on `{}`: {e}", spec.on))?;
         // Another pool protocol misreads this machine (a newer coordinator
@@ -659,6 +666,98 @@ impl RemoteLane {
             t0,
             warning,
         })
+    }
+
+    /// A warm lease on a node (ADR-0065 point 5): leased, `spec.worktree` (a
+    /// ref's checkout) synced as its mirror, started there (its container
+    /// runs only the `prepare` the member's store lacks), asked until its
+    /// runs are done, released. What each service's run did.
+    pub fn warm(
+        rt: &tokio::runtime::Handle,
+        spec: RemoteSpec<'_>,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let Leased {
+            offer,
+            client,
+            list,
+            elsewhere,
+            ..
+        } = Self::lease(rt, &spec)?;
+        // A node that does not know warm leases would start a whole lane: it
+        // runs this release or a later one, or exactly this devstack.
+        let node_version = offer.node.devstack.as_ref().map(|r| r.version.as_str());
+        let knows = node_version.and_then(devstack_config::version_order)
+            >= devstack_config::version_order(WARM_SINCE_NODE)
+            || node_version == Some(devstack_config::VERSION);
+        if !knows {
+            let _ = rt.block_on(client.release(&offer.id));
+            return Err(format!(
+                "{} runs a devstack before {WARM_SINCE_NODE}, which takes no warm leases",
+                offer.node.name
+            ));
+        }
+        let renewing = {
+            let client = client.clone();
+            let lease = offer.id.clone();
+            rt.spawn(async move {
+                loop {
+                    tokio::time::sleep(RENEW_EVERY).await;
+                    let _ = client.renew(&lease).await;
+                }
+            })
+        };
+        let ran = (|| {
+            let mut hashes = HashCache::default();
+            rt.block_on(client.sync_cached(
+                &offer.id,
+                spec.worktree,
+                &list,
+                &elsewhere,
+                &mut hashes,
+                &|_, _, _| {},
+            ))
+            .map_err(|e| format!("sync: {e}"))?;
+            rt.block_on(client.start(
+                &offer.id,
+                spec.stack_file,
+                None,
+                0,
+                None,
+                false,
+                Duration::from_secs(1800),
+                &|_| {},
+                &|_, _| {},
+            ))
+            .map_err(|e| format!("start: {e}"))?;
+            let until = Instant::now() + WARM_WITHIN;
+            loop {
+                if cancel() {
+                    return Err("stopped".to_string());
+                }
+                match rt.block_on(client.api(&offer.id, "GET", "/v1/warm", None)) {
+                    Ok((200, body)) => {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body)
+                            && v["done"] == true
+                        {
+                            return Ok(v["results"].as_array().cloned().unwrap_or_default());
+                        }
+                    }
+                    Ok((404, _)) => return Err("the lane's daemon runs no warm lease".into()),
+                    _ => {}
+                }
+                if Instant::now() >= until {
+                    return Err(format!(
+                        "not done within {} min",
+                        WARM_WITHIN.as_secs() / 60
+                    ));
+                }
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        })();
+        renewing.abort();
+        let _ = rt.block_on(client.release(&offer.id));
+        ran
     }
 
     /// The rest of a start, which may take minutes (a first start pulls and
