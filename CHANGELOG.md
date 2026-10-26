@@ -16,8 +16,17 @@ and listed with their assets on the
   and a command whose output keys them (`node --version`), for the store
   that keeps them per machine and repository so a second lane with the same
   lockfile skips `npm ci`. With `outputs`, each `link` is one of them or
-  inside one; `version` needs `outputs`. The store itself is not built yet.
-  A file with either says `requires = "0.23.0"`.
+  inside one; `version` needs `outputs`. A file with either says
+  `requires = "0.23.0"`.
+- **What `prepare` makes is kept in a store** (ADR-0062, #277): with
+  `outputs`, a lane or build whose `prepare` has the same `run`, `cwd`,
+  inputs, platform and `version` as one before copies its directories from
+  `.devstack/store/` instead of running it, 32 files at once. Measured on
+  Windows: a `node_modules` of 24,500 files copies in 5 s where `npm ci`
+  took 23 s (NTFS), and in 2 to 3 s where it took 45 s (Dev Drive). Two
+  copies preparing the same key prepare it once. Entries no copy used for
+  14 days go; `devstack lane prune --older-than` removes them sooner.
+  Lanes on a node do not use a store yet.
 - **Compose files are told the lane** (ADR-0064, #280): every `docker
   compose` call devstack makes for a group, and every `exec` step of a
   command, gets `DEVSTACK_LANE` (`main` in the main tree) and

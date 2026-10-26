@@ -1,6 +1,6 @@
 # ADR-0062: What `prepare` makes is kept in a store per machine and repository, keyed by its inputs
 
-- **Status:** Accepted (2026-10-26)
+- **Status:** Accepted (2026-10-26); measured and built on the developer's machine, noted 2026-10-26
 - **Date:** 2026-10-26
 - **Deciders:** project owner
 - **Related:** [#277](https://github.com/nuetzliches/devstack/issues/277), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (a lane runs from a copy), [ADR-0028](0028-lane-images.md) (point 3), [ADR-0033](0033-a-node-decides-what-runs-on-it.md), [ADR-0034](0034-a-machine-can-belong-to-several-pools.md), [ADR-0038](0038-a-lanes-data-outlives-its-lease.md) (slots, the member's disk cap), [ADR-0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md), [ADR-0049](0049-a-lanes-need-is-measured-disk-included.md), [ADR-0063](0063-a-lane-on-a-node-links-its-worktree-to-a-copy-from-the-local-store.md)
@@ -132,6 +132,34 @@ Where it will live:
   retention, taking an entry over), `lanerun.rs` (the read-only mount, the
   image id for the key).
 - `docs/stack-file.md` (`prepare`), `skills/devstack-config`.
+
+*Measured, noted 2026-10-26.* A `node_modules` of 24,500 files (an
+Angular 20 project with ESLint, Vitest, Playwright, Sass), `npm ci` with a
+warm npm cache against a copy of what it made, on the same volume:
+
+| Where | `npm ci` | copy, one file at a time | copy, 16 to 64 at once |
+|---|---|---|---|
+| Windows 11, NTFS | 23 s | 13 s | 5 s |
+| Windows 11, Dev Drive (ReFS) | 43 to 51 s | 6 to 10 s | 2 to 3 s |
+| Linux, XFS (a pool node, in a `node:24` container) | 2.6 s | 0.5 s | 0.5 s (reflink) |
+
+The copy wins everywhere; on Windows the files, not the bytes, take the
+time, so copying many at once matters more than block cloning. Point 6
+stays as the guard. npm 11 runs install scripts only once allowed: a
+project with allowed scripts takes longer to `npm ci`, not to copy.
+
+*Paths as built, noted 2026-10-26.* `crates/devstack-daemon/src/store.rs`
+(layout, `put` through a temporary directory renamed to the key with its
+metadata in it, `copy_into` with 32 files at once and links moved to the
+copy, the lock per key in the process, `sweep`);
+`crates/devstack-daemon/src/supervisor/copy.rs` (`store_use`: `outputs`,
+none tracked, not in a lane on a node; `store_key` with `version`;
+`prepare_from_store`, `store_put`; `sweep_store` the first time the store is
+written after a daemon starts, then daily, in the background);
+`crates/devstack-daemon/src/lanes.rs` (`prune` with `--older-than`). Not
+built: the store on a node (point 3's second half, point 4's last
+sentence, point 9's node part), the lane start naming the hit in the
+dashboard (`prepare-*.log` and the diagnostic log do).
 
 ## What this ADR does not say
 
