@@ -1363,7 +1363,7 @@ impl Lanes {
                         networks: cfg.networks.iter().map(|n| format!("{n}-{lane}")).collect(),
                         services: Vec::new(),
                         dir: self.main.repo.clone(),
-                        // No files: nothing for `DEVSTACK_PORT_*` to fill in.
+                        // No files: nothing for `DEVSTACK_PORT_*` or `DEVSTACK_LANE*` to fill in.
                         env: Default::default(),
                     };
                     match devstack_compose::Docker::default().remove(&group) {
@@ -1461,7 +1461,7 @@ impl Lanes {
                 networks: Vec::new(),
                 services: Vec::new(),
                 dir: self.main.repo.clone(),
-                // No files: nothing for `DEVSTACK_PORT_*` to fill in.
+                // No files: nothing for `DEVSTACK_PORT_*` or `DEVSTACK_LANE*` to fill in.
                 env: Default::default(),
             };
             if let Err(e) = docker.down(&group) {
@@ -1490,7 +1490,7 @@ impl Lanes {
                 networks: cfg.networks.iter().map(|n| format!("{n}-{name}")).collect(),
                 services: Vec::new(),
                 dir: self.main.repo.clone(),
-                // No files: nothing for `DEVSTACK_PORT_*` to fill in.
+                // No files: nothing for `DEVSTACK_PORT_*` or `DEVSTACK_LANE*` to fill in.
                 env: Default::default(),
             };
             if let Err(e) = docker.remove(&group) {

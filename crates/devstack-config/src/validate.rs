@@ -1238,6 +1238,7 @@ pub fn repo_warnings(stack: &Stack, repo: &std::path::Path) -> Vec<Issue> {
             .filter_map(|f| Some((f.as_str(), std::fs::read_to_string(repo.join(f)).ok()?)))
             .collect();
         out.extend(announced_warnings(g, group, &texts));
+        out.extend(lane_warnings(g, &texts));
     }
     out
 }
@@ -1263,7 +1264,7 @@ pub fn announced_warnings(
     let mut used = BTreeSet::new();
     let mut said = BTreeSet::new();
     for (file, text) in texts {
-        for (var, how) in port_variable_uses(text) {
+        for (var, how) in variable_uses(text, crate::model::PORT_VARIABLE_PREFIX) {
             if how != Mention::Sets {
                 used.insert(var.clone());
             }
@@ -1300,7 +1301,8 @@ pub fn announced_warnings(
     out
 }
 
-/// How a text names a `DEVSTACK_PORT_*`.
+/// How a text names a variable of devstack's (`DEVSTACK_PORT_*`,
+/// `DEVSTACK_LANE*`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mention {
     /// Compose reads it without a default: `${VAR}`, `$VAR`.
@@ -1314,9 +1316,49 @@ enum Mention {
     Uses,
 }
 
-/// Each `DEVSTACK_PORT_*` a text names, and how.
-fn port_variable_uses(text: &str) -> Vec<(String, Mention)> {
-    let prefix = crate::model::PORT_VARIABLE_PREFIX;
+/// What the text of a group's Compose files and env files (`texts`, by
+/// path) says against the lane variables every `docker compose` call gets
+/// (ADR-0064): `DEVSTACK_LANE` or `DEVSTACK_LANE_SUFFIX` read without a
+/// default (the files would not run without devstack, ADR-0015), and a
+/// `DEVSTACK_LANE_*` devstack does not set (a typo: it would be empty in
+/// every tree).
+pub fn lane_warnings(name: &str, texts: &[(&str, String)]) -> Vec<Issue> {
+    use crate::model::{LANE_SUFFIX_VARIABLE, LANE_VARIABLE};
+    let path = format!("compose.{name}");
+    let mut out = Vec::new();
+    let mut said = BTreeSet::new();
+    for (file, text) in texts {
+        for (var, how) in variable_uses(text, LANE_VARIABLE) {
+            let ours = var == LANE_VARIABLE || var == LANE_SUFFIX_VARIABLE;
+            // `DEVSTACK_LANES…` is another name; one being set is no use.
+            if !(ours || var.starts_with(&format!("{LANE_VARIABLE}_"))) || how == Mention::Sets {
+                continue;
+            }
+            if !ours {
+                if said.insert((file.to_string(), var.clone())) {
+                    out.push(Issue {
+                        path: path.clone(),
+                        message: format!(
+                            "`{file}` uses `{var}`, which devstack does not set: a Compose call is told `{LANE_VARIABLE}` and `{LANE_SUFFIX_VARIABLE}` only"
+                        ),
+                    });
+                }
+            } else if how == Mention::Bare && said.insert((file.to_string(), var.clone())) {
+                let default = if var == LANE_VARIABLE { "main" } else { "" };
+                out.push(Issue {
+                    path: path.clone(),
+                    message: format!(
+                        "`{file}` reads `{var}` without a default: the files do not run without devstack; write `${{{var}:-{default}}}`"
+                    ),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Each variable whose name starts with `prefix` a text names, and how.
+fn variable_uses(text: &str, prefix: &str) -> Vec<(String, Mention)> {
     let bytes = text.as_bytes();
     let mut out = Vec::new();
     let mut from = 0;
@@ -1326,7 +1368,7 @@ fn port_variable_uses(text: &str) -> Vec<(String, Mention)> {
                 .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
                 .unwrap_or(text.len() - at);
         from = end;
-        // Part of a longer name (`MY_DEVSTACK_PORT_X`): not this one.
+        // Part of a longer name (`MY_DEVSTACK_PORT_X`, `MY_DEVSTACK_LANE`): not this one.
         if at > 0 && (bytes[at - 1].is_ascii_alphanumeric() || bytes[at - 1] == b'_') {
             continue;
         }

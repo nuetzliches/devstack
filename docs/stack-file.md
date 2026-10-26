@@ -149,6 +149,29 @@ port), one read without a default, and an entry whose variable no file
 uses. A file with `announced_ports` should say `requires = "0.20.0"` in
 `[stack]`.
 
+Every `docker compose` call for a group, and every `exec` step of a command,
+also gets the tree's lane
+([ADR-0064](adr/0064-every-compose-call-is-told-the-lane-it-runs-for.md)):
+`DEVSTACK_LANE` (the lane's name, `main` in the main tree) and
+`DEVSTACK_LANE_SUFFIX` (empty in the main tree, `_<lane>` in a lane), the
+values `{lane}` and `{lane_suffix}` have for a native service. They win over
+an env file's value. A lane on a node is told its name as its developer
+calls it. Read them with a default, so the files give the main tree's value
+without devstack; what a browser keeps per name, such as a login cookie,
+stays apart per tree that way:
+
+```yaml
+services:
+  scheduler:
+    environment:
+      REFRESH_COOKIE: app_refresh${DEVSTACK_LANE_SUFFIX:-}
+```
+
+`devstack check` warns about one read without a default, and about a
+`DEVSTACK_LANE_*` devstack does not set (a typo). They take no key in the
+stack file; a devstack before 0.23.0 does not set them, and the files then
+give the main tree's value in every tree.
+
 The dashboard links every published port of a container to
 `http://localhost:<port>`, as Docker Desktop does. `urls` sets the link of a
 service where that is wrong: HTTPS, a path, or `""` for no link (a database,
@@ -674,7 +697,8 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
 - The main tree and every lane are on `localhost`, and browsers do not tell
   cookies apart by port: a login in a lane's frontend replaces the main
   tree's in the same browser. A cookie name with `{lane_suffix}` (in the
-  service's `env`) keeps them apart.
+  service's `env`) keeps them apart; in a Compose service, with
+  `${DEVSTACK_LANE_SUFFIX:-}` in its `environment` (above).
 - `{service.<name>.url}` is `http://127.0.0.1:<port>`, while the dashboard
   links `http://localhost:<port>`: an Origin check (CORS, CSRF) built from
   the URL refuses a browser that came through the dashboard's link. Build
@@ -735,7 +759,8 @@ stop the lane's API and drop the **main tree's** database. `docker compose
 A file that uses `{compose.<group>.project}` should say `requires =
 "0.20.0"` in `[stack]`. An `exec` step gets the `DEVSTACK_PORT_*` of every
 group's `announced_ports` as the tree has them, so `docker compose -p
-{compose.app.project} up -d media` in a lane keeps the moved port.
+{compose.app.project} up -d media` in a lane keeps the moved port, and the
+tree's `DEVSTACK_LANE` and `DEVSTACK_LANE_SUFFIX` (ADR-0064).
 In a lane, a `start`, `stop` or `restart` step on a `lanes = false` service
 is skipped (the main tree's instance serves the lane), with a line in the
 run's log.

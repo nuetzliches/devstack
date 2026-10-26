@@ -1092,6 +1092,78 @@ services:
 }
 
 #[test]
+fn every_compose_call_is_told_the_lane() {
+    use devstack_config::model::lane_variables;
+    // As `{lane}` and `{lane_suffix}` have it (ADR-0064).
+    for (lane, name, suffix) in [
+        ("", "main", ""),
+        ("main", "main", ""),
+        ("feat-x", "feat-x", "_feat-x"),
+    ] {
+        let v = lane_variables(lane);
+        assert_eq!(v["DEVSTACK_LANE"], name, "lane `{lane}`");
+        assert_eq!(v["DEVSTACK_LANE_SUFFIX"], suffix, "lane `{lane}`");
+        assert_eq!(v.len(), 2);
+    }
+    // With the announced ports' variables, in one environment.
+    let text = MINIMAL.replace(
+        "services = [\"db\", \"queue\"]\n",
+        "services = [\"db\", \"queue\"]\nannounced_ports = [\"db:5432\"]\n",
+    );
+    let s = from_str(&text, Path::new("t")).unwrap();
+    let v = s.compose["app"].variables("feat-x", 100, &[]);
+    assert_eq!(v["DEVSTACK_PORT_DB_5432"], "5532");
+    assert_eq!(v["DEVSTACK_LANE_SUFFIX"], "_feat-x");
+    assert_eq!(v.len(), 3, "{v:?}");
+    // Without `announced_ports` the lane is told all the same.
+    let s = from_str(MINIMAL, Path::new("t")).unwrap();
+    assert_eq!(s.compose["app"].variables("", 0, &[]), lane_variables(""));
+}
+
+#[test]
+fn the_files_read_the_lane_with_a_default() {
+    use devstack_config::validate::lane_warnings;
+    let compose = r#"
+services:
+  scheduler:
+    environment:
+      - REFRESH_COOKIE=app_refresh${DEVSTACK_LANE_SUFFIX:-}
+      - SESSION=app_${DEVSTACK_LANE}
+      - TAG=$DEVSTACK_LANE_SUFFIX
+      - OTHER=${DEVSTACK_LANE:-main}-${DEVSTACK_LANE_SUFIX:-}
+      - SHELL=sh -c "echo $${DEVSTACK_LANE}"
+      - ${DEVSTACK_LANES:-x}
+      - MY_DEVSTACK_LANE=1
+"#
+    .to_string();
+    let env = "DEVSTACK_LANE_OWN=1\n".to_string();
+    let w: Vec<String> = lane_warnings("app", &[("compose.yml", compose), (".env", env)])
+        .iter()
+        .map(|i| i.to_string())
+        .collect();
+    let all = w.join("\n");
+    assert!(
+        all.contains("`compose.yml` reads `DEVSTACK_LANE` without a default")
+            && all.contains("${DEVSTACK_LANE:-main}"),
+        "{all}"
+    );
+    assert!(
+        all.contains("`compose.yml` reads `DEVSTACK_LANE_SUFFIX` without a default")
+            && all.contains("${DEVSTACK_LANE_SUFFIX:-}"),
+        "{all}"
+    );
+    assert!(
+        all.contains("`compose.yml` uses `DEVSTACK_LANE_SUFIX`, which devstack does not set"),
+        "{all}"
+    );
+    // Set in an env file, another name, a longer name: none of devstack's.
+    assert!(!all.contains("DEVSTACK_LANE_OWN"), "{all}");
+    assert!(!all.contains("DEVSTACK_LANES"), "{all}");
+    assert_eq!(w.len(), 3, "each once: {all}");
+    assert!(w.iter().all(|i| i.starts_with("compose.app")), "{all}");
+}
+
+#[test]
 fn a_services_stop_takes_the_placeholders_of_its_run() {
     use devstack_config::{STOP_SINCE, validate::warnings};
     let text = MINIMAL.replace(

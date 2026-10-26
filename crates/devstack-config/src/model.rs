@@ -738,6 +738,30 @@ impl AnnouncedPort {
 /// devstack's own.
 pub const PORT_VARIABLE_PREFIX: &str = "DEVSTACK_PORT_";
 
+/// The lane a `docker compose` call of a group runs for (ADR-0064): `main`
+/// in the main tree, as a native process's `DEVSTACK_LANE`.
+pub const LANE_VARIABLE: &str = "DEVSTACK_LANE";
+
+/// The lane's suffix for a `docker compose` call (ADR-0064): empty in the
+/// main tree, `_<lane>` in a lane, as `{lane_suffix}` is for a native
+/// service.
+pub const LANE_SUFFIX_VARIABLE: &str = "DEVSTACK_LANE_SUFFIX";
+
+/// `DEVSTACK_LANE` and `DEVSTACK_LANE_SUFFIX` of the tree `lane` (empty or
+/// `main`: the main tree), which every `docker compose` call of a group gets
+/// (ADR-0064), so a Compose file can keep apart what a browser shares
+/// between trees (`app_refresh${DEVSTACK_LANE_SUFFIX:-}`).
+pub fn lane_variables(lane: &str) -> BTreeMap<String, String> {
+    let (name, suffix) = match lane {
+        "" | "main" => ("main".to_string(), String::new()),
+        l => (l.to_string(), format!("_{l}")),
+    };
+    BTreeMap::from([
+        (LANE_VARIABLE.to_string(), name),
+        (LANE_SUFFIX_VARIABLE.to_string(), suffix),
+    ])
+}
+
 impl ComposeGroup {
     /// `announced_ports`, each that parses (`devstack check` rejects the rest).
     pub fn announced(&self) -> Vec<AnnouncedPort> {
@@ -764,6 +788,16 @@ impl ComposeGroup {
                 Some((a.variable(), a.port.checked_add(by)?.to_string()))
             })
             .collect()
+    }
+
+    /// Everything a `docker compose` call of the group gets in the tree
+    /// `lane` (empty: the main tree) whose ports `offset` moves: the
+    /// [`Self::port_variables`] (ADR-0057) and the [`lane_variables`]
+    /// (ADR-0064).
+    pub fn variables(&self, lane: &str, offset: u16, fixed: &[String]) -> BTreeMap<String, String> {
+        let mut env = self.port_variables(offset, fixed);
+        env.extend(lane_variables(lane));
+        env
     }
 }
 
