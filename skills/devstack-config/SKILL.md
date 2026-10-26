@@ -129,7 +129,7 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   `_<lane>` in a lane). Read them in the Compose file with a default
   (`REFRESH_COOKIE: app_refresh${DEVSTACK_LANE_SUFFIX:-}`), never from
   `COMPOSE_PROJECT_NAME`. For a native service use `{lane_suffix}` in its
-  `env`.
+  `env`. Both give a lane on a pool node its own name too.
 - **A container as a service** (`run = "docker run ..."`, for what needs
   Linux tools but should get `watch` and candidates) needs three things: a
   process in it that ends on `SIGINT` and `SIGTERM` (`docker run --init`,

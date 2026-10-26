@@ -251,28 +251,15 @@ impl Supervisor {
         g
     }
 
-    /// The lane this tree's Compose files are told (ADR-0064): empty in the
-    /// main tree; on a node, where the daemon runs as a main tree, the
-    /// lane's name as its requester calls it (`DEVSTACK_REMOTE_LANE`), as
-    /// the node's agent tells the files in its own calls.
-    fn compose_lane(&self) -> String {
-        if self.external_infra().is_some() {
-            return std::env::var("DEVSTACK_REMOTE_LANE")
-                .map(|l| l.trim().to_string())
-                .unwrap_or_default();
-        }
-        self.lane.clone()
-    }
-
     /// What every `docker compose` call of `group` gets in this tree: the
     /// `DEVSTACK_PORT_*` of its announced ports (ADR-0057), the files'
     /// ports in the main tree, moved by the lane's offset in a lane, except
     /// a `shared` service's, which the main tree runs (on a node there is
     /// no main tree: every one moves); and `DEVSTACK_LANE` /
-    /// `DEVSTACK_LANE_SUFFIX` of the tree ([`Self::compose_lane`]).
+    /// `DEVSTACK_LANE_SUFFIX` of the tree ([`Self::presented_lane`]).
     fn group_variables(&self, group: &str) -> BTreeMap<String, String> {
         let cfg = &self.stack.compose[group];
-        let lane = self.compose_lane();
+        let lane = self.presented_lane();
         if self.external_infra().is_some() {
             // A lane on a node runs as a main tree on its developer's
             // ports: the offset its agent gave it.
@@ -295,7 +282,7 @@ impl Supervisor {
     /// compose` there keeps the moved ports (ADR-0057) and is told the
     /// lane (ADR-0064), also in a stack without a group.
     pub(crate) fn compose_variables(&self) -> BTreeMap<String, String> {
-        let mut env = devstack_config::model::lane_variables(&self.compose_lane());
+        let mut env = devstack_config::model::lane_variables(&self.presented_lane());
         env.extend(
             self.stack
                 .compose

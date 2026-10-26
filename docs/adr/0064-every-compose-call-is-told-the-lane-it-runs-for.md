@@ -1,6 +1,6 @@
 # ADR-0064: Every Compose call is told the lane it runs for
 
-- **Status:** Accepted (2026-10-26)
+- **Status:** Accepted (2026-10-26); addendum 2026-10-26 proposed (on a node, `{lane}`, `{lane_suffix}` and a native process's `DEVSTACK_LANE` follow the lane's name, [#284](https://github.com/nuetzliches/devstack/issues/284))
 - **Date:** 2026-10-26
 - **Deciders:** project owner
 - **Related:** [#280](https://github.com/nuetzliches/devstack/issues/280), [ADR-0014](0014-native-services-take-their-configuration-from-compose.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0023](0023-stack-file-compatibility.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md), [ADR-0057](0057-a-port-a-container-announces-moves-inside-it-too.md)
@@ -93,9 +93,59 @@ the main tree's; `Group::env`, set on every call),
 `confine.rs` (the model checked in a container), `docs/stack-file.md`,
 `docs/pool.md`, `skills/devstack-config/SKILL.md`.
 
+*Noted 2026-10-26:* with the addendum below, `compose_lane` became
+`Supervisor::presented_lane` in `crates/devstack-daemon/src/supervisor/mod.rs`.
+
 ## What this ADR does not say
 
 - Anything about other per-lane values for Compose (the lane's port offset
   stays withheld, ADR-0057).
 - Whether `{lane}` and `{lane_suffix}` of a native service on a node should
   be the lane's name (see Consequences).
+
+## Addendum 2026-10-26 (proposed): the native side of a lane on a node
+
+*Answers the last point of Consequences and of "What this ADR does not
+say" ([#284](https://github.com/nuetzliches/devstack/issues/284)).*
+
+A lane on a node forwards its ports to its developer's `localhost`, beside
+the main tree and the other lanes, so it needs what a local lane needs to
+stay apart: a login cookie named with `{lane_suffix}` collided with the
+main tree's there, while the same lane's Compose services were kept apart.
+The same stack file behaved differently by where the lane ran.
+
+1. **One lane name per tree is presented to the stack**: the lane's name
+   in a lane, empty (`main`) in the main tree, and in the daemon of a
+   node's lane container, which runs as a main tree, the lane's name as its
+   developer calls it (`DEVSTACK_REMOTE_LANE`). Compose calls, `exec`
+   steps, the placeholders and the processes' variables all take it from
+   there, so they cannot differ again.
+2. **On a node, these follow the lane's name** and have the values a local
+   lane of that name has: `{lane}`, `{lane_suffix}`, a native process's
+   `DEVSTACK_LANE` (ADR-0014 step 4), wherever a service or a command
+   expands them, as the Compose variables of the Decision's point 2
+   already do.
+3. **On a node, these stay the container's own**, because they name or
+   decide something that exists only there:
+   - `{compose.<group>.project}`: the project the node's agent created and
+     owns there (ADR-0038); a `docker compose -p` in a command has to find
+     it, and a name built from the lane would not.
+   - `{is_main}` and `DEVSTACK_SLOT`: they say whether this instance runs
+     the background workers and whether it is a candidate (ADR-0008,
+     ADR-0003), which a lane on a node decides as it did: it holds the
+     main slot only when its requester gives it (ADR-0025 point 4).
+   - `{repo}`, `{port}`, `{service.<name>.…}`, `{compose.<group>.<service>.<port>…}`:
+     paths and addresses in the container.
+4. **What the daemon runs as does not change**: on a node it is still a
+   main tree for its slots, its state, its proxies and forwards, the
+   copy it runs from and the infrastructure it reads from the agent.
+
+Consequence: a stack file that relied on `{lane}` being `main` on a node
+(a name, a path) gets the lane's name there now, as it would in a local
+lane. No stack-file key, so no `requires`.
+
+*Enforced by:* `crates/devstack-daemon/src/lib.rs` (`remote_lane_name`),
+`crates/devstack-daemon/src/supervisor/mod.rs` (`presented_lane`, used by
+`infra.rs` `group_variables` / `compose_variables`, `lifecycle.rs`
+`context`, `commands.rs` `CommandContext`), `crates/devstack-env/src/lib.rs`
+(`Context::lane`), `docs/stack-file.md`, `docs/pool.md`.

@@ -42,6 +42,21 @@ pub fn remote_lane() -> bool {
     *ON.get_or_init(|| std::env::var_os("DEVSTACK_REMOTE_LANE").is_some_and(|v| !v.is_empty()))
 }
 
+/// The name of the lane on a node as its requester calls it
+/// (`DEVSTACK_REMOTE_LANE`): what its Compose calls, `{lane}`,
+/// `{lane_suffix}` and its processes' `DEVSTACK_LANE` are told, while the
+/// daemon there runs as a main tree (ADR-0064, addendum 2026-10-26).
+pub fn remote_lane_name() -> Option<&'static str> {
+    static NAME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        std::env::var("DEVSTACK_REMOTE_LANE")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    })
+    .as_deref()
+}
+
 /// Where the files of a lane on a node are for the developer
 /// (`DEVSTACK_DISPLAY_ROOT`, the worktree the node mirrors): compiler paths
 /// in logs point there instead of into the mirror (ADR-0029 point 5).

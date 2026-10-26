@@ -31,6 +31,14 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A lane on a node gives its native services its name** (ADR-0064
+  addendum, #284): `{lane}`, `{lane_suffix}` and a native process's
+  `DEVSTACK_LANE` were `main`, empty and `main` there, because the lane's
+  daemon runs as a main tree, while its Compose calls were told the lane's
+  name. They now have the values a local lane of that name has, in services
+  and in commands, so a login cookie named with `{lane_suffix}` no longer
+  collides with the main tree's on `localhost`. `{is_main}`,
+  `DEVSTACK_SLOT` and `{compose.<group>.project}` stay the node's own.
 - **A pool call that only reads survives a connection the other side
   broke**: `devstack join`, asking whether this machine is admitted, and
   what a member reads from the coordinator ask once more when the

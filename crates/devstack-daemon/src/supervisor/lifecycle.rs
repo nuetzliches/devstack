@@ -882,7 +882,9 @@ impl Supervisor {
                 && (self.owns_main() || !svc.lanes || self.lane_workers.load(Ordering::SeqCst)),
             // The slot, not the workers: a lane's main instance is no candidate.
             candidate: !is_main,
-            lane: self.lane.clone(),
+            // `{lane}`, `{lane_suffix}`, `DEVSTACK_LANE`: on a node the lane's
+            // name, as its Compose calls are told (ADR-0064 addendum).
+            lane: self.presented_lane(),
             published: infra.published.clone(),
             projects,
             pending: infra.pending.clone(),
