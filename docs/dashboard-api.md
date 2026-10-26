@@ -136,6 +136,7 @@ type PoolOverview = {
       total?: { cpus: number; memory: number };        // what the machine has (ADR-0036)
       used?: { cpus: number; memory: number };         // what its lanes use
       gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean }[];
+      kept?: { lanes: number; bytes: number; store_bytes?: number }; // stopped lanes it keeps (ADR-0038) and the members' stores of what `prepare` makes (ADR-0062), together in `bytes`; `store_bytes` the stores' part (older nodes omit it)
       devstack?: PoolRelease;                           // what it runs; absent from a release before version reporting
     };
   }[];
@@ -212,6 +213,16 @@ type ServiceView = {
   rebuild?: Rebuild;                     // a dev server's last rebuild, from its output (ADR-0042): {state: rebuilding|ok|failed, since, ms?, tool, errors?}; an ok one for a minute, a failed one until the next
   hot_reload: boolean;                   // the toolchain's watcher runs it now
   hot_reload_available: boolean;         // the stack file has `hot_reload` for it
+  prepare?: PrepareView;                 // where its last `prepare` outputs came from (ADR-0062), since the daemon started; absent before its first `prepare` (and from older daemons)
+};
+type PrepareView = {
+  source: "store" | "run";               // copied out of the store, or `prepare` ran
+  at: number;                            // unix ms, when it was done
+  ms: number;                            // how long: the copy, or the run
+  key?: string;                          // the store's key: of the entry copied, or of the one the run put
+  prepare_ms?: number;                   // `store`: how long the `prepare` that made the entry took
+  miss?: string;                         // `run`: why the store gave nothing (no entry for these inputs on this machine; copying the entry took longer than running prepare; its `version` failed; an output git tracks; the node gives the lane no store); absent: the `prepare` names no `outputs`
+  stored?: true;                         // `run`: what it made went into the store
 };
 type Status =
   | { state: "stopped" | "starting" | "running" | "healthy" }
@@ -304,6 +315,36 @@ type UsageReport = {
   groups: ({ name: string } & Load)[];
   lanes: ({ name: string; disk?: { snapshot: number; artifacts: number; logs: number; volumes: number | null } } & Load)[];
   docker_error?: string;
+};
+```
+
+### The store of what `prepare` makes
+
+One per repository and machine
+([ADR-0062](adr/0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md)),
+in the main working tree's `.devstack/store/`. A lane's API (`/v1/lanes/{lane}/v1/store`)
+answers from the same store; a lane on a node from the member's store on its
+node, read-only there.
+
+| Method and path | Answer |
+|---|---|
+| `GET /v1/store` | JSON `StoreView` |
+| `DELETE /v1/store/{service}/{key}` | `204`: the entry is gone; the next `prepare` of its inputs runs and makes it again. `404` for no such entry, `409` when a `prepare` of that key in this daemon uses it (for more than 5 s) or the store is a node's. `POST /v1/lanes/prune` with `older_than` removes entries not used for that long too |
+
+```ts
+type StoreView = {
+  owned: boolean;          // this daemon writes and sweeps it; false: a node's store, seen from a lane there
+  bytes: number;           // all entries
+  entries: {               // the largest first
+    service: string; key: string;   // `key`: 20 hex digits, the entry's directory
+    outputs: string[];              // its directories, relative to the repository
+    bytes: number; files: number;
+    created: number;                // unix ms
+    last_used: number;              // unix ms of the last copy out of it, else of its making
+    prepare_ms: number;             // how long the `prepare` that made it took
+    copy_ms?: number;               // how long the last copy out of it took
+    used_by: string[];              // the trees (lane names, "" the main tree's builds) whose service's last `prepare` came from it or went into it, since the daemon started
+  }[];
 };
 ```
 

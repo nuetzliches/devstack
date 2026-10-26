@@ -11,6 +11,18 @@ and listed with their assets on the
 
 ### Added
 
+- **The dashboard shows the store of what `prepare` makes** (ADR-0062,
+  #291). A service's detail view says where its last `prepare` outputs came
+  from: copied out of the store (the key, the copy's time, what `prepare`
+  took when it made the entry) or a run (its time, and why the store gave
+  nothing: no entry for these inputs, copying slower than running, `version`
+  failed, an output git tracks). The usage page has a line with the store's
+  entries and size, which opens the list (service, key, outputs, size, last
+  used, which lanes use it) with a remove action per entry. The pool view
+  shows a node's store beside what it keeps. API: `ServiceView.prepare`,
+  `GET /v1/store`, `DELETE /v1/store/{service}/{key}`, and `kept.store_bytes`
+  in a node's report (older nodes omit it).
+
 - **A pool node keeps a store of what `prepare` makes** (ADR-0062, #277),
   per member and repository: a lane on the node reads it (read-only) and
   copies an entry with the same inputs, platform and lane image instead of

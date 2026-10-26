@@ -575,7 +575,13 @@ function policyText(id: string) {
                   class="faint small"
                   :title="`${n.report.kept.lanes} stopped lane(s) kept there for their next start: mirrors, builds, caches and volumes`"
                   data-testid="pool-node-kept"
-                >· {{ n.report.kept.lanes }} kept, {{ bytes(n.report.kept.bytes) }}</span>
+                >· {{ n.report.kept.lanes }} kept, {{ bytes(n.report.kept.bytes - (n.report.kept.store_bytes ?? 0)) }}</span>
+                <span
+                  v-if="n.report?.kept?.store_bytes"
+                  class="faint small"
+                  title="The members' stores of what prepare makes there (ADR-0062): a lane with the same inputs copies an entry instead of running prepare. Entries count with a member's kept lanes and go first over the room."
+                  data-testid="pool-node-store"
+                >· store {{ bytes(n.report.kept.store_bytes) }}</span>
               </td>
               <td class="faint">{{ n.seen === undefined ? 'never' : ago(now - n.seen * 1000, now) }}</td>
               <td v-if="pool.isAdmin" class="actions">

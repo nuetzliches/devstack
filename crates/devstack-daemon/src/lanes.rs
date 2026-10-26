@@ -2288,6 +2288,27 @@ impl Lanes {
         }
     }
 
+    /// Of the main tree and each lane started here, the store key each
+    /// service's last `prepare` outputs came from or went into (ADR-0062):
+    /// (tree, service, key), the main tree as `""`.
+    pub fn prepared_keys(&self) -> Vec<(String, String, String)> {
+        let mut sups: Vec<(String, Arc<Supervisor>)> = vec![(String::new(), self.main.clone())];
+        sups.extend(
+            self.map
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(n, l)| (n.clone(), l.sup.clone())),
+        );
+        sups.into_iter()
+            .flat_map(|(tree, sup)| {
+                sup.prepared_keys()
+                    .into_iter()
+                    .map(move |(s, k)| (tree.clone(), s, k))
+            })
+            .collect()
+    }
+
     /// The lanes started, or starting, here and on nodes: while there is
     /// one, the main tree's `down` keeps the daemon they live in (ADR-0024).
     pub fn active(&self) -> Vec<String> {
