@@ -622,6 +622,10 @@ pub struct LeaseRequest {
     /// node with the same pool protocol only. Absent from older requesters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub devstack: Option<Release>,
+    /// A warm lease (ADR-0065 point 5): the lane's container runs only the
+    /// `prepare` its member's store lacks, no infrastructure, then ends.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub warm: bool,
 }
 
 /// A member that runs lanes, as a requester reaches it.
@@ -683,6 +687,10 @@ pub struct Lease {
     /// Whom its owner shares the lane with, and which services (ADR-0035).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared: Option<Sharing>,
+    /// A warm lease (ADR-0065 point 5): the lane's container runs only the
+    /// `prepare` its member's store lacks, no infrastructure, then ends.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub warm: bool,
 }
 
 /// A lane shared with others in the pool (ADR-0035).
@@ -1264,6 +1272,7 @@ async fn report(
                         created: store::now(),
                         expires_in: Some(x.expires_in),
                         shared: None,
+                        warm: false,
                     },
                     // Admitted already: no node asks for it by token again.
                     random_hex(24),
@@ -1482,6 +1491,7 @@ async fn placement(
         floor: None,
         profile: q.profile.filter(|p| !p.is_empty()),
         devstack: Some(Release::this()),
+        warm: false,
     };
     Ok(Json(placement_for(&s, &ms, &me, &r, true)))
 }
@@ -1668,6 +1678,7 @@ async fn lease_create(
             created: store::now(),
             expires_in: None,
             shared: None,
+            warm: r.warm,
         };
         leases.insert(
             id.clone(),
@@ -2516,6 +2527,7 @@ mod placement_tests {
                         created: 0,
                         expires_in: None,
                         shared: None,
+                        warm: false,
                     },
                     String::new(),
                     std::time::Instant::now(),

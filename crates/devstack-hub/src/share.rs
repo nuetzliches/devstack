@@ -406,6 +406,7 @@ mod tests {
                 floor: None,
                 profile: None,
                 devstack: None,
+                warm: false,
             })
             .unwrap();
         let rt = rt();

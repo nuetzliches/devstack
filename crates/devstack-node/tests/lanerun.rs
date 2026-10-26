@@ -85,6 +85,7 @@ volumes:
         network: Network::Lan,
         secret: "s".into(),
         store: None,
+        warm: false,
     };
     let project = format!("dsltest-{tag}");
     let label = format!("label=com.docker.compose.project={project}");
