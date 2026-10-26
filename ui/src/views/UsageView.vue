@@ -5,6 +5,7 @@ import { useSort } from '@/lib/sort';
 import { useStack } from '@/stores/stack';
 import Sparkline from '@/components/Sparkline.vue';
 import LaneUsage from '@/components/LaneUsage.vue';
+import StoreLine from '@/components/StoreLine.vue';
 import SortTh from '@/components/SortTh.vue';
 import Icon from '@/components/icons/Icon.vue';
 
@@ -82,6 +83,8 @@ const filters: { v: 'all' | Kind; label: string }[] = [
       <div class="lanes stale-dim">
         <LaneUsage v-for="l in u.lanes" :key="l.name" :lane="l" />
       </div>
+
+      <StoreLine class="stale-dim" />
 
       <section class="card">
         <header class="card-header wrap-head">

@@ -26,7 +26,7 @@ use tokio::sync::broadcast;
 mod artifacts;
 mod candidate;
 mod copy;
-pub use copy::NodeLink;
+pub use copy::{NodeLink, StoreEntryView, StoreRemoveError, StoreView, store_remove, store_view};
 mod handover;
 mod infra;
 pub use infra::ContainerTarget;
@@ -411,6 +411,7 @@ impl Supervisor {
                         rebuild: None,
                         hot_reload: false,
                         hot_reload_available: svc.hot_reload.is_some(),
+                        prepare: None,
                     },
                     main: None,
                     previous: None,

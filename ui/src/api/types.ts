@@ -226,6 +226,50 @@ export type ServiceView = {
   hot_reload?: boolean;
   /** The stack file gives the service a hot-reload mode. */
   hot_reload_available?: boolean;
+  /** Where its last `prepare` outputs came from (ADR-0062), since the daemon started. Older daemons omit it. */
+  prepare?: PrepareView;
+};
+
+/** Where a service's last `prepare` outputs came from (ADR-0062). */
+export type PrepareView = {
+  /** Copied out of the store, or `prepare` ran. */
+  source: 'store' | 'run' | (string & {});
+  /** Unix ms, when it was done. */
+  at: number;
+  /** How long: the copy, or the run. */
+  ms: number;
+  /** The store's key: of the entry copied, or of the one the run put. */
+  key?: string;
+  /** Of a copy: how long the `prepare` that made the entry took. */
+  prepare_ms?: number;
+  /** Of a run: why the store gave nothing; absent: the `prepare` names no `outputs`. */
+  miss?: string;
+  /** Of a run: what it made went into the store. */
+  stored?: boolean;
+};
+
+/** `GET /v1/store`: the store of what `prepare` makes (ADR-0062). */
+export type StoreView = {
+  /** The daemon writes it; false: a node's store, seen from a lane there (read-only). */
+  owned: boolean;
+  bytes: number;
+  entries: StoreEntry[];
+};
+
+export type StoreEntry = {
+  service: string;
+  key: string;
+  outputs: string[];
+  bytes: number;
+  files: number;
+  /** Unix ms. */
+  created: number;
+  /** Unix ms of the last copy out of it, else of its making. */
+  last_used: number;
+  prepare_ms: number;
+  copy_ms?: number;
+  /** Lane names whose last `prepare` came from it or went into it; `""` the main tree. */
+  used_by: string[];
 };
 
 export type ContainerView = {
@@ -447,7 +491,7 @@ export type PoolNode = {
     used?: PoolAmount;
     gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean }[];
     /** Stopped lanes it keeps for their next start (ADR-0038); older nodes omit it. */
-    kept?: { lanes: number; bytes: number };
+    kept?: { lanes: number; bytes: number; /** Of `bytes`, the members' stores of what `prepare` makes (ADR-0062); older nodes omit it. */ store_bytes?: number };
     /** How the last update an admin ordered goes (ADR-0039). */
     update?: { at: number; state: 'draining' | 'installing' | 'restarting' | 'done' | 'refused' | 'failed' | 'cancelled' | (string & {}); target?: string; error?: string };
     /** Why it would refuse an ordered update (in a container its image is updated instead); absent: it updates itself. */

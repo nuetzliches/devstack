@@ -349,7 +349,8 @@ one per repository on the node, counts with its kept lanes: an entry no lane
 used for as long as a stopped lane is kept goes, and over the room the
 store's least recently used entries go before a kept lane does. A lane's
 container reads the store read-only; what it adds waits in its slot until
-the node takes it in. The images Compose built for a lane go with its slot, and
+the node takes it in. The node reports what its stores take beside its kept
+lanes; the dashboard's pool view shows both. The images Compose built for a lane go with its slot, and
 the lane images built from `[lanes] dockerfile` with the member, or when the
 node has less than 10 GiB free. A node takes no lane without the disk it
 needs there and 5 GiB to spare (see "What a lane needs"). A stack with `[lanes]

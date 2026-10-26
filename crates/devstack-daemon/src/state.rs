@@ -95,6 +95,35 @@ pub struct ServiceView {
     pub hot_reload: bool,
     /// The stack file gives it a hot-reload mode.
     pub hot_reload_available: bool,
+    /// Where its last `prepare` outputs came from (ADR-0062): the store or
+    /// a run. Since this daemon started; none before its first `prepare`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prepare: Option<PrepareView>,
+}
+
+/// Where a service's last `prepare` outputs came from (ADR-0062).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PrepareView {
+    /// `store`: copied out of the store; `run`: `prepare` ran.
+    pub source: &'static str,
+    /// Unix ms when it was done.
+    pub at: u128,
+    /// How long it took: the copy out of the store, or the run.
+    pub ms: u64,
+    /// The store's key: of the entry copied, or of the one the run made.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Of a copy: how long the `prepare` that made the entry took.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prepare_ms: Option<u64>,
+    /// Of a run: why the store gave nothing (no entry for these inputs, the
+    /// copy is slower, `version` failed, an output tracked by git). None: the
+    /// `prepare` names no `outputs`, it does not use the store.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub miss: Option<String>,
+    /// Of a run: what it made went into the store.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stored: bool,
 }
 
 /// A replacement for the main instance in progress (ADR-0003).

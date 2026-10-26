@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router';
 import { paths, v1, type ServiceAction } from '@/api';
 import { ago, bytes, dateTime, percent, serviceUrl, shortBuild, useNow } from '@/lib/format';
 import { kindIcon, kindLabel, statusLook } from '@/lib/status';
+import { prepareLine } from '@/lib/store';
 import { useStack } from '@/stores/stack';
 import StatusPill from '@/components/StatusPill.vue';
 import ErrorLine from '@/components/ErrorLine.vue';
@@ -82,6 +83,10 @@ const kv = computed(() => {
     { k: 'Autostart', v: s.autostart ? 'yes' : 'no' },
     { k: 'Groups', v: s.groups.length ? s.groups.join(', ') : '—' },
     { k: 'Log file', v: s.log ?? '—', mono: true },
+    // Where its last `prepare` outputs came from (ADR-0062): the store or a run.
+    ...(s.prepare
+      ? [{ k: 'Prepare', v: `${prepareLine(s.prepare)} · ${ago(s.prepare.at, now.value)}${s.prepare.key ? ` · key ${s.prepare.key}` : ''}`, testid: 'detail-prepare' }]
+      : []),
   ];
 });
 </script>
