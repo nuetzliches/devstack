@@ -1237,6 +1237,46 @@ mod tests {
     }
 
     #[test]
+    fn the_store_lists_its_entries_with_who_used_them_and_removes_one() {
+        let d = tempfile::tempdir().unwrap();
+        let made = d.path().join("made");
+        std::fs::create_dir_all(made.join("deps")).unwrap();
+        std::fs::write(made.join("deps/index.js"), "made").unwrap();
+        let store = Store::new(d.path().join("store"));
+        store
+            .put("web", "k1", &made, &["deps".into()], Duration::from_secs(3))
+            .unwrap();
+        let used = vec![("fix-login".to_string(), "web".to_string(), "k1".to_string())];
+        let v = store_view(&store, &used);
+        assert!(v.owned);
+        assert_eq!(v.entries.len(), 1);
+        let e = &v.entries[0];
+        assert_eq!((e.service.as_str(), e.key.as_str()), ("web", "k1"));
+        assert_eq!((e.files, e.prepare_ms), (1, 3000));
+        assert_eq!(e.used_by, vec!["fix-login".to_string()]);
+        assert_eq!(v.bytes, e.bytes);
+        assert!(matches!(
+            store_remove(&store, "web", "../web"),
+            Err(StoreRemoveError::NotFound(_))
+        ));
+        store_remove(&store, "web", "k1").unwrap();
+        assert!(store_view(&store, &used).entries.is_empty());
+        assert!(matches!(
+            store_remove(&store, "web", "k1"),
+            Err(StoreRemoveError::NotFound(_))
+        ));
+        // A node's store is its agent's.
+        let lane = Store::with_outbox(d.path().join("store"), d.path().join("out"));
+        assert!(!store_view(&lane, &[]).owned);
+        assert!(matches!(
+            store_remove(&lane, "web", "k1"),
+            Err(StoreRemoveError::Refused(_))
+        ));
+    }
+
+    // `prepare` runs as a process: without devstack's shim, on Windows only.
+    #[cfg(windows)]
+    #[test]
     fn a_service_says_where_its_prepare_came_from_and_the_store_lists_and_removes_entries() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
