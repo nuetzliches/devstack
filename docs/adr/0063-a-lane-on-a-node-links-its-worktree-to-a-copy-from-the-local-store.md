@@ -1,6 +1,6 @@
 # ADR-0063: A lane on a node links its worktree to a copy from the local store
 
-- **Status:** Accepted (2026-10-26)
+- **Status:** Accepted (2026-10-26); built, noted 2026-10-26
 - **Date:** 2026-10-26
 - **Deciders:** project owner
 - **Related:** [#277](https://github.com/nuetzliches/devstack/issues/277), [#159](https://github.com/nuetzliches/devstack/issues/159), [ADR-0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) (point 5 replaced here for lanes on a node), [ADR-0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md)
@@ -86,6 +86,23 @@ Where it will live:
 - `crates/devstack-daemon/src/api.rs` and `ui/` (the link's state),
   `crates/devstack` (`status`).
 - `docs/stack-file.md` (`prepare.link`).
+
+*Paths as built, noted 2026-10-26.* `crates/devstack-daemon/src/supervisor/copy.rs`:
+`link_node_lane` (the key from the worktree's inputs as a copy would hash
+them, `run_prepare` with the copy's source synced only before a `prepare`
+itself, not before a hit), `unlink_node_lane`, `link_one` (ADR-0044's rules,
+shared with a local lane's `link_prepared`), `NodeLink`. The copy is
+`.devstack/lane-<name>/linked/src/<path>` (a snapshot of the worktree, which
+gets the source only when it has to prepare), not `linked/<path>`.
+`crates/devstack-daemon/src/lanes.rs`: `follow_node_links` (every 15
+seconds over the lanes on nodes; a look at the inputs while nothing
+changed), `unlink_node` (on `lane stop`, the lane forgotten, and for any
+lane that left its node), `LaneView::links`. Point 2's "when a file of
+`inputs` changes" is that check, not the watcher. Shown in `devstack lane
+list` and `status` (`crates/devstack/src/client.rs`) and in the dashboard's
+lane header (`ui/src/components/StackHeader.vue`). `prepare` for a worktree
+runs under the main tree's one-at-a-time lock and logs as the main tree's
+service.
 
 ## What this ADR does not say
 

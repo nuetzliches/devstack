@@ -11,6 +11,17 @@ and listed with their assets on the
 
 ### Added
 
+- **The worktree of a lane on a node gets `prepare.link` too** (ADR-0063,
+  #277): a pre-commit hook with `npx eslint` there no longer needs a
+  hand-run `npm ci`. With `outputs`, devstack checks the worktree's inputs
+  every 15 s; when their key is new it copies this machine's store entry
+  into `.devstack/lane-<name>/linked/` or runs `prepare` there once, keeps
+  the result in the store, and links the worktree to it (built for this
+  machine, not the node's platform). `devstack lane list`, `status` and the
+  dashboard's lane header say per path `linked`, `linked (store)`,
+  `preparing` or `not linked` with why. The links go when the lane stops,
+  moves or goes.
+
 - **A lane on a node is in the pool's telemetry from the inside** (ADR-0037
   addendum, #287): its own daemon sent nothing, having no membership. It now
   keeps its diagnostic lines (the newest 5,000), and the daemon that started

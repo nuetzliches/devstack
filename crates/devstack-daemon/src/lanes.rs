@@ -113,6 +113,10 @@ pub struct LaneView {
     /// the main tree's daemon knows of it (its worktree missing).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notices: Vec<Notice>,
+    /// Of a lane on a node, what `prepare` makes linked into its worktree
+    /// from a copy on this machine, per path (ADR-0063).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<crate::supervisor::NodeLink>,
 }
 
 /// Of a lane, what the lists show that changes on its own: name, services
@@ -126,6 +130,7 @@ type Shown = (
     Vec<Notice>,
     Vec<String>,
     bool,
+    Vec<crate::supervisor::NodeLink>,
 );
 
 /// The notice of a lane whose worktree git lists but is not there, missing
@@ -251,6 +256,9 @@ struct Worktree {
 /// or removable drive gone for a moment) before its lane is forgotten, with
 /// its containers and volumes. A worktree removed with git goes at once.
 const MISSING_GRACE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+/// How often the worktrees of lanes on nodes are checked for their links
+/// (ADR-0063): their inputs read, a copy or `prepare` only when they changed.
+const NODE_LINKS_EVERY: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// What lane `number` moves its ports by; `None` beyond 65535.
 fn lane_offset(number: u16, step: u16) -> Option<u16> {
@@ -362,6 +370,9 @@ pub struct Lanes {
     /// What a restart carries over, noted when the daemon begins to stop and
     /// written when it is done ([`Lanes::leave_all`]).
     carry: Mutex<Option<Carry>>,
+    /// Of each lane on a node, its worktree's links to a copy on this
+    /// machine (ADR-0063), as [`Lanes::follow_node_links`] last made them.
+    node_links: Mutex<BTreeMap<String, Vec<crate::supervisor::NodeLink>>>,
 }
 
 /// What a daemon that restarts leaves for the next one, in
@@ -827,6 +838,7 @@ impl Lanes {
             known: Mutex::new(BTreeMap::new()),
             map: Mutex::new(BTreeMap::new()),
             remote: Mutex::new(BTreeMap::new()),
+            node_links: Mutex::new(BTreeMap::new()),
             moves: Mutex::new(BTreeMap::new()),
             pending: Mutex::new(BTreeSet::new()),
             forgetting: Mutex::new(BTreeSet::new()),
@@ -875,6 +887,7 @@ impl Lanes {
             weak.upgrade().map(|l| l.pins(service)).unwrap_or_default()
         }));
         me.follow();
+        me.follow_node_links();
         me
     }
 
@@ -1096,6 +1109,92 @@ impl Lanes {
             });
     }
 
+    /// Keep the worktree of every lane on a node linked to a copy on this
+    /// machine of what its `prepare` makes (ADR-0063), every
+    /// [`NODE_LINKS_EVERY`]: a look at its inputs while nothing changed; a
+    /// copy from the store, or `prepare` once, when they did. A lane that
+    /// left its node has its links taken away.
+    pub fn follow_node_links(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        let _ = std::thread::Builder::new()
+            .name("lanes-node-links".into())
+            .spawn(move || {
+                loop {
+                    let Some(me) = weak.upgrade() else { return };
+                    if me.main.closed() {
+                        return;
+                    }
+                    me.node_links_round();
+                    drop(me);
+                    std::thread::sleep(NODE_LINKS_EVERY);
+                }
+            });
+    }
+
+    fn node_links_round(&self) {
+        let on_node: Vec<(String, PathBuf)> = {
+            let remote = self.remote.lock().unwrap();
+            let known = self.known.lock().unwrap();
+            remote
+                .keys()
+                .filter_map(|n| known.get(n).map(|k| (n.clone(), k.entry.path.clone())))
+                .collect()
+        };
+        for (name, path) in &on_node {
+            if !path.is_dir() {
+                continue;
+            }
+            let stack = devstack_config::load(&self.stack_file_of(path))
+                .unwrap_or_else(|_| self.main.stack.clone());
+            let report = |links: &[crate::supervisor::NodeLink]| {
+                self.node_links
+                    .lock()
+                    .unwrap()
+                    .insert(name.clone(), links.to_vec());
+            };
+            let gone = || self.remote(name).is_none() || self.main.closed();
+            self.main
+                .link_node_lane(path, &self.state_dir(name), &stack, &report, &gone);
+            // Stopped while it prepared: what it linked goes again.
+            if self.remote(name).is_none() {
+                self.unlink_node(name);
+            }
+        }
+        let left: Vec<String> = self
+            .node_links
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|n| !on_node.iter().any(|(o, _)| o == *n))
+            .cloned()
+            .collect();
+        for name in left {
+            self.unlink_node(&name);
+        }
+    }
+
+    /// The links of lane `name`'s worktree to its copy here, taken away
+    /// (ADR-0063, ADR-0044 point 3): it stopped on its node, moved or went.
+    fn unlink_node(&self, name: &str) {
+        let had = self.node_links.lock().unwrap().remove(name).is_some();
+        let Some(path) = self
+            .known
+            .lock()
+            .unwrap()
+            .get(name)
+            .map(|k| k.entry.path.clone())
+        else {
+            return;
+        };
+        if !had && !self.state_dir(name).join("linked").is_dir() {
+            return;
+        }
+        let stack = devstack_config::load(&self.stack_file_of(&path))
+            .unwrap_or_else(|_| self.main.stack.clone());
+        self.main
+            .unlink_node_lane(&path, &self.state_dir(name), &stack);
+    }
+
     /// Of each lane, what the lists show that changes on its own.
     fn shown(&self) -> Vec<Shown> {
         self.views()
@@ -1109,6 +1208,7 @@ impl Lanes {
                     v.notices,
                     v.not_forwarded,
                     v.main_stack_file,
+                    v.links,
                 )
             })
             .collect()
@@ -1248,6 +1348,7 @@ impl Lanes {
         if let Some(r) = remote {
             self.stop_remote(r);
         }
+        self.unlink_node(name);
         self.missing.lock().unwrap().remove(name);
         self.profiles.lock().unwrap().remove(name);
         // Logged there; a lane that is forgotten has nobody to tell.
@@ -1751,6 +1852,13 @@ impl Lanes {
                         }
                         n
                     },
+                    links: self
+                        .node_links
+                        .lock()
+                        .unwrap()
+                        .get(&k.entry.name)
+                        .cloned()
+                        .unwrap_or_default(),
                 }
             })
             .collect()
@@ -1875,6 +1983,7 @@ impl Lanes {
         if let Some(r) = remote {
             let node = r.node.name.clone();
             self.stop_remote(r);
+            self.unlink_node(name);
             crate::diag::info(
                 "lane_stopped",
                 serde_json::json!({ "lane": name, "place": "remote", "node": node,

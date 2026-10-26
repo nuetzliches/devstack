@@ -43,21 +43,14 @@ impl Supervisor {
             return Ok(None);
         };
         let cwd = p.cwd.as_ref().or(svc.cwd.as_ref());
-        let mut h = blake3::Hasher::new();
-        h.update(p.run.as_bytes());
-        h.update(cwd.map_or("", String::as_str).as_bytes());
-        if let Some(g) = devstack_build::watch_set(&p.inputs).map_err(|e| e.to_string())? {
-            for (rel, e) in snap
-                .manifest
+        let key = prepare_key(
+            p,
+            svc,
+            snap.manifest
                 .files
                 .iter()
-                .filter(|(r, _)| g.is_match(r.as_str()))
-            {
-                h.update(rel.as_bytes());
-                h.update(e.hash.as_bytes());
-            }
-        }
-        let key = h.finalize().to_hex().to_string();
+                .map(|(r, e)| (r.as_str(), e.hash.clone())),
+        )?;
         let mark = self.layout.lane("main").join("prepared").join(name);
         // A linked directory that is gone (a `git worktree remove` followed
         // the link into it, ADR-0044) is prepared again.
@@ -72,6 +65,7 @@ impl Supervisor {
             cwd: cwd.map_or_else(|| snap.dir.clone(), |c| snap.dir.join(c)),
             run: p.run.clone(),
             store: self.store_use(name, p, snap),
+            before_run: None,
         }))
     }
 
@@ -129,15 +123,10 @@ impl Supervisor {
         let Some(s) = &job.store else {
             return Ok(None);
         };
-        let mut h = blake3::Hasher::new();
-        h.update(job.key.as_bytes());
-        h.update(std::env::consts::OS.as_bytes());
-        h.update(std::env::consts::ARCH.as_bytes());
+        let mut version = None;
         if let Some(cmd) = &s.version {
             match self.run_version(name, cmd, &job.cwd, cancel) {
-                Ok(out) => {
-                    h.update(out.trim().as_bytes());
-                }
+                Ok(out) => version = Some(out),
                 Err(e) if cancel() => return Err(e),
                 Err(e) => {
                     crate::diag::warn(
@@ -155,8 +144,7 @@ impl Supervisor {
                 }
             }
         }
-        // Short: Windows paths below it are long already (`node_modules`).
-        Ok(Some(h.finalize().to_hex()[..20].to_string()))
+        Ok(Some(store_key_of(&job.key, version.as_deref())))
     }
 
     /// `prepare.version` of `name`, run in `cwd` like `prepare`; its output.
@@ -296,7 +284,7 @@ impl Supervisor {
         name: &str,
         job: PrepareJob,
         cancel: &dyn Fn() -> bool,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let _one = self.preparing.lock().unwrap();
         let dir = self.log_dir(name);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -318,7 +306,10 @@ impl Supervisor {
             && self.prepare_from_store(name, &store, k, &s.root, &log)
         {
             self.clear_notice(&format!("prepare.store.{name}"));
-            return job.done();
+            return job.done().map(|()| true);
+        }
+        if let Some(f) = &job.before_run {
+            f()?;
         }
         let t0 = Instant::now();
         let file = std::fs::File::create(&log).map_err(|e| e.to_string())?;
@@ -356,7 +347,7 @@ impl Supervisor {
         if let (Some(k), Some(s)) = (&key, &job.store) {
             self.store_put(name, &store, k, s, t0.elapsed());
         }
-        job.done()
+        job.done().map(|()| false)
     }
 
     /// A lane's copy, current and prepared for `svc`, before it starts from it.
@@ -401,51 +392,187 @@ impl Supervisor {
         }
         let copy = self.run_root();
         for rel in &p.link {
-            let (link, target) = (self.repo.join(rel), copy.join(rel));
             let id = format!("prepare.{name}.{rel}");
-            if std::fs::symlink_metadata(&link).is_ok() {
-                self.clear_notice(&id);
-                continue;
+            match link_one(&self.repo, &copy, rel) {
+                Linked::Made => {
+                    self.clear_notice(&id);
+                    crate::diag::info(
+                        "prepare_linked",
+                        serde_json::json!({ "lane": self.lane, "service": name, "path": rel }),
+                    );
+                }
+                Linked::There(_) => self.clear_notice(&id),
+                Linked::Not(why) => {
+                    crate::diag::warn(
+                        "prepare_not_linked",
+                        serde_json::json!({ "lane": self.lane, "service": name, "path": rel, "why": why }),
+                    );
+                    self.set_notice(
+                        &id,
+                        NoticeLevel::Warn,
+                        format!(
+                            "`{rel}`, which `prepare` of {name} installs, is not linked into the worktree: {why}. What runs in the worktree itself (git hooks) does not find it."
+                        ),
+                    );
+                }
             }
-            let not_linked = |why: String| {
+        }
+    }
+
+    /// The worktree of a lane that runs on a node, linked to a copy on this
+    /// machine of what each `prepare` with `link` makes, for its git hooks
+    /// (ADR-0063): `<dir>/linked/src`, `dir` the lane's state here. The
+    /// copy comes from this machine's store (ADR-0062) when it has the key
+    /// of the worktree's inputs; else `prepare` runs once in that copy,
+    /// which gets the worktree's source for it, and its outputs go into the
+    /// store. `stack` is the worktree's stack file (the main tree's where it
+    /// has none). `report` hears every path's state as it changes. Nothing
+    /// runs when the key is the one prepared there before and its
+    /// directories are there: a look at the inputs.
+    pub(crate) fn link_node_lane(
+        &self,
+        worktree: &Path,
+        dir: &Path,
+        stack: &devstack_config::Stack,
+        report: &dyn Fn(&[NodeLink]),
+        cancel: &dyn Fn() -> bool,
+    ) {
+        let linked = dir.join("linked");
+        let mut views: Vec<NodeLink> = Vec::new();
+        let snap = match Snapshot::open(worktree, &linked) {
+            Ok(s) => s,
+            Err(e) => {
                 crate::diag::warn(
-                    "prepare_not_linked",
-                    serde_json::json!({ "lane": self.lane, "service": name, "path": rel, "why": why }),
+                    "prepare_node_link_failed",
+                    serde_json::json!({ "error": e.to_string() }),
                 );
-                self.set_notice(
-                    &id,
-                    NoticeLevel::Warn,
-                    format!(
-                        "`{rel}`, which `prepare` of {name} installs, is not linked into the worktree: {why}. What runs in the worktree itself (git hooks) does not find it."
-                    ),
-                );
+                return;
+            }
+        };
+        let root = snap.dir.clone();
+        let files = snap.list().unwrap_or_default();
+        let snap = Arc::new(std::sync::Mutex::new(snap));
+        for (name, svc) in &stack.services {
+            let Some(p) = svc.prepare.as_ref().filter(|p| !p.link.is_empty()) else {
+                continue;
             };
-            if !target.is_dir() {
-                not_linked(format!(
-                    "`prepare` made no directory `{rel}` in the lane's copy"
+            let at = |state: &str, why: Option<String>| {
+                p.link
+                    .iter()
+                    .map(|rel| NodeLink {
+                        path: rel.clone(),
+                        service: name.clone(),
+                        state: state.to_string(),
+                        why: why.clone(),
+                    })
+                    .collect::<Vec<_>>()
+            };
+            if p.outputs.is_empty() {
+                views.extend(at(
+                    "not linked",
+                    Some(format!(
+                        "`prepare` of {name} names no `outputs`: with them this machine keeps what it makes and links the worktree to a copy"
+                    )),
                 ));
                 continue;
             }
-            if !link.parent().is_some_and(Path::is_dir) {
-                not_linked("its parent directory is not in the worktree".into());
-                continue;
+            // The key of the worktree's inputs, as a copy of it would have it.
+            let globs = devstack_build::watch_set(&p.inputs).ok().flatten();
+            let hashed = files
+                .iter()
+                .filter(|rel| globs.as_ref().is_some_and(|g| g.is_match(rel.as_str())))
+                .filter_map(|rel| {
+                    let bytes = std::fs::read(worktree.join(rel)).ok()?;
+                    Some((rel.as_str(), blake3::hash(&bytes).to_hex().to_string()))
+                });
+            let key = match prepare_key(p, svc, hashed) {
+                Ok(k) => k,
+                Err(e) => {
+                    views.extend(at("not linked", Some(e)));
+                    continue;
+                }
+            };
+            let mark = linked.join("prepared").join(name);
+            let there = p.link.iter().all(|l| root.join(l).is_dir());
+            let done = there && std::fs::read_to_string(&mark).is_ok_and(|k| k == key);
+            let mut state = "linked";
+            if !done {
+                let mut now = views.clone();
+                now.extend(at("preparing", None));
+                report(&now);
+                let cwd = p.cwd.as_ref().or(svc.cwd.as_ref());
+                let sync = snap.clone();
+                let job = PrepareJob {
+                    key,
+                    mark,
+                    cwd: cwd.map_or_else(|| root.clone(), |c| root.join(c)),
+                    run: p.run.clone(),
+                    store: Some(StoreUse {
+                        root: root.clone(),
+                        outputs: p.outputs.clone(),
+                        version: p.version.clone(),
+                    }),
+                    before_run: Some(Box::new(move || {
+                        sync.lock()
+                            .unwrap()
+                            .sync()
+                            .map(|_| ())
+                            .map_err(|e| e.to_string())
+                    })),
+                };
+                match self.run_prepare(name, job, cancel) {
+                    Ok(true) => state = "linked (store)",
+                    Ok(false) => {}
+                    Err(e) => {
+                        views.extend(at("not linked", Some(e)));
+                        continue;
+                    }
+                }
             }
-            if let Err(e) = make_link(&target, &link) {
-                not_linked(e.to_string());
-                continue;
+            for rel in &p.link {
+                let (state, why) = match link_one(worktree, &root, rel) {
+                    Linked::Made | Linked::There(true) => (state, None),
+                    Linked::There(false) => (
+                        "not linked",
+                        Some(format!("the worktree has a `{rel}` of its own")),
+                    ),
+                    Linked::Not(why) => ("not linked", Some(why)),
+                };
+                views.push(NodeLink {
+                    path: rel.clone(),
+                    service: name.clone(),
+                    state: state.to_string(),
+                    why,
+                });
             }
-            if !git_ignores(&self.repo, rel) {
-                let _ = remove_link(&link);
-                not_linked(format!(
-                    "git does not ignore `{rel}` as a link: ignore it without a trailing slash (`node_modules`, not `node_modules/`)"
-                ));
-                continue;
+        }
+        report(&views);
+    }
+
+    /// The links [`Self::link_node_lane`] made in `worktree`, removed: the
+    /// lane stopped, moved or went (ADR-0044 point 3 holds for them too).
+    pub(crate) fn unlink_node_lane(
+        &self,
+        worktree: &Path,
+        dir: &Path,
+        stack: &devstack_config::Stack,
+    ) {
+        let copy = dir.join("linked").join("src");
+        for rel in stack
+            .services
+            .values()
+            .filter_map(|s| s.prepare.as_ref())
+            .flat_map(|p| &p.link)
+        {
+            let link = worktree.join(rel);
+            if links_to(&link, &copy.join(rel)) {
+                let r = remove_link(&link);
+                crate::diag::info(
+                    "prepare_unlinked",
+                    serde_json::json!({ "path": rel, "place": "remote",
+                        "error": r.err().map(|e| e.to_string()) }),
+                );
             }
-            self.clear_notice(&id);
-            crate::diag::info(
-                "prepare_linked",
-                serde_json::json!({ "lane": self.lane, "service": name, "path": rel }),
-            );
         }
     }
 
@@ -564,6 +691,10 @@ pub(super) struct PrepareJob {
     run: String,
     /// What the store needs, when it is used (ADR-0062).
     store: Option<StoreUse>,
+    /// Runs before `prepare` itself does, not before a hit: the copy of a
+    /// worktree linked for a lane on a node gets its source only when it
+    /// has to prepare (ADR-0063).
+    before_run: Option<Box<dyn Fn() -> Result<(), String> + Send>>,
 }
 
 impl PrepareJob {
@@ -574,6 +705,41 @@ impl PrepareJob {
         }
         std::fs::write(&self.mark, &self.key).map_err(|e| e.to_string())
     }
+}
+
+/// The key of `prepare` `p` of `svc` over the files of a copy (path, blake3
+/// of the content): its command, its directory and the files of `inputs`
+/// (ADR-0002's way: what changes it, nothing else).
+fn prepare_key<'a>(
+    p: &Prepare,
+    svc: &Service,
+    files: impl Iterator<Item = (&'a str, String)>,
+) -> Result<String, String> {
+    let cwd = p.cwd.as_ref().or(svc.cwd.as_ref());
+    let mut h = blake3::Hasher::new();
+    h.update(p.run.as_bytes());
+    h.update(cwd.map_or("", String::as_str).as_bytes());
+    if let Some(g) = devstack_build::watch_set(&p.inputs).map_err(|e| e.to_string())? {
+        for (rel, hash) in files.filter(|(r, _)| g.is_match(r)) {
+            h.update(rel.as_bytes());
+            h.update(hash.as_bytes());
+        }
+    }
+    Ok(h.finalize().to_hex().to_string())
+}
+
+/// The store's key of a `prepare` whose key is `key` on this machine, with
+/// the output of its `version` (ADR-0062 point 2). Short: Windows paths below
+/// it are long already (`node_modules`).
+fn store_key_of(key: &str, version: Option<&str>) -> String {
+    let mut h = blake3::Hasher::new();
+    h.update(key.as_bytes());
+    h.update(std::env::consts::OS.as_bytes());
+    h.update(std::env::consts::ARCH.as_bytes());
+    if let Some(v) = version {
+        h.update(v.trim().as_bytes());
+    }
+    h.finalize().to_hex()[..20].to_string()
 }
 
 /// A `prepare` that goes through the store.
@@ -611,6 +777,55 @@ fn sweep_store(store: &Store) {
             );
         }
     });
+}
+
+/// A path of a lane on a node's worktree, linked (or not) to a copy on this
+/// machine (ADR-0063): what `devstack status` and the dashboard show.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct NodeLink {
+    pub path: String,
+    pub service: String,
+    /// `linked`, `linked (store)`, `preparing`, `not linked`.
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+}
+
+/// What [`link_one`] did.
+enum Linked {
+    Made,
+    /// Something is there already: a link to the copy (`true`), or the
+    /// developer's own (`false`), which stays.
+    There(bool),
+    Not(String),
+}
+
+/// `rel` in `repo` linked to `rel` in `copy` (ADR-0044): only where the
+/// worktree has nothing of that name, and only where git ignores the link
+/// (`git add -A` would commit it; it is taken away again).
+fn link_one(repo: &Path, copy: &Path, rel: &str) -> Linked {
+    let (link, target) = (repo.join(rel), copy.join(rel));
+    if std::fs::symlink_metadata(&link).is_ok() {
+        return Linked::There(links_to(&link, &target));
+    }
+    if !target.is_dir() {
+        return Linked::Not(format!(
+            "`prepare` made no directory `{rel}` in the lane's copy"
+        ));
+    }
+    if !link.parent().is_some_and(Path::is_dir) {
+        return Linked::Not("its parent directory is not in the worktree".into());
+    }
+    if let Err(e) = make_link(&target, &link) {
+        return Linked::Not(e.to_string());
+    }
+    if !git_ignores(repo, rel) {
+        let _ = remove_link(&link);
+        return Linked::Not(format!(
+            "git does not ignore `{rel}` as a link: ignore it without a trailing slash (`node_modules`, not `node_modules/`)"
+        ));
+    }
+    Linked::Made
 }
 
 /// A directory link at `link` to `target`: a junction on Windows (no
@@ -695,5 +910,107 @@ mod tests {
         assert!(!git_ignores(&repo, "web/node_modules"));
         std::fs::write(repo.join(".gitignore"), "node_modules\n").unwrap();
         assert!(git_ignores(&repo, "web/node_modules"));
+    }
+
+    #[test]
+    fn a_lane_on_a_node_gets_its_worktree_linked_to_a_copy_from_the_store() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let (main, wt, lane) = (
+            d.path().join("main"),
+            d.path().join("wt"),
+            d.path().join("lane"),
+        );
+        let text = "version = 1\n[stack]\nname = \"t\"\n[services.web]\nkind = \"devserver\"\nrun = \"x\"\nport = 4200\nprepare = { run = \"npm ci\", inputs = [\"package-lock.json\"], outputs = [\"deps\"], link = [\"deps\"] }\n";
+        let stack = devstack_config::from_str(text, Path::new("t")).unwrap();
+        for repo in [&main, &wt] {
+            std::fs::create_dir_all(repo).unwrap();
+            let init = std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(repo)
+                .status()
+                .unwrap();
+            assert!(init.success());
+            std::fs::write(repo.join(".gitignore"), "deps\n.devstack\n").unwrap();
+            std::fs::write(repo.join("package-lock.json"), "{\"v\":1}").unwrap();
+        }
+        let sup = Supervisor::new(
+            stack.clone(),
+            main.join("devstack.toml"),
+            main.clone(),
+            main.join(".devstack"),
+            devstack_proc::Options::default(),
+            rt.handle().clone(),
+        )
+        .unwrap();
+        // What a lane with the same lockfile here made before: in the store.
+        let p = stack.services["web"].prepare.as_ref().unwrap();
+        let key = prepare_key(
+            p,
+            &stack.services["web"],
+            [(
+                "package-lock.json",
+                blake3::hash(b"{\"v\":1}").to_hex().to_string(),
+            )]
+            .into_iter(),
+        )
+        .unwrap();
+        let made = d.path().join("made");
+        std::fs::create_dir_all(made.join("deps/eslint")).unwrap();
+        std::fs::write(made.join("deps/eslint/index.js"), "lint").unwrap();
+        sup.store()
+            .put(
+                "web",
+                &store_key_of(&key, None),
+                &made,
+                &p.outputs,
+                Duration::from_secs(60),
+            )
+            .unwrap();
+
+        let seen = std::sync::Mutex::new(Vec::new());
+        let report = |l: &[NodeLink]| seen.lock().unwrap().push(l.to_vec());
+        sup.link_node_lane(&wt, &lane, &stack, &report, &|| false);
+        let last = seen.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(last.len(), 1);
+        assert_eq!(last[0].state, "linked (store)", "{last:?}");
+        assert!(
+            std::fs::symlink_metadata(wt.join("deps"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_to_string(wt.join("deps/eslint/index.js")).unwrap(),
+            "lint"
+        );
+        // A copy, not the store's entry.
+        assert!(lane.join("linked/src/deps/eslint/index.js").is_file());
+
+        // Nothing changed: linked as it is, nothing copied again.
+        sup.link_node_lane(&wt, &lane, &stack, &report, &|| false);
+        let last = seen.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(last[0].state, "linked", "{last:?}");
+
+        // The lane stops: the link goes, the copy stays for the next start.
+        sup.unlink_node_lane(&wt, &lane, &stack);
+        assert!(std::fs::symlink_metadata(wt.join("deps")).is_err());
+        assert!(lane.join("linked/src/deps/eslint/index.js").is_file());
+
+        // Without `outputs` there is no store and no link, and it says why.
+        let plain =
+            devstack_config::from_str(&text.replace(", outputs = [\"deps\"]", ""), Path::new("t"))
+                .unwrap();
+        sup.link_node_lane(&wt, &lane, &plain, &report, &|| false);
+        let last = seen.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(last[0].state, "not linked");
+        assert!(
+            last[0].why.as_deref().unwrap().contains("outputs"),
+            "{last:?}"
+        );
+        assert!(std::fs::symlink_metadata(wt.join("deps")).is_err());
     }
 }

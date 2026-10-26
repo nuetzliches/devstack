@@ -176,6 +176,15 @@ export type LaneView = {
   gone?: boolean;
   /** Its notices (ADR-0050): its tree's while it runs here, and what the main tree knows of it (`worktree_missing`). */
   notices?: Notice[];
+  /** Of a lane on a node, what `prepare` makes linked into its worktree from a copy on this machine (ADR-0063). Older daemons omit it. */
+  links?: NodeLink[];
+};
+
+export type NodeLink = {
+  path: string;
+  service: string;
+  state: 'linked' | 'linked (store)' | 'preparing' | 'not linked';
+  why?: string;
 };
 
 export type LaneMove = {

@@ -716,6 +716,9 @@ pub fn print_status_for(stack: &Value, stack_file: &Path) {
     if let Some(n) = c.as_ref().and_then(lanes_note) {
         println!("\n{n}");
     }
+    if let Some(n) = c.as_ref().and_then(links_note) {
+        println!("\n{n}");
+    }
     if let Some(n) = crate::skills::outdated_note(stack_file) {
         println!("\n{n}");
     }
@@ -1401,6 +1404,18 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
         {
             troubles.push(format!("{name}: {t}"));
         }
+        // A lane on a node: its worktree's links to a copy here (ADR-0063).
+        for k in l["links"].as_array().into_iter().flatten() {
+            troubles.push(format!(
+                "{name}: {} {}{}",
+                k["path"].as_str().unwrap_or(""),
+                k["state"].as_str().unwrap_or(""),
+                k["why"]
+                    .as_str()
+                    .map(|w| format!(": {w}"))
+                    .unwrap_or_default()
+            ));
+        }
         println!(
             "{:<24} {:<24} {:>8} {:>9}  {:<5}  {:<16} {}",
             name,
@@ -1716,6 +1731,37 @@ pub fn worktree_lane(stack_file: &Path) -> Option<String> {
                 .is_some_and(|p| same_dir(&devstack_proc::long_path(Path::new(p)), &me))
         })
         .and_then(|l| l["name"].as_str().map(str::to_string))
+}
+
+/// In the worktree of a lane on a node, for `status`: what `prepare` makes,
+/// linked into the worktree from a copy on this machine, per path
+/// (ADR-0063).
+pub fn links_note(c: &Client) -> Option<String> {
+    let lane = c.lane().filter(|l| *l != "-")?;
+    let (status, body) = c.call_raw("GET", "/v1/lanes", None).ok()?;
+    if status >= 400 {
+        return None;
+    }
+    let lanes: Vec<Value> = serde_json::from_str(&body).ok()?;
+    let links: Vec<String> = lanes
+        .iter()
+        .find(|l| l["name"] == lane)?
+        .get("links")?
+        .as_array()?
+        .iter()
+        .map(|k| {
+            format!(
+                "  {} {}{}",
+                k["path"].as_str().unwrap_or(""),
+                k["state"].as_str().unwrap_or(""),
+                k["why"]
+                    .as_str()
+                    .map(|w| format!(": {w}"))
+                    .unwrap_or_default()
+            )
+        })
+        .collect();
+    (!links.is_empty()).then(|| format!("linked into this worktree:\n{}", links.join("\n")))
 }
 
 /// One line on the lanes for `status` in the main working tree (#103): that
