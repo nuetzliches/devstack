@@ -343,7 +343,13 @@ The node keeps a stopped lane a week if it is dedicated, a day otherwise
 (`keep_lanes_hours` in its policy), and at most 20 GiB of one member's kept
 lanes, mirrors, builds and volumes together (`keep_lanes_gib`; the least
 recently used goes first); it removes them at once when the pool no longer
-lists the member. The images Compose built for a lane go with its slot, and
+lists the member. A member's store of what `prepare` makes
+([ADR-0062](adr/0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md)),
+one per repository on the node, counts with its kept lanes: an entry no lane
+used for as long as a stopped lane is kept goes, and over the room the
+store's least recently used entries go before a kept lane does. A lane's
+container reads the store read-only; what it adds waits in its slot until
+the node takes it in. The images Compose built for a lane go with its slot, and
 the lane images built from `[lanes] dockerfile` with the member, or when the
 node has less than 10 GiB free. A node takes no lane without the disk it
 needs there and 5 GiB to spare (see "What a lane needs"). A stack with `[lanes]

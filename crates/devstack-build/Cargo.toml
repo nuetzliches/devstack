@@ -1,6 +1,6 @@
 [package]
 name = "devstack-build"
-description = "Snapshots, builds in a lane, artifacts and build ids (ADR-0002, ADR-0003, ADR-0020)"
+description = "Snapshots, builds in a lane, artifacts and build ids, the store of what prepare makes (ADR-0002, ADR-0003, ADR-0020, ADR-0062)"
 version.workspace = true
 license.workspace = true
 edition.workspace = true
@@ -15,6 +15,9 @@ globset.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+junction.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -197,6 +197,7 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     let wt = repo.path().join("wt");
     copy_fixture(&main);
     slow_db(&main);
+    with_prepare(&main);
     git(&main, &["init", "-q"]);
     git(&main, &["add", "-A"]);
     git(
@@ -345,6 +346,66 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     )
     .expect("the lane answers");
     assert!(!again.contains("daemon_start"), "taken once: {again}");
+
+    // What `prepare` made is linked into the worktree here, from a copy on
+    // this machine (ADR-0063), and a git hook there finds it (#277).
+    let until = Instant::now() + Duration::from_secs(120);
+    loop {
+        let links = api("/v1/lanes")
+            .and_then(|v| v.as_array()?.iter().find(|l| l["name"] == "wt").cloned())
+            .map(|l| l["links"].clone());
+        if links
+            .as_ref()
+            .and_then(|l| l.as_array()?.first().cloned())
+            .is_some_and(|l| l["state"].as_str().is_some_and(|s| s.starts_with("linked")))
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "the worktree was not linked: {links:?}"
+        );
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    assert_eq!(
+        std::fs::read_to_string(wt.join("deps/made.txt"))
+            .unwrap()
+            .trim(),
+        "made"
+    );
+    let hook = main.join(".git/hooks/pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\ntest -f deps/made.txt\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::fs::write(wt.join("note.txt"), "hooked").unwrap();
+    git(&wt, &["add", "note.txt"]);
+    git(
+        &wt,
+        &[
+            "-c",
+            "user.email=ci@example.invalid",
+            "-c",
+            "user.name=ci",
+            "commit",
+            "-qm",
+            "a commit through the hook",
+        ],
+    );
+    assert!(
+        cli(&wt, &["status"]).contains("deps linked"),
+        "status names the link"
+    );
+    // The node took what the lane's `prepare` made into the member's store
+    // (ADR-0062 points 3, 4).
+    let until = Instant::now() + Duration::from_secs(120);
+    while store_entries(node.path()) == 0 {
+        assert!(Instant::now() < until, "the node's store took nothing in");
+        std::thread::sleep(Duration::from_secs(1));
+    }
+
     let status = child.wait().unwrap();
     let up = format!("{}{}", out.join().unwrap(), err.join().unwrap());
     assert!(status.success(), "devstack up --on ci-node: {up}");
@@ -542,6 +603,20 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     assert!(log.contains("\"remote_lane_unfollowed\""), "{log}");
     node_is_clear();
 
+    // Its data thrown away, the lane starts afresh on the node: its build's
+    // `prepare` comes from the member's store there (ADR-0062).
+    cli(&main, &["lane", "reset", "wt"]);
+    cli(&wt, &["up", "--on", "ci-node"]);
+    let (st, body) = api_request(
+        &main,
+        state.path(),
+        "POST",
+        "/v1/lanes/wt/v1/telemetry/take",
+    )
+    .expect("the lane answers");
+    assert_eq!(st, 200, "{body}");
+    assert!(body.contains("prepare_store_hit"), "{body}");
+
     // `down --all`: the daemon ends, and the lane on the node goes with it
     // (ADR-0025 point 7).
     cli(&main, &["down", "--all"]);
@@ -683,6 +758,49 @@ fn slow_db(main: &Path) {
 "#,
     )
     .unwrap();
+}
+
+/// The fixture's API gets a `prepare` whose outputs are kept in the store
+/// and linked into a worktree (ADR-0062, ADR-0063); git ignores the link.
+fn with_prepare(main: &Path) {
+    let file = main.join("devstack.toml");
+    let toml = std::fs::read_to_string(&file).unwrap();
+    let port = "port          = 5080\n";
+    assert!(toml.contains(port), "{toml}");
+    let toml = toml.replacen(
+        port,
+        &format!(
+            "{port}prepare       = {{ run = \"mkdir -p deps && echo made > deps/made.txt\", cwd = \".\", inputs = [\"src/Api/Api.csproj\"], outputs = [\"deps\"], link = [\"deps\"] }}\n"
+        ),
+        1,
+    );
+    std::fs::write(&file, toml).unwrap();
+    let ignore = main.join(".gitignore");
+    let mut text = std::fs::read_to_string(&ignore).unwrap();
+    text.push_str("deps\n");
+    std::fs::write(&ignore, text).unwrap();
+}
+
+/// The entries of every member store the node agent keeps under `dir`.
+fn store_entries(dir: &Path) -> usize {
+    fn count(p: &Path, in_stores: bool) -> usize {
+        std::fs::read_dir(p)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| {
+                let path = e.path();
+                if in_stores && path.join(".devstack-store.json").is_file() {
+                    1
+                } else if path.is_dir() && !path.is_symlink() {
+                    count(&path, in_stores || e.file_name() == "stores")
+                } else {
+                    0
+                }
+            })
+            .sum()
+    }
+    count(dir, false)
 }
 
 /// `GET <path>` of the requester's daemon (the main tree's), as its JSON;

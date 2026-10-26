@@ -14,6 +14,7 @@
 //! ```
 
 pub mod snapshot;
+pub mod store;
 
 use devstack_config::interpolate::{self, Placeholder, Resolve};
 use devstack_config::model::Service;

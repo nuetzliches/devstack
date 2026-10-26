@@ -1,6 +1,6 @@
 # ADR-0062: What `prepare` makes is kept in a store per machine and repository, keyed by its inputs
 
-- **Status:** Accepted (2026-10-26); measured and built on the developer's machine, noted 2026-10-26
+- **Status:** Accepted (2026-10-26); measured and built on the developer's machine, noted 2026-10-26; built on nodes, noted 2026-10-26
 - **Date:** 2026-10-26
 - **Deciders:** project owner
 - **Related:** [#277](https://github.com/nuetzliches/devstack/issues/277), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (a lane runs from a copy), [ADR-0028](0028-lane-images.md) (point 3), [ADR-0033](0033-a-node-decides-what-runs-on-it.md), [ADR-0034](0034-a-machine-can-belong-to-several-pools.md), [ADR-0038](0038-a-lanes-data-outlives-its-lease.md) (slots, the member's disk cap), [ADR-0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md), [ADR-0049](0049-a-lanes-need-is-measured-disk-included.md), [ADR-0063](0063-a-lane-on-a-node-links-its-worktree-to-a-copy-from-the-local-store.md)
@@ -160,6 +160,25 @@ written after a daemon starts, then daily, in the background);
 built: the store on a node (point 3's second half, point 4's last
 sentence, point 9's node part), the lane start naming the hit in the
 dashboard (`prepare-*.log` and the diagnostic log do).
+
+*The store on a node, as built, noted 2026-10-26.* The store module moved to
+`crates/devstack-build/src/store.rs`, shared by the daemon and the node
+agent: `Store::with_outbox` (a lane reads the store and writes new entries
+and notes of its hits into an outbox; links in an entry point to where it
+is read from), `take_in`, `entries`, `remove`. The node agent
+(`crates/devstack-node/src/node.rs`): a store per member and repository in
+`<node>/stores/<secret_name(["store", member, repo])>` with a note of whose
+it is (`prepare_store`); every round (15 s) the outboxes of the running and
+kept lanes' slots are taken in (`take_in_stores`); the sweep removes entries
+unused for the node's retention, counts the rest with the member's kept
+lanes, evicts the store's least recently used entries first over the room,
+and removes a gone member's stores (`sweep_slots`, `purge_gone_members`).
+`crates/devstack-node/src/lanerun.rs`: the store mounted read-only at
+`/store`, `DEVSTACK_STORE`, `DEVSTACK_STORE_OUT` (`/src/.devstack/store-out`)
+and `DEVSTACK_LANE_IMAGE` (the image's id, part of the key). The lane's
+daemon (`supervisor/copy.rs`, `node_store`) uses the store when the node
+gives it one, and does not sweep it. Still not built: the hit named in the
+dashboard (#291).
 
 ## What this ADR does not say
 

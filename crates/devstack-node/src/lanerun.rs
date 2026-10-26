@@ -80,7 +80,17 @@ pub struct LaneRun {
     /// A secret of this node, so names of images built here cannot be
     /// guessed by another lane (and used in its `FROM` or `image:`).
     pub secret: String,
+    /// The member's store of what `prepare` makes for this repository
+    /// (ADR-0062 point 3), mounted read-only at [`STORE_MOUNT`]; `None`:
+    /// the lane gets none.
+    pub store: Option<PathBuf>,
 }
+
+/// Where a lane's container sees its member's store (read-only).
+pub const STORE_MOUNT: &str = "/store";
+/// Where a lane writes what it adds to the store, in its slot: its agent
+/// takes it in ([`LaneRun::outbox`]).
+const STORE_OUTBOX: &str = ".devstack/store-out";
 
 /// Where the lane's daemon is reached, and its token.
 #[derive(Debug, Clone, Serialize)]
@@ -435,6 +445,12 @@ fn remove_project(p: &Project, volumes: bool) {
 }
 
 impl LaneRun {
+    /// What the lane added to its member's store, waiting in its slot for
+    /// the agent to take it in (ADR-0062 point 4).
+    pub fn outbox(&self) -> PathBuf {
+        self.src().join(STORE_OUTBOX)
+    }
+
     pub fn src(&self) -> PathBuf {
         self.dir.join("src")
     }
@@ -923,6 +939,23 @@ impl LaneRun {
         if let Some(p) = &profile_env {
             args.extend(["-e", p.as_str()]);
         }
+        // The member's store, read-only, and the outbox in its slot for
+        // what the lane adds; the image's id keys the entries (ADR-0062).
+        let store_args = self.store.as_ref().map(|dir| {
+            let image_id = docker(&["image", "inspect", "--format", "{{.Id}}", &image])
+                .map(|s| s.trim().to_string())
+                .unwrap_or_else(|_| image.clone());
+            [
+                format!("{}:{STORE_MOUNT}:ro", dir.display()),
+                format!("DEVSTACK_STORE={STORE_MOUNT}"),
+                format!("DEVSTACK_STORE_OUT=/src/{STORE_OUTBOX}"),
+                format!("DEVSTACK_LANE_IMAGE={image_id}"),
+            ]
+        });
+        if let Some([mount, store, out, image]) = &store_args {
+            args.extend(["-v", mount.as_str(), "-e", store.as_str()]);
+            args.extend(["-e", out.as_str(), "-e", image.as_str()]);
+        }
         if let Some(n) = networks.first() {
             args.extend(["--network", n.as_str()]);
         }
@@ -1323,6 +1356,7 @@ mod tests {
             cpu_limit: None,
             network: Network::Lan,
             secret: "s".into(),
+            store: None,
         };
         let g = run.mirror_group(&lane, "app");
         // Every call of the group gets them: the node's own (`group`) too.

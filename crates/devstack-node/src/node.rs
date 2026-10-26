@@ -57,6 +57,11 @@ const KEEP_DEDICATED: Duration = Duration::from_secs(7 * 24 * 3600);
 const KEEP_OTHER: Duration = Duration::from_secs(24 * 3600);
 /// What one member's kept lanes may take here, unless the policy says.
 const KEEP_GIB: u64 = 20;
+/// In a member's store of what `prepare` makes: whose it is.
+const STORE_NOTE: &str = "store.json";
+/// An entry of a member's store here: the store, its service and key, what
+/// it takes, how long no lane used it.
+type StoreEntry = (PathBuf, String, String, u64, Duration);
 /// The largest list of files (or hashes) one sync sends: about 250 000.
 const MAX_LIST: usize = 32 << 20;
 /// How long the node trusts its last list of members while the coordinator
@@ -658,6 +663,30 @@ impl Inner {
         {
             remove_lane_images(&self.owner(), |_| true);
         }
+        // The members' stores of what `prepare` makes (ADR-0062 point 9):
+        // entries no lane used for as long as a stopped lane is kept go;
+        // the rest counts with the member's kept lanes.
+        let mut stored: HashMap<String, Vec<StoreEntry>> = HashMap::new();
+        for (dir, member) in self.prepare_stores() {
+            let store = devstack_build::store::Store::new(&dir);
+            for s in store.sweep(keep_for, false) {
+                eprintln!(
+                    "store of {member}: {}/{} goes, not used for {} h",
+                    s.service,
+                    s.key,
+                    s.idle.as_secs() / 3600
+                );
+            }
+            for (meta, idle) in store.entries() {
+                stored.entry(member.clone()).or_default().push((
+                    dir.clone(),
+                    meta.service,
+                    meta.key,
+                    meta.bytes,
+                    idle,
+                ));
+            }
+        }
         let mut by_member: HashMap<String, Vec<(String, SlotInfo, u64)>> = HashMap::new();
         for (slot, info) in kept {
             if self.in_use(&slot) {
@@ -676,10 +705,34 @@ impl Inner {
         }
         *self.kept_use.lock().unwrap() = Some(crate::coordinator::Kept {
             lanes: by_member.values().map(Vec::len).sum(),
-            bytes: by_member.values().flatten().map(|s| s.2).sum(),
+            bytes: by_member.values().flatten().map(|s| s.2).sum::<u64>()
+                + stored.values().flatten().map(|e| e.3).sum::<u64>(),
         });
-        for (_, mut slots) in by_member {
-            let mut total: u64 = slots.iter().map(|s| s.2).sum();
+        // A member with only a store here counts too.
+        for member in stored.keys() {
+            by_member.entry(member.clone()).or_default();
+        }
+        for (member, mut slots) in by_member {
+            let mut entries = stored.remove(&member).unwrap_or_default();
+            let mut total: u64 =
+                slots.iter().map(|s| s.2).sum::<u64>() + entries.iter().map(|e| e.3).sum::<u64>();
+            // Over the room: the store's least recently used entries go
+            // first, a copy of what a lane can make again.
+            entries.sort_by_key(|e| std::cmp::Reverse(e.4));
+            for (dir, service, key, bytes, _) in entries {
+                if total <= room {
+                    break;
+                }
+                if devstack_build::store::Store::new(&dir)
+                    .remove(&service, &key)
+                    .is_ok()
+                {
+                    eprintln!(
+                        "store of {member}: {service}/{key} goes, the member's kept data take more than this node keeps"
+                    );
+                    total = total.saturating_sub(bytes);
+                }
+            }
             // The least recently used first.
             slots.sort_by_key(|s| s.1.used);
             for (slot, info, bytes) in slots {
@@ -987,6 +1040,12 @@ impl Inner {
                 self.purge_slot(&slot, &info, "the pool no longer lists its member");
             }
         }
+        for (dir, member) in self.prepare_stores() {
+            if !approved.contains(&member) && !holding.contains(&member) {
+                eprintln!("store of {member}: goes, the pool no longer lists its member");
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
         // The lane images built for them (ADR-0028).
         remove_lane_images(&self.owner(), |m| {
             !approved.contains(m) && !holding.contains(m)
@@ -1054,6 +1113,74 @@ impl Inner {
             memory_limit: None,
             cpu_limit: None,
             network: crate::policy::Network::Lan,
+            store: self.prepare_store(&l.member, &l.repo),
+        }
+    }
+
+    fn stores(&self) -> PathBuf {
+        self.root.join("stores")
+    }
+
+    /// `member`'s store of what `prepare` makes for `repo` here (ADR-0062
+    /// point 3): a name only this node can tell, like a slot's, so a lane
+    /// reaches its own member's entries and nobody else's. Made with a note
+    /// of whose it is, for the sweep.
+    fn prepare_store(&self, member: &str, repo: &str) -> Option<PathBuf> {
+        let dir = self.stores().join(crate::lanerun::secret_name(
+            &self.secret,
+            &["store", member, repo],
+        ));
+        std::fs::create_dir_all(&dir).ok()?;
+        let note = dir.join(STORE_NOTE);
+        if !note.is_file() {
+            let info = serde_json::json!({ "member": member, "repo": repo });
+            std::fs::write(&note, info.to_string()).ok()?;
+        }
+        Some(dir)
+    }
+
+    /// The stores here, with their member.
+    fn prepare_stores(&self) -> Vec<(PathBuf, String)> {
+        std::fs::read_dir(self.stores())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let note: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(e.path().join(STORE_NOTE)).ok()?).ok()?;
+                Some((e.path(), note["member"].as_str()?.to_string()))
+            })
+            .collect()
+    }
+
+    /// What the lanes here added to their member's store, taken in from
+    /// their slots (ADR-0062 point 4): the running leases' and the kept
+    /// lanes'. A move within one filesystem; done every round, so the next
+    /// lane with the same inputs finds the entry soon.
+    fn take_in_stores(&self) {
+        let mut runs: Vec<LaneRun> = self
+            .leases
+            .lock()
+            .unwrap()
+            .values()
+            .map(|l| self.run(l))
+            .collect();
+        runs.extend(
+            self.kept()
+                .iter()
+                .map(|(slot, info)| self.slot_run(slot, info)),
+        );
+        for run in runs {
+            let outbox = run.outbox();
+            if !outbox.is_dir() {
+                continue;
+            }
+            let Some(dir) = run.store.as_ref() else {
+                continue;
+            };
+            for (service, key) in devstack_build::store::Store::new(dir).take_in(&outbox) {
+                eprintln!("store of `{}`: took in {service}/{key}", run.lane);
+            }
         }
     }
 
@@ -3404,6 +3531,11 @@ async fn background(s: Shared) {
             cpus: a.cpus + b.cpus,
             memory: a.memory + b.memory,
         });
+        // What the lanes added to their member's store (ADR-0062 point 4).
+        {
+            let s2 = s.clone();
+            let _ = tokio::task::spawn_blocking(move || s2.take_in_stores()).await;
+        }
         if disk_at.is_none_or(|t| t.elapsed() >= DISK_EVERY) {
             disk_at = Some(Instant::now());
             let s2 = s.clone();

@@ -2,8 +2,8 @@
 
 use super::{COPY_QUIET, KEEP_BUILD_LOGS, STOPPED, Supervisor, tail};
 use crate::state::{NoticeLevel, now_ms};
-use crate::store::Store;
 use devstack_build::Snapshot;
+use devstack_build::store::Store;
 use devstack_config::model::{Prepare, Service};
 use devstack_proc::Spec;
 use std::collections::BTreeMap;
@@ -72,6 +72,9 @@ impl Supervisor {
     /// The store of what `prepare` makes (ADR-0062): in the main tree's
     /// state, shared by its builds and its lanes.
     pub(crate) fn store(&self) -> Store {
+        if let Some((root, outbox)) = node_store() {
+            return Store::with_outbox(root, outbox);
+        }
         let devstack = self
             .layout
             .artifacts_root
@@ -82,10 +85,10 @@ impl Supervisor {
 
     /// Whether `prepare` of `name` goes through the store: it names
     /// `outputs`, none of them is tracked by git (a copy from the store
-    /// would overwrite the source), and the lane is on this machine (a
-    /// node's store is the node's).
+    /// would overwrite the source), and, in a lane on a node, the node
+    /// gives it the member's store (an older node does not).
     fn store_use(&self, name: &str, p: &Prepare, snap: &Snapshot) -> Option<StoreUse> {
-        if p.outputs.is_empty() || crate::remote_lane() {
+        if p.outputs.is_empty() || (crate::remote_lane() && node_store().is_none()) {
             return None;
         }
         let id = format!("prepare.store.{name}");
@@ -739,7 +742,29 @@ fn store_key_of(key: &str, version: Option<&str>) -> String {
     if let Some(v) = version {
         h.update(v.trim().as_bytes());
     }
+    // In a lane on a node, what its toolchain is (ADR-0062 point 2).
+    if let Some(image) = std::env::var("DEVSTACK_LANE_IMAGE")
+        .ok()
+        .filter(|i| !i.is_empty())
+    {
+        h.update(image.as_bytes());
+    }
     h.finalize().to_hex()[..20].to_string()
+}
+
+/// In a lane on a node: the member's store the node mounts read-only
+/// (`DEVSTACK_STORE`), and the outbox in the lane's slot its agent takes new
+/// entries from (`DEVSTACK_STORE_OUT`), ADR-0062 points 3, 4.
+fn node_store() -> Option<(PathBuf, PathBuf)> {
+    if !crate::remote_lane() {
+        return None;
+    }
+    let var = |k: &str| {
+        std::env::var_os(k)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
+    Some((var("DEVSTACK_STORE")?, var("DEVSTACK_STORE_OUT")?))
 }
 
 /// A `prepare` that goes through the store.
@@ -760,6 +785,10 @@ const STORE_KEEP: Duration = Duration::from_secs(14 * 24 * 3600);
 /// starts, then daily.
 fn sweep_store(store: &Store) {
     static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+    // A node's store is its agent's to sweep.
+    if !store.owned() {
+        return;
+    }
     {
         let mut last = LAST.lock().unwrap();
         if last.is_some_and(|t| t.elapsed() < Duration::from_secs(24 * 3600)) {

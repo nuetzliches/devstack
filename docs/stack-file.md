@@ -605,10 +605,18 @@ status` and the dashboard say per path `linked`, `linked (store)`,
 says so. The links go when the lane stops on its node, moves or goes; the
 copy stays for its next start.
 
-Built so far: the store on the developer's machine, for lanes, builds and
-the worktrees of lanes on nodes. A lane on a node prepares in its copy there
-as before (no store on the node yet). A file with `outputs` or `version`
-should say `requires = "0.23.0"` in `[stack]`.
+**On a node** the member has a store of its own per repository: the lane's
+container reads it (mounted read-only), and what a lane prepares there goes
+into it through the lane's slot, taken in by the node within seconds, so
+the next lane of the member with the same inputs, platform and lane image
+copies it there instead of running `prepare`. The node keeps entries no
+lane used for as long as it keeps a stopped lane, counts them with the
+member's kept lanes, and lets them go first when the member is over its
+room ([pool.md](pool.md)). A node of an older devstack has no store: its
+lanes prepare in every copy.
+
+A file with `outputs` or `version` should say `requires = "0.23.0"` in
+`[stack]`.
 
 ## `[lanes]`: other worktrees ([ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0030](adr/0030-each-lane-has-its-own-infrastructure.md); on other machines [ADR-0025](adr/0025-a-lane-can-run-on-another-node.md), [ADR-0028](adr/0028-lane-images.md), [ADR-0029](adr/0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0035](adr/0035-lanes-can-be-shared-with-the-pool.md), and [pool.md](pool.md))
 
