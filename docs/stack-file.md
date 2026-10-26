@@ -156,7 +156,9 @@ also gets the tree's lane
 `DEVSTACK_LANE_SUFFIX` (empty in the main tree, `_<lane>` in a lane), the
 values `{lane}` and `{lane_suffix}` have for a native service. They win over
 an env file's value. A lane on a node is told its name as its developer
-calls it. Read them with a default, so the files give the main tree's value
+calls it, and so are its native services (`{lane}`, `{lane_suffix}`,
+`DEVSTACK_LANE`): the same values as a local lane of that name. Read them
+with a default, so the files give the main tree's value
 without devstack; what a browser keeps per name, such as a login cookie,
 stays apart per tree that way:
 
@@ -433,7 +435,8 @@ Telemetry__Endpoint = "http://127.0.0.1:4317"
   devstack's own `env_files` read it back as it was. `docker run
   --env-file` takes lines verbatim and does not.
 - Every process also gets `DEVSTACK_SERVICE` (its name), `DEVSTACK_LANE`
-  (its lane, `main` in the main working tree), `DEVSTACK_BUILD_ID` (the
+  (its lane, `main` in the main working tree; in a lane on a node the
+  lane's name, as `{lane}`), `DEVSTACK_BUILD_ID` (the
   build it runs, a built service only) and `DEVSTACK_SLOT` (`main`, or
   `candidate` while it starts beside the running one; a lane's own instance
   is `main` too), so it can tell its instances apart in its own logs or
@@ -710,7 +713,8 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
   cookies apart by port: a login in a lane's frontend replaces the main
   tree's in the same browser. A cookie name with `{lane_suffix}` (in the
   service's `env`) keeps them apart; in a Compose service, with
-  `${DEVSTACK_LANE_SUFFIX:-}` in its `environment` (above).
+  `${DEVSTACK_LANE_SUFFIX:-}` in its `environment` (above). Both hold for a
+  lane on a node too, whose ports are on your `localhost` as well.
 - `{service.<name>.url}` is `http://127.0.0.1:<port>`, while the dashboard
   links `http://localhost:<port>`: an Origin check (CORS, CSRF) built from
   the URL refuses a browser that came through the dashboard's link. Build
@@ -907,11 +911,11 @@ project wrote itself is never touched.
 | `{artifact}` | artifact directory of the build being started |
 | `{port}` | port of the instance being started (an internal one behind the proxy) |
 | `{is_main}` | `true` in the main slot, `false` in a candidate and in a lane without the main slot |
-| `{lane}` | the lane's name, `main` in the main working tree |
-| `{lane_suffix}` | empty in the main working tree, `_<lane>` in a lane: `app{lane_suffix}` keeps the main tree's name |
+| `{lane}` | the lane's name, `main` in the main working tree; in a lane on a node the lane's name as you call it, as on your machine |
+| `{lane_suffix}` | empty in the main working tree, `_<lane>` in a lane (on a node too): `app{lane_suffix}` keeps the main tree's name |
 | `{service.<name>.url}` | URL of that service's main slot (`http(s)://127.0.0.1:<port>`) |
 | `{service.<name>.port}` | that service's port |
-| `{compose.<group>.project}` | the group's Compose project as this tree runs it: `project` in the main working tree, `<project>-<lane>` in a lane (for `docker compose -p` in a command; a `shared` service stays in the main tree's) |
+| `{compose.<group>.project}` | the group's Compose project as this tree runs it: `project` in the main working tree, `<project>-<lane>` in a lane, on a node the project the node runs for the lane (for `docker compose -p` in a command; a `shared` service stays in the main tree's) |
 | `{compose.<group>.<service>.<port>}` | where a container port is published, as a URL (`http://127.0.0.1:15432`) |
 | `{compose.<group>.<service>.<port>.host}`, `.port`, `.address` | its host (`127.0.0.1`), its port (`15432`), or both (`127.0.0.1:15432`), for connection strings: `Server={compose.app.sql.1433.host},{compose.app.sql.1433.port}`, `Host=…host;Port=…port`. In a lane: the lane's own container, or the main tree's for a `shared` one |
 | `${VAR}`, `${VAR:-default}` | from the env files and the process environment; placeholders inside a default are resolved too |

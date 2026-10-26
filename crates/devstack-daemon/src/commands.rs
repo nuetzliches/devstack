@@ -293,7 +293,8 @@ fn execute(
         urls,
         published: sup.published_ports(),
         projects: sup.compose_projects(),
-        lane: sup.lane.clone(),
+        // On a node the lane's name (ADR-0064 addendum), as for its services.
+        lane: sup.presented_lane(),
     };
     let vars = devstack_env::variables(&sup.stack, None, &sup.repo);
     let env = |k: &str| vars.get(k).cloned();

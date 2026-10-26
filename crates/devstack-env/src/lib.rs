@@ -99,7 +99,10 @@ pub struct Context {
     /// `DEVSTACK_SLOT=candidate` instead of `main`. Not the same as
     /// `!is_main`: a lane's main instance runs no workers, but is no candidate.
     pub candidate: bool,
-    /// The lane (plan §3.5); empty means `main`.
+    /// The lane (plan §3.5) as the stack sees it: `{lane}`, `{lane_suffix}`
+    /// and `DEVSTACK_LANE`; empty means `main`. On a node, where the daemon
+    /// runs as a main tree, the lane's name as its developer calls it
+    /// (ADR-0064 addendum).
     pub lane: String,
     /// Main-slot URL of every service with a port.
     pub service_urls: BTreeMap<String, String>,

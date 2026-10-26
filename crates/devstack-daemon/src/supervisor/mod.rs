@@ -532,6 +532,17 @@ impl Supervisor {
         &self.stack_file
     }
 
+    /// The lane this tree presents to the stack (ADR-0064 and its addendum
+    /// of 2026-10-26): what `{lane}` and `{lane_suffix}` stand for, what a
+    /// native process gets as `DEVSTACK_LANE`, and what every Compose call
+    /// and `exec` step is told. Empty for the main tree. On a node, where
+    /// this daemon runs as a main tree, the lane's name as its developer
+    /// calls it: the values a lane of that name has on their machine.
+    /// [`Self::lane`] stays what the daemon runs as (slots, state, proxies).
+    pub(crate) fn presented_lane(&self) -> String {
+        presented_lane(&self.lane, crate::remote_lane_name())
+    }
+
     /// The watcher saw the stack file change: compare with what this daemon
     /// read at start and tell the clients when the answer flips.
     pub fn stack_file_touched(&self) {
@@ -1061,6 +1072,16 @@ fn quiet_left(last: Option<Instant>, quiet: Duration) -> Duration {
     last.map_or(quiet, |t| quiet.saturating_sub(t.elapsed()))
 }
 
+/// [`Supervisor::presented_lane`] of a tree that runs as `own` (empty: the
+/// main tree) on a node's lane named `remote` (`None` off a node): a main
+/// tree on a node presents the remote lane's name; a lane its own.
+fn presented_lane(own: &str, remote: Option<&str>) -> String {
+    match remote {
+        Some(name) if own.is_empty() => name.to_string(),
+        _ => own.to_string(),
+    }
+}
+
 /// A free local port for an instance behind the proxy.
 fn free_port() -> Result<u16, String> {
     std::net::TcpListener::bind(("127.0.0.1", 0))
@@ -1453,6 +1474,67 @@ mod copy_note_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod presented_lane_tests {
+    use super::presented_lane;
+
+    #[test]
+    fn a_main_tree_on_a_node_presents_the_lane_its_developer_names() {
+        // The developer's machine: the main tree, and a lane as itself.
+        assert_eq!(presented_lane("", None), "");
+        assert_eq!(presented_lane("feat-x", None), "feat-x");
+        // A lane of its own keeps its name.
+        assert_eq!(presented_lane("other", Some("feat-x")), "other");
+
+        // A node's lane container runs as a main tree (`DEVSTACK_REMOTE_LANE`
+        // is `feat-x`): a native service there gets what a local lane
+        // `feat-x` gets (ADR-0064 addendum), as its Compose calls do.
+        let text = "version = 1\n[stack]\nname = \"s\"\n[services.api]\nrun = \"x\"\nport = 5000\nenv = { COOKIE = \"app{lane_suffix}\", LANE = \"{lane}\" }\n";
+        let stack = devstack_config::from_str(text, std::path::Path::new("t")).unwrap();
+        let svc = &stack.services["api"];
+        let env_in = |lane: String| {
+            let ctx = devstack_env::Context {
+                lane: lane.clone(),
+                is_main: true,
+                ..Default::default()
+            };
+            let env = devstack_env::compose("api", svc, &ctx, &Default::default(), true).unwrap();
+            let get = |k: &str| env[k].value.clone();
+            let compose = devstack_config::model::lane_variables(&lane);
+            (
+                get("COOKIE"),
+                get("LANE"),
+                get("DEVSTACK_LANE"),
+                compose["DEVSTACK_LANE"].clone(),
+                compose["DEVSTACK_LANE_SUFFIX"].clone(),
+            )
+        };
+        let on_node = env_in(presented_lane("", Some("feat-x")));
+        assert_eq!(on_node, env_in(presented_lane("feat-x", None)));
+        assert_eq!(
+            on_node,
+            (
+                "app_feat-x".into(),
+                "feat-x".into(),
+                "feat-x".into(),
+                "feat-x".into(),
+                "_feat-x".into()
+            )
+        );
+        // The main tree, off a node, is unchanged.
+        assert_eq!(
+            env_in(presented_lane("", None)),
+            (
+                "app".into(),
+                "main".into(),
+                "main".into(),
+                "main".into(),
+                String::new()
+            )
+        );
     }
 }
 
