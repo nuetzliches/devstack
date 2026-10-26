@@ -523,6 +523,14 @@ refused, a lane started, not started with its phase and reason, a compose
 group of it up or failed with how long it took, stopped, an update refused
 or failed).
 
+A lane's own daemon on a node (its services, builds, `prepare`, notices)
+has no membership and sends nothing itself: it keeps its lines (the newest
+5,000), and the daemon that started the lane takes them every 30 seconds
+and sends them with its own, under its consent, as lines of that lane on
+that node (`devstack.place` `remote`). Lines of a lane whose requester is
+away wait in the lane until it is back; what the lane logs in the last
+moments before it stops is not taken.
+
 Never sent: file contents, environment values, command lines, service output.
 Every text of a log line is cut to its first line before it leaves the
 machine (a failed job's reason keeps its process output in `daemon.log`

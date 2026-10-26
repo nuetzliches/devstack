@@ -37,6 +37,7 @@ pub struct AppState {
 pub fn router(state: AppState) -> axum::Router {
     axum::Router::new()
         .route("/v1/stack", get(stack))
+        .route("/v1/telemetry/take", post(telemetry_take))
         .route("/v1/up", post(up))
         .route("/v1/down", post(down))
         .route("/v1/shutdown", post(shutdown))
@@ -213,6 +214,13 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 async fn stack(State(s): State<AppState>) -> Response {
     Json(s.sup.view()).into_response()
+}
+
+/// `POST /v1/telemetry/take`: in the daemon of a lane on a node, the
+/// diagnostic lines kept since the last take, for its requester to send
+/// under its consent (#287); `{"lines": []}` elsewhere.
+async fn telemetry_take() -> Response {
+    Json(serde_json::json!({ "lines": crate::telemetry::take_relayed() })).into_response()
 }
 
 /// Long operations run in the background; progress arrives on `/v1/events`.

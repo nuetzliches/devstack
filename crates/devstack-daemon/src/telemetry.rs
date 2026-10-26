@@ -39,6 +39,10 @@ const UNDECIDED: u8 = 1;
 const ON: u8 = 2;
 /// No pool takes it: nothing is kept.
 const OFF: u8 = 3;
+/// The daemon of a lane on a node: lines are kept, the newest
+/// [`MAX_LINES`], for the lane's requester to take ([`take_relayed`]) and
+/// send with its own, under its consent (#287). Nothing is sent from here.
+const RELAY: u8 = 4;
 
 static STATE: AtomicU8 = AtomicU8::new(IDLE);
 static BUFFER: Mutex<Vec<Value>> = Mutex::new(Vec::new());
@@ -55,7 +59,7 @@ static TARGETS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 /// Whether diagnostic lines are kept now: a pool takes them, or none was
 /// asked yet.
 pub fn active() -> bool {
-    matches!(STATE.load(Ordering::Relaxed), UNDECIDED | ON)
+    matches!(STATE.load(Ordering::Relaxed), UNDECIDED | ON | RELAY)
 }
 
 /// Keep a diagnostic line for the next send (when a pool takes them).
@@ -66,6 +70,43 @@ pub fn record(line: &serde_json::Map<String, Value>) {
     let mut b = BUFFER.lock().unwrap();
     if b.len() < MAX_LINES {
         b.push(Value::Object(line.clone()));
+    } else if STATE.load(Ordering::Relaxed) == RELAY {
+        // A requester that is away takes the latest when it is back.
+        b.remove(0);
+        b.push(Value::Object(line.clone()));
+    }
+}
+
+/// The daemon of a lane on a node: keep its lines for the requester, which
+/// has the member's consent and certificate; the container has neither
+/// (#287). Instead of [`start`].
+pub fn start_relay(service: &'static str) {
+    let _ = SERVICE.set(service);
+    STATE.store(RELAY, Ordering::Relaxed);
+}
+
+/// The lines kept for the requester since it last took them (`POST
+/// /v1/telemetry/take`); none when this daemon does not relay.
+pub fn take_relayed() -> Vec<Value> {
+    if STATE.load(Ordering::Relaxed) != RELAY {
+        return Vec::new();
+    }
+    std::mem::take(&mut *BUFFER.lock().unwrap())
+}
+
+/// The lines a lane's daemon on a node kept (`lines`), recorded as this
+/// process's own, as lines of `lane` on `node`: what the lane's daemon
+/// calls itself (`main`, it runs as a main tree there) is replaced. Sent
+/// with this process's lines, under its consent; nothing when it sends none.
+pub fn record_relayed(lane: &str, node: &str, lines: Vec<Value>) {
+    for l in lines {
+        let Value::Object(mut l) = l else {
+            continue;
+        };
+        l.insert("lane".into(), lane.into());
+        l.insert("node".into(), node.into());
+        l.insert("place".into(), "remote".into());
+        record(&l);
     }
 }
 
@@ -549,6 +590,49 @@ mod tests {
             .lock()
             .unwrap()
             .retain(|l| l["event"] != "telemetry_test_early");
+    }
+
+    #[test]
+    fn a_lane_on_a_node_keeps_its_lines_for_the_requester_which_sends_them_as_the_lanes() {
+        let line = |n: &str| {
+            let mut m = serde_json::Map::new();
+            m.insert("event".into(), Value::String(n.into()));
+            m.insert("lane".into(), Value::String("main".into()));
+            m
+        };
+        let _g = GLOBALS.lock().unwrap_or_else(|e| e.into_inner());
+        BUFFER.lock().unwrap().clear();
+        // Not relaying: nothing to take.
+        STATE.store(UNDECIDED, Ordering::Relaxed);
+        record(&line("telemetry_test_kept"));
+        assert!(take_relayed().is_empty());
+        BUFFER.lock().unwrap().clear();
+        // The lane's daemon: kept, the newest when full, taken once.
+        STATE.store(RELAY, Ordering::Relaxed);
+        for i in 0..MAX_LINES + 2 {
+            record(&line(&format!("telemetry_test_{i}")));
+        }
+        let taken = take_relayed();
+        assert_eq!(taken.len(), MAX_LINES);
+        assert_eq!(taken[0]["event"], "telemetry_test_2", "the oldest went");
+        assert!(take_relayed().is_empty(), "taken once");
+        // The requester: recorded as the lane's, on its node.
+        STATE.store(UNDECIDED, Ordering::Relaxed);
+        record_relayed(
+            "feat-x",
+            "n1",
+            vec![Value::Object(line("telemetry_test_relayed")), Value::Null],
+        );
+        let b = std::mem::take(&mut *BUFFER.lock().unwrap());
+        assert_eq!(b.len(), 1, "{b:?}");
+        assert_eq!(b[0]["lane"], "feat-x");
+        assert_eq!(b[0]["node"], "n1");
+        assert_eq!(b[0]["place"], "remote");
+        // Off: the requester sends nothing, so it keeps nothing.
+        STATE.store(OFF, Ordering::Relaxed);
+        record_relayed("feat-x", "n1", vec![Value::Object(line("x"))]);
+        assert!(BUFFER.lock().unwrap().is_empty());
+        STATE.store(IDLE, Ordering::Relaxed);
     }
 
     #[test]

@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **A lane on a node is in the pool's telemetry from the inside** (ADR-0037
+  addendum, #287): its own daemon sent nothing, having no membership. It now
+  keeps its diagnostic lines (the newest 5,000), and the daemon that started
+  the lane takes them every 30 s and sends them with its own, under its
+  consent, as lines of that lane on its node (`place` `remote`): its
+  services, builds, `prepare`, notices and failed requests. Needs the node
+  on this version too; an older node's lane answers `404` and is skipped.
+
 ## [0.23.0] - 2026-10-26
 
 One `npm ci` per lockfile and machine instead of one per lane: what

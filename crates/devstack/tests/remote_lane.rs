@@ -319,6 +319,32 @@ fn a_lane_runs_on_a_node_of_the_pool() {
         );
         std::thread::sleep(Duration::from_millis(250));
     }
+    // The lane's own daemon keeps its lines for this daemon to send with
+    // its own telemetry (ADR-0037 addendum, #287); taken once. This test's
+    // daemon sends no telemetry, so nothing took them before.
+    let (st, body) = api_request(
+        &main,
+        state.path(),
+        "POST",
+        "/v1/lanes/wt/v1/telemetry/take",
+    )
+    .expect("the lane answers");
+    assert_eq!(st, 200, "{body}");
+    let taken: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(
+        taken["lines"]
+            .as_array()
+            .is_some_and(|l| l.iter().any(|l| l["event"] == "daemon_start")),
+        "{body}"
+    );
+    let (_, again) = api_request(
+        &main,
+        state.path(),
+        "POST",
+        "/v1/lanes/wt/v1/telemetry/take",
+    )
+    .expect("the lane answers");
+    assert!(!again.contains("daemon_start"), "taken once: {again}");
     let status = child.wait().unwrap();
     let up = format!("{}{}", out.join().unwrap(), err.join().unwrap());
     assert!(status.success(), "devstack up --on ci-node: {up}");
