@@ -24,6 +24,9 @@ const RENEW_EVERY: Duration = Duration::from_secs(30);
 const LEASE_LIVES: Duration = Duration::from_secs(150);
 /// How often the lane's state is read for the lists.
 const STATE_EVERY: Duration = Duration::from_secs(5);
+/// How often what the lane's daemon logged is taken for telemetry (#287):
+/// within the minute this daemon sends in.
+const TELEMETRY_EVERY: Duration = Duration::from_secs(30);
 
 /// What the lists show of a remote lane.
 #[derive(Debug, Clone, Default)]
@@ -1094,6 +1097,33 @@ impl RemoteLane {
         rt.spawn(async move { me.follow_renew().await });
         let me = self.clone();
         rt.spawn(async move { me.follow_state().await });
+        let me = self.clone();
+        rt.spawn(async move { me.follow_telemetry().await });
+    }
+
+    /// Take what the lane's daemon logged and send it with this daemon's
+    /// lines, as lines of this lane on its node, every [`TELEMETRY_EVERY`]
+    /// while this daemon sends any (#287): the lane's daemon has no
+    /// membership and no consent of its own. A lane daemon that does not
+    /// keep them (an older node's) answers 404, and nothing is taken.
+    async fn follow_telemetry(self: Arc<Self>) {
+        while self.tick(TELEMETRY_EVERY).await {
+            if !crate::telemetry::active() {
+                continue;
+            }
+            let Ok((200, body)) = self
+                .client
+                .api(&self.lease, "POST", "/v1/telemetry/take", None)
+                .await
+            else {
+                continue;
+            };
+            let lines = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v["lines"].as_array().cloned())
+                .unwrap_or_default();
+            crate::telemetry::record_relayed(&self.name, &self.node.name, lines);
+        }
     }
 
     /// Resolves when the lane is stopped or gone.

@@ -351,7 +351,11 @@ pub fn init(path: impl Into<PathBuf>) -> &'static DiagLog {
     for stack in crate::registry::list() {
         add_root(&stack.repo, "<repo>");
     }
-    crate::telemetry::start(service);
+    if crate::remote_lane() {
+        crate::telemetry::start_relay(service);
+    } else {
+        crate::telemetry::start(service);
+    }
     GLOBAL.get_or_init(|| DiagLog::open(path))
 }
 

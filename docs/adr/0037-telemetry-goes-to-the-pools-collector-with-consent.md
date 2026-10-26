@@ -1,6 +1,6 @@
 # ADR-0037: Telemetry goes to the pool's collector, if the pool has one and the member agrees
 
-- **Status:** Accepted (2026-10-16)
+- **Status:** Accepted (2026-10-16); addendum 2026-10-26 accepted (a lane's own daemon on a node: its lines go through its requester, #287)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0031](0031-a-coordinator-places-lanes.md) (the coordinator, member certificates), [ADR-0034](0034-a-machine-can-belong-to-several-pools.md), [ADR-0036](0036-the-pool-shows-its-capacity-over-time.md), plan §11 (the diagnostic log)
@@ -141,3 +141,38 @@ replaces the roots the process knows in every text: the repository as
 Point 2's "the member stops sending" now holds at once: a `404` to a send
 marks the pool as not collecting until it is asked again (10 minutes),
 where before the member sent on until then.
+
+## Addendum 2026-10-26: a lane's own daemon on a node
+
+*[#287](https://github.com/nuetzliches/devstack/issues/287).* The daemon in
+a node's lane container sent nothing: a daemon sends to the pools its state
+is a member of, and the container has no membership (and must get no member
+key, ADR-0027, ADR-0033). The collector saw a lane on a node from the
+outside only, the requester's `remote_lane_*` and the node's `node_*` lines;
+not its services, builds, `prepare`, notices or failed requests.
+
+1. **The lane's daemon keeps its lines and sends none.** In a lane on a node
+   (`DEVSTACK_REMOTE_LANE`) its telemetry neither asks pools nor sends; it
+   keeps its diagnostic lines, the newest 5,000, already masked as point 4
+   and the 2026-10-20 note say, and hands them over on `POST
+   /v1/telemetry/take`, each once.
+2. **The requester sends them as its own.** The daemon that follows the
+   lane takes them every 30 seconds, through the node as every request to
+   the lane goes, while it sends telemetry at all, and records them with
+   its own lines as lines of that lane (`lane` its name, as the developer
+   calls it), on that node (`node`), `place` `remote`. They go where its own
+   lines go: to the pools it agreed to send to, with its member identity set
+   by the coordinator (point 2). Without its consent nothing is taken.
+3. **Not the node.** Point 3 lets a node send what concerns a lane on the
+   coordinator's setting alone; the lane's own lines are the member's
+   (its services, its repository) and go under the member's consent.
+4. **Lossy, as point 5.** A requester that is away takes the latest 5,000
+   lines when it is back; what the lane logs in its last 30 seconds before
+   it stops is not taken; a lane daemon of a node that does not keep them
+   (before 0.24.0) answers `404`, and nothing is taken. The lane's gauges
+   are not relayed: the requester counts the lane already.
+
+*Enforced by:* `crates/devstack-daemon/src/telemetry.rs` (`RELAY`,
+`start_relay`, `take_relayed`, `record_relayed`), `diag.rs` (relay in a lane
+on a node), `api.rs` (`POST /v1/telemetry/take`), `remote.rs`
+(`follow_telemetry`), `docs/pool.md`, `docs/dashboard-api.md`.
