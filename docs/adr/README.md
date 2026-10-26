@@ -111,5 +111,5 @@ stay.
 | [0060](0060-the-tray-is-a-client-of-the-hub.md) | The tray is a client of the hub, a process of its own, on every desktop | Accepted |
 | [0061](0061-the-dashboard-opens-in-its-installed-app.md) | The dashboard opens in its installed app, when there is one | Accepted |
 | [0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md) | What `prepare` makes is kept in a store per machine and repository, keyed by its inputs | Accepted; measured and built on the developer's machine, noted 2026-10-26 |
-| [0063](0063-a-lane-on-a-node-links-its-worktree-to-a-copy-from-the-local-store.md) | A lane on a node links its worktree to a copy from the local store | Accepted |
+| [0063](0063-a-lane-on-a-node-links-its-worktree-to-a-copy-from-the-local-store.md) | A lane on a node links its worktree to a copy from the local store | Accepted; built, noted 2026-10-26 |
 | [0064](0064-every-compose-call-is-told-the-lane-it-runs-for.md) | Every Compose call is told the lane it runs for | Accepted; addendum 2026-10-26 (a lane on a node: native `{lane}`, `{lane_suffix}`, `DEVSTACK_LANE` follow its name) |

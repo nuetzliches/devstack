@@ -557,7 +557,8 @@ which on Linux and macOS ignores directories only (the daemon log says
 Git version, it follows the junction and empties the copy's directory (the
 next start prepares it again), or leaves the worktree behind with the junction
 in it.
-The main tree and lanes on a node make no links.
+The main tree makes no links. A lane on a node links its worktree to a
+copy on this machine, with `outputs` (below).
 
 `outputs` ([ADR-0062](adr/0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md))
 names the directories `prepare` makes, relative to the repository, for the
@@ -590,10 +591,24 @@ is preparing waits for it and copies what it made. Entries no copy used for
 them sooner. A copy never shares a file with the store: what a dev server
 writes into its `node_modules` stays in its copy.
 
-Built so far: the store on the developer's machine, for lanes and for
-builds. A lane on a node prepares in every copy as before, and its worktree
-gets no link yet. A file with `outputs` or `version` should say
-`requires = "0.23.0"` in `[stack]`.
+**A lane on a node** ([ADR-0063](adr/0063-a-lane-on-a-node-links-its-worktree-to-a-copy-from-the-local-store.md))
+runs `prepare` there, and its worktree here still gets `link`: devstack
+checks the worktree's inputs every 15 seconds and, when their key is new,
+copies the entry of this machine's store into `.devstack/lane-<name>/linked/`
+or, without one, runs `prepare` there once (with a copy of the worktree's
+source) and keeps its outputs in the store; then it links the worktree
+there, by the rules above. The worktree's hooks get what is built for this
+machine (Windows here, Linux on the node). `devstack lane list`, `devstack
+status` and the dashboard say per path `linked`, `linked (store)`,
+`preparing` or `not linked` with why; a hook that runs while it says
+`preparing` does not find it yet. Without `outputs` it is not linked, and
+says so. The links go when the lane stops on its node, moves or goes; the
+copy stays for its next start.
+
+Built so far: the store on the developer's machine, for lanes, builds and
+the worktrees of lanes on nodes. A lane on a node prepares in its copy there
+as before (no store on the node yet). A file with `outputs` or `version`
+should say `requires = "0.23.0"` in `[stack]`.
 
 ## `[lanes]`: other worktrees ([ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0030](adr/0030-each-lane-has-its-own-infrastructure.md); on other machines [ADR-0025](adr/0025-a-lane-can-run-on-another-node.md), [ADR-0028](adr/0028-lane-images.md), [ADR-0029](adr/0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0035](adr/0035-lanes-can-be-shared-with-the-pool.md), and [pool.md](pool.md))
 

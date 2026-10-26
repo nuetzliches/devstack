@@ -354,6 +354,13 @@ function openWith(o: Opener) {
         <span v-if="current.node_error" class="err" :title="current.node_error"> · {{ current.node_error }}</span>
         <span v-if="current.node_warning" class="warn-text" :title="current.node_warning" data-testid="lane-node-warning"> · {{ current.node_warning }}</span>
         <span v-if="current.not_forwarded?.length" class="warn-text" data-testid="lane-not-forwarded"> · {{ notForwardedText(current.not_forwarded, current.not_forwarded_reason) }}</span>
+        <span
+          v-for="k in current.links ?? []"
+          :key="k.path"
+          :class="{ 'warn-text': k.state === 'not linked' }"
+          :title="k.why ?? `${k.path} in the worktree points to a copy on this machine (ADR-0063)`"
+          data-testid="lane-link"
+        > · {{ k.path }}: {{ k.state }}</span>
       </span>
     </div>
   </header>

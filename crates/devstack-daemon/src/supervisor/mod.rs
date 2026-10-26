@@ -26,6 +26,7 @@ use tokio::sync::broadcast;
 mod artifacts;
 mod candidate;
 mod copy;
+pub use copy::NodeLink;
 mod handover;
 mod infra;
 pub use infra::ContainerTarget;

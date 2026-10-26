@@ -255,6 +255,9 @@ type LaneView = {
              error?: string; failed_at?: number };  // a start on a node or a move under way, or failed lately
   removing?: boolean;                    // its worktree is gone: it stops and its data goes (ADR-0024 point 7); gone from the list after
   notices?: Notice[];                    // its tree's while it runs here, and what the main tree knows of it (`worktree_missing`)
+  links?: { path: string; service: string;
+            state: "linked" | "linked (store)" | "preparing" | "not linked";
+            why?: string }[];            // a lane on a node: what `prepare` makes, linked into its worktree from a copy on this machine (ADR-0063)
 };
 ```
 
