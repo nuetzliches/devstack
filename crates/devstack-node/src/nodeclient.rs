@@ -417,7 +417,7 @@ impl NodeClient {
         .await
         .map_err(|e| ClientError::Other(e.to_string()))?;
         *cache = known;
-        let entries: Vec<(FileEntry, std::path::PathBuf, u64)> = hashed?;
+        let mut entries: Vec<(FileEntry, std::path::PathBuf, u64)> = hashed?;
         let hash_ms = t.elapsed().as_millis() as u64;
         let t = std::time::Instant::now();
         let missing: Hashes = self
@@ -438,18 +438,43 @@ impl NodeClient {
         };
         let t = std::time::Instant::now();
         for h in &missing.hashes {
-            let Some((_, path, size)) = entries.iter().find(|(e, _, _)| &e.hash == h) else {
+            let Some(i) = entries.iter().position(|(e, _, _)| &e.hash == h) else {
                 continue;
             };
-            if !self.upload(h, path).await? {
-                // The file changed since it was hashed: the node refused
-                // it; the next sync sends what it holds then.
-                cache.0.remove(path);
+            let (path, size) = (entries[i].1.clone(), entries[i].2);
+            if self.upload(h, &path).await? {
+                stats.uploaded += 1;
+                stats.bytes += size;
+                uploaded(stats.uploaded, missing.hashes.len(), stats.bytes);
                 continue;
             }
-            stats.uploaded += 1;
-            stats.bytes += size;
-            uploaded(stats.uploaded, missing.hashes.len(), stats.bytes);
+            // It changed, or went, since it was hashed: listed with a blob
+            // the node does not have, the whole apply would be refused
+            // (seen 2026-10-23). What it holds now is sent once more; gone
+            // or changing still, it is left out of this sync (each file with
+            // that hash), and the next one sends what is there then.
+            cache.0.remove(&path);
+            let now = hash_file(&path).ok();
+            let sent = match &now {
+                Some(n) => self.upload(n, &path).await.unwrap_or(false),
+                None => false,
+            };
+            match now {
+                Some(n) if sent => {
+                    entries[i].0.hash = n;
+                    stats.uploaded += 1;
+                    stats.bytes += std::fs::metadata(&path).map_or(size, |m| m.len());
+                }
+                _ => {
+                    if path.exists() {
+                        stats.failed.push(format!(
+                            "{}: it changed while it was sent",
+                            entries[i].0.path
+                        ));
+                    }
+                    entries.retain(|(e, _, _)| &e.hash != h);
+                }
+            }
         }
         stats.upload_ms = t.elapsed().as_millis() as u64;
         let t = std::time::Instant::now();
@@ -465,7 +490,7 @@ impl NodeClient {
         stats.apply_ms = t.elapsed().as_millis() as u64;
         stats.written = applied.written;
         stats.removed = applied.removed;
-        stats.failed = applied.failed;
+        stats.failed.extend(applied.failed);
         Ok(stats)
     }
 

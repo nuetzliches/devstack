@@ -104,6 +104,8 @@ pub struct RemoteLane {
     /// The hashes the first sync found, for the syncs that follow (A-4):
     /// an unchanged file is not read again.
     hashes: Mutex<HashCache>,
+    /// Syncs wait: the lane is being removed (its worktree went).
+    sync_held: std::sync::atomic::AtomicBool,
     /// Where it says in the lane's state that a daemon here follows it
     /// ([`FOLLOWED`]), once it is followed.
     followed: Mutex<Option<PathBuf>>,
@@ -690,6 +692,20 @@ impl RemoteLane {
         } = leased;
         let mut hashes = HashCache::default();
         let unwritten: Mutex<Option<String>> = Mutex::new(None);
+        // The lease lives two minutes unless renewed: a sync of a large tree
+        // (90 s on a member whose virus scanner checks each file) and the
+        // start after it take longer. Renewed meanwhile, until the lane is
+        // followed (its own renewals take over).
+        let renewing = {
+            let client = client.clone();
+            let lease = offer.id.clone();
+            rt.spawn(async move {
+                loop {
+                    tokio::time::sleep(RENEW_EVERY).await;
+                    let _ = client.renew(&lease).await;
+                }
+            })
+        };
         let started = rt.block_on(async {
             let t = Instant::now();
             step(2, &format!("sync: comparing {} files", list.len()));
@@ -765,6 +781,7 @@ impl RemoteLane {
                 )
                 .await
         });
+        renewing.abort();
         let started = match started {
             Ok(st) => st,
             Err(e) => {
@@ -841,6 +858,7 @@ impl RemoteLane {
             _watcher: watcher,
             hashes: Mutex::new(p.hashes),
             followed: Mutex::new(None),
+            sync_held: std::sync::atomic::AtomicBool::new(false),
         });
         if lane._watcher.is_none() {
             // No watcher: every tick counts as a change.
@@ -1109,6 +1127,15 @@ impl RemoteLane {
             if !self.tick(SYNC_EVERY).await {
                 return;
             }
+            // Its worktree on its way out (git removes `.git` early), or the
+            // lane being removed here: what the worktree loses meanwhile is
+            // not sent, or the lane's builds on the node fail for a lane
+            // about to go (seen 2026-10-23: six failure notices).
+            if self.sync_held.load(std::sync::atomic::Ordering::SeqCst)
+                || !self.worktree.join(".git").exists()
+            {
+                continue;
+            }
             let changed = self.dirty.swap(false, std::sync::atomic::Ordering::SeqCst);
             if !changed && full.elapsed() < FULL_SYNC_EVERY {
                 continue;
@@ -1127,18 +1154,21 @@ impl RemoteLane {
             match listed {
                 Ok(Ok((list, elsewhere, fp))) => {
                     if seen.as_ref() != Some(&fp) {
-                        match self
-                            .client
-                            .sync_cached(
+                        let synced = tokio::select! {
+                            r = self.client.sync_cached(
                                 &self.lease,
                                 &self.worktree,
                                 &list,
                                 &elsewhere,
                                 &mut hashes,
                                 &|_, _, _| {},
-                            )
-                            .await
-                        {
+                            ) => r,
+                            // Stopped meanwhile: its lease is gone, and the
+                            // sync's failure is no news (a 404 logged as a
+                            // failed sync, seen 2026-10-23).
+                            _ = self.over() => return,
+                        };
+                        match synced {
                             Ok(s) => {
                                 if s.written + s.removed > 0 {
                                     crate::diag::info(
@@ -1636,6 +1666,12 @@ impl RemoteLane {
             )
                 .into_response(),
         }
+    }
+
+    /// No more syncs: the lane is being removed, and stops soon.
+    pub fn hold_sync(&self) {
+        self.sync_held
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Stop the lane: the node stops it and removes it with its mirror.
