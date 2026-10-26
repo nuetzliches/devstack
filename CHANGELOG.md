@@ -9,6 +9,13 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-10-27
+
+Fixes of warming the store (ADR-0065): a second service with the same
+`prepare` warms and shares the first one's entry instead of failing on its
+`version`, and a warm lease on a node gets the ref's files, so a stack with
+`[lanes] dockerfile` builds its lane image there.
+
 ### Fixed
 
 - **A second service with the same `prepare` warms, and shares the entry**
@@ -1754,7 +1761,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.24.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.24.1...HEAD
+[0.24.1]: https://github.com/nuetzliches/devstack/compare/v0.24.0...v0.24.1
 [0.24.0]: https://github.com/nuetzliches/devstack/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/nuetzliches/devstack/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/nuetzliches/devstack/compare/v0.22.0...v0.22.1
