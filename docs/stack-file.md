@@ -533,6 +533,30 @@ next start prepares it again), or leaves the worktree behind with the junction
 in it.
 The main tree and lanes on a node make no links.
 
+`outputs` ([ADR-0062](adr/0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md))
+names the directories `prepare` makes, relative to the repository, for the
+store: after a `prepare` that succeeded they are kept per machine and
+repository (`.devstack/store/` of the main tree; on a node per member and
+repository), under a key of `run`, `cwd`, the files of `inputs`, the
+operating system and architecture, and on a node the lane image. The next
+copy with the same key gets them copied and does not run `prepare`; a second
+lane with the same lockfile starts without `npm ci`. Name everything
+`prepare` makes that the service needs: what it writes elsewhere is not in
+the store. `version` is a command whose output, run in `prepare`'s `cwd`,
+is part of the key too, so that a toolchain update makes a new entry
+(`node --version` for native packages); it needs `outputs`. With `outputs`,
+each `link` is one of them or inside one: a lane on a node links its
+worktree to a copy from this machine's store
+([ADR-0063](adr/0063-a-lane-on-a-node-links-its-worktree-to-a-copy-from-the-local-store.md)).
+
+```toml
+prepare = { run = "npm ci", inputs = ["web/package-lock.json"], outputs = ["web/node_modules"], link = ["web/node_modules"], version = "node --version" }
+```
+
+**Not built yet:** this devstack checks `outputs` and `version` and does
+nothing else with them; `prepare` runs in every copy as above. A file with
+either should say `requires = "0.23.0"` in `[stack]`.
+
 ## `[lanes]`: other worktrees ([ADR-0024](adr/0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0030](adr/0030-each-lane-has-its-own-infrastructure.md); on other machines [ADR-0025](adr/0025-a-lane-can-run-on-another-node.md), [ADR-0028](adr/0028-lane-images.md), [ADR-0029](adr/0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0035](adr/0035-lanes-can-be-shared-with-the-pool.md), and [pool.md](pool.md))
 
 ```toml

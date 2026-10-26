@@ -55,6 +55,10 @@ pub const SKIP_SINCE: &str = "0.21.0";
 /// file that sets it wants `requires` at least this.
 pub const STOP_SINCE: &str = "0.21.0";
 
+/// The first devstack that knows `prepare.outputs` and `prepare.version`
+/// (ADR-0062): a file that sets one wants `requires` at least this.
+pub const OUTPUTS_SINCE: &str = "0.23.0";
+
 /// `"1.2.3"`, `"v1.2"`, `"1"` as numbers; `None` when malformed. A
 /// pre-release or build suffix (`1.2.3-rc1`, `1.2.3+abc`) is ignored here;
 /// [`version_order`] takes it into account.

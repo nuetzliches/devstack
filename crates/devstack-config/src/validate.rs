@@ -51,6 +51,14 @@ pub fn inside_repo(p: &str) -> bool {
         && !p.split(['/', '\\']).any(|c| c == "..")
 }
 
+/// A path inside the repository as its parts, so that `web/node_modules`,
+/// `./web\node_modules/` and `web//node_modules` compare equal.
+fn components(p: &str) -> Vec<&str> {
+    p.split(['/', '\\'])
+        .filter(|c| !c.is_empty() && *c != ".")
+        .collect()
+}
+
 /// The message for a stack file of another schema version.
 pub fn unsupported_version(v: impl fmt::Display) -> String {
     format!("unsupported version {v} (this devstack reads version {SCHEMA_VERSION})")
@@ -658,16 +666,47 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                 c.repo_path(&format!("{p}.prepare.cwd"), d);
             }
             c.globs(&format!("{p}.prepare.inputs"), &prep.inputs);
-            for l in &prep.link {
-                let at = format!("{p}.prepare.link");
-                c.literal(&at, l);
-                c.repo_path(&at, l);
-                if l.trim_matches(['/', '\\', '.']).is_empty() {
+            for (key, dirs) in [("link", &prep.link), ("outputs", &prep.outputs)] {
+                let at = format!("{p}.prepare.{key}");
+                for d in dirs {
+                    c.literal(&at, d);
+                    c.repo_path(&at, d);
+                    if d.trim_matches(['/', '\\', '.']).is_empty() {
+                        c.err(
+                            &at,
+                            format!(
+                                "`{d}`: a directory below the repository, not the repository itself"
+                            ),
+                        );
+                    }
+                }
+            }
+            // The worktree is linked to what the store holds (ADR-0062,
+            // ADR-0063): a link outside every output would point at nothing.
+            if !prep.outputs.is_empty() {
+                let outputs: Vec<Vec<&str>> = prep.outputs.iter().map(|o| components(o)).collect();
+                for l in &prep.link {
+                    let link = components(l);
+                    if !outputs.iter().any(|o| link.starts_with(o)) {
+                        c.err(
+                            format!("{p}.prepare.link"),
+                            format!(
+                                "`{l}` is not one of `outputs` nor inside one: a link names a directory `prepare` makes"
+                            ),
+                        );
+                    }
+                }
+            }
+            if let Some(v) = &prep.version {
+                let at = format!("{p}.prepare.version");
+                if v.trim().is_empty() {
+                    c.err(&at, "is empty: a command such as `node --version`");
+                }
+                c.literal(&at, v);
+                if prep.outputs.is_empty() {
                     c.err(
                         &at,
-                        format!(
-                            "`{l}`: a directory below the repository, not the repository itself"
-                        ),
+                        "keys the store, which only a `prepare` with `outputs` uses",
                     );
                 }
             }
@@ -1011,7 +1050,8 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
 const FIRST_LANES: u32 = 3;
 
 /// What a valid stack file may want changed (`devstack check` prints them):
-/// a newer key (`[stack] reviewed`, `announced_ports`, a service's `stop`)
+/// a newer key (`[stack] reviewed`, `announced_ports`, a service's `stop`,
+/// `prepare.outputs` and `prepare.version`)
 /// without the `requires` that keeps an older devstack from failing on it;
 /// two services whose ports differ by one of the first
 /// few multiples of `[lanes] port_step`, so that one of the first lanes
@@ -1104,6 +1144,33 @@ pub fn warnings(stack: &Stack) -> Vec<Issue> {
                     v = crate::STOP_SINCE
                 ),
             });
+        }
+    }
+    let outputs = crate::version_order(crate::OUTPUTS_SINCE);
+    if stack
+        .stack
+        .requires
+        .as_deref()
+        .is_none_or(|r| crate::version_order(r) < outputs)
+    {
+        for (name, prep) in stack
+            .services
+            .iter()
+            .filter_map(|(n, s)| s.prepare.as_ref().map(|p| (n, p)))
+        {
+            let keys = [
+                ("outputs", !prep.outputs.is_empty()),
+                ("version", prep.version.is_some()),
+            ];
+            for (key, _) in keys.into_iter().filter(|(_, set)| *set) {
+                out.push(Issue {
+                    path: format!("services.{name}.prepare.{key}"),
+                    message: format!(
+                        "a devstack before {v} does not know this key and fails on it with \"unknown field\": `requires = \"{v}\"` makes it ask to be updated instead",
+                        v = crate::OUTPUTS_SINCE
+                    ),
+                });
+            }
         }
     }
     if step == 0 {

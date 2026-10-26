@@ -938,8 +938,19 @@ pub struct Prepare {
     /// `["web/node_modules"]` (ADR-0044): the worktree's git hooks and
     /// editor find them there. Relative to the repository; only where the
     /// worktree has nothing of that name, and removed when the lane stops.
+    /// With `outputs`, each is one of them or inside one.
     #[serde(default)]
     pub link: Vec<String>,
+    /// Directories it makes, e.g. `["web/node_modules"]` (ADR-0062): kept
+    /// in the machine's store under the key of the inputs, and copied into
+    /// the next copy with the same key instead of running it again.
+    /// Relative to the repository; empty: no store.
+    #[serde(default)]
+    pub outputs: Vec<String>,
+    /// A command whose output is part of the store's key, e.g.
+    /// `node --version` (ADR-0062): a toolchain update makes a new entry.
+    /// Needs `outputs`.
+    pub version: Option<String>,
 }
 
 /// Hot-reload mode of a built service: the toolchain's own watcher, from

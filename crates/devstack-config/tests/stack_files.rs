@@ -718,6 +718,71 @@ prepare = {{ run = \"npm ci\", link = [\"{bad}\"] }}"
 }
 
 #[test]
+fn prepare_outputs_are_directories_inside_the_repository_and_hold_its_links() {
+    use devstack_config::{OUTPUTS_SINCE, validate::warnings};
+    let with =
+        |prep: &str| MINIMAL.replace("port = 5000", &format!("port = 5000\nprepare = {prep}"));
+    let ok = with(
+        r#"{ run = "npm ci", inputs = ["web/package-lock.json"], outputs = ["web/node_modules"], link = ["./web\\node_modules/"], version = "node --version" }"#,
+    );
+    let mut s = from_str(&ok, Path::new("t")).expect("loads");
+    let prep = s.services["api"].prepare.as_ref().unwrap();
+    assert_eq!(prep.outputs, ["web/node_modules"]);
+    assert_eq!(prep.version.as_deref(), Some("node --version"));
+    let w = warnings(&s);
+    for key in ["outputs", "version"] {
+        assert!(
+            w.iter()
+                .any(|i| i.path == format!("services.api.prepare.{key}")
+                    && i.message.contains(OUTPUTS_SINCE)),
+            "{key}: {w:?}"
+        );
+    }
+    s.stack.requires = Some(OUTPUTS_SINCE.into());
+    assert!(warnings(&s).is_empty());
+
+    // A link inside an output is fine; without `outputs`, any link is.
+    from_str(
+        &with(r#"{ run = "npm ci", outputs = ["web"], link = ["web/node_modules"] }"#),
+        Path::new("t"),
+    )
+    .expect("a link inside an output");
+
+    for (prep, expect) in [
+        (
+            r#"{ run = "npm ci", outputs = ["../node_modules"] }"#,
+            "services.api.prepare.outputs",
+        ),
+        (
+            r#"{ run = "npm ci", outputs = ["."] }"#,
+            "services.api.prepare.outputs: `.`: a directory below the repository",
+        ),
+        (
+            r#"{ run = "npm ci", outputs = ["{repo}/node_modules"] }"#,
+            "services.api.prepare.outputs",
+        ),
+        (
+            r#"{ run = "npm ci", outputs = ["web/node_modules"], link = ["web/node_modules-old"] }"#,
+            "services.api.prepare.link: `web/node_modules-old` is not one of `outputs`",
+        ),
+        (
+            r#"{ run = "npm ci", version = "node --version" }"#,
+            "services.api.prepare.version: keys the store",
+        ),
+        (
+            r#"{ run = "npm ci", outputs = ["web/node_modules"], version = " " }"#,
+            "services.api.prepare.version: is empty",
+        ),
+    ] {
+        let issues = invalid(&with(prep));
+        assert!(
+            issues.iter().any(|i| i.contains(expect)),
+            "{prep}: {issues:?}"
+        );
+    }
+}
+
+#[test]
 fn working_directories_and_the_output_stay_inside_the_repository() {
     let issues = invalid(&format!(
         "{MINIMAL}cwd = \"../outside\"\n[services.api.prepare]\nrun = \"npm ci\"\ncwd = \"/abs\"\n[services.api.hot_reload]\nrun = \"dotnet watch run\"\ncwd = \"C:/elsewhere\"\n"
