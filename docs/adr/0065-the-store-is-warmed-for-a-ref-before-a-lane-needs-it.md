@@ -1,6 +1,6 @@
 # ADR-0065: The store is warmed for a ref before a lane needs it
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-26)
 - **Date:** 2026-10-26
 - **Deciders:** project owner
 - **Related:** [#290](https://github.com/nuetzliches/devstack/issues/290), [#277](https://github.com/nuetzliches/devstack/issues/277), [ADR-0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md) (the store, its key), [ADR-0063](0063-a-lane-on-a-node-links-its-worktree-to-a-copy-from-the-local-store.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md), [ADR-0033](0033-a-node-decides-what-runs-on-it.md), [ADR-0038](0038-a-lanes-data-outlives-its-lease.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0023](0023-stack-file-compatibility.md)
