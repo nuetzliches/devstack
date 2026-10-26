@@ -61,8 +61,9 @@ pub fn config_args(g: &Group, src: &Path, image: &str, flags: &[&str]) -> Vec<Os
     .iter()
     .map(OsString::from)
     .collect();
-    // The group's `DEVSTACK_PORT_*` (ADR-0057): Compose in the container
-    // interpolates the model with them, nothing else of the agent's.
+    // The group's `DEVSTACK_PORT_*` (ADR-0057) and `DEVSTACK_LANE*`
+    // (ADR-0064): Compose in the container interpolates the model with
+    // them, nothing else of the agent's.
     for (k, v) in &g.env {
         a.push("-e".into());
         a.push(format!("{k}={v}").into());

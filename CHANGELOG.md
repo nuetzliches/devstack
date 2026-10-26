@@ -27,6 +27,16 @@ and listed with their assets on the
   copies preparing the same key prepare it once. Entries no copy used for
   14 days go; `devstack lane prune --older-than` removes them sooner.
   Lanes on a node do not use a store yet.
+- **Compose files are told the lane** (ADR-0064, #280): every `docker
+  compose` call devstack makes for a group, and every `exec` step of a
+  command, gets `DEVSTACK_LANE` (`main` in the main tree) and
+  `DEVSTACK_LANE_SUFFIX` (empty there, `_<lane>` in a lane, as
+  `{lane_suffix}`), on a node with the lane's name as its developer calls
+  it. A container keeps a login cookie apart per tree with
+  `app_refresh${DEVSTACK_LANE_SUFFIX:-}`, and the files give the same value
+  without devstack. `devstack check` warns about either read without a
+  default and about a `DEVSTACK_LANE_*` devstack does not set. No stack-file
+  key: no `requires`.
 
 ### Fixed
 

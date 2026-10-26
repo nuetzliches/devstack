@@ -126,6 +126,14 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   the files' port as default (`${DEVSTACK_PORT_MEDIA_7881:-7881}`); keep
   `ports` literal. Without the key, a lane's server announces the main
   tree's port. Add `requires = "0.20.0"` to `[stack]`.
+- **A per-lane value in a container** (a login cookie's name, which the
+  browser shares between the main tree and every lane on `localhost`): every
+  `docker compose` call (and every `exec` step) gets `DEVSTACK_LANE`
+  (`main` in the main tree) and `DEVSTACK_LANE_SUFFIX` (empty there,
+  `_<lane>` in a lane). Read them in the Compose file with a default
+  (`REFRESH_COOKIE: app_refresh${DEVSTACK_LANE_SUFFIX:-}`), never from
+  `COMPOSE_PROJECT_NAME`. For a native service use `{lane_suffix}` in its
+  `env`.
 - **A container as a service** (`run = "docker run ..."`, for what needs
   Linux tools but should get `watch` and candidates) needs three things: a
   process in it that ends on `SIGINT` and `SIGTERM` (`docker run --init`,
