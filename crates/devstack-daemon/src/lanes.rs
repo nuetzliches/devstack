@@ -1439,6 +1439,24 @@ impl Lanes {
                 }
             }
         }
+        // What `prepare` made, kept in this machine's store (ADR-0062): an
+        // entry no copy used for `older_than`. Copies hold their own.
+        if let Some(older_than) = older_than {
+            for s in self.main.store().sweep(older_than, dry_run) {
+                out.push(Pruned {
+                    place: "this machine".into(),
+                    lane: format!("store: {}", s.service),
+                    bytes: Some(s.bytes),
+                    why: format!(
+                        "what `prepare` made ({}), not used for {} h",
+                        s.key,
+                        s.idle.as_secs() / 3600
+                    ),
+                    removed: s.removed,
+                    error: s.error,
+                });
+            }
+        }
         crate::diag::info(
             "lanes_pruned",
             serde_json::json!({ "dry_run": dry_run, "found": out.len(),

@@ -2050,7 +2050,7 @@ fn a_worktree_runs_as_a_lane() {
     let tray_port = free_port();
     let mut toml = std::fs::read_to_string(s.file()).unwrap();
     toml.push_str(&format!(
-        "\n[services.web]\nkind = \"devserver\"\nrun = '\"{BIN}\" serve-static src/Site --port {{port}}'\nport = {web_port}\nprepare = {{ run = \"mkdir deps && echo x>>prepared.count\" }}\n"
+        "\n[services.web]\nkind = \"devserver\"\nrun = '\"{BIN}\" serve-static src/Site --port {{port}}'\nport = {web_port}\nprepare = {{ run = \"mkdir deps && echo x>>prepared.count\", outputs = [\"deps\"] }}\n"
     ));
     toml.push_str(&format!(
         "\n[services.tray]\nkind = \"tool\"\nlanes = false\nrun = '\"{BIN}\" serve-static src/Site --port {{port}}'\nport = {tray_port}\n"
@@ -2540,8 +2540,8 @@ fn a_worktree_runs_as_a_lane() {
     let file = extra.join("devstack.toml");
     let toml = std::fs::read_to_string(&file).unwrap();
     let toml = toml.replace(
-        "echo x>>prepared.count\" }",
-        "echo x>>prepared.count\", link = [\"deps\"] }",
+        "outputs = [\"deps\"] }",
+        "outputs = [\"deps\"], link = [\"deps\"] }",
     );
     assert!(toml.contains("link = [\"deps\"]"), "{toml}");
     std::fs::write(&file, toml).unwrap();
@@ -2574,6 +2574,27 @@ fn a_worktree_runs_as_a_lane() {
     assert!(
         wait_for(is_link, Duration::from_secs(30)),
         "prepare's directory is linked into the worktree\n{}",
+        s.diag()
+    );
+    // It came from the store, which the lane of step 5 filled with the same
+    // inputs (ADR-0062): `prepare` did not run in this lane's copy.
+    let extra_src = s
+        .dir
+        .path()
+        .join(".devstack")
+        .join(format!("lane-{extra_name}"))
+        .join("lanes/main/src");
+    assert!(extra_src.join("deps").is_dir(), "{}", s.diag());
+    assert!(
+        !extra_src.join("prepared.count").exists(),
+        "prepare ran although the store had its outputs\n{}",
+        s.diag()
+    );
+    assert!(
+        std::fs::read_to_string(&log).is_ok_and(|t| t
+            .lines()
+            .any(|l| l.contains("prepare_store_hit") && l.contains(&extra_name))),
+        "the hit is logged\n{}",
         s.diag()
     );
     s.ok(&["lane", "stop", &extra_name]);

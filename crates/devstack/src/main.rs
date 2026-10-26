@@ -413,9 +413,12 @@ enum LaneAction {
     /// Remove what this repository's lanes leave behind: on this machine
     /// the containers and volumes of lanes whose worktree is gone, on the
     /// pool's nodes this machine's kept lanes of this repository that are
-    /// gone, or not used for `--older-than` (ADR-0038).
+    /// gone, or not used for `--older-than` (ADR-0038); with
+    /// `--older-than`, also what `prepare` made in this machine's store and
+    /// no copy used for as long (ADR-0062).
     Prune {
-        /// Also kept lanes on nodes not used for this long (`7d`, `36h`).
+        /// Also kept lanes on nodes, and entries of the store, not used for
+        /// this long (`7d`, `36h`).
         #[arg(long, value_name = "AGE")]
         older_than: Option<String>,
         /// Only say what would go.
