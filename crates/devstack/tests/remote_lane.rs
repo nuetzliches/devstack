@@ -444,11 +444,12 @@ fn a_lane_runs_on_a_node_of_the_pool() {
                 log.lines().any(|l| l.contains("\"prepare_warmed\"")
                     && l.contains("\"place\":\"remote\"")
                     && l.contains("from the store")),
-                "the node prepared a key of its own: {}",
+                "the node prepared a key of its own: {}\nthe lanes on the node:\n{}",
                 log.lines()
                     .filter(|l| l.contains("warm"))
                     .collect::<Vec<_>>()
-                    .join("\n")
+                    .join("\n"),
+                lane_logs(node.path(), "prepare")
             );
             break;
         }
@@ -838,6 +839,31 @@ fn with_prepare(main: &Path) {
     let mut text = std::fs::read_to_string(&ignore).unwrap();
     text.push_str("deps\n");
     std::fs::write(&ignore, text).unwrap();
+}
+
+/// The lines with `what` of every lane daemon's log on the node under `dir`.
+fn lane_logs(dir: &Path, what: &str) -> String {
+    fn walk(p: &Path, what: &str, out: &mut Vec<String>) {
+        for e in std::fs::read_dir(p).into_iter().flatten().flatten() {
+            let path = e.path();
+            if path.is_dir() && !path.is_symlink() {
+                if e.file_name() != "node_modules" {
+                    walk(&path, what, out);
+                }
+            } else if e.file_name() == "daemon.log" {
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                out.push(format!("== {}", path.display()));
+                out.extend(
+                    text.lines()
+                        .filter(|l| l.contains(what))
+                        .map(str::to_string),
+                );
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, what, &mut out);
+    out.join("\n")
 }
 
 /// The entries of every member store the node agent keeps under `dir`.
