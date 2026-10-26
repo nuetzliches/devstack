@@ -112,3 +112,4 @@ stay.
 | [0061](0061-the-dashboard-opens-in-its-installed-app.md) | The dashboard opens in its installed app, when there is one | Accepted |
 | [0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md) | What `prepare` makes is kept in a store per machine and repository, keyed by its inputs | Accepted |
 | [0063](0063-a-lane-on-a-node-links-its-worktree-to-a-copy-from-the-local-store.md) | A lane on a node links its worktree to a copy from the local store | Accepted |
+| [0064](0064-every-compose-call-is-told-the-lane-it-runs-for.md) | Every Compose call is told the lane it runs for | Accepted |

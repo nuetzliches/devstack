@@ -221,7 +221,10 @@ node as it does locally: the node's agent gives Compose
 `DEVSTACK_PORT_<SERVICE>_<PORT>` with the files' port plus the lane's offset,
 the container listens there, and your machine forwards and relays that same
 number, so a client that follows what the server announces (an ICE
-candidate on `127.0.0.1:7981`) reaches the lane's server.
+candidate on `127.0.0.1:7981`) reaches the lane's server. The agent's
+Compose calls get the lane's `DEVSTACK_LANE` and `DEVSTACK_LANE_SUFFIX` as
+well ([ADR-0064](adr/0064-every-compose-call-is-told-the-lane-it-runs-for.md)),
+with the lane's name as you call it, as a local lane's do.
 The dashboard shows where each lane runs, its start step by step, and offers
 **Start here / on a node / in the pool** for a lane that is not started.
 

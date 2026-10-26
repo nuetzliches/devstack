@@ -53,13 +53,14 @@ pub struct Group {
     pub dir: PathBuf,
     /// Set for every call of the group, over an env file's value: the
     /// `DEVSTACK_PORT_*` of its announced ports as this tree runs them
-    /// (ADR-0057).
+    /// (ADR-0057), and `DEVSTACK_LANE` / `DEVSTACK_LANE_SUFFIX` of the tree
+    /// (ADR-0064).
     pub env: BTreeMap<String, String>,
 }
 
 impl Group {
     /// The group as the main tree runs it: its announced ports' variables
-    /// are the files' ports.
+    /// are the files' ports, its lane is `main`.
     pub fn from_config(name: &str, g: &ComposeGroup, repo: &Path) -> Self {
         Self {
             name: name.into(),
@@ -69,7 +70,7 @@ impl Group {
             networks: g.networks.clone(),
             services: g.services.clone(),
             dir: repo.to_path_buf(),
-            env: g.port_variables(0, &[]),
+            env: g.variables("", 0, &[]),
         }
     }
 
@@ -514,8 +515,8 @@ impl Docker {
     }
 
     /// The Docker CLI with `args` in `dir`, `env` set over what it gets of
-    /// this process (a group's `DEVSTACK_PORT_*`, also with
-    /// [`clean_env`]).
+    /// this process (a group's `DEVSTACK_PORT_*` and `DEVSTACK_LANE*`, also
+    /// with [`clean_env`]).
     fn command(&self, dir: &Path, args: &[OsString], env: &BTreeMap<String, String>) -> Command {
         let mut cmd = Command::new(&self.program);
         cmd.args(args).current_dir(dir);
@@ -1877,7 +1878,12 @@ mod tests {
         let g = Group::from_config("rtc", &stack.compose["rtc"], Path::new("."));
         assert_eq!(
             g.env,
-            [("DEVSTACK_PORT_MEDIA_7881".to_string(), "7881".to_string())].into()
+            [
+                ("DEVSTACK_LANE".to_string(), "main".to_string()),
+                ("DEVSTACK_LANE_SUFFIX".to_string(), String::new()),
+                ("DEVSTACK_PORT_MEDIA_7881".to_string(), "7881".to_string())
+            ]
+            .into()
         );
     }
 

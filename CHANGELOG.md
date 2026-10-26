@@ -18,6 +18,16 @@ and listed with their assets on the
   lockfile skips `npm ci`. With `outputs`, each `link` is one of them or
   inside one; `version` needs `outputs`. The store itself is not built yet.
   A file with either says `requires = "0.23.0"`.
+- **Compose files are told the lane** (ADR-0064, #280): every `docker
+  compose` call devstack makes for a group, and every `exec` step of a
+  command, gets `DEVSTACK_LANE` (`main` in the main tree) and
+  `DEVSTACK_LANE_SUFFIX` (empty there, `_<lane>` in a lane, as
+  `{lane_suffix}`), on a node with the lane's name as its developer calls
+  it. A container keeps a login cookie apart per tree with
+  `app_refresh${DEVSTACK_LANE_SUFFIX:-}`, and the files give the same value
+  without devstack. `devstack check` warns about either read without a
+  default and about a `DEVSTACK_LANE_*` devstack does not set. No stack-file
+  key: no `requires`.
 
 ### Fixed
 

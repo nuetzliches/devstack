@@ -252,8 +252,10 @@ const CANCELLED: &str = "cancelled";
 
 /// What an `exec` step gets on top of the daemon's environment: a
 /// profile's variables (ADR-0041), with the tree's own addresses, and the
-/// `DEVSTACK_PORT_*` of the tree's announced ports (ADR-0057), so a
-/// `docker compose` there keeps the moved ports. devstack's names win.
+/// `DEVSTACK_PORT_*` of the tree's announced ports (ADR-0057) and its
+/// `DEVSTACK_LANE` / `DEVSTACK_LANE_SUFFIX` (ADR-0064), so a `docker
+/// compose` there keeps the moved ports and the lane's values. devstack's
+/// names win.
 fn exec_env(
     sup: &Supervisor,
     ctx: &CommandContext,
@@ -263,7 +265,7 @@ fn exec_env(
     for (k, v) in sup.stack.profile.iter().flat_map(|p| &p.env) {
         step_env.insert(k.clone(), expand(v, ctx, env).map_err(|e| e.to_string())?);
     }
-    step_env.extend(sup.port_variables());
+    step_env.extend(sup.compose_variables());
     Ok(step_env)
 }
 
@@ -465,7 +467,7 @@ lanes = false
     }
 
     #[test]
-    fn an_exec_step_gets_the_trees_announced_ports() {
+    fn an_exec_step_gets_the_trees_announced_ports_and_lane() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -518,7 +520,18 @@ lanes = false
             );
             // `shared`: the main tree's container, on the files' port.
             assert_eq!(env["DEVSTACK_PORT_MAIL_1025"], mail, "lane `{lane}`");
-            assert_eq!(env.len(), 3, "{env:?}");
+            // The lane, as `{lane}` and `{lane_suffix}` have it (ADR-0064).
+            assert_eq!(
+                env["DEVSTACK_LANE"],
+                devstack_env::lane_name(lane),
+                "lane `{lane}`"
+            );
+            assert_eq!(
+                env["DEVSTACK_LANE_SUFFIX"],
+                devstack_env::lane_suffix(lane),
+                "lane `{lane}`"
+            );
+            assert_eq!(env.len(), 5, "{env:?}");
         }
     }
 

@@ -489,7 +489,7 @@ impl LaneRun {
         let mut g = Group::from_config(name, &stack.compose[name], &self.src());
         g.project = p.project;
         g.networks = p.networks;
-        g.env = self.port_variables(stack, name);
+        g.env = self.variables(stack, name);
         g.services = self.started(stack, name);
         g
     }
@@ -511,15 +511,14 @@ impl LaneRun {
             .collect()
     }
 
-    /// The `DEVSTACK_PORT_*` of a group's announced ports (ADR-0057): the
-    /// files' ports moved by the lane's offset, the numbers its requester
-    /// forwards and relays. A `shared` service is the lane's own here.
-    fn port_variables(
-        &self,
-        stack: &devstack_config::Stack,
-        name: &str,
-    ) -> BTreeMap<String, String> {
-        stack.compose[name].port_variables(self.port_offset, &[])
+    /// What every `docker compose` call of a group gets: the
+    /// `DEVSTACK_PORT_*` of its announced ports (ADR-0057), the files'
+    /// ports moved by the lane's offset, the numbers its requester forwards
+    /// and relays (a `shared` service is the lane's own here); and
+    /// `DEVSTACK_LANE` / `DEVSTACK_LANE_SUFFIX` of the lane as its requester
+    /// calls it (ADR-0064).
+    fn variables(&self, stack: &devstack_config::Stack, name: &str) -> BTreeMap<String, String> {
+        stack.compose[name].variables(&self.lane, self.port_offset, &[])
     }
 
     /// A group as the node runs it: the model the agent checked and its
@@ -538,7 +537,7 @@ impl LaneRun {
             networks: p.networks,
             services: self.started(stack, name),
             dir,
-            env: self.port_variables(stack, name),
+            env: self.variables(stack, name),
         }
     }
 
@@ -1309,21 +1308,45 @@ mod tests {
             Path::new("t.toml"),
         )
         .unwrap();
-        let mut g = Group::from_config("app", &lane.compose["app"], Path::new("/src"));
-        g.env = lane.compose["app"].port_variables(100, &[]);
+        let run = LaneRun {
+            id: "l1".into(),
+            slot: "l1".into(),
+            member: "m".into(),
+            lane: "feat-x".into(),
+            dir: PathBuf::from("/var/lib/node/lanes/l1"),
+            stack_file: "devstack.toml".into(),
+            display_root: None,
+            port_offset: 100,
+            profile: None,
+            relay_udp: false,
+            memory_limit: None,
+            cpu_limit: None,
+            network: Network::Lan,
+            secret: "s".into(),
+        };
+        let g = run.mirror_group(&lane, "app");
+        // Every call of the group gets them: the node's own (`group`) too.
+        assert_eq!(run.group(&lane, "app").env, g.env);
         let args: Vec<String> = crate::confine::config_args(&g, Path::new("/src"), "img", &[])
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        let at = args
-            .iter()
-            .position(|a| a == "DEVSTACK_PORT_MEDIA_7881=7981")
-            .unwrap_or_else(|| panic!("{args:?}"));
-        assert_eq!(args[at - 1], "-e");
-        assert!(
-            at < args.iter().position(|a| a == "img").unwrap(),
-            "{args:?}"
-        );
+        // The lane's name as its requester calls it (ADR-0064).
+        for want in [
+            "DEVSTACK_PORT_MEDIA_7881=7981",
+            "DEVSTACK_LANE=feat-x",
+            "DEVSTACK_LANE_SUFFIX=_feat-x",
+        ] {
+            let at = args
+                .iter()
+                .position(|a| a == want)
+                .unwrap_or_else(|| panic!("{want}: {args:?}"));
+            assert_eq!(args[at - 1], "-e");
+            assert!(
+                at < args.iter().position(|a| a == "img").unwrap(),
+                "{args:?}"
+            );
+        }
     }
 
     #[test]
