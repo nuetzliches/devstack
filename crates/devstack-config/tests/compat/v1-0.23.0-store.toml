@@ -1,0 +1,30 @@
+# Frozen for 0.23.0: what `prepare` makes (`outputs`), kept in the store
+# under its inputs and the toolchain's `version` (ADR-0062); its `link`
+# names one of them (ADR-0044, ADR-0063).
+version = 1
+
+[stack]
+name = "shop"
+requires = "0.23.0"
+
+[lanes]
+port_step = 100
+
+[services.web]
+kind = "devserver"
+cwd = "web"
+run = "npx ng serve --port {port}"
+port = 4200
+prepare = { run = "npm ci", inputs = ["web/package-lock.json"], outputs = ["web/node_modules"], link = ["web/node_modules"], version = "node --version" }
+
+[services.web-e2e]
+kind = "static"
+cwd = "web"
+build = "npm run build"
+output = "web/dist/web/browser"
+port = 4300
+
+[services.web-e2e.prepare]
+run = "npm ci"
+inputs = ["web/package-lock.json"]
+outputs = ["web/node_modules"]
