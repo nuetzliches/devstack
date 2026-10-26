@@ -2300,15 +2300,76 @@ impl Lanes {
         }
     }
 
-    /// Take up what a daemon before this one left running for a restart
-    /// (ADR-0052 point 2): the lanes on nodes first (their leases run
-    /// out), then those here, then the main slot. The word is read once.
+    /// What a daemon before this one left (ADR-0052): the lanes it carried
+    /// over a restart, those on nodes first (their leases run out); then the
+    /// lanes on nodes it followed when it ended without stopping them
+    /// ([`Self::unfollowed`]); then the lanes here and the main slot.
     /// Blocking: on a thread of its own.
     pub fn take_up(self: &Arc<Self>) {
+        let (lanes, main) = self
+            .carried()
+            .map(|c| (c.lanes, c.main))
+            .unwrap_or_default();
+        let (remote, local): (Vec<CarriedLane>, Vec<CarriedLane>) =
+            lanes.into_iter().partition(|l| l.node.is_some());
+        for l in remote {
+            self.take_up_remote(l);
+        }
+        self.unfollowed();
+        for l in local {
+            self.take_up_local(l);
+        }
+        match main {
+            Some(lane) => self.take_up_main(lane),
+            None => self.announce(),
+        }
+    }
+
+    /// The lanes on nodes a daemon before this one followed and neither
+    /// stopped nor carried over (ADR-0052 point 6): it crashed, was killed,
+    /// or the machine went down. Their leases are over by now (or released
+    /// here, as a daemon that stops releases them, ADR-0025 point 7); each
+    /// is said in the log and with the lane, so the lane does not just show
+    /// as stopped.
+    fn unfollowed(&self) {
+        let names: Vec<String> = self.known.lock().unwrap().keys().cloned().collect();
+        for name in names {
+            let state = self.state_dir(&name);
+            let Some(c) = crate::remote::followed(&state) else {
+                continue;
+            };
+            if self.remote(&name).is_some_and(|r| r.lease == c.lease) {
+                continue;
+            }
+            crate::remote::forget_followed(&state, &c.lease);
+            if let Ok(client) = devstack_node::nodeclient::NodeClient::new(
+                &crate::remote::local_member(&c.pool),
+                c.node.clone(),
+            ) {
+                let _ = self.rt.block_on(client.release(&c.lease));
+            }
+            let node = c.node.name;
+            crate::diag::warn(
+                "remote_lane_unfollowed",
+                serde_json::json!({ "lane": name, "node": node, "lease": c.lease }),
+            );
+            self.begin_move(&name, "start", &node, 1);
+            self.finish(
+                &name,
+                Some(&format!(
+                    "lane `{name}` ran on {node} until devstack here ended without stopping it \
+                     (a crash, a restart of this machine); its lease there is over. \
+                     `devstack up --on {node}` starts it again from its data kept there"
+                )),
+            );
+        }
+    }
+
+    /// What a daemon before this one left running for a restart (ADR-0052
+    /// point 2), if it is for this stack and recent. The word is read once.
+    fn carried(&self) -> Option<Carry> {
         let path = self.carry_file();
-        let Ok(bytes) = std::fs::read(&path) else {
-            return;
-        };
+        let bytes = std::fs::read(&path).ok()?;
         let _ = std::fs::remove_file(&path);
         let carry: Carry = match serde_json::from_slice(&bytes) {
             Ok(c) => c,
@@ -2317,7 +2378,7 @@ impl Lanes {
                     "carry_unreadable",
                     serde_json::json!({ "error": e.to_string() }),
                 );
-                return;
+                return None;
             }
         };
         let age = crate::state::now_ms().saturating_sub(carry.written);
@@ -2327,45 +2388,39 @@ impl Lanes {
                 serde_json::json!({ "age_ms": age as u64, "lanes": carry.lanes.len(),
                     "why": if carry.stack != self.main.stack.stack.name { "written for another stack" } else { "too old: the leases may be over" } }),
             );
+            return None;
+        }
+        Some(carry)
+    }
+
+    /// The main slot goes back to the lane `lane` that held it at the
+    /// restart (ADR-0052 point 2).
+    fn take_up_main(self: &Arc<Self>, lane: String) {
+        // The main tree starts beside this (`devstack up` asks for it):
+        // the main slot moves once it did, so what the main tree hands
+        // over is noted and comes back with `promote --lane main`.
+        if !self.main.wait_upped(std::time::Duration::from_secs(900)) {
+            crate::diag::warn(
+                "main_slot_not_carried",
+                serde_json::json!({ "lane": lane, "error": "the main tree did not start within 15 minutes" }),
+            );
+            if let Some(r) = self.remote(&lane) {
+                let _ = r.set_main(&self.rt, false);
+            }
+            self.announce();
             return;
         }
-        let (remote, local): (Vec<CarriedLane>, Vec<CarriedLane>) =
-            carry.lanes.into_iter().partition(|l| l.node.is_some());
-        for l in remote {
-            self.take_up_remote(l);
-        }
-        for l in local {
-            self.take_up_local(l);
-        }
-        if let Some(lane) = carry.main {
-            // The main tree starts beside this (`devstack up` asks for it):
-            // the main slot moves once it did, so what the main tree hands
-            // over is noted and comes back with `promote --lane main`.
-            if !self.main.wait_upped(std::time::Duration::from_secs(900)) {
-                crate::diag::warn(
-                    "main_slot_not_carried",
-                    serde_json::json!({ "lane": lane, "error": "the main tree did not start within 15 minutes" }),
-                );
+        match self.take_main(&lane) {
+            Ok(()) => crate::diag::info("main_slot_carried", serde_json::json!({ "lane": lane })),
+            Err(e) => {
+                // The lane on a node runs its workers no longer.
                 if let Some(r) = self.remote(&lane) {
                     let _ = r.set_main(&self.rt, false);
                 }
-                self.announce();
-                return;
-            }
-            match self.take_main(&lane) {
-                Ok(()) => {
-                    crate::diag::info("main_slot_carried", serde_json::json!({ "lane": lane }))
-                }
-                Err(e) => {
-                    // The lane on a node runs its workers no longer.
-                    if let Some(r) = self.remote(&lane) {
-                        let _ = r.set_main(&self.rt, false);
-                    }
-                    crate::diag::warn(
-                        "main_slot_not_carried",
-                        serde_json::json!({ "lane": lane, "error": e }),
-                    );
-                }
+                crate::diag::warn(
+                    "main_slot_not_carried",
+                    serde_json::json!({ "lane": lane, "error": e }),
+                );
             }
         }
         self.announce();
@@ -2408,6 +2463,7 @@ impl Lanes {
             ) {
                 let _ = self.rt.block_on(client.release(&c.lease));
             }
+            crate::remote::forget_followed(&self.state_dir(&l.name), &c.lease);
             return self.not_carried(&l.name, "remote", &node, "its worktree is gone");
         };
         if let Some(p) = &l.profile {
@@ -2416,6 +2472,7 @@ impl Lanes {
                 .unwrap()
                 .insert(l.name.clone(), p.clone());
         }
+        let lease = c.lease.clone();
         let adopted = crate::remote::RemoteLane::adopt(
             &self.rt,
             &l.name,
@@ -2438,6 +2495,8 @@ impl Lanes {
             }
             Err(e) => {
                 self.profiles.lock().unwrap().remove(&l.name);
+                // Said here: not again as a lane nobody followed.
+                crate::remote::forget_followed(&self.state_dir(&l.name), &lease);
                 self.not_carried(&l.name, "remote", &node, &e);
             }
         }

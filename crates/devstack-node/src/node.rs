@@ -1091,7 +1091,10 @@ impl Inner {
     /// (ADR-0038), unless its stack file says `keep_data = false`; a lease
     /// of an older agent takes its directory along. Off the caller's
     /// thread, Docker takes its time; the slot is busy until it is done.
-    fn drop_lease(self: &Arc<Self>, l: NodeLease) {
+    /// `why`: `released` (its requester), `expired` (no renewal for
+    /// [`TTL`]: the requester's daemon or machine went away) or `ended` (an
+    /// admin of the pool).
+    fn drop_lease(self: &Arc<Self>, l: NodeLease, why: &str) {
         crate::telemetry::node_log(
             "info",
             "node_lease_ended",
@@ -1103,6 +1106,7 @@ impl Inner {
                     "held_s",
                     crate::store::now().saturating_sub(l.admitted).to_string(),
                 ),
+                ("why", why.to_string()),
             ],
         );
         self.daemons.lock().unwrap().remove(&l.id);
@@ -1644,7 +1648,7 @@ async fn release(
         l
     };
     if let Some(l) = gone {
-        s.drop_lease(l);
+        s.drop_lease(l, "released");
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -3448,7 +3452,7 @@ async fn background(s: Shared) {
             out
         };
         for l in expired {
-            s.drop_lease(l);
+            s.drop_lease(l, "expired");
         }
 
         let available = s.available();
@@ -3634,7 +3638,7 @@ async fn background(s: Shared) {
                 out
             };
             for l in ended {
-                s.drop_lease(l);
+                s.drop_lease(l, "ended");
             }
         }
     }

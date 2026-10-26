@@ -100,7 +100,7 @@ stay.
 | [0049](0049-a-lanes-need-is-measured-disk-included.md) | A lane's need is measured where it ran, disk included; the stack file sets a floor | Accepted, amended 2026-10-21 (point 9: what a lane here checks) |
 | [0050](0050-what-no-request-reports-reaches-the-dashboard-as-a-notice.md) | What no request reports reaches the dashboard as a notice, not as a log view | Accepted |
 | [0051](0051-a-pool-can-grow-by-nodes-a-provisioner-makes.md) | A pool can grow by nodes a provisioner makes for one member's lane, and gives back when it is removed | Proposed |
-| [0052](0052-a-restart-carries-the-lanes-over.md) | A restart of the stack carries its lanes over to the next daemon | Accepted |
+| [0052](0052-a-restart-carries-the-lanes-over.md) | A restart of the stack carries its lanes over to the next daemon | Accepted; point 6 added 2026-10-26 (a lane on a node lost to an unclean end is said) |
 | [0053](0053-whoever-a-lane-is-shared-with-connects-to-it.md) | Whoever a lane is shared with connects to it, and disconnects again | Accepted |
 | [0054](0054-macos-is-a-developer-platform-in-preview.md) | macOS is a developer platform in preview, installed by Homebrew, checked by CI and by its testers | Accepted |
 | [0055](0055-a-lane-without-a-stack-file-says-so-and-can-be-given-one.md) | A lane whose branch has no stack file runs with the main tree's, says so, and can be given one | Accepted |

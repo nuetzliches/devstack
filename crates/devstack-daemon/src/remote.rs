@@ -104,6 +104,32 @@ pub struct RemoteLane {
     /// The hashes the first sync found, for the syncs that follow (A-4):
     /// an unchanged file is not read again.
     hashes: Mutex<HashCache>,
+    /// Where it says in the lane's state that a daemon here follows it
+    /// ([`FOLLOWED`]), once it is followed.
+    followed: Mutex<Option<PathBuf>>,
+}
+
+/// In a lane's state while a daemon here follows it on a node (ADR-0052
+/// point 6): its [`Carried`]. Gone when the lane stops, or its end is seen
+/// here; left when the daemon restarts (the next one follows it again) or
+/// ends without stopping it (a crash, a reboot), when the next daemon finds
+/// it and says the lane is gone.
+const FOLLOWED: &str = "followed.json";
+
+/// The lane on a node whose state is `state` (`lane-<name>/`), as the
+/// daemon that followed it last noted it.
+pub fn followed(state: &Path) -> Option<Carried> {
+    std::fs::read(state.join(FOLLOWED))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+}
+
+/// Remove the note of lease `lease` in `state`; a note of another lease (the
+/// lane moved to another node meanwhile) stays.
+pub fn forget_followed(state: &Path, lease: &str) {
+    if followed(state).is_some_and(|c| c.lease == lease) {
+        let _ = std::fs::remove_file(state.join(FOLLOWED));
+    }
 }
 
 /// devstack's per-user state, where this machine's memberships live.
@@ -814,6 +840,7 @@ impl RemoteLane {
             dirty: dirty.clone(),
             _watcher: watcher,
             hashes: Mutex::new(p.hashes),
+            followed: Mutex::new(None),
         });
         if lane._watcher.is_none() {
             // No watcher: every tick counts as a change.
@@ -848,7 +875,31 @@ impl RemoteLane {
         if forward {
             self.start_forwarding(rt);
         }
+        if let Some(state) = scratch.parent() {
+            let path = state.join(FOLLOWED);
+            let tmp = state.join(format!("{FOLLOWED}.tmp"));
+            let written = serde_json::to_vec_pretty(&self.carried())
+                .map_err(std::io::Error::other)
+                .and_then(|b| std::fs::write(&tmp, b))
+                .and_then(|()| std::fs::rename(&tmp, &path));
+            if written.is_ok() {
+                *self.followed.lock().unwrap() = Some(path);
+            }
+        }
         self.follow(rt, scratch.to_path_buf());
+    }
+
+    /// No daemon follows it from now on: the note goes.
+    fn unfollow(&self) {
+        if let Some(state) = self
+            .followed
+            .lock()
+            .unwrap()
+            .take()
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+        {
+            forget_followed(&state, &self.lease);
+        }
     }
 
     /// What the next daemon needs to follow the lane after a restart
@@ -1131,6 +1182,7 @@ impl RemoteLane {
             st.ended = true;
             st.errors.insert("lease".into(), why);
         }
+        self.unfollow();
         self.listening.send_replace(false);
         self.gone.send_replace(true);
         crate::diag::warn(
@@ -1589,6 +1641,7 @@ impl RemoteLane {
     /// Stop the lane: the node stops it and removes it with its mirror.
     pub fn stop(&self, rt: &tokio::runtime::Handle) {
         self.stopped.send_replace(true);
+        self.unfollow();
         let _ = rt.block_on(self.client.release(&self.lease));
         crate::diag::info(
             "remote_lane_stopped",
@@ -1798,6 +1851,37 @@ pub fn readiness(view: &serde_json::Value, expected: &[String]) -> Option<Result
 #[cfg(test)]
 mod tests {
     use super::{NodeRef, Release, RemoteState, release_warning, tunnel_error, version};
+
+    #[test]
+    fn the_note_of_a_followed_lane_goes_only_with_its_own_lease() {
+        let state = tempfile::tempdir().unwrap();
+        assert!(super::followed(state.path()).is_none());
+        let carried = super::Carried {
+            pool: "default".into(),
+            node: NodeRef {
+                id: "n".into(),
+                name: "build-box".into(),
+                api: "https://x:1".into(),
+                devstack: None,
+            },
+            lease: "new".into(),
+            ports: vec![(8080, 9080)],
+            udp_ports: Vec::new(),
+            coordinator: None,
+        };
+        std::fs::write(
+            state.path().join(super::FOLLOWED),
+            serde_json::to_vec(&carried).unwrap(),
+        )
+        .unwrap();
+        // The lane moved to another lease: the old one's end leaves the note.
+        super::forget_followed(state.path(), "old");
+        let read = super::followed(state.path()).expect("still noted");
+        assert_eq!(read.lease, "new");
+        assert_eq!(read.node.name, "build-box");
+        super::forget_followed(state.path(), "new");
+        assert!(super::followed(state.path()).is_none());
+    }
 
     #[test]
     fn a_peer_hanging_up_is_how_a_tunnel_ends() {

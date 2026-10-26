@@ -66,7 +66,8 @@ the coordinator from the certificate), `service.name` (`devstack-daemon`,
   since 0.12.0 with the first line of their `error`).
 - The node's own lines (`service.name` `devstack-node`, since 0.12.0):
   `node_lease_admitted|refused`, `node_lane_started|not_started` (phase,
-  reason), `node_lane_stopped`, `node_lease_ended`,
+  reason), `node_lane_stopped`, `node_lease_ended` (`why`: released,
+  expired, ended by an admin),
   `node_update_refused|failed`. A remote start that failed is explained
   there when the requester's line is not enough.
 - Durations: lane starts, syncs, moves; service start times from `service`
