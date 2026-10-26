@@ -15,9 +15,12 @@ A lane on a pool node now gets what its `prepare` makes without a second
 install: its worktree here is linked to a copy from this machine's store, so
 a pre-commit hook with `npx eslint` runs there (ADR-0063), and the node keeps
 a store per member and repository, so the next lane with the same lockfile
-copies `node_modules` instead of running `npm ci` (ADR-0062). The daemon in a
-lane's container sends its own lines through its requester, under the
-member's consent (ADR-0037 addendum).
+copies `node_modules` instead of running `npm ci` (ADR-0062). With
+`[prepare] warm = ["origin/main"]` the store is filled ahead for the main
+branch, here and on the nodes the repository's lanes use (ADR-0065), and the
+dashboard shows where each `prepare` came from and what the store holds.
+The daemon in a lane's container sends its own lines through its requester,
+under the member's consent (ADR-0037 addendum).
 
 ### Added
 

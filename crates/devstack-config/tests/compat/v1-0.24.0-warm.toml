@@ -1,0 +1,20 @@
+# Frozen for 0.24.0: the store of what `prepare` makes, warmed for a ref
+# before a lane needs it (`[prepare] warm`, ADR-0065).
+version = 1
+
+[stack]
+name = "shop"
+requires = "0.24.0"
+
+[prepare]
+warm = ["origin/main"]
+
+[lanes]
+port_step = 100
+
+[services.web]
+kind = "devserver"
+cwd = "web"
+run = "npx ng serve --port {port}"
+port = 4200
+prepare = { run = "npm ci", inputs = ["web/package-lock.json"], outputs = ["web/node_modules"], link = ["web/node_modules"], version = "node --version" }

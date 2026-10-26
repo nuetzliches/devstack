@@ -66,7 +66,10 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   Name what it makes as `outputs = ["web/node_modules"]` (and `version =
   "node --version"`): the next lane with the same lockfile copies it from
   the machine's store instead of running `npm ci` again. `link` must be
-  one of `outputs` then; add `requires = "0.23.0"` to `[stack]`.
+  one of `outputs` then; add `requires = "0.23.0"` to `[stack]`. To have the
+  main branch's lockfile prepared before the first lane needs it, add
+  `[prepare] warm = ["origin/main"]` (devstack never fetches; it watches the
+  ref) and `requires = "0.24.0"`.
 - **Lanes on other machines** (`devstack up --on <node>`) run in a Linux
   container: `[lanes] image` (a toolchain image) or `[lanes] dockerfile`. Files
   git ignores do not go there unless `[lanes] sync` names them (a dev
