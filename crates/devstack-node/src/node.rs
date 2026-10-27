@@ -3537,10 +3537,18 @@ async fn background(s: Shared) {
         let by = tokio::task::spawn_blocking(move || crate::runs::use_by(&keys))
             .await
             .unwrap_or_default();
+        // The part of what is free a policy says, else half (ADR-0031 point 3).
+        let percent = {
+            let policies = s.policies();
+            let all: Vec<&crate::policy::NodePolicy> = policies.iter().collect();
+            crate::policy::NodePolicy::strictest(&all).and_then(|p| p.share_percent)
+        };
         {
+            // Half of the most this node offers its lanes (ADR-0066).
+            let cap = s.share.most_cpus(cores as f64, percent) / 2.0;
             let mut runs = s.runs.lock().unwrap();
             for (id, a) in &by {
-                runs.load(id, *a);
+                runs.load(id, *a, cap);
             }
         }
         let used = by.values().fold(Amount::default(), |a, b| Amount {
@@ -3561,12 +3569,6 @@ async fn background(s: Shared) {
             })
             .await;
         }
-        // The part of what is free a policy says, else half (ADR-0031 point 3).
-        let percent = {
-            let policies = s.policies();
-            let all: Vec<&crate::policy::NodePolicy> = policies.iter().collect();
-            crate::policy::NodePolicy::strictest(&all).and_then(|p| p.share_percent)
-        };
         let offer = Settings {
             enabled: true,
             ..s.share.clone()

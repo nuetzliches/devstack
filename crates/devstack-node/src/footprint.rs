@@ -29,6 +29,10 @@ pub struct Run {
     /// The most it took so far: CPU averaged over a minute, memory, the
     /// repository's images and its slot.
     pub peak: Need,
+    /// Its CPU is capped at half of what its node gives lanes (ADR-0066);
+    /// absent from an older node, whose CPU is not counted.
+    #[serde(default)]
+    pub capped: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +41,9 @@ struct Entry {
     /// Unix seconds, when it was last reported.
     at: u64,
     peak: Need,
+    /// Its CPU counts (ADR-0066); absent from an entry stored before.
+    #[serde(default)]
+    capped: bool,
 }
 
 pub struct Footprints {
@@ -78,9 +85,16 @@ impl Footprints {
             .or_default();
         let changed = match runs.iter_mut().find(|e| e.id == run.id) {
             Some(e) => {
-                let raised = e.peak.max(peak);
-                let changed = raised != e.peak;
+                // A node updated during the run: its capped CPU replaces
+                // the uncapped one.
+                let mut was = e.peak;
+                if run.capped && !e.capped {
+                    was.cpus = 0.0;
+                }
+                let raised = was.max(peak);
+                let changed = raised != e.peak || run.capped != e.capped;
                 e.peak = raised;
+                e.capped = run.capped;
                 e.at = now;
                 changed
             }
@@ -89,6 +103,7 @@ impl Footprints {
                     id: run.id.clone(),
                     at: now,
                     peak,
+                    capped: run.capped,
                 });
                 if runs.len() > RUNS {
                     runs.remove(0);
@@ -108,11 +123,16 @@ impl Footprints {
     }
 
     /// The most each part took in the last runs of `repo` with `profile`,
-    /// and how many runs that is; `None`: none ran in the pool yet.
+    /// and how many runs that is; `None`: none ran in the pool yet. CPU
+    /// counts from capped runs only (ADR-0066): an uncapped peak measured
+    /// how idle its node was, and could lock a repository out of the pool.
     pub fn get(&self, repo: &str, profile: Option<&str>) -> Option<(Need, usize)> {
         let by = self.by.lock().unwrap();
         let runs = by.get(&key(repo, profile)).filter(|r| !r.is_empty())?;
-        let most = runs.iter().fold(Need::default(), |a, e| a.max(e.peak));
+        let most = runs.iter().fold(Need::default(), |a, e| {
+            let cpus = if e.capped { e.peak.cpus } else { 0.0 };
+            a.max(Need { cpus, ..e.peak })
+        });
         Some((most, runs.len()))
     }
 
@@ -142,6 +162,7 @@ mod tests {
                 disk_lane,
                 ..Need::default()
             },
+            capped: true,
         }
     }
 
@@ -168,6 +189,31 @@ mod tests {
         f.save().unwrap();
         let again = Footprints::load(dir.path());
         assert_eq!(again.get("shop", None).unwrap().1, 5);
+    }
+
+    #[test]
+    fn cpu_of_an_uncapped_run_does_not_count() {
+        let dir = tempfile::tempdir().unwrap();
+        // Stored before ADR-0066: no `capped`.
+        std::fs::write(
+            dir.path().join("footprints.json"),
+            r#"{"shop\n":[{"id":"a","at":1,"peak":{"cpus":18.5,"memory":1073741824}}]}"#,
+        )
+        .unwrap();
+        let f = Footprints::load(dir.path());
+        let (n, runs) = f.get("shop", None).unwrap();
+        assert_eq!((n.cpus, n.memory, runs), (0.0, GIB, 1));
+        // An older node reports: its CPU does not count either.
+        let mut old = run("b", GIB, GIB);
+        old.peak.cpus = 18.5;
+        old.capped = false;
+        f.record(&old, 2);
+        assert_eq!(f.get("shop", None).unwrap().0.cpus, 0.0);
+        // Updated during the run: the capped CPU replaces the uncapped.
+        let mut new = run("b", GIB, GIB);
+        new.peak.cpus = 10.0;
+        assert!(f.record(&new, 3));
+        assert_eq!(f.get("shop", None).unwrap().0.cpus, 10.0);
     }
 
     #[test]

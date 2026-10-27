@@ -154,6 +154,15 @@ impl Settings {
         )
     }
 
+    /// The most CPU the machine offers its lanes, idle: `percent` of its
+    /// `cores` (half when `None`), at most `max_cpus`. A run's measured CPU
+    /// is capped at half of it (ADR-0066).
+    pub fn most_cpus(&self, cores: f64, percent: Option<u8>) -> f64 {
+        let part = f64::from(percent.unwrap_or(50).clamp(1, 100)) / 100.0;
+        let cpus = cores * part;
+        self.max_cpus.map_or(cpus, |m| cpus.min(m)).max(0.0)
+    }
+
     /// What the machine offers now, given what is `free`: `percent` of it
     /// (half when `None`), capped; nothing with the switch off.
     pub fn offer(&self, free: Amount, percent: Option<u8>) -> Amount {
@@ -236,6 +245,19 @@ pub fn idle_cpus(before: (u64, u64), after: (u64, u64), cores: usize) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_most_a_node_offers_is_its_part_of_its_cores_capped() {
+        let s = Settings::default();
+        assert_eq!(s.most_cpus(24.0, None), 12.0);
+        assert!((s.most_cpus(24.0, Some(80)) - 19.2).abs() < 1e-9);
+        let s = Settings {
+            max_cpus: Some(16.0),
+            ..Settings::default()
+        };
+        assert_eq!(s.most_cpus(24.0, Some(80)), 16.0);
+        assert_eq!(s.most_cpus(24.0, None), 12.0);
+    }
 
     #[test]
     fn gpus_are_read_from_nvidia_smi() {
