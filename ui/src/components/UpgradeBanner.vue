@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // The stack file was last brought up to date with an older devstack
 // (`[stack] reviewed`): a coding agent brings it up to date with the hub's
-// prompt, the agent skills included. One line; skills from an older devstack
-// are said here, not in SkillsBanner, while this shows. Hidden, it stays
-// hidden until the next minor devstack is installed.
+// prompt, the agent skills included: the dashboard writes no file of a
+// repository itself (ADR-0071). One line; skills from an older devstack are
+// said here, not in SkillsBanner, and hidden with it until the next minor
+// devstack is installed.
 import { computed, watch } from 'vue';
 import { skillsState, useUpgradeNotice } from '@/lib/upgradeNotice';
 import { useHub } from '@/stores/hub';
@@ -35,9 +36,6 @@ watch(
         <template v-else>{{ name }} was set up with {{ stack.upgrade.from ? `devstack ${stack.upgrade.from}` : 'an earlier devstack' }}</template></strong>, {{ stack.upgrade.current }} is installed<template v-if="skillsOlder">; the agent skills come from {{ stack.skills!.from ? `devstack ${stack.skills!.from}` : 'an earlier one' }}</template>.
     </span>
     <AgentPrompt v-if="stack.id" compact label="Bring up to date" kind="upgrade" :target="{ stack: stack.id }" />
-    <button v-if="skillsOlder" type="button" class="btn btn-ghost btn-sm" :disabled="!!stack.busy.skills" title="devstack skills install: the generated skills only, a skill the project wrote itself stays" data-testid="skills-refresh" @click="stack.refreshSkills()">
-      <span v-if="stack.busy.skills" class="spinner" /><Icon v-else name="restart" :size="14" /> Refresh skills only
-    </button>
     <button type="button" class="btn btn-ghost btn-sm btn-icon" title="Hide until the next minor devstack" aria-label="Hide" data-testid="upgrade-behind-dismiss" @click="notice.hide">
       <Icon name="x" :size="14" />
     </button>

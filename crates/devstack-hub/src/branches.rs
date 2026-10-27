@@ -8,8 +8,8 @@
 //! - `POST /hub/stacks/{id}/worktrees/remove {path}`: `git worktree remove`,
 //!   without `--force`.
 //! - `POST /hub/stacks/{id}/fetch`: `git fetch --all --prune`.
-//! - `POST /hub/stacks/{id}/worktrees/stack-file {path}`: the main working
-//!   tree's stack file, copied into a worktree that has none (ADR-0055).
+//!
+//! None of them writes a file of a repository (ADR-0071).
 //!
 //! The page names a branch the hub lists and a worktree git lists; the
 //! folder of a new one is the hub's. git never asks: no prompt, no window,
@@ -392,46 +392,6 @@ pub fn remove(repo: &Path, path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-/// The main working tree's stack file `main_file`, copied to `rel` in the
-/// linked worktree of `repo` at `path` (ADR-0055 point 4), as it is on disk:
-/// never over a file, never into the main working tree. Where it went.
-pub fn give_stack_file(
-    repo: &Path,
-    main_file: &Path,
-    rel: &Path,
-    path: &Path,
-) -> Result<PathBuf, Error> {
-    let Some(tree) = devstack_daemon::lanes::worktree_of(repo, path) else {
-        return Err(Error::Bad("not a worktree of this stack".into()));
-    };
-    if devstack_daemon::lanes::same_tree(&tree, repo) {
-        return Err(Error::Bad("the main working tree has its own".into()));
-    }
-    let to = tree.join(rel);
-    let text = std::fs::read(main_file).map_err(|e| {
-        Error::Git(format!(
-            "the main working tree's {}: {e}",
-            main_file.display()
-        ))
-    })?;
-    if let Some(p) = to.parent() {
-        std::fs::create_dir_all(p).map_err(|e| Error::Git(format!("{}: {e}", p.display())))?;
-    }
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&to)
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::AlreadyExists => {
-                Error::Git(format!("{} is there already", to.display()))
-            }
-            _ => Error::Git(format!("{}: {e}", to.display())),
-        })?;
-    f.write_all(&text)
-        .map_err(|e| Error::Git(format!("{}: {e}", to.display())))?;
-    Ok(to)
-}
-
 /// `git fetch --all --prune`, without a prompt.
 pub fn fetch(repo: &Path) -> Result<(), Error> {
     git(repo, &["fetch", "--all", "--prune"], FETCH).map_err(Error::Git)?;
@@ -578,27 +538,8 @@ mod tests {
         // Its worktree is asked, not the commit.
         let dir = add(&repo, "feat/login", None).unwrap();
         assert!(!has("feat/login"));
-        let to = give_stack_file(&repo, &repo.join("devstack.toml"), rel, &dir).unwrap();
-        assert_eq!(std::fs::read_to_string(&to).unwrap(), "version = 1");
+        std::fs::write(dir.join(rel), "version = 1").unwrap();
         assert!(has("feat/login"));
-        // Never over a file, never into the main working tree.
-        assert!(matches!(
-            give_stack_file(&repo, &repo.join("devstack.toml"), rel, &dir),
-            Err(Error::Git(_))
-        ));
-        assert!(matches!(
-            give_stack_file(&repo, &repo.join("devstack.toml"), rel, &repo),
-            Err(Error::Bad(_))
-        ));
-        assert!(matches!(
-            give_stack_file(&repo, &repo.join("devstack.toml"), rel, _tmp.path()),
-            Err(Error::Bad(_))
-        ));
-        // Below the root, where the main one is.
-        let nested = Path::new("config").join("devstack.toml");
-        let dir = add(&repo, "old", None).unwrap();
-        let to = give_stack_file(&repo, &repo.join("devstack.toml"), &nested, &dir).unwrap();
-        assert!(to.ends_with(&nested) && to.is_file());
     }
 
     #[test]

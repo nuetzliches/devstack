@@ -1,6 +1,6 @@
 # ADR-0055: A lane whose branch has no stack file runs with the main tree's, says so, and can be given one
 
-- **Status:** Accepted (2026-10-23)
+- **Status:** Accepted (2026-10-23); point 4 replaced by [ADR-0071](0071-the-dashboard-writes-no-file-of-a-repository.md) (the dashboard copies no file: point 5's prompt does it)
 - **Date:** 2026-10-23
 - **Deciders:** project owner
 - **Related:** [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (lanes are worktrees), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) (what a lane on a node is synced, `[lanes] sync`), [ADR-0046](0046-the-hub-opens-a-worktree-in-the-users-programs.md) (prompts for an agent), [ADR-0047](0047-the-dashboard-makes-a-lane-from-a-branch.md) (the dashboard makes a lane from a branch), [ADR-0050](0050-what-no-request-reports-reaches-the-dashboard-as-a-notice.md)

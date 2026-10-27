@@ -180,22 +180,9 @@ function isActive(name: string) {
         <Icon name="file" :size="18" />
         <span class="grow">
           <strong>{{ borrowedFile.branch ?? 'This worktree' }} has no devstack.toml of its own.</strong>
-          The lane runs with the main working tree's<template v-if="borrowedFile.node">, on {{ borrowedFile.node }} as well</template>. Where the branch differs, give it its own: a copy to change for the branch, and commit with it.
-          <details v-if="stack.id && hub.reachable" class="lane-file-agent">
-            <summary>Let a coding agent adapt it to the branch</summary>
-            <AgentPrompt kind="lane-file" :target="{ stack: stack.id, path: borrowedFile.path }" />
-          </details>
+          The lane runs with the main working tree's<template v-if="borrowedFile.node">, on {{ borrowedFile.node }} as well</template>. Where the branch differs, give it its own: a coding agent copies it and adapts it to the branch, to commit with it.
         </span>
-        <button
-          type="button"
-          class="btn btn-sm"
-          :disabled="!hub.reachable || !!stack.busy[`stack-file:${borrowedFile.name}`]"
-          :title="`Copy the main working tree's stack file into ${borrowedFile.path}; nothing is committed`"
-          data-testid="action-lane-stack-file"
-          @click="stack.giveStackFile(borrowedFile)"
-        >
-          <span v-if="stack.busy[`stack-file:${borrowedFile.name}`]" class="spinner" /><Icon v-else name="copy" :size="14" /> Copy the main tree's
-        </button>
+        <AgentPrompt v-if="stack.id && hub.reachable" compact label="Give it its own" kind="lane-file" :target="{ stack: stack.id, path: borrowedFile.path }" />
       </div>
       <UpgradeBanner v-if="!hubDown && stack.entry && !stack.foreign" />
       <SkillsBanner v-if="!hubDown && stack.entry && !stack.foreign" />

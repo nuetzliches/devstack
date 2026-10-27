@@ -528,6 +528,7 @@ export class MockTransport implements Transport {
         'start-failed': `The devstack stack ${target} does not start.`,
         'lane-file': `The git worktree ${url.searchParams.get('path')} has no devstack stack file of its own.`,
         mcp: `Register devstack's MCP server for the coding agents of ${target}.`,
+        skills: `Refresh the devstack agent skills of the repository at ${target}.`,
       };
       if (!kind || !what[kind]) return json(400, { error: `no prompt \`${kind}\`` });
       return json(200, { text: `${what[kind]}
@@ -541,8 +542,6 @@ export class MockTransport implements Transport {
       return empty(204);
     }
     if (p === '/hub/stacks/add' && method === 'POST') return json(200, { id: hub.stacks[0].entry.id, name: hub.stacks[0].entry.name });
-    if (p === '/hub/stacks/init' && method === 'POST')
-      return json(200, { file: `${String(body?.path)}\\devstack.toml`, services: ['api', 'web'], compose_files: ['deploy/compose.yml'], todos: 9, id: null });
     if (p === '/hub/docker/start' && method === 'POST') {
       if (hub.docker.state === 'running') return json(200, { started: null });
       hub.startDocker();
@@ -555,14 +554,11 @@ export class MockTransport implements Transport {
     if (!stack) return json(404, { error: 'unknown stack' });
     const rest = m[2] ?? '';
 
-    if (rest === '/skills' && (method === 'GET' || method === 'POST')) {
-      if (method === 'POST') {
-        await sleep(500);
-        hub.skills[stack.entry.id] = { from: MOCK_VERSION, outdated: false };
-      }
+    // The hub writes no file of a repository (ADR-0071): the skills are read only.
+    if (rest === '/skills' && method === 'GET') {
       const k = hub.skills[stack.entry.id];
       const names = ['devstack', 'devstack-config'];
-      return json(200, { found: k ? names : [], outdated: k?.outdated ? names : [], from: k?.from ?? null, current: MOCK_VERSION, ahead: false, ...(method === 'POST' ? { kept: [] } : {}) });
+      return json(200, { found: k ? names : [], outdated: k?.outdated ? names : [], from: k?.from ?? null, current: MOCK_VERSION, ahead: false });
     }
     if (rest === '/upgrade' && method === 'GET') {
       const r = hub.reviewed[stack.entry.id];
@@ -617,12 +613,6 @@ export class MockTransport implements Transport {
       await sleep(600);
       const name = String(body?.new ?? body?.branch ?? '').replace(/^origin\//, '').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
       return json(200, { path: `C:\\work\\shop.worktrees\\${name}` });
-    }
-    if (rest === '/worktrees/stack-file' && method === 'POST') {
-      await sleep(300);
-      const at = String(body?.path ?? '');
-      if (!stack.noStackFile.delete(at)) return json(409, { error: `${at}\\devstack.toml is there already` });
-      return json(200, { file: `${at}\\devstack.toml` });
     }
     if (rest === '/worktrees/remove' && method === 'POST') return json(409, { error: 'error: worktree contains modified or untracked files, use --force to delete it' });
     if (!rest.startsWith('/api/')) return json(404, { error: 'no route' });

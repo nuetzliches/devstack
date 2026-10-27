@@ -242,8 +242,8 @@ main working tree's checkout is never changed.
 **Built (unreleased, [ADR-0055](adr/0055-a-lane-without-a-stack-file-says-so-and-can-be-given-one.md)):**
 a lane whose branch has no stack file runs with the main tree's, on a node
 too (it is synced there); the branch picker and the lane's page say so, and
-the page copies the main tree's file into the worktree or starts a coding
-agent that adapts it to the branch.
+the page starts a coding agent that copies the main tree's file and adapts
+it to the branch (the copy by the page itself went with ADR-0071).
 
 ### 3.6 Daemon crash, restart and update
 

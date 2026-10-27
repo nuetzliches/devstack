@@ -642,7 +642,7 @@ export type Opener = {
 };
 
 /** The prompts the hub writes for a coding agent (`GET /hub/prompt`, ADR-0046 amendment 2026-10-22). */
-export type PromptKind = 'setup' | 'fix-file' | 'upgrade' | 'start-failed' | 'lane-file' | 'mcp';
+export type PromptKind = 'setup' | 'fix-file' | 'upgrade' | 'start-failed' | 'lane-file' | 'mcp' | 'skills';
 /** What a prompt is about: a registered stack, a folder before it is one, or a worktree of a stack (`lane-file`). */
 export type PromptTarget = { stack: string } | { path: string } | { stack: string; path: string };
 

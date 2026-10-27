@@ -582,7 +582,8 @@ fn a_stack_is_added_or_drafted_from_the_dashboard() {
         std::thread::sleep(Duration::from_millis(200));
     }
 
-    // Its agent skills: none yet; installed from the dashboard, current.
+    // Its agent skills: none yet. The dashboard does not write them
+    // (ADR-0071): the hub has no route that does.
     let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
         .as_str()
         .unwrap()
@@ -594,35 +595,35 @@ fn a_stack_is_added_or_drafted_from_the_dashboard() {
         body.contains("\"found\":[]") && body.contains("\"from\":null"),
         "{body}"
     );
-    let (s, _, _) = post(&skills, "", false);
-    assert_eq!(s, 403, "no Origin, no change");
-    let (s, _, body) = post(&skills, "", true);
-    assert_eq!(s, 200, "{body}");
-    assert!(shop.join(".claude/skills/devstack/SKILL.md").is_file());
-    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(
-        v["found"],
-        serde_json::json!([".claude/skills/devstack", ".claude/skills/devstack-config"])
-    );
-    assert_eq!(v["outdated"], serde_json::json!([]));
-    assert_eq!(v["from"], v["current"]);
+    let (s, _, _) = post(&skills, "", true);
+    assert_eq!(s, 405, "no route writes the skills");
+    assert!(!shop.join(".claude/skills").exists());
 
-    // An empty folder: a draft is written (never over an existing file).
+    // An empty folder: no draft is written either; the setup prompt has an
+    // agent run `devstack init`.
     let crm = h.home.path().join("crm");
     std::fs::create_dir_all(&crm).unwrap();
-    let (s, _, body) = post(
-        "/hub/stacks/init",
-        &format!("{{\"path\":{}}}", js(&crm.to_string_lossy())),
-        true,
-    );
-    assert_eq!(s, 200, "{body}");
-    assert!(crm.join("devstack.toml").is_file());
     let (s, _, _) = post(
         "/hub/stacks/init",
         &format!("{{\"path\":{}}}", js(&crm.to_string_lossy())),
         true,
     );
-    assert_eq!(s, 409, "an existing stack file stays");
+    assert!(s == 404 || s == 405, "{s}");
+    assert!(!crm.join("devstack.toml").exists());
+    let (s, _, body) = get(
+        p,
+        &format!(
+            "/hub/prompt?kind=setup&path={}",
+            enc(&crm.to_string_lossy())
+        ),
+        &with,
+    );
+    assert_eq!(s, 200, "{body}");
+    assert!(body.contains("devstack init"), "{body}");
+    // The skills' own prompt, for when only they are behind.
+    let (s, _, body) = get(p, &format!("/hub/prompt?kind=skills&stack={id}"), &with);
+    assert_eq!(s, 200, "{body}");
+    assert!(body.contains("devstack skills install"), "{body}");
 
     // Relative paths are refused.
     let (s, _, _) = get(p, "/hub/inspect?path=shop", &with);
@@ -1299,24 +1300,15 @@ fn the_hub_writes_the_prompts_and_starts_only_agents_with_them() {
         &with,
     );
     assert_eq!(s, 400, "not a worktree of the stack");
+    // The hub does not copy the file there itself (ADR-0071): the prompt
+    // above is the way.
     let give = format!(
         "{{\"path\":{}}}",
         serde_json::to_string(&wt.to_string_lossy()).unwrap()
     );
-    let (s, _, body) = post(&format!("/hub/stacks/{id}/worktrees/stack-file"), &give);
-    assert_eq!(s, 200, "{body}");
-    assert_eq!(
-        std::fs::read_to_string(wt.join("devstack.toml")).unwrap(),
-        std::fs::read_to_string(shop.join("devstack.toml")).unwrap()
-    );
-    let (s, _, body) = post(&format!("/hub/stacks/{id}/worktrees/stack-file"), &give);
-    assert_eq!(s, 409, "never over a file: {body}");
-    let main = format!(
-        "{{\"path\":{}}}",
-        serde_json::to_string(&shop.to_string_lossy()).unwrap()
-    );
-    let (s, _, body) = post(&format!("/hub/stacks/{id}/worktrees/stack-file"), &main);
-    assert_eq!(s, 400, "never into the main working tree: {body}");
+    let (s, _, _) = post(&format!("/hub/stacks/{id}/worktrees/stack-file"), &give);
+    assert!(s == 404 || s == 405, "{s}");
+    assert!(!wt.join("devstack.toml").exists());
 
     // The page never sends text, and only an agent that takes a prompt is
     // started: a folder opener or a program not found is refused.

@@ -106,6 +106,7 @@ list already knows can also be started with it, in the right folder.
    | `upgrade` | a stack | the devstack its stack file was last brought up to date with and this one (`/hub/stacks/{id}/upgrade`; *amended 2026-10-22*, see below) |
    | `start-failed` | a stack | the end of the last failed `devstack up` the hub ran, and its log file |
    | `mcp` | a stack | nothing read: register `devstack mcp` in the project's agent configuration (*added 2026-10-27*; offered where `/hub/stacks/{id}/mcp` finds no entry) |
+   | `skills` | a stack | nothing read: refresh the generated agent skills and hold the project's own against them (*added 2026-10-27* by [ADR-0071](0071-the-dashboard-writes-no-file-of-a-repository.md), which removed the dashboard's "Refresh skills") |
 
    A prompt the page wrote would make an agent one XSS away from running
    anything, as a command line would make the hub (point 3 above). What the

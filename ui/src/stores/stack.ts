@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { computed, ref, shallowRef, triggerRef, watch } from 'vue';
 import { api, paths, sharedRef, v1, type GroupAction, type ServiceAction, type StreamState, type Subscription } from '@/api';
 import type { Branches, LaneView, Point, Pruned, Run, ServiceView, SkillsState, StackEvent, StackView, UpgradeState, UsageReport, McpState } from '@/api/types';
-import { laneLabel, restartLanesText, restartPlan, samePath } from '@/lib/lanes';
+import { restartLanesText, restartPlan, samePath } from '@/lib/lanes';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
@@ -335,25 +335,7 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
-  /** `devstack skills install` in the stack's repository, by the hub. */
-  async function refreshSkills() {
-    const sid = id.value;
-    if (!sid) return;
-    busy.value.skills = 'install';
-    try {
-      const r = await act<SkillsState>({
-        label: 'Refresh the agent skills',
-        path: paths.skills(sid),
-        success: (b) =>
-          b?.kept?.length
-            ? `Skills written; ${b.kept.length} of the project's own kept`
-            : 'Skills written to .claude/skills: commit them with the repository',
-      });
-      if (r.ok && r.body && sid === id.value) skills.value = r.body;
-    } finally {
-      delete busy.value.skills;
-    }
-  }
+
 
   /** How far the stack file is behind this devstack (`GET /hub/stacks/{id}/upgrade`): `[stack] reviewed`, not the skills. */
   const upgrade = shallowRef<UpgradeState | null>(null);
@@ -466,27 +448,7 @@ export const useStack = defineStore('stack', () => {
     await loadLanes();
   }
 
-  /**
-   * The main working tree's stack file, copied into a lane's worktree that
-   * has none (ADR-0055): the lane then has its own, to change for its branch.
-   */
-  async function giveStackFile(l: LaneView) {
-    if (refuseReadOnly() || !id.value) return;
-    const key = `stack-file:${l.name}`;
-    busy.value[key] = 'copy';
-    try {
-      const r = await act<{ file: string }>({
-        label: `Stack file for ${laneLabel(l)}`,
-        path: paths.worktreeStackFile(id.value),
-        body: { path: l.path },
-        success: (b) =>
-          `Copied to ${b?.file ?? l.path}: change it for the branch and commit it there.${l.active !== false ? ' The lane takes it at its next start.' : ''}`,
-      });
-      if (r.ok) await Promise.all([loadLanes(), loadBranches()]);
-    } finally {
-      delete busy.value[key];
-    }
-  }
+
 
   async function resetLane(name: string) {
     if (!id.value) return;
@@ -1018,7 +980,6 @@ export const useStack = defineStore('stack', () => {
     sharedLane,
     skills,
     loadSkills,
-    refreshSkills,
     upgrade,
     loadUpgrade,
     mcp,
@@ -1027,7 +988,6 @@ export const useStack = defineStore('stack', () => {
     loadBranches,
     fetchBranches,
     newLane,
-    giveStackFile,
     removeWorktree,
     followLink,
     runningLanes,

@@ -247,24 +247,19 @@ describe('stack store', () => {
     expect(fake.requests.filter((r) => r.path === '/hub/stacks/shop/worktrees').at(-1)?.body).toEqual({ branch: 'feat/login', new: 'feat/next' });
   });
 
-  it('asks for the agent skills of the stack shown, and refreshes them', async () => {
+  it('asks for the agent skills of the stack shown, and writes none (ADR-0071)', async () => {
     const old = { found: ['devstack'], outdated: ['devstack'], from: '0.9.1', current: '0.9.8', ahead: false };
-    fake.on('/hub/stacks/shop/skills', (method) => ok(method === 'POST' ? { ...old, outdated: [], from: '0.9.8', kept: [] } : old));
+    fake.on('/hub/stacks/shop/skills', () => ok(old));
     const stack = await shownStack();
     await vi.waitFor(() => expect(stack.skills?.from).toBe('0.9.1'));
-    await stack.refreshSkills();
-    expect(fake.requests.filter((r) => r.path === '/hub/stacks/shop/skills').map((r) => r.method)).toEqual(['GET', 'POST']);
-    expect(stack.skills).toMatchObject({ outdated: [], from: '0.9.8' });
+    expect(fake.requests.filter((r) => r.path === '/hub/stacks/shop/skills').map((r) => r.method)).toEqual(['GET']);
   });
 
   it('asks how far the stack file is behind, apart from the skills', async () => {
     fake.on('/hub/stacks/shop/upgrade', () => ok({ reviewed: null, from: '0.9.1', current: '0.9.8', behind: true }));
-    fake.on('/hub/stacks/shop/skills', (method) => ok({ found: ['devstack'], outdated: [], from: '0.9.8', current: '0.9.8', ahead: false, ...(method === 'POST' ? { kept: [] } : {}) }));
     const stack = await shownStack();
     await vi.waitFor(() => expect(stack.upgrade?.behind).toBe(true));
-    await stack.refreshSkills();
     expect(stack.upgrade).toMatchObject({ behind: true, from: '0.9.1' });
-    expect(fake.requests.filter((r) => r.path === '/hub/stacks/shop/upgrade')).toHaveLength(1);
   });
 
   it('asks whether an agent configuration registers devstack mcp', async () => {
@@ -293,19 +288,6 @@ describe('stack store', () => {
     const sent = fake.requests.filter((r) => r.path === '/hub/stacks/shop/worktrees/remove');
     expect(sent.map((r) => (r.body as { path: string }).path)).toEqual(['/src/feat']);
     expect(stack.lane).toBeNull();
-  });
-
-  it("a lane without a stack file of its own gets a copy of the main tree's (ADR-0055)", async () => {
-    const stack = await shownStack();
-    const lane = { name: 'old', path: '/src/old', branch: 'old', number: 1, active: false, port_offset: 100, owns_main: false, running: 0, services: 3, main_stack_file: true };
-    fake.stream('/hub/stacks/shop/api/v1/events').handlers.onMessage({ type: 'lanes', lanes: [lane] });
-    fake.on('/hub/stacks/shop/worktrees/stack-file', ok({ file: '/src/old/devstack.toml' }));
-    fake.on('/hub/stacks/shop/branches', ok({ branches: [] }));
-    fake.on('/hub/stacks/shop/api/v1/lanes', ok([{ ...lane, main_stack_file: undefined }]));
-    await stack.giveStackFile(stack.lanes[0]);
-    const sent = fake.requests.filter((r) => r.path === '/hub/stacks/shop/worktrees/stack-file');
-    expect(sent.map((r) => r.body)).toEqual([{ path: '/src/old' }]);
-    expect(stack.lanes[0].main_stack_file).toBeUndefined();
   });
 
   it("someone else's lane gets no branches and makes none", async () => {

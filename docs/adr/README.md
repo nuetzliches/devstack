@@ -103,7 +103,7 @@ stay.
 | [0052](0052-a-restart-carries-the-lanes-over.md) | A restart of the stack carries its lanes over to the next daemon | Accepted; point 6 added 2026-10-26 (a lane on a node lost to an unclean end is said) |
 | [0053](0053-whoever-a-lane-is-shared-with-connects-to-it.md) | Whoever a lane is shared with connects to it, and disconnects again | Accepted |
 | [0054](0054-macos-is-a-developer-platform-in-preview.md) | macOS is a developer platform in preview, installed by Homebrew, checked by CI and by its testers | Accepted |
-| [0055](0055-a-lane-without-a-stack-file-says-so-and-can-be-given-one.md) | A lane whose branch has no stack file runs with the main tree's, says so, and can be given one | Accepted |
+| [0055](0055-a-lane-without-a-stack-file-says-so-and-can-be-given-one.md) | A lane whose branch has no stack file runs with the main tree's, says so, and can be given one | Accepted; point 4 replaced by ADR-0071 |
 | [0056](0056-a-lane-on-a-node-relays-its-udp-ports-through-a-tunnel-per-session.md) | A lane on a node relays its UDP ports, a tunnel per client, a datagram per frame | Accepted |
 | [0057](0057-a-port-a-container-announces-moves-inside-it-too.md) | A port a container announces moves inside the container too, and Compose is told its number | Accepted |
 | [0058](0058-a-profile-can-leave-out-containers-and-services.md) | A profile can leave out containers, whole Compose groups and services | Accepted |
@@ -118,3 +118,4 @@ stay.
 | [0067](0067-a-change-at-runtime-says-who-made-it.md) | A change at runtime says where it came from, and a journal keeps the last ones | Accepted; built 2026-10-27 (point 2 for the main slot and services) |
 | [0068](0068-a-stop-takes-the-containers-too.md) | A stop takes the stack's containers too, unless asked to keep them | Accepted |
 | [0069](0069-devstack-mcp-can-carry-the-tools-of-upstream-mcp-servers.md) | `devstack mcp` can carry the tools of upstream MCP servers, logged in once by the hub | Proposed (option A: a proxy in the hub, per user); amended 2026-10-27 (keychain via `keyring`, a file on Linux without a Secret Service) |
+| [0071](0071-the-dashboard-writes-no-file-of-a-repository.md) | The dashboard writes no file of a repository; a change to one is a prompt for a coding agent | Accepted |
