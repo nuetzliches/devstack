@@ -689,6 +689,9 @@ export type Placement = {
   memory: number;
   disk?: number;
   disk_room?: number;
+  /** What the lane would hold there, and where that comes from (its footprint, or the estimate); absent from an older coordinator. */
+  need?: { cpus: number; memory: number };
+  need_from?: string;
 };
 
 /** A node's or the pool's capacity at one moment (ADR-0036), `GET /hub/pool/history`. */

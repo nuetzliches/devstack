@@ -348,6 +348,8 @@ export class MockTransport implements Transport {
           memory: 48 * 2 ** 30,
           disk: lane === 'review-cart' ? 0 : 6 * 2 ** 30,
           disk_room: 180 * 2 ** 30,
+          need: { cpus: 2.5, memory: 6 * 2 ** 30 },
+          need_from: 'measured: the most of its last 3 runs in the pool',
         },
       ]);
     }
