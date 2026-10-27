@@ -9,6 +9,23 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **A stop takes the containers too** (ADR-0066): `devstack down`, the
+  dashboard's stop and the MCP tool `down` remove the stack's containers
+  along with its services, as stopping a lane already did; their volumes,
+  and with them the data, stay. `devstack down --keep-infra` (the box "Keep
+  its containers running" in the dashboard, `keep_infra` on the MCP tool,
+  `infra=false` on the API) leaves them running for a faster next start.
+  `--infra` is still accepted and does what `down` does now. **Breaking**
+  for a script that relied on `down` keeping the containers: it adds
+  `--keep-infra`. A restart of the stack still keeps them.
+- **Lanes that run keep only what they use** (ADR-0066): the main tree's
+  stop while lanes run used to keep every one of its containers, also with
+  `--infra`. It now removes them except the `shared` ones a lane on this
+  machine uses (ADR-0030) and those a `lanes = false` service comes
+  `after`, and says which stayed.
+
 ### Fixed
 
 - **A measured CPU need no longer locks a repository out of the pool**

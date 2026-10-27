@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
 - **Deciders:** project owner
-- **Related:** [problem statement, root cause C](../problem-statement.md#root-cause-c-an-opaque-orchestration-layer-between-host-and-services), [ADR-0014](0014-native-services-take-their-configuration-from-compose.md)
+- **Related:** [problem statement, root cause C](../problem-statement.md#root-cause-c-an-opaque-orchestration-layer-between-host-and-services), [ADR-0014](0014-native-services-take-their-configuration-from-compose.md), [ADR-0066](0066-a-stop-takes-the-containers-too.md) (a stop takes the containers too)
 
 ## Context
 

@@ -72,11 +72,15 @@ enum Cmd {
         #[arg(long)]
         yes: bool,
     },
-    /// Stop the services and the daemon; `--infra` also removes the containers.
-    /// In the main working tree, lanes that still run keep the daemon and the
-    /// infrastructure: then only the main tree's services stop.
+    /// Stop the services, remove the containers (volumes stay) and end the
+    /// daemon. In the main working tree, lanes that still run keep the daemon,
+    /// what serves them and the `shared` containers they use.
     Down {
+        /// Leave the containers running: the next `up` is faster.
         #[arg(long)]
+        keep_infra: bool,
+        /// What `down` does anyway since 0.25.0 (ADR-0066); kept for scripts.
+        #[arg(long, hide = true, conflicts_with = "keep_infra")]
         infra: bool,
         /// The lanes too: the daemon exits even while lanes run. A daemon
         /// that refuses this CLI or hangs is ended by its pid.

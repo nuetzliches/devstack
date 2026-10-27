@@ -2417,9 +2417,15 @@ fn start_up(s: &AppState, id: &str, exe: &std::path::Path, e: &StackEntry) -> Re
     Ok(())
 }
 
+fn yes() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
 struct DownQuery {
-    #[serde(default)]
+    /// The containers too, volumes kept (the default since 0.25.0,
+    /// ADR-0066); `infra=false` leaves them running. Not for a `restart`.
+    #[serde(default = "yes")]
     infra: bool,
     /// Its lanes, too: the daemon exits even while lanes run.
     #[serde(default)]
@@ -2456,12 +2462,13 @@ async fn stack_down(
         // so nothing (an `up`, a forwarded request) takes it for a daemon
         // that serves while its services stop.
         //
-        // Lanes that still run keep their daemon (ADR-0024) and the
-        // infrastructure they share (ADR-0030): then only the main tree's
-        // services stop (`200` from `down`, `409` from `shutdown`). A daemon
-        // from before this does not know `unless_lanes` and exits.
+        // Lanes that still run keep their daemon (ADR-0024), what serves
+        // them and the containers they share (ADR-0030): then only the main
+        // tree's services and its other containers stop (`200` from `down`,
+        // `409` from `shutdown`). A daemon from before this does not know
+        // `unless_lanes` and exits.
         let shutdown = || daemon_request(port, &token, Method::POST, "/v1/shutdown");
-        let exits = if q.infra {
+        let exits = if q.infra && !q.restart {
             // With `all`, the lanes stop first, their containers too, so the
             // main tree's go as well.
             let path = if q.all {
@@ -2481,7 +2488,8 @@ async fn stack_down(
             };
             match daemon_request(port, &token, Method::POST, path).await {
                 Ok(409) => {
-                    let _ = daemon_request(port, &token, Method::POST, "/v1/down").await;
+                    let _ =
+                        daemon_request(port, &token, Method::POST, "/v1/down?infra=false").await;
                     false
                 }
                 r => r.is_ok(),

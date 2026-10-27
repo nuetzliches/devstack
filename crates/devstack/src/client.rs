@@ -2060,16 +2060,16 @@ pub fn down(stack_file: &Path, infra: bool, all: bool) -> Result<()> {
     if let Some(lane) = c.lane() {
         // A lane stops its own services; the daemon and the infrastructure
         // belong to the main working tree.
-        let (status, body) = c.post("/v1/down", None)?;
+        let (status, body) = c.post(&format!("/v1/down?infra={infra}"), None)?;
         if status >= 400 {
             bail!("{}", error_text(&body));
         }
         println!("lane `{lane}` stopped");
         return Ok(());
     }
-    // `--all --infra`: the lanes stop first, their containers too, so the
-    // main tree's go as well (a daemon before 0.17.1 ignores it). Without
-    // `--infra` every container stays, the lanes' too.
+    // `--all`: the lanes stop first, their containers too, so the main
+    // tree's go as well (a daemon before 0.17.1 ignores it). With
+    // `--keep-infra` every container stays, the lanes' too.
     let (status, body) = c.post(
         &format!("/v1/down?infra={infra}&all={}", all && infra),
         None,
@@ -2077,23 +2077,37 @@ pub fn down(stack_file: &Path, infra: bool, all: bool) -> Result<()> {
     if status >= 400 {
         bail!("{}", error_text(&body));
     }
-    // Lanes that still run keep the daemon they live in (ADR-0024) and the
-    // infrastructure they share (ADR-0030).
+    // Lanes that still run keep the daemon they live in (ADR-0024), what
+    // serves them and the `shared` containers they use (ADR-0030, ADR-0066).
     let lanes = running_lanes(status, &body);
     if !lanes.is_empty() && !all {
+        let list = |key: &str| -> Vec<String> {
+            serde_json::from_str::<Value>(&body)
+                .ok()
+                .and_then(|v| serde_json::from_value(v[key].clone()).ok())
+                .unwrap_or_default()
+        };
         // What serves the lanes (`lanes = false`) runs on for them.
-        let kept: Vec<String> = serde_json::from_str::<Value>(&body)
-            .ok()
-            .and_then(|v| serde_json::from_value(v["kept"].clone()).ok())
-            .unwrap_or_default();
+        let kept = list("kept");
+        let containers = list("containers");
+        let mut stays = vec!["the daemon".to_string()];
+        if !kept.is_empty() {
+            stays.push(format!("{} that serve them", kept.join(", ")));
+        }
+        if !infra {
+            stays.push("the containers".into());
+        } else if !containers.is_empty() {
+            stays.push(format!("the containers {}", containers.join(", ")));
+        }
         println!(
-            "main working tree stopped; lanes keep running: {} (the daemon and the infrastructure stay{}; `devstack down --all` stops them too)",
-            lanes.join(", "),
-            if kept.is_empty() {
-                String::new()
+            "main working tree stopped{}; lanes keep running: {} ({} stay; `devstack down --all` stops them too)",
+            if infra {
+                ", its containers removed"
             } else {
-                format!(", and {} that serve them", kept.join(", "))
-            }
+                ""
+            },
+            lanes.join(", "),
+            stays.join(", "),
         );
         return Ok(());
     }
@@ -2122,12 +2136,10 @@ pub fn down(stack_file: &Path, infra: bool, all: bool) -> Result<()> {
     }
     println!(
         "stopped{}",
-        if infra && !lanes.is_empty() {
-            "; infrastructure keeps running, lanes were using it (`down --infra` to stop it)"
-        } else if infra {
-            ", infrastructure removed"
+        if infra {
+            ", containers removed (their volumes stay)"
         } else {
-            "; infrastructure keeps running (`down --infra` to stop it)"
+            "; containers keep running (`devstack down` removes them)"
         }
     );
     Ok(())
@@ -2172,7 +2184,7 @@ fn end_unanswering_daemon(state_dir: &Path, why: anyhow::Error, all: bool) -> Re
     // It had no chance to say it is gone.
     let _ = std::fs::remove_file(devstack_daemon::info_path(state_dir));
     println!(
-        "stopped; its services ended with it, its infrastructure keeps running (`devstack up`, then `devstack down --infra`, stops it)"
+        "stopped; its services ended with it, its containers keep running (`devstack up`, then `devstack down`, removes them)"
     );
     Ok(())
 }

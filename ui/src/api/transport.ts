@@ -65,7 +65,7 @@ export const paths = {
   stackInit: '/hub/stacks/init',
   up: (stack: string) => `/hub/stacks/${enc(stack)}/up`,
   /** `restart`: the daemon leaves its lanes to the next one (ADR-0052). */
-  down: (stack: string, infra = false, restart = false) => `/hub/stacks/${enc(stack)}/down?infra=${infra}${restart ? '&restart=true' : ''}`,
+  down: (stack: string, infra = true, restart = false) => `/hub/stacks/${enc(stack)}/down?infra=${infra}${restart ? '&restart=true' : ''}`,
   forget: (stack: string) => `/hub/stacks/${enc(stack)}`,
   branches: (stack: string) => `/hub/stacks/${enc(stack)}/branches`,
   worktrees: (stack: string) => `/hub/stacks/${enc(stack)}/worktrees`,

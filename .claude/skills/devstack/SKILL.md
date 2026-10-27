@@ -80,7 +80,7 @@ Run from the repository root (devstack looks for `devstack.toml` there; `-f` oth
 | `devstack hub notify` | the desktop notifications the hub shows (a build failed, a candidate held, a service crashed, a lane's start on a node failed) and whether they show; `on\|off <kind>…\|all`, `test`. The user's own choice: change it only when asked |
 | `devstack hub tray` | whether the tray icon runs (the hub starts it); `on\|off`. The user's own choice: change it only when asked |
 | `devstack update` | install the newest devstack (`--check` only asks); stacks switch at their next restart |
-| `devstack down` | stop the services and the daemon; containers keep running. `down --infra` removes them too. In the main tree, lanes that run keep the daemon and the infrastructure (only the main tree's services stop); `down --all` stops the lanes too: ask first, they may be someone else's |
+| `devstack down` | stop the services and the daemon and remove the containers (volumes, and with them the data, stay); `down --keep-infra` leaves the containers running. In the main tree, lanes that run keep the daemon, what serves them and the `shared` containers they use (only the main tree's services and its other containers stop); `down --all` stops the lanes too: ask first, they may be someone else's |
 
 ### Is my change live?
 

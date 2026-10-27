@@ -67,7 +67,7 @@ pub fn uninstall(yes: bool, with_coordinator: bool) -> Result<()> {
             .map(|e| format!("  {} ({})", e.name, e.repo.display()))
             .collect();
         bail!(
-            "stacks still run; stop them first (`devstack down --infra` in each):\n{}",
+            "stacks still run; stop them first (`devstack down` in each):\n{}",
             list.join("\n")
         );
     }
