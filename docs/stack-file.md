@@ -605,7 +605,10 @@ status` and the dashboard say per path `linked`, `linked (store)`,
 `preparing`, `linked (stale)` or `not linked` with why. New inputs are
 prepared in a second copy while the worktree keeps the one it has; the link
 moves once that copy is whole, and stays where it was when its `prepare`
-fails (`linked (stale)`, with why). Without `outputs` it is not linked, and
+fails (`linked (stale)`, with why). A linked directory that lost most of
+what `prepare` made (a reinstall in the worktree goes through the link into
+the lane's copy) is prepared again: for a lane here when its service next
+starts, with a notice, for a lane on a node at the next look. Without `outputs` it is not linked, and
 says so. The links go when the lane stops on its node, moves or goes; the
 copy stays for its next start.
 
