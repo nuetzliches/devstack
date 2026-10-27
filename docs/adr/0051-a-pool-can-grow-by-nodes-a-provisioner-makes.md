@@ -1,6 +1,6 @@
 # ADR-0051: A pool can grow by nodes a provisioner makes, fills them before it makes another, and gives back the idle ones
 
-- **Status:** Accepted (2026-10-27, [card](https://github.com/nuetzliches/devstack/issues/328)); revised 2026-10-26 before acceptance (nodes bound to the pool, not to one member; scaling out by placement), and 2026-10-27 on the card (the provisioner stated as a root of trust; an enrolment bound to its machine, a second use alarmed; an admin's confirmation as a pool option; a member can keep its lanes off provisioned nodes)
+- **Status:** Accepted (2026-10-27, [card](https://github.com/nuetzliches/devstack/issues/328)); revised 2026-10-26 before acceptance (nodes bound to the pool, not to one member; scaling out by placement), and 2026-10-27 on the card (the provisioner stated as a root of trust; an enrolment bound to its machine, a second use alarmed; an admin's confirmation as a pool option; a member can keep its lanes off provisioned nodes); built, noted 2026-10-27
 - **Date:** 2026-10-21
 - **Deciders:** project owner
 - **Related:** [ADR-0025](0025-a-lane-can-run-on-another-node.md) (remote lanes, their timed phases), [ADR-0027](0027-trust-between-nodes.md) (point 6: what a node trusts), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md) (a lane and its infrastructure are on one node), [ADR-0031](0031-a-coordinator-places-lanes.md) (placement, joining), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md) (admins grant nodes), [ADR-0033](0033-a-node-decides-what-runs-on-it.md) (what a node admits), [ADR-0034](0034-a-machine-can-belong-to-several-pools.md) (pools do not trust each other), [ADR-0038](0038-a-lanes-data-outlives-its-lease.md) (slots kept after a lease), [ADR-0049](0049-a-lanes-need-is-measured-disk-included.md) (a lane's need)
@@ -204,6 +204,28 @@ node; the pool's idle time), `version.rs` (`PROTOCOL`),
 `crates/devstack/src/poolcmd.rs` (`--provisioner`, `--enrol`, `members
 provision`, `node confirm`, `pool provisioned`), the pool area under `ui/`, [pool.md](../pool.md) and the
 provisioner's API in [dashboard-api.md](../dashboard-api.md).
+
+*Paths as built, noted 2026-10-27.* The contract, the pool's settings
+(`provisioning.json`), the machines (`machines.json`, the token's hash
+only) and a mock provisioner are `crates/devstack-node/src/provision.rs`;
+the coordinator's part is `coordinator.rs` (`provision_for`, `lease_wait`,
+`enrol` with `alarm`, `tend` for idle time, deletions and events,
+`rank_filling`, `provisioned_admits`); the member's flags, the
+`provisioned` mark and `enrol` are `store.rs`; `Local::enrol`,
+`lease_or_wait` and `wait` are `member.rs`; the CLI is `poolcmd.rs`
+(`node serve --provisioner`, `node provisioning`, `node confirm`, `node
+give-back`, `node members provision`, `join --enrol`, `pool provisioned`,
+the hidden `node mock-provisioner`); the tests are
+`crates/devstack-node/tests/provision.rs`. Differences from the lines
+above: the repository binding of point 2 is the node's policy (`repos`),
+set at enrolment, so `node.rs` is unchanged and enforces it as any policy;
+the token is checked in the coordinator, not `pki.rs`; `PROTOCOL` is not
+raised, since the offer keeps its shape and a requester asks to wait with
+`POST /v1/leases?wait=provision`, which one of an earlier release does not;
+the provisioner's API is in [pool.md](../pool.md#the-provisioners-api).
+Not built: pruning one stopped lane's slot after the idle time while
+other lanes run on the machine (the whole machine is given back once it
+has none).
 
 ## What this ADR does not say
 

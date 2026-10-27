@@ -291,6 +291,10 @@ enum Cmd {
         /// (ADR-0037); `devstack pool telemetry off` takes it back.
         #[arg(long)]
         telemetry: bool,
+        /// Enrol as a machine the pool's provisioner made (ADR-0051), with
+        /// the token of its request: approved and granted as a node at once.
+        #[arg(long, value_name = "TOKEN")]
+        enrol: Option<String>,
     },
     /// The pools this machine belongs to: their members, online or not, and
     /// what each shares.
@@ -364,6 +368,9 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum PoolAction {
+    /// Whether this machine's lanes may run on nodes the pool's provisioner
+    /// made (ADR-0051): `on`, `off`, or nothing to show it.
+    Provisioned { state: Option<String> },
     /// Whether this machine sends the pool's collector telemetry (ADR-0037):
     /// `on`, `off`, or nothing to show it and what is sent.
     Telemetry { state: Option<String> },
@@ -481,7 +488,36 @@ enum NodeAction {
         listen: String,
         #[arg(long)]
         dir: Option<PathBuf>,
+        /// The provisioner that makes machines for lanes no node can take
+        /// (ADR-0051), `http(s)://host:port`; its token from
+        /// `DEVSTACK_PROVISIONER_TOKEN` or `provisioner.token` in the
+        /// directory. Whoever runs it can read the lanes on its machines.
+        #[arg(long, value_name = "URL")]
+        provisioner: Option<String>,
     },
+    /// The pool's settings for provisioned nodes (ADR-0051), changed by the
+    /// options given, and the machines the coordinator asked for.
+    Provisioning(ProvisioningArgs),
+    /// Confirm a provisioned node, where the pool asks for it (`devstack
+    /// node provisioning --confirm admin`): compare its machine and address
+    /// with the provider's first.
+    Confirm {
+        node: String,
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+    /// Give a provisioned node back: its membership is revoked and its
+    /// machine deleted, its lanes with it.
+    GiveBack {
+        node: String,
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+    /// A provisioner without a cloud, to try provisioning on one machine:
+    /// each machine it makes runs `--exec` with the enrolment in its
+    /// environment, or prints how to enrol it.
+    #[command(hide = true)]
+    MockProvisioner(MockProvisionerArgs),
     /// Try a lane on a node without the daemon: lease, sync this repository,
     /// start it there, show its services until they are up (M2b; `devstack
     /// up --on` replaces it).
@@ -540,6 +576,63 @@ enum NodeAction {
     },
 }
 
+/// `devstack node provisioning`.
+#[derive(clap::Args)]
+struct ProvisioningArgs {
+    /// `pool` (a provisioned node runs every member's lanes) or `repo`
+    /// (the lanes of the repository it was made for).
+    #[arg(long)]
+    per: Option<String>,
+    /// `admin`: each provisioned node takes lanes only once an admin
+    /// confirmed it; `none`: once enrolled.
+    #[arg(long)]
+    confirm: Option<String>,
+    /// Minutes a provisioned node without a lease is kept.
+    #[arg(long)]
+    idle_minutes: Option<u64>,
+    /// Provisioned nodes at once.
+    #[arg(long)]
+    max_nodes: Option<u32>,
+    /// CPU cores of all provisioned nodes together; 0 lifts it.
+    #[arg(long)]
+    max_cpus: Option<f64>,
+    /// Memory of all provisioned nodes together, GiB; 0 lifts it.
+    #[arg(long)]
+    max_memory_gib: Option<f64>,
+    #[arg(long)]
+    dir: Option<PathBuf>,
+}
+
+/// `devstack node mock-provisioner`.
+#[derive(clap::Args)]
+struct MockProvisionerArgs {
+    #[arg(long, default_value = "127.0.0.1:4270")]
+    listen: String,
+    /// The address it names for each machine (where it enrols from).
+    #[arg(long, default_value = "127.0.0.1")]
+    address: String,
+    #[arg(long, default_value_t = 8.0)]
+    cpus: f64,
+    #[arg(long, default_value_t = 16.0)]
+    memory_gib: f64,
+    /// Seconds it estimates a machine takes.
+    #[arg(long, default_value_t = 120)]
+    estimate: u64,
+    /// Refuse every request with this reason.
+    #[arg(long)]
+    refuse: Option<String>,
+    /// Fail this many deletions first.
+    #[arg(long, default_value_t = 0)]
+    fail_deletes: u32,
+    /// The bearer token it expects.
+    #[arg(long)]
+    token: Option<String>,
+    /// What "makes" a machine: a shell command, with
+    /// `DEVSTACK_ENROL_COMMAND` (and its parts) and `DEVSTACK_MACHINE`.
+    #[arg(long)]
+    exec: Option<String>,
+}
+
 #[derive(Subcommand)]
 enum MembersAction {
     /// Every member and its state (the default).
@@ -560,6 +653,9 @@ enum MembersAction {
     /// Grant a member to run the pool's lanes (`on`), or take it back
     /// (`off`): only a granted node is placed on (ADR-0032, addendum).
     Node { member: String, state: String },
+    /// Allow a member to cause provisioning (`on`): a lane of it that no
+    /// node can take makes a machine, which costs money (ADR-0051).
+    Provision { member: String, state: String },
     /// Set a member's tags (ADR-0033), replacing its tags: `team:backend`,
     /// `customer:acme`; none clears them.
     Tags { member: String, tags: Vec<String> },

@@ -99,6 +99,31 @@ pub struct Member {
     /// addendum 2026-10-17).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub node: bool,
+    /// An admin allowed it to cause provisioning (ADR-0051 point 3): a lane
+    /// no node can take makes a machine, which costs someone money.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub provision: bool,
+    /// It keeps its lanes off provisioned nodes (ADR-0051 point 10).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_provisioned: bool,
+    /// A node a provisioner made, enrolled with a token (ADR-0051 point 6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioned: Option<Provisioned>,
+}
+
+/// What the coordinator knows of a node a provisioner made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Provisioned {
+    /// The coordinator's request it came from.
+    pub request: String,
+    /// The provider's id of the machine.
+    pub machine: String,
+    /// The address it enrolled from.
+    pub address: String,
+    /// An admin confirmed it, where the pool asks for that
+    /// (`provision_confirm = "admin"`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub confirmed: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -284,6 +309,9 @@ impl Store {
                 tags: Vec::new(),
                 policy: None,
                 node: false,
+                provision: false,
+                no_provisioned: false,
+                provisioned: None,
             };
             ms.push(m.clone());
             Ok((m, true))
@@ -493,6 +521,131 @@ impl Store {
             };
             self.log(by, "node", &m, Some(detail.into()))?;
         }
+        Ok(m)
+    }
+
+    /// Allow an approved member to cause provisioning, or take it back
+    /// (ADR-0051 point 3).
+    pub fn set_provision(&self, key: &str, on: bool, by: &str) -> Result<Member, StoreError> {
+        let (m, changed) = self.change(|ms| {
+            let i = Self::find(ms, key)?;
+            if on && ms[i].state != State::Approved {
+                return Err(StoreError::Refused(format!(
+                    "{} ({}) is {}: only an approved member starts lanes",
+                    ms[i].id,
+                    ms[i].name,
+                    ms[i].state.as_str()
+                )));
+            }
+            let changed = ms[i].provision != on;
+            ms[i].provision = on;
+            Ok(((ms[i].clone(), changed), changed))
+        })?;
+        if changed {
+            let detail = if on {
+                "may cause provisioning"
+            } else {
+                "causes no provisioning"
+            };
+            self.log(by, "provision", &m, Some(detail.into()))?;
+        }
+        Ok(m)
+    }
+
+    /// A member keeps its lanes off provisioned nodes, or lets them go there
+    /// again (ADR-0051 point 10): its own choice.
+    pub fn set_no_provisioned(&self, id: &str, off: bool) -> Result<Member, StoreError> {
+        self.change(|ms| {
+            let i = ms
+                .iter()
+                .position(|m| m.id == id)
+                .ok_or_else(|| StoreError::Unknown(id.into()))?;
+            let changed = ms[i].no_provisioned != off;
+            ms[i].no_provisioned = off;
+            Ok((ms[i].clone(), changed))
+        })
+    }
+
+    /// An admin confirms a provisioned node (ADR-0051 point 6).
+    pub fn confirm(&self, key: &str, by: &str) -> Result<Member, StoreError> {
+        let (m, changed) = self.change(|ms| {
+            let i = Self::find(ms, key)?;
+            let Some(p) = ms[i].provisioned.as_mut() else {
+                return Err(StoreError::Refused(format!(
+                    "{} ({}) is no provisioned node",
+                    ms[i].id, ms[i].name
+                )));
+            };
+            let changed = !p.confirmed;
+            p.confirmed = true;
+            Ok(((ms[i].clone(), changed), changed))
+        })?;
+        if changed {
+            let p = m.provisioned.as_ref().expect("provisioned");
+            self.log(
+                by,
+                "confirm",
+                &m,
+                Some(format!("machine {} at {}", p.machine, p.address)),
+            )?;
+        }
+        Ok(m)
+    }
+
+    /// A machine a provisioner made joins with its enrolment (ADR-0051
+    /// point 6): approved, granted as a node, marked provisioned, and (for a
+    /// pool that provisions per repository) bound to the repository by its
+    /// policy, in one step. A key that asked before is refused: a machine
+    /// enrols once, with a key of its own.
+    #[allow(clippy::too_many_arguments)]
+    pub fn enrol(
+        &self,
+        id: &str,
+        name: &str,
+        csr: &str,
+        address: &str,
+        ca: &crate::pki::Pair,
+        provisioned: Provisioned,
+        repo: Option<&str>,
+    ) -> Result<Member, StoreError> {
+        let m = self.change(|ms| {
+            if ms.iter().any(|m| m.id == id) {
+                return Err(StoreError::Refused(format!(
+                    "{id} asked to join before: a machine enrols with a key of its own"
+                )));
+            }
+            let cert = crate::pki::sign_member(ca, csr, id)?;
+            let m = Member {
+                id: id.into(),
+                name: name.into(),
+                state: State::Approved,
+                role: Role::Member,
+                requested_at: now(),
+                address: Some(address.into()),
+                csr: csr.into(),
+                cert_fp: Some(crate::pki::fingerprint(&cert)?),
+                cert: Some(cert),
+                paused: false,
+                tags: Vec::new(),
+                policy: repo.map(|r| crate::policy::NodePolicy {
+                    repos: vec![r.to_string()],
+                    ..crate::policy::NodePolicy::default()
+                }),
+                node: true,
+                provision: false,
+                no_provisioned: false,
+                provisioned: Some(provisioned),
+            };
+            ms.push(m.clone());
+            Ok((m, true))
+        })?;
+        let p = m.provisioned.as_ref().expect("provisioned");
+        self.log(
+            &format!("enrolment of request {}", p.request),
+            "enrol",
+            &m,
+            Some(format!("machine {} at {}", p.machine, address)),
+        )?;
         Ok(m)
     }
 

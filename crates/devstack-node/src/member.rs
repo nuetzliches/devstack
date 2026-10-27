@@ -3,8 +3,8 @@
 //! call to the coordinator after the first is mutual TLS with the pool's CA.
 
 use crate::coordinator::{
-    ApproveRequest, JoinAnswer, JoinRequest, LeaseOffer, LeaseRequest, MemberView, NodeView,
-    Report, RoleRequest,
+    ApproveRequest, EnrolRequest, JoinAnswer, JoinRequest, LeaseOffer, LeaseRequest, Leasing,
+    MemberView, NodeView, OnRequest, ProvisioningView, Report, RoleRequest,
 };
 use crate::pki;
 use crate::store::{AuditEntry, Role, State};
@@ -276,6 +276,30 @@ impl Local {
     /// the same key, so the request is the same; joining another pool starts
     /// over with a new key.
     pub fn join(&self, coordinator: &str, fingerprint: &str, name: &str) -> Result<Membership> {
+        self.ask(coordinator, fingerprint, name, None)
+    }
+
+    /// Join as a machine a provisioner made (ADR-0051 point 6): with the
+    /// token of its request, approved and granted as a node at once. Always
+    /// with a new key: a machine enrols once.
+    pub fn enrol(
+        &self,
+        coordinator: &str,
+        fingerprint: &str,
+        name: &str,
+        token: &str,
+    ) -> Result<Membership> {
+        let _ = std::fs::remove_file(self.path("member.key"));
+        self.ask(coordinator, fingerprint, name, Some(token))
+    }
+
+    fn ask(
+        &self,
+        coordinator: &str,
+        fingerprint: &str,
+        name: &str,
+        enrol: Option<&str>,
+    ) -> Result<Membership> {
         let coordinator = coordinator.trim_end_matches('/').to_string();
         let fp = normalise_fingerprint(fingerprint);
         if fp.len() != 64 {
@@ -311,17 +335,28 @@ impl Local {
         write_private(&self.path("ca.pem"), &ca)?;
 
         let verified = agent(tls_builder().root_certs(roots(&ca)?).build());
+        let (path, request) = match enrol {
+            None => (
+                "join",
+                serde_json::to_string(&JoinRequest {
+                    name: name.into(),
+                    csr: csr.clone(),
+                }),
+            ),
+            Some(token) => (
+                "enrol",
+                serde_json::to_string(&EnrolRequest {
+                    name: name.into(),
+                    csr: csr.clone(),
+                    token: token.into(),
+                }),
+            ),
+        };
         let a: JoinAnswer = json(&body(
             verified
-                .post(&format!("{coordinator}/v1/join"))
+                .post(&format!("{coordinator}/v1/{path}"))
                 .header("Content-Type", "application/json")
-                .send(
-                    serde_json::to_string(&JoinRequest {
-                        name: name.into(),
-                        csr: csr.clone(),
-                    })
-                    .expect("a request serialises"),
-                )?,
+                .send(request.expect("a request serialises"))?,
         )?)?;
         if a.id != id {
             return Err(MemberError::Other(format!(
@@ -453,6 +488,56 @@ impl Local {
     /// Ask the coordinator for a lane on a node (ADR-0031 point 4).
     pub fn lease(&self, r: &LeaseRequest) -> Result<LeaseOffer> {
         self.post("/v1/leases", r)
+    }
+
+    /// [`Self::lease`], waiting for a machine a provisioner makes when no
+    /// node can take the lane (ADR-0051 point 5): an offer, or the lease
+    /// that waits, to ask about with [`Self::wait`].
+    pub fn lease_or_wait(&self, r: &LeaseRequest) -> Result<Leasing> {
+        self.post("/v1/leases?wait=provision", r)
+    }
+
+    /// The lease that waits for a machine: offered, or still waiting; an
+    /// error once it cannot come.
+    pub fn wait(&self, lease: &str) -> Result<Leasing> {
+        self.get(&format!("/v1/leases/{lease}/wait"))
+    }
+
+    /// Let this member's lanes go to provisioned nodes, or keep them off
+    /// (ADR-0051 point 10).
+    pub fn set_provisioned(&self, on: bool) -> Result<()> {
+        self.put("/v1/me/provisioned", &OnRequest { on })
+    }
+
+    /// Allow a member to cause provisioning, or take it back (admins only).
+    pub fn admin_provision(&self, id: &str, on: bool) -> Result<MemberView> {
+        self.post(
+            &format!("/v1/admin/members/{id}/provision"),
+            &OnRequest { on },
+        )
+    }
+
+    /// Confirm a provisioned node (admins only).
+    pub fn admin_confirm(&self, id: &str) -> Result<MemberView> {
+        self.post(&format!("/v1/admin/nodes/{id}/confirm"), &())
+    }
+
+    /// Give a provisioned node back (admins only).
+    pub fn admin_give_back(&self, id: &str) -> Result<()> {
+        self.post::<serde_json::Value>(&format!("/v1/admin/nodes/{id}/give-back"), &())?;
+        Ok(())
+    }
+
+    /// The provisioner, the pool's settings for it, the machines (admins).
+    pub fn admin_provisioning(&self) -> Result<ProvisioningView> {
+        self.get("/v1/admin/provisioning")
+    }
+
+    pub fn admin_provisioning_set(
+        &self,
+        settings: &crate::provision::Settings,
+    ) -> Result<crate::provision::Settings> {
+        self.post("/v1/admin/provisioning", settings)
     }
 
     pub fn me(&self) -> Result<MemberView> {

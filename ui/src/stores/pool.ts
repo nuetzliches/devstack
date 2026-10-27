@@ -293,6 +293,55 @@ export const usePool = defineStore('pool', () => {
     if (r.ok) await load();
   }
 
+  /** Let a member's lanes cause provisioning (ADR-0051 point 3), or take that back. */
+  async function setProvision(id: string, name: string, on: boolean) {
+    const r = await act({
+      label: on ? `Let ${name} cause provisioning` : `No provisioning for ${name}`,
+      path: at(paths.poolProvision(id)),
+      body: { on },
+      success: on ? `${name}'s lanes may have the pool make a node` : `${name}'s lanes make no node any more`,
+    });
+    if (r.ok) await load();
+  }
+
+  /** Confirm a provisioned node (ADR-0051 point 6): it admits lanes from now on. */
+  async function confirmNode(id: string, name: string, machine: string, address: string, key?: string) {
+    const r = await act({
+      label: `Confirm ${name}`,
+      path: at(paths.poolConfirm(id)),
+      confirmText: `Confirm ${name} as the machine the provisioner made? Machine ${machine}, address ${address}${key ? `, key ${key}` : ''}: check them against the provider's console. It admits lanes from now on.`,
+      confirmLabel: 'Confirm it',
+      danger: false,
+      success: `${name} admits lanes`,
+    });
+    if (r.ok) await load();
+  }
+
+  /** Give a provisioned node back by hand (ADR-0051 point 9). */
+  async function giveBack(id: string, name: string) {
+    const lanesOn = (overview.value?.leases ?? []).filter((l) => l.node === id).length;
+    const r = await act({
+      label: `Give ${name} back`,
+      path: at(paths.poolGiveBack(id)),
+      confirmText: `Give ${name} back to its provider? The machine is deleted with all it holds${lanesOn ? `, and the ${lanesOn} lane(s) running on it end` : ''}.`,
+      confirmLabel: 'Give it back',
+      success: `${name} is given back`,
+    });
+    if (r.ok) setTimeout(() => void load(), 1500);
+  }
+
+  /** Whether this member's lanes may run on provisioned nodes (ADR-0051 point 10). */
+  async function setProvisioned(on: boolean) {
+    const r = await act({
+      label: on ? 'Lanes on provisioned nodes' : 'No lanes on provisioned nodes',
+      method: 'PUT',
+      path: at(paths.poolProvisioned),
+      body: { on },
+      success: on ? "This machine's lanes may run on provisioned nodes" : "This machine's lanes stay off provisioned nodes",
+    });
+    if (r.ok) await load();
+  }
+
   /** `null` lifts the node's policy: every member may run any lane there. */
   async function setPolicy(id: string, name: string, policy: NodePolicy | null) {
     const r = await act({
@@ -414,5 +463,9 @@ export const usePool = defineStore('pool', () => {
     setTags,
     setNode,
     setPolicy,
+    setProvision,
+    confirmNode,
+    giveBack,
+    setProvisioned,
   };
 });

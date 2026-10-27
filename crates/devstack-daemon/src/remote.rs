@@ -5,7 +5,7 @@
 //! `/v1/lanes/<name>/v1/...`, so CLI, MCP and dashboard treat it like a
 //! local lane (ADR-0025 point 6).
 
-use devstack_node::coordinator::{LeaseRequest, NodeRef};
+use devstack_node::coordinator::{LeaseRequest, Leasing, NodeRef};
 use devstack_node::member::Local;
 use devstack_node::nodeclient::{Elsewhere, HashCache, NodeClient};
 use devstack_node::version::{self, Compat, Release};
@@ -484,6 +484,39 @@ fn phase_over(lane: &str, node: &str, phase: &str, ms: u64) {
     );
 }
 
+/// Ask about a lease that waits for a machine until it is offered, saying
+/// each change of what it waits for (ADR-0051 point 5).
+fn wait_for_machine(
+    local: &devstack_node::member::Local,
+    spec: &RemoteSpec<'_>,
+    first: devstack_node::coordinator::Provisioning,
+) -> Result<devstack_node::coordinator::LeaseOffer, String> {
+    let mut p = first;
+    let mut said = String::new();
+    loop {
+        if p.why != said {
+            (spec.step)(
+                1,
+                &format!(
+                    "provision: {} ({} of at most {} s)",
+                    p.why, p.waited, p.limit
+                ),
+            );
+            crate::diag::info(
+                "remote_lane_provision",
+                serde_json::json!({ "lane": spec.name, "lease": p.id, "why": p.why,
+                    "waited": p.waited, "machine": p.machine }),
+            );
+            said = p.why.clone();
+        }
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        match local.wait(&p.id).map_err(|e| e.to_string())? {
+            Leasing::Offer(o) => return Ok(o),
+            Leasing::Provisioning(next) => p = next,
+        }
+    }
+}
+
 /// What a lane on a node is made of here, for [`RemoteLane::assemble`].
 struct Parts<'a> {
     name: &'a str,
@@ -588,19 +621,46 @@ impl RemoteLane {
             spec.scratch,
             spec.files,
         )?;
-        let offer = local
-            .lease(&LeaseRequest {
-                node,
-                repo: spec.repo.into(),
-                lane: spec.name.into(),
-                need: spec.need.need,
-                need_from: Some(spec.need.from.clone()),
-                floor: spec.floor,
-                profile: spec.profile.map(str::to_string),
-                devstack: Some(Release::this()),
-                warm: spec.warm,
-            })
-            .map_err(|e| format!("lease on `{}`: {e}", spec.on))?;
+        let request = LeaseRequest {
+            node,
+            repo: spec.repo.into(),
+            lane: spec.name.into(),
+            need: spec.need.need,
+            need_from: Some(spec.need.from.clone()),
+            floor: spec.floor,
+            profile: spec.profile.map(str::to_string),
+            devstack: Some(Release::this()),
+            warm: spec.warm,
+        };
+        // No node can take it: a machine the pool's provisioner makes,
+        // waited for (ADR-0051 point 5), as a phase of its own.
+        let offer = match local
+            .lease_or_wait(&request)
+            .map_err(|e| format!("lease on `{}`: {e}", spec.on))?
+        {
+            Leasing::Offer(o) => o,
+            Leasing::Provisioning(p) => {
+                let t = Instant::now();
+                let o = wait_for_machine(&local, spec, p)
+                    .map_err(|e| format!("lease on `{}`: {e}", spec.on))?;
+                phase_over(
+                    spec.name,
+                    &o.node.name,
+                    "provision",
+                    t.elapsed().as_millis() as u64,
+                );
+                o
+            }
+        };
+        if offer.provisioned {
+            (spec.step)(
+                1,
+                &format!(
+                    "lease on {}: a provisioned node; whoever runs the pool's provisioner can read the lane there",
+                    offer.node.name
+                ),
+            );
+        }
         // Another pool protocol misreads this machine (a newer coordinator
         // refused it already): refused here, before anything is admitted.
         // Another release, or one that does not say, is a warning
@@ -2146,6 +2206,7 @@ mod tests {
             why: None,
             need: None,
             need_from: None,
+            provisioned: false,
         }
     }
 

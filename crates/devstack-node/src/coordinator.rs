@@ -14,12 +14,20 @@
 //!   `POST /v1/admin/members/{id}/approve` `{role?}`,
 //!   `POST /v1/admin/members/{id}/remove` (also rejects a request),
 //!   `POST /v1/admin/members/{id}/role` `{role}`, `GET /v1/admin/audit`
+//! - provisioned nodes (ADR-0051): `POST /v1/leases?wait=provision` may
+//!   answer `202` with a machine on its way, `GET /v1/leases/{id}/wait` until
+//!   it is offered; `POST /v1/enrol` `{name, csr, token}` (no certificate);
+//!   `PUT /v1/me/provisioned` `{on}`; admins: `GET|POST
+//!   /v1/admin/provisioning`, `POST /v1/admin/members/{id}/provision` `{on}`,
+//!   `POST /v1/admin/nodes/{id}/confirm`, `POST /v1/admin/nodes/{id}/give-back`
 
 use crate::pki::{self, Pair};
+use crate::provision::{self, Confirm, Machine, MachineState, Per, Settings};
 use crate::store::{self, AuditEntry, Member, Role, State, Store};
 use crate::version::Release;
 use axum::extract::{Path as UrlPath, State as AxState};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
@@ -256,9 +264,34 @@ pub fn rank(
     need: crate::share::Need,
     requester: Option<&Release>,
 ) -> Vec<Placement> {
-    let mut out: Vec<(u8, f64, Placement)> = nodes
+    rank_filling(
+        nodes,
+        &std::collections::HashSet::new(),
+        member,
+        repo,
+        lane,
+        need,
+        requester,
+    )
+}
+
+/// [`rank`], with `filled` the nodes a provisioner made (ADR-0051 point 4):
+/// after the members' own nodes of the same tier, and among themselves the
+/// one with the least free capacity that takes the lane first, so lanes
+/// gather on few machines and the others empty.
+pub fn rank_filling(
+    nodes: &[(&str, &str, &Report)],
+    filled: &std::collections::HashSet<String>,
+    member: &str,
+    repo: &str,
+    lane: &str,
+    need: crate::share::Need,
+    requester: Option<&Release>,
+) -> Vec<Placement> {
+    let mut out: Vec<(u8, bool, f64, Placement)> = nodes
         .iter()
         .map(|(id, name, rep)| {
+            let fill = filled.contains(*id);
             let kept = rep
                 .slots
                 .iter()
@@ -330,10 +363,18 @@ pub fn rank(
                     1,
                     "the repository ran there (its images and builds are there)".into(),
                 ),
+                None if fill => (
+                    2,
+                    format!(
+                        "provisioned, filled before another is made: free capacity {:.1}× the lane's need",
+                        ratio
+                    ),
+                ),
                 None => (2, format!("free capacity: {:.1}× the lane's need", ratio)),
             };
             (
                 tier,
+                fill,
                 ratio,
                 Placement {
                     node: id.to_string(),
@@ -350,10 +391,15 @@ pub fn rank(
         .collect();
     out.sort_by(|a, b| {
         a.0.cmp(&b.0)
-            .then(b.1.total_cmp(&a.1))
-            .then(a.2.name.cmp(&b.2.name))
+            .then(a.1.cmp(&b.1))
+            .then(if a.1 && b.1 {
+                a.2.total_cmp(&b.2)
+            } else {
+                b.2.total_cmp(&a.2)
+            })
+            .then(a.3.name.cmp(&b.3.name))
     });
-    out.into_iter().map(|(_, _, p)| p).collect()
+    out.into_iter().map(|(_, _, _, p)| p).collect()
 }
 
 /// An admin's order that a server update its devstack (ADR-0039).
@@ -668,6 +714,87 @@ pub struct LeaseOffer {
     pub need: Option<crate::share::Need>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub need_from: Option<String>,
+    /// The node is one a provisioner made (ADR-0051 point 9): whoever runs
+    /// the provisioner can read the lane there.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub provisioned: bool,
+}
+
+/// A lease that waits for a machine a provisioner makes (ADR-0051 point
+/// 5): the answer `202` to `POST /v1/leases?wait=provision`, and to `GET
+/// /v1/leases/{id}/wait` until the lease is offered.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Provisioning {
+    /// The lease.
+    pub id: String,
+    /// `provisioning`
+    pub state: String,
+    /// Seconds waited so far, and at most.
+    pub waited: u64,
+    pub limit: u64,
+    /// What it waits for now: the machine, its enrolment, an admin.
+    pub why: String,
+    /// The provider's id of the machine, once it is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+}
+
+/// What a lease request that may wait gets: an offer, or a machine on its
+/// way.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Leasing {
+    Offer(LeaseOffer),
+    Provisioning(Provisioning),
+}
+
+/// `POST /v1/enrol`: a machine a provisioner made joins with its token.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnrolRequest {
+    pub name: String,
+    pub csr: String,
+    pub token: String,
+}
+
+/// `PUT /v1/me/provisioned`, `POST /v1/admin/members/{id}/provision`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OnRequest {
+    pub on: bool,
+}
+
+/// `GET /v1/admin/provisioning`: whether the coordinator has a
+/// provisioner, the pool's settings, and the machines it asked for.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvisioningView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioner: Option<String>,
+    pub settings: Settings,
+    pub machines: Vec<Machine>,
+}
+
+/// A provisioned node as `/v1/nodes` shows it (ADR-0051 point 9).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProvisionedView {
+    pub machine: String,
+    pub address: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<crate::share::Amount>,
+    /// When it enrolled (unix seconds).
+    pub since: u64,
+    /// Seconds until it is given back, while it has no lease.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_left: Option<u64>,
+    /// It admits no lease until an admin confirms it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unconfirmed: bool,
+    /// Its certificate's SHA-256: the key it enrolled with, what an admin
+    /// compares before confirming it (ADR-0051 point 6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// The repository it runs lanes of, when the pool provisions per
+    /// repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
 
 /// A lease as the coordinator keeps it.
@@ -809,6 +936,9 @@ pub struct NodeView {
     /// lanes), from its last report; `unknown` before one.
     #[serde(default)]
     pub kind: String,
+    /// A node a provisioner made (ADR-0051 point 9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioned: Option<ProvisionedView>,
 }
 
 /// Whether a requester and a node work together: the same pool protocol,
@@ -872,6 +1002,15 @@ pub struct MemberView {
     /// An admin granted it to run the pool's lanes.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub node: bool,
+    /// It may cause provisioning (ADR-0051 point 3).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub provision: bool,
+    /// It keeps its lanes off provisioned nodes (ADR-0051 point 10).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_provisioned: bool,
+    /// A node a provisioner made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioned: Option<store::Provisioned>,
 }
 
 impl From<&Member> for MemberView {
@@ -886,6 +1025,9 @@ impl From<&Member> for MemberView {
             tags: m.tags.clone(),
             policy: m.policy.clone(),
             node: m.node,
+            provision: m.provision,
+            no_provisioned: m.no_provisioned,
+            provisioned: m.provisioned.clone(),
         }
     }
 }
@@ -1036,6 +1178,33 @@ struct Inner {
     telemetry_slots: Arc<tokio::sync::Semaphore>,
     /// Join requests by address, in the last minute.
     joins: Mutex<HashMap<std::net::IpAddr, std::collections::VecDeque<std::time::Instant>>>,
+    /// The provisioner, if the coordinator has one (ADR-0051).
+    provisioner: Option<provision::Provisioner>,
+    /// The machines it asked for, as `machines.json` keeps them.
+    machines: Mutex<Vec<Machine>>,
+    /// Leases that wait for a machine, by lease id.
+    waits: Mutex<HashMap<String, Wait>>,
+    /// Leases on provisioned nodes told to the provisioner as begun, by
+    /// lease id: the machine's request and id, and the lease.
+    begun: Mutex<HashMap<String, (String, String, provision::LeaseEvent)>>,
+    /// Where members reach the coordinator (`https://host:port`), and its
+    /// CA's fingerprint: what an enrolment names.
+    public_url: String,
+    fingerprint: String,
+}
+
+/// A lease that waits for a machine (ADR-0051 point 5).
+#[derive(Debug, Clone)]
+struct Wait {
+    member: String,
+    /// The request, its need settled.
+    request: LeaseRequest,
+    need_from: String,
+    /// The machine's request id.
+    machine: String,
+    token: String,
+    started: std::time::Instant,
+    limit: Duration,
 }
 
 use crate::tls::Peer;
@@ -1094,6 +1263,16 @@ fn router(shared: Shared) -> Router {
             get(|AxState(s): AxState<Shared>| async move { s.ca_pem.clone() }),
         )
         .route("/v1/join", post(join))
+        .route("/v1/enrol", post(enrol))
+        .route("/v1/me/provisioned", axum::routing::put(me_provisioned))
+        .route("/v1/leases/{id}/wait", get(lease_wait))
+        .route(
+            "/v1/admin/provisioning",
+            get(admin_provisioning).post(admin_provisioning_set),
+        )
+        .route("/v1/admin/members/{id}/provision", post(admin_provision))
+        .route("/v1/admin/nodes/{id}/confirm", post(admin_confirm))
+        .route("/v1/admin/nodes/{id}/give-back", post(admin_give_back))
         .route("/v1/join/{id}", get(join_state))
         .route("/v1/me", get(me))
         .route("/v1/members", get(members))
@@ -1137,21 +1316,7 @@ async fn join(
 ) -> ApiResult<Json<JoinAnswer>> {
     // Anyone may ask: by address, a few times a minute; a request of
     // reasonable size; a bounded number waiting.
-    {
-        let mut joins = s.joins.lock().unwrap();
-        joins.retain(|_, at| {
-            at.retain(|t| t.elapsed() < Duration::from_secs(60));
-            !at.is_empty()
-        });
-        let at = joins.entry(peer.addr.ip()).or_default();
-        if at.len() >= JOINS_PER_MINUTE {
-            return Err((
-                StatusCode::TOO_MANY_REQUESTS,
-                "too many join requests from this address: wait a minute".into(),
-            ));
-        }
-        at.push_back(std::time::Instant::now());
-    }
+    throttle(&s, &peer)?;
     if r.csr.len() > MAX_CSR {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -1178,6 +1343,24 @@ async fn join(
         .request(&id, name.trim(), &r.csr, Some(&peer.addr.ip().to_string()))
         .map_err(internal)?;
     Ok(Json(answer(&m)))
+}
+
+/// A few joins (and enrolments) a minute per address.
+fn throttle(s: &Inner, peer: &Peer) -> ApiResult<()> {
+    let mut joins = s.joins.lock().unwrap();
+    joins.retain(|_, at| {
+        at.retain(|t| t.elapsed() < Duration::from_secs(60));
+        !at.is_empty()
+    });
+    let at = joins.entry(peer.addr.ip()).or_default();
+    if at.len() >= JOINS_PER_MINUTE {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many join requests from this address: wait a minute".into(),
+        ));
+    }
+    at.push_back(std::time::Instant::now());
+    Ok(())
 }
 
 fn answer(m: &Member) -> JoinAnswer {
@@ -1361,12 +1544,54 @@ async fn report(
     }))
 }
 
+/// What `/v1/nodes` says of a provisioned node.
+fn provisioned_view(m: &Member, machines: &[Machine], s: &Settings) -> Option<ProvisionedView> {
+    let p = m.provisioned.as_ref()?;
+    let machine = machines.iter().find(|x| x.request == p.request);
+    Some(ProvisionedView {
+        machine: p.machine.clone(),
+        address: p.address.clone(),
+        size: machine.and_then(|x| x.size),
+        since: m.requested_at,
+        idle_left: machine
+            .and_then(|x| x.idle_since)
+            .map(|since| (s.idle_minutes * 60).saturating_sub(store::now().saturating_sub(since))),
+        unconfirmed: s.confirm == Confirm::Admin && !p.confirmed,
+        key: m.cert_fp.clone(),
+        repo: machine.and_then(|x| x.repo.clone()),
+    })
+}
+
+/// Whether a provisioned node `m` may take a lane of `me` now: the member
+/// does not keep its lanes off them, and an admin confirmed it where the
+/// pool asks for that.
+fn provisioned_admits(m: &Member, me: &Member, s: &Settings) -> std::result::Result<(), String> {
+    let Some(p) = &m.provisioned else {
+        return Ok(());
+    };
+    if me.no_provisioned {
+        return Err(format!(
+            "{} is a provisioned node, and you keep your lanes off them (`devstack pool provisioned on`)",
+            m.name
+        ));
+    }
+    if s.confirm == Confirm::Admin && !p.confirmed {
+        return Err(format!(
+            "{} waits for an admin to confirm it (`devstack node confirm {}`)",
+            m.name, m.id
+        ));
+    }
+    Ok(())
+}
+
 async fn nodes(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
 ) -> ApiResult<Json<Vec<NodeView>>> {
     member(&s, &peer)?;
     let ms = s.store.list().map_err(internal)?;
+    let settings = Settings::load(&s.dir);
+    let machines = s.machines.lock().unwrap().clone();
     let reports = s.reports.lock().unwrap();
     Ok(Json(
         ms.iter()
@@ -1375,6 +1600,7 @@ async fn nodes(
                 let r = reports.get(&m.id);
                 let age = r.map(|(at, _)| at.elapsed());
                 NodeView {
+                    provisioned: provisioned_view(m, &machines, &settings),
                     id: m.id.clone(),
                     name: m.name.clone(),
                     online: age.is_some_and(|a| a < ONLINE_FOR),
@@ -1448,9 +1674,11 @@ fn placement_for(
             (id.clone(), (*at, rep))
         })
         .collect();
+    let settings = Settings::load(&s.dir);
     let nodes: Vec<(&str, &str, &Report)> = ms
         .iter()
         .filter(|m| m.state == State::Approved && m.node && !m.paused && m.id != me.id)
+        .filter(|m| provisioned_admits(m, me, &settings).is_ok())
         .filter(|m| {
             m.policy
                 .as_ref()
@@ -1461,8 +1689,14 @@ fn placement_for(
             (at.elapsed() < ONLINE_FOR).then_some((m.id.as_str(), m.name.as_str(), rep))
         })
         .collect();
-    rank(
+    let filled: std::collections::HashSet<String> = ms
+        .iter()
+        .filter(|m| m.provisioned.is_some())
+        .map(|m| m.id.clone())
+        .collect();
+    rank_filling(
         &nodes,
+        &filled,
         &me.id,
         &r.repo,
         &r.lane,
@@ -1515,11 +1749,21 @@ struct PlacementQuery {
     profile: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct LeaseQuery {
+    /// `provision`: the requester waits for a machine when no node can take
+    /// the lane (ADR-0051 point 5); an older requester does not ask, and is
+    /// refused as before.
+    #[serde(default)]
+    wait: Option<String>,
+}
+
 async fn lease_create(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
+    axum::extract::Query(q): axum::extract::Query<LeaseQuery>,
     Json(mut r): Json<LeaseRequest>,
-) -> ApiResult<Json<LeaseOffer>> {
+) -> ApiResult<Response> {
     let me = member(&s, &peer)?;
     crate::policy::valid_lease_names(&r.repo, &r.lane).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     // What the lane's repository took in the pool, at least what its stack
@@ -1535,7 +1779,10 @@ async fn lease_create(
         .lock()
         .unwrap()
         .values()
-        .filter(|(l, _, at)| l.member == me.id && l.state == "offered" && at.elapsed() < OFFER_FOR)
+        .filter(|(l, _, at)| {
+            l.member == me.id
+                && (l.state == "offered" && at.elapsed() < OFFER_FOR || l.state == "provisioning")
+        })
         .count();
     if offered >= MAX_OFFERS {
         return Err((
@@ -1544,11 +1791,6 @@ async fn lease_create(
         ));
     }
     let ms = s.store.list().map_err(internal)?;
-    let pick = |f: &dyn Fn(&Member) -> bool| -> Vec<&Member> {
-        ms.iter()
-            .filter(|m| m.state == State::Approved && f(m))
-            .collect()
-    };
     // No node named (`pool`): the coordinator places the lane (ADR-0031
     // point 4, in the order of ADR-0026 point 3): of the nodes an admin
     // granted that are online, run lanes, share, are not paused and offer
@@ -1561,18 +1803,50 @@ async fn lease_create(
             p.node
         });
         let Some(id) = best else {
-            return Err((
-                StatusCode::CONFLICT,
-                format!(
-                    "no node of the pool can take the lane now ({:.1} CPU, {} MiB, {} of disk; {need_from}): none online, sharing, with that much free and a devstack that works with the requester's",
-                    r.need.cpus,
-                    r.need.memory >> 20,
-                    gib(r.need.disk())
-                ),
-            ));
+            let refused = format!(
+                "no node of the pool can take the lane now ({:.1} CPU, {} MiB, {} of disk; {need_from}): none online, sharing, with that much free and a devstack that works with the requester's",
+                r.need.cpus,
+                r.need.memory >> 20,
+                gib(r.need.disk())
+            );
+            // A machine a provisioner makes, for a requester that waits
+            // for one (ADR-0051 point 3); a warm lease never makes one.
+            if q.wait.as_deref() == Some("provision") && !r.warm && s.provisioner.is_some() {
+                return provision_for(&s, &me, r, need_from, refused).await;
+            }
+            return Err((StatusCode::CONFLICT, refused));
         };
         r.node = id;
     }
+    let offer = offer(
+        &s,
+        &ms,
+        &me,
+        r,
+        need_from,
+        why,
+        (random_hex(8), random_hex(24)),
+    )?;
+    Ok(Json(offer).into_response())
+}
+
+/// Offer `r` (its need settled) on the node it names, as lease `id` with
+/// `token`: checked against the node's last report and what other offers
+/// hold there, and recorded in the same step.
+fn offer(
+    s: &Shared,
+    ms: &[Member],
+    me: &Member,
+    mut r: LeaseRequest,
+    need_from: String,
+    why: Option<String>,
+    (id, token): (String, String),
+) -> ApiResult<LeaseOffer> {
+    let pick = |f: &dyn Fn(&Member) -> bool| -> Vec<&Member> {
+        ms.iter()
+            .filter(|m| m.state == State::Approved && f(m))
+            .collect()
+    };
     let mut hits = pick(&|m| m.id == r.node || m.id.starts_with(&r.node));
     if hits.is_empty() {
         hits = pick(&|m| m.name.eq_ignore_ascii_case(&r.node));
@@ -1592,6 +1866,9 @@ async fn lease_create(
             ));
         }
     };
+    if let Err(why) = provisioned_admits(&node, me, &Settings::load(&s.dir)) {
+        return Err((StatusCode::FORBIDDEN, why));
+    }
     let (api, rep, node_release) = {
         let reports = s.reports.lock().unwrap();
         let Some((at, rep)) = reports
@@ -1649,8 +1926,6 @@ async fn lease_create(
     // Checked and offered in one step, less what other offers for the node
     // hold until it admits them: two requests between two reports cannot
     // both be offered the same room (ADR-0026 point 4).
-    let id = random_hex(8);
-    let token = random_hex(24);
     {
         let mut leases = s.leases.lock().unwrap();
         let rep = less_offered(&rep, offered_need(&leases, &node.id));
@@ -1674,9 +1949,9 @@ async fn lease_create(
         let lease = Lease {
             id: id.clone(),
             node: node.id.clone(),
-            member: me.id,
-            repo: r.repo,
-            lane: r.lane,
+            member: me.id.clone(),
+            repo: std::mem::take(&mut r.repo),
+            lane: std::mem::take(&mut r.lane),
             need: r.need,
             disk: p.disk,
             state: "offered".into(),
@@ -1690,10 +1965,11 @@ async fn lease_create(
             (lease, token.clone(), std::time::Instant::now()),
         );
     }
-    Ok(Json(LeaseOffer {
+    Ok(LeaseOffer {
         why,
         id,
         token,
+        provisioned: node.provisioned.is_some(),
         node: NodeRef {
             id: node.id,
             name: node.name,
@@ -1701,9 +1977,301 @@ async fn lease_create(
             devstack: node_release,
         },
         coordinator: Some(Release::this()),
-        need: Some(need),
+        need: Some(r.need),
         need_from: Some(need_from),
-    }))
+    })
+}
+
+/// No node can take `r`: have a machine made for it, or join one on its
+/// way that holds it too, and answer `202` with the lease that waits for
+/// it (ADR-0051 points 3 and 5). Refused, with `refused` and why, when the
+/// member may not cause provisioning, keeps off provisioned nodes, a cap
+/// holds, or the provisioner refuses.
+async fn provision_for(
+    s: &Shared,
+    me: &Member,
+    r: LeaseRequest,
+    need_from: String,
+    refused: String,
+) -> ApiResult<Response> {
+    let no = |why: String| {
+        Err((
+            StatusCode::CONFLICT,
+            format!("{refused}; no node is provisioned for it: {why}"),
+        ))
+    };
+    let Some(provisioner) = s.provisioner.clone() else {
+        return Err((StatusCode::CONFLICT, refused));
+    };
+    if !me.provision {
+        return no(format!(
+            "{} ({}) may not cause provisioning (an admin: `devstack node members provision {} on`)",
+            me.name, me.id, me.id
+        ));
+    }
+    if me.no_provisioned {
+        return no(
+            "you keep your lanes off provisioned nodes (`devstack pool provisioned on`)".into(),
+        );
+    }
+    let settings = Settings::load(&s.dir);
+    let repo = (settings.per == Per::Repo).then(|| r.repo.clone());
+    // A machine on its way that holds this lane too, with the lanes that
+    // wait for it already: wait for it rather than make another.
+    let joined = {
+        let machines = s.machines.lock().unwrap();
+        let waits = s.waits.lock().unwrap();
+        machines
+            .iter()
+            .filter(|m| m.state == MachineState::Provisioning && m.repo == repo)
+            .find(|m| {
+                let Some(size) = m.size else { return false };
+                let (cpus, memory) = waits.values().filter(|w| w.machine == m.request).fold(
+                    (r.need.cpus, r.need.memory),
+                    |(c, b), w| {
+                        (
+                            c + w.request.need.cpus,
+                            b.saturating_add(w.request.need.memory),
+                        )
+                    },
+                );
+                size.cpus >= cpus && size.memory >= memory
+            })
+            .map(|m| (m.request.clone(), m.deadline))
+    };
+    let (request, deadline) = match joined {
+        Some(j) => j,
+        None => {
+            let request = random_hex(8);
+            let token = random_hex(24);
+            let created = store::now();
+            {
+                let mut machines = s.machines.lock().unwrap();
+                if let Err(e) = provision::within_caps(&settings, &machines, &r.need) {
+                    return no(e);
+                }
+                machines.push(Machine {
+                    request: request.clone(),
+                    machine: String::new(),
+                    address: String::new(),
+                    size: None,
+                    repo: repo.clone(),
+                    state: MachineState::Provisioning,
+                    requester: me.id.clone(),
+                    created,
+                    deadline: created + provision::MAX_WAIT,
+                    token_hash: provision::token_hash(&token),
+                    member: None,
+                    idle_since: None,
+                    alarm: None,
+                    error: None,
+                });
+                save_machines(s, &machines);
+            }
+            let ask = provision::MachineRequest {
+                request: request.clone(),
+                need: r.need,
+                repo: repo.clone(),
+                devstack: Release::this(),
+                enrol: provision::Enrolment {
+                    command: format!(
+                        "devstack join {} --fingerprint {} --enrol {token}",
+                        s.public_url, s.fingerprint
+                    ),
+                    coordinator: s.public_url.clone(),
+                    fingerprint: s.fingerprint.clone(),
+                    token,
+                    expires_in: provision::MAX_WAIT,
+                },
+            };
+            let answer = tokio::task::spawn_blocking(move || provisioner.request(&ask))
+                .await
+                .map_err(internal)?;
+            let mut machines = s.machines.lock().unwrap();
+            let Some(m) = machines.iter_mut().find(|m| m.request == request) else {
+                return no("the machine was given back meanwhile".into());
+            };
+            let address = match &answer {
+                Ok(a) => a
+                    .address
+                    .as_deref()
+                    .and_then(|x| x.parse::<std::net::IpAddr>().ok()),
+                Err(_) => None,
+            };
+            let why = match (&answer, address) {
+                (Err(e), _) => Some(e.clone()),
+                (Ok(a), _) if !a.accepted => Some(format!(
+                    "the provisioner refused: {}",
+                    a.reason.as_deref().unwrap_or("it gave no reason")
+                )),
+                (Ok(_), None) => Some(
+                    "the provisioner named no IP address for the machine, so it could not enrol"
+                        .into(),
+                ),
+                _ => None,
+            };
+            let a = answer.unwrap_or_default();
+            m.machine = a.machine.clone().unwrap_or_default();
+            if let Some(why) = why {
+                // Made, but of no use: given back by `tend`.
+                if m.machine.is_empty() {
+                    machines.retain(|m| m.request != request);
+                } else {
+                    m.state = MachineState::Returning;
+                }
+                save_machines(s, &machines);
+                return no(why);
+            }
+            m.address = address.expect("checked").to_canonical().to_string();
+            m.size = a.size;
+            m.deadline = created + provision::wait_for(a.estimate);
+            let deadline = m.deadline;
+            save_machines(s, &machines);
+            (request, deadline)
+        }
+    };
+    let id = random_hex(8);
+    let limit = Duration::from_secs(deadline.saturating_sub(store::now()));
+    {
+        let mut leases = s.leases.lock().unwrap();
+        leases.insert(
+            id.clone(),
+            (
+                Lease {
+                    id: id.clone(),
+                    node: String::new(),
+                    member: me.id.clone(),
+                    repo: r.repo.clone(),
+                    lane: r.lane.clone(),
+                    need: r.need,
+                    disk: 0,
+                    state: "provisioning".into(),
+                    created: store::now(),
+                    expires_in: None,
+                    shared: None,
+                    warm: false,
+                },
+                random_hex(24),
+                std::time::Instant::now(),
+            ),
+        );
+    }
+    s.waits.lock().unwrap().insert(
+        id.clone(),
+        Wait {
+            member: me.id.clone(),
+            request: r,
+            need_from,
+            machine: request,
+            token: random_hex(24),
+            started: std::time::Instant::now(),
+            limit,
+        },
+    );
+    let p = waiting(s, &id).expect("just inserted");
+    Ok((StatusCode::ACCEPTED, Json(Leasing::Provisioning(p))).into_response())
+}
+
+fn save_machines(s: &Inner, machines: &[Machine]) {
+    if let Err(e) = provision::save_machines(&s.dir, machines) {
+        eprintln!("coordinator: machines.json: {e}");
+    }
+}
+
+/// How the lease `id` that waits for a machine stands, for its requester.
+fn waiting(s: &Inner, id: &str) -> Option<Provisioning> {
+    let w = s.waits.lock().unwrap().get(id).cloned()?;
+    let m = s
+        .machines
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|m| m.request == w.machine)
+        .cloned();
+    let why = match &m {
+        Some(m) if m.member.is_some() => "the machine has enrolled; its node agent reports".into(),
+        Some(m) if !m.machine.is_empty() => format!(
+            "the provisioner makes machine {}; it enrols from {}",
+            m.machine, m.address
+        ),
+        _ => "the provisioner is asked for a machine".into(),
+    };
+    Some(Provisioning {
+        id: id.into(),
+        state: "provisioning".into(),
+        waited: w.started.elapsed().as_secs(),
+        limit: w.limit.as_secs(),
+        why,
+        machine: m.map(|m| m.machine).filter(|x| !x.is_empty()),
+    })
+}
+
+/// `GET /v1/leases/{id}/wait` (the requester): the lease that waits for a
+/// machine, offered once the machine has enrolled, reports and (where the
+/// pool asks for it) an admin confirmed it; `409` with why once it can no
+/// longer come (the limit passed, the machine was given back).
+async fn lease_wait(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<Json<Leasing>> {
+    let me = member(&s, &peer)?;
+    let Some(w) = s
+        .waits
+        .lock()
+        .unwrap()
+        .get(&id)
+        .filter(|w| w.member == me.id)
+        .cloned()
+    else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("no lease `{id}` of yours waits for a machine"),
+        ));
+    };
+    let fail = |why: String| {
+        s.waits.lock().unwrap().remove(&id);
+        s.leases.lock().unwrap().remove(&id);
+        Err((StatusCode::CONFLICT, why))
+    };
+    let machine = s
+        .machines
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|m| m.request == w.machine)
+        .cloned();
+    let Some(m) = machine.filter(|m| m.state != MachineState::Returning) else {
+        return fail("the machine made for the lane was given back".into());
+    };
+    if w.started.elapsed() > w.limit {
+        return fail(format!(
+            "the machine did not come within {} s; it is given back",
+            w.limit.as_secs()
+        ));
+    }
+    let mut p = waiting(&s, &id).expect("waits");
+    if let Some(node) = &m.member {
+        let ms = s.store.list().map_err(internal)?;
+        let mut r = w.request.clone();
+        r.node = node.clone();
+        match offer(
+            &s,
+            &ms,
+            &me,
+            r,
+            w.need_from.clone(),
+            Some(format!("provisioned for it: machine {}", m.machine)),
+            (id.clone(), w.token.clone()),
+        ) {
+            Ok(o) => {
+                s.waits.lock().unwrap().remove(&id);
+                return Ok(Json(Leasing::Offer(o)));
+            }
+            Err((_, why)) => p.why = why,
+        }
+    }
+    Ok(Json(Leasing::Provisioning(p)))
 }
 
 #[derive(Deserialize)]
@@ -2166,6 +2734,420 @@ async fn admin_prune(
     Ok(StatusCode::ACCEPTED)
 }
 
+/// `POST /v1/enrol` (no certificate): a machine a provisioner made joins
+/// with the token of its request (ADR-0051 point 6), from the address the
+/// provisioner named for it, once. It is approved, granted as a node and
+/// marked provisioned in one step. A second use of the token, or one from
+/// another address, is an alarm: the node enrolled with it is revoked, its
+/// machine given back, and the pool's admins see both addresses.
+async fn enrol(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    Json(r): Json<EnrolRequest>,
+) -> ApiResult<Json<JoinAnswer>> {
+    throttle(&s, &peer)?;
+    if r.csr.len() > MAX_CSR || r.token.len() > 256 {
+        return Err((StatusCode::BAD_REQUEST, "the request is too large".into()));
+    }
+    let id = pki::member_id(&r.csr).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let from = peer.addr.ip().to_canonical();
+    let hash = provision::token_hash(&r.token);
+    let mut machines = s.machines.lock().unwrap();
+    let Some(m) = machines
+        .iter_mut()
+        .find(|m| !m.token_hash.is_empty() && crate::tls::same(&m.token_hash, &hash))
+    else {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "no enrolment with this token: it is used up, expired or never was".into(),
+        ));
+    };
+    let expected = m.address.parse::<std::net::IpAddr>().ok();
+    let second = m.member.is_some() || m.alarm.is_some();
+    let elsewhere = expected.is_some_and(|a| a != from);
+    if second || elsewhere {
+        let why = if second {
+            format!(
+                "the enrolment token of machine {} was used again, from {from} (it enrolled from {})",
+                if m.machine.is_empty() {
+                    &m.request
+                } else {
+                    &m.machine
+                },
+                if m.address.is_empty() {
+                    "-"
+                } else {
+                    &m.address
+                }
+            )
+        } else {
+            format!(
+                "an enrolment for machine {} came from {from}, not from {}, the address the provisioner named",
+                m.machine, m.address
+            )
+        };
+        alarm(&s, m, why);
+        save_machines(&s, &machines);
+        return Err((
+            StatusCode::FORBIDDEN,
+            "this enrolment is refused; the pool's admins are told".into(),
+        ));
+    }
+    if expected.is_none() {
+        return Err((
+            StatusCode::CONFLICT,
+            "not yet: the provisioner has not named this machine; try again in a moment".into(),
+        ));
+    }
+    // Too late: the machine is given back already, or is past its time.
+    if m.state != MachineState::Provisioning || store::now() > m.deadline {
+        return Err((StatusCode::FORBIDDEN, "this enrolment has expired".into()));
+    }
+    let name: String = r
+        .name
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(64)
+        .collect();
+    let ca = ca(&s.dir).map_err(internal)?;
+    let joined = s
+        .store
+        .enrol(
+            &id,
+            name.trim(),
+            &r.csr,
+            &from.to_string(),
+            &ca,
+            store::Provisioned {
+                request: m.request.clone(),
+                machine: m.machine.clone(),
+                address: m.address.clone(),
+                confirmed: false,
+            },
+            m.repo.as_deref(),
+        )
+        .map_err(store_err)?;
+    m.member = Some(joined.id.clone());
+    m.state = MachineState::Ready;
+    let ready = provision::Event {
+        kind: "node_ready".into(),
+        request: m.request.clone(),
+        machine: m.machine.clone(),
+        at: store::now(),
+        size: m.size,
+        lease: None,
+    };
+    save_machines(&s, &machines);
+    drop(machines);
+    tell(&s, vec![ready]);
+    Ok(Json(answer(&joined)))
+}
+
+/// Raise an alarm on machine `m`: its node (if one enrolled) is revoked, it
+/// is given back, and the leases that wait for it fail.
+fn alarm(s: &Inner, m: &mut Machine, why: String) {
+    eprintln!("coordinator: ALARM: {why}");
+    if let Some(node) = &m.member {
+        let by = "coordinator (enrolment alarm)";
+        let _ = s.store.record(by, "alarm", node, Some(why.clone()));
+        let _ = s.store.remove(node, by);
+        s.reports.lock().unwrap().remove(node);
+    }
+    m.alarm = Some(why);
+    m.state = MachineState::Returning;
+}
+
+/// Tell the provisioner what happened, off the request: a failure is
+/// logged, nothing waits for it.
+fn tell(s: &Inner, events: Vec<provision::Event>) {
+    let Some(p) = s.provisioner.clone() else {
+        return;
+    };
+    if events.is_empty() {
+        return;
+    }
+    tokio::task::spawn_blocking(move || {
+        for e in events {
+            if let Err(err) = p.event(&e) {
+                eprintln!("coordinator: event {} of {}: {err}", e.kind, e.machine);
+            }
+        }
+    });
+}
+
+/// `PUT /v1/me/provisioned` `{on}`: the caller lets its lanes go to
+/// provisioned nodes, or keeps them off (ADR-0051 point 10).
+async fn me_provisioned(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    Json(o): Json<OnRequest>,
+) -> ApiResult<Json<MemberView>> {
+    let me = member(&s, &peer)?;
+    let m = s
+        .store
+        .set_no_provisioned(&me.id, !o.on)
+        .map_err(store_err)?;
+    Ok(Json(MemberView::from(&m)))
+}
+
+async fn admin_provisioning(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+) -> ApiResult<Json<ProvisioningView>> {
+    admin(&s, &peer)?;
+    Ok(Json(ProvisioningView {
+        provisioner: s.provisioner.as_ref().map(|p| p.url.clone()),
+        settings: Settings::load(&s.dir),
+        machines: s.machines.lock().unwrap().clone(),
+    }))
+}
+
+/// `POST /v1/admin/provisioning`: the pool's settings for provisioning.
+async fn admin_provisioning_set(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    Json(settings): Json<Settings>,
+) -> ApiResult<Json<Settings>> {
+    let (me, by) = admin(&s, &peer)?;
+    settings.save(&s.dir).map_err(internal)?;
+    s.store
+        .record(
+            &by,
+            "provisioning",
+            &me.id,
+            Some(serde_json::to_string(&settings).unwrap_or_default()),
+        )
+        .map_err(store_err)?;
+    Ok(Json(settings))
+}
+
+/// `POST /v1/admin/members/{id}/provision` `{on}` (ADR-0051 point 3).
+async fn admin_provision(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+    Json(o): Json<OnRequest>,
+) -> ApiResult<Json<MemberView>> {
+    let (_, by) = admin(&s, &peer)?;
+    let m = s.store.set_provision(&id, o.on, &by).map_err(store_err)?;
+    Ok(Json(MemberView::for_admin(&m)))
+}
+
+/// `POST /v1/admin/nodes/{id}/confirm` (ADR-0051 point 6).
+async fn admin_confirm(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<Json<MemberView>> {
+    let (_, by) = admin(&s, &peer)?;
+    let m = s.store.confirm(&id, &by).map_err(store_err)?;
+    Ok(Json(MemberView::for_admin(&m)))
+}
+
+/// `POST /v1/admin/nodes/{id}/give-back` (ADR-0051 point 9): the node's
+/// membership is revoked and its machine given back, its lanes with it.
+async fn admin_give_back(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<StatusCode> {
+    let (_, by) = admin(&s, &peer)?;
+    let ms = s.store.list().map_err(internal)?;
+    let Some(m) = ms
+        .iter()
+        .find(|m| (m.id == id || m.name == id) && m.provisioned.is_some())
+    else {
+        return Err((StatusCode::NOT_FOUND, format!("no provisioned node `{id}`")));
+    };
+    if m.state == State::Approved {
+        s.store.remove(&m.id, &by).map_err(store_err)?;
+    }
+    s.reports.lock().unwrap().remove(&m.id);
+    let mut machines = s.machines.lock().unwrap();
+    for x in machines
+        .iter_mut()
+        .filter(|x| x.member.as_deref() == Some(m.id.as_str()))
+    {
+        x.state = MachineState::Returning;
+    }
+    save_machines(&s, &machines);
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Every `every`: provisioned machines that did not enrol in time, whose
+/// node was removed, or that had no lease for the pool's idle time are given
+/// back (ADR-0051 points 5 and 7), deletions retried until the provisioner
+/// confirms them; leases on them are told as begun and ended (point 8);
+/// leases whose requester stopped waiting are dropped.
+async fn tend(s: Shared) {
+    let Some(p) = s.provisioner.clone() else {
+        return;
+    };
+    let settings = Settings::load(&s.dir);
+    let now = store::now();
+    let ms = s.store.list().unwrap_or_default();
+    // A requester that stopped asking: its wait goes a minute past the limit.
+    let gone: Vec<String> = s
+        .waits
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, w)| w.started.elapsed() > w.limit + Duration::from_secs(60))
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in gone {
+        s.waits.lock().unwrap().remove(&id);
+        s.leases.lock().unwrap().remove(&id);
+    }
+    let leases: Vec<Lease> = s
+        .leases
+        .lock()
+        .unwrap()
+        .values()
+        .map(|(l, _, _)| l.clone())
+        .collect();
+    let waited: std::collections::HashSet<String> = s
+        .waits
+        .lock()
+        .unwrap()
+        .values()
+        .map(|w| w.machine.clone())
+        .collect();
+    let mut events = Vec::new();
+    let delete: Vec<(String, String)> = {
+        let mut machines = s.machines.lock().unwrap();
+        for m in machines.iter_mut() {
+            match m.state {
+                MachineState::Provisioning if now > m.deadline => {
+                    m.state = MachineState::Returning;
+                }
+                MachineState::Ready => {
+                    let node = m
+                        .member
+                        .as_ref()
+                        .and_then(|id| ms.iter().find(|x| &x.id == id));
+                    let Some(node) = node.filter(|n| n.state == State::Approved) else {
+                        m.state = MachineState::Returning;
+                        continue;
+                    };
+                    let busy =
+                        waited.contains(&m.request) || leases.iter().any(|l| l.node == node.id);
+                    if busy {
+                        m.idle_since = None;
+                    } else {
+                        let since = *m.idle_since.get_or_insert(now);
+                        if now.saturating_sub(since) >= settings.idle_minutes * 60 {
+                            let by = "coordinator (idle)";
+                            let _ = s.store.remove(&node.id, by);
+                            s.reports.lock().unwrap().remove(&node.id);
+                            m.state = MachineState::Returning;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // A machine the provisioner never named cannot be deleted by name.
+        machines.retain(|m| !(m.state == MachineState::Returning && m.machine.is_empty()));
+        save_machines(&s, &machines);
+        machines
+            .iter()
+            .filter(|m| m.state == MachineState::Returning)
+            .map(|m| (m.request.clone(), m.machine.clone()))
+            .collect()
+    };
+    for (request, machine) in delete {
+        let p2 = p.clone();
+        let id = machine.clone();
+        let done = tokio::task::spawn_blocking(move || p2.delete(&id))
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+        let mut machines = s.machines.lock().unwrap();
+        match done {
+            Ok(()) => {
+                let size = machines
+                    .iter()
+                    .find(|m| m.request == request)
+                    .and_then(|m| m.size);
+                machines.retain(|m| m.request != request);
+                events.push(provision::Event {
+                    kind: "node_returned".into(),
+                    request,
+                    machine,
+                    at: now,
+                    size,
+                    lease: None,
+                });
+            }
+            Err(e) => {
+                if let Some(m) = machines.iter_mut().find(|m| m.request == request) {
+                    m.error = Some(e);
+                }
+            }
+        }
+        save_machines(&s, &machines);
+    }
+    // Leases on provisioned nodes, begun and ended (ADR-0051 point 8).
+    let on: HashMap<String, (String, String)> = s
+        .machines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|m| Some((m.member.clone()?, (m.request.clone(), m.machine.clone()))))
+        .chain(ms.iter().filter_map(|m| {
+            let p = m.provisioned.as_ref()?;
+            Some((m.id.clone(), (p.request.clone(), p.machine.clone())))
+        }))
+        .collect();
+    {
+        let mut begun = s.begun.lock().unwrap();
+        for l in leases.iter().filter(|l| l.state == "running") {
+            let Some((request, machine)) = on.get(&l.node) else {
+                continue;
+            };
+            if begun.contains_key(&l.id) {
+                continue;
+            }
+            let e = provision::LeaseEvent {
+                id: l.id.clone(),
+                member: l.member.clone(),
+                repo: l.repo.clone(),
+                lane: l.lane.clone(),
+                need: l.need,
+                began: now,
+                ended: None,
+            };
+            events.push(provision::Event {
+                kind: "lease_begun".into(),
+                request: request.clone(),
+                machine: machine.clone(),
+                at: now,
+                size: None,
+                lease: Some(e.clone()),
+            });
+            begun.insert(l.id.clone(), (request.clone(), machine.clone(), e));
+        }
+        let ended: Vec<String> = begun
+            .keys()
+            .filter(|id| !leases.iter().any(|l| &&l.id == id && l.state == "running"))
+            .cloned()
+            .collect();
+        for id in ended {
+            let (request, machine, mut e) = begun.remove(&id).expect("listed");
+            e.ended = Some(now);
+            events.push(provision::Event {
+                kind: "lease_ended".into(),
+                request,
+                machine,
+                at: now,
+                size: None,
+                lease: Some(e),
+            });
+        }
+    }
+    tell(&s, events);
+}
+
 async fn admin_members(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
@@ -2218,13 +3200,54 @@ async fn admin_audit(
     Ok(Json(s.store.audit(200).map_err(internal)?))
 }
 
+/// What a coordinator runs with beyond its directory.
+#[derive(Debug, Clone)]
+pub struct Options {
+    /// The provisioner it asks for machines (ADR-0051).
+    pub provisioner: Option<provision::Provisioner>,
+    /// How often it looks after provisioned machines.
+    pub tend_every: Duration,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            provisioner: None,
+            tend_every: Duration::from_secs(15),
+        }
+    }
+}
+
 /// Serve the coordinator in `dir` on `listener` until `stop` resolves.
 pub async fn serve(
     dir: &Path,
     listener: tokio::net::TcpListener,
     stop: impl std::future::Future<Output = ()>,
 ) -> Result<()> {
+    serve_with(dir, listener, stop, Options::default()).await
+}
+
+/// [`serve`], with `options`.
+pub async fn serve_with(
+    dir: &Path,
+    listener: tokio::net::TcpListener,
+    stop: impl std::future::Future<Output = ()>,
+    options: Options,
+) -> Result<()> {
     let ca_pem = read(&dir.join("ca.pem"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| CoordError::Other(e.to_string()))?
+        .port();
+    let host = names(dir)?
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "127.0.0.1".into());
+    let host = if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host
+    };
     let config = crate::tls::server_config(
         &ca_pem,
         &read(&dir.join("server.pem"))?,
@@ -2245,21 +3268,37 @@ pub async fn serve(
         prunes: Mutex::new(std::collections::HashSet::new()),
         store: Store::new(dir),
         footprints: crate::footprint::Footprints::load(dir),
-        ca_pem,
         reports: Mutex::new(HashMap::new()),
+        machines: Mutex::new(provision::load_machines(dir)),
+        waits: Mutex::new(HashMap::new()),
+        begun: Mutex::new(HashMap::new()),
+        public_url: format!("https://{host}:{port}"),
+        fingerprint: pki::fingerprint(&ca_pem)?,
+        provisioner: options.provisioner,
+        ca_pem,
     });
+    if shared.provisioner.is_some() {
+        let s = shared.clone();
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(options.tend_every);
+            loop {
+                every.tick().await;
+                tend(s.clone()).await;
+            }
+        });
+    }
     crate::tls::serve(config, listener, router(shared), stop).await;
     Ok(())
 }
 
 /// Serve the coordinator in `dir` on `listen` until Ctrl-C (or SIGTERM).
-pub fn serve_blocking(dir: &Path, listen: std::net::SocketAddr) -> Result<()> {
+pub fn serve_blocking(dir: &Path, listen: std::net::SocketAddr, options: Options) -> Result<()> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| CoordError::Other(e.to_string()))?;
     rt.block_on(async {
         let listener = tokio::net::TcpListener::bind(listen)
             .await
             .map_err(|e| CoordError::Other(format!("listen on {listen}: {e}")))?;
-        serve(dir, listener, stop_signal()).await
+        serve_with(dir, listener, stop_signal(), options).await
     })
 }
 
@@ -2376,6 +3415,31 @@ mod placement_tests {
             .into_iter()
             .map(|p| (p.name, p.eligible, p.why))
             .collect()
+    }
+
+    #[test]
+    fn provisioned_nodes_are_filled_after_the_members_own() {
+        let need = Need {
+            cpus: 1.0,
+            memory: 2 * GIB,
+            ..Need::default()
+        };
+        let (own, emptier, fuller) = (node(4.0, 8, &[]), node(8.0, 16, &[]), node(2.0, 4, &[]));
+        let nodes = [
+            ("p1", "emptier", &emptier),
+            ("own", "own", &own),
+            ("p2", "fuller", &fuller),
+        ];
+        let filled = ["p1".to_string(), "p2".to_string()].into_iter().collect();
+        let got: Vec<String> = rank_filling(&nodes, &filled, "me", "shop", "fix", need, None)
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        // The member's own first; of the provisioned, the fuller one.
+        assert_eq!(got, ["own", "fuller", "emptier"]);
+        // Without provisioned nodes, the most free capacity first, as before.
+        let got: Vec<String> = order(&nodes, need).into_iter().map(|p| p.0).collect();
+        assert_eq!(got, ["emptier", "own", "fuller"]);
     }
 
     #[test]

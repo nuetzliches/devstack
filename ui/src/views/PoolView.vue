@@ -2,16 +2,17 @@
 // The pool (ADR-0031, ADR-0032): this machine's membership (and joining one),
 // the requests to join, the nodes with their lanes, the members. An admin
 // approves, rejects and removes members, changes roles, pauses nodes and ends
-// leases here; the coordinator checks the role, this page only hides what the
+// leases here, and confirms or gives back the nodes a provisioner made
+// (ADR-0051); the coordinator checks the role, this page only hides what the
 // role does not allow.
 import { computed, onBeforeUnmount, ref } from 'vue';
-import { ago, bytes } from '@/lib/format';
+import { ago, bytes, duration } from '@/lib/format';
 import { guestsReserved } from '@/lib/guests';
 import { connectedTo, usePool } from '@/stores/pool';
 import { sharedId } from '@/api';
 import Icon from '@/components/icons/Icon.vue';
 import CapacityChart from '@/components/CapacityChart.vue';
-import type { PoolLease, PoolMember, PoolRelease } from '@/api/types';
+import type { PoolLease, PoolMember, PoolNode, PoolRelease } from '@/api/types';
 import { useUi } from '@/stores/ui';
 import { useHub } from '@/stores/hub';
 
@@ -52,7 +53,23 @@ const actionText: Record<string, string> = {
   tags: 'changed the tags of',
   policy: 'changed the policy of',
   node: 'changed whether lanes run on',
+  provision: 'changed whether lanes cause provisioning for',
+  confirm: 'confirmed the provisioned node',
+  enrol: 'saw the provisioned node enrol:',
 };
+
+// Provisioned nodes (ADR-0051): what the provisioner made, for admins the
+// machines it was asked for, with alarms first.
+const provisioning = computed(() => o.value?.provisioning);
+const machines = computed(() => [...(provisioning.value?.machines ?? [])].sort((a, b) => Number(!!b.alarm) - Number(!!a.alarm)));
+const alarms = computed(() => machines.value.filter((m) => m.alarm).length);
+const provisionedTitle = (n: PoolNode) => {
+  const p = n.provisioned!;
+  return `Made by the pool's provisioner: machine ${p.machine}, address ${p.address}${p.key ? `, key ${p.key}` : ''}`;
+};
+const myMember = computed(() => (o.value?.members ?? []).find((m) => m.id === me.value?.id));
+/** Whether this member's lanes may run on provisioned nodes (the inverse of `no_provisioned`). */
+const onProvisioned = computed(() => !(me.value?.no_provisioned ?? myMember.value?.no_provisioned));
 
 // Joining a pool from here, as `devstack join` does; another one beside
 // the default pool under a name of its own (ADR-0034).
@@ -385,6 +402,19 @@ function policyText(id: string) {
           Choosing the pool lets the CLI and agents send a worktree's files to a node of it without asking each time. A place named
           explicitly (`--on`, `on`) always wins; `local` keeps a lane here.
         </p>
+        <label class="consent">
+          <input
+            type="checkbox"
+            :checked="onProvisioned"
+            data-testid="pool-on-provisioned"
+            @change="pool.setProvisioned(($event.target as HTMLInputElement).checked)"
+          />
+          <span>My lanes may run on provisioned nodes</span>
+        </label>
+        <p class="muted small">
+          Nodes the pool's provisioner makes run on a provider's machines: whoever runs the provisioner (and the provider) can read a lane
+          there. Off: this machine's lanes go to the pool's other nodes only.
+        </p>
       </div>
     </section>
 
@@ -517,6 +547,54 @@ function policyText(id: string) {
       </div>
     </section>
 
+    <section v-if="pool.isAdmin && provisioning" class="card" data-testid="pool-provisioning">
+      <header class="card-header">
+        <Icon name="server" :size="18" />
+        <h2>Provisioning</h2>
+        <span v-if="alarms" class="pill sm danger" data-testid="pool-provision-alarms">{{ alarms }} alarm{{ alarms === 1 ? '' : 's' }}</span>
+        <span class="faint small">
+          <template v-if="provisioning.provisioner">{{ provisioning.provisioner }}</template>
+          <template v-else>no provisioner: the pool makes no nodes</template>
+        </span>
+      </header>
+      <div class="card-body flush table-wrap">
+        <p class="hint muted" data-testid="pool-provision-settings">
+          One node {{ provisioning.settings.per === 'repo' ? 'per repository' : 'for the whole pool' }} ·
+          {{ provisioning.settings.confirm === 'admin' ? 'an admin confirms each' : 'no confirmation' }} ·
+          given back after {{ provisioning.settings.idle_minutes }} min without a lane · at most {{ provisioning.settings.max_nodes }} node(s)<template
+            v-if="provisioning.settings.max_cpus"
+          >, {{ provisioning.settings.max_cpus }} CPU</template><template v-if="provisioning.settings.max_memory">, {{ bytes(provisioning.settings.max_memory) }}</template>
+        </p>
+        <table v-if="machines.length" class="table">
+          <thead>
+            <tr><th>Request</th><th>Machine</th><th>Address</th><th>State</th><th>Node</th><th>For</th></tr>
+          </thead>
+          <tbody>
+            <template v-for="m in machines" :key="m.request">
+              <tr :data-request="m.request" :class="{ alarm: m.alarm }">
+                <td class="mono faint">{{ m.request }}</td>
+                <td class="mono">{{ m.machine || '–' }}</td>
+                <td class="mono">{{ m.address || '–' }}</td>
+                <td>
+                  <span class="pill sm" :class="m.state === 'ready' ? 'ok' : m.state === 'returning' ? 'warn' : 'outline'">{{ m.state }}</span>
+                  <span v-if="m.size" class="faint small tabular"> {{ m.size.cpus }} CPU · {{ bytes(m.size.memory) }}</span>
+                </td>
+                <td>{{ m.member ? nameOf(m.member) : '–' }}</td>
+                <td>{{ nameOf(m.requester) }}<span v-if="m.repo" class="faint"> · {{ m.repo }}</span></td>
+              </tr>
+              <tr v-if="m.alarm || m.error" class="policy-row">
+                <td colspan="6">
+                  <p v-if="m.alarm" class="err" data-testid="pool-provision-alarm"><Icon name="alert" :size="14" /> <strong>Alarm:</strong> {{ m.alarm }}</p>
+                  <p v-if="m.error" class="warn-line small" data-testid="pool-provision-error"><Icon name="alert" :size="14" /> Giving it back failed: {{ m.error }}</p>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+        <p v-else class="hint muted">The provisioner has made no machine.</p>
+      </div>
+    </section>
+
     <section v-if="me?.state === 'approved'" class="card" data-testid="pool-nodes">
       <header class="card-header">
         <Icon name="cpu" :size="18" />
@@ -534,6 +612,7 @@ function policyText(id: string) {
               <td>
                 <strong>{{ n.name }}</strong> <span v-if="isMe(n.id)" class="pill sm outline">this machine</span>
                 <span class="pill sm" :class="n.kind === 'server' ? 'accent' : 'outline'" :title="kindTitle[n.kind ?? 'unknown']" data-testid="pool-kind">{{ kindText[n.kind ?? 'unknown'] }}</span>
+                <span v-if="n.provisioned" class="pill sm info" :title="provisionedTitle(n)" data-testid="pool-provisioned">provisioned</span>
                 <span v-for="g in n.report?.gpus ?? []" :key="g.name" class="pill sm info" :title="`${g.name}, ${bytes(g.memory)}`">GPU</span>
                 <button
                   type="button"
@@ -548,6 +627,7 @@ function policyText(id: string) {
               <td>
                 <span class="pill sm" :class="n.online ? 'ok' : 'outline'">{{ n.online ? 'online' : 'offline' }}</span>
                 <span v-if="n.paused" class="pill sm warn" title="Paused by an admin: no new lanes, running ones stay">paused</span>
+                <span v-if="n.provisioned?.unconfirmed" class="pill sm warn" title="It admits no lane until an admin confirms it (ADR-0051 point 6)" data-testid="pool-unconfirmed">unconfirmed</span>
               </td>
               <td class="tabular" data-testid="pool-node-version">
                 <span v-if="n.report" class="pill sm" :class="releaseClass(n.report.devstack, true)" :title="releaseTitle(n.report.devstack, n.name)">
@@ -585,6 +665,26 @@ function policyText(id: string) {
               </td>
               <td class="faint">{{ n.seen === undefined ? 'never' : ago(now - n.seen * 1000, now) }}</td>
               <td v-if="pool.isAdmin" class="actions">
+                <button
+                  v-if="n.provisioned?.unconfirmed"
+                  type="button"
+                  class="btn btn-xs btn-primary"
+                  title="Check its machine id, address and key against the provider, then let it admit lanes"
+                  data-testid="pool-confirm"
+                  @click="pool.confirmNode(n.id, n.name, n.provisioned.machine, n.provisioned.address, n.provisioned.key)"
+                >
+                  <Icon name="check" :size="13" /> Confirm
+                </button>
+                <button
+                  v-if="n.provisioned"
+                  type="button"
+                  class="btn btn-xs btn-danger"
+                  title="Delete the machine at its provider now"
+                  data-testid="pool-give-back"
+                  @click="pool.giveBack(n.id, n.name)"
+                >
+                  <Icon name="trash" :size="13" /> Give back
+                </button>
                 <button
                   v-if="n.report?.api"
                   type="button"
@@ -639,6 +739,19 @@ function policyText(id: string) {
                 </button>
               </td>
             </tr>
+              <tr v-if="n.provisioned" class="policy-row" data-testid="pool-provisioned-row">
+                <td :colspan="pool.isAdmin ? 7 : 6" class="faint small">
+                  Provisioned: machine <span class="mono">{{ n.provisioned.machine }}</span> at <span class="mono">{{ n.provisioned.address }}</span>
+                  <template v-if="n.provisioned.size"> · {{ n.provisioned.size.cpus }} CPU, {{ bytes(n.provisioned.size.memory) }}</template>
+                  · since {{ ago(n.provisioned.since * 1000, now) }}
+                  <template v-if="n.provisioned.idle_left !== undefined"> · given back in {{ duration(n.provisioned.idle_left * 1000) }} without a lane</template>
+                  <template v-if="n.provisioned.repo"> · runs lanes of {{ n.provisioned.repo }} only</template>
+                  <template v-if="n.provisioned.unconfirmed">
+                    · <span class="warn-text" data-testid="pool-confirm-wait">waits for an admin to confirm it</span>
+                    <template v-if="n.provisioned.key"> · key <span class="mono">{{ n.provisioned.key }}</span></template>
+                  </template>
+                </td>
+              </tr>
               <tr v-if="openNode === n.id" class="history-row">
                 <td :colspan="pool.isAdmin ? 7 : 6"><CapacityChart :pool="pool.current" :node="n.id" /></td>
               </tr>
@@ -719,6 +832,8 @@ function policyText(id: string) {
                 <strong>{{ m.name }}</strong> <span v-if="isMe(m.id)" class="pill sm outline">this machine</span>
                 <span class="pill sm" :class="kindOf(m.id) === 'server' ? 'accent' : 'outline'" :title="kindTitle[kindOf(m.id)]">{{ kindText[kindOf(m.id)] }}</span>
                 <span v-if="m.node" class="pill sm accent" title="An admin let it run the pool's lanes" data-testid="pool-node-granted">runs lanes</span>
+                <span v-if="m.provision" class="pill sm info" title="An admin let its lanes have the pool make a node (ADR-0051)" data-testid="pool-provision-granted">may provision</span>
+                <span v-if="m.no_provisioned" class="pill sm outline" title="It keeps its lanes off provisioned nodes">not on provisioned nodes</span>
                 <span v-for="t in m.tags ?? []" :key="t" class="pill sm info" data-testid="pool-tag">{{ t }}</span>
                 <form v-if="editTags === m.id" class="tags-form" @submit.prevent="saveTags(m)">
                   <input v-model="tagsText" class="input" placeholder="team:backend, customer:acme" data-testid="pool-tags-input" />
@@ -741,6 +856,16 @@ function policyText(id: string) {
                   @click="pool.setNode(m.id, m.name, !m.node)"
                 >
                   {{ m.node ? 'No lanes' : 'Allow lanes' }}
+                </button>
+                <button
+                  v-if="provisioning?.provisioner || m.provision"
+                  type="button"
+                  class="btn btn-sm"
+                  :title="m.provision ? 'Its lanes no longer have the pool make a node' : 'Let its lanes have the pool make a node when none has room (ADR-0051)'"
+                  data-testid="pool-provision"
+                  @click="pool.setProvision(m.id, m.name, !m.provision)"
+                >
+                  {{ m.provision ? 'No provisioning' : 'Allow provisioning' }}
                 </button>
                 <button
                   v-if="m.role === 'member'"
@@ -856,8 +981,12 @@ function policyText(id: string) {
 .err {
   color: var(--danger);
 }
-.warn-line {
+.warn-line,
+.warn-text {
   color: var(--warn);
+}
+tr.alarm td {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 .small {
   font-size: 12px;

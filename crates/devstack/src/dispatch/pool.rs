@@ -15,15 +15,28 @@ pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
             no_wait,
             pool,
             telemetry,
+            enrol,
         } => {
             if telemetry {
                 poolcmd::telemetry(&pool, Some("on"))?;
             }
-            poolcmd::join(&pool, &coordinator, &fingerprint, name.as_deref(), !no_wait)
+            poolcmd::join(
+                &pool,
+                &coordinator,
+                &fingerprint,
+                name.as_deref(),
+                !no_wait,
+                enrol.as_deref(),
+            )
         }
         Cmd::Pool { pool, action } => match action {
             None => poolcmd::pool(pool.as_deref()),
             Some(PoolAction::Shared) => hubcmd::shared(pool.as_deref()),
+            Some(PoolAction::Provisioned { state }) => poolcmd::provisioned(
+                pool.as_deref()
+                    .unwrap_or(devstack_node::member::DEFAULT_POOL),
+                state.as_deref(),
+            ),
             Some(PoolAction::Connect { lane }) => hubcmd::connect_shared(&lane, pool.as_deref()),
             Some(PoolAction::Disconnect { lane }) => {
                 hubcmd::disconnect_shared(&lane, pool.as_deref())
@@ -49,7 +62,31 @@ pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
 fn node(file: &Path, action: NodeAction) -> Result<()> {
     match action {
         NodeAction::Init { addresses, dir } => poolcmd::init(dir, &addresses),
-        NodeAction::Serve { listen, dir } => poolcmd::serve(dir, &listen),
+        NodeAction::Serve {
+            listen,
+            dir,
+            provisioner,
+        } => poolcmd::serve(dir, &listen, provisioner.as_deref()),
+        NodeAction::Provisioning(a) => poolcmd::provisioning(
+            a.dir,
+            a.per.as_deref(),
+            a.confirm.as_deref(),
+            a.idle_minutes,
+            a.max_nodes,
+            (a.max_cpus, a.max_memory_gib),
+        ),
+        NodeAction::Confirm { node, dir } => poolcmd::confirm(dir, &node),
+        NodeAction::GiveBack { node, dir } => poolcmd::give_back(dir, &node),
+        NodeAction::MockProvisioner(a) => poolcmd::mock_provisioner(
+            &a.listen,
+            &a.address,
+            (a.cpus, a.memory_gib),
+            a.estimate,
+            a.refuse,
+            a.fail_deletes,
+            a.token,
+            a.exec,
+        ),
         NodeAction::Fingerprint { dir } => poolcmd::print_fingerprint(dir),
         NodeAction::RunLane { on, lane, keep } => poolcmd::run_lane(file, &on, &lane, keep),
         NodeAction::Agent {
@@ -91,6 +128,9 @@ fn node(file: &Path, action: NodeAction) -> Result<()> {
             MembersAction::Role { member, role } => poolcmd::members_role(dir, &member, &role),
             MembersAction::Tags { member, tags } => poolcmd::members_tags(dir, &member, &tags),
             MembersAction::Node { member, state } => poolcmd::members_node(dir, &member, &state),
+            MembersAction::Provision { member, state } => {
+                poolcmd::members_provision(dir, &member, &state)
+            }
             MembersAction::Policy {
                 node,
                 allow,

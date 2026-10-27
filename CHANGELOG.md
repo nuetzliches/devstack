@@ -11,6 +11,26 @@ and listed with their assets on the
 
 ### Added
 
+- **A pool grows by machines a provisioner makes** (ADR-0051): with
+  `devstack node serve --provisioner <url>`, a lane the pool places that
+  no node can take makes a machine through an HTTP service of the pool's
+  own (it holds the cloud credentials, devstack none), for a member an
+  admin allowed (`devstack node members provision <id> on`) and within
+  caps (`devstack node provisioning`). The start waits for it as a phase
+  of its own (`provision`, at most 10 minutes). The machine enrols once
+  with a single-use token, only from the address the provisioner named
+  (`devstack join --enrol`); a second use, or one from elsewhere, revokes
+  it, deletes the machine and alarms the admins. Optionally an admin
+  confirms each machine (`--confirm admin`, `devstack node confirm`), or a
+  machine runs one repository's lanes (`--per repo`). Placement fills
+  provisioned nodes before another is made; an idle one is given back
+  after 30 minutes (`--idle-minutes`), deletions retried until confirmed,
+  and the provisioner is told of every machine and lease to bill from. A
+  member keeps its lanes off them with `devstack pool provisioned off`:
+  whoever runs the provisioner can read the lanes there. The contract is
+  in [pool.md](docs/pool.md#grow-by-provisioned-nodes); `devstack node
+  mock-provisioner` (hidden) tries it on one machine.
+
 - **MCP upstreams in the hub** (ADR-0069, first part): the dashboard's new
   page *MCP upstreams* keeps the MCP servers a user works with once, per
   user: a URL, a prefix, which tools, and how it logs in. The hub logs in
