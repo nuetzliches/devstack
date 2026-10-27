@@ -660,3 +660,21 @@ export type NotifySettings = {
   /** Stack ids, and `<stack id>/<lane>`. */
   muted: string[];
 };
+
+/** How an MCP upstream logs in (ADR-0069). */
+export type McpUpstreamAuth = { kind: 'none' } | { kind: 'token'; env?: string } | { kind: 'oauth'; client_id?: string; scopes?: string[] };
+
+/** An MCP upstream as the hub lists it: never a secret. */
+export type McpUpstream = {
+  name: string;
+  url: string;
+  /** Its tools are `<prefix>__<tool>`. */
+  prefix: string;
+  /** The tools offered; absent or empty: all. */
+  allow?: string[];
+  auth: McpUpstreamAuth;
+  logged_in: boolean;
+};
+
+/** `GET /hub/upstreams`. `file`: no keychain on this machine (Linux without a Secret Service). */
+export type McpUpstreams = { store: 'keychain' | 'file'; upstreams: McpUpstream[] };

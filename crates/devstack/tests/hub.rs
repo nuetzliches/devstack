@@ -625,6 +625,55 @@ fn a_stack_is_added_or_drafted_from_the_dashboard() {
     assert_eq!(s, 200, "{body}");
     assert!(body.contains("devstack skills install"), "{body}");
 
+    // MCP upstreams (ADR-0069): per user, kept without a secret; the page
+    // needs its session and Origin for them.
+    let (s, _, body) = get(p, "/hub/upstreams", &with);
+    assert_eq!(s, 200, "{body}");
+    assert!(body.contains("\"upstreams\":[]"), "{body}");
+    let tracker =
+        r#"{"name":"tracker","url":"https://mcp.example.com/mcp","auth":{"kind":"oauth"}}"#;
+    let (s, _, _) = post("/hub/upstreams", tracker, false);
+    assert_eq!(s, 403, "no Origin, no change");
+    let (s, _, body) = post("/hub/upstreams", tracker, true);
+    assert_eq!(s, 204, "{body}");
+    let (s, _, body) = post(
+        "/hub/upstreams",
+        r#"{"name":"plain","url":"http://mcp.example.com/mcp"}"#,
+        true,
+    );
+    assert_eq!(s, 400, "plain http beyond this machine: {body}");
+    let (_, _, body) = get(p, "/hub/upstreams", &with);
+    assert!(
+        body.contains("\"name\":\"tracker\"")
+            && body.contains("\"prefix\":\"tracker\"")
+            && body.contains("\"logged_in\":false"),
+        "{body}"
+    );
+    let file = h.home.path().join("devstack/hub/upstreams.toml");
+    assert!(file.is_file(), "{}", file.display());
+    // Without a session nothing of it is read.
+    let (s, _, _) = get(p, "/hub/upstreams", "");
+    assert_eq!(s, 401);
+    // The authorization server's answer comes without a session; one for no
+    // login this hub started changes nothing.
+    let (s, _, body) = get(
+        p,
+        "/oauth/upstream/callback?code=c&state=forged",
+        "Sec-Fetch-Site: cross-site\r\n",
+    );
+    assert_eq!(s, 200, "{body}");
+    assert!(
+        body.contains("Not logged in") && body.contains("no login of this hub"),
+        "{body}"
+    );
+    let (s, _, _) = http(
+        p,
+        &format!(
+            "DELETE /hub/upstreams/tracker HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\n{with}Origin: http://127.0.0.1:{p}\r\nConnection: close\r\n\r\n"
+        ),
+    );
+    assert_eq!(s, 204);
+
     // Relative paths are refused.
     let (s, _, _) = get(p, "/hub/inspect?path=shop", &with);
     assert_eq!(s, 400);

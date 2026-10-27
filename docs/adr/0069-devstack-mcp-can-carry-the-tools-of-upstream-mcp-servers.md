@@ -1,6 +1,6 @@
 # ADR-0069: `devstack mcp` can carry the tools of upstream MCP servers, logged in once by the hub
 
-- **Status:** Proposed (2026-10-27); amended 2026-10-27 (the keychain spike: `keyring`, a file on Linux without a Secret Service)
+- **Status:** Accepted (2026-10-27, [card](https://github.com/nuetzliches/devstack/issues/316#issuecomment-6452598449)); amended 2026-10-27 (the keychain spike: `keyring`, a file on Linux without a Secret Service)
 - **Date:** 2026-10-27
 - **Deciders:** project owner
 - **Related:** [#316](https://github.com/nuetzliches/devstack/issues/316), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md), [ADR-0054](0054-macos-is-a-developer-platform-in-preview.md), [ADR-0060](0060-the-tray-is-a-client-of-the-hub.md), [ADR-0067](0067-a-change-at-runtime-says-who-made-it.md)

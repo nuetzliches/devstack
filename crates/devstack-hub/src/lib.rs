@@ -48,6 +48,7 @@ mod share;
 mod shared;
 mod summary;
 pub mod tray;
+mod upstreams;
 mod ws;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -156,6 +157,8 @@ struct AppState {
     notify: Arc<notify::Center>,
     /// What the streams `notify` follows show now, for `/hub/summary`.
     board: Arc<summary::Board>,
+    /// The user's MCP upstreams and their logins (ADR-0069).
+    upstreams: Arc<upstreams::Upstreams>,
 }
 
 fn now_ms() -> u128 {
@@ -416,6 +419,7 @@ pub fn serve() -> Result<(), String> {
             shutdown: shutdown.clone(),
             notify,
             board: Arc::default(),
+            upstreams: Arc::new(upstreams::Upstreams::open(dir.clone())),
         };
         // The port last: what accepts a connection answers it. Bound before
         // the setup above (a first `docker version` alone may take 5 s), the
@@ -479,6 +483,12 @@ pub fn serve() -> Result<(), String> {
 fn router(state: AppState) -> axum::Router {
     axum::Router::new()
         .route("/auth", get(auth))
+        .route(upstreams::CALLBACK, get(upstream_callback))
+        .route("/hub/upstreams", get(upstreams_list).post(upstream_put))
+        .route("/hub/upstreams/{name}", delete(upstream_remove))
+        .route("/hub/upstreams/{name}/login", post(upstream_login))
+        .route("/hub/upstreams/{name}/token", post(upstream_token))
+        .route("/hub/upstreams/{name}/logout", post(upstream_logout))
         .route("/hub/pair", post(pair))
         .route("/hub/shutdown", post(shutdown))
         .route("/hub/session", get(session))
@@ -2407,6 +2417,147 @@ async fn stack_down(
         end_phase(&phases, &id, Phase::Stopping);
     });
     StatusCode::ACCEPTED.into_response()
+}
+
+/// `GET /hub/upstreams`: the user's MCP upstreams (ADR-0069), never a
+/// secret; `store` says where the secrets are (`keychain`, or `file` on a
+/// Linux machine without a Secret Service).
+async fn upstreams_list(State(s): State<AppState>) -> Response {
+    let ups = s.upstreams.clone();
+    match tokio::task::spawn_blocking(move || ups.views().map(|v| (v, ups.store()))).await {
+        Ok(Ok((list, store))) => {
+            Json(serde_json::json!({ "store": store, "upstreams": list })).into_response()
+        }
+        Ok(Err(e)) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// Run `f` on the upstreams off the async threads: `204`, or `400` with why.
+async fn on_upstreams(
+    s: &AppState,
+    f: impl FnOnce(&upstreams::Upstreams) -> Result<(), String> + Send + 'static,
+) -> Response {
+    let ups = s.upstreams.clone();
+    match tokio::task::spawn_blocking(move || f(&ups)).await {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(e)) => err(StatusCode::BAD_REQUEST, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `POST /hub/upstreams {name, url, prefix?, allow?, auth}`: add one, or
+/// change the one of that name.
+async fn upstream_put(State(s): State<AppState>, Json(u): Json<upstreams::Upstream>) -> Response {
+    let name = u.name.clone();
+    let r = on_upstreams(&s, move |ups| ups.put(u)).await;
+    if r.status().is_success() {
+        diag::info("upstream_put", serde_json::json!({ "upstream": name }));
+    }
+    r
+}
+
+/// `DELETE /hub/upstreams/{name}`: it and its credential go.
+async fn upstream_remove(State(s): State<AppState>, Path(name): Path<String>) -> Response {
+    on_upstreams(&s, move |ups| {
+        ups.remove(&name)?
+            .then_some(())
+            .ok_or_else(|| format!("no upstream `{name}`"))
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+struct TokenBody {
+    token: String,
+}
+
+/// `POST /hub/upstreams/{name}/token {token}`: the static token of an
+/// upstream that logs in with one, into the keychain.
+async fn upstream_token(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Json(b): Json<TokenBody>,
+) -> Response {
+    on_upstreams(&s, move |ups| ups.set_token(&name, &b.token)).await
+}
+
+/// `POST /hub/upstreams/{name}/logout`: its credential goes.
+async fn upstream_logout(State(s): State<AppState>, Path(name): Path<String>) -> Response {
+    on_upstreams(&s, move |ups| ups.logout(&name)).await
+}
+
+/// `POST /hub/upstreams/{name}/login`: start its OAuth login; `{url}` to
+/// open in the browser, which comes back to `upstreams::CALLBACK`.
+async fn upstream_login(State(s): State<AppState>, Path(name): Path<String>) -> Response {
+    let ups = s.upstreams.clone();
+    let redirect = format!("http://127.0.0.1:{}{}", s.port, upstreams::CALLBACK);
+    let started = tokio::task::spawn_blocking(move || {
+        ups.begin(&upstreams::http(), &name, &redirect)
+            .map(|url| (name, url))
+    })
+    .await;
+    match started {
+        Ok(Ok((name, url))) => {
+            diag::info(
+                "upstream_login_started",
+                serde_json::json!({ "upstream": name }),
+            );
+            Json(serde_json::json!({ "url": url })).into_response()
+        }
+        Ok(Err(e)) => err(StatusCode::BAD_GATEWAY, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct CallbackQuery {
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+/// `GET /oauth/upstream/callback?code&state`: where an upstream's
+/// authorization server sends the browser back. No session comes with it
+/// (a navigation from another site): the one-time `state` of a login this
+/// hub started is what admits it. A page that says how it went.
+async fn upstream_callback(State(s): State<AppState>, Query(q): Query<CallbackQuery>) -> Response {
+    let page = |ok: bool, text: &str| {
+        let text = text.replace('&', "&amp;").replace('<', "&lt;");
+        axum::response::Html(format!(
+            "<!doctype html><meta charset=utf-8><title>devstack</title><body style=\"font-family:system-ui;margin:3em\"><h2>{}</h2><p>{text}</p><p>You can close this tab.</p></body>",
+            if ok { "Logged in" } else { "Not logged in" }
+        ))
+        .into_response()
+    };
+    let (Some(code), Some(state)) = (q.code, q.state) else {
+        return page(
+            false,
+            &q.error.unwrap_or_else(|| "the answer named no code".into()),
+        );
+    };
+    let ups = s.upstreams.clone();
+    match tokio::task::spawn_blocking(move || ups.complete(&upstreams::http(), &state, &code)).await
+    {
+        Ok(Ok(name)) => {
+            diag::info(
+                "upstream_login_done",
+                serde_json::json!({ "upstream": name }),
+            );
+            page(
+                true,
+                &format!("devstack logged in to the MCP upstream `{name}`."),
+            )
+        }
+        Ok(Err(e)) => {
+            diag::warn("upstream_login_failed", serde_json::json!({ "error": e }));
+            page(false, &e)
+        }
+        Err(e) => page(false, &e.to_string()),
+    }
 }
 
 async fn forget(Path(id): Path<String>) -> Response {
