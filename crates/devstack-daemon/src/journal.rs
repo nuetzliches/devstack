@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
 
 /// Entries kept, in memory and on disk.
 pub const KEEP: usize = 500;
@@ -35,6 +36,14 @@ pub struct Entry {
     pub error: Option<String>,
 }
 
+impl Entry {
+    /// Whether the stream of `tree` carries it: the main tree's (`""`)
+    /// every entry, a lane's those of its lane.
+    pub fn for_tree(&self, tree: &str) -> bool {
+        tree.is_empty() || self.lane.as_deref() == Some(tree)
+    }
+}
+
 /// Who changed something, and when: what a view shows of the journal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Change {
@@ -51,6 +60,9 @@ pub struct Journal {
     entries: Mutex<VecDeque<Entry>>,
     /// Lines in the file: it is rewritten with the last [`KEEP`] at twice that.
     lines: Mutex<usize>,
+    /// Each entry as it is recorded: the supervisors send it on as a
+    /// `journal` event.
+    tx: broadcast::Sender<Entry>,
 }
 
 static JOURNAL: OnceLock<Journal> = OnceLock::new();
@@ -111,12 +123,20 @@ impl Journal {
             path,
             entries: Mutex::new(entries),
             lines: Mutex::new(lines),
+            tx: broadcast::channel(256).0,
         }
+    }
+
+    /// The entries recorded from now on.
+    pub fn subscribe(&self) -> broadcast::Receiver<Entry> {
+        self.tx.subscribe()
     }
 
     pub fn record(&self, e: Entry) {
         let line = serde_json::to_string(&e).unwrap_or_default();
         let mut entries = self.entries.lock().unwrap();
+        // Sent under the lock: the stream has the entries in the journal's order.
+        let _ = self.tx.send(e.clone());
         entries.push_back(e);
         if entries.len() > KEEP {
             entries.pop_front();
@@ -247,5 +267,24 @@ mod tests {
         assert_eq!(client(Some("dashboard")), "dashboard");
         assert_eq!(client(Some("curl")), "unknown");
         assert_eq!(client(None), "unknown");
+    }
+
+    #[test]
+    fn a_recorded_entry_is_sent_on() {
+        let j = Journal::open(None);
+        let mut rx = j.subscribe();
+        j.record(entry(1, "dashboard", "/v1/services/api/stop", 200));
+        let e = rx.try_recv().unwrap();
+        assert_eq!(
+            (e.via.as_str(), e.path.as_str()),
+            ("dashboard", "/v1/services/api/stop")
+        );
+        assert!(e.for_tree(""));
+        assert!(!e.for_tree("feat"));
+        let lane = Entry {
+            lane: Some("feat".into()),
+            ..e
+        };
+        assert!(lane.for_tree("") && lane.for_tree("feat") && !lane.for_tree("other"));
     }
 }

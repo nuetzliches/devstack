@@ -106,7 +106,7 @@ const tabs: { name: string; label: string; icon: IconName }[] = [
   { name: 'infra', label: 'Infrastructure', icon: 'box' },
   { name: 'commands', label: 'Commands', icon: 'terminal' },
   { name: 'usage', label: 'Usage', icon: 'gauge' },
-  { name: 'events', label: 'Events', icon: 'activity' },
+  { name: 'events', label: 'Activity', icon: 'activity' },
 ];
 
 function isActive(name: string) {

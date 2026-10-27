@@ -661,7 +661,23 @@ export class MockTransport implements Transport {
     return this.daemon(stack, method, rest.slice(4), url.searchParams, body);
   }
 
+  /** The daemon's API; what changes something goes into its journal, as the daemon's `audit` layer does (ADR-0067). */
   private async daemon(s: MockStack, method: string, p: string, q: URLSearchParams, body?: Record<string, unknown>): Promise<Response> {
+    const inLane = /^\/v1\/lanes\/([^/]+)(\/v1\/.*)$/.exec(p);
+    if ((inLane ? inLane[2] : p) === '/v1/journal' && method === 'GET') {
+      const since = Number(q.get('since') ?? '0');
+      return json(200, s.journal.filter((e) => e.at > since));
+    }
+    const res = await this.daemonApi(s, method, p, q, body);
+    if (method !== 'GET' && method !== 'HEAD') {
+      const lane = /^\/v1\/lanes\/([^/]+)\//.exec(p)?.[1];
+      const error = res.status >= 400 && res.body && typeof res.body === 'object' && 'error' in res.body ? String((res.body as { error: unknown }).error) : undefined;
+      s.journalize({ at: Date.now(), via: 'dashboard', ...(lane ? { lane: decodeURIComponent(lane) } : {}), method, path: p, status: res.status, ...(error ? { error } : {}) });
+    }
+    return res;
+  }
+
+  private async daemonApi(s: MockStack, method: string, p: string, q: URLSearchParams, body?: Record<string, unknown>): Promise<Response> {
     // Lanes (plan §3.5): the shop repository has two other worktrees, one
     // started; a lane's API is the stack's, here.
     const lanes = () =>

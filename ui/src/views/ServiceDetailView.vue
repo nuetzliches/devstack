@@ -5,6 +5,7 @@ import { paths, v1, type ServiceAction } from '@/api';
 import { ago, bytes, dateTime, percent, serviceUrl, shortBuild, useNow } from '@/lib/format';
 import { kindIcon, kindLabel, statusLook } from '@/lib/status';
 import { prepareLine } from '@/lib/store';
+import { viaText } from '@/lib/journal';
 import { useStack } from '@/stores/stack';
 import StatusPill from '@/components/StatusPill.vue';
 import ErrorLine from '@/components/ErrorLine.vue';
@@ -76,6 +77,10 @@ const kv = computed(() => {
   return [
     { k: 'Running build', v: s.hot_reload ? 'hot reload, from the source tree' : (s.build_id ?? '—'), mono: !s.hot_reload, testid: 'detail-build' },
     { k: 'Since', v: `${ago(s.since, now.value)} (${dateTime(s.since)})` },
+    // Who acted on it last (ADR-0067): a stop that was no fault.
+    ...(s.last_action
+      ? [{ k: 'Last action', v: `${s.last_action.action ?? 'changed'} ${viaText(s.last_action.via)} · ${ago(s.last_action.at, now.value)} (${dateTime(s.last_action.at)})`, testid: 'detail-last-action' }]
+      : []),
     { k: 'Kind', v: kindLabel(s) },
     { k: 'Process', v: s.pid ? `pid ${s.pid}` : '—' },
     { k: 'Fixed port', v: s.port ? String(s.port) : '—', mono: true },

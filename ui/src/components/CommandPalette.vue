@@ -39,7 +39,7 @@ const items = computed<Item[]>(() => {
       ['infra', 'Infrastructure', 'box'],
       ['commands', 'Commands', 'terminal'],
       ['usage', 'Usage', 'gauge'],
-      ['events', 'Events', 'activity'],
+      ['events', 'Activity', 'activity'],
     ] as [string, string, IconName][])
       out.push({ id: `view:${name}`, label, hint: 'view', icon, run: () => go(name) });
   }

@@ -1,9 +1,10 @@
 import { defineStore } from 'pinia';
 import { computed, ref, shallowRef, triggerRef, watch } from 'vue';
 import { api, paths, sharedRef, v1, type GroupAction, type ServiceAction, type StreamState, type Subscription } from '@/api';
-import type { Branches, LaneView, Point, Pruned, Run, ServiceView, SkillsState, StackEvent, StackView, UpgradeState, UsageReport, McpState } from '@/api/types';
+import type { Branches, JournalEntry, LaneView, Point, Pruned, Run, ServiceView, SkillsState, StackEvent, StackView, UpgradeState, UsageReport, McpState } from '@/api/types';
 import { restartLanesText, restartPlan, samePath } from '@/lib/lanes';
 import { act } from '@/lib/actions';
+import { forTree, sameEntry } from '@/lib/journal';
 import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
 import { useHub } from './hub';
@@ -14,7 +15,7 @@ const MAX_EVENTS = 500;
 const HISTORY_WINDOW_MS = 10 * 60_000;
 
 /** An entry of the events timeline (usage ticks are left out). */
-export type TimelineEvent = Exclude<StackEvent, { type: 'usage' } | { type: 'lanes' } | { type: 'notices' }>;
+export type TimelineEvent = Exclude<StackEvent, { type: 'usage' } | { type: 'lanes' } | { type: 'notices' } | { type: 'journal' }>;
 
 /** Keys of usage series: svc:<name>, ctr:<group>/<service>, builds, grp:<name>, lane:<name>. */
 export type SeriesKey = string;
@@ -32,6 +33,8 @@ export const useStack = defineStore('stack', () => {
   /** A snapshot arrived on the current stream connection. */
   const live = ref(false);
   const events = shallowRef<TimelineEvent[]>([]);
+  /** What the journal recorded for the tree shown (ADR-0067), newest first: fetched on each snapshot, then live. */
+  const journal = shallowRef<JournalEntry[]>([]);
   const usage = shallowRef<UsageReport | null>(null);
   const history = shallowRef<Map<SeriesKey, Point[]>>(new Map());
   const runs = ref<Record<string, Run[]>>({});
@@ -186,6 +189,7 @@ export const useStack = defineStore('stack', () => {
     view.value = cached?.view ?? null;
     viewAt.value = cached?.at ?? null;
     events.value = [];
+    journal.value = [];
     usage.value = null;
     history.value = new Map();
     runs.value = {};
@@ -539,6 +543,7 @@ export const useStack = defineStore('stack', () => {
         viewAt.value = Date.now();
         save();
         if (!usageFetched) void fetchUsage();
+        void fetchJournal();
         break;
       case 'service': {
         const s = svc(ev.service);
@@ -606,12 +611,45 @@ export const useStack = defineStore('stack', () => {
       case 'lanes':
         setLanes(ev.lanes);
         return; // the lane bar and the stack switcher show it
+      case 'journal':
+        addJournal([ev.entry]);
+        return; // its own list, merged into the timeline by the page
     }
     viewAt.value = Date.now();
     const list = events.value;
     list.unshift(ev);
     if (list.length > MAX_EVENTS) list.length = MAX_EVENTS;
     triggerRef(events);
+  }
+
+  /**
+   * The journal since the newest entry known, after each snapshot: on
+   * connecting, and after the stream fell behind (ADR-0067). An older
+   * daemon has none; the page then shows the events only.
+   */
+  async function fetchJournal() {
+    const stackId = id.value;
+    if (!stackId) return;
+    const since = Math.max(0, (journal.value[0]?.at ?? 0) - 1);
+    const lane = apiLane.value;
+    // A lane here reads the stack's journal; one on a node, or shared, its own daemon's.
+    const ownDaemon = foreign.value || !!lanes.value.find((l) => l.name === lane)?.node;
+    try {
+      const res = await api().request<JournalEntry[]>('GET', daemonPath(stackId, v1.journal(since)));
+      if (!res.ok || !Array.isArray(res.body) || id.value !== stackId || apiLane.value !== lane) return;
+      addJournal(res.body.filter((e) => forTree(e, lane, ownDaemon)));
+    } catch {
+      /* the stream will tell us */
+    }
+  }
+
+  /** Entries into `journal`, newest first, each once (the fetch and the stream overlap). */
+  function addJournal(entries: JournalEntry[]) {
+    const fresh = entries.filter((e) => !journal.value.some((k) => sameEntry(k, e)));
+    if (!fresh.length) return;
+    const list = [...fresh, ...journal.value].sort((a, b) => b.at - a.at);
+    if (list.length > MAX_EVENTS) list.length = MAX_EVENTS;
+    journal.value = list;
   }
 
   /** One fetch of /v1/stack in reaction to events, debounced (fields that events do not carry). */
@@ -993,6 +1031,7 @@ export const useStack = defineStore('stack', () => {
     runningLanes,
     mainIdle,
     events,
+    journal,
     usage,
     history,
     runs,

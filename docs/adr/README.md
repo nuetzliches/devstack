@@ -145,7 +145,7 @@ stay.
 | [0064](0064-every-compose-call-is-told-the-lane-it-runs-for.md) | Every Compose call is told the lane it runs for | Accepted; addendum 2026-10-26 (a lane on a node: native `{lane}`, `{lane_suffix}`, `DEVSTACK_LANE` follow its name) |
 | [0065](0065-the-store-is-warmed-for-a-ref-before-a-lane-needs-it.md) | The store is warmed for a ref before a lane needs it | Accepted; built, noted 2026-10-26 |
 | [0066](0066-a-measured-cpu-need-is-capped-at-half-of-what-its-node-gives-lanes.md) | A measured CPU need is capped at half of what its node gives lanes | Accepted |
-| [0067](0067-a-change-at-runtime-says-who-made-it.md) | A change at runtime says where it came from, and a journal keeps the last ones | Accepted; built 2026-10-27 (point 2 for the main slot and services) |
+| [0067](0067-a-change-at-runtime-says-who-made-it.md) | A change at runtime says where it came from, and a journal keeps the last ones | Accepted; built 2026-10-27 (point 2 for the main slot and services); addendum 2026-10-27: the dashboard shows the journal |
 | [0068](0068-a-stop-takes-the-containers-too.md) | A stop takes the stack's containers too, unless asked to keep them | Accepted |
 | [0069](0069-devstack-mcp-can-carry-the-tools-of-upstream-mcp-servers.md) | `devstack mcp` can carry the tools of upstream MCP servers, logged in once by the hub | Accepted ([card](https://github.com/nuetzliches/devstack/issues/316#issuecomment-6452598449)): a proxy in the hub, per user; amended 2026-10-27 (keychain via `keyring`, a file on Linux without a Secret Service) |
 | [0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md) | A review card comes before the code; an ADR records what was built | Accepted (supersedes ADR-0001) |

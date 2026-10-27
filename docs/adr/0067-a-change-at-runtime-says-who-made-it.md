@@ -1,6 +1,6 @@
 # ADR-0067: A change at runtime says where it came from, and a journal keeps the last ones
 
-- **Status:** Accepted (2026-10-27); built 2026-10-27
+- **Status:** Accepted (2026-10-27); built 2026-10-27; addendum 2026-10-27 (the dashboard)
 - **Date:** 2026-10-27
 - **Deciders:** project owner
 - **Related:** [ADR-0007](0007-one-http-api-is-the-control-surface.md) (one API, several clients), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0048](0048-a-containers-main-port-can-move-with-the-main-slot.md), [ADR-0052](0052-a-restart-carries-the-lanes-over.md), [ADR-0068](0068-a-stop-takes-the-containers-too.md)
@@ -92,4 +92,41 @@ slot given back or handed on by devstack); `main_served` and a service's
 Point 2 is built for the main slot and services (`stop`, `restart`,
 and every other `/v1/services/<name>/<action>`), not yet for
 workers, profiles or sharing: those are in the journal only. The dashboard
-gets the fields in its types and does not show them yet.
+gets the fields in its types and, since the addendum below, shows them.
+
+## Addendum 2026-10-27: the dashboard shows the journal
+
+Approved as a review card in [#331](https://github.com/nuetzliches/devstack/issues/331)
+(ADR-0070). Events and the journal are not one or the other: the journal
+records the requests, the events what followed and what no request
+caused (a build held, a health check, the file watcher). The dashboard
+shows them together, so a change stands next to what it caused.
+
+1. `/v1/events` carries `{type: "journal", entry}` when the daemon records
+   an entry, the same entry `GET /v1/journal` gives: the main tree's stream
+   every entry, a lane's those of its lane.
+2. The Events page is one timeline of events and journal entries
+   (*Activity*): on opening it loads `GET /v1/journal`, after that both
+   arrive live, and after a snapshot it fetches what it may have missed
+   (`?since=`). A journal row shows its client; a refused one (`status`
+   400 or more) its error.
+3. The dashboard names a row from its method and path, with a table of the
+   mutating routes; a path the table does not know shows as it came. The
+   journal's format stays: no `action` or `target` field, and no API
+   schema to derive the names from (a schema of its own is a question of
+   its own).
+4. `/v1/journal` is among what a viewer of a shared lane reads (ADR-0040).
+5. The dashboard shows point 2 of this ADR: a lane on the main ports says
+   since when and through what it holds them, a service's details its last
+   action.
+
+*Paths as built.* `Journal::subscribe` and `Entry::for_tree` in
+`crates/devstack-daemon/src/journal.rs`; `Supervisor::follow_journal` in
+`crates/devstack-daemon/src/supervisor/mod.rs` sends the entries on as
+events; `viewable` in `crates/devstack-node/src/node.rs`. In the dashboard
+`ui/src/lib/journal.ts` (the table, `forTree`), the store's `journal` and
+`fetchJournal` (`ui/src/stores/stack.ts`), `ui/src/views/EventsView.vue`,
+`servedSince` in `ui/src/components/StackHeader.vue` and the service's
+*Last action*. A lane on a node, and a shared one, read the journal of
+their daemon there, which runs as a main tree: its every entry, without
+`lane`.

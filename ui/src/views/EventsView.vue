@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import type { Client, JournalEntry } from '@/api/types';
 import { clock, shortBuild } from '@/lib/format';
+import { clientLabel, journalLabel, journalService, viaText } from '@/lib/journal';
 import { candidateLook, candidateSummary, rebuildLook, rebuildSummary, statusLook, type Tone } from '@/lib/status';
 import { useStack, type TimelineEvent } from '@/stores/stack';
 import Icon from '@/components/icons/Icon.vue';
 import type { IconName } from '@/components/icons/icons';
 
-type Type = TimelineEvent['type'];
+type Type = TimelineEvent['type'] | 'journal';
 const stack = useStack();
 const types: { v: Type; label: string }[] = [
+  { v: 'journal', label: 'Changed by' },
   { v: 'service', label: 'Service' },
   { v: 'candidate', label: 'Candidate' },
   { v: 'devserver_rebuild', label: 'Rebuild' },
@@ -19,10 +22,19 @@ const types: { v: Type; label: string }[] = [
   { v: 'notice', label: 'Notice' },
   { v: 'snapshot', label: 'Connect' },
 ];
-const enabled = ref<Record<Type, boolean>>({ service: true, candidate: true, devserver_rebuild: true, infra: true, command: true, config: true, watcher: true, notice: true, snapshot: true });
+const enabled = ref<Record<Type, boolean>>({ journal: true, service: true, candidate: true, devserver_rebuild: true, infra: true, command: true, config: true, watcher: true, notice: true, snapshot: true });
 const subject = ref('');
+/** Changes through this client only; events stay. */
+const client = ref<Client | ''>('');
+/** Changes of this lane only (`main`: the main tree's); events stay. */
+const laneOf = ref('');
 
-function subjectOf(e: TimelineEvent): string {
+/** A row of the timeline: an event of the stream, or a change the journal recorded (ADR-0067). */
+type Row = { kind: 'event'; at: number; key: string; e: TimelineEvent } | { kind: 'journal'; at: number; key: string; j: JournalEntry };
+
+function subjectOf(r: Row): string {
+  if (r.kind === 'journal') return journalService(r.j) ?? '';
+  const e = r.e;
   switch (e.type) {
     case 'service':
     case 'candidate':
@@ -40,21 +52,50 @@ function subjectOf(e: TimelineEvent): string {
   }
 }
 
+const rows = computed<Row[]>(() => {
+  const all: Row[] = [
+    ...stack.events.map((e) => ({ kind: 'event' as const, at: e.at, key: `e${e.seq}-${e.at}`, e })),
+    ...stack.journal.map((j, i) => ({ kind: 'journal' as const, at: j.at, key: `j${j.at}-${i}`, j })),
+  ];
+  // Newest first; at the same moment, what was caused above the change that caused it.
+  return all.sort((a, b) => b.at - a.at || (a.kind === b.kind ? 0 : a.kind === 'event' ? -1 : 1));
+});
+
 const subjects = computed(() => {
   const set = new Set<string>();
   for (const s of stack.view?.services ?? []) set.add(s.name);
-  for (const e of stack.events) {
-    const s = subjectOf(e);
+  for (const r of rows.value) {
+    const s = subjectOf(r);
     if (s) set.add(s);
   }
   return [...set].sort();
 });
+const clients = computed(() => [...new Set(stack.journal.map((j) => j.via))].sort());
+const lanes = computed(() => [...new Set(stack.journal.map((j) => j.lane).filter((l): l is string => !!l))].sort());
 
-const shown = computed(() => stack.events.filter((e) => enabled.value[e.type] && (!subject.value || subjectOf(e) === subject.value)));
+const shown = computed(() =>
+  rows.value.filter((r) => {
+    if (subject.value && subjectOf(r) !== subject.value) return false;
+    if (r.kind === 'event') return enabled.value[r.e.type];
+    if (!enabled.value.journal) return false;
+    if (client.value && r.j.via !== client.value) return false;
+    if (laneOf.value && (r.j.lane ?? 'main') !== laneOf.value) return false;
+    return true;
+  }),
+);
 
 type Desc = { icon: IconName; tone: Tone; title: string; text: string; detail?: string | null };
 
-function describe(e: TimelineEvent): Desc {
+function describeJournal(j: JournalEntry): Desc {
+  const by = viaText(j.via);
+  const where = j.lane ? ` · lane ${j.lane}` : '';
+  if (j.status >= 400) return { icon: 'xCircle', tone: 'danger', title: journalLabel(j), text: `refused (${j.status}) · ${by}${where}`, detail: j.error ?? null };
+  return { icon: j.via === 'auto' ? 'zap' : 'history', tone: 'accent', title: journalLabel(j), text: `${by}${where}` };
+}
+
+function describe(r: Row): Desc {
+  if (r.kind === 'journal') return describeJournal(r.j);
+  const e = r.e;
   switch (e.type) {
     case 'service': {
       const l = statusLook(e.status);
@@ -100,8 +141,8 @@ function describe(e: TimelineEvent): Desc {
   <div class="page">
     <header class="page-header">
       <div>
-        <h1>Events</h1>
-        <p class="subtitle">The stack's live event stream since this page connected, newest first (last 500).</p>
+        <h1>Activity</h1>
+        <p class="subtitle">What changed the stack and through which client (its journal, kept across restarts), and the live events since this page connected; newest first.</p>
       </div>
     </header>
 
@@ -113,6 +154,21 @@ function describe(e: TimelineEvent): Desc {
           </button>
         </div>
         <span class="grow" />
+        <template v-if="clients.length">
+          <label class="sr-only" for="ev-client">Filter changes by client</label>
+          <select id="ev-client" v-model="client" class="input input-sm" data-testid="events-client">
+            <option value="">All clients</option>
+            <option v-for="c in clients" :key="c" :value="c">{{ clientLabel[c] ?? c }}</option>
+          </select>
+        </template>
+        <template v-if="lanes.length">
+          <label class="sr-only" for="ev-lane">Filter changes by lane</label>
+          <select id="ev-lane" v-model="laneOf" class="input input-sm" data-testid="events-lane">
+            <option value="">All lanes</option>
+            <option value="main">Main tree</option>
+            <option v-for="l in lanes" :key="l" :value="l">{{ l }}</option>
+          </select>
+        </template>
         <label class="sr-only" for="ev-subject">Filter by service</label>
         <select id="ev-subject" v-model="subject" class="input input-sm" data-testid="events-subject">
           <option value="">All services</option>
@@ -120,25 +176,26 @@ function describe(e: TimelineEvent): Desc {
         </select>
       </header>
       <ol v-if="shown.length" class="timeline stale-dim" data-testid="events-list" aria-live="polite">
-        <li v-for="e in shown" :key="e.seq" class="ev" :class="`tone-${describe(e).tone}`" :data-type="e.type">
-          <time class="t tabular" :datetime="new Date(e.at).toISOString()">{{ clock(e.at) }}</time>
-          <span class="ic"><Icon :name="describe(e).icon" :size="14" /></span>
+        <li v-for="r in shown" :key="r.key" class="ev" :class="`tone-${describe(r).tone}`" :data-type="r.kind === 'journal' ? 'journal' : r.e.type">
+          <time class="t tabular" :datetime="new Date(r.at).toISOString()">{{ clock(r.at) }}</time>
+          <span class="ic"><Icon :name="describe(r).icon" :size="14" /></span>
           <div class="grow body">
             <div class="line1">
-              <span class="ty">{{ e.type }}</span>
-              <RouterLink v-if="(e.type === 'service' || e.type === 'candidate') && stack.svc(e.service)" :to="{ name: 'service', params: { stack: stack.id ?? '', name: e.service } }" class="subj">{{ describe(e).title }}</RouterLink>
-              <span v-else class="subj">{{ describe(e).title }}</span>
-              <span class="txt">{{ describe(e).text }}</span>
+              <span class="ty">{{ r.kind === 'journal' ? 'changed' : r.e.type }}</span>
+              <RouterLink v-if="r.kind === 'event' && (r.e.type === 'service' || r.e.type === 'candidate') && stack.svc(r.e.service)" :to="{ name: 'service', params: { stack: stack.id ?? '', name: r.e.service } }" class="subj">{{ describe(r).title }}</RouterLink>
+              <span v-else class="subj">{{ describe(r).title }}</span>
+              <span class="txt">{{ describe(r).text }}</span>
             </div>
-            <pre v-if="describe(e).detail" class="detail">{{ describe(e).detail }}</pre>
+            <pre v-if="describe(r).detail" class="detail">{{ describe(r).detail }}</pre>
           </div>
-          <span class="seq faint tabular">#{{ e.seq }}</span>
+          <span v-if="r.kind === 'event'" class="seq faint tabular">#{{ r.e.seq }}</span>
+          <span v-else class="seq faint tabular" :title="`${r.j.method} ${r.j.path}`">{{ r.j.via }}</span>
         </li>
       </ol>
       <div v-else class="empty">
         <Icon name="activity" :size="28" />
-        <p v-if="!stack.events.length">{{ stack.live ? 'Waiting for events…' : 'Not connected to the stack.' }}</p>
-        <p v-else>No events match the filter.</p>
+        <p v-if="!rows.length">{{ stack.live ? 'Waiting for events…' : 'Not connected to the stack.' }}</p>
+        <p v-else>Nothing matches the filter.</p>
       </div>
     </section>
   </div>
