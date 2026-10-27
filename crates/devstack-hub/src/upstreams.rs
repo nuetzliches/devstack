@@ -36,12 +36,25 @@ pub const CALLBACK: &str = "/oauth/upstream/callback";
 const FLOW_FOR: Duration = Duration::from_secs(600);
 
 /// One upstream as the user configured it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Upstream {
     /// Its name in the dashboard and in the keychain: `[a-z0-9-]`, 1 to 32.
     pub name: String,
-    /// Its MCP endpoint (Streamable HTTP).
+    /// Its MCP endpoint (Streamable HTTP); empty for one that is a command.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub url: String,
+    /// The command the hub starts for it instead (stdio, card point 3): the
+    /// program and its arguments, as the user entered them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub command: Vec<String>,
+    /// The variables the command gets besides a base to run at all (no
+    /// secret: the configuration is not the keychain).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub env: std::collections::BTreeMap<String, String>,
+    /// For a command logging in with a token the hub keeps: the variable it
+    /// is given in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_var: Option<String>,
     /// What its tools are prefixed with (`<prefix>__<tool>`); the name with
     /// `_` for `-` when not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -78,6 +91,11 @@ pub enum Auth {
 }
 
 impl Upstream {
+    /// It is a command the hub starts (stdio), not a URL.
+    pub fn is_command(&self) -> bool {
+        !self.command.is_empty()
+    }
+
     pub fn prefix(&self) -> String {
         self.prefix
             .clone()
@@ -102,14 +120,47 @@ impl Upstream {
         {
             return Err(format!("`{p}`: a prefix is 1 to 32 of a-z, 0-9 and _"));
         }
-        let u = self.url.trim();
-        let local = ["http://127.0.0.1", "http://localhost", "http://[::1]"]
-            .iter()
-            .any(|l| u.starts_with(l));
-        if !(u.starts_with("https://") || local) {
-            return Err(format!(
-                "`{u}`: an upstream is reached over https (plain http on this machine only)"
-            ));
+        let var =
+            |e: &str| !e.is_empty() && e.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+        if self.is_command() {
+            if !self.url.trim().is_empty() {
+                return Err("an upstream is a URL or a command, not both".into());
+            }
+            if self.command[0].trim().is_empty() {
+                return Err("the command names no program".into());
+            }
+            if let Some(k) = self.env.keys().find(|k| !var(k)) {
+                return Err(format!("`{k}`: not the name of an environment variable"));
+            }
+            if matches!(self.auth, Auth::Oauth { .. }) {
+                return Err("a command logs in with a token, not with OAuth".into());
+            }
+            match (&self.auth, &self.token_var) {
+                (Auth::Token { env: None }, Some(t)) if var(t) => {}
+                (Auth::Token { env: None }, _) => {
+                    return Err(
+                        "a command with a token the hub keeps needs the variable it is given in"
+                            .into(),
+                    );
+                }
+                (_, Some(_)) => {
+                    return Err("`token_var` is for a command with a token the hub keeps".into());
+                }
+                _ => {}
+            }
+        } else {
+            let u = self.url.trim();
+            let local = ["http://127.0.0.1", "http://localhost", "http://[::1]"]
+                .iter()
+                .any(|l| u.starts_with(l));
+            if !(u.starts_with("https://") || local) {
+                return Err(format!(
+                    "`{u}`: an upstream is reached over https (plain http on this machine only)"
+                ));
+            }
+            if !self.env.is_empty() || self.token_var.is_some() {
+                return Err("`env` and `token_var` are for an upstream that is a command".into());
+            }
         }
         if let Auth::Token { env: Some(e) } = &self.auth
             && (e.is_empty() || !e.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
@@ -173,6 +224,10 @@ pub struct Upstreams {
     /// The tools each upstream listed last, kept across restarts: a
     /// logged-out or unreachable upstream keeps them listed (card point 5).
     seen: PathBuf,
+    /// The running command of each upstream that is one.
+    procs: Mutex<HashMap<String, std::sync::Arc<crate::stdio::Process>>>,
+    /// Where those commands' stderr goes.
+    logs: PathBuf,
     /// When each upstream was asked last, and what it answered then.
     listed: Mutex<HashMap<String, Listed>>,
 }
@@ -210,6 +265,8 @@ impl Upstreams {
             flows: Mutex::new(HashMap::new()),
             write: Mutex::new(()),
             sessions: Mutex::new(HashMap::new()),
+            procs: Mutex::new(HashMap::new()),
+            logs: dir.join("upstreams"),
             listed: Mutex::new(HashMap::new()),
         }
     }
@@ -269,6 +326,7 @@ impl Upstreams {
     /// it logs in forgets its credential: it was for the other.
     pub fn put(&self, u: Upstream) -> Result<(), String> {
         u.check()?;
+        let name = u.name.clone();
         let _one = self.write.lock().unwrap();
         let mut all = self.list()?;
         if all
@@ -280,6 +338,7 @@ impl Upstreams {
         match all.iter_mut().find(|o| o.name == u.name) {
             Some(o) => {
                 if o.url != u.url
+                    || o.command != u.command
                     || std::mem::discriminant(&o.auth) != std::mem::discriminant(&u.auth)
                 {
                     self.secrets.delete(&u.name)?;
@@ -288,6 +347,8 @@ impl Upstreams {
             }
             None => all.push(u),
         }
+        // A command runs again as configured now.
+        self.procs.lock().unwrap().remove(&name);
         self.save(&all)
     }
 
@@ -299,6 +360,7 @@ impl Upstreams {
         if all.len() == before {
             return Ok(false);
         }
+        self.procs.lock().unwrap().remove(name);
         self.secrets.delete(name)?;
         self.save(&all)?;
         Ok(true)
@@ -511,6 +573,9 @@ impl Upstreams {
         method: &str,
         params: Value,
     ) -> Result<Value, String> {
+        if u.is_command() {
+            return self.ask_command(u, method, params);
+        }
         for stale in [false, true] {
             let bearer = self.bearer(http, &u.name, stale)?;
             if bearer.is_none() && !matches!(u.auth, Auth::None) {
@@ -552,6 +617,59 @@ impl Upstreams {
             }
         }
         unreachable!("the loop returns")
+    }
+
+    /// `method` on the command of `u`, started when it does not run (card
+    /// point 3): with the variables the user set and, for a token the hub
+    /// keeps, that token in `token_var`.
+    fn ask_command(&self, u: &Upstream, method: &str, params: Value) -> Result<Value, String> {
+        let running = self
+            .procs
+            .lock()
+            .unwrap()
+            .get(&u.name)
+            .filter(|p| p.alive())
+            .cloned();
+        let p = match running {
+            Some(p) => p,
+            None => {
+                let mut env = u.env.clone();
+                if let (Auth::Token { env: None }, Some(var)) = (&u.auth, &u.token_var) {
+                    let token = self.bearer(&http(), &u.name, false)?.ok_or_else(|| {
+                        format!(
+                            "devstack has no token for the MCP upstream `{}`: give it at {}",
+                            u.name,
+                            dashboard()
+                        )
+                    })?;
+                    env.insert(var.clone(), token);
+                }
+                if let Auth::Token { env: Some(from) } = &u.auth
+                    && let Ok(v) = std::env::var(from)
+                {
+                    env.insert(from.clone(), v);
+                }
+                let log = self.logs.join(format!("{}.log", u.name));
+                let p = std::sync::Arc::new(
+                    crate::stdio::Process::start(&u.command, &env, &log).map_err(|e| {
+                        format!(
+                            "the MCP upstream `{}`: {e} (its output: {})",
+                            u.name,
+                            log.display()
+                        )
+                    })?,
+                );
+                self.procs.lock().unwrap().insert(u.name.clone(), p.clone());
+                p
+            }
+        };
+        let within = if method == "tools/call" {
+            Duration::from_secs(600)
+        } else {
+            Duration::from_secs(60)
+        };
+        p.request(method, params, within)
+            .map_err(|e| format!("the MCP upstream `{}`: {e}", u.name))
     }
 
     /// The tools `u` offers now, all pages, before its allowlist.
@@ -936,6 +1054,7 @@ mod tests {
             prefix: None,
             allow: Vec::new(),
             auth: Auth::None,
+            ..Default::default()
         };
         assert!(u("tracker", "https://mcp.example.com/mcp").check().is_ok());
         assert!(u("local", "http://127.0.0.1:9000/mcp").check().is_ok());
@@ -954,6 +1073,7 @@ mod tests {
             prefix: Some("tr".into()),
             allow: vec!["search".into()],
             auth: Auth::Token { env: None },
+            ..Default::default()
         };
         ups.put(tracker.clone()).unwrap();
         ups.set_token("tracker", "secret-token").unwrap();
@@ -1074,6 +1194,7 @@ mod tests {
                 client_id: None,
                 scopes: Vec::new(),
             },
+            ..Default::default()
         })
         .unwrap();
         let http = http();
@@ -1223,6 +1344,7 @@ mod tests {
             prefix: Some("tr".into()),
             allow: vec!["search".into()],
             auth: Auth::Token { env: None },
+            ..Default::default()
         })
         .unwrap();
         let http = http();
@@ -1288,5 +1410,52 @@ mod tests {
             "{r}"
         );
         let _ = ups.remove(&name);
+    }
+
+    #[test]
+    fn a_command_gets_the_token_the_hub_keeps_in_its_variable_and_nothing_else() {
+        let d = tempfile::tempdir().unwrap();
+        let ups = Upstreams::open(d.path().to_path_buf());
+        let name = format!("c{}", std::process::id());
+        let cmd = Upstream {
+            name: name.clone(),
+            command: crate::stdio::tests::fake_command(),
+            env: std::collections::BTreeMap::from([("DEVSTACK_FAKE_STDIO_MCP".into(), "1".into())]),
+            auth: Auth::Token { env: None },
+            token_var: Some("THE_TOKEN".into()),
+            ..Default::default()
+        };
+        // What does not fit a command is refused.
+        let mut bad = cmd.clone();
+        bad.auth = Auth::Oauth {
+            client_id: None,
+            scopes: Vec::new(),
+        };
+        assert!(ups.put(bad).is_err());
+        let mut bad = cmd.clone();
+        bad.token_var = None;
+        assert!(ups.put(bad).is_err());
+        let mut bad = cmd.clone();
+        bad.url = "https://x.example.com/mcp".into();
+        assert!(ups.put(bad).is_err());
+        ups.put(cmd).unwrap();
+        let http = http();
+        // No token yet: it is not started, and says how to get one.
+        let tools = ups.tools(&http);
+        assert_eq!(tools[0]["name"], format!("{name}__login"), "{tools:?}");
+        ups.set_token(&name, "tk-1").unwrap();
+        ups.listed.lock().unwrap().clear();
+        let tools = ups.tools(&http);
+        assert_eq!(tools[0]["name"], format!("{name}__env"), "{tools:?}");
+        let r = ups.call(
+            &http,
+            &format!("{name}__env"),
+            json!({ "var": "THE_TOKEN" }),
+        );
+        assert_eq!(r["content"][0]["text"], "tk-1", "{r}");
+        // A change of it starts the command again.
+        assert_eq!(ups.procs.lock().unwrap().len(), 1);
+        ups.remove(&name).unwrap();
+        assert!(ups.procs.lock().unwrap().is_empty());
     }
 }

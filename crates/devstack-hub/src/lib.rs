@@ -47,6 +47,7 @@ pub mod release;
 pub mod secrets;
 mod share;
 mod shared;
+mod stdio;
 mod summary;
 pub mod tray;
 pub mod upstreams;

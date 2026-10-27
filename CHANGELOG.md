@@ -24,7 +24,10 @@ and listed with their assets on the
   tools it listed last and answers with the dashboard's page; a change of
   the tools is announced (`notifications/tools/list_changed`). Without a
   hub (`DEVSTACK_NO_HUB`), upstreams without a login or with a token from
-  the environment are asked directly.
+  the environment are asked directly. An upstream can also be a command the
+  hub starts (stdio, `npx -y …`), as the user, with a base environment and
+  only the variables set for it there, a token the hub keeps given in a
+  variable of its choice; never a command from a repository or the pool.
 
 ### Changed
 

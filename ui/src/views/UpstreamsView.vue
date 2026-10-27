@@ -8,6 +8,7 @@ import { computed, onMounted, ref } from 'vue';
 import { api, paths } from '@/api';
 import type { McpUpstream, McpUpstreamAuth, McpUpstreams } from '@/api/types';
 import { act } from '@/lib/actions';
+import { line, words } from '@/lib/commandLine';
 import { useUi } from '@/stores/ui';
 import Icon from '@/components/icons/Icon.vue';
 
@@ -31,25 +32,49 @@ async function load() {
 onMounted(load);
 
 // The form: a new upstream, or one to change.
-const form = ref({ name: '', url: '', prefix: '', allow: '', kind: 'oauth' as McpUpstreamAuth['kind'], client_id: '', env: '' });
+type Form = {
+  name: string;
+  /** A URL (Streamable HTTP), or a command the hub starts (stdio). */
+  transport: 'url' | 'command';
+  url: string;
+  command: string;
+  /** `KEY=value`, one per line: what the command gets besides a base. */
+  vars: string;
+  prefix: string;
+  allow: string;
+  kind: McpUpstreamAuth['kind'];
+  client_id: string;
+  env: string;
+  token_var: string;
+};
+const empty = (): Form => ({ name: '', transport: 'url', url: '', command: '', vars: '', prefix: '', allow: '', kind: 'oauth', client_id: '', env: '', token_var: '' });
+const form = ref<Form>(empty());
 const editing = ref<string | null>(null);
 const formOpen = ref(false);
 
+
 function startAdd() {
-  form.value = { name: '', url: '', prefix: '', allow: '', kind: 'oauth', client_id: '', env: '' };
+  form.value = empty();
   editing.value = null;
   formOpen.value = true;
 }
 
 function startEdit(u: McpUpstream) {
+  const isCommand = (u.command ?? []).length > 0;
   form.value = {
     name: u.name,
-    url: u.url,
+    transport: isCommand ? 'command' : 'url',
+    url: u.url ?? '',
+    command: line(u.command ?? []),
+    vars: Object.entries(u.env ?? {})
+      .map(([k, v]) => `${k}=${v}`)
+      .join('\n'),
     prefix: u.prefix === u.name.replace(/-/g, '_') ? '' : u.prefix,
     allow: (u.allow ?? []).join(', '),
     kind: u.auth.kind,
     client_id: u.auth.kind === 'oauth' ? (u.auth.client_id ?? '') : '',
     env: u.auth.kind === 'token' ? (u.auth.env ?? '') : '',
+    token_var: u.token_var ?? '',
   };
   editing.value = u.name;
   formOpen.value = true;
@@ -64,9 +89,18 @@ const auth = computed<McpUpstreamAuth>(() => {
 
 async function save() {
   const f = form.value;
+  const isCommand = f.transport === 'command';
+  const vars = Object.fromEntries(
+    f.vars
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.includes('='))
+      .map((l) => [l.slice(0, l.indexOf('=')).trim(), l.slice(l.indexOf('=') + 1)]),
+  );
   const body = {
     name: f.name.trim(),
-    url: f.url.trim(),
+    ...(isCommand ? { command: words(f.command.trim()), env: vars } : { url: f.url.trim() }),
+    ...(isCommand && f.kind === 'token' && !f.env.trim() && f.token_var.trim() ? { token_var: f.token_var.trim() } : {}),
     ...(f.prefix.trim() ? { prefix: f.prefix.trim() } : {}),
     allow: f.allow
       .split(',')
@@ -150,21 +184,44 @@ function how(u: McpUpstream): string {
 
       <form v-if="formOpen" class="form" data-testid="upstream-form" @submit.prevent="save">
         <label>Name <input v-model="form.name" class="input" :disabled="!!editing" placeholder="tracker" spellcheck="false" /></label>
-        <label>URL <input v-model="form.url" class="input" placeholder="https://mcp.example.com/mcp" spellcheck="false" /></label>
+        <label
+          >Reached
+          <select v-model="form.transport" class="input" data-testid="upstream-transport">
+            <option value="url">at a URL</option>
+            <option value="command">as a command the hub starts</option>
+          </select>
+        </label>
+        <label v-if="form.transport === 'url'" class="wide">URL <input v-model="form.url" class="input" placeholder="https://mcp.example.com/mcp" spellcheck="false" /></label>
+        <template v-else>
+          <label class="wide"
+            >Command <input v-model="form.command" class="input" placeholder="npx -y @example/mcp-server" spellcheck="false" />
+            <span class="faint small">Started as you, with a base environment and only the variables below; never from a repository.</span>
+          </label>
+          <label class="wide">Variables <textarea v-model="form.vars" class="input" rows="2" placeholder="KEY=value, one per line; no secret here" spellcheck="false" /></label>
+        </template>
         <label>Prefix <input v-model="form.prefix" class="input" :placeholder="form.name.replace(/-/g, '_') || 'tracker'" spellcheck="false" /></label>
         <label>Tools <input v-model="form.allow" class="input" placeholder="all; or: search, get_issue" spellcheck="false" /></label>
         <label
           >Login
           <select v-model="form.kind" class="input">
-            <option value="oauth">OAuth (log in in the browser)</option>
+            <option v-if="form.transport === 'url'" value="oauth">OAuth (log in in the browser)</option>
             <option value="token">A token</option>
             <option value="none">None</option>
           </select>
         </label>
         <label v-if="form.kind === 'oauth'">Client id <input v-model="form.client_id" class="input" placeholder="only where the server registers none itself" spellcheck="false" /></label>
         <label v-if="form.kind === 'token'">From variable <input v-model="form.env" class="input" placeholder="empty: you give it the hub" spellcheck="false" /></label>
+        <label v-if="form.kind === 'token' && form.transport === 'command' && !form.env.trim()"
+          >Given to it as <input v-model="form.token_var" class="input" placeholder="API_TOKEN" spellcheck="false"
+        /></label>
         <div class="row">
-          <button type="submit" class="btn btn-primary btn-sm" :disabled="!form.name.trim() || !form.url.trim() || !!busy.form">Save</button>
+          <button
+            type="submit"
+            class="btn btn-primary btn-sm"
+            :disabled="!form.name.trim() || !(form.transport === 'url' ? form.url.trim() : form.command.trim()) || (form.transport === 'command' && form.kind === 'oauth') || !!busy.form"
+          >
+            Save
+          </button>
           <button type="button" class="btn btn-sm" @click="formOpen = false">Cancel</button>
         </div>
       </form>
@@ -174,7 +231,7 @@ function how(u: McpUpstream): string {
         <li v-for="u in state.upstreams" :key="u.name" class="item" data-testid="upstream" :data-name="u.name">
           <div class="main">
             <strong>{{ u.name }}</strong>
-            <span class="faint small">{{ u.url }}</span>
+            <span class="faint small">{{ u.command?.length ? line(u.command) : u.url }}</span>
             <span class="small">
               <code>{{ u.prefix }}__…</code> · {{ how(u) }} ·
               <span :class="u.logged_in ? 'ok-text' : 'warn-text'">{{ u.logged_in ? 'logged in' : 'logged out' }}</span>
@@ -222,6 +279,9 @@ function how(u: McpUpstream): string {
   flex-direction: column;
   gap: 4px;
   font-size: 13px;
+}
+.form .wide {
+  grid-column: 1 / -1;
 }
 .form .row {
   grid-column: 1 / -1;

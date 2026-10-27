@@ -161,3 +161,19 @@ connections, OAuth client and redirect, a loopback API for
 `devstack mcp`), `crates/devstack/src/mcp.rs` (merging the tool lists,
 forwarding calls, starting the hub), `ui/` (upstreams and logins),
 `docs/dashboard-api.md`.
+
+*Paths as built, noted 2026-10-27* (#325, #329, #332 and the stdio upstreams):
+`crates/devstack-hub/src/secrets.rs` (the keychain, a file without a
+Secret Service); `upstreams.rs` (`upstreams.toml`, the OAuth flow written
+against `ureq` rather than the `oauth2` crate, `tools()` and `call()` with
+prefix, allowlist and the tools last listed kept in `upstream-tools.json`,
+`<prefix>__login` for an upstream never listed); `mcpclient.rs`
+(Streamable HTTP); `stdio.rs` (a command started with a base environment
+and the variables the user set, a kept token in `token_var`, its stderr in
+`upstreams/<name>.log`); the routes `/hub/upstreams...` and
+`/oauth/upstream/callback` in `lib.rs`; `crates/devstack/src/upstream.rs`
+and `mcp.rs` (`devstack mcp` starts the hub only when upstreams are
+configured, and looks for a change of their tools once a minute); the page
+*MCP upstreams* (`ui/src/views/UpstreamsView.vue`). One user token for
+every agent, as the owner chose on 2026-10-27; a token per agent was not
+built.
