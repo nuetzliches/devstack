@@ -1,6 +1,6 @@
 # ADR-0069: `devstack mcp` can carry the tools of upstream MCP servers, logged in once by the hub
 
-- **Status:** Open
+- **Status:** Proposed (2026-10-27)
 - **Date:** 2026-10-27
 - **Deciders:** project owner
 - **Related:** [#316](https://github.com/nuetzliches/devstack/issues/316), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md), [ADR-0054](0054-macos-is-a-developer-platform-in-preview.md), [ADR-0060](0060-the-tray-is-a-client-of-the-hub.md), [ADR-0067](0067-a-change-at-runtime-says-who-made-it.md)
@@ -42,8 +42,83 @@ What is settled by the constraints, whichever way the questions below go:
 - **Out of scope**: a registry or marketplace, a policy engine, caching or
   rewriting content, a gateway on a server for many users.
 
-## Question
+## Decision
 
+Option A of the alternatives below: a proxy in the hub, configured per
+user. *Decided 2026-10-27; the record of the question it answered is under
+"The question as it was open".*
+
+1. **The hub connects to the upstreams.** It speaks MCP to each upstream the
+   user configured, over stdio or Streamable HTTP, with a prefix
+   (`<upstream>__<tool>`) and a tool allowlist per upstream. `devstack mcp`
+   asks the hub for their tools over loopback (the user token of ADR-0019),
+   lists them beside its own and forwards their calls to the hub. A call
+   for devstack's own tools never goes through an upstream.
+2. **Upstreams are configured per user only**, in the hub's settings,
+   managed in the dashboard (add, remove, allowlist, log in, log out). The
+   pool and the stack file hand out nothing (questions 1; B and C can
+   follow without a break).
+3. **Identity: OAuth per user.** The hub is an OAuth client of each
+   upstream (authorization code with PKCE, dynamic client registration
+   where the upstream offers it), its redirect target on the hub's loopback
+   port. Tokens in the OS keychain; no token passthrough either way. An
+   upstream with a static bearer token takes it from the keychain or the
+   environment. The pool's client certificate is not used towards upstreams
+   (question 2).
+4. **A logged-out upstream stays listed.** Its tools are in the list and
+   answer with an error that says to log in from the dashboard (with the
+   link); an upstream that is down answers that it is down. When an
+   upstream's tools change, `devstack mcp` sends
+   `notifications/tools/list_changed`, and works the same with a harness
+   that ignores it (question 3).
+5. **`devstack mcp` starts the hub** when it is not running, as `devstack
+   ui` does; if it cannot, it serves its own tools and says why in each
+   upstream tool's error (question 4).
+6. **No browser, no OAuth.** On a machine without one (CI, headless,
+   `DEVSTACK_NO_HUB`), only upstreams with a static token from the
+   environment are used; the others are listed as logged out (question 5).
+
+Before it is built, a spike settles the keychain: crates with an
+MIT-compatible licence for Windows (Credential Manager), Linux (Secret
+Service, and what to do without one) and macOS (Keychain, ADR-0054). If
+none fits, this ADR is amended before any code depends on it.
+
+## Alternatives considered
+
+- **A. Proxy in the hub, user level only.** Chosen.
+- **B. A, plus definitions from the pool.** The pool hands upstream
+  definitions to its members (never secrets), administered in the pool's
+  dashboard. Needs precedence and opt-out rules and a pool protocol change
+  before the user level has been used; left for later.
+- **C. B, plus suggestions in the stack file.** A repository names the
+  upstreams it works with. A stack file key (ADR-0023), and a repository
+  steering what an agent's harness can reach; left out.
+- **D. Do not proxy; write the harnesses' own configuration** (as #317 does
+  for `devstack mcp`). The lists stop drifting, but every harness still
+  logs in and holds tokens on its own: the main problem stays.
+- **E. A separate gateway** (prior art: MCPJungle). Central, without
+  per-user OAuth, and a server to run.
+- **The pool's client certificate as identity** (question 2): revocation
+  for free where an upstream trusts the pool's CA, but it ties upstreams
+  to the pool, and no upstream is known to accept one.
+- **Hiding a logged-out upstream's tools** (question 3): a harness that
+  ignores `list_changed` never sees them come back, and the agent cannot
+  tell the user to log in.
+
+## Consequences
+
+- A second protocol surface in the hub, an OAuth client and keychain
+  access on three platforms: several pull requests, the keychain first.
+- The hub holds every upstream token of the user. Its loopback API stays
+  behind the user token (ADR-0019); a token never leaves it.
+- Every harness that has `devstack mcp` gets the same upstream tools; one
+  that should not, does not register `devstack mcp` or the user narrows the
+  allowlist.
+- On CI and headless machines only static tokens work.
+
+## The question as it was open
+
+'''
 How does `devstack mcp` carry upstream tools, and what is decided for each
 of these?
 
@@ -64,46 +139,11 @@ of these?
    Static tokens from the environment only, a device-code flow where an
    upstream offers it, or no upstreams there?
 
-## Options
-
-- **A. Proxy in the hub, user level only.** `devstack mcp` asks the hub for
-  the upstream tools and forwards calls to it (loopback, the user token of
-  ADR-0019); the hub speaks to each upstream (stdio or Streamable HTTP),
-  with a prefix and a tool allowlist per upstream. Upstreams and logins are
-  managed in the dashboard. Smallest that removes the per-harness logins;
-  the pool and the stack file stay out. Cost: a second protocol surface in
-  the hub, keychain access on three platforms (macOS in preview,
-  ADR-0054), an OAuth client implementation.
-- **B. A, plus definitions from the pool.** The pool hands upstream
-  definitions to its members (never secrets; every member logs in for
-  themselves), administered in the pool's dashboard. Cost: precedence and
-  opt-out rules (question 1), a pool protocol change.
-- **C. B, plus suggestions in the stack file.** A repository names the
-  upstreams it works with (non-secret), the dashboard offers to add them.
-  Cost: a stack file key (ADR-0023 applies), and a repository steering what
-  an agent's harness can reach.
-- **D. Do not proxy; manage the harnesses' own configuration.** devstack
-  writes the same upstream list into every harness's config (as #317 does
-  for `devstack mcp` itself). The lists stop drifting, but every harness
-  still logs in and holds tokens on its own: the main problem stays.
-- **E. Leave it to a separate gateway** (prior art: MCPJungle, central,
-  without OAuth). No work in devstack; no per-user OAuth, and a server to
-  run.
-
-## What would decide it
-
-- Which upstreams the maintainers use daily need OAuth, and whether they
-  rotate refresh tokens (if none do, D covers most of it).
-- Whether the harnesses in use honour `tools/list_changed` (question 3).
-- Whether a pool should hand out upstreams at all before user-level
-  configuration has been used (B and C can follow A without a break).
-- The keychain crates available under an MIT-compatible licence on
-  Windows, Linux and macOS.
 
 ## Enforced by
 
-Nothing is built; nothing builds on either side until this ADR moves to
-`Proposed` or `Accepted`. Where it would live: `crates/devstack-hub`
-(upstream connections, OAuth client, token storage, a loopback API for
+To be built, after the keychain spike: `crates/devstack-hub` (upstream
+connections, OAuth client and redirect, token storage, a loopback API for
 `devstack mcp`), `crates/devstack/src/mcp.rs` (merging the tool lists,
-forwarding calls), `ui/` (upstreams and logins), `docs/dashboard-api.md`.
+forwarding calls, starting the hub), `ui/` (upstreams and logins),
+`docs/dashboard-api.md`.
