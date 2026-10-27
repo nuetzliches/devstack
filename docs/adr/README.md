@@ -117,4 +117,4 @@ stay.
 | [0066](0066-a-measured-cpu-need-is-capped-at-half-of-what-its-node-gives-lanes.md) | A measured CPU need is capped at half of what its node gives lanes | Accepted |
 | [0067](0067-a-change-at-runtime-says-who-made-it.md) | A change at runtime says where it came from, and a journal keeps the last ones | Accepted; built 2026-10-27 (point 2 for the main slot and services) |
 | [0068](0068-a-stop-takes-the-containers-too.md) | A stop takes the stack's containers too, unless asked to keep them | Accepted |
-| [0069](0069-devstack-mcp-can-carry-the-tools-of-upstream-mcp-servers.md) | `devstack mcp` can carry the tools of upstream MCP servers, logged in once by the hub | Open |
+| [0069](0069-devstack-mcp-can-carry-the-tools-of-upstream-mcp-servers.md) | `devstack mcp` can carry the tools of upstream MCP servers, logged in once by the hub | Proposed (option A: a proxy in the hub, per user) |
