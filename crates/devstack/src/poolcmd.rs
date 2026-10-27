@@ -757,6 +757,7 @@ pub fn run_lane(file: &Path, on: &str, lane: &str, keep: bool) -> Result<()> {
                 0,
                 None,
                 false,
+                false,
                 Duration::from_secs(1800),
                 &|p| println!("  {p}"),
                 &|p, ms| println!("    ({p}: {:.1} s)", ms as f64 / 1000.0),

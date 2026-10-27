@@ -1045,7 +1045,8 @@ pub fn up(
             );
         }
     }
-    if c.lane().is_some_and(|l| l != "-") && on.is_none() && (workers || force) {
+    // Started already, here or on a node: nothing restarts it (#314).
+    if c.lane().is_some_and(|l| l != "-") && (workers || force) {
         eprintln!(
             "note: this worktree's lane is started already; --workers and --force apply when it starts (`devstack down` here first)"
         );
@@ -1472,6 +1473,9 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
         let name = l["name"].as_str().unwrap_or("");
         if let Some(p) = l["profile"].as_str() {
             troubles.push(format!("{name}: runs with the profile `{p}`"));
+        }
+        if l["workers"] == true && l["owns_main"] != true {
+            troubles.push(format!("{name}: runs its background workers"));
         }
         if let Some(e) = l["node_error"].as_str() {
             troubles.push(format!("{name}: {e}"));

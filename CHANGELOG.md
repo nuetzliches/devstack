@@ -41,6 +41,16 @@ and listed with their assets on the
 
 ### Fixed
 
+- **`devstack up --workers` runs the workers of a lane on a node too**
+  (#314): the flag never reached the node, so a worker gated by
+  `{is_main}` stayed off there and its jobs stayed queued, with nothing
+  saying so. It goes with the lane's start to the node's agent and its
+  daemon (a profile's `workers` too), stays with the lane when it moves or
+  the stack restarts, and `devstack lane list` says which lanes run their
+  workers. A node before this release does not take it: `up` warns.
+  `up --workers` on a lane that runs already says it applies at its next
+  start, on a node as here.
+
 - **A lane's memory check looks at Docker Desktop's VM** (#309): on Windows
   and macOS the check compared the whole need with the host's free memory,
   while the containers run in Docker Desktop's VM with a limit of its own;

@@ -292,6 +292,14 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
         rt.handle().clone(),
     )?;
     sup.refresh_infra();
+    // A lane on a node runs its background workers as its requester asked
+    // (`--workers`, `DEVSTACK_LANE_WORKERS`), or as its profile says, as a
+    // lane here does (#314).
+    if remote_lane() {
+        let asked = std::env::var_os("DEVSTACK_LANE_WORKERS").is_some_and(|v| v == "1");
+        let profile = sup.stack.profile.as_ref().and_then(|p| p.workers);
+        sup.set_lane_workers(profile.unwrap_or(asked));
+    }
     let usage = usage::Sampler::start(sup.clone());
     // Kept for the daemon's lifetime; changes become candidates (ADR-0003).
     let _watcher = watch::start(sup.clone());

@@ -521,7 +521,13 @@ async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> 
         if let Some(on) = body.on.as_deref().filter(|o| !o.trim().is_empty()) {
             // What a local lane would need here is what it needs there.
             let need = lane_estimate(&main, &usage);
-            return match lanes.activate_remote(&body.path, on.trim(), need, profile)? {
+            return match lanes.activate_remote(
+                &body.path,
+                on.trim(),
+                need,
+                profile,
+                body.workers,
+            )? {
                 crate::lanes::RemoteStart::Running(name) => {
                     view(&name).map(|v| (StatusCode::CREATED, v))
                 }

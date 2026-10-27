@@ -71,6 +71,8 @@ pub struct LaneRun {
     /// Its requester relays UDP ports (ADR-0056): the lane's daemon is told,
     /// and the start answers with them.
     pub relay_udp: bool,
+    /// Its background workers run (`DEVSTACK_LANE_WORKERS`, #314).
+    pub workers: bool,
     /// The memory limit of each of its containers (ADR-0033), bytes.
     pub memory_limit: Option<u64>,
     /// Their CPU limit, cores.
@@ -964,6 +966,9 @@ impl LaneRun {
         if self.warm {
             args.extend(["-e", "DEVSTACK_WARM=1"]);
         }
+        if self.workers {
+            args.extend(["-e", "DEVSTACK_LANE_WORKERS=1"]);
+        }
         if let Some(n) = networks.first() {
             args.extend(["--network", n.as_str()]);
         }
@@ -1360,6 +1365,7 @@ mod tests {
             port_offset: 100,
             profile: None,
             relay_udp: false,
+            workers: false,
             memory_limit: None,
             cpu_limit: None,
             network: Network::Lan,
