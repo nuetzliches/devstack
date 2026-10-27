@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { ago, useNow } from '@/lib/format';
 import { usePopover } from '@/lib/popover';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
-import { laneLabel, orderLanes } from '@/lib/lanes';
+import { laneLabel, laneTab, orderLanes } from '@/lib/lanes';
 import type { LaneView } from '@/api/types';
 import Icon from './icons/Icon.vue';
 import AddStackDialog from './AddStackDialog.vue';
@@ -13,6 +13,7 @@ import AddStackDialog from './AddStackDialog.vue';
 const hub = useHub();
 const stack = useStack();
 const router = useRouter();
+const route = useRoute();
 const now = useNow();
 
 const root = ref<HTMLElement | null>(null);
@@ -46,7 +47,7 @@ function chooseLane(l: LaneView | null) {
     return;
   }
   stack.selectLane(l?.name ?? null);
-  if (stack.id) void router.push({ name: 'overview', params: { stack: stack.id } });
+  if (stack.id) void router.push({ name: laneTab(route.name), params: { stack: stack.id } });
 }
 
 async function toggle() {

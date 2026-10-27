@@ -9,6 +9,14 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **The dashboard's Usage view has a tab** beside Commands and Events. A
+  switch to another lane of the same stack (or back to the main working
+  tree) keeps the tab shown: from Usage of one lane to Usage of the next.
+  A service's or container's detail goes to the overview, a command's run
+  to the command list, since both belong to the lane left.
+
 ### Fixed
 
 - **A lane's memory check looks at Docker Desktop's VM** (#309): on Windows

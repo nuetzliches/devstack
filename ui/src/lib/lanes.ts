@@ -111,3 +111,12 @@ export function notForwardedText(ports: string[] | undefined, reason?: string): 
   const why = reason || (list.some((p) => p.proto === 'UDP') ? 'an older devstack forwards TCP only' : 'devstack forwards TCP and UDP only');
   return `${named} ${list.length === 1 ? 'is' : 'are'} not forwarded to this machine (${why})`;
 }
+
+/**
+ * The tab a switch to another lane of the same stack lands on: the one shown,
+ * so Usage of one lane goes to Usage of the next. A service's or a container's
+ * detail, and a command's run, belong to the lane left: their list instead.
+ */
+export function laneTab(route: unknown): string {
+  return typeof route === 'string' && ['infra', 'commands', 'usage', 'events'].includes(route) ? route : 'overview';
+}
