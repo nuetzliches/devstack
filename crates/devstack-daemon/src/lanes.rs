@@ -80,6 +80,10 @@ pub struct LaneView {
     /// `*` for every member; empty: nobody.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub shared_with: Vec<String>,
+    /// Its background workers run (`--workers` or its profile, #314), while
+    /// it runs.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub workers: bool,
     /// The profile it runs with (ADR-0041), while it runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
@@ -355,6 +359,9 @@ pub struct Lanes {
     shares: Mutex<BTreeMap<String, Vec<String>>>,
     /// The profile each started lane runs with (ADR-0041), while it runs.
     profiles: Mutex<BTreeMap<String, String>>,
+    /// The lanes on nodes that run their background workers (`--workers`,
+    /// #314): a lane here keeps it in its supervisor.
+    workers: Mutex<BTreeSet<String>>,
     /// One main-slot hand-over at a time, and what it took from the main tree.
     handover: Mutex<Handover>,
     /// One [`Lanes::sync`] at a time: asking git and applying the answer go
@@ -397,6 +404,9 @@ struct CarriedLane {
     name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     profile: Option<String>,
+    /// Its background workers run (#314).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    workers: bool,
     /// On a node: its lease and ports; absent: it ran on this machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     node: Option<crate::remote::Carried>,
@@ -847,6 +857,7 @@ impl Lanes {
             forgetting: Mutex::new(BTreeSet::new()),
             shares: Mutex::new(shares),
             profiles: Mutex::new(BTreeMap::new()),
+            workers: Mutex::new(BTreeSet::new()),
             handover: Mutex::new(Handover::default()),
             syncing: Mutex::new(()),
             missing: Mutex::new(BTreeMap::new()),
@@ -1231,6 +1242,7 @@ impl Lanes {
                 forward: false,
                 step: &|_, _| {},
                 profile: None,
+                workers: false,
                 warm: true,
                 files: Some(&checkout.1),
             };
@@ -1503,6 +1515,7 @@ impl Lanes {
         self.unlink_node(name);
         self.missing.lock().unwrap().remove(name);
         self.profiles.lock().unwrap().remove(name);
+        self.workers.lock().unwrap().remove(name);
         // Logged there; a lane that is forgotten has nobody to tell.
         let _ = self.remove_infra(name);
         // Its kept data on the nodes it ran on goes too (ADR-0038 point 4);
@@ -1979,6 +1992,13 @@ impl Lanes {
                     pool: on_node.map(|r| r.pool.clone()),
                     shared_with: self.share_of(&k.entry.name),
                     profile: self.profiles.lock().unwrap().get(&k.entry.name).cloned(),
+                    workers: lane.map_or_else(
+                        || {
+                            on_node.is_some()
+                                && self.workers.lock().unwrap().contains(&k.entry.name)
+                        },
+                        |l| l.sup.lane_workers(),
+                    ),
                     node_error: node_state.as_ref().and_then(|st| st.error()),
                     not_forwarded: node_state
                         .as_ref()
@@ -2129,6 +2149,7 @@ impl Lanes {
         let t0 = std::time::Instant::now();
         // A profile holds while the lane runs (ADR-0041).
         self.profiles.lock().unwrap().remove(name);
+        self.workers.lock().unwrap().remove(name);
         // Stopped: a start or move that failed before is no longer news.
         self.forget_failed(Some(name));
         let remote = self.remote.lock().unwrap().remove(name);
@@ -2587,14 +2608,16 @@ impl Lanes {
     /// the main ports. A start or move under way is not carried.
     fn carry_now(&self) -> Carry {
         let profiles = self.profiles.lock().unwrap().clone();
+        let workers = self.workers.lock().unwrap().clone();
         let mut lanes: Vec<CarriedLane> = self
             .map
             .lock()
             .unwrap()
-            .keys()
-            .map(|n| CarriedLane {
+            .iter()
+            .map(|(n, l)| CarriedLane {
                 name: n.clone(),
                 profile: profiles.get(n).cloned(),
+                workers: l.sup.lane_workers(),
                 node: None,
             })
             .collect();
@@ -2607,6 +2630,7 @@ impl Lanes {
                 .map(|(n, r)| CarriedLane {
                     name: n.clone(),
                     profile: profiles.get(n).cloned(),
+                    workers: workers.contains(n),
                     node: Some(r.carried()),
                 }),
         );
@@ -2796,6 +2820,9 @@ impl Lanes {
                 .unwrap()
                 .insert(l.name.clone(), p.clone());
         }
+        if l.workers {
+            self.workers.lock().unwrap().insert(l.name.clone());
+        }
         let lease = c.lease.clone();
         let adopted = crate::remote::RemoteLane::adopt(
             &self.rt,
@@ -2819,6 +2846,7 @@ impl Lanes {
             }
             Err(e) => {
                 self.profiles.lock().unwrap().remove(&l.name);
+                self.workers.lock().unwrap().remove(&l.name);
                 // Said here: not again as a lane nobody followed.
                 crate::remote::forget_followed(&self.state_dir(&l.name), &lease);
                 self.not_carried(&l.name, "remote", &node, &e);
@@ -2860,6 +2888,7 @@ impl Lanes {
         // `up`, and the lane runs the rest.
         match self.activate(&path, l.profile.as_deref()) {
             Ok(lane) => {
+                lane.sup.set_lane_workers(l.workers);
                 let failed = lane.sup.up().err();
                 crate::diag::info(
                     "lane_carried",
@@ -2995,6 +3024,7 @@ impl Lanes {
         on: &str,
         need: crate::remote::Expected,
         profile: Option<&str>,
+        workers: bool,
     ) -> Result<RemoteStart, String> {
         let path = std::path::absolute(path).map_err(|e| e.to_string())?;
         if same_tree(&path, &self.main.repo) {
@@ -3056,6 +3086,11 @@ impl Lanes {
                 .insert(name.clone(), p.to_string()),
             None => self.profiles.lock().unwrap().remove(&name),
         };
+        if workers {
+            self.workers.lock().unwrap().insert(name.clone());
+        } else {
+            self.workers.lock().unwrap().remove(&name);
+        }
         self.begin_move(&name, "start", on, 3);
         let leased = {
             let step = self.step_fn(&name);
@@ -3227,6 +3262,7 @@ impl Lanes {
         let synced = self.synced();
         let scratch = self.state_dir(&entry.name).join("remote");
         let profile = self.profiles.lock().unwrap().get(&entry.name).cloned();
+        let workers = self.workers.lock().unwrap().contains(&entry.name);
         // What the lane's own stack file declares it needs at least, with
         // its profile (ADR-0049 point 5); the main tree's where it does not
         // load.
@@ -3259,6 +3295,7 @@ impl Lanes {
             forward,
             step,
             profile: profile.as_deref(),
+            workers,
             warm: false,
             files: None,
         })
@@ -3319,6 +3356,15 @@ impl Lanes {
         }
         if here && local.is_some() {
             return Ok(());
+        }
+        // Its workers go with it to a node (#314).
+        if let Some(l) = &local {
+            let mut w = self.workers.lock().unwrap();
+            if l.sup.lane_workers() {
+                w.insert(name.to_string());
+            } else {
+                w.remove(name);
+            }
         }
         if let Some(r) = &remote
             && !here
@@ -3411,9 +3457,11 @@ impl Lanes {
         self.pending.lock().unwrap().remove(name);
         step(2, "starting it here (build, infrastructure, services)");
         let profile = self.profiles.lock().unwrap().get(name).cloned();
+        let workers = self.workers.lock().unwrap().contains(name);
         let started = self
             .activate(&entry.path, profile.as_deref())
             .and_then(|lane| {
+                lane.sup.set_lane_workers(workers);
                 lane.sup.up().inspect_err(|_| {
                     lane.sup.down(true);
                     let removed = self.map.lock().unwrap().remove(name);

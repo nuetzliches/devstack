@@ -1116,6 +1116,7 @@ impl Inner {
             port_offset: 0,
             profile: None,
             relay_udp: false,
+            workers: false,
             memory_limit: None,
             cpu_limit: None,
             network: crate::policy::Network::Lan,
@@ -2118,6 +2119,10 @@ pub struct Start {
     /// does not send it, an older agent does not read it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub relay_udp: bool,
+    /// Its background workers run (`devstack up --workers`, #314); its
+    /// profile may say so too. An older agent does not read it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub workers: bool,
 }
 
 fn default_stack_file() -> String {
@@ -2178,8 +2183,8 @@ async fn start(
             format!("{} cannot run lanes: its agent is no Linux build", s.name),
         ));
     };
-    let (stack_file, display_root, port_offset, profile, relay_udp) = body.map_or_else(
-        || (default_stack_file(), None, 0, None, false),
+    let (stack_file, display_root, port_offset, profile, relay_udp, workers) = body.map_or_else(
+        || (default_stack_file(), None, 0, None, false, false),
         |Json(b)| {
             (
                 b.stack_file,
@@ -2187,6 +2192,7 @@ async fn start(
                 b.port_offset,
                 b.profile,
                 b.relay_udp,
+                b.workers,
             )
         },
     );
@@ -2271,6 +2277,7 @@ async fn start(
         run.port_offset = port_offset;
         run.profile = profile;
         run.relay_udp = relay_udp;
+        run.workers = workers;
         let policies = s2.policies();
         let all: Vec<&crate::policy::NodePolicy> = policies.iter().collect();
         if let Some(p) = crate::policy::NodePolicy::strictest(&all) {

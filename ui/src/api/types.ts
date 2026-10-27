@@ -158,6 +158,8 @@ export type LaneView = {
   shared_with?: string[];
   /** The profile it runs with (ADR-0041), while it runs. */
   profile?: string;
+  /** Its background workers run (`--workers` or its profile), while it runs. Older daemons omit it. */
+  workers?: boolean;
   /** What went wrong with it on its node lately (a sync, a renewal). */
   node_error?: string;
   /** Its node or the pool's coordinator runs another devstack than this machine, or does not say which. */

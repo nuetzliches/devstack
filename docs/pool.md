@@ -369,7 +369,9 @@ stopped lane's data away, here and on the nodes it ran on;
 `devstack lane prune [--older-than 7d]` removes what this repository's
 gone lanes left (both ask the node with `DELETE /v1/slots`). A move to another node is a cold start
 there: data never moves between nodes. It runs without background workers unless it holds the
-main ports. When its lease ends (an admin ends it, the node goes away for
+main ports, or was started with `devstack up --workers` (or a
+profile with `workers = true`), as a lane here; a node before 0.25.1 does
+not take `--workers`, and `up` warns. When its lease ends (an admin ends it, the node goes away for
 longer than a lease lives), the main working tree takes the main ports back
 by itself.
 

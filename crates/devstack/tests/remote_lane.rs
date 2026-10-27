@@ -523,6 +523,9 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     let port = 5080 + offset;
     let body = http_get(port, "/health");
     assert!(body.contains("ok"), "GET /health on {port}: {body}");
+    // A lane runs without its workers unless asked (ADR-0030 point 6).
+    let info = http_get(port, "/info");
+    assert!(info.contains("\"workers\":false"), "{info}");
 
     // The lane's containers, which its daemon cannot reach (no Docker in the
     // lane container): their output and what they use come from the node
@@ -681,8 +684,13 @@ fn a_lane_runs_on_a_node_of_the_pool() {
 
     // Its data thrown away, the lane starts afresh on the node: its build's
     // `prepare` comes from the member's store there (ADR-0062).
+    // With `--workers` its workers run there too (#314).
     cli(&main, &["lane", "reset", "wt"]);
-    cli(&wt, &["up", "--on", "ci-node"]);
+    cli(&wt, &["up", "--workers", "--on", "ci-node"]);
+    let info = http_get(port, "/info");
+    assert!(info.contains("\"workers\":true"), "{info}");
+    let list = cli(&main, &["lane", "list"]);
+    assert!(list.contains("wt: runs its background workers"), "{list}");
     let (st, body) = api_request(
         &main,
         state.path(),

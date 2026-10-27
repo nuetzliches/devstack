@@ -59,6 +59,11 @@ impl Supervisor {
         self.lane_workers.store(on, Ordering::SeqCst);
     }
 
+    /// What [`Self::set_lane_workers`] said last.
+    pub fn lane_workers(&self) -> bool {
+        self.lane_workers.load(Ordering::SeqCst)
+    }
+
     /// Main lane: the lane serving its fixed ports, if one does (`None` in a
     /// lane: its own ports are its own).
     pub fn served_by(&self) -> Option<String> {

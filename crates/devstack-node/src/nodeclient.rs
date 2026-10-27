@@ -186,6 +186,7 @@ impl NodeClient {
         port_offset: u16,
         profile: Option<&str>,
         relay_udp: bool,
+        workers: bool,
         within: std::time::Duration,
         phase: &(dyn Fn(&str) + Send + Sync),
         over: &(dyn Fn(&str, u64) + Send + Sync),
@@ -200,6 +201,7 @@ impl NodeClient {
                     port_offset,
                     profile: profile.map(str::to_string),
                     relay_udp,
+                    workers,
                 }),
             )
             .await?;

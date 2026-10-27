@@ -410,6 +410,8 @@ pub struct RemoteSpec<'a> {
     pub step: &'a (dyn Fn(u8, &str) + Send + Sync),
     /// The profile it runs with (ADR-0041).
     pub profile: Option<&'a str>,
+    /// Its background workers run (`devstack up --workers`, #314).
+    pub workers: bool,
     /// A warm lease (ADR-0065 point 5): only `prepare`, no infrastructure.
     pub warm: bool,
     /// The files of `worktree` to sync, when git cannot tell them: a ref's
@@ -603,7 +605,20 @@ impl RemoteLane {
         // refused it already): refused here, before anything is admitted.
         // Another release, or one that does not say, is a warning
         // (ADR-0031 point 8).
-        let warning = release_warning(&offer).map_err(|e| format!("lane `{}`: {e}", spec.name))?;
+        let mut warning =
+            release_warning(&offer).map_err(|e| format!("lane `{}`: {e}", spec.name))?;
+        // An agent before 0.25.1 does not pass `--workers` on (#314).
+        if spec.workers && !takes_workers(offer.node.devstack.as_ref()) {
+            let w = format!(
+                "the node {} runs {}, which starts the lane without its background workers whatever `--workers` says; `devstack up --workers --on local` runs them here",
+                offer.node.name,
+                version::describe(offer.node.devstack.as_ref())
+            );
+            warning = Some(match warning {
+                Some(o) => format!("{o}; {w}"),
+                None => w,
+            });
+        }
         // What the lease holds, and from what (ADR-0049 point 10).
         if let Some(n) = &offer.need {
             let from = offer.need_from.as_deref().unwrap_or("");
@@ -752,6 +767,7 @@ impl RemoteLane {
                 0,
                 None,
                 false,
+                false,
                 Duration::from_secs(1800),
                 &|_| {},
                 &|_, _| {},
@@ -808,6 +824,7 @@ impl RemoteLane {
             forward,
             step,
             profile,
+            workers,
             ..
         } = spec;
         let Leased {
@@ -897,6 +914,7 @@ impl RemoteLane {
                     // This machine relays UDP (ADR-0056); an older node
                     // does not read it, and its lane names none.
                     true,
+                    workers,
                     Duration::from_secs(1800),
                     &|p| {
                         step(3, &format!("on {node}: {p}"));
@@ -1955,6 +1973,13 @@ fn release_warning(
         notes.extend(version::note("the coordinator", offer.coordinator.as_ref()));
     }
     Ok((!notes.is_empty()).then(|| notes.join("; ")))
+}
+
+/// A node's agent passes `--workers` on to its lane (#314): 0.25.1 and
+/// later. One that does not say counts as older.
+fn takes_workers(node: Option<&devstack_node::version::Release>) -> bool {
+    node.and_then(|r| devstack_config::version_triple(&r.version))
+        .is_some_and(|v| v >= (0, 25, 1))
 }
 
 /// The warning of a lane a daemon before this one followed (ADR-0052), made
