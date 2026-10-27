@@ -960,6 +960,25 @@ impl Supervisor {
         )
     }
 
+    /// Each service's services it comes `after` (Compose dependencies are
+    /// `infra_up`'s).
+    pub(super) fn service_deps(&self) -> BTreeMap<String, Vec<String>> {
+        self.stack
+            .services
+            .iter()
+            .map(|(k, s)| {
+                (
+                    k.clone(),
+                    s.after
+                        .iter()
+                        .filter(|a| !a.starts_with("compose."))
+                        .cloned()
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
     /// `svc` runs in this supervisor: on this platform, and in a lane only
     /// unless it says `lanes = false`.
     fn runs_here(&self, svc: &Service) -> bool {
@@ -1182,6 +1201,32 @@ fn topo(deps: BTreeMap<String, Vec<String>>) -> Vec<String> {
     out
 }
 
+/// The names of `deps` in levels: each one's dependencies (those among
+/// `deps`) in an earlier level, so the members of a level can go at once.
+/// A cycle (the stack file check refuses one) ends up in the last level.
+fn levels(deps: &BTreeMap<String, Vec<String>>) -> Vec<Vec<String>> {
+    let mut level: BTreeMap<String, usize> = BTreeMap::new();
+    for n in topo(deps.clone()) {
+        let l = deps
+            .get(&n)
+            .into_iter()
+            .flatten()
+            .filter_map(|d| level.get(d))
+            .map(|l| l + 1)
+            .max()
+            .unwrap_or(0);
+        level.insert(n, l);
+    }
+    let mut out: Vec<Vec<String>> = Vec::new();
+    for (n, l) in level {
+        if out.len() <= l {
+            out.resize(l + 1, Vec::new());
+        }
+        out[l].push(n);
+    }
+    out
+}
+
 /// Taken on IPv4 or IPv6 loopback. A dev server bound to `localhost` may hold
 /// only `::1` (Node on Windows); binding `127.0.0.1` would still succeed. A host
 /// without IPv6 fails the `::1` bind with another error, which is not "in use".
@@ -1308,6 +1353,36 @@ fn lsof_holder(text: &str) -> Option<String> {
     match text.lines().find_map(|l| l.strip_prefix('c')) {
         Some(name) => Some(format!("{name}, pid {pid}")),
         None => Some(format!("pid {pid}")),
+    }
+}
+
+#[cfg(test)]
+mod level_tests {
+    #[test]
+    fn what_no_after_orders_shares_a_level() {
+        let deps = |pairs: &[(&str, &[&str])]| {
+            pairs
+                .iter()
+                .map(|(n, d)| (n.to_string(), d.iter().map(|x| x.to_string()).collect()))
+                .collect()
+        };
+        // mocks side by side; the migrator first, then the api, then the spa.
+        let l = super::levels(&deps(&[
+            ("ai-mock", &[]),
+            ("cituro-mock", &[]),
+            ("migrate", &[]),
+            ("api", &["migrate", "ai-mock"]),
+            ("spa", &["api"]),
+            ("outside", &["not-a-service"]),
+        ]));
+        assert_eq!(
+            l,
+            vec![
+                vec!["ai-mock", "cituro-mock", "migrate", "outside"],
+                vec!["api"],
+                vec!["spa"]
+            ]
+        );
     }
 }
 

@@ -300,7 +300,7 @@ fn a_lane_runs_on_a_node_of_the_pool() {
         "the lane's daemon answered only once its db was healthy"
     );
     // Its services start only once its infrastructure is up, as a local
-    // lane's: `api` leaves `stopped` with the db healthy.
+    // lane's: `api` may build meanwhile, but starts with the db healthy.
     let until = Instant::now() + Duration::from_secs(600);
     loop {
         let api_state = api("/v1/lanes/wt/v1/stack").and_then(|v| {
@@ -310,7 +310,7 @@ fn a_lane_runs_on_a_node_of_the_pool() {
                 .find(|s| s["name"] == "api")
                 .and_then(|s| s["status"]["state"].as_str().map(str::to_string))
         });
-        if let Some(st) = api_state.filter(|s| s != "stopped") {
+        if let Some(st) = api_state.filter(|s| s != "stopped" && s != "building") {
             assert_eq!(
                 lane_db("{{.State.Health.Status}}"),
                 "healthy",
@@ -691,15 +691,31 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     assert!(info.contains("\"workers\":true"), "{info}");
     let list = cli(&main, &["lane", "list"]);
     assert!(list.contains("wt: runs its background workers"), "{list}");
-    let (st, body) = api_request(
-        &main,
-        state.path(),
-        "POST",
-        "/v1/lanes/wt/v1/telemetry/take",
-    )
-    .expect("the lane answers");
-    assert_eq!(st, 200, "{body}");
-    assert!(body.contains("prepare_store_hit"), "{body}");
+    // Its build too: the member's artifact store on the node has the
+    // artifact the lane's first start built (the card of 2026-10-28). The
+    // services start side by side, so the lines are gathered until both
+    // came (a take hands each line once).
+    let mut body = String::new();
+    let until = Instant::now() + Duration::from_secs(120);
+    loop {
+        let (st, b) = api_request(
+            &main,
+            state.path(),
+            "POST",
+            "/v1/lanes/wt/v1/telemetry/take",
+        )
+        .expect("the lane answers");
+        assert_eq!(st, 200, "{b}");
+        body.push_str(&b);
+        if body.contains("prepare_store_hit")
+            && body.contains("build_reused")
+            && body.contains("\"source\":\"store\"")
+        {
+            break;
+        }
+        assert!(Instant::now() < until, "{body}");
+        std::thread::sleep(Duration::from_millis(500));
+    }
 
     // `down --all`: the daemon ends, and the lane on the node goes with it
     // (ADR-0025 point 7).
@@ -903,6 +919,9 @@ fn store_entries(dir: &Path) -> usize {
                 let path = e.path();
                 if in_stores && path.join(".devstack-store.json").is_file() {
                     1
+                } else if in_stores && e.file_name() == "artifacts" {
+                    // The build artifacts' store, not `prepare`'s.
+                    0
                 } else if path.is_dir() && !path.is_symlink() {
                     count(&path, in_stores || e.file_name() == "stores")
                 } else {

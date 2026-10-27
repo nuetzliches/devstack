@@ -325,6 +325,9 @@ fn an_enrolment_from_another_address_is_refused_and_an_alarm() {
         .unwrap();
     let e = offer_of(&dev, dev.lease_or_wait(&ask("a")).unwrap()).unwrap_err();
     assert!(e.contains("given back"), "{e}");
+    // The mock records the machine once its refused enrolment returned,
+    // which may be after the lease was given back.
+    until("enrolled", 10, || !enrolled.lock().unwrap().is_empty());
     assert_eq!(enrolled.lock().unwrap().len(), 1);
     let l = Local::new(&enrolled.lock().unwrap()[0]);
     assert!(l.nodes().is_err(), "it never joined");

@@ -353,7 +353,9 @@ admitted like a lane, on the ref's checkout as its mirror (its slot is the
 ref's, `warm--<ref>`), its container runs only the `prepare` the member's
 store there lacks, starts no container of the stack, and the lease ends
 when it is done. A node before 0.24.0 is not asked (it would start a whole
-lane); a node whose policy says `warm = false` refuses it. A member's store of what `prepare` makes
+lane); a node whose policy says `warm = false` refuses it. A member's store on a node also keeps its builds' artifacts (keyed by the
+build id and the lane image): the member's next lane with the same inputs
+copies them instead of building (ADR-0062 addendum). A member's store of what `prepare` makes
 ([ADR-0062](adr/0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md)),
 one per repository on the node, counts with its kept lanes: an entry no lane
 used for as long as a stopped lane is kept goes, and over the room the
