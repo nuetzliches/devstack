@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **Setting a repository up offers devstack's MCP server**: the setup
+  prompt of "Add a stack" has the agent ask whether to register
+  `devstack mcp` in the project's agent configuration (`.mcp.json`,
+  `.vscode/mcp.json`, `.codex/config.toml`), suggesting yes; the upgrade
+  prompt offers it where no entry is there. The stack's head in the
+  dashboard shows *no MCP* when neither the project's nor the user's
+  configuration registers it (`GET /hub/stacks/{id}/mcp`); its menu holds a
+  prompt for a coding agent that adds the entry, or hides the label for the
+  stack.
+
 ### Fixed
 
 - **A lane's memory check looks at Docker Desktop's VM** (#309): on Windows

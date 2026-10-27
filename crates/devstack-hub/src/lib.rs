@@ -36,6 +36,7 @@ static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 
 mod branches;
 mod guests;
+mod mcp;
 mod notice;
 mod notify;
 mod open;
@@ -516,6 +517,7 @@ fn router(state: AppState) -> axum::Router {
             get(stack_skills).post(stack_skills_install),
         )
         .route("/hub/stacks/{id}/upgrade", get(stack_upgrade))
+        .route("/hub/stacks/{id}/mcp", get(stack_mcp))
         .route("/hub/stacks/{id}/api/{*rest}", any(forward))
         .route("/hub/pool", get(pool::overview))
         .route("/hub/pool/share", get(share::get))
@@ -1761,6 +1763,22 @@ async fn stack_upgrade(State(s): State<AppState>, Path(id): Path<String>) -> Res
     }
 }
 
+/// `GET /hub/stacks/{id}/mcp`: the agent configuration files that register
+/// `devstack mcp` for the stack's repository, its own and the user's.
+async fn stack_mcp(State(s): State<AppState>, Path(id): Path<String>) -> Response {
+    let Some(e) = entry(&s, &id) else {
+        return err(StatusCode::NOT_FOUND, "no such stack");
+    };
+    match tokio::task::spawn_blocking(move || mcp::registered(&e.repo)).await {
+        Ok(files) => Json(serde_json::json!({
+            "registered": !files.is_empty(),
+            "files": files,
+        }))
+        .into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 /// `GET /hub/stacks/{id}/skills`.
 async fn stack_skills(State(s): State<AppState>, Path(id): Path<String>) -> Response {
     let Some(e) = entry(&s, &id) else {
@@ -1870,7 +1888,7 @@ async fn open_tree(State(s): State<AppState>, Json(q): Json<OpenQuery>) -> Respo
 #[derive(Deserialize)]
 struct PromptQuery {
     kind: String,
-    /// The stack a prompt is about (`upgrade`, `start-failed`).
+    /// The stack a prompt is about (`upgrade`, `start-failed`, `mcp`).
     #[serde(default)]
     stack: Option<String>,
     /// The folder a prompt is about (`setup`, `fix-file`), before it is a stack.
@@ -1953,6 +1971,11 @@ fn write_prompt(s: &AppState, q: &PromptQuery) -> Result<Written, Refusal> {
                 reviewed: u.as_ref().is_some_and(|u| u.reviewed.is_some()),
                 current: devstack_config::VERSION,
             });
+            (text, e.repo, e.file)
+        }
+        "mcp" => {
+            let e = stack()?;
+            let text = prompts::text(&Prompt::Mcp { repo: &e.repo });
             (text, e.repo, e.file)
         }
         "start-failed" => {
