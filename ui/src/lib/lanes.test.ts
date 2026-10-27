@@ -59,9 +59,10 @@ describe('ports a lane on a node does not forward', () => {
 
 describe('a lane switch keeps the tab', () => {
   it('a list stays, a detail goes to the overview', () => {
-    expect(laneTab('usage')).toBe('usage');
-    expect(laneTab('events')).toBe('events');
+    for (const tab of ['overview', 'infra', 'commands', 'usage', 'events']) expect(laneTab(tab)).toBe(tab);
     expect(laneTab('service')).toBe('overview');
+    expect(laneTab('container')).toBe('overview');
+    expect(laneTab('pool')).toBe('overview');
     expect(laneTab(undefined)).toBe('overview');
   });
 });
