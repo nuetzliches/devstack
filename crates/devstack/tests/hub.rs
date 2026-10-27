@@ -1369,3 +1369,132 @@ fn the_hub_writes_the_prompts_and_starts_only_agents_with_them() {
         assert_eq!(s, 400, "{opener}: {body}");
     }
 }
+
+/// An MCP server over Streamable HTTP without a login: `echo`, and `hidden`,
+/// which the allowlist keeps out.
+fn fake_mcp() -> String {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://127.0.0.1:{}/mcp", l.local_addr().unwrap().port());
+    std::thread::spawn(move || {
+        for mut c in l.incoming().flatten() {
+            let mut r = BufReader::new(c.try_clone().unwrap());
+            let mut line = String::new();
+            r.read_line(&mut line).unwrap();
+            let mut len = 0;
+            loop {
+                let mut h = String::new();
+                r.read_line(&mut h).unwrap();
+                if h.trim().is_empty() {
+                    break;
+                }
+                if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
+                    len = v.trim().parse().unwrap();
+                }
+            }
+            let mut body = vec![0; len];
+            r.read_exact(&mut body).unwrap();
+            let m: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let id = m["id"].clone();
+            let result = match m["method"].as_str().unwrap_or("") {
+                "initialize" => {
+                    serde_json::json!({ "protocolVersion": "2025-06-18", "capabilities": {} })
+                }
+                "tools/list" => serde_json::json!({ "tools": [
+                    { "name": "echo", "description": "Says it back", "inputSchema": { "type": "object" } },
+                    { "name": "hidden", "description": "Not offered", "inputSchema": { "type": "object" } },
+                ] }),
+                "tools/call" => {
+                    serde_json::json!({ "content": [{ "type": "text", "text": format!("echo: {}", m["params"]["arguments"]["say"].as_str().unwrap_or("")) }] })
+                }
+                _ => {
+                    let _ = write!(
+                        c,
+                        "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    continue;
+                }
+            };
+            let text =
+                serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string();
+            let _ = write!(
+                c,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                text.len()
+            );
+        }
+    });
+    url
+}
+
+/// ADR-0069: `devstack mcp` offers an upstream's tools beside its own, with
+/// its prefix and allowlist, and calls them through the hub.
+#[test]
+fn devstack_mcp_offers_and_calls_an_upstreams_tools_through_the_hub() {
+    let h = start();
+    let url = fake_mcp();
+    std::fs::write(
+        h.home.path().join("devstack/hub/upstreams.toml"),
+        format!(
+            "[[upstream]]\nname = \"fake\"\nurl = \"{url}\"\nprefix = \"fk\"\nallow = [\"echo\"]\n"
+        ),
+    )
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut mcp = Command::new(BIN)
+        .arg("mcp")
+        .current_dir(dir.path())
+        .env("DEVSTACK_HUB_PORT", h.port.to_string())
+        .env("LOCALAPPDATA", h.home.path())
+        .env("XDG_STATE_HOME", h.home.path())
+        .env("DEVSTACK_NO_UPDATE_CHECK", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = mcp.stdin.take().unwrap();
+    let mut lines = BufReader::new(mcp.stdout.take().unwrap()).lines();
+    let mut ask = |msg: serde_json::Value| -> serde_json::Value {
+        writeln!(stdin, "{msg}").unwrap();
+        stdin.flush().unwrap();
+        loop {
+            let line = lines.next().unwrap().unwrap();
+            let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+            if v["id"] == msg["id"] {
+                return v;
+            }
+        }
+    };
+    let init = ask(
+        serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "t", "version": "1" } } }),
+    );
+    assert_eq!(
+        init["result"]["capabilities"]["tools"]["listChanged"], true,
+        "{init}"
+    );
+    let list = ask(serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+    let names: Vec<&str> = list["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"status") && names.contains(&"fk__echo"),
+        "{names:?}"
+    );
+    assert!(!names.contains(&"fk__hidden"), "{names:?}");
+    let call = ask(
+        serde_json::json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "fk__echo", "arguments": { "say": "hello" } } }),
+    );
+    assert_eq!(
+        call["result"]["content"][0]["text"], "echo: hello",
+        "{call}"
+    );
+    let refused = ask(
+        serde_json::json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": { "name": "fk__hidden", "arguments": {} } }),
+    );
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    drop(stdin);
+    let _ = mcp.wait();
+}

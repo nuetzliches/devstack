@@ -37,9 +37,51 @@ const MAX_CALLS: usize = 16;
 
 static RUNNING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// The upstream tools the client was last given (`tools/list`): a change
+/// of them is announced (`notifications/tools/list_changed`, ADR-0069).
+static LISTED: Mutex<Option<Vec<String>>> = Mutex::new(None);
+
+/// How often the upstreams' tools are looked at for a change.
+const LOOK_EVERY: Duration = Duration::from_secs(60);
+
+fn names(tools: &[Value]) -> Vec<String> {
+    let mut n: Vec<String> = tools
+        .iter()
+        .filter_map(|t| t["name"].as_str().map(str::to_string))
+        .collect();
+    n.sort();
+    n
+}
+
+/// Every [`LOOK_EVERY`]: the upstreams' tools, and the notification when
+/// they are not the ones the client was given. A client that ignores it
+/// gets them at its next `tools/list`.
+fn follow_upstreams(out: Out) {
+    let _ = std::thread::Builder::new()
+        .name("mcp-upstreams".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(LOOK_EVERY);
+                if LISTED.lock().unwrap().is_none() {
+                    continue;
+                }
+                let now = names(&crate::upstream::tools());
+                let mut listed = LISTED.lock().unwrap();
+                if listed.as_ref() != Some(&now) {
+                    *listed = Some(now);
+                    send(
+                        &out,
+                        json!({ "jsonrpc": "2.0", "method": "notifications/tools/list_changed" }),
+                    );
+                }
+            }
+        });
+}
+
 pub fn serve(stack_file: &Path) -> Result<()> {
     client::serve_as("mcp");
     let out: Out = Arc::new(Mutex::new(std::io::stdout()));
+    follow_upstreams(out.clone());
     let file = std::path::absolute(stack_file)?;
     let mut input = std::io::stdin().lock();
     let mut buf = Vec::new();
@@ -159,16 +201,27 @@ fn respond(m: Value, file: &Path) -> Option<Value> {
                 id,
                 json!({
                     "protocolVersion": version,
-                    "capabilities": { "tools": {} },
+                    "capabilities": { "tools": { "listChanged": true } },
                     "serverInfo": { "name": "devstack", "version": env!("CARGO_PKG_VERSION") },
                     "instructions": INSTRUCTIONS,
                 }),
             )
         }
         "ping" => reply(id, json!({})),
-        "tools/list" => reply(id, json!({ "tools": tools() })),
+        "tools/list" => {
+            // The user's MCP upstreams' tools beside devstack's own (ADR-0069).
+            let upstream = crate::upstream::tools();
+            *LISTED.lock().unwrap() = Some(names(&upstream));
+            let mut all = tools();
+            all.extend(upstream);
+            reply(id, json!({ "tools": all }))
+        }
         "tools/call" => {
             let name = params["name"].as_str().unwrap_or("").to_string();
+            if crate::upstream::is_upstream(&name) {
+                let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                return Some(reply(id, crate::upstream::call(&name, args)));
+            }
             if !tools().iter().any(|t| t["name"] == name) {
                 return Some(error(id, -32602, &format!("unknown tool `{name}`")));
             }
