@@ -26,6 +26,8 @@ http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 include_dir = "0.7"
+# The hub's secrets of upstream MCP servers in the OS keychain (ADR-0069).
+keyring = "4"
 junction = { version = "2", default-features = false }
 jiff = "0.2"
 libc = "0.2"
