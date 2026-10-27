@@ -113,14 +113,13 @@ fn runs_devstack_mcp(
     command: Option<&serde_json::Value>,
     args: Option<&serde_json::Value>,
 ) -> bool {
+    // Either separator: a file may name a Windows path on any machine.
     let devstack = command
         .and_then(|c| c.as_str())
-        .and_then(|c| {
-            Path::new(c)
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-        })
-        .is_some_and(|s| s.eq_ignore_ascii_case("devstack"));
+        .and_then(|c| c.rsplit(['/', '\\']).next())
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("devstack") || name.eq_ignore_ascii_case("devstack.exe")
+        });
     let mcp = args
         .and_then(|a| a.as_array())
         .and_then(|a| a.first())
