@@ -2949,7 +2949,8 @@ const VIEW_FRESH: Duration = Duration::from_secs(5);
 
 /// What of the lane daemon's API a viewer reads (ADR-0040 point 2): its
 /// state and events, its services' logs and builds, its commands' runs,
-/// its usage. Nothing that changes it, nor its environment.
+/// its usage, its journal (ADR-0067). Nothing that changes it, nor its
+/// environment.
 fn viewable(rest: &str) -> bool {
     let p: Vec<&str> = rest.split('/').collect();
     let name = |s: &str| {
@@ -2958,7 +2959,7 @@ fn viewable(rest: &str) -> bool {
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
     };
     match p.as_slice() {
-        ["v1", "stack" | "events" | "usage" | "logs"] => true,
+        ["v1", "stack" | "events" | "usage" | "logs" | "journal"] => true,
         ["v1", "services", s, "logs" | "builds" | "build-log"] => name(s),
         ["v1", "services", s, "logs", "stream" | "files"] => name(s),
         ["v1", "commands", c, "runs"] => name(c),
@@ -4083,6 +4084,7 @@ mod tests {
             "v1/events",
             "v1/usage",
             "v1/logs",
+            "v1/journal",
             "v1/services/api/logs",
             "v1/services/api/logs/stream",
             "v1/services/api/builds",

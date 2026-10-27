@@ -239,6 +239,20 @@ export type Change = { via: Client; at: number; action?: string };
 /** The client a change came through; `auto`: devstack itself. */
 export type Client = 'cli' | 'mcp' | 'dashboard' | 'tray' | 'auto' | 'unknown';
 
+/** A change the daemon's journal recorded (ADR-0067): a request that changed something, refused ones included, or devstack's own (`AUTO`). */
+export type JournalEntry = {
+  /** Unix ms. */
+  at: number;
+  via: Client;
+  /** The lane it was for; absent: the main working tree (and every entry of a lane's daemon on a node). */
+  lane?: string;
+  /** `POST`, `DELETE`; `AUTO` for devstack's own. */
+  method: string;
+  path: string;
+  status: number;
+  error?: string;
+};
+
 /** Where a service's last `prepare` outputs came from (ADR-0062). */
 export type PrepareView = {
   /** Copied out of the store, or `prepare` ran. */
@@ -433,6 +447,8 @@ export type StackEventBody =
   | { type: 'notice'; level: NoticeLevel; text: string }
   /** A worktree added or removed, a branch checked out, a lane started or stopped, the main ports moved. */
   | { type: 'lanes'; lanes: LaneView[] }
+  /** A change the journal recorded (ADR-0067): the main tree's stream carries every entry, a lane's those of its lane. */
+  | { type: 'journal'; entry: JournalEntry }
   | ({ type: 'usage' } & UsageReport);
 
 export type StackEvent = { seq: number; at: number } & StackEventBody;

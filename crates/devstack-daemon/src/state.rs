@@ -391,6 +391,11 @@ pub enum EventBody {
     Lanes {
         lanes: Vec<crate::lanes::LaneView>,
     },
+    /// A change recorded in the journal (ADR-0067): the main tree's stream
+    /// carries every entry, a lane's those of its lane.
+    Journal {
+        entry: Box<crate::journal::Entry>,
+    },
 }
 
 /// Persisted in `<state>/state.json`.

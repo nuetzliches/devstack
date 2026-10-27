@@ -1,6 +1,7 @@
 // One fake stack daemon: state, event stream, logs, usage, actions.
 import type {
   Candidate,
+  JournalEntry,
   LogStreamEvent,
   Point,
   Run,
@@ -45,6 +46,17 @@ export class MockStack {
   private logs = new Map<string, string[]>();
   private logSubs = new Map<string, Set<Listener<LogStreamEvent>>>();
   runs: Run[] = [];
+  /** The journal (ADR-0067), oldest first: some changes from before the page opened. */
+  journal: JournalEntry[] = (() => {
+    const t = Date.now();
+    return [
+      { at: t - 41 * 60_000, via: 'cli', method: 'POST', path: '/v1/up', status: 202 },
+      { at: t - 23 * 60_000, via: 'mcp', lane: 'agent-login-fix', method: 'POST', path: '/v1/lanes/agent-login-fix/v1/services/api/restart', status: 200 },
+      { at: t - 17 * 60_000, via: 'mcp', method: 'POST', path: '/v1/services/api/promote', status: 409, error: 'no candidate to promote' },
+      { at: t - 9 * 60_000, via: 'dashboard', method: 'POST', path: '/v1/services/worker/stop', status: 200 },
+      { at: t - 4 * 60_000, via: 'tray', method: 'POST', path: '/v1/commands/seed', status: 202 },
+    ];
+  })();
   private runLogs = new Map<number, { lines: string[]; end: RunLogEvent | null; subs: Set<Listener<RunLogEvent>> }>();
   private history = new Map<string, Point[]>();
   private walks = new Map<string, Walk>();
@@ -160,6 +172,13 @@ export class MockStack {
     }
     r.subs.add(l);
     return () => r.subs.delete(l);
+  }
+
+  /** A change into the journal, and onto the stream (ADR-0067). */
+  journalize(entry: JournalEntry): void {
+    this.journal.push(entry);
+    if (this.journal.length > 500) this.journal.shift();
+    this.emit({ type: 'journal', entry });
   }
 
   emit(body: StackEventBody): void {

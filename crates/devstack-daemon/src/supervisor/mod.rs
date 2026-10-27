@@ -473,7 +473,7 @@ impl Supervisor {
             })
             .collect();
         let (events, _) = broadcast::channel(1024);
-        Ok(Arc::new(Self {
+        let sup = Arc::new(Self {
             stack,
             repo,
             state_dir,
@@ -530,7 +530,35 @@ impl Supervisor {
             fresh_done: std::sync::atomic::AtomicBool::new(false),
             forward_checks: Mutex::new(BTreeMap::new()),
             lane,
-        }))
+        });
+        sup.follow_journal();
+        Ok(sup)
+    }
+
+    /// Each entry the journal records for this tree goes out as a `journal`
+    /// event (ADR-0067): every entry in the main tree, its own in a lane.
+    /// Ends with the supervisor, at the next entry.
+    fn follow_journal(self: &Arc<Self>) {
+        let mut rx = crate::journal::get().subscribe();
+        let me = Arc::downgrade(self);
+        self.rt.spawn(async move {
+            loop {
+                let entry = match rx.recv().await {
+                    Ok(e) => e,
+                    // The dashboard fetches what it missed (`?since=`).
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => return,
+                };
+                let Some(sup) = me.upgrade() else {
+                    return;
+                };
+                if entry.for_tree(&sup.lane) {
+                    sup.emit_quiet(EventBody::Journal {
+                        entry: Box::new(entry),
+                    });
+                }
+            }
+        });
     }
 
     pub fn stack_file(&self) -> &Path {

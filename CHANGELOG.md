@@ -48,6 +48,15 @@ and listed with their assets on the
   hub starts (stdio, `npx -y …`), as the user, with a base environment and
   only the variables set for it there, a token the hub keeps given in a
   variable of its choice; never a command from a repository or the pool.
+- **The dashboard shows who changed the stack** (ADR-0067, addendum
+  2026-10-27; #331): the Events page is now *Activity*, one timeline of
+  the live events and the journal, which it loads on opening and so shows
+  changes from before the page connected, each with its client (CLI, MCP
+  server, dashboard, tray, devstack itself) and, refused, with the reason.
+  Filters by client and lane. A lane on the main ports says since when and
+  through what it holds them; a service's details its last action.
+  `/v1/events` carries each new journal entry as a `journal` event, and
+  whoever views a shared lane may read its `/v1/journal`.
 
 ### Changed
 

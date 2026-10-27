@@ -4,7 +4,8 @@
 // branches, ADR-0047), the lane's actions and start/stop. Replaces the lane
 // banner.
 import { computed, onBeforeUnmount, ref } from 'vue';
-import { duration, ago, useNow } from '@/lib/format';
+import { clock, duration, ago, useNow } from '@/lib/format';
+import { viaText } from '@/lib/journal';
 import { laneLabel, nodeLabel, notForwardedText } from '@/lib/lanes';
 import { usePopover } from '@/lib/popover';
 import type { Opener } from '@/api/types';
@@ -28,6 +29,12 @@ const hubAway = computed(() => !hub.reachable);
 const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 const current = computed(() => stack.shownLane);
 const servedBy = computed(() => stack.lanes.find((l) => l.owns_main) ?? null);
+/** Since when and by what the lane `name` serves the main ports (ADR-0067), from the view: "since 10:42, set via the dashboard". */
+function servedSince(name: string): string {
+  const m = view.value?.main_served;
+  if (!m || m.lane !== name) return '';
+  return `${m.at ? ` since ${clock(m.at)}` : ''}, set ${viaText(m.via)}`;
+}
 const busyMain = computed(() => !!stack.busy['lane-main']);
 
 /** The shown tree's state and its event stream: live, or why not. */
@@ -212,7 +219,7 @@ function openWith(o: Opener) {
         >
           <span v-if="busyMain" class="spinner" /><Icon v-else name="promote" :size="14" /> Serve main ports
         </button>
-        <button v-if="servedBy" type="button" class="btn btn-sm" :disabled="busyMain" :title="`${laneLabel(servedBy)} serves the main ports`" data-testid="lane-main-back" @click="stack.laneMain('main')">
+        <button v-if="servedBy" type="button" class="btn btn-sm" :disabled="busyMain" :title="`${laneLabel(servedBy)} serves the main ports${servedSince(servedBy.name)}`" data-testid="lane-main-back" @click="stack.laneMain('main')">
           <Icon name="rollback" :size="14" /> Main ports back
         </button>
         <div v-if="current && current.node" ref="shareRoot" class="picker" data-testid="lane-share">
@@ -352,7 +359,8 @@ function openWith(o: Opener) {
       <span v-else-if="current && current.active !== false" class="muted small" data-testid="lane-placement">
         <template v-if="current.node">runs on <strong>{{ nodeLabel(current) }}</strong> · </template>
         <template v-else>runs on this machine · </template>
-        {{ current.owns_main ? 'serves the main ports' : 'no background workers' }}
+        <span v-if="current.owns_main" data-testid="lane-main-served">serves the main ports{{ servedSince(current.name) }}</span>
+        <template v-else>no background workers</template>
         <span v-if="current.node_error" class="err" :title="current.node_error"> · {{ current.node_error }}</span>
         <span v-if="current.node_warning" class="warn-text" :title="current.node_warning" data-testid="lane-node-warning"> · {{ current.node_warning }}</span>
         <span v-if="current.not_forwarded?.length" class="warn-text" data-testid="lane-not-forwarded"> · {{ notForwardedText(current.not_forwarded, current.not_forwarded_reason) }}</span>

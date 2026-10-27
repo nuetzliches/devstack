@@ -24,7 +24,7 @@ export const router = createRouter({
         { path: 'infra', name: 'infra', component: () => import('./views/InfraView.vue'), meta: { title: 'Infrastructure' } },
         { path: 'commands', name: 'commands', component: () => import('./views/CommandsView.vue'), meta: { title: 'Commands' } },
         { path: 'usage', name: 'usage', component: () => import('./views/UsageView.vue'), meta: { title: 'Usage' } },
-        { path: 'events', name: 'events', component: () => import('./views/EventsView.vue'), meta: { title: 'Events' } },
+        { path: 'events', name: 'events', component: () => import('./views/EventsView.vue'), meta: { title: 'Activity' } },
       ],
     },
     { path: '/pool', name: 'pool', component: () => import('./views/PoolView.vue'), meta: { title: 'Pool' } },

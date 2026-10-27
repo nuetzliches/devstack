@@ -141,6 +141,7 @@ export const v1 = {
   laneReset: (lane: string) => `/v1/lanes/${enc(lane)}/reset`,
   laneMove: (lane: string) => `/v1/lanes/${enc(lane)}/move`,
   events: '/v1/events',
+  journal: (since = 0) => `/v1/journal?since=${since}`,
   usage: '/v1/usage?history=true',
   store: '/v1/store',
   storeEntry: (service: string, key: string) => `/v1/store/${enc(service)}/${enc(key)}`,
