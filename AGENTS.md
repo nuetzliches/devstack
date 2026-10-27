@@ -8,11 +8,16 @@
    ([ADR-0006](docs/adr/0006-dashboard-vue-same-origin.md),
    [ADR-0021](docs/adr/0021-a-hub-serves-the-dashboard.md)).
 2. **Language:** documentation, commits and code comments in English.
-3. **ADR-driven:** read [`docs/adr/README.md`](docs/adr/README.md) before
-   proposing a change to anything listed in its index. A new architectural
-   decision gets an ADR with status `Proposed` *before* the code that depends
-   on it. An ADR with status `Open` is a question, not a licence: do not build
-   on either side of it.
+3. **Review card before the code, ADR after it**
+   ([ADR-0070](docs/adr/0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md)):
+   read [`docs/adr/README.md`](docs/adr/README.md) before proposing a change
+   to anything listed in its index. A change with a point in a card category
+   (trust, concept, contract, term) starts with a review card of three to
+   seven one-sentence points, shown to the owner and put in the issue or pull
+   request; do not bring the owner an ADR text to review. List what you
+   decided on your own. Merge only after the owner approved the points; then
+   the ADR records what was built. An ADR with status `Open` is a question,
+   not a licence: do not build on either side of it.
 4. **Dependencies:** MIT-compatible licences only, latest stable versions.
 5. **Code style:** `cargo clippy` clean, `cargo fmt` formatted.
 6. **Windows is a first-class target.** Every feature works on native Windows
