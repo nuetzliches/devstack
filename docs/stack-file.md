@@ -602,8 +602,10 @@ source) and keeps its outputs in the store; then it links the worktree
 there, by the rules above. The worktree's hooks get what is built for this
 machine (Windows here, Linux on the node). `devstack lane list`, `devstack
 status` and the dashboard say per path `linked`, `linked (store)`,
-`preparing` or `not linked` with why; a hook that runs while it says
-`preparing` does not find it yet. Without `outputs` it is not linked, and
+`preparing`, `linked (stale)` or `not linked` with why. New inputs are
+prepared in a second copy while the worktree keeps the one it has; the link
+moves once that copy is whole, and stays where it was when its `prepare`
+fails (`linked (stale)`, with why). Without `outputs` it is not linked, and
 says so. The links go when the lane stops on its node, moves or goes; the
 copy stays for its next start.
 

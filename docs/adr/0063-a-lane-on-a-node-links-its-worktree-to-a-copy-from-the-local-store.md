@@ -1,6 +1,6 @@
 # ADR-0063: A lane on a node links its worktree to a copy from the local store
 
-- **Status:** Accepted (2026-10-26); built, noted 2026-10-26
+- **Status:** Accepted (2026-10-26); built, noted 2026-10-26; addendum 2026-10-27 (two copies: new inputs are prepared beside the one the worktree has)
 - **Date:** 2026-10-26
 - **Deciders:** project owner
 - **Related:** [#277](https://github.com/nuetzliches/devstack/issues/277), [#159](https://github.com/nuetzliches/devstack/issues/159), [ADR-0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) (point 5 replaced here for lanes on a node), [ADR-0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md)
@@ -103,6 +103,23 @@ list` and `status` (`crates/devstack/src/client.rs`) and in the dashboard's
 lane header (`ui/src/components/StackHeader.vue`). `prepare` for a worktree
 runs under the main tree's one-at-a-time lock and logs as the main tree's
 service.
+
+## Addendum 2026-10-27: two copies, the link moves when the new one is whole
+
+Point 2 ran `prepare` for new inputs in the copy the worktree was linked to.
+`npm ci` empties `node_modules` first: while it ran, the worktree's hooks
+found a few packages, and when it failed (a file held open, a machine out
+of memory, #305) the link stayed on what was left, with nothing in the log.
+
+A lane on a node now has two copies, `linked/src` and `linked/next/src`, each
+with its own `prepared/<service>` marks. New inputs are prepared (from the
+store, or by running `prepare`) in the copy the worktree is *not* linked to;
+its mark goes first, so a half-made copy is no copy of any key. Once it
+succeeded the link moves there. When it fails the worktree keeps the copy
+it had, made for its inputs before, and the path says `linked (stale)` with
+why; the next look tries again. Inputs that go back to those of the other
+copy only move the link. A failed `prepare` is logged (`prepare_failed`,
+with its log). The disk a lane's copies take doubles at most.
 
 ## What this ADR does not say
 

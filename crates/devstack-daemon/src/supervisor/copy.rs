@@ -401,6 +401,11 @@ impl Supervisor {
             std::thread::sleep(Duration::from_millis(100));
         };
         if code != 0 {
+            crate::diag::warn(
+                "prepare_failed",
+                serde_json::json!({ "lane": self.lane, "service": name, "run": job.run,
+                    "exit_code": code, "cwd": job.cwd, "log": log }),
+            );
             return Err(format!(
                 "prepare `{}` exited with code {code}\n{}",
                 job.run,
@@ -495,14 +500,20 @@ impl Supervisor {
 
     /// The worktree of a lane that runs on a node, linked to a copy on this
     /// machine of what each `prepare` with `link` makes, for its git hooks
-    /// (ADR-0063): `<dir>/linked/src`, `dir` the lane's state here. The
-    /// copy comes from this machine's store (ADR-0062) when it has the key
-    /// of the worktree's inputs; else `prepare` runs once in that copy,
-    /// which gets the worktree's source for it, and its outputs go into the
-    /// store. `stack` is the worktree's stack file (the main tree's where it
-    /// has none). `report` hears every path's state as it changes. Nothing
-    /// runs when the key is the one prepared there before and its
-    /// directories are there: a look at the inputs.
+    /// (ADR-0063): `<dir>/linked/src` or `<dir>/linked/next/src`, `dir` the
+    /// lane's state here. The copy comes from this machine's store
+    /// (ADR-0062) when it has the key of the worktree's inputs; else
+    /// `prepare` runs once in that copy, which gets the worktree's source
+    /// for it, and its outputs go into the store. `stack` is the worktree's
+    /// stack file (the main tree's where it has none). `report` hears every
+    /// path's state as it changes. Nothing runs when the key is the one
+    /// prepared there before and its directories are there: a look at the
+    /// inputs.
+    ///
+    /// New inputs are prepared in the copy the link does not point to, and
+    /// the link moves once that succeeded (ADR-0063 addendum 2026-10-27):
+    /// while it runs, and when it fails, the worktree keeps the last copy
+    /// that was whole (`linked (stale)`), never one `npm ci` is emptying.
     pub(crate) fn link_node_lane(
         &self,
         worktree: &Path,
@@ -512,9 +523,10 @@ impl Supervisor {
         cancel: &dyn Fn() -> bool,
     ) {
         let linked = dir.join("linked");
+        let copies = node_copies(&linked);
         let mut views: Vec<NodeLink> = Vec::new();
-        let snap = match Snapshot::open(worktree, &linked) {
-            Ok(s) => s,
+        let files = match Snapshot::open(worktree, &copies[0]).and_then(|s| s.list()) {
+            Ok(f) => f,
             Err(e) => {
                 crate::diag::warn(
                     "prepare_node_link_failed",
@@ -523,9 +535,7 @@ impl Supervisor {
                 return;
             }
         };
-        let root = snap.dir.clone();
-        let files = snap.list().unwrap_or_default();
-        let snap = Arc::new(std::sync::Mutex::new(snap));
+        let roots = copies.clone().map(|c| c.join("src"));
         for (name, svc) in &stack.services {
             let Some(p) = svc.prepare.as_ref().filter(|p| !p.link.is_empty()) else {
                 continue;
@@ -566,45 +576,88 @@ impl Supervisor {
                     continue;
                 }
             };
-            let mark = linked.join("prepared").join(name);
-            let there = p.link.iter().all(|l| root.join(l).is_dir());
-            let done = there && std::fs::read_to_string(&mark).is_ok_and(|k| k == key);
+            // The copy the worktree is linked to now, and those made for
+            // this key already.
+            let current = (0..2).find(|&i| {
+                p.link
+                    .iter()
+                    .any(|rel| links_to(&worktree.join(rel), &roots[i].join(rel)))
+            });
+            let ready = |i: usize| {
+                p.link.iter().all(|l| roots[i].join(l).is_dir())
+                    && std::fs::read_to_string(copies[i].join("prepared").join(name))
+                        .is_ok_and(|k| k == key)
+            };
             let mut state = "linked";
-            if !done {
-                let mut now = views.clone();
-                now.extend(at("preparing", None));
-                report(&now);
-                let cwd = p.cwd.as_ref().or(svc.cwd.as_ref());
-                let sync = snap.clone();
-                let job = PrepareJob {
-                    key,
-                    mark,
-                    cwd: cwd.map_or_else(|| root.clone(), |c| root.join(c)),
-                    run: p.run.clone(),
-                    store: Ok(StoreUse {
-                        root: root.clone(),
-                        outputs: p.outputs.clone(),
-                        version: p.version.clone(),
-                    }),
-                    before_run: Some(Box::new(move || {
-                        sync.lock()
-                            .unwrap()
-                            .sync()
-                            .map(|_| ())
-                            .map_err(|e| e.to_string())
-                    })),
-                };
-                match self.run_prepare(name, job, cancel) {
-                    Ok(v) if v.source == "store" => state = "linked (store)",
-                    Ok(_) => {}
-                    Err(e) => {
-                        views.extend(at("not linked", Some(e)));
-                        continue;
+            let to = match current
+                .filter(|&i| ready(i))
+                .or_else(|| (0..2).find(|&i| ready(i)))
+            {
+                Some(i) => i,
+                None => {
+                    // The other copy than the one the worktree has: it
+                    // keeps that one until this one is whole.
+                    let to = current.map_or(0, |i| 1 - i);
+                    let mark = copies[to].join("prepared").join(name);
+                    // Half-made, it is no copy of any key.
+                    let _ = std::fs::remove_file(&mark);
+                    let mut now = views.clone();
+                    now.extend(at("preparing", None));
+                    report(&now);
+                    let snap = match Snapshot::open(worktree, &copies[to]) {
+                        Ok(s) => Arc::new(std::sync::Mutex::new(s)),
+                        Err(e) => {
+                            views.extend(at("not linked", Some(e.to_string())));
+                            continue;
+                        }
+                    };
+                    let root = roots[to].clone();
+                    let cwd = p.cwd.as_ref().or(svc.cwd.as_ref());
+                    let job = PrepareJob {
+                        key,
+                        mark,
+                        cwd: cwd.map_or_else(|| root.clone(), |c| root.join(c)),
+                        run: p.run.clone(),
+                        store: Ok(StoreUse {
+                            root: root.clone(),
+                            outputs: p.outputs.clone(),
+                            version: p.version.clone(),
+                        }),
+                        before_run: Some(Box::new(move || {
+                            snap.lock()
+                                .unwrap()
+                                .sync()
+                                .map(|_| ())
+                                .map_err(|e| e.to_string())
+                        })),
+                    };
+                    match self.run_prepare(name, job, cancel) {
+                        Ok(v) if v.source == "store" => state = "linked (store)",
+                        Ok(_) => {}
+                        Err(e) if current.is_some() => {
+                            views.extend(at(
+                                "linked (stale)",
+                                Some(format!(
+                                    "the worktree keeps the copy made for its inputs before: {e}"
+                                )),
+                            ));
+                            continue;
+                        }
+                        Err(e) => {
+                            views.extend(at("not linked", Some(e)));
+                            continue;
+                        }
                     }
+                    to
                 }
-            }
+            };
             for rel in &p.link {
-                let (state, why) = match link_one(worktree, &root, rel) {
+                // A link of ours to the other copy moves to this one.
+                let link = worktree.join(rel);
+                if (0..2).any(|i| i != to && links_to(&link, &roots[i].join(rel))) {
+                    let _ = remove_link(&link);
+                }
+                let (state, why) = match link_one(worktree, &roots[to], rel) {
                     Linked::Made | Linked::There(true) => (state, None),
                     Linked::There(false) => (
                         "not linked",
@@ -719,7 +772,7 @@ impl Supervisor {
         dir: &Path,
         stack: &devstack_config::Stack,
     ) {
-        let copy = dir.join("linked").join("src");
+        let roots = node_copies(&dir.join("linked")).map(|c| c.join("src"));
         for rel in stack
             .services
             .values()
@@ -727,7 +780,7 @@ impl Supervisor {
             .flat_map(|p| &p.link)
         {
             let link = worktree.join(rel);
-            if links_to(&link, &copy.join(rel)) {
+            if roots.iter().any(|r| links_to(&link, &r.join(rel))) {
                 let r = remove_link(&link);
                 crate::diag::info(
                     "prepare_unlinked",
@@ -1104,7 +1157,8 @@ const STORE_REMOVE_WAIT: Duration = Duration::from_secs(5);
 pub struct NodeLink {
     pub path: String,
     pub service: String,
-    /// `linked`, `linked (store)`, `preparing`, `not linked`.
+    /// `linked`, `linked (store)`, `preparing`, `linked (stale)`, `not
+    /// linked`.
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
@@ -1151,6 +1205,14 @@ enum Linked {
     /// developer's own (`false`), which stays.
     There(bool),
     Not(String),
+}
+
+/// The two copies a lane on a node's worktree is linked to in turn
+/// (ADR-0063 addendum 2026-10-27), each a snapshot with its `src` and its
+/// `prepared` marks: `linked` itself, the one there was before, and
+/// `linked/next`.
+fn node_copies(linked: &Path) -> [PathBuf; 2] {
+    [linked.to_path_buf(), linked.join("next")]
 }
 
 /// `rel` in `repo` linked to `rel` in `copy` (ADR-0044): only where the
@@ -1347,6 +1409,73 @@ mod tests {
         sup.link_node_lane(&wt, &lane, &stack, &report, &|| false);
         let last = seen.lock().unwrap().last().cloned().unwrap();
         assert_eq!(last[0].state, "linked", "{last:?}");
+
+        // New inputs, and their prepare fails: the worktree keeps the copy
+        // it had, whole, and says so (#305).
+        std::fs::write(wt.join("package-lock.json"), "{\"v\":2}").unwrap();
+        let failing = devstack_config::from_str(
+            &text.replace("run = \"npm ci\"", "run = \"exit 3\""),
+            Path::new("t"),
+        )
+        .unwrap();
+        sup.link_node_lane(&wt, &lane, &failing, &report, &|| false);
+        let last = seen.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(last[0].state, "linked (stale)", "{last:?}");
+        // Elsewhere a unit test cannot spawn (no shim): a failure all the same.
+        let why = last[0].why.as_deref().unwrap();
+        assert!(
+            why.contains("keeps the copy made for its inputs before")
+                && (!cfg!(windows) || why.contains("exited with code 3")),
+            "{last:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(wt.join("deps/eslint/index.js")).unwrap(),
+            "lint"
+        );
+        // Once the store has them, the other copy gets them and the link
+        // moves there; the first copy stays as it was.
+        let p2 = failing.services["web"].prepare.as_ref().unwrap();
+        let key2 = prepare_key(
+            p2,
+            &failing.services["web"],
+            [(
+                "package-lock.json",
+                blake3::hash(b"{\"v\":2}").to_hex().to_string(),
+            )]
+            .into_iter(),
+        )
+        .unwrap();
+        std::fs::write(made.join("deps/eslint/index.js"), "lint 2").unwrap();
+        sup.store()
+            .put(
+                "web",
+                &store_key_of(&key2, &p2.outputs, None),
+                &made,
+                &p2.outputs,
+                Duration::from_secs(60),
+            )
+            .unwrap();
+        sup.link_node_lane(&wt, &lane, &failing, &report, &|| false);
+        let last = seen.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(last[0].state, "linked (store)", "{last:?}");
+        assert_eq!(
+            std::fs::read_to_string(wt.join("deps/eslint/index.js")).unwrap(),
+            "lint 2"
+        );
+        assert!(lane.join("linked/next/src/deps/eslint/index.js").is_file());
+        assert_eq!(
+            std::fs::read_to_string(lane.join("linked/src/deps/eslint/index.js")).unwrap(),
+            "lint"
+        );
+        // Back to the first inputs: that copy is still theirs, nothing runs.
+        std::fs::write(wt.join("package-lock.json"), "{\"v\":1}").unwrap();
+        sup.link_node_lane(&wt, &lane, &stack, &report, &|| false);
+        let last = seen.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(last[0].state, "linked", "{last:?}");
+        assert_eq!(
+            std::fs::read_to_string(wt.join("deps/eslint/index.js")).unwrap(),
+            "lint"
+        );
 
         // The lane stops: the link goes, the copy stays for the next start.
         sup.unlink_node_lane(&wt, &lane, &stack);
