@@ -105,7 +105,7 @@ pub fn print_fingerprint(dir: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-fn ago(secs: u64) -> String {
+pub(crate) fn ago(secs: u64) -> String {
     match secs {
         s if s < 120 => format!("{s} s ago"),
         s if s < 7200 => format!("{} min ago", s / 60),

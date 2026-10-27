@@ -1477,7 +1477,7 @@ impl Lanes {
             r.hold_sync();
         }
         if self.main.served_by().as_deref() == Some(name)
-            && let Err(e) = self.take_main("main")
+            && let Err(e) = self.take_main_auto("main")
         {
             crate::diag::warn(
                 "main_slot_back_failed",
@@ -2182,6 +2182,18 @@ impl Lanes {
     ///
     /// The ports move first; the owner changes only when all of them did. A
     /// port that cannot move gives everything back to the main tree.
+    /// [`Self::take_main`] by devstack itself (a lane that goes gives the
+    /// ports back, a restart hands them on): journaled as `auto`
+    /// (ADR-0067), as a client's request is by the API.
+    fn take_main_auto(&self, name: &str) -> Result<(), String> {
+        let had = self.main.served_by();
+        self.take_main(name)?;
+        if self.main.served_by() != had {
+            crate::journal::auto(&format!("/v1/lanes/{name}/main"), Some(name));
+        }
+        Ok(())
+    }
+
     pub fn take_main(&self, name: &str) -> Result<(), String> {
         let main = &self.main;
         let mut ho = self.handover.lock().unwrap();
@@ -2483,7 +2495,7 @@ impl Lanes {
     pub fn stop_all(&self) -> Vec<String> {
         let mut failed = Vec::new();
         if self.main.served_by().is_some()
-            && let Err(e) = self.take_main("main")
+            && let Err(e) = self.take_main_auto("main")
         {
             failed.push(format!("the main ports: {e}"));
         }
@@ -2722,7 +2734,7 @@ impl Lanes {
             self.announce();
             return;
         }
-        match self.take_main(&lane) {
+        match self.take_main_auto(&lane) {
             Ok(()) => crate::diag::info("main_slot_carried", serde_json::json!({ "lane": lane })),
             Err(e) => {
                 // The lane on a node runs its workers no longer.

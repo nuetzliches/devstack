@@ -27,6 +27,11 @@ pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
         Cmd::Down {
             keep_infra, all, ..
         } => client::down(file, !keep_infra, all),
+        Cmd::Journal { lines } => {
+            let c = client::need(&client::state_dir(file)?)?;
+            print!("{}", client::journal_text(&c.journal()?, lines));
+            Ok(())
+        }
         Cmd::Status => {
             let c = client::need(&client::state_dir(file)?)?;
             client::print_status_for(&c.stack()?, file);

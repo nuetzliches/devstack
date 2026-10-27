@@ -138,7 +138,7 @@ chat or terminal makes it clickable), and `devstack ui` opens the page paired.
 
 ## 5. Agents: MCP
 
-`devstack mcp` is an MCP server (stdio) with `status`, `up` (`on` for a lane on a
+`devstack mcp` is an MCP server (stdio) with `status`, `journal`, `up` (`on` for a lane on a
 node), `down`, `start_service`, `stop_service`, `restart_service`,
 `promote_service`, `rollback_service`, `hot_reload`, `logs`, `builds`,
 `diagnostics`, `doctor`, `run_command`, `usage`, `lanes`, `lane_start`,
@@ -164,6 +164,7 @@ Register it once (project `.mcp.json` or user configuration):
 
 | Symptom | Cause and fix |
 | --- | --- |
+| a state looks wrong (a lane on the main ports, a service stopped, containers gone) | look before reporting or undoing it: `devstack status` says who gave a lane the main ports and who stopped a service last, `devstack journal` (MCP `journal`) every change with its client (`dashboard`, `cli`, `mcp`, `tray`, `auto`). A change a client made is the user's decision, not a fault: ask before you undo it, and do not report it upstream |
 | anything does not start, before guessing | `devstack doctor` (MCP `doctor`): what this machine lacks for this stack, one line each, with the fix |
 | something happened and nothing says why (a restart, a switch, a stop) | `devstack logs --daemon --grep <service>` (MCP `diagnostics`): service and candidate states with reasons, every request that changed something, daemon start and stop; it works with the daemon stopped |
 | `devstack up`: Docker is not running | `up` (CLI and MCP) starts Docker Desktop and waits; with Docker Engine as a Linux service it names `sudo systemctl start docker` for the user |

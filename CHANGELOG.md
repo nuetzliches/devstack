@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **Who changed the stack at runtime is on record** (ADR-0067): the CLI,
+  the MCP server, the tray and the dashboard (through the hub) say which
+  client they are, and the daemon keeps the last 500 changes with it in
+  `.devstack/journal.ndjson`: `devstack journal`, the MCP tool `journal`,
+  `GET /v1/journal`. `devstack status` says who gave a lane the main ports
+  and when, and who stopped a service last. An agent can tell a user's
+  decision from a fault; the skill tells it to look there first.
+
 ### Changed
 
 - **A stop takes the containers too** (ADR-0068): `devstack down`, the

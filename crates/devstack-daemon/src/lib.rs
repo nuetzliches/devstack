@@ -8,6 +8,7 @@ pub mod commands;
 pub mod diag;
 pub mod external;
 pub mod health;
+pub mod journal;
 pub mod lanes;
 pub mod logfiles;
 pub mod proxy;
@@ -219,6 +220,8 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     )?;
     // Only the lock holder writes the diagnostic log (plan §11).
     diag::init(state_dir.join("daemon.log"));
+    // Who changed what at runtime (ADR-0067), across restarts.
+    journal::init(&state_dir);
     // Its path stays on this machine (ADR-0037 point 4).
     diag::add_root(&repo, "<repo>");
     // Read after the log is open: a stack file this devstack cannot run (one

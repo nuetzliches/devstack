@@ -38,6 +38,7 @@ const MAX_CALLS: usize = 16;
 static RUNNING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 pub fn serve(stack_file: &Path) -> Result<()> {
+    client::serve_as("mcp");
     let out: Out = Arc::new(Mutex::new(std::io::stdout()));
     let file = std::path::absolute(stack_file)?;
     let mut input = std::io::stdin().lock();
@@ -245,6 +246,13 @@ pub fn tools() -> Vec<Value> {
             json!({ "keep_infra": { "type": "boolean", "default": false } }),
             &[],
             false,
+        ),
+        tool(
+            "journal",
+            "What changed the stack at runtime and through which client (dashboard, cli, mcp, tray, auto: devstack itself), oldest first (ADR-0067). Check it before reporting a state as a fault: a lane on the main ports or a stopped service may be the user's choice. GET /v1/journal.",
+            json!({ "lines": { "type": "integer", "default": 30 } }),
+            &[],
+            true,
         ),
         tool(
             "start_service",
@@ -605,6 +613,10 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             } else {
                 "services stopped, infrastructure removed".into()
             })
+        }
+        "journal" => {
+            let n = args["lines"].as_u64().unwrap_or(30) as usize;
+            Ok(client::journal_text(&connect(file)?.journal()?, n))
         }
         "start_service" | "stop_service" | "restart_service" | "promote_service"
         | "rollback_service" => {

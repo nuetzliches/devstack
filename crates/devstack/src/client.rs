@@ -30,6 +30,15 @@ pub struct Worktree {
 
 static WORKTREE: std::sync::OnceLock<Option<Worktree>> = std::sync::OnceLock::new();
 
+/// What this process is to the daemon (`X-Devstack-Client`, ADR-0067):
+/// `cli` unless the MCP server says otherwise at its start.
+static CLIENT: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// This process serves MCP: its requests say `mcp` (ADR-0067).
+pub fn serve_as(client: &'static str) {
+    let _ = CLIENT.set(client);
+}
+
 /// The worktree the CLI runs in, if it is a lane (decided once per process).
 pub fn worktree() -> Option<&'static Worktree> {
     WORKTREE.get().and_then(Option::as_ref)
@@ -273,7 +282,8 @@ impl Client {
         let req = ureq::http::Request::builder()
             .method(method)
             .uri(format!("{}{path}", self.base))
-            .header("Authorization", format!("Bearer {}", self.token));
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("X-Devstack-Client", *CLIENT.get().unwrap_or(&"cli"));
         let req = match body {
             Some(b) => req
                 .header("Content-Type", "application/json")
@@ -329,6 +339,13 @@ impl Client {
         let reader = std::io::BufReader::new(resp.into_body().into_reader());
         read_sse(reader, on_event)?;
         Ok(())
+    }
+
+    /// The stack's journal (ADR-0067); an older daemon has none.
+    pub fn journal(&self) -> Result<Value> {
+        Ok(serde_json::from_str(&self.get("/v1/journal").map_err(
+            |e| e.context("this daemon keeps no journal (devstack 0.25.0 or later does)"),
+        )?)?)
     }
 
     pub fn get(&self, path: &str) -> Result<String> {
@@ -732,9 +749,67 @@ pub fn print_status_for(stack: &Value, stack_file: &Path) {
 /// The service table and the infrastructure, as `devstack status` shows them.
 /// `SERVICE` is a `[services.*]` entry only, as in the stack file and in
 /// "main ports"; Compose containers have their own table, by group (#184).
+/// How long ago `at` (Unix ms) was.
+fn since(at: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    crate::poolcmd::ago(now.saturating_sub(at) / 1000)
+}
+
+/// The last `n` entries of the journal (ADR-0067), oldest first.
+pub fn journal_text(entries: &Value, n: usize) -> String {
+    use std::fmt::Write;
+    let all = entries.as_array().cloned().unwrap_or_default();
+    if all.is_empty() {
+        return "nothing changed at runtime yet\n".into();
+    }
+    let mut out = format!(
+        "{:<14} {:<10} {:<14} {:<6} WHAT\n",
+        "WHEN", "VIA", "LANE", "STATUS"
+    );
+    for e in &all[all.len().saturating_sub(n)..] {
+        let what = format!(
+            "{} {}{}",
+            e["method"].as_str().unwrap_or(""),
+            e["path"].as_str().unwrap_or(""),
+            e["error"]
+                .as_str()
+                .map(|r| format!(": {}", truncate(r.lines().next().unwrap_or(""), 80)))
+                .unwrap_or_default()
+        );
+        let _ = writeln!(
+            out,
+            "{:<14} {:<10} {:<14} {:<6} {what}",
+            since(e["at"].as_u64().unwrap_or(0)),
+            e["via"].as_str().unwrap_or("?"),
+            e["lane"].as_str().unwrap_or("main"),
+            e["status"].as_u64().unwrap_or(0),
+        );
+    }
+    out
+}
+
 pub fn status_text(stack: &Value) -> String {
     use std::fmt::Write;
     let mut out = String::new();
+    // Who gave a lane the main ports (ADR-0067): a user's choice, not a fault.
+    let m = &stack["main_served"];
+    if let Some(lane) = m["lane"].as_str() {
+        let _ = writeln!(
+            out,
+            "main ports: served by lane `{lane}`, set {}{} (`devstack promote --lane main` gives them back)\n",
+            match m["via"].as_str() {
+                Some("auto") => "by devstack".to_string(),
+                Some("unknown") | None => "by an unknown client".to_string(),
+                Some(v) => format!("in the {v}"),
+            },
+            m["at"]
+                .as_u64()
+                .map(|a| format!(", {}", since(a)))
+                .unwrap_or_default()
+        );
+    }
     if let Some(p) = stack["profile"].as_str() {
         let _ = writeln!(out, "profile: {p} (ADR-0041)\n");
     }
@@ -777,6 +852,14 @@ pub fn status_text(stack: &Value) -> String {
             s["port"].as_u64().map_or("-".into(), |p| p.to_string()),
             s["pid"].as_u64().map_or("-".into(), |p| p.to_string()),
         );
+        // Stopped by someone: who, and when (ADR-0067).
+        let a = &s["last_action"];
+        if s["status"]["state"] == "stopped"
+            && let (Some(action), Some(via), Some(at)) =
+                (a["action"].as_str(), a["via"].as_str(), a["at"].as_u64())
+        {
+            let _ = writeln!(out, "  -> last `{action}` via {via}, {}", since(at));
+        }
         // A newer build on its way, or why it did not arrive: the running one
         // is not the latest change (ADR-0003).
         let c = &s["candidate"];

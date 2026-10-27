@@ -37,6 +37,7 @@ pub struct AppState {
 pub fn router(state: AppState) -> axum::Router {
     axum::Router::new()
         .route("/v1/stack", get(stack))
+        .route("/v1/journal", get(journal))
         .route("/v1/telemetry/take", post(telemetry_take))
         .route("/v1/warm", get(warm_view))
         .route("/v1/up", post(up))
@@ -105,10 +106,15 @@ async fn audit(State(s): State<AppState>, req: Request, next: Next) -> Response 
         return next.run(req).await;
     }
     let path = req.uri().path().to_string();
+    let via = crate::journal::client(
+        req.headers()
+            .get("x-devstack-client")
+            .and_then(|v| v.to_str().ok()),
+    );
     let res = next.run(req).await;
     let status = res.status().as_u16();
-    let mut fields =
-        serde_json::json!({ "method": method.as_str(), "path": path, "status": status });
+    let mut fields = serde_json::json!({ "method": method.as_str(), "path": path,
+        "status": status, "via": via });
     // Why it was refused: a 409 alone explains nothing afterwards.
     let res = if status >= 400 {
         let (res, error) = error_of(res).await;
@@ -126,12 +132,36 @@ async fn audit(State(s): State<AppState>, req: Request, next: Next) -> Response 
     {
         fields["lane"] = lane.into();
     }
+    // Who changed it, kept for whoever looks later (ADR-0067).
+    crate::journal::get().record(crate::journal::Entry {
+        at: crate::state::now_ms() as u64,
+        via,
+        lane: fields["lane"].as_str().map(str::to_string),
+        method: method.as_str().to_string(),
+        path,
+        status,
+        error: fields["error"].as_str().map(str::to_string),
+    });
     crate::diag::log(
         if status >= 400 { "warn" } else { "info" },
         "request",
         fields,
     );
     res
+}
+
+#[derive(Deserialize)]
+struct JournalQuery {
+    /// Unix ms: only what came after.
+    #[serde(default)]
+    since: u64,
+}
+
+/// `GET /v1/journal?since=`: what clients and devstack changed at runtime,
+/// oldest first, the last 500 (ADR-0067). A lane's API answers the same:
+/// it is the stack's journal, each entry with its lane.
+async fn journal(Query(q): Query<JournalQuery>) -> Response {
+    Json(crate::journal::get().since(q.since)).into_response()
 }
 
 /// The `error` of a refused answer (`{"error": …}`, small), for the
