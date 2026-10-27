@@ -3538,9 +3538,11 @@ async fn background(s: Shared) {
             .await
             .unwrap_or_default();
         {
+            // Half of what the lanes get here in all (ADR-0066).
+            let cap = s.share.max_cpus.unwrap_or(cores as f64) / 2.0;
             let mut runs = s.runs.lock().unwrap();
             for (id, a) in &by {
-                runs.load(id, *a);
+                runs.load(id, *a, cap);
             }
         }
         let used = by.values().fold(Amount::default(), |a, b| Amount {

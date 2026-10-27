@@ -61,14 +61,15 @@ impl Runs {
         }
     }
 
-    /// What it uses in this round.
-    pub fn load(&mut self, id: &str, used: Amount) {
+    /// What it uses in this round. CPU counts up to `cpu_cap` (ADR-0066):
+    /// a build takes what is free, more says how idle the node was.
+    pub fn load(&mut self, id: &str, used: Amount, cpu_cap: f64) {
         let Some(s) = self.by.get_mut(id) else {
             return;
         };
         s.since.get_or_insert_with(Instant::now);
         s.peak.memory = s.peak.memory.max(used.memory);
-        s.cpu.push_back(used.cpus);
+        s.cpu.push_back(used.cpus.min(cpu_cap));
         if s.cpu.len() > CPU_WINDOW {
             s.cpu.pop_front();
         }
@@ -273,7 +274,7 @@ mod tests {
         r.profile("l1", Some("acceptance".into()));
         // A single spike does not count; four rounds at two cores do.
         for cpus in [8.0, 0.0, 0.0, 0.0] {
-            r.load("l1", Amount { cpus, memory: GIB });
+            r.load("l1", Amount { cpus, memory: GIB }, 12.0);
         }
         assert_eq!(r.by["l1"].peak.cpus, 2.0);
         for _ in 0..4 {
@@ -283,6 +284,7 @@ mod tests {
                     cpus: 2.0,
                     memory: 3 * GIB,
                 },
+                12.0,
             );
         }
         r.load(
@@ -291,6 +293,7 @@ mod tests {
                 cpus: 0.1,
                 memory: GIB,
             },
+            12.0,
         );
         assert!(r.report().is_empty(), "not running for long enough yet");
         r.by.get_mut("l1").unwrap().since = Instant::now().checked_sub(COUNTS_AFTER);
@@ -312,9 +315,26 @@ mod tests {
         assert_eq!(r.written("l1"), (0, 0));
         // A lane that never ran long enough is not a run.
         r.begin("l2", "shop");
-        r.load("l2", Amount::default());
+        r.load("l2", Amount::default(), 12.0);
         r.end("l2");
         assert!(r.report().is_empty());
+    }
+
+    #[test]
+    fn a_build_that_takes_the_whole_node_needs_half_of_it() {
+        let mut r = Runs::default();
+        r.begin("l1", "shop");
+        for _ in 0..4 {
+            r.load(
+                "l1",
+                Amount {
+                    cpus: 18.5,
+                    memory: GIB,
+                },
+                10.0,
+            );
+        }
+        assert_eq!(r.by["l1"].peak.cpus, 10.0);
     }
 
     #[test]
