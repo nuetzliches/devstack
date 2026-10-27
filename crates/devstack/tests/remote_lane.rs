@@ -909,6 +909,9 @@ fn store_entries(dir: &Path) -> usize {
                 let path = e.path();
                 if in_stores && path.join(".devstack-store.json").is_file() {
                     1
+                } else if in_stores && e.file_name() == "artifacts" {
+                    // The build artifacts' store, not `prepare`'s.
+                    0
                 } else if path.is_dir() && !path.is_symlink() {
                     count(&path, in_stores || e.file_name() == "stores")
                 } else {
