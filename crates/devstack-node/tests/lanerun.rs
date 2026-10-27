@@ -80,6 +80,7 @@ volumes:
         port_offset: 0,
         profile: None,
         relay_udp: false,
+        workers: false,
         memory_limit: Some(256 << 20),
         cpu_limit: None,
         network: Network::Lan,
