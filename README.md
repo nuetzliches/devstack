@@ -145,7 +145,7 @@ devstack run reset                 # a command of the stack file (a database res
 devstack top --watch               # CPU, memory, disk per service, container, group and lane
 devstack env api                   # what a service gets, with origins
 devstack logs --daemon             # devstack's own decisions with their reasons
-devstack down [--infra] [--all]    # running lanes keep the daemon; --all stops them too
+devstack down [--keep-infra] [--all]  # containers go too (volumes stay); running lanes keep the daemon; --all stops them too
 ```
 
 ## Lanes: every worktree, side by side
@@ -210,7 +210,7 @@ Every command and flag: `devstack --help`, `devstack <command> --help`.
 |---|---|
 | `devstack init`, `check [--compose]`, `schema` | write a first stack file; validate it (with `--compose` every Compose group on its own too); print its JSON Schema |
 | `devstack doctor` | what this machine lacks for this stack, with the fix; exits 1 when something fails |
-| `devstack up [--on <node>\|pool] [--workers] [--force] [--profile <name> [--run]] [--yes]`, `down [--infra] [--all]`, `status` | start (in a worktree: its lane, here or on a node; with a profile of the stack file, for a purpose such as an acceptance run), stop (`--all`: the lanes too), show the stack |
+| `devstack up [--on <node>\|pool] [--workers] [--force] [--profile <name> [--run]] [--yes]`, `down [--keep-infra] [--all]`, `status` | start (in a worktree: its lane, here or on a node; with a profile of the stack file, for a purpose such as an acceptance run), stop with the containers (`--keep-infra`: leave them running; `--all`: the lanes too), show the stack |
 | `devstack start\|stop\|restart <service\|group>`, `promote`, `rollback`, `hot-reload` | one service or group; `restart --rebuild` builds again although an artifact for the same inputs exists |
 | `devstack build <service>` | sync the main tree's snapshot and build an artifact, without starting it (in a lane: `devstack restart <service>` in its worktree) |
 | `devstack builds <service>`, `logs`, `top`, `env <service> [--export dotenv]` | what ran, what it printed, what it uses, what it gets |

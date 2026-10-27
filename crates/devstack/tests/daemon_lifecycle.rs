@@ -410,7 +410,7 @@ impl Drop for Stack {
             eprintln!("--- daemon.log ---\n{}\n--- end ---", self.daemon_log());
         }
         // `--all`: a lane a test started must not keep the daemon.
-        let _ = self.cli(&["down", "--infra", "--all"], None);
+        let _ = self.cli(&["down", "--all"], None);
     }
 }
 
@@ -933,8 +933,8 @@ fn lifecycle(with_compose: bool) {
         assert!(!out.status.success(), "no such group");
     }
 
-    // down: nothing left.
-    s.ok(&["down", "--infra"]);
+    // down: nothing left, containers included (ADR-0068).
+    s.ok(&["down"]);
     assert!(s.api("/health").is_none());
     if let Some(p) = &s.project {
         let out = Command::new("docker")
@@ -2852,6 +2852,23 @@ steps = [
     assert!(!refused.status.success(), "reset while it runs");
     assert!(String::from_utf8_lossy(&refused.stderr).contains("lane stop"));
 
+    // `down` in the main tree takes its own containers but the `shared`
+    // cache the lane uses (ADR-0068); the lane's are its own.
+    let down = s.ok(&["down"]);
+    assert!(
+        down.contains("lanes keep running") && down.contains("app.cache"),
+        "{down}"
+    );
+    let main = compose_ps(&project);
+    assert!(
+        main.iter().all(|c| c.0 == "cache") && main.iter().any(|c| c.0 == "cache"),
+        "only the shared cache stays: {main:?}"
+    );
+    assert!(
+        compose_ps(&lane_project).iter().any(|c| c.0 == "db"),
+        "the lane's db runs on"
+    );
+
     // `lane stop` gives the containers back; a removed worktree takes the rest.
     s.ok(&["lane", "stop", &lane]);
     assert!(
@@ -2994,7 +3011,7 @@ steps = [{{ exec = "{echo}" }}]
         }
     }
     let clean = || {
-        let _ = cli(&main_file, &["down", "--infra", "--all"]);
+        let _ = cli(&main_file, &["down", "--all"]);
         for pr in [&project, &lane_project] {
             let _ = Command::new("docker")
                 .args(["compose", "-p", pr, "down", "--volumes"])
@@ -3170,7 +3187,7 @@ skip = ["compose.heavy", "compose.app.scanner"]
         }
     }
     let clean = || {
-        let _ = cli(&["down", "--infra"]);
+        let _ = cli(&["down"]);
         for p in [&app, &heavy] {
             let _ = Command::new("docker")
                 .args(["compose", "-p", p, "down", "--volumes", "--timeout", "1"])
@@ -3186,7 +3203,8 @@ skip = ["compose.heavy", "compose.app.scanner"]
         .success();
     assert!(ok, "git init");
 
-    // Without the profile everything runs; `down` leaves the containers.
+    // Without the profile everything runs; `down --keep-infra` leaves the
+    // containers.
     let (ok, up) = cli(&["up"]);
     assert!(ok, "{up}");
     // `up` answers before the containers run when no service waits for them.
@@ -3199,9 +3217,13 @@ skip = ["compose.heavy", "compose.app.scanner"]
         running(&app),
         running(&heavy)
     );
-    let (ok, down) = cli(&["down"]);
+    let (ok, down) = cli(&["down", "--keep-infra"]);
     assert!(ok, "{down}");
-    assert_eq!(running(&heavy), ["engine"], "`down` keeps the containers");
+    assert_eq!(
+        running(&heavy),
+        ["engine"],
+        "`down --keep-infra` keeps the containers"
+    );
 
     // With it, what it leaves out goes, and the rest runs.
     let (ok, up) = cli(&["up", "--profile", "lite"]);

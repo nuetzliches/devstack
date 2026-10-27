@@ -193,17 +193,27 @@ impl Supervisor {
         }
     }
 
-    /// Stop every service, last started first. Infra stays up (ADR-0004: it is
-    /// long-lived) unless `infra` is set. Returns what did not stop.
+    /// Stop every service, last started first; with `infra` the containers
+    /// go too, volumes kept (`devstack down` does, ADR-0068). Without it,
+    /// as for a daemon that stops or restarts, they run on. Returns what did
+    /// not stop.
     pub fn down(&self, infra: bool) -> Vec<String> {
         self.down_keeping(infra, &BTreeSet::new())
     }
 
     /// Main tree, while lanes run: stop every service but those that serve
     /// the lanes, a service with `lanes = false` and what it starts `after`
-    /// (ADR-0024 point 5: the main tree's instance serves every lane).
-    /// Their names, and what did not stop.
-    pub fn down_for_lanes(&self) -> (Vec<String>, Vec<String>) {
+    /// (ADR-0024 point 5: the main tree's instance serves every lane). With
+    /// `infra` the containers go too (ADR-0068), but those a kept service
+    /// comes `after` and, while `local_lanes`, the `shared` ones (a lane
+    /// here uses them, ADR-0030; a lane on a node runs its own). The
+    /// services kept, the containers kept (`<group>.<service>`), what did
+    /// not stop.
+    pub fn down_for_lanes(
+        &self,
+        infra: bool,
+        local_lanes: bool,
+    ) -> (Vec<String>, Vec<String>, Vec<String>) {
         let mut keep: BTreeSet<String> = self
             .stack
             .services
@@ -211,6 +221,7 @@ impl Supervisor {
             .filter(|(_, s)| !s.lanes)
             .map(|(n, _)| n.clone())
             .collect();
+        let mut containers: BTreeSet<(String, String)> = BTreeSet::new();
         let mut todo: Vec<String> = keep.iter().cloned().collect();
         while let Some(n) = todo.pop() {
             for dep in self
@@ -220,13 +231,47 @@ impl Supervisor {
                 .map(|s| s.after.clone())
                 .unwrap_or_default()
             {
-                if self.stack.services.contains_key(&dep) && keep.insert(dep.clone()) {
+                if let Some(rest) = dep.strip_prefix("compose.")
+                    && let Some((g, s)) = rest.split_once('.')
+                {
+                    containers.insert((g.to_string(), s.to_string()));
+                } else if self.stack.services.contains_key(&dep) && keep.insert(dep.clone()) {
                     todo.push(dep);
                 }
             }
         }
-        let failed = self.down_keeping(false, &keep);
-        (keep.into_iter().collect(), failed)
+        let mut failed = self.down_keeping(false, &keep);
+        let mut kept = Vec::new();
+        if infra && self.external_infra().is_none() {
+            for g in self.group_order().into_iter().rev() {
+                let Some(cfg) = self.stack.compose.get(&g) else {
+                    continue;
+                };
+                let stays: BTreeSet<&String> = containers
+                    .iter()
+                    .filter(|(cg, _)| *cg == g)
+                    .map(|(_, s)| s)
+                    .chain(cfg.shared.iter().filter(|_| local_lanes))
+                    .collect();
+                let mut group = self.compose_group(&g);
+                let res = if stays.is_empty() {
+                    self.docker.down(&group)
+                } else if group.services.is_empty() {
+                    // Every service of its files: none can be told apart.
+                    kept.push(g.clone());
+                    Ok(())
+                } else {
+                    kept.extend(stays.iter().map(|s| format!("{g}.{s}")));
+                    group.services.retain(|s| !stays.contains(s));
+                    self.docker.remove_selected(&group)
+                };
+                if let Err(e) = res {
+                    failed.push(format!("compose group `{g}`: {e}"));
+                }
+            }
+            self.refresh_infra();
+        }
+        (keep.into_iter().collect(), kept, failed)
     }
 
     fn down_keeping(&self, infra: bool, keep: &BTreeSet<String>) -> Vec<String> {

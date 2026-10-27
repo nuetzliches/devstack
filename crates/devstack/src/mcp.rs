@@ -241,8 +241,8 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "down",
-            "Stop every service; with `infra`, also stop and remove the infrastructure containers (volumes are kept). The daemon keeps running. POST /v1/down.",
-            json!({ "infra": { "type": "boolean", "default": false } }),
+            "Stop every service and remove the infrastructure containers (volumes are kept); with `keep_infra` the containers keep running. The daemon keeps running. In the main tree, lanes that run keep what serves them and the `shared` containers they use. POST /v1/down.",
+            json!({ "keep_infra": { "type": "boolean", "default": false } }),
             &[],
             false,
         ),
@@ -586,19 +586,24 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             }
         }
         "down" => {
-            let infra = args["infra"].as_bool().unwrap_or(false);
+            let infra = !args["keep_infra"].as_bool().unwrap_or(false);
             let (status, body) = connect(file)?.post(&format!("/v1/down?infra={infra}"), None)?;
             let lanes = client::running_lanes(status, &body);
-            checked(status, body)?;
-            Ok(if !lanes.is_empty() {
+            let body = checked(status, body)?;
+            let kept: Vec<String> = serde_json::from_str::<Value>(&body)
+                .ok()
+                .and_then(|v| serde_json::from_value(v["containers"].clone()).ok())
+                .unwrap_or_default();
+            Ok(if !infra {
+                "services stopped; infrastructure keeps running".into()
+            } else if !lanes.is_empty() && !kept.is_empty() {
                 format!(
-                    "services stopped; infrastructure keeps running, lanes use it: {}",
+                    "services stopped, infrastructure removed but {} (lanes run: {})",
+                    kept.join(", "),
                     lanes.join(", ")
                 )
-            } else if infra {
-                "services stopped, infrastructure removed".into()
             } else {
-                "services stopped; infrastructure keeps running".into()
+                "services stopped, infrastructure removed".into()
             })
         }
         "start_service" | "stop_service" | "restart_service" | "promote_service"

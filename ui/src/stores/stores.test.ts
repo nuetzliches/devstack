@@ -419,7 +419,7 @@ describe('stack store', () => {
     expect(stack.view?.services[0].pid).toBeNull();
   });
 
-  it('a stack of containers only stops them too, unless told otherwise', async () => {
+  it('a stack stops its containers too, unless told to keep them', async () => {
     const stack = await shownStack();
     const app = { group: 'app', project: 'shop', containers: [{ service: 'db', name: 'shop-db-1', state: 'running', health: '', ports: [] }], error: null };
     const view = (services: unknown[]) => ({ name: 'shop', repo: '/src/shop', version: '0.9.8', services, infra: [app], groups: [], commands: [] });
@@ -436,11 +436,11 @@ describe('stack store', () => {
       return { offered, path: fake.requests.at(-1)?.path };
     };
     events.handlers.onMessage({ type: 'snapshot', stack: view([]) } as never);
-    expect(await stopWith()).toEqual({ offered: true, path: '/hub/stacks/shop/down?infra=true' });
-    expect((await stopWith(false)).path).toBe('/hub/stacks/shop/down?infra=false');
-    // Services of its own: the containers stay unless asked.
+    expect(await stopWith()).toEqual({ offered: false, path: '/hub/stacks/shop/down?infra=true' });
+    expect((await stopWith(true)).path).toBe('/hub/stacks/shop/down?infra=false');
+    // Services of its own: the containers go all the same (ADR-0068).
     events.handlers.onMessage({ type: 'snapshot', stack: view([{ name: 'api', status: { state: 'running' } }]) } as never);
-    expect(await stopWith()).toEqual({ offered: false, path: '/hub/stacks/shop/down?infra=false' });
+    expect(await stopWith()).toEqual({ offered: false, path: '/hub/stacks/shop/down?infra=true' });
   });
 
   it('a lane not started is shown from the main tree', async () => {

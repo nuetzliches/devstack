@@ -249,9 +249,15 @@ async fn up(State(s): State<AppState>) -> Response {
     StatusCode::ACCEPTED.into_response()
 }
 
+fn yes() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
 struct DownQuery {
-    #[serde(default)]
+    /// The containers too, volumes kept (the default since 0.25.0,
+    /// ADR-0068); `infra=false` leaves them running.
+    #[serde(default = "yes")]
     infra: bool,
     /// The lanes first (`down --all`): each stops with its own containers
     /// (a lane on the main ports gives them back first), so `infra` then
@@ -260,11 +266,13 @@ struct DownQuery {
     all: bool,
 }
 
-/// `204` once every service (and with `infra` every Compose group) stopped;
-/// `409` naming what did not. In the main tree, lanes that still run keep the
-/// infrastructure their `shared` services use (ADR-0030), and the daemon they
-/// live in (ADR-0024): then `200` with `{"lanes": [...]}`, and `infra` is not
-/// done. With `all` the lanes stop first (`Lanes::stop_all`), so it is.
+/// `204` once every service (and with `infra`, the default, every Compose
+/// group) stopped; `409` naming what did not. In the main tree, lanes that
+/// still run keep the daemon they live in (ADR-0024), what serves them
+/// (`lanes = false`, and the containers it comes `after`) and, a lane here,
+/// the `shared` containers (ADR-0030): then `200` with `{"lanes": [...],
+/// "kept": [...], "containers": [...]}`; every other container goes
+/// (ADR-0068). With `all` the lanes stop first (`Lanes::stop_all`).
 async fn down(State(s): State<AppState>, Query(q): Query<DownQuery>) -> Response {
     let mut lanes_failed = Vec::new();
     if q.all
@@ -276,28 +284,30 @@ async fn down(State(s): State<AppState>, Query(q): Query<DownQuery>) -> Response
         }
     }
     let lanes = s.lanes.as_ref().map(|l| l.active()).unwrap_or_default();
-    let infra = q.infra && lanes.is_empty();
+    let local = s.lanes.as_ref().is_some_and(|l| l.any_local());
+    let infra = q.infra;
     let sup = s.sup.clone();
     // Lanes that still run keep what serves them (`lanes = false`).
     let keeping = !lanes.is_empty() && s.lanes.is_some();
     let result = tokio::task::spawn_blocking(move || {
         if keeping {
-            let (kept, failed) = sup.down_for_lanes();
-            if !kept.is_empty() {
+            let (kept, containers, failed) = sup.down_for_lanes(infra, local);
+            if !kept.is_empty() || !containers.is_empty() {
                 crate::diag::info(
                     "main_down_kept",
-                    serde_json::json!({ "services": kept, "why": "they serve the lanes that run" }),
+                    serde_json::json!({ "services": kept, "containers": containers,
+                        "why": "they serve the lanes that run" }),
                 );
             }
-            (kept, failed)
+            (kept, containers, failed)
         } else {
-            (Vec::new(), sup.down(infra))
+            (Vec::new(), Vec::new(), sup.down(infra))
         }
     })
     .await;
-    let (kept, result) = match result {
-        Ok((k, f)) => (k, Ok(f)),
-        Err(e) => (Vec::new(), Err(e)),
+    let (kept, containers, result) = match result {
+        Ok((k, c, f)) => (k, c, Ok(f)),
+        Err(e) => (Vec::new(), Vec::new(), Err(e)),
     };
     // The stack stopped: a lane's start or move that failed before is over.
     if let Some(l) = &s.lanes {
@@ -316,7 +326,8 @@ async fn down(State(s): State<AppState>, Query(q): Query<DownQuery>) -> Response
             ),
         ),
         Ok(_) if !lanes.is_empty() => {
-            Json(serde_json::json!({ "lanes": lanes, "kept": kept })).into_response()
+            Json(serde_json::json!({ "lanes": lanes, "kept": kept, "containers": containers }))
+                .into_response()
         }
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),

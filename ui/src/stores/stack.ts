@@ -954,15 +954,14 @@ export const useStack = defineStore('stack', () => {
     if (!id.value) return;
     const name = entry.value?.name ?? 'stack';
     const kept = runningLanes.value;
-    // Lanes that run keep the containers they share (ADR-0030): nothing to choose.
-    const containers = !kept.length && (view.value?.infra.some((g) => g.containers.length) ?? true);
-    // Containers only, nothing else to stop: then they are what "stop" means.
-    const option = containers ? stopContainers(view.value !== null && view.value.services.length === 0) : undefined;
+    // Stop takes the containers too (ADR-0068), unless asked to keep them.
+    const containers = view.value?.infra.some((g) => g.containers.length) ?? true;
+    const option = containers ? keepContainers() : undefined;
     const ok = await ui.confirm({
       title: `Stop ${name}`,
       text: kept.length
-        ? `The main working tree's services stop. ${laneList(kept)} keep running, and with them the daemon. Infrastructure containers keep running.`
-        : 'All services of this stack stop and its daemon exits.',
+        ? `The main working tree's services and containers stop. ${laneList(kept)} keep running, and with them the daemon and the shared containers they use.`
+        : 'All services and containers of this stack stop and its daemon exits. Their volumes stay.',
       confirmLabel: 'Stop stack',
       danger: true,
       option,
@@ -970,15 +969,15 @@ export const useStack = defineStore('stack', () => {
     if (!ok) return;
     busy.value['stack'] = 'stop';
     try {
-      await act({ label: `Stop ${name}`, path: paths.down(id.value, !!option?.checked), success: 'Stopping the stack…' });
+      await act({ label: `Stop ${name}`, path: paths.down(id.value, !option?.checked), success: 'Stopping the stack…' });
     } finally {
       delete busy.value['stack'];
     }
   }
 
-  /** The choice to take a stack's containers down with it (`devstack down --infra`). */
-  function stopContainers(checked: boolean): ConfirmOption {
-    return { label: 'Stop its containers too', hint: 'Docker Compose takes them down; their volumes stay.', checked };
+  /** The choice to leave a stack's containers running when it stops (`devstack down --keep-infra`). */
+  function keepContainers(): ConfirmOption {
+    return { label: 'Keep its containers running', hint: 'The next start is faster; `devstack down` removes them later.', checked: false };
   }
 
   function laneList(names: string[]) {
@@ -986,7 +985,7 @@ export const useStack = defineStore('stack', () => {
   }
 
   return {
-    stopContainers,
+    keepContainers,
     id,
     view,
     viewAt,

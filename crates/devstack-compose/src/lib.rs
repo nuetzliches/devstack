@@ -826,6 +826,19 @@ impl Docker {
         self.run_group(g, &a, budget::STOP).map(|_| ())
     }
 
+    /// Stop and remove the containers of the group's selected services
+    /// (`g.services`), volumes kept; none selected: nothing (Compose would
+    /// remove every one).
+    pub fn remove_selected(&self, g: &Group) -> Result<()> {
+        if g.services.is_empty() {
+            return Ok(());
+        }
+        let mut a = g.base_args();
+        a.extend(["rm".into(), "--stop".into(), "--force".into()]);
+        a.extend(g.services.iter().map(OsString::from));
+        self.run_group(g, &a, budget::STOP).map(|_| ())
+    }
+
     /// Remove the group's containers, its volumes and the networks devstack
     /// created for it: a lane whose worktree is gone (ADR-0030).
     pub fn remove(&self, g: &Group) -> Result<()> {

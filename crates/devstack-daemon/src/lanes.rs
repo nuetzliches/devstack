@@ -2470,6 +2470,13 @@ impl Lanes {
         names.into_iter().collect()
     }
 
+    /// A lane runs, or starts, on this machine: it may use the main tree's
+    /// `shared` containers (ADR-0030). One starting may be for a node; it
+    /// counts all the same.
+    pub fn any_local(&self) -> bool {
+        !self.map.lock().unwrap().is_empty() || !self.pending.lock().unwrap().is_empty()
+    }
+
     /// Stop every lane (`down --all`): the one on the main ports gives them
     /// back first, then each stops as [`Self::stop`] does, its containers
     /// too, a lane on a node released. What did not stop, said.

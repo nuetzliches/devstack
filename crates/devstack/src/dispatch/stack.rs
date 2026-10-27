@@ -24,7 +24,9 @@ pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
             run,
             yes,
         ),
-        Cmd::Down { infra, all } => client::down(file, infra, all),
+        Cmd::Down {
+            keep_infra, all, ..
+        } => client::down(file, !keep_infra, all),
         Cmd::Status => {
             let c = client::need(&client::state_dir(file)?)?;
             client::print_status_for(&c.stack()?, file);

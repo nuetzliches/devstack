@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-10-16)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
-- **Related:** plan §3.5, [ADR-0004](0004-infrastructure-is-delegated-to-compose.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0012](0012-shared-infrastructure-between-lanes.md) (decided here), [ADR-0014](0014-native-services-take-their-configuration-from-compose.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (point 4 replaced here), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0057](0057-a-port-a-container-announces-moves-inside-it-too.md) (point 2 detailed: an announced port moves inside the container too)
+- **Related:** plan §3.5, [ADR-0004](0004-infrastructure-is-delegated-to-compose.md), [ADR-0008](0008-background-workers-run-only-in-the-active-slot.md), [ADR-0012](0012-shared-infrastructure-between-lanes.md) (decided here), [ADR-0014](0014-native-services-take-their-configuration-from-compose.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (point 4 replaced here), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0057](0057-a-port-a-container-announces-moves-inside-it-too.md) (point 2 detailed: an announced port moves inside the container too), [ADR-0068](0068-a-stop-takes-the-containers-too.md) (the main tree's stop takes its containers too, but the `shared` ones a lane here uses)
 
 ## Context
 
