@@ -999,6 +999,12 @@ pub fn up(
         explicit.map(str::to_string)
     };
     let on = resolved.as_deref();
+    if let Some(o) = explicit
+        && on.is_none()
+        && worktree().is_some()
+    {
+        println!("`{o}` is this machine: the lane runs here, as with `--on local`");
+    }
     if on.is_some() && worktree().is_none() {
         bail!(
             "--on runs a worktree's lane on another machine: run it in a `git worktree` of the repository"
@@ -1051,11 +1057,20 @@ pub fn up(
             println!("leasing, syncing and starting the lane on {node}...");
         }
         // A start on a node answers once leased; its steps follow.
-        let name = c.join_lane(wt, workers, force, on, profile, None, |m| {
-            if m["step"] != 0 {
-                println!("{}", step_line(m));
-            }
-        })?;
+        let name = c
+            .join_lane(wt, workers, force, on, profile, None, |m| {
+                if m["step"] != 0 {
+                    println!("{}", step_line(m));
+                }
+            })
+            .map_err(|e| match on {
+                Some(node) => anyhow!(
+                    "{e:#}
+{}",
+                    refused_ways(node, explicit.is_none())
+                ),
+                None => e,
+            })?;
         // `pool`: the coordinator chose; say which node, and whether it
         // runs another devstack (known once the start is followed).
         let view = on.and_then(|_| {
@@ -2272,6 +2287,28 @@ fn end_unanswering_daemon(state_dir: &Path, why: anyhow::Error, all: bool) -> Re
     Ok(())
 }
 
+/// What to do when a lane's start on `node` failed (#310): the error alone
+/// gives no way on, and `up` again asks the same. `default`: `node` is
+/// this machine's default (`devstack pool default-on`), not `--on`.
+fn refused_ways(node: &str, default: bool) -> String {
+    format!(
+        "{}the ways on: try again once something is free; `devstack pool placement <lane>` says what is free where; \
+         `devstack up --on <node>` picks another; `devstack up --on local` runs it on this machine (its memory check applies){}",
+        if default {
+            format!(
+                "the lane did not start on `{node}`, where this machine starts lanes by default (`devstack pool default-on`).\n"
+            )
+        } else {
+            format!("the lane did not start on `{node}`.\n")
+        },
+        if default {
+            ": the user chose the pool as the default, so ask them before running it here"
+        } else {
+            ""
+        }
+    )
+}
+
 /// The lanes a `200` from the main tree's `/v1/down` names: they still run.
 pub fn running_lanes(status: u16, body: &str) -> Vec<String> {
     if status != 200 {
@@ -2473,6 +2510,22 @@ pub fn print_placement(stack_file: &Path, lane: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_start_on_the_pool_names_the_ways_on() {
+        let by_default = refused_ways("pool", true);
+        assert!(
+            by_default.contains("default-on")
+                && by_default.contains("--on local")
+                && by_default.contains("ask them"),
+            "{by_default}"
+        );
+        let asked = refused_ways("node-1", false);
+        assert!(
+            asked.contains("--on local") && !asked.contains("ask them"),
+            "{asked}"
+        );
+    }
 
     #[test]
     fn server_sent_events_are_read_one_by_one() {

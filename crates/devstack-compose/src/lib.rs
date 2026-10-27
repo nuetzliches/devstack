@@ -1330,7 +1330,45 @@ pub struct VolumeSize {
     pub size: u64,
 }
 
+/// The memory of the machine the engine runs containers on, when that is a
+/// VM of its own (Docker Desktop on Windows and macOS, #309): its total, and
+/// what every running container uses in it now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EngineMemory {
+    pub total: u64,
+    pub used: u64,
+}
+
 impl Docker {
+    /// [`EngineMemory`] of Docker Desktop's VM; `None` for an engine that
+    /// runs on the host itself (its containers take the host's memory) or
+    /// one that does not answer. Takes about two seconds (`docker stats`).
+    pub fn engine_memory(&self) -> Option<EngineMemory> {
+        let a: Vec<OsString> = vec![
+            "info".into(),
+            "--format".into(),
+            "{{.MemTotal}}|{{.OperatingSystem}}".into(),
+        ];
+        let out = self.run(Path::new("."), &a, budget::QUICK).ok()?;
+        let (total, os) = parse_engine_info(&String::from_utf8_lossy(&out.stdout))?;
+        if !os.contains("Docker Desktop") {
+            return None;
+        }
+        let a: Vec<OsString> = vec![
+            "stats".into(),
+            "--no-stream".into(),
+            "--format".into(),
+            "json".into(),
+        ];
+        let out = self.run(Path::new("."), &a, budget::QUICK).ok()?;
+        let used = parse_stats(&String::from_utf8_lossy(&out.stdout))
+            .ok()?
+            .iter()
+            .map(|c| c.memory)
+            .sum();
+        Some(EngineMemory { total, used })
+    }
+
     /// One `docker stats --no-stream` sample of the named containers. Takes
     /// about two seconds: Docker measures over an interval.
     pub fn stats(&self, names: &[String]) -> Result<Vec<ContainerStats>> {
@@ -1471,6 +1509,13 @@ pub fn parse_volumes(json: &str) -> std::result::Result<Vec<VolumeSize>, String>
         .collect())
 }
 
+/// `docker info --format "{{.MemTotal}}|{{.OperatingSystem}}"`: the bytes
+/// and the engine's OS name.
+pub fn parse_engine_info(text: &str) -> Option<(u64, String)> {
+    let (total, os) = text.trim().split_once('|')?;
+    Some((total.trim().parse().ok()?, os.trim().to_string()))
+}
+
 /// Docker's human sizes: `12B`, `37.56kB`, `1.2MB` (SI), `35.27MiB`, `31.35GiB` (binary).
 pub fn parse_size(s: &str) -> Option<u64> {
     let s = s.trim();
@@ -1558,6 +1603,15 @@ mod tests {
 
     #[test]
     fn stats_and_sizes() {
+        assert_eq!(
+            parse_engine_info("33610137600|Docker Desktop\n"),
+            Some((33_610_137_600, "Docker Desktop".into()))
+        );
+        assert_eq!(
+            parse_engine_info("16000000000|Ubuntu 24.04.1 LTS"),
+            Some((16_000_000_000, "Ubuntu 24.04.1 LTS".into()))
+        );
+        assert_eq!(parse_engine_info(""), None);
         let text = r#"{"BlockIO":"1.63GB / 0B","CPUPerc":"12.50%","Container":"cb21","ID":"cb21","MemPerc":"0.11%","MemUsage":"35.27MiB / 31.35GiB","Name":"probe-db-1","NetIO":"1MB / 1MB","PIDs":"11"}"#;
         let s = parse_stats(text).unwrap();
         assert_eq!(s[0].name, "probe-db-1");

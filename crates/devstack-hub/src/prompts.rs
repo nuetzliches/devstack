@@ -120,13 +120,14 @@ pub fn text(p: &Prompt) -> String {
 
 {about}
 
-1. Read what changed since then: {changes}. Note what concerns this repository: keys that changed or went away, new defaults, new features.
-2. Hold {file} against the stack file reference of {current}: {at}/docs/stack-file.md
-3. Run `devstack check` (and `devstack check --compose`) and `devstack doctor`, and fix every error and warning.
-4. Tell me which new features would help this stack, and add only those I agree to. Raise `[stack] requires` only when the file uses something an older devstack does not know: it shuts out everyone still on one.
-5. Set `reviewed = \"{current}\"` in `[stack]`: the stack file is up to date with devstack {current} then, and the dashboard stops offering this.{requires}
-6. Run `devstack skills install` to refresh the generated skills. Check the project's own skills, CLAUDE.md and AGENTS.md for anything that contradicts devstack {current}.
-7. Restart the stack (`devstack down`, then `devstack up`) and check that every service becomes healthy. {careful}",
+1. `devstack --version` must say {current}: `check`, `skills install` and `reviewed` below are only right with that devstack. If it says another, run `devstack update` first and tell me.
+2. Read what changed since then: {changes}. Note what concerns this repository: keys that changed or went away, new defaults, new features.
+3. Hold {file} against the stack file reference of {current}: {at}/docs/stack-file.md
+4. Run `devstack check` (and `devstack check --compose`) and `devstack doctor`, and fix every error and warning.
+5. Tell me which new features would help this stack, and add only those I agree to. Raise `[stack] requires` only when the file uses something an older devstack does not know: it shuts out everyone still on one.
+6. Set `reviewed = \"{current}\"` in `[stack]`: the stack file is up to date with devstack {current} then, and the dashboard stops offering this.{requires}
+7. Run `devstack skills install` to refresh the generated skills. Check the project's own skills, CLAUDE.md and AGENTS.md for anything that contradicts devstack {current}.
+8. Restart the stack so it runs devstack {current}, and check that every service becomes healthy. Before you stop it, look at `devstack status` and `devstack lane list`: when lanes run, a lane holds the main ports, or other sessions may use this stack, ask me first. Restart with `devstack down --keep-infra`, then `devstack up`: the containers keep running (a plain `down` removes them since 0.25.0). {careful}",
                 repo = display(repo),
                 file = display(file),
             )
@@ -297,6 +298,8 @@ mod tests {
         assert!(p[3].contains("last brought up to date with devstack 0.1.0"));
         assert!(p[3].contains("the sections after 0.1.0, up to 0.2.0"));
         assert!(p[3].contains("Set `reviewed = \"0.2.0\"`"));
+        assert!(p[3].contains("`devstack --version` must say 0.2.0"));
+        assert!(p[3].contains("`devstack lane list`") && p[3].contains("down --keep-infra"));
         assert!(!p[3].contains("raise `requires`"), "the file has the key");
         assert!(p[4].contains("an earlier devstack"));
         assert!(p[5].contains("its generated agent skills name"));

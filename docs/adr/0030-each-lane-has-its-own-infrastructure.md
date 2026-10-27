@@ -58,6 +58,11 @@ that is half isolated.
    takes now (services and containers, plan §12) with the memory available,
    and refuses with that number and the ways out (stop another lane, a lane on
    another machine) unless `devstack up --force`.
+   *Amended 2026-10-27 (#309):* where the containers run in a VM of their
+   own (Docker Desktop on Windows and macOS), the containers' part of
+   that is compared with what is free in the VM (`docker info` `MemTotal`
+   less what every running container uses), and only the services' part
+   with the host's free memory; the refusal names the limit that was hit.
 6. **Workers:** a lane still runs without background workers by default (they
    may also talk to systems outside the stack). `devstack up --workers` turns
    them on for that lane: its coordinators are its own now. A service with
