@@ -3,7 +3,7 @@
 - **Status:** Proposed
 - **Date:** 2026-10-27
 - **Deciders:** project owner
-- **Related:** [ADR-0007](0007-one-http-api-is-the-control-surface.md) (one API, several clients), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0048](0048-a-containers-main-port-can-move-with-the-main-slot.md), [ADR-0052](0052-a-restart-carries-the-lanes-over.md), [ADR-0066](0066-a-stop-takes-the-containers-too.md)
+- **Related:** [ADR-0007](0007-one-http-api-is-the-control-surface.md) (one API, several clients), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0048](0048-a-containers-main-port-can-move-with-the-main-slot.md), [ADR-0052](0052-a-restart-carries-the-lanes-over.md), [ADR-0068](0068-a-stop-takes-the-containers-too.md)
 
 ## Context
 
