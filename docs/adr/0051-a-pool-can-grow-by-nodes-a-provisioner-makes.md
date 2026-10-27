@@ -1,6 +1,6 @@
 # ADR-0051: A pool can grow by nodes a provisioner makes, fills them before it makes another, and gives back the idle ones
 
-- **Status:** Proposed; revised 2026-10-26 before acceptance (nodes bound to the pool, not to one member; scaling out by placement)
+- **Status:** Accepted (2026-10-27, [card](https://github.com/nuetzliches/devstack/issues/328)); revised 2026-10-26 before acceptance (nodes bound to the pool, not to one member; scaling out by placement), and 2026-10-27 on the card (the provisioner stated as a root of trust; an enrolment bound to its machine, a second use alarmed; an admin's confirmation as a pool option; a member can keep its lanes off provisioned nodes)
 - **Date:** 2026-10-21
 - **Deciders:** project owner
 - **Related:** [ADR-0025](0025-a-lane-can-run-on-another-node.md) (remote lanes, their timed phases), [ADR-0027](0027-trust-between-nodes.md) (point 6: what a node trusts), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md) (a lane and its infrastructure are on one node), [ADR-0031](0031-a-coordinator-places-lanes.md) (placement, joining), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md) (admins grant nodes), [ADR-0033](0033-a-node-decides-what-runs-on-it.md) (what a node admits), [ADR-0034](0034-a-machine-can-belong-to-several-pools.md) (pools do not trust each other), [ADR-0038](0038-a-lanes-data-outlives-its-lease.md) (slots kept after a lease), [ADR-0049](0049-a-lanes-need-is-measured-disk-included.md) (a lane's need)
@@ -45,6 +45,12 @@ need the same mechanism and different code behind it.
    (`devstack node serve --provisioner <url>`, mutual TLS or a bearer token
    from the coordinator's state). The provisioner holds the provider's
    credentials; the coordinator never does. Without one, nothing changes.
+   **The provisioner is a root of trust**, as the coordinator's host is: it
+   controls the machines it makes, so whoever runs it can read the lanes on
+   them, their source and environment files included (ADR-0027 point 6).
+   No enrolment scheme protects against a provisioner that is compromised;
+   the docs and the dashboard say so, and point 10 lets a member stay off
+   its machines.
 2. **A provisioned node belongs to the pool.** The pool is the unit of
    trust already: its members trust each other's lanes on their nodes
    (ADR-0027 point 6), and pools do not trust each other (ADR-0034). An
@@ -82,6 +88,24 @@ need the same mechanism and different code behind it.
    --enrol <token>` on the machine makes it an approved member and a
    granted, dedicated node in one step, marked `provisioned` (and bound to
    the repository, under point 2's option). No other token admits anyone.
+   The token alone is not enough, since it travels through the provider
+   (user data, a metadata endpoint any process on the machine can read):
+   - **It is bound to its machine.** When the provisioner accepts, it names
+     the machine (the provider's instance id and the public address it will
+     have); the coordinator takes the enrolment only from that address, and
+     the machine's key, made on the machine, is the one certified.
+   - **A second use is an alarm.** A token presented again (the real
+     machine after a thief, or the other way round) is refused, the node
+     enrolled with it is revoked at once and its machine given back, and
+     the pool says so to its admins (the dashboard, `devstack pool`), with
+     both addresses. A
+     stolen token is at most a short and visible intrusion, not a silent
+     one.
+   - **An admin can confirm each one** (`provision_confirm = "admin"`, a
+     pool option, off by default). A provisioned node then admits no lease
+     until an admin confirms it in the dashboard or with `devstack node
+     confirm <id>`, shown its instance id, address and key fingerprint; the
+     start waits for that within point 5's limit.
 7. **An idle provisioned node is given back.** `lane remove` drops the
    lane's slot at once (ADR-0038). A stopped lane's slot is kept for the
    pool's idle time (an admin's, default 30 minutes, not ADR-0038's hours),
@@ -95,7 +119,14 @@ need the same mechanism and different code behind it.
    node given back. It may bill from that; devstack does not count money.
 9. **The pool shows provisioned nodes** in the dashboard and `devstack
    pool`, with their size, load, lanes, since when and their idle time
-   left, and an admin can give one back by hand.
+   left, and an admin can give one back by hand. A lane on a provisioned
+   node says so wherever it shows where it runs.
+10. **A member can keep its lanes off provisioned nodes** (`devstack pool
+    provisioned off`, kept by the coordinator for that member). Its lanes
+    are then never placed on one, and none is provisioned for them. Who may
+    see or use a lane stays its owner's choice (ADR-0035): a provisioned
+    node runs the lanes of several members side by side, apart as ADR-0033
+    keeps them, and shares none of them.
 
 ## Alternatives considered
 
@@ -123,6 +154,14 @@ need the same mechanism and different code behind it.
 - **Warm spare machines.** Faster first starts, but a spare is paid while it
   waits. A provisioner may keep spares itself; until one has enrolled, it is
   no node of the pool.
+- **An admin confirms every provisioned node, by default.** Safest against
+  a stolen enrolment token, but a start then waits for a person, which is
+  what provisioning is meant to remove. Kept as the pool option of point 6.
+- **The provider's attestation of the machine** (a signed instance
+  identity document). Verified by the coordinator it needs vendor code
+  there; verified by the provisioner it adds nothing against a provisioner
+  that is compromised, and the address binding of point 6 covers a token
+  stolen in transit.
 
 ## Consequences
 
@@ -141,7 +180,12 @@ need the same mechanism and different code behind it.
 - A machine the provisioner failed to delete costs money until someone
   notices; point 7 keeps it listed, nothing more.
 - An enrolment token is a credential to the pool for its lifetime; it is
-  single-use, short-lived, and bound to one request.
+  single-use, short-lived, bound to one request and to the address of its
+  machine. A machine whose public address the provisioner cannot name in
+  advance cannot enrol.
+- Whoever runs the provisioner, or holds the provider account behind it,
+  can read every lane on its machines (point 1). A member who does not
+  accept that keeps its lanes off them (point 10).
 - The lease state `provisioning` is new; a requester of an earlier pool
   protocol is refused as today rather than told to wait, and the protocol
   number goes up if the offer changes shape.
@@ -150,13 +194,15 @@ need the same mechanism and different code behind it.
 
 Will live in: `crates/devstack-node/src/coordinator.rs` (the fallback in
 `lease_create`, the `provisioning` lease, filling provisioned nodes in
-`rank`, giving back, the admin caps), `store.rs` (a member's `provision`
-permission, a node's `provisioned` mark and repository binding), `pki.rs`
-(the enrolment token), `node.rs` (refusing other repositories on a bound
+`rank`, giving back, the admin caps, the second-use alarm and how the pool shows it, an admin's
+confirmation), `store.rs` (a member's `provision` permission and
+`provisioned off`, a node's `provisioned` mark, repository binding, instance
+id and address), `pki.rs` (the enrolment token, bound to an address),
+`node.rs` (refusing other repositories on a bound
 node; the pool's idle time), `version.rs` (`PROTOCOL`),
 `crates/devstack-daemon/src/remote.rs` (the `provision` phase),
 `crates/devstack/src/poolcmd.rs` (`--provisioner`, `--enrol`, `members
-provision`), the pool area under `ui/`, [pool.md](../pool.md) and the
+provision`, `node confirm`, `pool provisioned`), the pool area under `ui/`, [pool.md](../pool.md) and the
 provisioner's API in [dashboard-api.md](../dashboard-api.md).
 
 ## What this ADR does not say

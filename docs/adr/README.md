@@ -129,7 +129,7 @@ stay.
 | [0048](0048-a-containers-main-port-can-move-with-the-main-slot.md) | A container's main port can be devstack's, and then moves with the main slot | Accepted; point 2 detailed by ADR-0057 (an announced port is not held) |
 | [0049](0049-a-lanes-need-is-measured-disk-included.md) | A lane's need is measured where it ran, disk included; the stack file sets a floor | Accepted, amended 2026-10-21 (point 9: what a lane here checks) |
 | [0050](0050-what-no-request-reports-reaches-the-dashboard-as-a-notice.md) | What no request reports reaches the dashboard as a notice, not as a log view | Accepted |
-| [0051](0051-a-pool-can-grow-by-nodes-a-provisioner-makes.md) | A pool can grow by nodes a provisioner makes, fills them before it makes another, and gives back the idle ones | Proposed (revised 2026-10-26) |
+| [0051](0051-a-pool-can-grow-by-nodes-a-provisioner-makes.md) | A pool can grow by nodes a provisioner makes, fills them before it makes another, and gives back the idle ones | Accepted (revised 2026-10-26, and 2026-10-27 on its card: enrolment bound to its machine, a second use alarmed, an admin's confirmation as an option, a member can stay off provisioned nodes) |
 | [0052](0052-a-restart-carries-the-lanes-over.md) | A restart of the stack carries its lanes over to the next daemon | Accepted; point 6 added 2026-10-26 (a lane on a node lost to an unclean end is said) |
 | [0053](0053-whoever-a-lane-is-shared-with-connects-to-it.md) | Whoever a lane is shared with connects to it, and disconnects again | Accepted |
 | [0054](0054-macos-is-a-developer-platform-in-preview.md) | macOS is a developer platform in preview, installed by Homebrew, checked by CI and by its testers | Accepted |
