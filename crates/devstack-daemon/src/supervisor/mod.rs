@@ -414,6 +414,7 @@ impl Supervisor {
                         hot_reload: false,
                         hot_reload_available: svc.hot_reload.is_some(),
                         prepare: None,
+                        last_action: None,
                     },
                     main: None,
                     previous: None,
@@ -652,6 +653,13 @@ impl Supervisor {
 
     pub fn view(&self) -> StackView {
         let proxies = self.proxies.lock().unwrap().clone();
+        let journal = crate::journal::get();
+        // A lane's requests come through the main API under its path.
+        let services_at = if self.lane.is_empty() {
+            "/v1/services/".to_string()
+        } else {
+            format!("/v1/lanes/{}/v1/services/", self.lane)
+        };
         let services = self
             .slots
             .lock()
@@ -666,6 +674,7 @@ impl Supervisor {
                         .get(&v.name)
                         .map(crate::tcpfwd::Front::view)
                 });
+                v.last_action = journal.last_under(&format!("{services_at}{}/", v.name));
                 v
             })
             .collect();
@@ -716,6 +725,16 @@ impl Supervisor {
             config_changed: self.config_changed.load(Ordering::SeqCst),
             lane: (!self.lane.is_empty()).then(|| self.lane.clone()),
             branch: self.branch.lock().unwrap().clone(),
+            main_served: self.served_by().map(|lane| {
+                let set = journal.last_at(&format!("/v1/lanes/{lane}/main"));
+                crate::state::MainServed {
+                    via: set
+                        .as_ref()
+                        .map_or_else(|| "unknown".into(), |c| c.via.clone()),
+                    at: set.map(|c| c.at),
+                    lane,
+                }
+            }),
             main_served_by: self.served_by(),
             no_main_ports: !self.main_slot_moves(),
             watcher_error: self

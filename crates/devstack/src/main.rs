@@ -89,6 +89,14 @@ enum Cmd {
     },
     /// State of services and infrastructure.
     Status,
+    /// What changed the stack at runtime, and through which client: the
+    /// dashboard, the CLI, an agent's MCP server, the tray, or devstack
+    /// itself (ADR-0067). Look here before taking a state for a fault.
+    Journal {
+        /// The last N changes.
+        #[arg(short = 'n', long, default_value_t = 30)]
+        lines: usize,
+    },
     /// Start a service, every service of a group, or one Compose container.
     Start {
         /// A service or a group of the stack file, or a Compose service
@@ -707,6 +715,7 @@ fn main() -> Result<()> {
         | Cmd::Up { .. }
         | Cmd::Down { .. }
         | Cmd::Status
+        | Cmd::Journal { .. }
         | Cmd::Env { .. }
         | Cmd::Schema
         | Cmd::Doctor

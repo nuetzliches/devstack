@@ -2440,7 +2440,9 @@ async fn stack_down(
     State(s): State<AppState>,
     Path(id): Path<String>,
     Query(q): Query<DownQuery>,
+    headers: HeaderMap,
 ) -> Response {
+    let via = client_of(&headers);
     let Some(e) = entry(&s, &id) else {
         return err(StatusCode::SERVICE_UNAVAILABLE, "stack not running");
     };
@@ -2467,7 +2469,7 @@ async fn stack_down(
         // tree's services and its other containers stop (`200` from `down`,
         // `409` from `shutdown`). A daemon from before this does not know
         // `unless_lanes` and exits.
-        let shutdown = || daemon_request(port, &token, Method::POST, "/v1/shutdown");
+        let shutdown = || daemon_request(port, &token, &via, Method::POST, "/v1/shutdown");
         let exits = if q.infra && !q.restart {
             // With `all`, the lanes stop first, their containers too, so the
             // main tree's go as well.
@@ -2476,7 +2478,7 @@ async fn stack_down(
             } else {
                 "/v1/down?infra=true"
             };
-            let kept = daemon_request(port, &token, Method::POST, path).await == Ok(200);
+            let kept = daemon_request(port, &token, &via, Method::POST, path).await == Ok(200);
             (q.all || !kept) && shutdown().await.is_ok()
         } else {
             let path = if q.restart {
@@ -2486,10 +2488,11 @@ async fn stack_down(
             } else {
                 "/v1/shutdown?unless_lanes=true"
             };
-            match daemon_request(port, &token, Method::POST, path).await {
+            match daemon_request(port, &token, &via, Method::POST, path).await {
                 Ok(409) => {
                     let _ =
-                        daemon_request(port, &token, Method::POST, "/v1/down?infra=false").await;
+                        daemon_request(port, &token, &via, Method::POST, "/v1/down?infra=false")
+                            .await;
                     false
                 }
                 r => r.is_ok(),
@@ -2544,15 +2547,36 @@ async fn connect_daemon(port: u16) -> Result<tokio::net::TcpStream, String> {
     }
 }
 
-async fn daemon_request(port: u16, token: &str, method: Method, path: &str) -> Result<u16, String> {
-    tokio::time::timeout(DAEMON_CALL, daemon_request_once(port, token, method, path))
-        .await
-        .unwrap_or_else(|_| Err(format!("no answer within {} s", DAEMON_CALL.as_secs())))
+/// Which client a request to the hub is (ADR-0067): the dashboard when it
+/// carries a session cookie, else what it says it is (the tray, the CLI).
+fn client_of(h: &HeaderMap) -> String {
+    if cookie_sessions(h).next().is_some() {
+        return "dashboard".into();
+    }
+    devstack_daemon::journal::client(h.get(CLIENT_HEADER).and_then(|v| v.to_str().ok()))
+}
+
+const CLIENT_HEADER: &str = "x-devstack-client";
+
+async fn daemon_request(
+    port: u16,
+    token: &str,
+    via: &str,
+    method: Method,
+    path: &str,
+) -> Result<u16, String> {
+    tokio::time::timeout(
+        DAEMON_CALL,
+        daemon_request_once(port, token, via, method, path),
+    )
+    .await
+    .unwrap_or_else(|_| Err(format!("no answer within {} s", DAEMON_CALL.as_secs())))
 }
 
 async fn daemon_request_once(
     port: u16,
     token: &str,
+    via: &str,
     method: Method,
     path: &str,
 ) -> Result<u16, String> {
@@ -2566,6 +2590,7 @@ async fn daemon_request_once(
         .uri(path)
         .header(header::HOST, format!("127.0.0.1:{port}"))
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(CLIENT_HEADER, via)
         .body(http_body_util::Empty::<bytes::Bytes>::new())
         .map_err(|e| e.to_string())?;
     let resp = sender.send_request(req).await.map_err(|e| e.to_string())?;
@@ -2591,6 +2616,9 @@ async fn forward(
         Err(_) => return err(StatusCode::BAD_REQUEST, "bad path"),
     };
     strip_hop_by_hop(&mut parts.headers);
+    // Which client it is (ADR-0067): the dashboard by its cookie, else
+    // what the caller says; never what a browser claims.
+    let via = client_of(&parts.headers);
     parts.headers.remove(header::COOKIE);
     parts.headers.remove(header::ORIGIN);
     parts.headers.remove(header::REFERER);
@@ -2598,6 +2626,9 @@ async fn forward(
         header::AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {}", s.token)).unwrap(),
     );
+    parts
+        .headers
+        .insert(CLIENT_HEADER, HeaderValue::from_str(&via).unwrap());
     let req = hyper::Request::from_parts(parts, body);
     match daemon_send(|| daemon_now(&s, &id), req).await {
         Ok(resp) => {

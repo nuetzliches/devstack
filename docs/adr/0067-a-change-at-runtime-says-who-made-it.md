@@ -1,6 +1,6 @@
 # ADR-0067: A change at runtime says where it came from, and a journal keeps the last ones
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-27); built 2026-10-27
 - **Date:** 2026-10-27
 - **Deciders:** project owner
 - **Related:** [ADR-0007](0007-one-http-api-is-the-control-surface.md) (one API, several clients), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0048](0048-a-containers-main-port-can-move-with-the-main-slot.md), [ADR-0052](0052-a-restart-carries-the-lanes-over.md), [ADR-0068](0068-a-stop-takes-the-containers-too.md)
@@ -77,3 +77,19 @@ Changes to the stack file are out of scope: git records them.
 (CLI, MCP); the forwarding in `crates/devstack-hub/src/lib.rs` and
 `crates/devstack/src/tray.rs`; `StackView` in `crates/devstack-daemon/src/state.rs`;
 `skills/devstack/SKILL.md`; `docs/dashboard-api.md`.
+
+*Paths as built, noted 2026-10-27.* `crates/devstack-daemon/src/journal.rs`
+(the journal, `client`, `auto`, `Change`); the `audit` layer and
+`GET /v1/journal` in `crates/devstack-daemon/src/api.rs`;
+`Lanes::take_main_auto` in `crates/devstack-daemon/src/lanes.rs` (the main
+slot given back or handed on by devstack); `main_served` and a service's
+`last_action` in `Supervisor::view` (`crates/devstack-daemon/src/supervisor/mod.rs`,
+`state.rs`), read from the journal rather than kept beside it; the header in
+`Client::request` (`crates/devstack/src/client.rs`, `serve_as("mcp")` in
+`mcp.rs`), `tray.rs`, and the hub's `forward` and `stack_down`
+(`client_of`); `devstack journal`, `status`'s lines and the MCP tool
+`journal` in `crates/devstack`; the skill's row in `skills/devstack/SKILL.md`.
+Point 2 is built for the main slot and services (`stop`, `restart`,
+and every other `/v1/services/<name>/<action>`), not yet for
+workers, profiles or sharing: those are in the journal only. The dashboard
+gets the fields in its types and does not show them yet.

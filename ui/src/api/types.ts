@@ -228,7 +228,14 @@ export type ServiceView = {
   hot_reload_available?: boolean;
   /** Where its last `prepare` outputs came from (ADR-0062), since the daemon started. Older daemons omit it. */
   prepare?: PrepareView;
+  /** The last action a client took on it, and which (ADR-0067). Older daemons omit it. */
+  last_action?: Change;
 };
+
+/** Who changed something at runtime, and when (ADR-0067). */
+export type Change = { via: Client; at: number; action?: string };
+/** The client a change came through; `auto`: devstack itself. */
+export type Client = 'cli' | 'mcp' | 'dashboard' | 'tray' | 'auto' | 'unknown';
 
 /** Where a service's last `prepare` outputs came from (ADR-0062). */
 export type PrepareView = {
@@ -345,6 +352,8 @@ export type StackView = {
   profiles?: ProfileView[];
   /** Nothing moves with the main slot (Compose containers only, #184): serving the main ports is refused. */
   no_main_ports?: boolean;
+  /** The lane on the main ports and who put it there (ADR-0067); `at` absent when the journal does not say. Older daemons omit it. */
+  main_served?: { lane: string; via: Client; at?: number };
   /** The file watcher could not be set up, or lost events: edits make no candidates (or every built service got one). */
   watcher_error?: string | null;
   /** What no request reports, while it holds (ADR-0050). Older daemons omit it. */

@@ -135,6 +135,7 @@ schema` prints the JSON Schema for your editor.
 
 ```sh
 devstack status                    # every service; "not yet active" until your change runs
+devstack journal                   # what changed at runtime, and through which client (dashboard, cli, mcp, tray)
 devstack logs api --follow         # --grep timeout across all, --since 2h for earlier instances
 devstack restart api               # rebuild now; the running one stays until the new one is healthy
 devstack promote api               # take over a candidate held back by a schema change
@@ -184,7 +185,7 @@ per machine, a customer's beside the team's. Setup and everything else:
 ## Agents
 
 `devstack mcp` is an MCP server on stdio, a client of the same API as the CLI:
-`status`, `up` (with `on` for a node), `down`, `start_service`,
+`status`, `journal`, `up` (with `on` for a node), `down`, `start_service`,
 `stop_service`, `restart_service`, `promote_service`, `rollback_service`,
 `hot_reload`, `logs`, `builds`, `diagnostics`, `doctor`, `run_command`,
 `usage`, `lanes`, `lane_start`, `lane_stop`, `lane_move`, `lane_share`,

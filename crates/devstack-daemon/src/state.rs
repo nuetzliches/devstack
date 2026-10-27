@@ -99,6 +99,10 @@ pub struct ServiceView {
     /// a run. Since this daemon started; none before its first `prepare`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prepare: Option<PrepareView>,
+    /// The last action a client took on it, and which (ADR-0067): from the
+    /// journal, so also from before this daemon started.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_action: Option<crate::journal::Change>,
 }
 
 /// Where a service's last `prepare` outputs came from (ADR-0062).
@@ -270,6 +274,11 @@ pub struct StackView {
     /// absent while the main working tree serves them itself.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub main_served_by: Option<String>,
+    /// Who gave that lane the main ports, and when (ADR-0067): `via` the
+    /// client, `auto` devstack itself, `unknown` when the journal does not
+    /// say. Absent with `main_served_by`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub main_served: Option<MainServed>,
     /// Nothing of this stack moves with the main slot: no service on a port,
     /// none with workers (Compose containers only, #184). Serving the main
     /// ports is refused; the dashboard does not offer it.
@@ -289,6 +298,16 @@ pub struct StackView {
     /// The stack file's profiles, for a start with one.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub profiles: Vec<ProfileView>,
+}
+
+/// The lane on the main ports, and who put it there (ADR-0067).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MainServed {
+    pub lane: String,
+    pub via: String,
+    /// Unix ms; absent when the journal does not say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<u64>,
 }
 
 /// A profile of the stack file (ADR-0041).

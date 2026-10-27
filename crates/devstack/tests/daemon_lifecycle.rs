@@ -2338,6 +2338,23 @@ fn a_worktree_runs_as_a_lane() {
         "the dev server's main port forwards to the lane\n{}",
         s.diag()
     );
+    // Who did it is on record (ADR-0067): `status` says it, and the
+    // journal has both changes with their client.
+    let status = s.ok(&["status"]);
+    assert!(
+        status.contains(&format!(
+            "main ports: served by lane `{lane}`, set in the cli"
+        )),
+        "{status}"
+    );
+    assert!(status.contains("last `stop` via cli"), "{status}");
+    let journal = s.ok(&["journal"]);
+    assert!(
+        journal
+            .lines()
+            .any(|l| l.contains(" cli ") && l.contains(&format!("/v1/lanes/{lane}/main"))),
+        "{journal}"
+    );
     assert!(
         wait_for(|| lane_info()["workers"] == true, Duration::from_secs(60)),
         "the lane runs the workers now"

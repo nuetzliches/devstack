@@ -83,7 +83,8 @@ fn post(path: &str, body: Option<Value>) -> Result<()> {
     }
     let req = agent()
         .post(&format!("http://127.0.0.1:{port}{path}"))
-        .header("Authorization", &format!("Bearer {}", token()?));
+        .header("Authorization", &format!("Bearer {}", token()?))
+        .header("X-Devstack-Client", "tray");
     let mut r = match body {
         Some(b) => req
             .header("Content-Type", "application/json")
