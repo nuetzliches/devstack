@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **The dashboard's "stack file behind" banner can be hidden**: it stays
+  hidden for that stack until the next minor devstack is installed; a patch
+  release does not bring it back.
+- **The agent skills count as outdated only when their text changed**: a new
+  devstack whose skills read the same, apart from the version in their marker
+  line and docs links, no longer asks for a refresh (dashboard, `status`,
+  `doctor`, `skills check`).
+
 ### Fixed
 
 - **A lane's memory check looks at Docker Desktop's VM** (#309): on Windows
