@@ -609,7 +609,7 @@ impl Supervisor {
             return Ok(p.clone());
         }
         let port = svc.port.expect("proxied services have a port");
-        if port_in_use(port) {
+        if !port_freed(port) {
             return Err(super::port_taken(port));
         }
         let p =
@@ -740,7 +740,7 @@ impl Supervisor {
             None
         } else {
             if let Some(port) = svc.port
-                && port_in_use(port)
+                && !port_freed(port)
             {
                 return Err(super::port_taken(port));
             }
@@ -1409,4 +1409,18 @@ impl Supervisor {
         }
         Ok(())
     }
+}
+
+/// Whether `port` is free, or becomes free within a while: held a moment
+/// longer by something on its way out (the instance of a daemon that just
+/// restarted, ADR-0052), as for a front.
+fn port_freed(port: u16) -> bool {
+    let t0 = std::time::Instant::now();
+    while port_in_use(port) {
+        if t0.elapsed() >= Duration::from_secs(10) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    true
 }
