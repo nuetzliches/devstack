@@ -700,6 +700,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
+ "toml",
  "ureq",
 ]
 

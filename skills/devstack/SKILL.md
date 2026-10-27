@@ -152,7 +152,8 @@ takes `profile`, `run` and `yes` (as `--profile`, `--run`, `--yes`) and
 `lane_start` takes `profile`, `run` and `timeout_s` too; `logs` takes `file` (one kept log, from its
 list); `diagnostics` takes `source: "hub"` for the hub's log. Each tool
 describes its parameters.
-Register it once (project `.mcp.json` or user configuration):
+Register it once (project `.mcp.json` or user configuration; the dashboard
+shows *no MCP* in the stack's head while neither has it):
 
 ```json
 { "mcpServers": { "devstack": { "command": "devstack", "args": ["mcp"] } } }

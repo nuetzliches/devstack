@@ -527,6 +527,7 @@ export class MockTransport implements Transport {
         upgrade: `Bring the devstack setup of ${target} up to devstack ${MOCK_VERSION}.`,
         'start-failed': `The devstack stack ${target} does not start.`,
         'lane-file': `The git worktree ${url.searchParams.get('path')} has no devstack stack file of its own.`,
+        mcp: `Register devstack's MCP server for the coding agents of ${target}.`,
       };
       if (!kind || !what[kind]) return json(400, { error: `no prompt \`${kind}\`` });
       return json(200, { text: `${what[kind]}
@@ -569,6 +570,11 @@ export class MockTransport implements Transport {
       const k = hub.skills[stack.entry.id];
       const from = reviewed ?? (k && k.from !== MOCK_VERSION ? k.from : null);
       return json(200, { reviewed, from, current: MOCK_VERSION, behind: reviewed !== MOCK_VERSION });
+    }
+    // The first stack registers devstack's MCP server, the others do not.
+    if (rest === '/mcp' && method === 'GET') {
+      const registered = stack === hub.stacks[0];
+      return json(200, { registered, files: registered ? [`${stack.entry.repo}\\.mcp.json`] : [] });
     }
     if (rest === '/up' && method === 'POST') {
       if (!stack.running) void stack.goUp();

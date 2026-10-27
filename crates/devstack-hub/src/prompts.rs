@@ -38,6 +38,8 @@ pub enum Prompt<'a> {
         main_file: &'a Path,
         file: &'a Path,
     },
+    /// No agent configuration registers `devstack mcp` for the repository.
+    Mcp { repo: &'a Path },
     /// The last `devstack up` the hub ran failed.
     StartFailed {
         name: &'a str,
@@ -53,6 +55,9 @@ pub fn text(p: &Prompt) -> String {
     let at = format!("{REPO_URL}/blob/v{v}");
     let about = "devstack (https://github.com/nuetzliches/devstack) runs a local development stack from a devstack.toml in the repository root: containers from the Compose files, native services built in the background, a change goes live once it is healthy.";
     let careful = "Ask me before running anything that deletes data, and before committing, naming the branch: the branch checked out may hold other work.";
+    // Where the MCP server goes: the project's file of each agent, an
+    // existing file merged into.
+    let mcp = "devstack's MCP server (`devstack mcp`, stdio) gives coding agents its tools (status, logs, restart, lanes). Register it in the project's configuration of the coding agents this repository is worked on with, next to the servers already there: `.mcp.json` (Claude Code) `{ \"mcpServers\": { \"devstack\": { \"command\": \"devstack\", \"args\": [\"mcp\"] } } }`; `.vscode/mcp.json` (VS Code) the same under `servers`, with `\"type\": \"stdio\"`; `.codex/config.toml` (Codex) `[mcp_servers.devstack]` with `command = \"devstack\"`, `args = [\"mcp\"]`. Keep the files' other entries and their formatting; an agent loads a new server when it starts again.";
     match *p {
         Prompt::Setup { repo, drafted } => format!(
             "Set up devstack for the repository at {repo}.
@@ -63,7 +68,8 @@ pub fn text(p: &Prompt) -> String {
 2. {draft} Work through every TODO in it: which containers run in development (infrastructure only; what runs natively stays out), build/output/run/watch of each service, ports (the process listens on {{port}}), a readiness health endpoint, the environment (from a Compose service with `compose = {{...}}`), background workers (`workers`), and commands such as seed or reset (with `confirm` when they delete data).
 3. Validate with `devstack check` (and `devstack check --compose`), then `devstack doctor`.
 4. Run `devstack skills install`, so later sessions have the devstack skills.
-5. Start with `devstack up` and fix what fails. {careful}",
+5. Ask me whether to register devstack's MCP server for this repository; suggest yes, unless it is registered already. {mcp}
+6. Start with `devstack up` and fix what fails. {careful}",
             repo = display(repo),
             draft = if drafted {
                 "A draft devstack.toml exists (from `devstack init`)."
@@ -126,7 +132,7 @@ pub fn text(p: &Prompt) -> String {
 4. Run `devstack check` (and `devstack check --compose`) and `devstack doctor`, and fix every error and warning.
 5. Tell me which new features would help this stack, and add only those I agree to. Raise `[stack] requires` only when the file uses something an older devstack does not know: it shuts out everyone still on one.
 6. Set `reviewed = \"{current}\"` in `[stack]`: the stack file is up to date with devstack {current} then, and the dashboard stops offering this.{requires}
-7. Run `devstack skills install` to refresh the generated skills. Check the project's own skills, CLAUDE.md and AGENTS.md for anything that contradicts devstack {current}.
+7. Run `devstack skills install` to refresh the generated skills. Check the project's own skills, CLAUDE.md and AGENTS.md for anything that contradicts devstack {current}. Where no agent configuration of the project registers devstack's MCP server, ask me whether to; suggest yes. {mcp}
 8. Restart the stack so it runs devstack {current}, and check that every service becomes healthy. Before you stop it, look at `devstack status` and `devstack lane list`: when lanes run, a lane holds the main ports, or other sessions may use this stack, ask me first. Restart with `devstack down --keep-infra`, then `devstack up`: the containers keep running (a plain `down` removes them since 0.25.0). {careful}",
                 repo = display(repo),
                 file = display(file),
@@ -150,6 +156,17 @@ pub fn text(p: &Prompt) -> String {
             on = branch.map(|b| format!(" (branch {b})")).unwrap_or_default(),
             main_file = display(main_file),
             file = display(file),
+        ),
+        Prompt::Mcp { repo } => format!(
+            "Register devstack's MCP server for the coding agents of the repository at {repo}.
+
+{about}
+
+1. {mcp} Its tools: {at}/skills/devstack/SKILL.md
+2. Look at which agents the repository is set up for (`.mcp.json`, `.vscode/`, `.cursor/`, `.codex/`, CLAUDE.md, AGENTS.md); where it does not say, ask me which ones I use.
+3. `devstack` must be on the PATH the agent starts it with: `devstack --version` answers there.
+4. {careful}",
+            repo = display(repo),
         ),
         Prompt::StartFailed {
             name,
@@ -253,6 +270,7 @@ mod tests {
                 main_file: file,
                 file: Path::new("/src/shop.worktrees/feat-x/devstack.toml"),
             }),
+            text(&Prompt::Mcp { repo }),
         ]
     }
 
@@ -311,13 +329,25 @@ mod tests {
         assert!(p[6].contains("up-x.log"));
         assert!(p[7].contains("feat-x (branch feat/x) has no devstack stack file"));
         assert!(p[7].contains("devstack.toml, which may not fit this branch"));
+        assert!(p[8].starts_with("Register devstack's MCP server"));
+        let entry =
+            r#"{ "mcpServers": { "devstack": { "command": "devstack", "args": ["mcp"] } } }"#;
+        for i in [0, 1, 3, 8] {
+            assert!(p[i].contains(entry), "prompt {i} names the entry");
+        }
+        assert!(
+            p[0].contains("register devstack's MCP server for this repository; suggest yes"),
+            "set up: offered, yes by default"
+        );
+        assert!(p[3].contains("registers devstack's MCP server, ask me whether to; suggest yes"));
         let reference = format!(
             "{REPO_URL}/blob/v{}/docs/stack-file.md",
             devstack_config::VERSION
         );
         assert!(
-            p.iter().all(|t| t.contains(&reference)),
-            "every one links the reference"
+            p[..8].iter().all(|t| t.contains(&reference)),
+            "every one about the stack file links the reference"
         );
+        assert!(p[8].contains("/skills/devstack/SKILL.md"), "the tools");
     }
 }

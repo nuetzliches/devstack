@@ -332,6 +332,12 @@ export type UpgradeState = {
   behind: boolean;
 };
 
+/**
+ * `GET /hub/stacks/{id}/mcp`: the agent configuration files (the project's,
+ * then the user's) that register `devstack mcp` for the repository.
+ */
+export type McpState = { registered: boolean; files: string[] };
+
 export type CommandView = { name: string; description: string; confirm: string | null; requires: string[] };
 
 export type StackView = {
@@ -634,7 +640,7 @@ export type Opener = {
 };
 
 /** The prompts the hub writes for a coding agent (`GET /hub/prompt`, ADR-0046 amendment 2026-10-22). */
-export type PromptKind = 'setup' | 'fix-file' | 'upgrade' | 'start-failed' | 'lane-file';
+export type PromptKind = 'setup' | 'fix-file' | 'upgrade' | 'start-failed' | 'lane-file' | 'mcp';
 /** What a prompt is about: a registered stack, a folder before it is one, or a worktree of a stack (`lane-file`). */
 export type PromptTarget = { stack: string } | { path: string } | { stack: string; path: string };
 

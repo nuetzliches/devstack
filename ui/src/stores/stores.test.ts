@@ -267,6 +267,16 @@ describe('stack store', () => {
     expect(fake.requests.filter((r) => r.path === '/hub/stacks/shop/upgrade')).toHaveLength(1);
   });
 
+  it('asks whether an agent configuration registers devstack mcp', async () => {
+    let files: string[] = [];
+    fake.on('/hub/stacks/shop/mcp', () => ok({ registered: files.length > 0, files }));
+    const stack = await shownStack();
+    await vi.waitFor(() => expect(stack.mcp?.registered).toBe(false));
+    files = ['/src/shop/.mcp.json'];
+    await stack.loadMcp();
+    expect(stack.mcp).toMatchObject({ registered: true, files: ['/src/shop/.mcp.json'] });
+  });
+
   it("removing a lane's worktree asks first, and shows the main tree after", async () => {
     const stack = await shownStack();
     const lane = { name: 'feat', path: '/src/feat', number: 1, active: false, port_offset: 100, owns_main: false, running: 0, services: 3 };
