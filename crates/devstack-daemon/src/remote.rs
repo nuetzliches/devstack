@@ -216,7 +216,7 @@ pub fn local_member(pool: &str) -> Local {
 /// its pool is not joined.
 pub fn effective_on(on: Option<&str>) -> Option<String> {
     match on.map(str::trim).filter(|o| !o.is_empty()) {
-        Some(o) if devstack_node::member::is_here(o) => None,
+        Some(o) if devstack_node::member::is_here(o) || is_this_machine(o) => None,
         Some(o) => Some(o.to_string()),
         None => {
             let d = devstack_node::member::default_on(&state_dir())?;
@@ -229,6 +229,20 @@ pub fn effective_on(on: Option<&str>) -> Option<String> {
                 .map(|_| d)
         }
     }
+}
+
+/// `on` names this machine in its pool, by its member id or name: the
+/// pool would refuse it as a node not granted lanes (#310); it means
+/// `local`.
+pub fn is_this_machine(on: &str) -> bool {
+    let Ok((pool, node)) = resolve_on(on) else {
+        return false;
+    };
+    local_member(&pool)
+        .membership()
+        .ok()
+        .flatten()
+        .is_some_and(|m| m.id.eq_ignore_ascii_case(&node) || m.name.eq_ignore_ascii_case(&node))
 }
 
 /// `--on` split into the pool and the node asked for (ADR-0034 point 3).

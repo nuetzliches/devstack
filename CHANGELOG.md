@@ -9,6 +9,29 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **A lane's memory check looks at Docker Desktop's VM** (#309): on Windows
+  and macOS the check compared the whole need with the host's free memory,
+  while the containers run in Docker Desktop's VM with a limit of its own;
+  a lane that did not fit there started and the engine hung. The
+  containers' part is now checked against what is free in the VM, the
+  services' part against the host, and the refusal names the limit.
+- **A refused start on the pool says how to go on** (#310): the error now
+  names `devstack pool placement`, another node and `devstack up --on
+  local`, and when the pool is the machine's default, that running here is
+  the user's call. `--on <this machine's name or id>` runs the lane here
+  instead of being refused as a node not granted lanes. The skill's rows
+  say the same.
+- **The skills warn about a linked `node_modules`** (#311): a directory
+  `prepare.link` puts in a worktree is the lane's copy; reinstalling or
+  deleting it there empties what the lane runs from. The `devstack` and
+  `devstack-config` skills say so and how to get one's own.
+- **The upgrade prompt checks the version and asks before a restart**
+  (#312): it starts with `devstack --version`, and before restarting the
+  stack it has the agent look for lanes and other sessions and ask; the
+  restart keeps the containers (`down --keep-infra`).
+
 ## [0.25.0] - 2026-10-27
 
 A stop takes the stack's containers too, as stopping a lane already did;

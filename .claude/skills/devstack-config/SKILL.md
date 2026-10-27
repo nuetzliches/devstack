@@ -63,6 +63,9 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   a `package.json` and no `prepare`). When git hooks need it (`npx eslint` in a
   pre-commit hook), `prepare.link = ["web/node_modules"]` links it into the
   worktree; `.gitignore` then needs `node_modules` without a trailing slash.
+  The linked directory is the lane's copy: reinstalling or deleting it in
+  the worktree empties what the lane runs from (say so in project notes
+  that tell agents to run `npm ci`).
   Name what it makes as `outputs = ["web/node_modules"]` (and `version =
   "node --version"`): the next lane with the same lockfile copies it from
   the machine's store instead of running `npm ci` again. `link` must be

@@ -551,12 +551,18 @@ async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> 
     }
 }
 
-/// What a lane takes: about what the main tree takes now, containers
-/// included (ADR-0030).
-fn lane_need(main: &crate::supervisor::Supervisor, usage: &crate::usage::Sampler) -> u64 {
+/// What a lane takes: about what the main tree takes now (ADR-0030), as
+/// its services' part and its containers' part: they may live in different
+/// memory (#309).
+fn lane_need_parts(
+    main: &crate::supervisor::Supervisor,
+    usage: &crate::usage::Sampler,
+) -> (u64, u64) {
     let r = usage.report(main, false);
-    r.services.iter().map(|e| e.load.memory).sum::<u64>()
-        + r.containers.iter().map(|e| e.load.memory).sum::<u64>()
+    (
+        r.services.iter().map(|e| e.load.memory).sum::<u64>(),
+        r.containers.iter().map(|e| e.load.memory).sum::<u64>(),
+    )
 }
 
 /// What a lane on a node is expected to need, as this machine estimates it
@@ -634,19 +640,65 @@ fn memory_fits(
     main: &crate::supervisor::Supervisor,
     usage: &crate::usage::Sampler,
 ) -> Result<(), String> {
+    let (services, containers) = lane_need_parts(main, usage);
+    let free = devstack_proc::memory_available();
+    // Docker Desktop runs the containers in a VM with a limit of its own;
+    // the host's free memory does not say whether they fit (#309).
+    let vm = if containers > 0 {
+        main.docker().engine_memory()
+    } else {
+        None
+    };
+    memory_verdict(services, containers, free, vm)
+}
+
+/// [`memory_fits`] on numbers: with `vm` the containers are checked against
+/// what is free in it and only the services against the host.
+fn memory_verdict(
+    services: u64,
+    containers: u64,
+    free: Option<u64>,
+    vm: Option<devstack_compose::EngineMemory>,
+) -> Result<(), String> {
     const MARGIN: u64 = 1 << 30;
-    let need = lane_need(main, usage);
-    let Some(free) = devstack_proc::memory_available() else {
+    let gb = |b: u64| b as f64 / (1u64 << 30) as f64;
+    let ways = "stop another lane or close something, start it on another machine of the pool \
+         (`devstack up --on <node>`, see `devstack pool`), or start it anyway with `devstack up --force`";
+    if let Some(vm) = vm {
+        let vm_free = vm.total.saturating_sub(vm.used);
+        if containers > 0 && vm_free < containers + MARGIN {
+            return Err(format!(
+                "a lane's containers need about {:.1} GB (what the main tree's take now), and Docker Desktop's VM, \
+                 where they run, has {:.1} GB with {:.1} GB used by the containers that run: {:.1} GB are free there, \
+                 whatever the host has (raise its limit in Docker Desktop, or in `.wslconfig` for WSL 2). {ways}",
+                gb(containers),
+                gb(vm.total),
+                gb(vm.used),
+                gb(vm_free)
+            ));
+        }
+        let Some(free) = free else {
+            return Ok(());
+        };
+        if services == 0 || free >= services + MARGIN {
+            return Ok(());
+        }
+        return Err(format!(
+            "a lane's services need about {:.1} GB (what the main tree's take now; its containers fit in Docker Desktop's VM), \
+             {:.1} GB are free on this machine: {ways}",
+            gb(services),
+            gb(free)
+        ));
+    }
+    let need = services + containers;
+    let Some(free) = free else {
         return Ok(()); // not measurable here: no reason to refuse
     };
     if need == 0 || free >= need + MARGIN {
         return Ok(());
     }
-    let gb = |b: u64| b as f64 / (1u64 << 30) as f64;
     Err(format!(
-        "a lane needs about {:.1} GB (what the main tree takes now, containers included), {:.1} GB are free: \
-         stop another lane or close something, start it on another machine of the pool \
-         (`devstack up --on <node>`, see `devstack pool`), or start it anyway with `devstack up --force`",
+        "a lane needs about {:.1} GB (what the main tree takes now, containers included), {:.1} GB are free: {ways}",
         gb(need),
         gb(free)
     ))
@@ -1889,6 +1941,34 @@ async fn act_on_container(
 mod tests {
     use super::*;
     use axum::body::Body;
+
+    const GB: u64 = 1 << 30;
+
+    #[test]
+    fn containers_in_docker_desktops_vm_are_checked_against_the_vm() {
+        // The case of #309: the host has plenty, the VM does not.
+        let vm = devstack_compose::EngineMemory {
+            total: 31 * GB,
+            used: 20 * GB,
+        };
+        let e = memory_verdict(GB, 19 * GB, Some(36 * GB), Some(vm)).unwrap_err();
+        assert!(
+            e.contains("Docker Desktop's VM") && e.contains("--force"),
+            "{e}"
+        );
+        // Room in the VM: only the services count against the host.
+        let vm = devstack_compose::EngineMemory {
+            total: 31 * GB,
+            used: 5 * GB,
+        };
+        assert!(memory_verdict(GB, 19 * GB, Some(3 * GB), Some(vm)).is_ok());
+        let e = memory_verdict(4 * GB, 19 * GB, Some(3 * GB), Some(vm)).unwrap_err();
+        assert!(e.contains("services"), "{e}");
+        // An engine on the host: everything against the host, as before.
+        assert!(memory_verdict(GB, 19 * GB, Some(36 * GB), None).is_ok());
+        assert!(memory_verdict(GB, 19 * GB, Some(10 * GB), None).is_err());
+        assert!(memory_verdict(GB, 19 * GB, None, None).is_ok());
+    }
 
     fn refused(body: Body, len: Option<usize>) -> Response {
         let mut b = Response::builder()
