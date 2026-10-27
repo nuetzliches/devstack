@@ -11,7 +11,10 @@ and listed with their assets on the
 
 ### Changed
 
-- **The dashboard's "stack file behind" banner can be hidden**: it stays
+- **The dashboard's "stack file behind" banner is one quiet line and can be
+  hidden**: neutral instead of blue, one "Bring up to date" button whose
+  menu holds the other agents, the copy and the prompt, and it says that the
+  agent skills are older too instead of a second banner. Hidden, it stays
   hidden for that stack until the next minor devstack is installed; a patch
   release does not bring it back.
 - **The agent skills count as outdated only when their text changed**: a new

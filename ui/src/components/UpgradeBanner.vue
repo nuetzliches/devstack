@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // The stack file was last brought up to date with an older devstack
 // (`[stack] reviewed`): a coding agent brings it up to date with the hub's
-// prompt. The agent skills are SkillsBanner's: refreshing them leaves this.
-// Hidden, it stays hidden until the next minor devstack is installed.
-import { computed, ref, watch } from 'vue';
-import { persist } from '@/lib/persist';
+// prompt, the agent skills included. One line; skills from an older devstack
+// are said here, not in SkillsBanner, while this shows. Hidden, it stays
+// hidden until the next minor devstack is installed.
+import { computed, watch } from 'vue';
+import { skillsState, useUpgradeNotice } from '@/lib/upgradeNotice';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import AgentPrompt from './AgentPrompt.vue';
@@ -12,22 +13,10 @@ import Icon from './icons/Icon.vue';
 
 const hub = useHub();
 const stack = useStack();
+const notice = useUpgradeNotice();
 
-/** `0.25.1` and `0.25.0-rc.1` are `0.25`: a patch release does not show it again. */
-function minor(version: string): string {
-  return version.split(/[.-]/).slice(0, 2).join('.');
-}
-
-const key = computed(() => `upgradeDismissed.${stack.id}`);
-const dismissed = ref<string | null>(null);
-watch(key, (k) => (dismissed.value = persist.get<string>(k)), { immediate: true });
-const shown = computed(() => !!stack.upgrade?.behind && dismissed.value !== minor(stack.upgrade.current));
-
-function dismiss() {
-  if (!stack.upgrade) return;
-  dismissed.value = minor(stack.upgrade.current);
-  persist.set(key.value, dismissed.value);
-}
+const name = computed(() => stack.entry?.name ?? 'This repository');
+const skillsOlder = computed(() => skillsState(stack.skills) === 'older');
 
 // A new devstack (the hub restarts with it) or an edited stack file (an
 // agent set `reviewed`) changes the answer.
@@ -38,18 +27,30 @@ watch(
 </script>
 
 <template>
-  <div v-if="shown && stack.upgrade" class="banner info" data-testid="upgrade-behind">
+  <div v-if="notice.shown.value && stack.upgrade" class="banner neutral upgrade" data-testid="upgrade-behind">
     <Icon name="info" :size="18" />
-    <span class="grow">
+    <span class="grow" title="A coding agent brings it up to date: what changed in between, the stack file, the agent skills. It notes the version in [stack] reviewed.">
       <strong>
-        <template v-if="stack.upgrade.reviewed">The stack file of {{ stack.entry?.name ?? 'this repository' }} was last brought up to date with devstack {{ stack.upgrade.reviewed }}, devstack {{ stack.upgrade.current }} is installed.</template>
-        <template v-else>{{ stack.entry?.name ?? 'This repository' }} was set up with {{ stack.upgrade.from ? `devstack ${stack.upgrade.from}` : 'an earlier devstack' }}, devstack {{ stack.upgrade.current }} is installed.</template>
-      </strong>
-      A coding agent can bring it up to date: what changed in between, the stack file, the agent skills. It notes the version in <code>[stack] reviewed</code>.
-      <AgentPrompt v-if="stack.id" kind="upgrade" :target="{ stack: stack.id }" />
+        <template v-if="stack.upgrade.reviewed">{{ name }} was last brought up to date with devstack {{ stack.upgrade.reviewed }}</template>
+        <template v-else>{{ name }} was set up with {{ stack.upgrade.from ? `devstack ${stack.upgrade.from}` : 'an earlier devstack' }}</template></strong>, {{ stack.upgrade.current }} is installed<template v-if="skillsOlder">; the agent skills come from {{ stack.skills!.from ? `devstack ${stack.skills!.from}` : 'an earlier one' }}</template>.
     </span>
-    <button type="button" class="btn btn-ghost btn-sm btn-icon" title="Hide until the next minor devstack" aria-label="Hide" data-testid="upgrade-behind-dismiss" @click="dismiss">
+    <AgentPrompt v-if="stack.id" compact label="Bring up to date" kind="upgrade" :target="{ stack: stack.id }" />
+    <button v-if="skillsOlder" type="button" class="btn btn-ghost btn-sm" :disabled="!!stack.busy.skills" title="devstack skills install: the generated skills only, a skill the project wrote itself stays" data-testid="skills-refresh" @click="stack.refreshSkills()">
+      <span v-if="stack.busy.skills" class="spinner" /><Icon v-else name="restart" :size="14" /> Refresh skills only
+    </button>
+    <button type="button" class="btn btn-ghost btn-sm btn-icon" title="Hide until the next minor devstack" aria-label="Hide" data-testid="upgrade-behind-dismiss" @click="notice.hide">
       <Icon name="x" :size="14" />
     </button>
   </div>
 </template>
+
+<style scoped>
+.upgrade {
+  flex-wrap: wrap;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.upgrade .grow {
+  min-width: 240px;
+}
+</style>
