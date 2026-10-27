@@ -300,7 +300,7 @@ fn a_lane_runs_on_a_node_of_the_pool() {
         "the lane's daemon answered only once its db was healthy"
     );
     // Its services start only once its infrastructure is up, as a local
-    // lane's: `api` leaves `stopped` with the db healthy.
+    // lane's: `api` may build meanwhile, but starts with the db healthy.
     let until = Instant::now() + Duration::from_secs(600);
     loop {
         let api_state = api("/v1/lanes/wt/v1/stack").and_then(|v| {
@@ -310,7 +310,7 @@ fn a_lane_runs_on_a_node_of_the_pool() {
                 .find(|s| s["name"] == "api")
                 .and_then(|s| s["status"]["state"].as_str().map(str::to_string))
         });
-        if let Some(st) = api_state.filter(|s| s != "stopped") {
+        if let Some(st) = api_state.filter(|s| s != "stopped" && s != "building") {
             assert_eq!(
                 lane_db("{{.State.Health.Status}}"),
                 "healthy",
