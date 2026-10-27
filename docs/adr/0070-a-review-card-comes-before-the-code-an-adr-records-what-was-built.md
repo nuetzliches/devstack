@@ -1,6 +1,6 @@
 # ADR-0070: A review card comes before the code; an ADR records what was built
 
-- **Status:** Accepted (2026-10-27, [card](https://github.com/nuetzliches/devstack/pull/326))
+- **Status:** Accepted (2026-10-27, [card](https://github.com/nuetzliches/devstack/pull/326)); point 1 amended 2026-10-28 (the card is shown in the conversation and kept in the pull request, no issue)
 - **Date:** 2026-10-27
 - **Deciders:** project owner
 - **Related:** supersedes [ADR-0001](0001-development-is-adr-driven.md), [README](README.md), [plan](../plan.md), `AGENTS.md`
@@ -43,6 +43,12 @@ to see which few sentences carried the risk.
    sentence and what reversing it would cost. A point on a trust boundary
    also says what an attacker gains if it is wrong. A last line lists what
    the agent decides on its own, so that the owner sees it was not asked.
+   *Amended 2026-10-28, by the owner:* the agent shows the card in the
+   conversation with the owner, who approves its points there; the card and
+   the approval (date, points) then go into the description of the pull
+   request that builds it, before it merges. An issue is not opened for a
+   card. Where one card covers several pull requests, the first carries it
+   and the others link to it.
 2. **What goes on a card.** A point that is expensive to reverse *and*
    - **trust:** moves a trust boundary (who may do what on which machine,
      what leaves the machine, credentials);

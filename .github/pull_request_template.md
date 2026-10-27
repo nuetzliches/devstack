@@ -7,6 +7,7 @@
 <!--
 Only when the change has a point in a card category (ADR-0070,
 docs/adr/README.md#the-review-card); otherwise delete this section.
+The card as the owner approved it in the conversation; no issue for it.
 Three to seven points, one sentence each. A trust point says what an
 attacker gains if it is wrong.
 -->
