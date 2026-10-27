@@ -141,6 +141,7 @@ impl Supervisor {
         }
         let base = build_id(&snap.manifest, svc).map_err(|e| e.to_string())?;
         let mut id = base.clone();
+        let mut from_store = false;
         // `--rebuild`: the same inputs once more, under `<id>-<n>`; the artifact
         // that exists may be running and is never overwritten (ADR-0002).
         if forced {
@@ -164,6 +165,7 @@ impl Supervisor {
                 }),
             );
         } else if let Some(ms) = self.copy_from_node_store(name, &id) {
+            from_store = true;
             crate::diag::info(
                 "build_reused",
                 serde_json::json!({
@@ -176,8 +178,13 @@ impl Supervisor {
                 }),
             );
         }
-        if self.builder.artifact(name, &id).is_none() {
-            building(Some(id.clone()));
+        let missing = self.builder.artifact(name, &id).is_none();
+        // An artifact from the node's store came without its `prepare`: the
+        // lane's worktree gets what `prepare` makes as a build's would.
+        if missing || from_store {
+            if missing {
+                building(Some(id.clone()));
+            }
             if let Some(job) = self.prepare_job(name, svc, &snap)? {
                 drop(snap);
                 let view = self.run_prepare(name, job, cancel)?;
@@ -185,6 +192,8 @@ impl Supervisor {
                 snap = self.snapshot.lock().unwrap();
             }
             self.link_prepared(name, svc);
+        }
+        if missing {
             let t0 = Instant::now();
             let mut running = self
                 .builder
