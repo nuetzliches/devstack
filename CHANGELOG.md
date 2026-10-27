@@ -28,6 +28,14 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A lane on a node keeps a whole `node_modules` while new inputs are
+  prepared** (#305, ADR-0063 addendum): when the lockfile changed in its
+  worktree, `prepare` ran `npm ci` in the very copy the worktree was linked
+  to, which empties `node_modules` first; a `prepare` that then failed left
+  the worktree with a few packages and nothing in the log. The new inputs
+  are prepared in a second copy and the link moves once it is whole; a
+  failure keeps the copy it had (`linked (stale)`, with why) and is logged
+  (`prepare_failed`).
 - **A measured CPU need no longer locks a repository out of the pool**
   (ADR-0066): a build takes every core that is free, so a lane's measured
   CPU peak rose with each run on an idler node until it was more than any

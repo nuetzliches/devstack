@@ -183,7 +183,7 @@ export type LaneView = {
 export type NodeLink = {
   path: string;
   service: string;
-  state: 'linked' | 'linked (store)' | 'preparing' | 'not linked';
+  state: 'linked' | 'linked (store)' | 'preparing' | 'linked (stale)' | 'not linked';
   why?: string;
 };
 

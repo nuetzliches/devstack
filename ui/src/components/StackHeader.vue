@@ -357,7 +357,7 @@ function openWith(o: Opener) {
         <span
           v-for="k in current.links ?? []"
           :key="k.path"
-          :class="{ 'warn-text': k.state === 'not linked' }"
+          :class="{ 'warn-text': k.state === 'not linked' || k.state === 'linked (stale)' }"
           :title="k.why ?? `${k.path} in the worktree points to a copy on this machine (ADR-0063)`"
           data-testid="lane-link"
         > · {{ k.path }}: {{ k.state }}</span>
