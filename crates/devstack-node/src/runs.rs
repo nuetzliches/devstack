@@ -131,6 +131,7 @@ fn run(id: &str, s: State) -> Run {
         repo: s.repo,
         profile: s.profile,
         peak: s.peak,
+        capped: true,
     }
 }
 

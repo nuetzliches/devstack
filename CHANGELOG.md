@@ -16,10 +16,9 @@ and listed with their assets on the
   CPU peak rose with each run on an idler node until it was more than any
   node offers; then no lane of the repository started, and with no run the
   footprint never came down. A node now counts at most half of what it gives
-  lanes in all (its `--max-cpus`, else its cores). A footprint stored before
-  is not lowered: stop the coordinator (it writes the file back from
-  memory), remove the repository's entry from its `footprints.json` once,
-  then start it again.
+  lanes in all (its `--max-cpus`, else its cores), and the coordinator
+  counts CPU from such runs only: a repository locked out already starts
+  again once the coordinator is updated, with no edit of `footprints.json`.
 
 ## [0.24.1] - 2026-10-27
 

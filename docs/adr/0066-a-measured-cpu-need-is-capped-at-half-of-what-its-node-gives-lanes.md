@@ -37,6 +37,13 @@ the coordinator's `footprints.json`.
    offer (ADR-0026, ADR-0031), and the need still has the stack file's
    `[lanes.need]` as its floor (ADR-0049 point 5): a stack that does need
    more than half a node declares it.
+4. **CPU counts from capped runs only.** A node with the cap marks its runs
+   so (`capped`); the coordinator keeps the mark with each run in
+   `footprints.json`. The CPU of a run without it, stored before or
+   reported by an older node, does not count; its memory and disk do. A run
+   reported uncapped and then capped (its node was updated while it ran)
+   takes the capped CPU. Until a capped run is there, the floor stands for
+   the CPU: `[lanes.need]`, else the least (ADR-0033 point 4).
 
 ## Alternatives considered
 
@@ -49,6 +56,9 @@ the coordinator's `footprints.json`.
   above every offer.
 - **Forget a footprint no node can take.** It ends the lock-out after the
   fact, the ratchet towards it stays.
+- **Remove the stored footprints by hand once.** It needs the coordinator
+  stopped (it writes the file back from memory) and someone who knows the
+  file; point 4 does it on its own.
 
 ## Consequences
 
@@ -57,14 +67,18 @@ the coordinator's `footprints.json`.
   beside a second one.
 - A build may still take more than its need while it runs; the offer is
   measured (ADR-0031), so the next placement sees it.
-- A footprint stored before a node with this cap reports is not lowered by
-  it (a run's peak is raised, never lowered, ADR-0049 point 3); it ages out
-  after five runs. A repository locked out already needs its entry removed
-  from the coordinator's `footprints.json` once.
+- A repository locked out by an uncapped footprint starts again once the
+  coordinator runs this version: its stored CPU no longer counts, nothing
+  is edited by hand.
+- Until its first capped run, a repository's lanes are placed with the
+  floor's CPU, possibly fewer cores than they take. CPU only slows a lane
+  down, and the offer is measured, so the next placement sees the load.
 - The requester's estimate (ADR-0049 point 4.2) is not capped: it applies
   only before a stack's first run in the pool.
 
 ## Paths
 
-- `crates/devstack-node/src/runs.rs` (`Runs::load` takes the cap),
-  `crates/devstack-node/src/node.rs` (the agent's round passes it).
+- `crates/devstack-node/src/runs.rs` (`Runs::load` takes the cap, a run
+  is reported `capped`), `crates/devstack-node/src/node.rs` (the agent's
+  round passes it), `crates/devstack-node/src/footprint.rs` (`Run::capped`,
+  the entry's `capped`, `Footprints::get` counts CPU from capped runs).
