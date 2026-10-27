@@ -14,7 +14,7 @@ tokens. Adding a server, or logging in again, is done once per harness, and
 the lists drift apart.
 
 `devstack mcp` is registered in each of these harnesses already (since
-0.25.1 the setup prompt offers it, and the dashboard says when it is
+0.26.0 the setup prompt offers it, and the dashboard says when it is
 missing). The hub runs per user across all stacks from logon, on a fixed
 loopback port, without a stack (ADR-0021), and serves the dashboard there.
 
