@@ -74,6 +74,7 @@ export const paths = {
   fetch: (stack: string) => `/hub/stacks/${enc(stack)}/fetch`,
   skills: (stack: string) => `/hub/stacks/${enc(stack)}/skills`,
   upgrade: (stack: string) => `/hub/stacks/${enc(stack)}/upgrade`,
+  mcp: (stack: string) => `/hub/stacks/${enc(stack)}/mcp`,
   pool: '/hub/pool',
   pools: '/hub/pools',
   poolShared: '/hub/pool/shared',

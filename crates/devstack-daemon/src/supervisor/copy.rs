@@ -56,8 +56,25 @@ impl Supervisor {
         // the link into it, ADR-0044) is prepared again.
         let linked_there =
             !self.links_prepared() || p.link.iter().all(|l| snap.dir.join(l).is_dir());
+        let counted: Vec<PathBuf> = p.link.iter().map(|l| snap.dir.join(l)).collect();
         if linked_there && std::fs::read_to_string(&mark).is_ok_and(|k| k == key) {
-            return Ok(None);
+            // Emptied through the worktree's link (an `npm ci` there, #311):
+            // prepared again, and said so.
+            let Some((rel, now, then)) = emptied(&mark, &counted, &p.link) else {
+                return Ok(None);
+            };
+            crate::diag::warn(
+                "prepare_copy_emptied",
+                serde_json::json!({ "lane": self.lane, "service": name, "path": rel,
+                    "entries": now, "prepared_with": then }),
+            );
+            self.set_notice(
+                &format!("prepare.emptied.{name}"),
+                NoticeLevel::Warn,
+                format!(
+                    "`{rel}` of {name} had lost what `prepare` made ({now} of {then} entries): something emptied it, likely a reinstall through the worktree's link. It is prepared again; leave a linked directory alone in the worktree."
+                ),
+            );
         }
         Ok(Some(PrepareJob {
             key,
@@ -66,6 +83,7 @@ impl Supervisor {
             run: p.run.clone(),
             store: self.store_use(name, p, snap),
             before_run: None,
+            counted,
         }))
     }
 
@@ -583,10 +601,14 @@ impl Supervisor {
                     .iter()
                     .any(|rel| links_to(&worktree.join(rel), &roots[i].join(rel)))
             });
+            let counted =
+                |i: usize| -> Vec<PathBuf> { p.link.iter().map(|l| roots[i].join(l)).collect() };
             let ready = |i: usize| {
+                let mark = copies[i].join("prepared").join(name);
                 p.link.iter().all(|l| roots[i].join(l).is_dir())
-                    && std::fs::read_to_string(copies[i].join("prepared").join(name))
-                        .is_ok_and(|k| k == key)
+                    && std::fs::read_to_string(&mark).is_ok_and(|k| k == key)
+                    // Emptied through the worktree's link (#311): not ready.
+                    && emptied(&mark, &counted(i), &p.link).is_none()
             };
             let mut state = "linked";
             let to = match current
@@ -630,6 +652,7 @@ impl Supervisor {
                                 .map(|_| ())
                                 .map_err(|e| e.to_string())
                         })),
+                        counted: counted(to),
                     };
                     match self.run_prepare(name, job, cancel) {
                         Ok(v) if v.source == "store" => state = "linked (store)",
@@ -712,6 +735,7 @@ impl Supervisor {
                 version: p.version.clone(),
             }),
             before_run: Some(complete),
+            counted: Vec::new(),
         };
         let key = match self.store_key(name, &job, cancel)? {
             Ok(k) => k,
@@ -911,6 +935,9 @@ pub(super) struct PrepareJob {
     /// worktree linked for a lane on a node gets its source only when it
     /// has to prepare (ADR-0063).
     before_run: Option<Box<dyn Fn() -> Result<(), String> + Send>>,
+    /// The directories whose entries are counted beside the mark (#311):
+    /// those linked into the worktree, where a reinstall can empty them.
+    counted: Vec<PathBuf>,
 }
 
 impl PrepareJob {
@@ -919,8 +946,41 @@ impl PrepareJob {
         if let Some(parent) = self.mark.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        std::fs::write(&self.mark, &self.key).map_err(|e| e.to_string())
+        std::fs::write(&self.mark, &self.key).map_err(|e| e.to_string())?;
+        let counts: String = self
+            .counted
+            .iter()
+            .map(|d| format!("{}\n", entries(d)))
+            .collect();
+        std::fs::write(entries_file(&self.mark), counts).map_err(|e| e.to_string())
     }
+}
+
+/// Beside a mark: the entries each counted directory had once prepared.
+fn entries_file(mark: &Path) -> PathBuf {
+    let mut s = mark.as_os_str().to_owned();
+    s.push(".entries");
+    s.into()
+}
+
+/// The entries right in `dir` (a `node_modules`' packages and scopes).
+fn entries(dir: &Path) -> usize {
+    std::fs::read_dir(dir).map_or(0, |r| r.count())
+}
+
+/// The first of `dirs` (named `rels`) that has lost more than a tenth of
+/// the entries it had when it was prepared, with now and then (#311); none
+/// when nothing was counted (a mark from before).
+fn emptied(mark: &Path, dirs: &[PathBuf], rels: &[String]) -> Option<(String, usize, usize)> {
+    let text = std::fs::read_to_string(entries_file(mark)).ok()?;
+    dirs.iter()
+        .zip(rels)
+        .zip(text.lines())
+        .find_map(|((dir, rel), then)| {
+            let then: usize = then.trim().parse().ok()?;
+            let now = entries(dir);
+            (now * 10 < then * 9).then(|| (rel.clone(), now, then))
+        })
 }
 
 /// The key of `prepare` `p` of `svc` over the files of a copy (path, blake3
@@ -1328,6 +1388,41 @@ mod tests {
     }
 
     #[test]
+    fn a_copy_emptied_through_its_link_is_noticed() {
+        let d = tempfile::tempdir().unwrap();
+        let deps = d.path().join("copy/node_modules");
+        for i in 0..10 {
+            std::fs::create_dir_all(deps.join(format!("pkg{i}"))).unwrap();
+        }
+        let mark = d.path().join("prepared/web");
+        let rels = ["web/node_modules".to_string()];
+        // A mark from before counted nothing: no check.
+        assert_eq!(emptied(&mark, std::slice::from_ref(&deps), &rels), None);
+        PrepareJob {
+            key: "k".into(),
+            mark: mark.clone(),
+            cwd: d.path().into(),
+            run: "x".into(),
+            store: Err(None),
+            before_run: None,
+            counted: vec![deps.clone()],
+        }
+        .done()
+        .unwrap();
+        assert_eq!(emptied(&mark, std::slice::from_ref(&deps), &rels), None);
+        // One package less is a tool's doing; most of them gone is not.
+        std::fs::remove_dir(deps.join("pkg0")).unwrap();
+        assert_eq!(emptied(&mark, std::slice::from_ref(&deps), &rels), None);
+        for i in 1..8 {
+            std::fs::remove_dir(deps.join(format!("pkg{i}"))).unwrap();
+        }
+        assert_eq!(
+            emptied(&mark, std::slice::from_ref(&deps), &rels),
+            Some(("web/node_modules".into(), 2, 10))
+        );
+    }
+
+    #[test]
     fn a_lane_on_a_node_gets_its_worktree_linked_to_a_copy_from_the_store() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1705,6 +1800,7 @@ mod tests {
             mark: d.path().join("mark"),
             cwd: copy.clone(),
             run: "git --version".into(),
+            counted: Vec::new(),
             store: Ok(StoreUse {
                 root: copy.clone(),
                 outputs: vec!["deps".into()],

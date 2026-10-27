@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref, shallowRef, triggerRef, watch } from 'vue';
 import { api, paths, sharedRef, v1, type GroupAction, type ServiceAction, type StreamState, type Subscription } from '@/api';
-import type { Branches, LaneView, Point, Pruned, Run, ServiceView, SkillsState, StackEvent, StackView, UpgradeState, UsageReport } from '@/api/types';
+import type { Branches, LaneView, Point, Pruned, Run, ServiceView, SkillsState, StackEvent, StackView, UpgradeState, UsageReport, McpState } from '@/api/types';
 import { laneLabel, restartLanesText, restartPlan, samePath } from '@/lib/lanes';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
@@ -168,8 +168,10 @@ export const useStack = defineStore('stack', () => {
     branches.value = null;
     skills.value = null;
     upgrade.value = null;
+    mcp.value = null;
     void loadSkills();
     void loadUpgrade();
+    void loadMcp();
     persist.saveLastStack(next);
     lane.value = persist.get<string | null>(`lane.${next}`) ?? null;
     reset(next);
@@ -363,6 +365,21 @@ export const useStack = defineStore('stack', () => {
       const res = await api().request<UpgradeState>('GET', paths.upgrade(sid));
       const b = res.body;
       if (sid === id.value && res.ok && b && typeof b === 'object' && typeof b.behind === 'boolean') upgrade.value = b;
+    } catch {
+      // nothing shown; the next visit asks again
+    }
+  }
+
+  /** Whether an agent configuration registers `devstack mcp` for the repository (`GET /hub/stacks/{id}/mcp`). */
+  const mcp = shallowRef<McpState | null>(null);
+
+  async function loadMcp() {
+    const sid = id.value;
+    if (!sid || foreign.value) return;
+    try {
+      const res = await api().request<McpState>('GET', paths.mcp(sid));
+      const b = res.body;
+      if (sid === id.value && res.ok && b && typeof b === 'object' && typeof b.registered === 'boolean') mcp.value = b;
     } catch {
       // nothing shown; the next visit asks again
     }
@@ -1004,6 +1021,8 @@ export const useStack = defineStore('stack', () => {
     refreshSkills,
     upgrade,
     loadUpgrade,
+    mcp,
+    loadMcp,
     branches,
     loadBranches,
     fetchBranches,

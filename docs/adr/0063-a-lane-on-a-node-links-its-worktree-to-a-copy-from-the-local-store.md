@@ -1,6 +1,6 @@
 # ADR-0063: A lane on a node links its worktree to a copy from the local store
 
-- **Status:** Accepted (2026-10-26); built, noted 2026-10-26; addendum 2026-10-27 (two copies: new inputs are prepared beside the one the worktree has)
+- **Status:** Accepted (2026-10-26); built, noted 2026-10-26; addendum 2026-10-27 (two copies: new inputs are prepared beside the one the worktree has; an emptied copy is prepared again)
 - **Date:** 2026-10-26
 - **Deciders:** project owner
 - **Related:** [#277](https://github.com/nuetzliches/devstack/issues/277), [#159](https://github.com/nuetzliches/devstack/issues/159), [ADR-0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) (point 5 replaced here for lanes on a node), [ADR-0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md)
@@ -120,6 +120,14 @@ it had, made for its inputs before, and the path says `linked (stale)` with
 why; the next look tries again. Inputs that go back to those of the other
 copy only move the link. A failed `prepare` is logged (`prepare_failed`,
 with its log). The disk a lane's copies take doubles at most.
+
+*Amended 2026-10-27 (#311):* a copy that is linked is also checked for
+being whole. With its mark, each linked directory's entries are counted
+(`prepared/<service>.entries`); one that has lost more than a tenth of them
+since (a reinstall through the worktree's link empties it) is no copy of
+its key, so the next look prepares the other copy. A local lane's copy
+(ADR-0044) is checked the same way before its service starts, prepared
+again in place, and said in a notice.
 
 ## What this ADR does not say
 

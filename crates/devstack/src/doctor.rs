@@ -142,11 +142,38 @@ fn docker(needed: Option<bool>) -> Vec<Finding> {
                             MIN_COMPOSE.0, MIN_COMPOSE.1, MIN_COMPOSE.2
                         ),
                     )],
-                    _ => vec![f(Level::Ok, format!("Docker {version}, Compose {c}"))],
+                    _ => {
+                        let mut out = vec![f(Level::Ok, format!("Docker {version}, Compose {c}"))];
+                        out.extend(memory());
+                        out
+                    }
                 },
             }
         }
     }
+}
+
+/// Where a lane's containers take their memory (#309): Docker Desktop's VM
+/// has a limit of its own, which the lane's memory check holds them to.
+fn memory() -> Option<Finding> {
+    let vm = devstack_compose::Docker::default().engine_memory()?;
+    Some(f(
+        Level::Info,
+        memory_text(vm, devstack_proc::memory_available()),
+    ))
+}
+
+fn memory_text(vm: devstack_compose::EngineMemory, host_free: Option<u64>) -> String {
+    let gb = |b: u64| b as f64 / (1u64 << 30) as f64;
+    format!(
+        "Memory: containers run in Docker Desktop's VM, {:.1} GB, {:.1} GB of it used by the containers that run, {:.1} GB free; a lane's containers must fit there{} (raise the limit in Docker Desktop, or in `.wslconfig` for WSL 2)",
+        gb(vm.total),
+        gb(vm.used),
+        gb(vm.total.saturating_sub(vm.used)),
+        host_free
+            .map(|h| format!(", its services on the host ({:.1} GB free)", gb(h)))
+            .unwrap_or_default()
+    )
 }
 
 /// How long a version query of another tool may take: a hanging Docker CLI
@@ -487,6 +514,21 @@ pub fn text(findings: &[Finding]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_memory_line_names_docker_desktops_vm() {
+        const GB: u64 = 1 << 30;
+        let vm = devstack_compose::EngineMemory {
+            total: 31 * GB,
+            used: 20 * GB,
+        };
+        let t = memory_text(vm, Some(36 * GB));
+        assert!(
+            t.contains("31.0 GB") && t.contains("11.0 GB free") && t.contains("36.0 GB free"),
+            "{t}"
+        );
+        assert!(!memory_text(vm, None).contains("host"));
+    }
 
     #[test]
     fn the_program_of_a_command_line() {

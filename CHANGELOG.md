@@ -9,6 +9,23 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **Setting a repository up offers devstack's MCP server**: the setup
+  prompt of "Add a stack" has the agent ask whether to register
+  `devstack mcp` in the project's agent configuration (`.mcp.json`,
+  `.vscode/mcp.json`, `.codex/config.toml`), suggesting yes; the upgrade
+  prompt offers it where no entry is there. The stack's head in the
+  dashboard shows *no MCP* when neither the project's nor the user's
+  configuration registers it (`GET /hub/stacks/{id}/mcp`); its menu holds a
+  prompt for a coding agent that adds the entry, or hides the label for the
+  stack.
+- **The dashboard's Usage view has a tab** beside Commands and Events. A
+  switch to another lane of the same stack (or back to the main working
+  tree) keeps the tab shown: from Usage of one lane to Usage of the next.
+  A service's or container's detail goes to the overview, a command's run
+  to the command list, since both belong to the lane left.
+
 ### Changed
 
 - **The dashboard's "stack file behind" banner is one quiet line and can be
@@ -30,6 +47,8 @@ and listed with their assets on the
   a lane that did not fit there started and the engine hung. The
   containers' part is now checked against what is free in the VM, the
   services' part against the host, and the refusal names the limit.
+  `devstack doctor` shows the VM's memory, what the running containers
+  use of it and the host's free memory.
 - **A refused start on the pool says how to go on** (#310): the error now
   names `devstack pool placement`, another node and `devstack up --on
   local`, and when the pool is the machine's default, that running here is
@@ -39,7 +58,11 @@ and listed with their assets on the
 - **The skills warn about a linked `node_modules`** (#311): a directory
   `prepare.link` puts in a worktree is the lane's copy; reinstalling or
   deleting it there empties what the lane runs from. The `devstack` and
-  `devstack-config` skills say so and how to get one's own.
+  `devstack-config` skills say so and how to get one's own. devstack
+  counts the entries of a linked directory once prepared; one that lost
+  more than a tenth of them is prepared again (a local lane at its
+  service's next start, with a notice and `prepare_copy_emptied` in the
+  log; a lane on a node at the next look, into its other copy).
 - **The upgrade prompt checks the version and asks before a restart**
   (#312): it starts with `devstack --version`, and before restarting the
   stack it has the agent look for lanes and other sessions and ask; the
