@@ -244,6 +244,13 @@ pub struct Placement {
     pub disk: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disk_room: Option<u64>,
+    /// What the lane would hold there (ADR-0049 point 4), and where that
+    /// comes from (its footprint, or the requester's estimate): the zone
+    /// the dashboard shows on each node. Absent from an older coordinator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub need: Option<crate::share::Need>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub need_from: Option<String>,
 }
 
 /// Rank the nodes for a lane of `member`'s `repo`/`lane` needing `need`:
@@ -385,6 +392,8 @@ pub fn rank_filling(
                     memory: rep.memory,
                     disk,
                     disk_room: room,
+                    need: Some(need),
+                    need_from: None,
                 },
             )
         })
@@ -1694,15 +1703,20 @@ fn placement_for(
         .filter(|m| m.provisioned.is_some())
         .map(|m| m.id.clone())
         .collect();
-    rank_filling(
+    let (need, from) = need_of(s, r);
+    let mut out = rank_filling(
         &nodes,
         &filled,
         &me.id,
         &r.repo,
         &r.lane,
-        need_of(s, r).0,
+        need,
         r.devstack.as_ref(),
-    )
+    );
+    for p in &mut out {
+        p.need_from = Some(from.clone());
+    }
+    out
 }
 
 /// `GET /v1/placement?repo=&lane=&cpus=&memory=&disk=&profile=`: where a
@@ -3415,6 +3429,21 @@ mod placement_tests {
             .into_iter()
             .map(|p| (p.name, p.eligible, p.why))
             .collect()
+    }
+
+    #[test]
+    fn each_place_says_what_the_lane_would_hold_there() {
+        let need = Need {
+            cpus: 2.5,
+            memory: 6 * GIB,
+            ..Need::default()
+        };
+        let (a, b) = (node(4.0, 8, &[]), node(0.5, 1, &[]));
+        let nodes = [("a", "a", &a), ("b", "b", &b)];
+        let got = rank(&nodes, "me", "shop", "fix", need, Some(&Release::this()));
+        // Eligible or not: the dashboard draws the need on every node.
+        assert_eq!(got.len(), 2);
+        assert!(got.iter().all(|p| p.need == Some(need)));
     }
 
     #[test]

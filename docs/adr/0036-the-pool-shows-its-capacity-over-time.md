@@ -38,6 +38,24 @@ pool has to know which nodes have one before it can place such a lane.
    the node handing one to the lane's container (`--gpus`), and the policy
    for it (ADR-0033) are a later decision; this one makes them visible.
 
+## Addendum 2026-10-28: where a lane starts, compared
+
+The not-started lane's card lets the developer choose where it starts, so it
+shows the machines side by side, this machine first (highlighted; a click
+starts the lane here), then the nodes of the pools. Per machine, CPU and
+memory each get one chart on the scale of all the machine has: above, the
+last hour of what is used and, dashed, what a node offered the pool (the
+part above it, hatched, its owner keeps); below, a bar of now with the zone
+the lane would take on top, red where it does not fit into what is offered
+(on this machine: what is free). The lane's need is the one the coordinator
+ranks with (ADR-0049 point 4): `GET /v1/placement` gives it on every place,
+with where it comes from (`need`, `need_from`; absent from an older
+coordinator). This machine's numbers are what its hub measures for the pool
+(`GET /hub/pool/share`: everything the machine runs, not only lanes); the
+hub keeps no history of them, so its chart grows from the samples the page
+takes while it is open. A node that reports no total is drawn on the scale
+of what it offers.
+
 ## Consequences
 
 - An admin sees whether the pool is too small, before members wait.
@@ -63,4 +81,5 @@ pool has to know which nodes have one before it can place such a lane.
 (a developer's machine reports its total and GPUs),
 `crates/devstack-node/src/coordinator.rs` (`History`, `pool_series`,
 `GET /v1/history`), the hub's `GET /hub/pool/history`, the pool area in `ui/`
-(the capacity card with the pool's history, a node's history by its row).
+(the capacity card with the pool's history, a node's history by its row;
+`LoadChart.vue`, `NodeLoad.vue`, `LocalLoad.vue` beside a lane to start).

@@ -11,6 +11,13 @@ and listed with their assets on the
 
 ### Added
 
+- **Where a lane starts, compared** (ADR-0036 addendum): the card of a
+  lane not started shows this machine first, beside the pool's nodes, and
+  per machine one chart for CPU and one for memory on the scale of all it
+  has: the last hour with what a node offers (dashed), and now with the
+  zone the lane would take on top, red where it does not fit. The lane's
+  need is the coordinator's (its footprint in the pool, else the
+  estimate): `GET /hub/pool/placement` gives it as `need` and `need_from`.
 - **A pool grows by machines a provisioner makes** (ADR-0051): with
   `devstack node serve --provisioner <url>`, a lane the pool places that
   no node can take makes a machine through an HTTP service of the pool's

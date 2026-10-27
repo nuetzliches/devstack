@@ -1,14 +1,15 @@
 <script setup lang="ts">
 // How busy a node of the pool is, to choose where a lane starts (ADR-0036):
-// what it has free now, of what it offers and has, its lanes, and the last
-// hour of what its lanes used, from the coordinator's history.
+// per resource one chart on the scale of what the machine has: the last hour
+// of what its lanes used against what it offered (the coordinator's
+// history), and now, with what the lane would take on top (`need`).
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { api, paths } from '@/api';
 import type { CapacityPoint, PoolNode } from '@/api/types';
 import { bytes } from '@/lib/format';
-import Sparkline from './Sparkline.vue';
+import LoadChart from './LoadChart.vue';
 
-const props = defineProps<{ pool: string; node: PoolNode; lanes: number }>();
+const props = defineProps<{ pool: string; node: PoolNode; lanes: number; need?: { cpus: number; memory: number } }>();
 const points = ref<CapacityPoint[]>([]);
 
 async function load() {
@@ -24,34 +25,54 @@ const timer = setInterval(() => void load(), 30_000);
 onBeforeUnmount(() => clearInterval(timer));
 
 const r = computed(() => props.node.report);
-/** Free now: what it offers a new lane (the report's `cpus`/`memory`). */
+/** Free now: what it offers a new lane (the report's `cpus`/`memory`); its
+ * lanes may use up to `used + free` (the offer), of `total`. */
 const cpu = computed(() => {
   const total = r.value?.total?.cpus ?? 0;
   const used = r.value?.used?.cpus ?? 0;
-  return { free: r.value?.cpus ?? 0, used, total, share: total ? Math.min(1, used / total) : 0 };
+  const free = r.value?.cpus ?? 0;
+  return { free, used, total, offered: used + free };
 });
 const mem = computed(() => {
   const total = r.value?.total?.memory ?? 0;
   const used = r.value?.used?.memory ?? 0;
-  return { free: r.value?.memory ?? 0, used, total, share: total ? Math.min(1, used / total) : 0 };
+  const free = r.value?.memory ?? 0;
+  return { free, used, total, offered: used + free };
 });
 const gpus = computed(() => (r.value?.gpus ?? []).filter((g) => g.offered));
-const tone = (share: number) => (share > 0.85 ? 'danger' : share > 0.6 ? 'warn' : 'ok');
 </script>
 
 <template>
   <div class="load" data-testid="node-load">
     <div class="row">
       <span class="k">CPU</span>
-      <span class="bar" :class="`tone-${tone(cpu.share)}`"><span :style="{ width: `${100 * cpu.share}%` }" /></span>
-      <span class="v tabular"><strong>{{ cpu.free.toFixed(1) }}</strong> free · {{ cpu.used.toFixed(1) }} of {{ cpu.total.toFixed(0) }} used</span>
-      <Sparkline v-if="points.length > 1" :values="points.map((p) => p.used_cpus)" :max="Math.max(1, cpu.total)" :height="18" :width="90" label="CPU used, last hour" />
+      <LoadChart
+        :total="cpu.total"
+        :used="cpu.used"
+        :limit="cpu.offered"
+        :need="need?.cpus"
+        :history="points.map((p) => p.used_cpus)"
+        :ceiling="points.map((p) => p.used_cpus + p.offered_cpus)"
+        label="CPU: what its lanes used in the last hour, what it offered (dashed), and now, with the lane on top"
+      />
+      <span class="v tabular" :title="`${cpu.used.toFixed(1)} used by its lanes, ${cpu.offered.toFixed(1)} offered to the pool, ${cpu.total.toFixed(0)} cores in all`">
+        <strong>{{ cpu.free.toFixed(1) }}</strong> free · {{ cpu.offered.toFixed(1) }} offered<template v-if="cpu.total"> of {{ cpu.total.toFixed(0) }}</template>
+      </span>
     </div>
     <div class="row">
       <span class="k">Memory</span>
-      <span class="bar" :class="`tone-${tone(mem.share)}`"><span :style="{ width: `${100 * mem.share}%` }" /></span>
-      <span class="v tabular"><strong>{{ bytes(mem.free) }}</strong> free · {{ bytes(mem.used) }} of {{ bytes(mem.total) }} used</span>
-      <Sparkline v-if="points.length > 1" :values="points.map((p) => p.used_memory)" :max="Math.max(1, mem.total)" :height="18" :width="90" label="Memory used, last hour" />
+      <LoadChart
+        :total="mem.total"
+        :used="mem.used"
+        :limit="mem.offered"
+        :need="need?.memory"
+        :history="points.map((p) => p.used_memory)"
+        :ceiling="points.map((p) => p.used_memory + p.offered_memory)"
+        label="Memory: what its lanes used in the last hour, what it offered (dashed), and now, with the lane on top"
+      />
+      <span class="v tabular" :title="`${bytes(mem.used)} used by its lanes, ${bytes(mem.offered)} offered to the pool, ${bytes(mem.total)} in all`">
+        <strong>{{ bytes(mem.free) }}</strong> free · {{ bytes(mem.offered) }} offered<template v-if="mem.total"> of {{ bytes(mem.total) }}</template>
+      </span>
     </div>
     <div class="row meta">
       <span>{{ lanes }} lane{{ lanes === 1 ? '' : 's' }} running</span>
@@ -79,26 +100,6 @@ const tone = (share: number) => (share > 0.85 ? 'danger' : share > 0.6 ? 'warn' 
   width: 52px;
   color: var(--text-muted);
   flex: none;
-}
-.bar {
-  --tone: var(--ok);
-  width: 80px;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--surface-hover);
-  overflow: hidden;
-  flex: none;
-}
-.bar > span {
-  display: block;
-  height: 100%;
-  background: var(--tone);
-}
-.bar.tone-warn {
-  --tone: var(--warn);
-}
-.bar.tone-danger {
-  --tone: var(--danger);
 }
 .v {
   flex: 1;

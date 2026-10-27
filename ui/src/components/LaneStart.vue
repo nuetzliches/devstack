@@ -13,6 +13,7 @@ import { laneLabel } from '@/lib/lanes';
 import { usePool } from '@/stores/pool';
 import { useStack } from '@/stores/stack';
 import Icon from './icons/Icon.vue';
+import LocalLoad from './LocalLoad.vue';
 import NodeLoad from './NodeLoad.vue';
 
 const props = defineProps<{ lane: LaneView }>();
@@ -62,6 +63,14 @@ async function loadPlacement() {
 watch(() => [props.lane.name, stack.view?.name, pool.placeable.map((p) => p.pool).join(), profile.value], () => void loadPlacement(), { immediate: true });
 const placementTimer = setInterval(() => void loadPlacement(), 30_000);
 onBeforeUnmount(() => clearInterval(placementTimer));
+/** What the lane would take where it starts (ADR-0049 point 4), and where
+ * that comes from: its footprint in the pool, else the estimate. */
+const need = computed(() => {
+  const p = Object.values(placement.value)
+    .flat()
+    .find((x) => x.need);
+  return p?.need ? { cpus: p.need.cpus, memory: p.need.memory, from: p.need_from ?? '' } : null;
+});
 /** A node's place in its pool's order: its rank (1: the pick) and why. */
 function placeOf(poolName: string, nodeId: string) {
   const list = placement.value[poolName] ?? [];
@@ -161,7 +170,16 @@ function start(on?: string) {
           <Icon name="server" :size="14" /> Start in the pool{{ p.pool === 'default' ? '' : ` ${p.pool}` }}
         </button>
       </div>
+      <p v-if="need && nodes.length" class="need small" data-testid="lane-start-need">
+        <span class="swatch" aria-hidden="true" /> The lane takes about <strong>{{ need.cpus.toFixed(1) }} CPU</strong> and
+        <strong>{{ bytes(need.memory) }}</strong> ({{ need.from }}).
+        <span class="faint">Each chart, on the scale of all the machine has: above, the last hour (dashed: what a node offers the pool); below, now, with the lane on top.</span>
+      </p>
       <div v-if="nodes.length" class="targets" data-testid="lane-start-targets">
+        <button type="button" class="target local" :disabled="busy || running" data-testid="lane-start-local" @click="start()">
+          <span class="tname"><Icon name="monitor" :size="14" /> <strong>this machine</strong></span>
+          <LocalLoad :need="need ?? undefined" />
+        </button>
         <button
           v-for="n in nodes"
           :key="n.on"
@@ -180,7 +198,7 @@ function start(on?: string) {
             {{ placeOf(n.pool, n.node.id)?.eligible ? `#${placeOf(n.pool, n.node.id)?.rank} · ` : 'cannot take it: ' }}{{ placeOf(n.pool, n.node.id)?.why
             }}<template v-if="placeOf(n.pool, n.node.id)?.eligible && placeOf(n.pool, n.node.id)?.disk"> · needs {{ bytes(placeOf(n.pool, n.node.id)?.disk) }} of disk there</template>
           </span>
-          <NodeLoad :pool="n.pool" :node="n.node" :lanes="lanesOn(n.pool, n.node.id)" />
+          <NodeLoad :pool="n.pool" :node="n.node" :lanes="lanesOn(n.pool, n.node.id)" :need="need ?? undefined" />
         </button>
       </div>
       <p v-if="!pool.joinedAny" class="muted small">
@@ -304,6 +322,10 @@ function start(on?: string) {
   border-color: var(--accent);
   background: var(--surface-hover);
 }
+.target.local {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
 .target:disabled {
   opacity: 0.6;
   cursor: default;
@@ -312,6 +334,23 @@ function start(on?: string) {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+.need {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 12px 0 0;
+}
+.need .faint {
+  flex-basis: 100%;
+}
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: repeating-linear-gradient(-45deg, var(--accent) 0 2px, color-mix(in srgb, var(--accent) 30%, transparent) 2px 4px);
 }
 .why {
   font-size: 12px;
