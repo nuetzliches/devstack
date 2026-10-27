@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-27
+
+A stop takes the stack's containers too, as stopping a lane already did;
+`--keep-infra` leaves them running (ADR-0068). Who changed the stack at
+runtime, and through which client, is on record: `devstack journal`, and
+`devstack status` says who gave a lane the main ports (ADR-0067). Fixed: a
+lane on a node keeps a whole `node_modules` while new inputs are prepared
+(#305), a measured CPU need no longer locks a repository out of the pool
+(ADR-0066), the dashboard's banners are spaced apart.
+
 ### Added
 
 - **Who changed the stack at runtime is on record** (ADR-0067): the CLI,
@@ -54,6 +64,8 @@ and listed with their assets on the
   offers its lanes (its share of its cores, at most `--max-cpus`), and the coordinator
   counts CPU from such runs only: a repository locked out already starts
   again once the coordinator is updated, with no edit of `footprints.json`.
+- **The dashboard's banners are spaced apart** (#301): notices, the upgrade
+  and the skills banner above a stack sat directly on top of each other.
 
 ## [0.24.1] - 2026-10-27
 
@@ -1807,7 +1819,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.24.1...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/nuetzliches/devstack/compare/v0.24.1...v0.25.0
 [0.24.1]: https://github.com/nuetzliches/devstack/compare/v0.24.0...v0.24.1
 [0.24.0]: https://github.com/nuetzliches/devstack/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/nuetzliches/devstack/compare/v0.22.1...v0.23.0

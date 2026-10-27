@@ -7,7 +7,7 @@ version = 1
 [stack]
 name = "devstack"
 requires = "0.20.0"
-reviewed = "0.24.1"
+reviewed = "0.25.0"
 
 [services.dashboard]
 kind = "devserver"
