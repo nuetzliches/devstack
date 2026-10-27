@@ -328,6 +328,9 @@ function isActive(name: string) {
   place-items: center;
 }
 .banners {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
   padding: 0 var(--space-5);
 }
 .banners:has(> *) {
