@@ -667,7 +667,14 @@ export type McpUpstreamAuth = { kind: 'none' } | { kind: 'token'; env?: string }
 /** An MCP upstream as the hub lists it: never a secret. */
 export type McpUpstream = {
   name: string;
-  url: string;
+  /** Its endpoint (Streamable HTTP); absent for one that is a command. */
+  url?: string;
+  /** The command the hub starts for it (stdio), program and arguments. */
+  command?: string[];
+  /** The variables that command gets besides a base; no secret. */
+  env?: Record<string, string>;
+  /** For a command with a token the hub keeps: the variable it is given in. */
+  token_var?: string;
   /** Its tools are `<prefix>__<tool>`. */
   prefix: string;
   /** The tools offered; absent or empty: all. */
