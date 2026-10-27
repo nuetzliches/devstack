@@ -1421,12 +1421,11 @@ mod tests {
         sup.link_node_lane(&wt, &lane, &failing, &report, &|| false);
         let last = seen.lock().unwrap().last().cloned().unwrap();
         assert_eq!(last[0].state, "linked (stale)", "{last:?}");
+        // Elsewhere a unit test cannot spawn (no shim): a failure all the same.
+        let why = last[0].why.as_deref().unwrap();
         assert!(
-            last[0]
-                .why
-                .as_deref()
-                .unwrap()
-                .contains("exited with code 3"),
+            why.contains("keeps the copy made for its inputs before")
+                && (!cfg!(windows) || why.contains("exited with code 3")),
             "{last:?}"
         );
         assert_eq!(
