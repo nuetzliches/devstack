@@ -41,8 +41,18 @@ fn free_port() -> u16 {
     }
 }
 
+/// A hub on a free port. A port another process took between [`free_port`]
+/// and the hub's bind (seen on macOS CI: the hub exited with status 1) is
+/// given up for another one.
 fn start() -> Hub {
-    start_in(tempfile::tempdir().unwrap(), free_port())
+    for _ in 0..3 {
+        match try_start(tempfile::tempdir().unwrap(), free_port(), &[]) {
+            Ok(h) => return h,
+            Err((why, true)) => eprintln!("{why}; another port"),
+            Err((why, false)) => panic!("{why}"),
+        }
+    }
+    panic!("no free port for a hub in three tries");
 }
 
 fn start_in(home: tempfile::TempDir, port: u16) -> Hub {
@@ -51,6 +61,17 @@ fn start_in(home: tempfile::TempDir, port: u16) -> Hub {
 
 /// A hub as [`start_in`] starts it, with `extra` in its environment.
 fn start_env(home: tempfile::TempDir, port: u16, extra: &[(&str, std::ffi::OsString)]) -> Hub {
+    try_start(home, port, extra).unwrap_or_else(|(why, _)| panic!("{why}"))
+}
+
+/// The hub, or why not and whether its port was taken.
+fn try_start(
+    home: tempfile::TempDir,
+    port: u16,
+    extra: &[(&str, std::ffi::OsString)],
+) -> Result<Hub, (String, bool)> {
+    // What the hub says before its log exists, for a start that fails.
+    let err_file = home.path().join("hub-test.err");
     let child = Command::new(BIN)
         .arg("hub")
         .envs(extra.iter().map(|(k, v)| (k, v)))
@@ -63,7 +84,7 @@ fn start_env(home: tempfile::TempDir, port: u16, extra: &[(&str, std::ffi::OsStr
         // No tray icon on the desktop of whoever runs the tests.
         .env("DEVSTACK_NO_TRAY", "1")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(std::fs::File::create(&err_file).unwrap())
         .spawn()
         .unwrap();
     let mut hub = Hub { child, port, home };
@@ -80,10 +101,18 @@ fn start_env(home: tempfile::TempDir, port: u16, extra: &[(&str, std::ffi::OsStr
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
             .is_some_and(|v| v["pid"] == hub.child.id() && v["port"] == port);
         if ours && std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return hub;
+            return Ok(hub);
         }
         if let Some(status) = hub.child.try_wait().unwrap() {
-            panic!("hub on port {port} exited before it was up: {status}");
+            let said = std::fs::read_to_string(&err_file).unwrap_or_default();
+            let taken = said.contains(&format!("port {port}"));
+            return Err((
+                format!(
+                    "hub on port {port} exited before it was up: {status}: {}",
+                    said.trim()
+                ),
+                taken,
+            ));
         }
         assert!(t0.elapsed() < Duration::from_secs(15), "hub did not start");
         std::thread::sleep(Duration::from_millis(50));
