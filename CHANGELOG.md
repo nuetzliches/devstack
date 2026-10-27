@@ -20,6 +20,11 @@ and listed with their assets on the
   configuration registers it (`GET /hub/stacks/{id}/mcp`); its menu holds a
   prompt for a coding agent that adds the entry, or hides the label for the
   stack.
+- **The dashboard's Usage view has a tab** beside Commands and Events. A
+  switch to another lane of the same stack (or back to the main working
+  tree) keeps the tab shown: from Usage of one lane to Usage of the next.
+  A service's or container's detail goes to the overview, a command's run
+  to the command list, since both belong to the lane left.
 
 ### Fixed
 
