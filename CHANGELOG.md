@@ -9,6 +9,17 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **A stack starts sooner** (measured in the pool's telemetry: a lane on a
+  node took about 154 s, of which 51 s waiting for its containers before
+  any build, and 37 s building what an earlier lane had built). The
+  services are built while the containers start, Compose groups that no
+  `after` orders start side by side (here and on a node), and services
+  whose `after` is done start side by side. A node keeps the member's
+  build artifacts with its store (ADR-0062 addendum): the member's next
+  lane with the same inputs copies them instead of building.
+
 ### Added
 
 - **A pool grows by machines a provisioner makes** (ADR-0051): with

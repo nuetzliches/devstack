@@ -393,7 +393,40 @@ impl Supervisor {
             // The node's agent starts it, after this daemon (ADR-0025, #164).
             return self.node_infra_up(&file);
         }
-        for g in self.group_order() {
+        // Groups no `after` orders start side by side.
+        let deps: BTreeMap<String, Vec<String>> = self
+            .stack
+            .compose
+            .iter()
+            .map(|(k, g)| (k.clone(), g.after.clone()))
+            .collect();
+        for level in super::levels(&deps) {
+            let results: Vec<Result<(), String>> = std::thread::scope(|s| {
+                let running: Vec<_> = level
+                    .iter()
+                    .map(|g| s.spawn(move || self.group_up(g)))
+                    .collect();
+                running
+                    .into_iter()
+                    .map(|h| {
+                        h.join().unwrap_or_else(|_| {
+                            Err("a compose group's start failed inside devstack".into())
+                        })
+                    })
+                    .collect()
+            });
+            if let Some(e) = results.into_iter().find_map(Result::err) {
+                return Err(e);
+            }
+        }
+        self.refresh_infra();
+        Ok(())
+    }
+
+    /// Start compose group `g` and wait until it is ready.
+    fn group_up(&self, g: &str) -> Result<(), String> {
+        let g = g.to_string();
+        {
             self.emit(EventBody::Infra {
                 group: g.clone(),
                 message: "starting".into(),
@@ -450,7 +483,7 @@ impl Supervisor {
                 if self.lane.is_empty() {
                     self.hold_ports(&g, &held);
                 }
-                continue;
+                return Ok(());
             }
             if let Err(e) = self.docker.up(&group, Duration::from_secs(300)) {
                 let msg = e.to_string();
@@ -470,7 +503,6 @@ impl Supervisor {
                 message: "ready".into(),
             });
         }
-        self.refresh_infra();
         Ok(())
     }
 

@@ -1034,7 +1034,7 @@ fn store_key_of(key: &str, outputs: &[String], version: Option<&str>) -> String 
 /// In a lane on a node: the member's store the node mounts read-only
 /// (`DEVSTACK_STORE`), and the outbox in the lane's slot its agent takes new
 /// entries from (`DEVSTACK_STORE_OUT`), ADR-0062 points 3, 4.
-fn node_store() -> Option<(PathBuf, PathBuf)> {
+pub(super) fn node_store() -> Option<(PathBuf, PathBuf)> {
     if !crate::remote_lane() {
         return None;
     }

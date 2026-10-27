@@ -119,9 +119,12 @@ pub struct Started {
 
 /// What a start leaves for after the lane's daemon answered (#164): its
 /// Compose groups' containers, created and checked, started and waited for
-/// in order, as a local lane's daemon does. The daemon waits for them.
+/// in `after` order (groups no `after` orders side by side), as a local
+/// lane's daemon does. The daemon waits for them.
 pub struct InfraUp {
     groups: Vec<(String, Group)>,
+    /// Each group's groups it comes after.
+    after: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// How long a group's containers may take to be healthy once started.
@@ -142,20 +145,20 @@ impl InfraUp {
     pub fn run(
         &self,
         lane: &LaneRun,
-        stop: &dyn Fn() -> bool,
-        done: &dyn Fn(&str, Duration, Option<&str>),
+        stop: &(dyn Fn() -> bool + Sync),
+        done: &(dyn Fn(&str, Duration, Option<&str>) + Sync),
     ) -> std::result::Result<(), String> {
         let dc = Docker::clean();
         let src = lane.src();
+        // The state file is written by one group at a time.
+        let writing = std::sync::Mutex::new(());
         let set = |group: &str, state: &str, error: Option<&str>| {
+            let _one = writing.lock().unwrap();
             if let Err(e) = crate::laneinfra::set_group(&lane.dir, &src, group, state, error) {
                 eprintln!("lane {}: compose group `{group}`: {e}", lane.id);
             }
         };
-        for (i, (name, g)) in self.groups.iter().enumerate() {
-            if stop() {
-                return Ok(());
-            }
+        let up = |name: &str, g: &Group| -> std::result::Result<(), String> {
             let t = std::time::Instant::now();
             set(name, crate::laneinfra::STARTING, None);
             // Nothing is built here: the lane runs by now, and its build
@@ -168,18 +171,61 @@ impl InfraUp {
                 Ok(()) => {
                     set(name, crate::laneinfra::UP, None);
                     done(name, t.elapsed(), None);
+                    Ok(())
                 }
                 Err(e) => {
                     let e = e.to_string();
                     set(name, crate::laneinfra::FAILED, Some(&e));
                     done(name, t.elapsed(), Some(&e));
-                    let why = format!("not started: compose group `{name}` failed");
-                    for (rest, _) in &self.groups[i + 1..] {
-                        set(rest, crate::laneinfra::FAILED, Some(&why));
-                    }
-                    return Err(format!("compose group `{name}`: {e}"));
+                    Err(format!("compose group `{name}`: {e}"))
                 }
             }
+        };
+        let mut left: Vec<&(String, Group)> = self.groups.iter().collect();
+        let mut finished: BTreeSet<String> = BTreeSet::new();
+        while !left.is_empty() {
+            if stop() {
+                return Ok(());
+            }
+            // Those whose groups `after` are up start now, side by side.
+            let (now, later): (Vec<_>, Vec<_>) = left.into_iter().partition(|(n, _)| {
+                self.after
+                    .get(n)
+                    .into_iter()
+                    .flatten()
+                    .all(|d| finished.contains(d) || !self.groups.iter().any(|(o, _)| o == d))
+            });
+            // A cycle (the stack file check refuses one): one at a time.
+            let (now, later) = if now.is_empty() {
+                let mut l = later;
+                let first = l.remove(0);
+                (vec![first], l)
+            } else {
+                (now, later)
+            };
+            let results: Vec<std::result::Result<(), String>> = std::thread::scope(|s| {
+                let running: Vec<_> = now.iter().map(|(n, g)| s.spawn(|| up(n, g))).collect();
+                running
+                    .into_iter()
+                    .map(|h| {
+                        h.join()
+                            .unwrap_or_else(|_| Err("a group's start failed".into()))
+                    })
+                    .collect()
+            });
+            if let Some((i, e)) = results
+                .iter()
+                .enumerate()
+                .find_map(|(i, r)| r.as_ref().err().map(|e| (i, e)))
+            {
+                let why = format!("not started: compose group `{}` failed", now[i].0);
+                for (rest, _) in &later {
+                    set(rest, crate::laneinfra::FAILED, Some(&why));
+                }
+                return Err(e.clone());
+            }
+            finished.extend(now.iter().map(|(n, _)| n.clone()));
+            left = later;
         }
         Ok(())
     }
@@ -1003,6 +1049,10 @@ impl LaneRun {
                 infra_udp_ports,
             },
             infra: InfraUp {
+                after: groups
+                    .iter()
+                    .map(|(n, _, _)| (n.clone(), stack.compose[n].after.clone()))
+                    .collect(),
                 groups: groups.into_iter().map(|(n, g, _)| (n, g)).collect(),
             },
         })

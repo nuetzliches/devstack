@@ -126,8 +126,19 @@ impl Supervisor {
             // volumes go first, once per start, so its seed jobs fill new
             // ones. On a node its agent does it (ADR-0025).
             self.fresh_data();
-            // Every lane has its own infrastructure (ADR-0030).
-            self.infra_up()?;
+            // Every lane has its own infrastructure (ADR-0030). A build needs
+            // no container: the services are built while it starts.
+            let infra = {
+                let me = self.clone();
+                std::thread::Builder::new()
+                    .name("infra-up".into())
+                    .spawn(move || me.infra_up())
+                    .map_err(|e| e.to_string())?
+            };
+            self.prebuild();
+            infra
+                .join()
+                .map_err(|_| "starting the infrastructure failed inside devstack".to_string())??;
             // Healthy inside Docker is not reachable from here: say so
             // (a service that needs the container repairs it, ensure_after).
             for (g, svc, lost) in self.check_forwards(true) {
@@ -142,26 +153,42 @@ impl Supervisor {
         }
         // A failed service holds back only what comes `after` it; everything
         // independent of it still starts (one broken build must not keep the
-        // rest of the stack down).
+        // rest of the stack down). Services whose `after` is done start at
+        // once, side by side.
         let mut failed: BTreeSet<String> = BTreeSet::new();
-        for name in self.service_order() {
-            let svc = self.service(&name)?;
-            if !svc.autostart || !self.runs_here(svc) {
-                continue;
+        for level in super::levels(&self.service_deps()) {
+            let mut go = Vec::new();
+            for name in level {
+                let svc = self.service(&name)?;
+                if !svc.autostart || !self.runs_here(svc) {
+                    continue;
+                }
+                if let Some(dep) = svc.after.iter().find(|d| failed.contains(*d)) {
+                    self.set_status(
+                        &name,
+                        Status::Failed {
+                            reason: format!("not started: `{dep}` failed"),
+                        },
+                    );
+                    failed.insert(name);
+                    continue;
+                }
+                go.push(name);
             }
-            if let Some(dep) = svc.after.iter().find(|d| failed.contains(*d)) {
-                self.set_status(
-                    &name,
-                    Status::Failed {
-                        reason: format!("not started: `{dep}` failed"),
-                    },
-                );
-                failed.insert(name);
-                continue;
-            }
-            if self.start(&name).is_err() {
-                failed.insert(name);
-            }
+            let results: Vec<(String, bool)> = std::thread::scope(|s| {
+                let running: Vec<_> = go
+                    .into_iter()
+                    .map(|name| {
+                        let me = self.clone();
+                        s.spawn(move || {
+                            let ok = me.start(&name).is_ok();
+                            (name, ok)
+                        })
+                    })
+                    .collect();
+                running.into_iter().filter_map(|h| h.join().ok()).collect()
+            });
+            failed.extend(results.into_iter().filter(|(_, ok)| !ok).map(|(n, _)| n));
         }
         if failed.is_empty() {
             Ok(())
@@ -170,6 +197,45 @@ impl Supervisor {
                 "failed: {}",
                 failed.into_iter().collect::<Vec<_>>().join(", ")
             ))
+        }
+    }
+
+    /// Build what the start will run, while the infrastructure starts: each
+    /// service with `build` that starts with the tree and has no artifact
+    /// to restore (ADR-0016). Its start then finds the artifact. One that
+    /// fails here (a build that needs a container after all) is built again
+    /// by its start, which says why.
+    fn prebuild(self: &Arc<Self>) {
+        let first: Vec<String> = self.started.lock().unwrap().iter().cloned().collect();
+        for name in self.service_order() {
+            let Ok(declared) = self.service(&name) else {
+                continue;
+            };
+            if !declared.autostart || !self.runs_here(declared) || first.contains(&name) {
+                continue;
+            }
+            let svc = self.effective(&name, declared);
+            if svc.build.is_none()
+                || !super::on_this_platform(&svc)
+                || self.restorable(&name).is_some()
+            {
+                continue;
+            }
+            let epoch = self.stop_epoch(&name);
+            let _op = self.op_locks[&name].lock().unwrap();
+            if self.slots.lock().unwrap()[&name].view.status.is_active() {
+                continue;
+            }
+            let cancel = || self.stopped_since(&name, epoch);
+            let t0 = std::time::Instant::now();
+            let r = self.build_locked(&name, &svc, &cancel, epoch);
+            crate::diag::info(
+                "prebuilt",
+                serde_json::json!({ "lane": self.lane, "service": name,
+                    "ms": t0.elapsed().as_millis() as u64, "error": r.as_ref().err() }),
+            );
+            // Built, not started: it waits for the infrastructure.
+            self.set_status(&name, Status::Stopped);
         }
     }
 

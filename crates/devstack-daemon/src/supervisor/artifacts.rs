@@ -163,6 +163,18 @@ impl Supervisor {
                     "why": "an artifact for these inputs exists (watch paths, build files above them, build command); `devstack restart --rebuild` builds anyway",
                 }),
             );
+        } else if let Some(ms) = self.copy_from_node_store(name, &id) {
+            crate::diag::info(
+                "build_reused",
+                serde_json::json!({
+                    "lane": self.lane,
+                    "service": name,
+                    "build_id": id,
+                    "source": "store",
+                    "ms": ms,
+                    "why": "a lane of this member built these inputs on this node before (its artifact store); `devstack restart --rebuild` builds anyway",
+                }),
+            );
         }
         if self.builder.artifact(name, &id).is_none() {
             building(Some(id.clone()));
@@ -216,7 +228,10 @@ impl Supervisor {
             };
             self.build_done(name, &id, t0, result);
             match outcome {
-                Outcome::Published { .. } => self.prune_artifacts(name),
+                Outcome::Published { .. } => {
+                    self.put_in_node_store(name, &id, t0.elapsed());
+                    self.prune_artifacts(name)
+                }
                 Outcome::Stale { .. } => {
                     crate::diag::warn(
                         "build_discarded",
@@ -243,6 +258,78 @@ impl Supervisor {
             }
         }
         Ok(Some((id.clone(), self.layout.artifact(name, &id))))
+    }
+
+    /// In a lane on a node: the member's artifact store there (card on the
+    /// pull request of 2026-10-28): `artifacts` in the member's store the
+    /// node mounts read-only, new entries through the lane's outbox, which
+    /// the agent takes in. Keyed by the build id and the lane image, whose
+    /// toolchain built it. `None` elsewhere, or from an agent that gives no
+    /// store or no image.
+    fn node_artifacts(&self) -> Option<(devstack_build::store::Store, String)> {
+        let (root, outbox) = super::copy::node_store()?;
+        let image = std::env::var("DEVSTACK_LANE_IMAGE")
+            .ok()
+            .filter(|i| !i.is_empty())?;
+        let image = blake3::hash(image.as_bytes()).to_hex()[..12].to_string();
+        Some((
+            devstack_build::store::Store::with_outbox(
+                root.join("artifacts"),
+                outbox.join("artifacts"),
+            ),
+            image,
+        ))
+    }
+
+    /// The artifact of `id` from the node's store, into this lane's own:
+    /// how long the copy took, `None` when the store has none.
+    fn copy_from_node_store(&self, name: &str, id: &str) -> Option<u64> {
+        let (store, image) = self.node_artifacts()?;
+        let key = format!("{id}-{image}");
+        store.get(name, &key)?;
+        let t0 = Instant::now();
+        let dir = self.layout.artifacts(name);
+        // Copied beside it, then moved: an artifact is there whole or not.
+        let tmp = dir.join(format!(".store-{}-{id}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let copied = std::fs::create_dir_all(&tmp)
+            .and_then(|()| store.copy_into(name, &key, &tmp).map(|_| ()))
+            .and_then(|()| std::fs::rename(tmp.join(id), dir.join(id)));
+        let _ = std::fs::remove_dir_all(&tmp);
+        match copied {
+            Ok(()) if self.builder.artifact(name, id).is_some() => {
+                Some(t0.elapsed().as_millis() as u64)
+            }
+            Ok(()) => None,
+            Err(e) => {
+                crate::diag::warn(
+                    "build_store_copy_failed",
+                    serde_json::json!({ "lane": self.lane, "service": name, "build_id": id, "error": e.to_string() }),
+                );
+                None
+            }
+        }
+    }
+
+    /// A build of `id` published: into the node's store for the member's
+    /// next lane with the same inputs.
+    fn put_in_node_store(&self, name: &str, id: &str, took: Duration) {
+        let Some((store, image)) = self.node_artifacts() else {
+            return;
+        };
+        let key = format!("{id}-{image}");
+        if let Err(e) = store.put(
+            name,
+            &key,
+            &self.layout.artifacts(name),
+            &[id.to_string()],
+            took,
+        ) {
+            crate::diag::warn(
+                "build_store_put_failed",
+                serde_json::json!({ "lane": self.lane, "service": name, "build_id": id, "error": e.to_string() }),
+            );
+        }
     }
 
     /// A build ended: how long it ran and how (ADR-0037 point 4).

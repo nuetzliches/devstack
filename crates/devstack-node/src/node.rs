@@ -672,7 +672,16 @@ impl Inner {
         // entries no lane used for as long as a stopped lane is kept go;
         // the rest counts with the member's kept lanes.
         let mut stored: HashMap<String, Vec<StoreEntry>> = HashMap::new();
-        for (dir, member) in self.prepare_stores() {
+        let with_artifacts: Vec<(PathBuf, String)> = self
+            .prepare_stores()
+            .into_iter()
+            .flat_map(|(dir, member)| {
+                // The artifacts of the member's builds go the same way.
+                let arts = dir.join("artifacts");
+                [(dir, member.clone()), (arts, member)]
+            })
+            .collect();
+        for (dir, member) in with_artifacts {
             let store = devstack_build::store::Store::new(&dir);
             for s in store.sweep(keep_for, false) {
                 eprintln!(
@@ -1188,6 +1197,15 @@ impl Inner {
             };
             for (service, key) in devstack_build::store::Store::new(dir).take_in(&outbox) {
                 eprintln!("store of `{}`: took in {service}/{key}", run.lane);
+            }
+            // The artifacts its builds published, for the member's next lane.
+            for (service, key) in devstack_build::store::Store::new(dir.join("artifacts"))
+                .take_in(&outbox.join("artifacts"))
+            {
+                eprintln!(
+                    "store of `{}`: took in the artifact {service}/{key}",
+                    run.lane
+                );
             }
         }
     }

@@ -700,6 +700,12 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     .expect("the lane answers");
     assert_eq!(st, 200, "{body}");
     assert!(body.contains("prepare_store_hit"), "{body}");
+    // Its build too: the member's artifact store on the node has the
+    // artifact the lane's first start built (the card of 2026-10-28).
+    assert!(
+        body.contains("build_reused") && body.contains("\"source\":\"store\""),
+        "{body}"
+    );
 
     // `down --all`: the daemon ends, and the lane on the node goes with it
     // (ADR-0025 point 7).
