@@ -1,14 +1,17 @@
 <script setup lang="ts">
 // The agent skills in the stack's repository no longer match this devstack
 // or its stack file: refreshed here. Whether the stack file itself is up to
-// date is UpgradeBanner's: a refresh does not answer that.
+// date is UpgradeBanner's: a refresh does not answer that. Skills from an
+// older devstack are UpgradeBanner's too while it shows: one line, not two.
 import { computed, watch } from 'vue';
+import { skillsState, useUpgradeNotice } from '@/lib/upgradeNotice';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import Icon from './icons/Icon.vue';
 
 const hub = useHub();
 const stack = useStack();
+const notice = useUpgradeNotice();
 
 // A new devstack (the hub restarts with it) or an edited stack file changes
 // what `devstack skills install` would write.
@@ -17,12 +20,9 @@ watch(
   () => void stack.loadSkills(),
 );
 
-/** `ahead`: written by a newer devstack; `older`: by an older one; `file`: the stack file changed. */
 const state = computed(() => {
-  const s = stack.skills;
-  if (!s || !s.outdated.length) return null;
-  if (s.ahead) return 'ahead';
-  return s.from === s.current ? 'file' : 'older';
+  const s = skillsState(stack.skills);
+  return s === 'older' && notice.shown.value ? null : s;
 });
 </script>
 

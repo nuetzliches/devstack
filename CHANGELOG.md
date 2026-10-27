@@ -26,6 +26,19 @@ and listed with their assets on the
   A service's or container's detail goes to the overview, a command's run
   to the command list, since both belong to the lane left.
 
+### Changed
+
+- **The dashboard's "stack file behind" banner is one quiet line and can be
+  hidden**: neutral instead of blue, one "Bring up to date" button whose
+  menu holds the other agents, the copy and the prompt, and it says that the
+  agent skills are older too instead of a second banner. Hidden, it stays
+  hidden for that stack until the next minor devstack is installed; a patch
+  release does not bring it back.
+- **The agent skills count as outdated only when their text changed**: a new
+  devstack whose skills read the same, apart from the version in their marker
+  line and docs links, no longer asks for a refresh (dashboard, `status`,
+  `doctor`, `skills check`).
+
 ### Fixed
 
 - **A lane's memory check looks at Docker Desktop's VM** (#309): on Windows

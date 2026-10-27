@@ -957,7 +957,8 @@ inside the repository and be named once; the list must not be empty.
 A generated skill (its marker line says so) is also looked for in the other
 agents' folders (`.github/skills`, `.cursor/skills`, `.gemini/skills`, ...):
 `devstack status`, `doctor`, `skills check` and the dashboard report one that
-no longer matches, and `skills install` refreshes it there. A skill the
+no longer matches (a newer devstack whose skills read the same, apart from
+its version, does not count), and `skills install` refreshes it there. A skill the
 project wrote itself is never touched.
 
 ## Placeholders
