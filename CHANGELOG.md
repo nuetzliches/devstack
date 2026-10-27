@@ -17,8 +17,9 @@ and listed with their assets on the
   node offers; then no lane of the repository started, and with no run the
   footprint never came down. A node now counts at most half of what it gives
   lanes in all (its `--max-cpus`, else its cores). A footprint stored before
-  is not lowered: remove the repository's entry from the coordinator's
-  `footprints.json` once, then restart the coordinator.
+  is not lowered: stop the coordinator (it writes the file back from
+  memory), remove the repository's entry from its `footprints.json` once,
+  then start it again.
 
 ## [0.24.1] - 2026-10-27
 
