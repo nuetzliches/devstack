@@ -1,6 +1,6 @@
 # ADR-0066: A measured CPU need is capped at half of what its node gives lanes
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-27)
 - **Date:** 2026-10-27
 - **Deciders:** project owner
 - **Related:** [ADR-0049](0049-a-lanes-need-is-measured-disk-included.md) (amends points 2 and 3), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md), [ADR-0031](0031-a-coordinator-places-lanes.md), [ADR-0033](0033-a-node-decides-what-runs-on-it.md)
@@ -26,10 +26,14 @@ the coordinator's `footprints.json`.
 
 ## Decision
 
-1. **A node caps the CPU it measures for a run** at half of what it gives
-   its lanes in all: its `max_cpus` when it has one, else its cores. A lane
-   that took more took what was free; half says "a lot", and leaves an idle
-   node room for it beside another such lane.
+1. **A node caps the CPU it measures for a run** at half of the most it
+   offers its lanes: the part of its cores it shares (its policy's
+   `share_percent`, else half, ADR-0031 point 3), at most its `max_cpus`.
+   That is what an idle node offers; a lane that took more took what was
+   free. Half says "a lot", and leaves an idle node room for it beside
+   another such lane. (Half of `max_cpus` or of the cores alone would not:
+   a node without `max_cpus` offers half its cores, so a lane measured at
+   half its cores would need all of an idle node's offer.)
 2. The cap applies to each round's reading before the minute's average
    (ADR-0049 point 2), so the run's peak, its report and the footprint stay
    within it. Memory, disk and GPUs are measured as before.
@@ -63,8 +67,8 @@ the coordinator's `footprints.json`.
 ## Consequences
 
 - A repository's measured CPU need on a node stays within half of what that
-  node gives lanes; on the node above, 10 CPU. Its lanes fit an idle node
-  beside a second one.
+  node offers its lanes; on the node above, sharing 80 %, 9.6 CPU. Its lanes
+  fit an idle node beside a second one.
 - A build may still take more than its need while it runs; the offer is
   measured (ADR-0031), so the next placement sees it.
 - A repository locked out by an uncapped footprint starts again once the
@@ -76,9 +80,10 @@ the coordinator's `footprints.json`.
 - The requester's estimate (ADR-0049 point 4.2) is not capped: it applies
   only before a stack's first run in the pool.
 
-## Paths
+## Enforced by
 
 - `crates/devstack-node/src/runs.rs` (`Runs::load` takes the cap, a run
-  is reported `capped`), `crates/devstack-node/src/node.rs` (the agent's
-  round passes it), `crates/devstack-node/src/footprint.rs` (`Run::capped`,
+  is reported `capped`), `crates/devstack-node/src/share.rs`
+  (`Settings::most_cpus`, the most a node offers),
+  `crates/devstack-node/src/node.rs` (the agent's round passes half of it), `crates/devstack-node/src/footprint.rs` (`Run::capped`,
   the entry's `capped`, `Footprints::get` counts CPU from capped runs).

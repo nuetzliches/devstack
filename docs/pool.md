@@ -176,9 +176,9 @@ order and the reasons beside the nodes to start on.
 **What a lane needs**
 ([ADR-0049](adr/0049-a-lanes-need-is-measured-disk-included.md)): CPU,
 memory, disk and GPUs. A node measures each lane it runs: the peak of its
-memory, of its CPU averaged over a minute (at most half of what the node
-gives lanes in all, its `--max-cpus` or its cores: a build takes what is
-free, [ADR-0066](adr/0066-a-measured-cpu-need-is-capped-at-half-of-what-its-node-gives-lanes.md)),
+memory, of its CPU averaged over a minute (at most half of the most the node
+offers its lanes, its share of its cores capped by `--max-cpus`: a build
+takes what is free, [ADR-0066](adr/0066-a-measured-cpu-need-is-capped-at-half-of-what-its-node-gives-lanes.md)),
 of its slot (mirror, caches,
 builds, volumes) and of the images its containers run, and reports it with
 its report; a run counts once its lane ran for three minutes. The
