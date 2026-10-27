@@ -30,8 +30,15 @@ pub struct Secrets {
 }
 
 enum Store {
-    Keychain { service: String },
-    File { path: PathBuf, lock: Mutex<()> },
+    Keychain {
+        service: String,
+    },
+    File {
+        path: PathBuf,
+        lock: Mutex<()>,
+    },
+    /// None: `devstack mcp` without a hub reads no secret (ADR-0069 point 6).
+    Nothing,
 }
 
 impl Secrets {
@@ -57,9 +64,16 @@ impl Secrets {
         }
     }
 
+    /// A store that holds nothing and takes nothing.
+    pub fn nothing() -> Self {
+        Self {
+            store: Store::Nothing,
+        }
+    }
+
     pub fn kind(&self) -> Kind {
         match self.store {
-            Store::Keychain { .. } => Kind::Keychain,
+            Store::Keychain { .. } | Store::Nothing => Kind::Keychain,
             Store::File { .. } => Kind::File,
         }
     }
@@ -76,6 +90,7 @@ impl Secrets {
                 let _held = lock.lock().unwrap();
                 Ok(read_file(path)?.remove(upstream))
             }
+            Store::Nothing => Ok(None),
         }
     }
 
@@ -90,6 +105,7 @@ impl Secrets {
                 all.insert(upstream.to_string(), secret.to_string());
                 write_file(path, &all)
             }
+            Store::Nothing => Err("no secret is kept here".into()),
         }
     }
 
@@ -108,6 +124,7 @@ impl Secrets {
                 }
                 Ok(())
             }
+            Store::Nothing => Ok(()),
         }
     }
 }

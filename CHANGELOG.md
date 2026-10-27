@@ -17,8 +17,14 @@ and listed with their assets on the
   itself, with OAuth (it finds the authorization server, registers where
   the server allows it, PKCE; the browser comes back to the hub) or a
   token the user gives it, and keeps the login in the keychain (a file on
-  a Linux machine without a Secret Service). Their tools in `devstack mcp`
-  follow.
+  a Linux machine without a Secret Service). `devstack mcp` offers their
+  tools in every coding agent as `<prefix>__<tool>`, beside its own, and
+  calls them through the hub, which starts when it does not run; the token
+  never leaves the hub. One that is logged out or unreachable keeps the
+  tools it listed last and answers with the dashboard's page; a change of
+  the tools is announced (`notifications/tools/list_changed`). Without a
+  hub (`DEVSTACK_NO_HUB`), upstreams without a login or with a token from
+  the environment are asked directly.
 
 ### Changed
 

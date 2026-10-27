@@ -17,6 +17,7 @@ mod mcp;
 mod poolcmd;
 mod selfcmd;
 mod tray;
+mod upstream;
 use devstack_skills as skills;
 mod topcmd;
 mod update;

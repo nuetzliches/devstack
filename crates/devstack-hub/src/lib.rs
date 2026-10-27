@@ -37,6 +37,7 @@ static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 mod branches;
 mod guests;
 mod mcp;
+mod mcpclient;
 mod notice;
 mod notify;
 mod open;
@@ -48,7 +49,7 @@ mod share;
 mod shared;
 mod summary;
 pub mod tray;
-mod upstreams;
+pub mod upstreams;
 mod ws;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -485,6 +486,8 @@ fn router(state: AppState) -> axum::Router {
         .route("/auth", get(auth))
         .route(upstreams::CALLBACK, get(upstream_callback))
         .route("/hub/upstreams", get(upstreams_list).post(upstream_put))
+        .route("/hub/upstreams/tools", get(upstream_tools))
+        .route("/hub/upstreams/call", post(upstream_call))
         .route("/hub/upstreams/{name}", delete(upstream_remove))
         .route("/hub/upstreams/{name}/login", post(upstream_login))
         .route("/hub/upstreams/{name}/token", post(upstream_token))
@@ -2455,6 +2458,43 @@ async fn upstream_put(State(s): State<AppState>, Json(u): Json<upstreams::Upstre
         diag::info("upstream_put", serde_json::json!({ "upstream": name }));
     }
     r
+}
+
+/// `GET /hub/upstreams/tools`: the upstreams' tools as `devstack mcp` offers
+/// them (`<prefix>__<tool>`, allowlists applied); for `devstack mcp`, with
+/// the user token (card point 2).
+async fn upstream_tools(State(s): State<AppState>) -> Response {
+    let ups = s.upstreams.clone();
+    match tokio::task::spawn_blocking(move || ups.tools(&upstreams::http())).await {
+        Ok(tools) => Json(serde_json::json!({ "tools": tools })).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct CallBody {
+    name: String,
+    #[serde(default)]
+    arguments: serde_json::Value,
+}
+
+/// `POST /hub/upstreams/call {name, arguments}`: the upstream's answer to a
+/// tool call, a `CallToolResult`. The credential stays in the hub.
+async fn upstream_call(State(s): State<AppState>, Json(b): Json<CallBody>) -> Response {
+    let ups = s.upstreams.clone();
+    let name = b.name.clone();
+    match tokio::task::spawn_blocking(move || ups.call(&upstreams::calls(), &b.name, b.arguments))
+        .await
+    {
+        Ok(r) => {
+            diag::info(
+                "upstream_call",
+                serde_json::json!({ "tool": name, "error": r["isError"] == true }),
+            );
+            Json(r).into_response()
+        }
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 /// `DELETE /hub/upstreams/{name}`: it and its credential go.

@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use sha2::Digest as _;
 
 use crate::secrets::Secrets;
@@ -145,6 +146,9 @@ enum Secret {
     },
 }
 
+/// When an upstream was asked for its tools, and what it answered.
+type Listed = (Instant, Result<Vec<Value>, String>);
+
 /// A login started and not come back yet.
 struct Flow {
     upstream: String,
@@ -164,6 +168,13 @@ pub struct Upstreams {
     flows: Mutex<HashMap<String, Flow>>,
     /// One configuration change at a time.
     write: Mutex<()>,
+    /// The MCP session with each upstream.
+    sessions: Mutex<HashMap<String, crate::mcpclient::Session>>,
+    /// The tools each upstream listed last, kept across restarts: a
+    /// logged-out or unreachable upstream keeps them listed (card point 5).
+    seen: PathBuf,
+    /// When each upstream was asked last, and what it answered then.
+    listed: Mutex<HashMap<String, Listed>>,
 }
 
 /// An upstream as the dashboard lists it: never a secret.
@@ -179,11 +190,27 @@ pub struct View {
 
 impl Upstreams {
     pub fn open(dir: PathBuf) -> Self {
+        Self::with(dir.clone(), Secrets::open(dir))
+    }
+
+    /// Its configuration without any secret: what `devstack mcp` uses without
+    /// a hub, where only upstreams without a login or with a token from the
+    /// environment work (ADR-0069 point 6). It keeps no tools of its own.
+    pub fn without_secrets(dir: PathBuf) -> Self {
+        let mut u = Self::with(dir, Secrets::nothing());
+        u.seen = PathBuf::new();
+        u
+    }
+
+    fn with(dir: PathBuf, secrets: Secrets) -> Self {
         Self {
             file: dir.join("upstreams.toml"),
-            secrets: Secrets::open(dir),
+            seen: dir.join("upstream-tools.json"),
+            secrets,
             flows: Mutex::new(HashMap::new()),
             write: Mutex::new(()),
+            sessions: Mutex::new(HashMap::new()),
+            listed: Mutex::new(HashMap::new()),
         }
     }
 
@@ -406,9 +433,7 @@ impl Upstreams {
     /// The bearer token for a call to `name` now: a static one, or the
     /// login's access token, refreshed when it is about to expire (or when
     /// `stale`, after the upstream refused it). `None`: it needs none, or it
-    /// is logged out. Used by the proxy for `devstack mcp`, which follows
-    /// (ADR-0069); tested here with the login it belongs to.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// is logged out.
     pub fn bearer(
         &self,
         http: &ureq::Agent,
@@ -464,6 +489,215 @@ impl Upstreams {
                     }
                 }
             }
+        }
+    }
+}
+
+/// How long a tool list is taken as current.
+const LISTED_FOR: Duration = Duration::from_secs(60);
+
+/// The page of the dashboard where upstreams are logged in.
+fn dashboard() -> String {
+    format!("http://127.0.0.1:{}/#/upstreams", crate::port())
+}
+
+impl Upstreams {
+    /// `method` on upstream `u` with its credential; a refused one is
+    /// refreshed once (`stale`) before it counts as logged out.
+    fn ask(
+        &self,
+        http: &ureq::Agent,
+        u: &Upstream,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, String> {
+        for stale in [false, true] {
+            let bearer = self.bearer(http, &u.name, stale)?;
+            if bearer.is_none() && !matches!(u.auth, Auth::None) {
+                return Err(format!(
+                    "devstack is not logged in to the MCP upstream `{}`: log in at {}",
+                    u.name,
+                    dashboard()
+                ));
+            }
+            let mut session = self
+                .sessions
+                .lock()
+                .unwrap()
+                .remove(&u.name)
+                .unwrap_or_default();
+            let r = crate::mcpclient::request(
+                http,
+                &u.url,
+                bearer.as_deref(),
+                &mut session,
+                method,
+                params.clone(),
+            );
+            self.sessions
+                .lock()
+                .unwrap()
+                .insert(u.name.clone(), session);
+            match r {
+                Ok(v) => return Ok(v),
+                Err(crate::mcpclient::Error::Unauthorized) if !stale => continue,
+                Err(crate::mcpclient::Error::Unauthorized) => {
+                    return Err(format!(
+                        "the MCP upstream `{}` refused devstack's login: log in again at {}",
+                        u.name,
+                        dashboard()
+                    ));
+                }
+                Err(e) => return Err(format!("the MCP upstream `{}`: {e}", u.name)),
+            }
+        }
+        unreachable!("the loop returns")
+    }
+
+    /// The tools `u` offers now, all pages, before its allowlist.
+    fn list_tools(&self, http: &ureq::Agent, u: &Upstream) -> Result<Vec<Value>, String> {
+        let mut tools = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..20 {
+            let params = cursor
+                .as_ref()
+                .map_or_else(|| json!({}), |c| json!({ "cursor": c }));
+            let r = self.ask(http, u, "tools/list", params)?;
+            tools.extend(r["tools"].as_array().cloned().unwrap_or_default());
+            cursor = r["nextCursor"].as_str().map(str::to_string);
+            if cursor.is_none() {
+                break;
+            }
+        }
+        Ok(tools)
+    }
+
+    fn seen_tools(&self) -> HashMap<String, Vec<Value>> {
+        std::fs::read(&self.seen)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    fn keep_seen(&self, name: &str, tools: &[Value]) {
+        if self.seen.as_os_str().is_empty() {
+            return;
+        }
+        let mut all = self.seen_tools();
+        if all.get(name).is_some_and(|t| t == tools) {
+            return;
+        }
+        all.insert(name.to_string(), tools.to_vec());
+        if let Ok(text) = serde_json::to_vec(&all) {
+            let _ = std::fs::write(&self.seen, text);
+        }
+    }
+
+    /// What `u` lists now, at most a minute old; `Err` with why it could
+    /// not be asked.
+    fn current(&self, http: &ureq::Agent, u: &Upstream) -> Result<Vec<Value>, String> {
+        if let Some((at, r)) = self.listed.lock().unwrap().get(&u.name)
+            && at.elapsed() < LISTED_FOR
+        {
+            return r.clone();
+        }
+        let r = self.list_tools(http, u);
+        if let Ok(t) = &r {
+            self.keep_seen(&u.name, t);
+        }
+        self.listed
+            .lock()
+            .unwrap()
+            .insert(u.name.clone(), (Instant::now(), r.clone()));
+        r
+    }
+
+    /// The tools of every upstream, as an agent sees them through
+    /// `devstack mcp`: `<prefix>__<tool>`, its allowlist applied. One that
+    /// cannot be asked keeps the tools it listed last, said in their
+    /// description; one never listed shows a single `<prefix>__login` that
+    /// says how to get its tools (card point 5).
+    pub fn tools(&self, http: &ureq::Agent) -> Vec<Value> {
+        let Ok(all) = self.list() else {
+            return Vec::new();
+        };
+        let seen = self.seen_tools();
+        let mut out = Vec::new();
+        for u in &all {
+            let prefix = u.prefix();
+            let (tools, why) = match self.current(http, u) {
+                Ok(t) => (t, None),
+                Err(e) => (seen.get(&u.name).cloned().unwrap_or_default(), Some(e)),
+            };
+            if tools.is_empty() {
+                if let Some(why) = why {
+                    out.push(json!({
+                        "name": format!("{prefix}__login"),
+                        "description": format!("The tools of the MCP upstream `{}` are not here yet: {why}", u.name),
+                        "inputSchema": { "type": "object", "properties": {} },
+                    }));
+                }
+                continue;
+            }
+            for t in tools {
+                let Some(name) = t["name"].as_str() else {
+                    continue;
+                };
+                if !u.allow.is_empty() && !u.allow.iter().any(|a| a == name) {
+                    continue;
+                }
+                let mut t = t.clone();
+                t["name"] = json!(format!("{prefix}__{name}"));
+                let what = t["description"].as_str().unwrap_or("").to_string();
+                t["description"] = json!(match &why {
+                    None => format!("[{} via devstack] {what}", u.name),
+                    Some(w) => format!("[{} via devstack, not available now: {w}] {what}", u.name),
+                });
+                out.push(t);
+            }
+        }
+        out
+    }
+
+    /// Call `<prefix>__<tool>` with `arguments`: the upstream's
+    /// `CallToolResult`, or one with `isError` that says why not.
+    pub fn call(&self, http: &ureq::Agent, name: &str, arguments: Value) -> Value {
+        let failed = |text: String| json!({ "content": [{ "type": "text", "text": text }], "isError": true });
+        let Ok(all) = self.list() else {
+            return failed("the hub cannot read its upstreams".into());
+        };
+        let Some((u, tool)) = all.iter().find_map(|u| {
+            name.strip_prefix(&format!("{}__", u.prefix()))
+                .map(|t| (u, t))
+        }) else {
+            return failed(format!("no MCP upstream has the tool `{name}`"));
+        };
+        if tool == "login"
+            && !self
+                .seen_tools()
+                .get(&u.name)
+                .is_some_and(|t| t.iter().any(|x| x["name"] == "login"))
+        {
+            return failed(format!(
+                "log in to the MCP upstream `{}` at {}",
+                u.name,
+                dashboard()
+            ));
+        }
+        if !u.allow.is_empty() && !u.allow.iter().any(|a| a == tool) {
+            return failed(format!(
+                "`{tool}` of `{}` is not among the tools allowed in the dashboard",
+                u.name
+            ));
+        }
+        match self.ask(
+            http,
+            u,
+            "tools/call",
+            json!({ "name": tool, "arguments": arguments }),
+        ) {
+            Ok(r) => r,
+            Err(e) => failed(e),
         }
     }
 }
@@ -653,6 +887,21 @@ fn token_request(
         return Err(format!("{endpoint} refused: {why}"));
     }
     serde_json::from_str(&text).map_err(|e| format!("{endpoint}: {e}"))
+}
+
+/// The agent a tool call goes out with: a tool may work for minutes.
+pub fn calls() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(600)))
+        .http_status_as_error(false)
+        .build()
+        .new_agent()
+}
+
+/// The hub's state directory, where `upstreams.toml` is: for `devstack mcp`
+/// without a hub.
+pub fn dir() -> PathBuf {
+    crate::state_dir()
 }
 
 /// The agent the hub talks to upstreams and their servers with: errors as
@@ -875,6 +1124,169 @@ mod tests {
         assert!(ups.views().unwrap()[0].logged_in);
         ups.logout(&name).unwrap();
         assert_eq!(ups.bearer(&http, &name, false).unwrap(), None);
+        let _ = ups.remove(&name);
+    }
+
+    /// An MCP server over Streamable HTTP that wants `Bearer good`: a
+    /// session, `search` and `drop`, `tools/call` answered as an event
+    /// stream. What each request named as its method.
+    fn fake_mcp() -> (String, Seen) {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
+        let seen: Seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let s = seen.clone();
+        std::thread::spawn(move || {
+            for mut c in l.incoming().flatten() {
+                let mut r = BufReader::new(c.try_clone().unwrap());
+                let mut line = String::new();
+                r.read_line(&mut line).unwrap();
+                let (mut len, mut auth, mut session) = (0, String::new(), String::new());
+                loop {
+                    let mut h = String::new();
+                    r.read_line(&mut h).unwrap();
+                    if h.trim().is_empty() {
+                        break;
+                    }
+                    let lower = h.to_ascii_lowercase();
+                    if let Some(v) = lower.strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap();
+                    } else if lower.starts_with("authorization:") {
+                        auth = h[14..].trim().to_string();
+                    } else if lower.starts_with("mcp-session-id:") {
+                        session = h[15..].trim().to_string();
+                    }
+                }
+                let mut body = vec![0; len];
+                r.read_exact(&mut body).unwrap();
+                let m: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                let method = m["method"].as_str().unwrap_or("").to_string();
+                s.lock().unwrap().push((method.clone(), session.clone()));
+                let reply = |c: &mut std::net::TcpStream,
+                             status: u16,
+                             ctype: &str,
+                             extra: &str,
+                             text: &str| {
+                    let _ = write!(
+                        c,
+                        "HTTP/1.1 {status} X\r\nContent-Type: {ctype}\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                        text.len()
+                    );
+                };
+                if auth != "Bearer good" {
+                    reply(&mut c, 401, "application/json", "", "{}");
+                    continue;
+                }
+                let id = m["id"].clone();
+                match method.as_str() {
+                    "initialize" => {
+                        let text = serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": { "protocolVersion": "2025-06-18", "capabilities": { "tools": {} } } }).to_string();
+                        reply(
+                            &mut c,
+                            200,
+                            "application/json",
+                            "Mcp-Session-Id: s-1\r\n",
+                            &text,
+                        );
+                    }
+                    "notifications/initialized" => reply(&mut c, 202, "application/json", "", ""),
+                    "tools/list" => {
+                        let text = serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": { "tools": [
+                            { "name": "search", "description": "Find issues", "inputSchema": { "type": "object" } },
+                            { "name": "drop", "description": "Delete everything", "inputSchema": { "type": "object" } },
+                        ] } }).to_string();
+                        reply(&mut c, 200, "application/json", "", &text);
+                    }
+                    "tools/call" => {
+                        let q = m["params"]["arguments"]["q"].as_str().unwrap_or("");
+                        let answer = serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": format!("found {q}") }] } });
+                        let text = format!(
+                            "event: message\ndata: {{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}}\n\nevent: message\ndata: {answer}\n\n"
+                        );
+                        reply(&mut c, 200, "text/event-stream", "", &text);
+                    }
+                    _ => reply(&mut c, 400, "application/json", "", "{}"),
+                }
+            }
+        });
+        (base, seen)
+    }
+
+    #[test]
+    fn an_upstreams_tools_are_offered_with_its_prefix_and_called_through_the_hub() {
+        let (base, seen) = fake_mcp();
+        let d = tempfile::tempdir().unwrap();
+        let ups = Upstreams::open(d.path().to_path_buf());
+        let name = format!("u{}", std::process::id());
+        ups.put(Upstream {
+            name: name.clone(),
+            url: format!("{base}/mcp"),
+            prefix: Some("tr".into()),
+            allow: vec!["search".into()],
+            auth: Auth::Token { env: None },
+        })
+        .unwrap();
+        let http = http();
+        // Logged out and never listed: one tool that says how to get them.
+        let tools = ups.tools(&http);
+        assert_eq!(tools.len(), 1, "{tools:?}");
+        assert_eq!(tools[0]["name"], "tr__login");
+        assert!(ups.call(&http, "tr__login", json!({}))["isError"] == true);
+
+        ups.set_token(&name, "good").unwrap();
+        ups.listed.lock().unwrap().clear();
+        let tools = ups.tools(&http);
+        let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert_eq!(names, ["tr__search"], "the allowlist keeps `drop` out");
+        assert!(
+            tools[0]["description"]
+                .as_str()
+                .unwrap()
+                .contains("via devstack")
+        );
+
+        let r = ups.call(&http, "tr__search", json!({ "q": "login bug" }));
+        assert_eq!(r["content"][0]["text"], "found login bug", "{r}");
+        assert!(
+            ups.call(&http, "tr__drop", json!({}))["isError"] == true,
+            "not allowed"
+        );
+        assert!(ups.call(&http, "other__search", json!({}))["isError"] == true);
+        // One session for all of it.
+        let sent = seen.lock().unwrap().clone();
+        assert_eq!(
+            sent.iter().filter(|(m, _)| m == "initialize").count(),
+            1,
+            "{sent:?}"
+        );
+        assert!(
+            sent.iter()
+                .filter(|(m, _)| m == "tools/call")
+                .all(|(_, s)| s == "s-1"),
+            "{sent:?}"
+        );
+
+        // A refused token: its tools stay listed, a call says to log in again.
+        ups.set_token(&name, "revoked").unwrap();
+        ups.sessions.lock().unwrap().clear();
+        ups.listed.lock().unwrap().clear();
+        let tools = ups.tools(&http);
+        assert_eq!(tools.len(), 1);
+        assert!(
+            tools[0]["description"]
+                .as_str()
+                .unwrap()
+                .contains("not available now"),
+            "{tools:?}"
+        );
+        let r = ups.call(&http, "tr__search", json!({ "q": "x" }));
+        assert!(
+            r["isError"] == true
+                && r["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("log in again"),
+            "{r}"
+        );
         let _ = ups.remove(&name);
     }
 }
