@@ -8,8 +8,13 @@
 //!   `.../role` `{role}`, `POST /hub/pool/nodes/{id}/pause|resume`,
 //!   `POST /hub/pool/leases/{id}/end`, `POST /hub/pool/members/{id}/tags`
 //!   `{tags}`, `POST /hub/pool/members/{id}/node` `{node}`,
-//!   `POST /hub/pool/nodes/{id}/policy` (a policy or `null`): an admin's
+//!   `POST /hub/pool/nodes/{id}/policy` (a policy or `null`),
+//!   `POST /hub/pool/members/{id}/provision` `{on}`,
+//!   `POST /hub/pool/nodes/{id}/confirm|give-back` (ADR-0051): an admin's
 //!   changes, passed on as they are
+//! - `GET /hub/pool/provisioning`: the provisioner, its settings and the
+//!   machines (admins); `PUT /hub/pool/provisioned` `{on}`: whether this
+//!   member's lanes may run on provisioned nodes (ADR-0051)
 //! - `POST /hub/pool/join` `{coordinator, fingerprint, name?}`: ask to join a
 //!   pool (`devstack join` without waiting)
 //! - `GET /hub/pools`: the pools this machine belongs to (ADR-0034)
@@ -140,6 +145,7 @@ pub async fn overview(Query(q): Query<PoolQuery>) -> Response {
         let mine = l.me()?;
         let mut v = json!({ "joined": true, "me": me, "nodes": l.nodes()?, "leases": l.leases()? });
         v["me"]["role"] = json!(mine.role);
+        v["me"]["no_provisioned"] = json!(mine.no_provisioned);
         // What another machine runs to join this pool; the fingerprint is
         // public, the approval is what admits it.
         let as_pool = if pool == devstack_node::member::DEFAULT_POOL {
@@ -155,6 +161,10 @@ pub async fn overview(Query(q): Query<PoolQuery>) -> Response {
         if mine.role == Role::Admin {
             v["members"] = json!(l.admin_members()?);
             v["audit"] = json!(l.admin_audit()?);
+            // An older coordinator has no provisioning: the page goes without.
+            if let Ok(p) = l.admin_provisioning() {
+                v["provisioning"] = json!(p);
+            }
         } else {
             v["members"] = json!(l.members()?);
         }
@@ -226,6 +236,58 @@ pub async fn node(
 ) -> Response {
     match blocking(&q, move |l| l.admin_node(&id, b.node)).await {
         Ok(m) => Json(m).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+/// `POST /hub/pool/members/{id}/provision` `{on}`: let a member's lanes
+/// cause provisioning, or take that back (ADR-0051 point 3).
+pub async fn provision(
+    Path(id): Path<String>,
+    Query(q): Query<PoolQuery>,
+    Json(b): Json<devstack_node::coordinator::OnRequest>,
+) -> Response {
+    match blocking(&q, move |l| l.admin_provision(&id, b.on)).await {
+        Ok(m) => Json(m).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+/// `POST /hub/pool/nodes/{id}/confirm`: admit a provisioned node's leases
+/// (ADR-0051 point 6).
+pub async fn confirm(Path(id): Path<String>, Query(q): Query<PoolQuery>) -> Response {
+    match blocking(&q, move |l| l.admin_confirm(&id)).await {
+        Ok(m) => Json(m).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+/// `POST /hub/pool/nodes/{id}/give-back`: give a provisioned node back by
+/// hand (ADR-0051 point 9).
+pub async fn give_back(Path(id): Path<String>, Query(q): Query<PoolQuery>) -> Response {
+    match blocking(&q, move |l| l.admin_give_back(&id)).await {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+/// `GET /hub/pool/provisioning`: the provisioner, the pool's settings for
+/// it and the machines it made (admins).
+pub async fn provisioning(Query(q): Query<PoolQuery>) -> Response {
+    match blocking(&q, |l| l.admin_provisioning()).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+/// `PUT /hub/pool/provisioned` `{on}`: whether this member's lanes may run
+/// on provisioned nodes (ADR-0051 point 10).
+pub async fn set_provisioned(
+    Query(q): Query<PoolQuery>,
+    Json(b): Json<devstack_node::coordinator::OnRequest>,
+) -> Response {
+    match blocking(&q, move |l| l.set_provisioned(b.on)).await {
+        Ok(()) => Json(json!({ "on": b.on })).into_response(),
         Err(e) => error(&e),
     }
 }

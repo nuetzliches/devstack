@@ -86,7 +86,7 @@ pub fn init(dir: Option<PathBuf>, addresses: &[String]) -> Result<()> {
     Ok(())
 }
 
-pub fn serve(dir: Option<PathBuf>, listen: &str) -> Result<()> {
+pub fn serve(dir: Option<PathBuf>, listen: &str, provisioner: Option<&str>) -> Result<()> {
     let dir = coordinator_dir(dir);
     need_coordinator(&dir)?;
     let addr: std::net::SocketAddr = listen.parse().map_err(|e| {
@@ -94,8 +94,305 @@ pub fn serve(dir: Option<PathBuf>, listen: &str) -> Result<()> {
     })?;
     println!("coordinator listening on {addr} ({})", dir.display());
     println!("members join with: {}", join_hint(&dir, Some(addr.port()))?);
-    coordinator::serve_blocking(&dir, addr)?;
+    let provisioner = provisioner.map(|url| devstack_node::provision::Provisioner::new(&dir, url));
+    if let Some(p) = &provisioner {
+        println!(
+            "machines for lanes no node can take come from the provisioner at {}{} (ADR-0051); whoever runs it can read the lanes on them",
+            p.url,
+            if p.token.is_some() {
+                ""
+            } else {
+                ", without a token (DEVSTACK_PROVISIONER_TOKEN or provisioner.token)"
+            }
+        );
+    }
+    coordinator::serve_blocking(
+        &dir,
+        addr,
+        coordinator::Options {
+            provisioner,
+            ..coordinator::Options::default()
+        },
+    )?;
     Ok(())
+}
+
+fn on_off(state: &str) -> Result<bool> {
+    match state {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        o => bail!("`{o}`: on or off"),
+    }
+}
+
+/// `devstack node members provision <id> on|off`: whether a member's lane
+/// that no node can take makes a machine (ADR-0051 point 3).
+pub fn members_provision(dir: Option<PathBuf>, member: &str, state: &str) -> Result<()> {
+    let dir = coordinator_dir(dir);
+    need_coordinator(&dir)?;
+    let m = Store::new(&dir).set_provision(member, on_off(state)?, SHELL)?;
+    if m.provision {
+        println!(
+            "{} ({}) may cause provisioning: a lane of it no node can take makes a machine, which costs money",
+            m.id, m.name
+        );
+    } else {
+        println!("{} ({}) causes no provisioning", m.id, m.name);
+    }
+    Ok(())
+}
+
+/// `devstack node confirm <node>`: an admin confirms a provisioned node
+/// (ADR-0051 point 6).
+pub fn confirm(dir: Option<PathBuf>, node: &str) -> Result<()> {
+    let dir = coordinator_dir(dir);
+    need_coordinator(&dir)?;
+    let m = Store::new(&dir).confirm(node, SHELL)?;
+    let p = m.provisioned.as_ref().expect("a provisioned node");
+    println!(
+        "confirmed {} ({}): machine {} at {}, key {}; it takes lanes now",
+        m.id,
+        m.name,
+        p.machine,
+        p.address,
+        m.cert_fp.as_deref().unwrap_or("-")
+    );
+    Ok(())
+}
+
+/// `devstack node give-back <node>`: its membership is revoked; the
+/// coordinator has the provisioner delete its machine, its lanes with it.
+pub fn give_back(dir: Option<PathBuf>, node: &str) -> Result<()> {
+    let dir = coordinator_dir(dir);
+    need_coordinator(&dir)?;
+    let store = Store::new(&dir);
+    let ms = store.list()?;
+    let Some(m) = ms
+        .iter()
+        .find(|m| (m.id.starts_with(node) || m.name == node) && m.provisioned.is_some())
+    else {
+        bail!("no provisioned node `{node}` (`devstack node provisioning` lists them)");
+    };
+    store.remove(&m.id, SHELL)?;
+    println!(
+        "removed {} ({}); the running coordinator has its machine deleted",
+        m.id, m.name
+    );
+    Ok(())
+}
+
+/// `devstack node provisioning`: the pool's settings for provisioning
+/// (ADR-0051), changed by the options given, and the machines.
+pub fn provisioning(
+    dir: Option<PathBuf>,
+    per: Option<&str>,
+    confirm: Option<&str>,
+    idle_minutes: Option<u64>,
+    max_nodes: Option<u32>,
+    (max_cpus, max_memory_gib): (Option<f64>, Option<f64>),
+) -> Result<()> {
+    use devstack_node::provision::{self, Confirm, Per, Settings};
+    let dir = coordinator_dir(dir);
+    need_coordinator(&dir)?;
+    let mut s = Settings::load(&dir);
+    let before = s.clone();
+    if let Some(p) = per {
+        s.per = match p {
+            "pool" => Per::Pool,
+            "repo" => Per::Repo,
+            o => bail!("--per {o}: `pool` or `repo`"),
+        };
+    }
+    if let Some(c) = confirm {
+        s.confirm = match c {
+            "none" => Confirm::None,
+            "admin" => Confirm::Admin,
+            o => bail!("--confirm {o}: `none` or `admin`"),
+        };
+    }
+    if let Some(m) = idle_minutes {
+        s.idle_minutes = m;
+    }
+    if let Some(n) = max_nodes {
+        s.max_nodes = n;
+    }
+    if let Some(c) = max_cpus {
+        s.max_cpus = (c > 0.0).then_some(c);
+    }
+    if let Some(m) = max_memory_gib {
+        s.max_memory = (m > 0.0).then(|| (m * f64::from(1u32 << 30)) as u64);
+    }
+    if s != before {
+        s.save(&dir)?;
+        if let Some(admin) = Store::new(&dir)
+            .list()?
+            .into_iter()
+            .find(|m| m.state == State::Approved && m.role == Role::Admin)
+        {
+            Store::new(&dir).record(
+                SHELL,
+                "provisioning",
+                &admin.id,
+                Some(serde_json::to_string(&s)?),
+            )?;
+        }
+    }
+    println!(
+        "provisioned nodes run {}; {}; at most {} at once{}{}; idle ones are given back after {} min",
+        match s.per {
+            Per::Pool => "every member's lanes",
+            Per::Repo => "the lanes of the repository they were made for",
+        },
+        match s.confirm {
+            Confirm::None => "they take lanes once enrolled",
+            Confirm::Admin => "an admin confirms each (`devstack node confirm <id>`)",
+        },
+        s.max_nodes,
+        s.max_cpus
+            .map_or(String::new(), |c| format!(", {c} CPU together")),
+        s.max_memory.map_or(String::new(), |m| format!(
+            ", {} together",
+            coordinator::gib(m)
+        )),
+        s.idle_minutes
+    );
+    let machines = provision::load_machines(&dir);
+    if machines.is_empty() {
+        println!("no machines");
+        return Ok(());
+    }
+    println!(
+        "\n{:<10}{:<16}{:<16}{:<14}{:<18}NOTE",
+        "REQUEST", "MACHINE", "ADDRESS", "STATE", "NODE"
+    );
+    for m in &machines {
+        println!(
+            "{:<10}{:<16}{:<16}{:<14}{:<18}{}",
+            m.request,
+            if m.machine.is_empty() {
+                "-"
+            } else {
+                &m.machine
+            },
+            if m.address.is_empty() {
+                "-"
+            } else {
+                &m.address
+            },
+            format!("{:?}", m.state).to_lowercase(),
+            m.member.as_deref().unwrap_or("-"),
+            m.alarm
+                .as_deref()
+                .map(|a| format!("ALARM: {a}"))
+                .or_else(|| m.error.as_ref().map(|e| format!("delete failed: {e}")))
+                .unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
+/// `devstack node mock-provisioner`: a provisioner without a cloud, to try
+/// provisioning (ADR-0051) on one machine. Each machine it "makes" is the
+/// command `exec` (run with `DEVSTACK_ENROL_COMMAND`,
+/// `DEVSTACK_ENROL_COORDINATOR`, `DEVSTACK_ENROL_FINGERPRINT`,
+/// `DEVSTACK_ENROL_TOKEN`, `DEVSTACK_MACHINE`), or without it the line to
+/// enrol one by hand, printed.
+#[allow(clippy::too_many_arguments)]
+pub fn mock_provisioner(
+    listen: &str,
+    address: &str,
+    (cpus, memory_gib): (f64, f64),
+    estimate: u64,
+    refuse: Option<String>,
+    fail_deletes: u32,
+    token: Option<String>,
+    exec: Option<String>,
+) -> Result<()> {
+    use devstack_node::provision::mock::{Behaviour, Mock};
+    let listener =
+        std::net::TcpListener::bind(listen).map_err(|e| anyhow!("--listen {listen}: {e}"))?;
+    let hook = move |r: devstack_node::provision::MachineRequest, machine: String| {
+        println!(
+            "machine {machine} for request {} ({:.1} CPU, {}{}): enrol it with\n  {}",
+            r.request,
+            r.need.cpus,
+            coordinator::gib(r.need.memory),
+            r.repo
+                .as_ref()
+                .map_or(String::new(), |x| format!(", repository {x}")),
+            r.enrol.command
+        );
+        let Some(cmd) = &exec else { return };
+        let mut c = if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/C", cmd]);
+            c
+        } else {
+            let mut c = std::process::Command::new("sh");
+            c.args(["-c", cmd]);
+            c
+        };
+        let started = c
+            .env("DEVSTACK_ENROL_COMMAND", &r.enrol.command)
+            .env("DEVSTACK_ENROL_COORDINATOR", &r.enrol.coordinator)
+            .env("DEVSTACK_ENROL_FINGERPRINT", &r.enrol.fingerprint)
+            .env("DEVSTACK_ENROL_TOKEN", &r.enrol.token)
+            .env("DEVSTACK_MACHINE", &machine)
+            .spawn();
+        if let Err(e) = started {
+            eprintln!("--exec {cmd}: {e}");
+        }
+    };
+    let mock = Mock::serve(
+        listener,
+        Behaviour {
+            size: devstack_node::share::Amount {
+                cpus,
+                memory: (memory_gib * f64::from(1u32 << 30)) as u64,
+            },
+            address: address.into(),
+            estimate,
+            refuse,
+            fail_deletes,
+            token,
+            hook_after: Duration::from_millis(500),
+        },
+        Some(Box::new(hook)),
+    );
+    println!(
+        "mock provisioner at {}: on the coordinator, `devstack node serve --listen <address:port> --provisioner {}`",
+        mock.url, mock.url
+    );
+    let mut told = (0, 0, 0);
+    loop {
+        std::thread::sleep(Duration::from_secs(1));
+        let seen = mock.seen();
+        for e in &seen.events[told.0..] {
+            println!(
+                "event {} of {}{}",
+                e.kind,
+                e.machine,
+                e.lease.as_ref().map_or(String::new(), |l| format!(
+                    ": {}/{} of {}",
+                    l.repo, l.lane, l.member
+                ))
+            );
+        }
+        for d in &seen.deleted[told.1..] {
+            println!("deleted machine {d}");
+        }
+        if seen.failed_deletes as usize > told.2 {
+            println!(
+                "failed a deletion on purpose ({} so far)",
+                seen.failed_deletes
+            );
+        }
+        told = (
+            seen.events.len(),
+            seen.deleted.len(),
+            seen.failed_deletes as usize,
+        );
+    }
 }
 
 pub fn print_fingerprint(dir: Option<PathBuf>) -> Result<()> {
@@ -328,6 +625,7 @@ pub fn join(
     fingerprint: &str,
     name: Option<&str>,
     wait: bool,
+    enrol: Option<&str>,
 ) -> Result<()> {
     let local = Local::new(&member_dir(pool)?);
     // Asking again keeps the name it asked with.
@@ -335,6 +633,28 @@ pub fn join(
         Some(n) => n.to_string(),
         None => local.membership()?.map_or_else(hostname, |m| m.name),
     };
+    // A machine a provisioner made (ADR-0051 point 6): once, and again for
+    // a minute while the coordinator has not heard of it from the
+    // provisioner.
+    if let Some(token) = enrol {
+        let t = std::time::Instant::now();
+        let m = loop {
+            match local.enrol(coordinator, fingerprint, &name, token) {
+                Err(devstack_node::member::MemberError::Status(409, why))
+                    if t.elapsed() < Duration::from_secs(60) =>
+                {
+                    eprintln!("{why}");
+                    std::thread::sleep(Duration::from_secs(2));
+                }
+                r => break r?,
+            }
+        };
+        println!(
+            "enrolled in the pool `{pool}` at {} as {} ({name}), a provisioned node; `devstack node agent --dedicated` runs its lanes",
+            m.coordinator, m.id
+        );
+        return Ok(());
+    }
     let mut m = local.join(coordinator, fingerprint, &name)?;
     if m.state == State::Pending {
         println!(
@@ -443,6 +763,31 @@ pub fn telemetry(pool: &str, state: Option<&str>) -> Result<()> {
         for w in devstack_node::telemetry::collects() {
             println!("  - {w}");
         }
+    }
+    Ok(())
+}
+
+/// `devstack pool provisioned [on|off]`: whether this machine's lanes may
+/// run on nodes a provisioner made (ADR-0051 point 10).
+pub fn provisioned(pool: &str, state: Option<&str>) -> Result<()> {
+    let local = Local::new(&member_dir(pool)?);
+    if let Some(s) = state {
+        local.set_provisioned(on_off(s)?)?;
+    }
+    let me = local.me()?;
+    if me.no_provisioned {
+        println!(
+            "pool `{pool}`: this machine's lanes stay off provisioned nodes (`devstack pool provisioned on` lets them go there)"
+        );
+    } else {
+        println!(
+            "pool `{pool}`: this machine's lanes may run on provisioned nodes; whoever runs the pool's provisioner can read them there (`devstack pool provisioned off` keeps them off)"
+        );
+    }
+    if me.provision {
+        println!(
+            "an admin allowed it to cause provisioning: a lane no node can take makes a machine"
+        );
     }
     Ok(())
 }

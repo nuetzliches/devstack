@@ -475,6 +475,12 @@ export type PoolMember = {
   policy?: NodePolicy;
   /** An admin granted it to run the pool's lanes (a node); absent: no. */
   node?: boolean;
+  /** An admin let its lanes cause provisioning (ADR-0051 point 3); absent: no. */
+  provision?: boolean;
+  /** It keeps its lanes off provisioned nodes (ADR-0051 point 10); absent: it does not. */
+  no_provisioned?: boolean;
+  /** A node a provisioner made (ADR-0051). */
+  provisioned?: { request: string; machine: string; address: string; confirmed?: boolean };
 };
 
 export type NodePolicy = {
@@ -520,6 +526,57 @@ export type PoolNode = {
   paused?: boolean;
   /** `server` (dedicated node), `node` (runs lanes, may reclaim), `machine` (asks for lanes), `unknown` (never reported). */
   kind?: 'server' | 'node' | 'machine' | 'unknown';
+  /** A node a provisioner made (ADR-0051 point 9); absent: an enrolled machine of someone's. */
+  provisioned?: ProvisionedNode;
+};
+
+/** What the coordinator tells of a provisioned node (ADR-0051 point 9). */
+export type ProvisionedNode = {
+  /** The provider's id of the machine. */
+  machine: string;
+  /** The address it enrolled from. */
+  address: string;
+  /** The SHA-256 of the node certificate's key it enrolled with (ADR-0051 point 6). */
+  key?: string;
+  size?: PoolAmount;
+  /** When it enrolled (Unix seconds). */
+  since: number;
+  /** Seconds until it is given back, while it has no lane. */
+  idle_left?: number;
+  /** It admits no lane until an admin confirms it. */
+  unconfirmed?: boolean;
+  /** The repository it runs lanes of, when the pool provisions per repository. */
+  repo?: string;
+};
+
+/** A machine the coordinator asked a provisioner for (ADR-0051), kept until it is deleted. */
+export type ProvisionMachine = {
+  request: string;
+  /** The provider's id; empty until the provisioner answered. */
+  machine: string;
+  address: string;
+  size?: PoolAmount;
+  repo?: string;
+  state: 'provisioning' | 'ready' | 'returning' | (string & {});
+  /** The member whose lane caused it. */
+  requester: string;
+  created: number;
+  deadline: number;
+  /** The member it enrolled as. */
+  member?: string;
+  idle_since?: number;
+  /** A second use of its enrolment token, or one from another address. */
+  alarm?: string;
+  /** Why the last deletion failed. */
+  error?: string;
+};
+
+/** `GET /hub/pool/provisioning` (admins): the provisioner, the pool's settings, the machines. */
+export type Provisioning = {
+  /** The provisioner's address; absent: the coordinator has none. */
+  provisioner?: string;
+  settings: { per: 'pool' | 'repo'; confirm: 'none' | 'admin'; idle_minutes: number; max_nodes: number; max_cpus?: number; max_memory?: number };
+  machines: ProvisionMachine[];
 };
 
 /** A lane on a node, as the coordinator knows it. */
@@ -538,7 +595,7 @@ export type PoolAuditEntry = {
   at: number;
   by: string;
   /** The coordinator's `String`: these today, others from a newer coordinator. */
-  action: 'approve' | 'reject' | 'remove' | 'role' | 'pause' | 'resume' | 'end' | 'tags' | 'policy' | 'node' | (string & {});
+  action: 'approve' | 'reject' | 'remove' | 'role' | 'pause' | 'resume' | 'end' | 'tags' | 'policy' | 'node' | 'provision' | 'confirm' | 'enrol' | (string & {});
   member: string;
   name: string;
   detail?: string;
@@ -547,7 +604,7 @@ export type PoolAuditEntry = {
 /** `GET /hub/pool`: what this machine sees of its pool. */
 export type PoolOverview = {
   joined: boolean;
-  me?: { id: string; name: string; state: PoolMemberState; role?: PoolRole; coordinator: string };
+  me?: { id: string; name: string; state: PoolMemberState; role?: PoolRole; coordinator: string; /** Its lanes stay off provisioned nodes (ADR-0051 point 10). */ no_provisioned?: boolean };
   members?: PoolMember[];
   nodes?: PoolNode[];
   leases?: PoolLease[];
@@ -555,6 +612,8 @@ export type PoolOverview = {
   join?: { coordinator: string; fingerprint: string; command: string };
   /** Admins only. */
   audit?: PoolAuditEntry[];
+  /** Admins only, from a coordinator that knows provisioning (ADR-0051). */
+  provisioning?: Provisioning;
 };
 
 /** Which devstack a party of the pool runs; `protocol` changes when releases no longer work together. */

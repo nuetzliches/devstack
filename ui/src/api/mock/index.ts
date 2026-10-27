@@ -474,6 +474,21 @@ export class MockTransport implements Transport {
       const r = hub.pool.grantNode(decodeURIComponent(pg[1]), (body as { node?: boolean } | undefined)?.node === true);
       return json(r.status, r.body);
     }
+    const pv = /^\/hub\/pool\/members\/([^/]+)\/provision$/.exec(p);
+    if (pv && method === 'POST') {
+      const r = hub.pool.provision(decodeURIComponent(pv[1]), (body as { on?: boolean } | undefined)?.on === true);
+      return json(r.status, r.body);
+    }
+    const pc = /^\/hub\/pool\/nodes\/([^/]+)\/(confirm|give-back)$/.exec(p);
+    if (pc && method === 'POST') {
+      const r = hub.pool.provisioned(decodeURIComponent(pc[1]), pc[2]);
+      return json(r.status, r.body);
+    }
+    if (p === '/hub/pool/provisioning' && method === 'GET') return json(200, hub.pool.provisioning);
+    if (p === '/hub/pool/provisioned' && method === 'PUT') {
+      const r = hub.pool.setProvisioned((body as { on?: boolean } | undefined)?.on === true);
+      return json(r.status, r.body);
+    }
     const pp = /^\/hub\/pool\/nodes\/([^/]+)\/policy$/.exec(p);
     if (pp && method === 'POST') {
       const r = hub.pool.policy(decodeURIComponent(pp[1]), body as never);

@@ -102,6 +102,11 @@ export const paths = {
   poolTags: (id: string) => `/hub/pool/members/${enc(id)}/tags`,
   poolNode: (id: string) => `/hub/pool/members/${enc(id)}/node`,
   poolPolicy: (id: string) => `/hub/pool/nodes/${enc(id)}/policy`,
+  poolProvision: (id: string) => `/hub/pool/members/${enc(id)}/provision`,
+  poolConfirm: (id: string) => `/hub/pool/nodes/${enc(id)}/confirm`,
+  poolGiveBack: (id: string) => `/hub/pool/nodes/${enc(id)}/give-back`,
+  poolProvisioning: '/hub/pool/provisioning',
+  poolProvisioned: '/hub/pool/provisioned',
   /**
    * A daemon path of `stack`. With a `lane` (plan §3.5) it goes to that
    * lane's API, except the lane routes themselves, which the main tree's

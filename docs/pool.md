@@ -476,6 +476,119 @@ the coordinator does not answer, a node trusts its last list for at most an
 hour; after that it refuses every member, renewals included, until the
 coordinator is back.
 
+## Grow by provisioned nodes
+
+A pool can rent machines for the hours it needs more than its members
+have (ADR-0051): a lane placed by the pool (`--on pool`) that no node can
+take makes a machine, which enrols itself as a node, is filled with the
+lanes that come after it, and is given back once idle.
+
+```sh
+devstack node serve --listen 10.0.0.5:4260 --provisioner https://provisioner.internal:8443
+devstack node members provision <id> on         # who may cause it: it costs money
+devstack node provisioning --max-nodes 3 --idle-minutes 30
+devstack node provisioning --per repo           # a machine runs one repository's lanes
+devstack node provisioning --confirm admin      # each machine waits for an admin
+devstack node confirm <node>                    # compare machine and address first
+devstack node give-back <node>                  # by hand; its lanes go with it
+devstack pool provisioned off                   # a member: my lanes stay off them
+```
+
+**The provisioner** is an HTTP service of your own that holds the cloud
+provider's credentials; the coordinator never does. devstack ships none:
+it is the contract below, and a mock to try it. It is a root of trust like
+the coordinator's host: whoever runs it, or holds the provider account
+behind it, can read every lane on its machines, their environment files
+included. A member who does not accept that runs `devstack pool
+provisioned off`; a lane on a provisioned node says so when it starts.
+
+**When.** Only for a lane the pool places, of a member an admin allowed
+(`members provision <id> on`, off by default), that does not keep its
+lanes off provisioned nodes, within the caps (`--max-nodes`, default 2;
+`--max-cpus`, `--max-memory-gib` of all of them together), and never for a
+warm lease or a named node. A machine on its way that holds the lane too
+is waited for instead of making another. Otherwise the start is refused as
+before, with the reason added.
+
+**The wait.** The requester's start shows a `provision` phase ("the
+provisioner makes machine m-3; it enrols from 203.0.113.7"), for at most
+the provisioner's estimate (between 60 s and 10 min). Past it, or if the
+machine is given back meanwhile, the start fails and the machine is
+deleted. A requester of an earlier release is refused as before rather
+than told to wait.
+
+**Enrolment.** With each request the coordinator sends a single-use token,
+good for the wait. The machine runs `devstack join <coordinator>
+--fingerprint <fp> --enrol <token>` and `devstack node agent --dedicated`;
+it is then an approved member and a granted, dedicated node at once,
+marked provisioned (and, with `--per repo`, bound to the repository by its
+policy). The coordinator takes the enrolment only from the address the
+provisioner named for the machine. A second use of the token, or one from
+another address, is an **alarm**: the node enrolled with it is revoked,
+the machine deleted, and the dashboard's pool area, `devstack node
+provisioning` and the coordinator's log show both addresses (the admin log
+too, when a node had enrolled). With `--confirm admin` a machine takes no lease until an
+admin confirms it (the start waits for that within its limit).
+
+**Placement** fills provisioned nodes: after the members' own nodes of the
+same rank (warm, then free), the provisioned node with the least free
+capacity that takes the lane comes first, so the others empty. A running
+machine is never resized, a lane never moved: one long-lived lane keeps its
+machine.
+
+**Giving back.** A provisioned node without a lease for the pool's idle
+time (`--idle-minutes`, default 30) is revoked and its machine deleted;
+nothing of its lanes is kept elsewhere. A deletion that fails is retried
+every 15 s; the machine stays listed, with the error, until the provisioner
+confirms it. Not built yet: dropping one stopped lane's kept data after the
+idle time while other lanes still run on the machine.
+
+### The provisioner's API
+
+The coordinator calls it with `Authorization: Bearer <token>` (from
+`DEVSTACK_PROVISIONER_TOKEN`, else `provisioner.token` in the
+coordinator's directory; none without either). JSON throughout.
+
+| Call | Body | Answer |
+|---|---|---|
+| `POST /machines` | `{request, need: {cpus, memory, disk_repo?, disk_lane?, gpus?}, repo?, devstack: {version, protocol}, enrol: {coordinator, fingerprint, token, expires_in, command}}` | `{accepted: true, machine, address, size: {cpus, memory}, estimate}` (seconds), or `{accepted: false, reason}` |
+| `DELETE /machines/{machine}` | | `2xx`, or `404` (gone already) |
+| `POST /events` | `{kind, request, machine, at, size?, lease?: {id, member, repo, lane, need, began, ended?}}` | `2xx` |
+
+- `machine` is the provider's id, `address` the public IP address the
+  machine enrols from (required: a machine without one is deleted
+  unused), `size` what it holds (choose one that holds several such lanes),
+  `memory` in bytes, times in unix seconds.
+- The machine runs `enrol.command` (or `devstack join enrol.coordinator
+  --fingerprint enrol.fingerprint --enrol enrol.token`), then `devstack node
+  agent --listen <its address>:<port> --dedicated`, with a devstack of the
+  same pool protocol as `devstack` (`version` is the coordinator's).
+- `kind`: `node_ready` (enrolled, with its size), `lease_begun`,
+  `lease_ended` (a lease on it, with member, repository, lane and need),
+  `node_returned` (deleted). They are all devstack says about cost; it
+  counts no money. An event the provisioner does not take is not sent
+  again.
+
+### Try it without a cloud
+
+A mock provisioner comes with devstack (hidden from `--help`). Its
+"machines" are this one: each runs `--exec` with the enrolment in its
+environment (`DEVSTACK_ENROL_COMMAND`, `DEVSTACK_ENROL_COORDINATOR`,
+`DEVSTACK_ENROL_FINGERPRINT`, `DEVSTACK_ENROL_TOKEN`, `DEVSTACK_MACHINE`),
+or, without `--exec`, prints the line to enrol one by hand.
+
+```sh
+devstack node mock-provisioner --listen 127.0.0.1:4270 --cpus 8 --memory-gib 16 \
+    --exec 'DEVSTACK_POOL_DIR=/tmp/$DEVSTACK_MACHINE $DEVSTACK_ENROL_COMMAND'
+devstack node serve --listen 127.0.0.1:4260 --provisioner http://127.0.0.1:4270
+```
+
+It names `127.0.0.1` as each machine's address (`--address` another, to
+see the alarm), can refuse (`--refuse <reason>`), fail deletions
+(`--fail-deletes 2`) and expect a token (`--token`); it prints each event
+and deletion. The tests in `crates/devstack-node/tests/provision.rs` use
+the same mock (`devstack_node::provision::mock`).
+
 ## Several pools
 
 A machine can belong to several pools, a customer's beside the team's, each
@@ -616,7 +729,7 @@ same arguments. "Prune" on a node removes the stopped lanes it keeps
 |---|---|
 | Membership (key, certificate, coordinator) | devstack's per-user state, `pool/`; other pools in `pools/<name>/`; `DEVSTACK_POOL_DIR` overrides the default pool's |
 | Share settings, telemetry consent | `share.json`, `telemetry.json` beside the membership |
-| Coordinator | `DEVSTACK_COORDINATOR_DIR`; `members.json` (changed under `members.lock`), `audit.jsonl`, `telemetry.json` |
+| Coordinator | `DEVSTACK_COORDINATOR_DIR`; `members.json` (changed under `members.lock`), `audit.jsonl`, `telemetry.json`; with a provisioner `provisioning.json` (the settings), `machines.json` (the machines asked for, until deleted), `provisioner.token` |
 | Node agent state (leases, mirrors, uploaded files per member, `policy.json`, `secret`) | `node/` beside its membership |
 | Ports | coordinator and node agent: as you choose (`--listen`); mutual TLS with the pool's CA |
 | Certificates | the pool's CA 20 years, the coordinator's server certificate 10, a member's 5; not renewed: when one expires, that member (for the CA, the pool) is set up again |

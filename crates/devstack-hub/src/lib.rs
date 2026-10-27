@@ -18,7 +18,7 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, delete, get, post};
+use axum::routing::{any, delete, get, post, put};
 use devstack_compose::engine::{self, Engine};
 use devstack_daemon::{diag, registry};
 use devstack_desktop::no_window;
@@ -550,6 +550,11 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/pool/nodes/{id}/prune", post(pool::prune))
         .route("/hub/pool/members/{id}/tags", post(pool::tags))
         .route("/hub/pool/members/{id}/node", post(pool::node))
+        .route("/hub/pool/members/{id}/provision", post(pool::provision))
+        .route("/hub/pool/nodes/{id}/confirm", post(pool::confirm))
+        .route("/hub/pool/nodes/{id}/give-back", post(pool::give_back))
+        .route("/hub/pool/provisioning", get(pool::provisioning))
+        .route("/hub/pool/provisioned", put(pool::set_provisioned))
         .route("/hub/pools", get(pool::pools))
         .route("/hub/pool/history", get(pool::history))
         .route("/hub/pool/placement", get(pool::placement))
