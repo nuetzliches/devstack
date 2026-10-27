@@ -500,7 +500,6 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/prompt", get(prompt))
         .route("/hub/agent", post(agent))
         .route("/hub/stacks/add", post(stack_add))
-        .route("/hub/stacks/init", post(stack_init))
         .route("/hub/stacks/scan", post(stack_scan))
         .route("/hub/stacks/{id}/up", post(stack_up))
         .route("/hub/stacks/{id}/down", post(stack_down))
@@ -508,15 +507,9 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/stacks/{id}/branches", get(stack_branches))
         .route("/hub/stacks/{id}/worktrees", post(worktree_add))
         .route("/hub/stacks/{id}/worktrees/remove", post(worktree_remove))
-        .route(
-            "/hub/stacks/{id}/worktrees/stack-file",
-            post(worktree_stack_file),
-        )
         .route("/hub/stacks/{id}/fetch", post(stack_fetch))
-        .route(
-            "/hub/stacks/{id}/skills",
-            get(stack_skills).post(stack_skills_install),
-        )
+        // No route writes a file of a repository (ADR-0071).
+        .route("/hub/stacks/{id}/skills", get(stack_skills))
         .route("/hub/stacks/{id}/upgrade", get(stack_upgrade))
         .route("/hub/stacks/{id}/mcp", get(stack_mcp))
         .route("/hub/stacks/{id}/api/{*rest}", any(forward))
@@ -1638,7 +1631,7 @@ async fn worktree_add(
     .await
 }
 
-/// A worktree the page names, to remove or to give a stack file.
+/// A worktree the page names, to remove.
 #[derive(Deserialize)]
 struct WorktreePath {
     path: String,
@@ -1657,29 +1650,6 @@ async fn worktree_remove(
     }
     with_repo(&s, &id, move |e| {
         branches::remove(&e.repo, &raw).map(|()| serde_json::json!({}))
-    })
-    .await
-}
-
-/// `POST /hub/stacks/{id}/worktrees/stack-file {path}`: the main working
-/// tree's stack file, copied into a linked worktree that has none
-/// (ADR-0055 point 4): `{file}`.
-async fn worktree_stack_file(
-    State(s): State<AppState>,
-    Path(id): Path<String>,
-    Json(b): Json<WorktreePath>,
-) -> Response {
-    let raw = PathBuf::from(&b.path);
-    if !raw.is_absolute() || !local_path(&b.path, &raw) {
-        return err(StatusCode::BAD_REQUEST, "a folder on this machine");
-    }
-    with_repo(&s, &id, move |e| {
-        let file = branches::give_stack_file(&e.repo, &e.file, &stack_file_rel(e), &raw)?;
-        diag::info(
-            "lane_stack_file_given",
-            serde_json::json!({ "stack": e.id, "file": file }),
-        );
-        Ok(serde_json::json!({ "file": file }))
     })
     .await
 }
@@ -1787,39 +1757,6 @@ async fn stack_skills(State(s): State<AppState>, Path(id): Path<String>) -> Resp
     };
     match tokio::task::spawn_blocking(move || skills_view(&e)).await {
         Ok(v) => Json(v).into_response(),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    }
-}
-
-/// `POST /hub/stacks/{id}/skills`: `devstack skills install` for the stack's
-/// repository (a skill the project wrote itself is kept), then the new view.
-async fn stack_skills_install(State(s): State<AppState>, Path(id): Path<String>) -> Response {
-    let Some(e) = entry(&s, &id) else {
-        return err(StatusCode::NOT_FOUND, "no such stack");
-    };
-    let done = tokio::task::spawn_blocking(move || {
-        let stack = devstack_config::load(&e.file).map_err(|err| err.to_string())?;
-        let out = devstack_skills::install(&stack, &e.file, None, false)
-            .map_err(|err| format!("{err:#}"))?;
-        let kept: Vec<_> = out
-            .iter()
-            .filter_map(|o| match o {
-                devstack_skills::Outcome::Kept(p) => Some(p.clone()),
-                _ => None,
-            })
-            .collect();
-        diag::info(
-            "skills_install",
-            serde_json::json!({ "repo": e.repo, "kept": kept }),
-        );
-        let mut view = skills_view(&e);
-        view["kept"] = serde_json::json!(kept);
-        Ok::<_, String>(view)
-    })
-    .await;
-    match done {
-        Ok(Ok(v)) => Json(v).into_response(),
-        Ok(Err(m)) => err(StatusCode::CONFLICT, m),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -1977,6 +1914,11 @@ fn write_prompt(s: &AppState, q: &PromptQuery) -> Result<Written, Refusal> {
         "mcp" => {
             let e = stack()?;
             let text = prompts::text(&Prompt::Mcp { repo: &e.repo });
+            (text, e.repo, e.file)
+        }
+        "skills" => {
+            let e = stack()?;
+            let text = prompts::text(&Prompt::Skills { repo: &e.repo });
             (text, e.repo, e.file)
         }
         "start-failed" => {
@@ -2259,75 +2201,6 @@ async fn stack_scan(Json(q): Json<ScanQuery>) -> Response {
         Ok(list) => Json(list).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
-}
-
-/// `POST /hub/stacks/init {"path"}`: write a first draft (`devstack init`,
-/// never over an existing file) and register it, so it shows in the list.
-async fn stack_init(Json(q): Json<PathQuery>) -> Response {
-    let (repo, file) = match stack_paths(&q.path) {
-        Ok(p) => p,
-        Err(e) => return err(StatusCode::BAD_REQUEST, e),
-    };
-    if !repo.is_dir() {
-        return err(
-            StatusCode::BAD_REQUEST,
-            format!("{} is not a folder", repo.display()),
-        );
-    }
-    if file.exists() {
-        return err(
-            StatusCode::CONFLICT,
-            "it has a devstack.toml already; add it instead",
-        );
-    }
-    let Ok(exe) = devstack_exe() else {
-        return err(StatusCode::INTERNAL_SERVER_ERROR, "cannot find devstack");
-    };
-    let run = {
-        let repo = repo.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut cmd = std::process::Command::new(exe);
-            cmd.args(["init", "--json", "--dir"])
-                .arg(&repo)
-                .stdin(std::process::Stdio::null());
-            no_window(&mut cmd);
-            cmd.output()
-        })
-        .await
-    };
-    let out = match run {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    };
-    if !out.status.success() {
-        return err(
-            StatusCode::CONFLICT,
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        );
-    }
-    let draft: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
-    diag::info(
-        "stack_init",
-        serde_json::json!({ "repo": repo, "todos": draft["todos"] }),
-    );
-    // A draft may not load yet (TODOs); then it is written but not listed.
-    let registered = tokio::task::spawn_blocking({
-        let (repo, file) = (repo.clone(), file.clone());
-        move || register_folder(&repo, &file)
-    })
-    .await
-    .ok()
-    .and_then(Result::ok);
-    Json(serde_json::json!({
-        "file": file,
-        "services": draft["services"],
-        "compose_files": draft["compose_files"],
-        "todos": draft["todos"],
-        "id": registered.as_ref().map(|e| e.id.clone()),
-        "name": registered.as_ref().map(|e| e.name.clone()),
-    }))
-    .into_response()
 }
 
 async fn stack_up(State(s): State<AppState>, Path(id): Path<String>) -> Response {

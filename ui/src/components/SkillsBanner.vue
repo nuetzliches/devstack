@@ -1,17 +1,18 @@
 <script setup lang="ts">
 // The agent skills in the stack's repository no longer match this devstack
-// or its stack file: refreshed here. Whether the stack file itself is up to
-// date is UpgradeBanner's: a refresh does not answer that. Skills from an
-// older devstack are UpgradeBanner's too while it shows: one line, not two.
+// or its stack file. A coding agent refreshes them, from the hub's prompt:
+// the dashboard writes no file of a repository (ADR-0071). While the stack
+// file is behind, skills from an older devstack are UpgradeBanner's, whose
+// prompt refreshes them too, shown or hidden with it: one notice, not two.
 import { computed, watch } from 'vue';
-import { skillsState, useUpgradeNotice } from '@/lib/upgradeNotice';
+import { skillsState } from '@/lib/upgradeNotice';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
+import AgentPrompt from './AgentPrompt.vue';
 import Icon from './icons/Icon.vue';
 
 const hub = useHub();
 const stack = useStack();
-const notice = useUpgradeNotice();
 
 // A new devstack (the hub restarts with it) or an edited stack file changes
 // what `devstack skills install` would write.
@@ -22,7 +23,7 @@ watch(
 
 const state = computed(() => {
   const s = skillsState(stack.skills);
-  return s === 'older' && notice.shown.value ? null : s;
+  return s === 'older' && stack.upgrade?.behind ? null : s;
 });
 </script>
 
@@ -40,9 +41,7 @@ const state = computed(() => {
         <strong>The agent skills come from devstack {{ stack.skills!.from }}, this is {{ stack.skills!.current }}.</strong> Update devstack rather than write older ones.
       </template>
     </span>
-    <button v-if="state !== 'ahead'" type="button" class="btn btn-sm" :disabled="!!stack.busy.skills" title="devstack skills install: the generated skills only, a skill the project wrote itself stays" data-testid="skills-refresh" @click="stack.refreshSkills()">
-      <span v-if="stack.busy.skills" class="spinner" /><Icon v-else name="restart" :size="14" /> Refresh skills
-    </button>
+    <AgentPrompt v-if="state !== 'ahead' && stack.id" compact label="Refresh skills" kind="skills" :target="{ stack: stack.id }" />
     <button v-else-if="hub.newer" type="button" class="btn btn-sm" :disabled="hub.updating" @click="hub.installUpdate()">Update to {{ hub.newer }}</button>
   </div>
 </template>

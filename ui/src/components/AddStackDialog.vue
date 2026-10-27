@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // Add a stack: the user pastes a folder (a browser never reveals a picked
 // folder's absolute path). A folder with devstack.toml is registered; without
-// one, the hub can write a first draft (`devstack init`), or a coding agent
-// writes it with devstack's tools, from the hub's prompt (copied, or the agent
-// started with it); a file that does not load, the same for repairing it.
+// one, a coding agent writes it with devstack's tools (`devstack init`, then
+// the TODOs), from the hub's prompt (copied, or the agent started with it); a
+// file that does not load, the same for repairing it. The dashboard writes
+// no file of the repository itself (ADR-0071).
 import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { api, paths } from '@/api';
@@ -20,7 +21,6 @@ const ui = useUi();
 const router = useRouter();
 
 type Inspect = { repo: string; is_dir: boolean; has_stack_file: boolean; valid: { Ok?: null; Err?: string } | null; registered: string | null; id: string };
-type InitResult = { file: string; services: string[]; compose_files: string[]; todos: number; id: string | null };
 
 /** One folder, or every project below a folder. */
 const mode = ref<'one' | 'scan'>('one');
@@ -29,7 +29,6 @@ const checking = ref(false);
 const info = ref<Inspect | null>(null);
 const problem = ref<string | null>(null);
 const busy = ref(false);
-const drafted = ref<InitResult | null>(null);
 
 watch(
   () => props.open,
@@ -37,7 +36,6 @@ watch(
     if (o) {
       info.value = null;
       problem.value = null;
-      drafted.value = null;
     }
   },
 );
@@ -76,7 +74,6 @@ async function check() {
   checking.value = true;
   problem.value = null;
   info.value = null;
-  drafted.value = null;
   try {
     const res = await api().request<Inspect | { error: string }>('GET', paths.inspect(p));
     const b = typeof res.body === 'object' ? res.body : null;
@@ -108,18 +105,6 @@ async function add() {
   const res = await act<{ id: string; name: string }>({ label: 'Add stack', path: paths.stackAdd, body: { path: info.value!.repo }, success: (b) => `${b?.name ?? 'Stack'} added` });
   busy.value = false;
   if (res.ok && res.body) openStack(res.body.id);
-}
-
-async function draft() {
-  busy.value = true;
-  const res = await act<InitResult>({
-    label: 'Create a draft',
-    path: paths.stackInit,
-    body: { path: info.value!.repo },
-    success: (b) => `devstack.toml written with ${b?.todos ?? 0} TODO(s)`,
-  });
-  busy.value = false;
-  if (res.ok && res.body) drafted.value = res.body;
 }
 
 </script>
@@ -171,31 +156,10 @@ async function draft() {
     </div>
 
     <template v-else-if="state === 'no-file'">
-      <div v-if="!drafted" class="choices">
-        <div class="choice">
-          <h3><Icon name="file" :size="15" /> Create a draft</h3>
-          <p class="muted">devstack writes a first <code>devstack.toml</code> from what it finds (Compose files, .NET, Node, Go, Python and Spring Boot apps). Every guess is marked <code>TODO</code>; nothing else in the repository changes.</p>
-          <button type="button" class="btn btn-primary" :disabled="busy" data-testid="add-stack-init" @click="draft">
-            <span v-if="busy" class="spinner" /><Icon v-else name="play" :size="14" /> Create draft
-          </button>
-        </div>
-        <div class="choice">
-          <h3><Icon name="terminal" :size="15" /> Let a coding agent do it</h3>
-          <p class="muted">A prompt for Claude Code, Codex or similar: it runs <code>devstack init</code>, works through the TODOs with the reference, validates and starts the stack.</p>
-          <AgentPrompt kind="setup" :target="{ path: info!.repo }" />
-        </div>
-      </div>
-      <div v-else class="note ok" data-testid="add-stack-drafted">
-        <p>
-          <strong>Draft written:</strong> <code>{{ drafted.file }}</code>, {{ drafted.services.length }} service(s)<template v-if="drafted.services.length"> ({{ drafted.services.join(', ') }})</template>,
-          {{ drafted.compose_files.length }} Compose file(s), <strong>{{ drafted.todos }} TODO(s)</strong> to work through.
-        </p>
-        <p class="muted">Then <code>devstack check</code> and <code>devstack up</code> in the folder<template v-if="!drafted.id">; the stack appears here once its file loads</template>.</p>
-        <p class="muted">Or let a coding agent finish it:</p>
+      <div class="choice" data-testid="add-stack-setup">
+        <h3><Icon name="terminal" :size="15" /> Let a coding agent set it up</h3>
+        <p class="muted">A prompt for Claude Code, Codex or similar: it runs <code>devstack init</code> for a first draft (Compose files, .NET, Node, Go, Python and Spring Boot apps), works through its TODOs with the reference, validates and starts the stack. Without an agent, copy the prompt, or run <code>devstack init</code> in the folder yourself.</p>
         <AgentPrompt kind="setup" :target="{ path: info!.repo }" />
-        <div v-if="drafted.id" class="row">
-          <button type="button" class="btn btn-primary" @click="openStack(drafted.id)">Open the stack</button>
-        </div>
       </div>
     </template>
     </template>

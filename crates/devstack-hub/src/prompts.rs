@@ -40,6 +40,9 @@ pub enum Prompt<'a> {
     },
     /// No agent configuration registers `devstack mcp` for the repository.
     Mcp { repo: &'a Path },
+    /// The generated agent skills differ from what this devstack writes
+    /// for the stack file (ADR-0071: the dashboard does not write them).
+    Skills { repo: &'a Path },
     /// The last `devstack up` the hub ran failed.
     StartFailed {
         name: &'a str,
@@ -168,6 +171,17 @@ pub fn text(p: &Prompt) -> String {
 4. {careful}",
             repo = display(repo),
         ),
+        Prompt::Skills { repo } => format!(
+            "Refresh the devstack agent skills of the repository at {repo}: they no longer match devstack {v} or its stack file.
+
+{about}
+
+1. `devstack --version` must say {v}; if it says another, run `devstack update` first and tell me.
+2. Run `devstack skills install` in the repository. It rewrites the generated skills only (their marker line says so); a skill the project wrote itself stays.
+3. Read what changed in them (`git diff`). Check the project's own skills, CLAUDE.md and AGENTS.md for anything that now contradicts them, and tell me what you would change there.
+4. {careful}",
+            repo = display(repo),
+        ),
         Prompt::StartFailed {
             name,
             repo,
@@ -271,6 +285,7 @@ mod tests {
                 file: Path::new("/src/shop.worktrees/feat-x/devstack.toml"),
             }),
             text(&Prompt::Mcp { repo }),
+            text(&Prompt::Skills { repo }),
         ]
     }
 

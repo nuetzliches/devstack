@@ -62,7 +62,6 @@ export const paths = {
     `/hub/prompt?kind=${encodeURIComponent(kind)}${target.stack !== undefined ? `&stack=${encodeURIComponent(target.stack)}` : ''}${target.path !== undefined ? `&path=${encodeURIComponent(target.path)}` : ''}`,
   agent: '/hub/agent',
   scanStacks: '/hub/stacks/scan',
-  stackInit: '/hub/stacks/init',
   up: (stack: string) => `/hub/stacks/${enc(stack)}/up`,
   /** `restart`: the daemon leaves its lanes to the next one (ADR-0052). */
   down: (stack: string, infra = true, restart = false) => `/hub/stacks/${enc(stack)}/down?infra=${infra}${restart ? '&restart=true' : ''}`,
@@ -70,7 +69,6 @@ export const paths = {
   branches: (stack: string) => `/hub/stacks/${enc(stack)}/branches`,
   worktrees: (stack: string) => `/hub/stacks/${enc(stack)}/worktrees`,
   worktreeRemove: (stack: string) => `/hub/stacks/${enc(stack)}/worktrees/remove`,
-  worktreeStackFile: (stack: string) => `/hub/stacks/${enc(stack)}/worktrees/stack-file`,
   fetch: (stack: string) => `/hub/stacks/${enc(stack)}/fetch`,
   skills: (stack: string) => `/hub/stacks/${enc(stack)}/skills`,
   upgrade: (stack: string) => `/hub/stacks/${enc(stack)}/upgrade`,

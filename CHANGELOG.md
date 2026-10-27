@@ -9,6 +9,19 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **The dashboard writes no file of a repository** (ADR-0071): "Refresh
+  skills", "Create draft" in "Add a stack" and "Copy the main tree's" for a
+  worktree without a stack file are gone. Each is a prompt for a coding
+  agent now (the new `skills` prompt, `setup`, `lane-file`), started in the
+  user's agent or copied; the agent reads what it writes. While the stack
+  file is behind, its banner speaks for the agent skills too, and hiding it
+  hides both until the next minor devstack (before, the skills banner came
+  up in its place). The hub's `POST /hub/stacks/init`,
+  `POST /hub/stacks/{id}/skills` and `POST /hub/stacks/{id}/worktrees/stack-file`
+  are gone. `devstack init` and `devstack skills install` stay in the CLI.
+
 ## [0.26.0] - 2026-10-27
 
 Setting a repository up offers devstack's MCP server, and the dashboard
