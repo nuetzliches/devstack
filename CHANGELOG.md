@@ -9,6 +9,17 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **MCP upstreams in the hub** (ADR-0069, first part): the dashboard's new
+  page *MCP upstreams* keeps the MCP servers a user works with once, per
+  user: a URL, a prefix, which tools, and how it logs in. The hub logs in
+  itself, with OAuth (it finds the authorization server, registers where
+  the server allows it, PKCE; the browser comes back to the hub) or a
+  token the user gives it, and keeps the login in the keychain (a file on
+  a Linux machine without a Secret Service). Their tools in `devstack mcp`
+  follow.
+
 ### Changed
 
 - **The dashboard writes no file of a repository** (ADR-0071): "Refresh

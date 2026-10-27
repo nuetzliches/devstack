@@ -12,7 +12,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { DockerEngine, Guest, HubEvent, LaneView, NotifySettings, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
+import type { DockerEngine, Guest, HubEvent, LaneView, McpUpstream, NotifySettings, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -65,6 +65,12 @@ function startMove(to: string, t0: number) {
 
 /** The devstack the mock hub runs. */
 const MOCK_VERSION = '0.2.0';
+
+/** The user's MCP upstreams in the mock (ADR-0069). */
+const mockUpstreams: McpUpstream[] = [
+  { name: 'tracker', url: 'https://mcp.tracker.example.com/mcp', prefix: 'tracker', allow: [], auth: { kind: 'oauth' }, logged_in: true },
+  { name: 'wiki', url: 'https://wiki.example.com/mcp', prefix: 'wiki', allow: ['search', 'get_page'], auth: { kind: 'token' }, logged_in: false },
+];
 
 class MockHub {
   stacks: MockStack[] = [];
@@ -426,6 +432,26 @@ export class MockTransport implements Transport {
         ],
         join: { coordinator: 'https://172.20.1.5:4260', fingerprint: 'ab'.repeat(32), command: `devstack join https://172.20.1.5:4260 --fingerprint ${'ab'.repeat(32)} --pool customer` },
       });
+    // MCP upstreams (ADR-0069): one logged in, one not.
+    if (p === '/hub/upstreams' && method === 'GET') return json(200, { store: 'keychain', upstreams: mockUpstreams });
+    if (p === '/hub/upstreams' && method === 'POST') {
+      const u = body as unknown as McpUpstream;
+      const at = mockUpstreams.findIndex((o) => o.name === u.name);
+      const next = { ...u, prefix: u.prefix || u.name.replace(/-/g, '_'), logged_in: at >= 0 ? mockUpstreams[at].logged_in : u.auth.kind === 'none' };
+      if (at >= 0) mockUpstreams[at] = next;
+      else mockUpstreams.push(next);
+      return empty(204);
+    }
+    const up = /^\/hub\/upstreams\/([^/]+)(?:\/(login|token|logout))?$/.exec(p);
+    if (up) {
+      const u = mockUpstreams.find((o) => o.name === decodeURIComponent(up[1]));
+      if (!u) return json(400, { error: `no upstream \`${up[1]}\`` });
+      if (method === 'DELETE' && !up[2]) mockUpstreams.splice(mockUpstreams.indexOf(u), 1);
+      else if (up[2] === 'login') return json(200, { url: 'https://auth.example.com/authorize?mock=1' });
+      else if (up[2] === 'token') u.logged_in = true;
+      else if (up[2] === 'logout') u.logged_in = false;
+      return empty(204);
+    }
     if (p === '/hub/pool' && method === 'GET') return json(200, hub.pool.overview());
     if (p === '/hub/pool/share' && method === 'GET') return json(200, hub.pool.share());
     const pn = /^\/hub\/pool\/nodes\/([^/]+)\/(pause|resume)$/.exec(p);

@@ -406,6 +406,17 @@ async function copyPath(s: StackEntry) {
         <span v-if="pool.isAdmin && pool.pending.length" class="pill sm warn" data-testid="sidebar-pool-badge">{{ pool.pending.length }}</span>
         <span v-else class="faint small tabular">{{ poolHint }}</span>
       </button>
+      <button
+        type="button"
+        class="item pool-item"
+        :class="{ active: route.name === 'upstreams' }"
+        title="MCP servers your coding agents reach through devstack mcp, logged in once"
+        data-testid="sidebar-upstreams"
+        @click="router.push({ name: 'upstreams' })"
+      >
+        <Icon name="link" :size="14" class="branch" />
+        <span class="label">MCP upstreams</span>
+      </button>
     </div>
     <AddStackDialog :open="adding" @close="adding = false" />
     <Teleport to="body">

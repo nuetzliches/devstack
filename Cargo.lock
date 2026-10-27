@@ -900,6 +900,7 @@ name = "devstack-hub"
 version = "0.26.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "blake3",
  "bytes",
  "devstack-compose",
@@ -917,6 +918,7 @@ dependencies = [
  "rand 0.10.3",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-stream",
