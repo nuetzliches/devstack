@@ -1,6 +1,6 @@
 # ADR-0001: Development is ADR-driven
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md) (2026-10-27)
 - **Date:** 2026-10-14
 - **Related:** [README](README.md), [plan](../plan.md)
 

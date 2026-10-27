@@ -1,8 +1,30 @@
 # Architecture Decision Records
 
-devstack is developed ADR-driven ([ADR-0001](0001-development-is-adr-driven.md)):
-an architectural decision is written down, with the alternatives it beat,
-**before** code depends on it.
+Since [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md),
+a change that touches an architectural point starts with a **review card** in
+its issue or pull request, which the project owner approves point by point;
+the ADR follows the code and records the decision as built, with the
+alternatives it beat.
+
+## The review card
+
+Three to seven points, each one sentence, each tagged with a category, with the
+alternative it beats and what reversing it would cost. A point belongs on the
+card when it is expensive to reverse **and**
+
+- **trust:** moves a trust boundary (who may do what on which machine, what
+  leaves the machine, credentials); the point says what an attacker gains if
+  it is wrong;
+- **concept:** fixes what a core term *is* (a lane, a node, a share), who owns
+  it, who creates or removes it;
+- **contract:** fixes an outside contract (the stack file, the pool protocol,
+  CLI flags and output that scripts read, state on disk);
+- **term:** adds a user-visible level, mode, switch or grant.
+
+A last line lists what the agent decided on its own. Everything else
+(timeouts, status codes, ordering, window handling) goes into a code comment
+or the changelog. Code may be spiked before the card is approved, and merges
+after.
 
 ## What belongs here
 
@@ -20,21 +42,29 @@ Reasoning that fails this test goes into a comment at the decision site or the
 | Status | Meaning |
 |---|---|
 | `Proposed` | Written, not yet agreed. Code may be spiked against it, not merged. |
-| `Accepted` | Agreed. Code builds on it. |
+| `Accepted` | Its card points were approved by the owner (the ADR links the card). Code builds on it. Before ADR-0070, see the note below. |
+| `Recorded` | Written down after the fact; its points went through no card. A fact, not a verdict. |
 | `Accepted, provisional` | Agreed for now, with a named point at which it is confirmed or superseded. Code builds on it; until that point it may change without a migration path. |
-| `Open` | A recorded question with the options laid out. **Nothing builds on either side** until it moves to `Proposed`/`Accepted`. |
+| `Open` | A recorded question with the options laid out. **Nothing builds on either side** until a card decides it. |
 | `Superseded by ADR-NNNN` | Reversed. The file stays; its outcome is never edited. |
 | `Decided by ADR-NNNN` | An `Open` question that a later ADR answered. The file stays as the record of the options. |
 
 An ADR describes a decision at the moment it was taken. To change the outcome,
 write a new ADR and supersede the old one.
 
-A refinement that keeps the outcome (a detail found while building it, a
-point another ADR replaced) is an **amendment**: a dated paragraph
+**ADRs before ADR-0070** (0001 to 0069) were accepted under ADR-0001, often on
+the day they were written and without a review beforehand. They stay as
+written and the code follows them. When work touches one of their points in a
+card category, the card names that point and the owner reviews it then.
+
+A refinement in a card category that keeps the outcome (a point another ADR
+replaced, a point changed through a card) is an **amendment**: a dated paragraph
 (`*Amended YYYY-MM-DD.*`) or section (`## Addendum YYYY-MM-DD: …`) added to the
 file, the original text left as it was, and named in the status line and in
 the index below. A later ADR that replaces or details a point of an earlier one
-is linked from the earlier one too (its status or `Related` line).
+is linked from the earlier one too (its status or `Related` line). A detail
+found while building is not an amendment; it goes into a code comment or the
+changelog.
 
 ## Numbering and format
 
@@ -49,7 +79,7 @@ stay.
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-development-is-adr-driven.md) | Development is ADR-driven | Accepted |
+| [0001](0001-development-is-adr-driven.md) | Development is ADR-driven | Superseded by ADR-0070 |
 | [0002](0002-processes-run-from-immutable-artifacts.md) | Processes run from immutable artifacts, never from the build output of the source tree | Accepted, amended (services without `build`; a build whose inputs changed meanwhile, checked before it is published) |
 | [0003](0003-changes-flow-through-candidates.md) | Changes flow through candidates; the main slot only holds a stack that built and passed health | Accepted |
 | [0004](0004-infrastructure-is-delegated-to-compose.md) | Infrastructure comes from the project's existing Compose files plus a dev overlay | Accepted; what a stop does with the containers, ADR-0068 |
@@ -118,5 +148,5 @@ stay.
 | [0067](0067-a-change-at-runtime-says-who-made-it.md) | A change at runtime says where it came from, and a journal keeps the last ones | Accepted; built 2026-10-27 (point 2 for the main slot and services) |
 | [0068](0068-a-stop-takes-the-containers-too.md) | A stop takes the stack's containers too, unless asked to keep them | Accepted |
 | [0069](0069-devstack-mcp-can-carry-the-tools-of-upstream-mcp-servers.md) | `devstack mcp` can carry the tools of upstream MCP servers, logged in once by the hub | Proposed (option A: a proxy in the hub, per user); amended 2026-10-27 (keychain via `keyring`, a file on Linux without a Secret Service) |
-| [0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md) | A review card comes before the code; an ADR records what was built | Proposed (supersedes ADR-0001 once accepted) |
+| [0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md) | A review card comes before the code; an ADR records what was built | Accepted (supersedes ADR-0001) |
 | [0071](0071-the-dashboard-writes-no-file-of-a-repository.md) | The dashboard writes no file of a repository; a change to one is a prompt for a coding agent | Accepted |

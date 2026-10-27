@@ -1,9 +1,9 @@
 # ADR-0070: A review card comes before the code; an ADR records what was built
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-27, [card](https://github.com/nuetzliches/devstack/pull/326))
 - **Date:** 2026-10-27
 - **Deciders:** project owner
-- **Related:** [ADR-0001](0001-development-is-adr-driven.md) (superseded once this is accepted), [README](README.md), [plan](../plan.md), `AGENTS.md`
+- **Related:** supersedes [ADR-0001](0001-development-is-adr-driven.md), [README](README.md), [plan](../plan.md), `AGENTS.md`
 
 ## Context
 
@@ -107,7 +107,7 @@ to see which few sentences carried the risk.
   before 0070, amendments)
 - `docs/adr/0000-template.md` (status values)
 - `AGENTS.md` (core expectation 3: card before code, ADR after)
-- `.github/pull_request_template.md` (a section for the card), to be added
+- `.github/pull_request_template.md` (a section for the card)
 
 ## What this ADR does not say
 
