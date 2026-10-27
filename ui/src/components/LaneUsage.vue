@@ -22,11 +22,38 @@ function memSeries(key: string) {
 
 const diskParts = (d: LaneDisk) =>
   [
-    { k: 'snapshot', label: 'Snapshots', v: d.snapshot, color: 'var(--accent)' },
-    { k: 'artifacts', label: 'Artifacts', v: d.artifacts, color: 'var(--info)' },
-    { k: 'logs', label: 'Logs', v: d.logs, color: 'var(--warn)' },
-    { k: 'volumes', label: 'Volumes', v: d.volumes ?? 0, color: 'var(--ok)', na: d.volumes === null },
-  ] as { k: string; label: string; v: number; color: string; na?: boolean }[];
+    {
+      k: 'snapshot',
+      label: 'Snapshots',
+      v: d.snapshot,
+      color: 'var(--accent)',
+      tip: 'The copy of the source that builds run in (.devstack/lanes/main), with what builds leave there: obj/, node_modules, caches.',
+    },
+    {
+      k: 'artifacts',
+      label: 'Artifacts',
+      v: d.artifacts,
+      color: 'var(--info)',
+      tip: "Published build outputs that services run from (.devstack/artifacts), every kept build. A lane shares the main tree's store, which counts there.",
+    },
+    {
+      k: 'logs',
+      label: 'Logs',
+      v: d.logs,
+      color: 'var(--warn)',
+      tip: 'Service, build and command logs (.devstack/logs).',
+    },
+    {
+      k: 'volumes',
+      label: 'Volumes',
+      v: d.volumes ?? 0,
+      color: 'var(--ok)',
+      na: d.volumes === null,
+      tip:
+        "Named Docker volumes of the stack's Compose projects (data of databases, caches). Images and bind mounts are not counted." +
+        (d.volumes === null ? ' Not measured: Docker is not reachable, or the infra is external or not there.' : ''),
+    },
+  ] as { k: string; label: string; v: number; color: string; tip: string; na?: boolean }[];
 
 function diskTotal(d: LaneDisk) {
   return d.snapshot + d.artifacts + d.logs + (d.volumes ?? 0);
@@ -60,10 +87,10 @@ function diskTotal(d: LaneDisk) {
         <span class="ml">Disk</span>
         <span class="mv tabular">{{ bytes(diskTotal(lane.disk)) }}</span>
         <div class="bar" role="img" :aria-label="`Disk use of lane ${lane.name}`">
-          <span v-for="p in diskParts(lane.disk)" :key="p.k" :style="{ width: `${(p.v / Math.max(1, diskTotal(lane.disk))) * 100}%`, background: p.color }" />
+          <span v-for="p in diskParts(lane.disk)" :key="p.k" :title="`${p.label}: ${p.na ? 'n/a' : bytes(p.v)}. ${p.tip}`" :style="{ width: `${(p.v / Math.max(1, diskTotal(lane.disk))) * 100}%`, background: p.color }" />
         </div>
         <ul class="legend">
-          <li v-for="p in diskParts(lane.disk)" :key="p.k">
+          <li v-for="p in diskParts(lane.disk)" :key="p.k" :title="p.tip">
             <span class="sw" :style="{ background: p.color }" />{{ p.label }}
             <span class="tabular lv">{{ p.na ? 'n/a' : bytes(p.v) }}</span>
           </li>
