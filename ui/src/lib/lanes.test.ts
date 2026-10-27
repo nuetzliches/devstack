@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { notForwardedText, restartLanesText, restartPlan, runCounts, runsAnything } from './lanes';
+import { laneTab, notForwardedText, restartLanesText, restartPlan, runCounts, runsAnything } from './lanes';
 
 describe('a started lane runs', () => {
   it('by its containers when the stack has no services', () => {
@@ -54,5 +54,15 @@ describe('ports a lane on a node does not forward', () => {
     // The daemon's reason (ADR-0056): the node is too old to relay UDP.
     const why = 'the node build-1 runs devstack 0.19.0, which forwards TCP only: devstack 0.20.0 or later there relays UDP';
     expect(notForwardedText(['5353/udp', '9000/sctp'], why)).toBe(`ports UDP 5353, SCTP 9000 are not forwarded to this machine (${why})`);
+  });
+});
+
+describe('a lane switch keeps the tab', () => {
+  it('a list stays, a detail goes to the overview', () => {
+    for (const tab of ['overview', 'infra', 'commands', 'usage', 'events']) expect(laneTab(tab)).toBe(tab);
+    expect(laneTab('service')).toBe('overview');
+    expect(laneTab('container')).toBe('overview');
+    expect(laneTab('pool')).toBe('overview');
+    expect(laneTab(undefined)).toBe('overview');
   });
 });
