@@ -13,8 +13,11 @@
    read [`docs/adr/README.md`](docs/adr/README.md) before proposing a change
    to anything listed in its index. A change with a point in a card category
    (trust, concept, contract, term) starts with a review card of three to
-   seven one-sentence points, shown to the owner and put in the issue or pull
-   request; do not bring the owner an ADR text to review. List what you
+   seven one-sentence points. Show it to the owner in the conversation (a
+   table: category, point, what it beats, what reversing it costs), get the
+   points approved there, then put the card and the approval (date, which
+   points) into the description of the pull request that builds it; do not
+   open an issue for a card. Do not bring the owner an ADR text to review. List what you
    decided on your own. Merge only after the owner approved the points; then
    the ADR records what was built. An ADR with status `Open` is a question,
    not a licence: do not build on either side of it.
