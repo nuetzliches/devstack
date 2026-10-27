@@ -954,7 +954,7 @@ export const useStack = defineStore('stack', () => {
     if (!id.value) return;
     const name = entry.value?.name ?? 'stack';
     const kept = runningLanes.value;
-    // Stop takes the containers too (ADR-0066), unless asked to keep them.
+    // Stop takes the containers too (ADR-0068), unless asked to keep them.
     const containers = view.value?.infra.some((g) => g.containers.length) ?? true;
     const option = containers ? keepContainers() : undefined;
     const ok = await ui.confirm({

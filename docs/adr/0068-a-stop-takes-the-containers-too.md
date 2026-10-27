@@ -1,4 +1,4 @@
-# ADR-0066: A stop takes the stack's containers too, unless asked to keep them
+# ADR-0068: A stop takes the stack's containers too, unless asked to keep them
 
 - **Status:** Accepted (2026-10-27)
 - **Date:** 2026-10-27

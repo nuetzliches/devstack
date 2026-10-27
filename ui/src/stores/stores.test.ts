@@ -438,7 +438,7 @@ describe('stack store', () => {
     events.handlers.onMessage({ type: 'snapshot', stack: view([]) } as never);
     expect(await stopWith()).toEqual({ offered: false, path: '/hub/stacks/shop/down?infra=true' });
     expect((await stopWith(true)).path).toBe('/hub/stacks/shop/down?infra=false');
-    // Services of its own: the containers go all the same (ADR-0066).
+    // Services of its own: the containers go all the same (ADR-0068).
     events.handlers.onMessage({ type: 'snapshot', stack: view([{ name: 'api', status: { state: 'running' } }]) } as never);
     expect(await stopWith()).toEqual({ offered: false, path: '/hub/stacks/shop/down?infra=true' });
   });

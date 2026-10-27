@@ -2424,7 +2424,7 @@ fn yes() -> bool {
 #[derive(Deserialize)]
 struct DownQuery {
     /// The containers too, volumes kept (the default since 0.25.0,
-    /// ADR-0066); `infra=false` leaves them running. Not for a `restart`.
+    /// ADR-0068); `infra=false` leaves them running. Not for a `restart`.
     #[serde(default = "yes")]
     infra: bool,
     /// Its lanes, too: the daemon exits even while lanes run.

@@ -194,7 +194,7 @@ impl Supervisor {
     }
 
     /// Stop every service, last started first; with `infra` the containers
-    /// go too, volumes kept (`devstack down` does, ADR-0066). Without it,
+    /// go too, volumes kept (`devstack down` does, ADR-0068). Without it,
     /// as for a daemon that stops or restarts, they run on. Returns what did
     /// not stop.
     pub fn down(&self, infra: bool) -> Vec<String> {
@@ -204,7 +204,7 @@ impl Supervisor {
     /// Main tree, while lanes run: stop every service but those that serve
     /// the lanes, a service with `lanes = false` and what it starts `after`
     /// (ADR-0024 point 5: the main tree's instance serves every lane). With
-    /// `infra` the containers go too (ADR-0066), but those a kept service
+    /// `infra` the containers go too (ADR-0068), but those a kept service
     /// comes `after` and, while `local_lanes`, the `shared` ones (a lane
     /// here uses them, ADR-0030; a lane on a node runs its own). The
     /// services kept, the containers kept (`<group>.<service>`), what did

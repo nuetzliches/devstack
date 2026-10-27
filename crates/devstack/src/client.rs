@@ -2078,7 +2078,7 @@ pub fn down(stack_file: &Path, infra: bool, all: bool) -> Result<()> {
         bail!("{}", error_text(&body));
     }
     // Lanes that still run keep the daemon they live in (ADR-0024), what
-    // serves them and the `shared` containers they use (ADR-0030, ADR-0066).
+    // serves them and the `shared` containers they use (ADR-0030, ADR-0068).
     let lanes = running_lanes(status, &body);
     if !lanes.is_empty() && !all {
         let list = |key: &str| -> Vec<String> {

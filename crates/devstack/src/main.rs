@@ -79,7 +79,7 @@ enum Cmd {
         /// Leave the containers running: the next `up` is faster.
         #[arg(long)]
         keep_infra: bool,
-        /// What `down` does anyway since 0.25.0 (ADR-0066); kept for scripts.
+        /// What `down` does anyway since 0.25.0 (ADR-0068); kept for scripts.
         #[arg(long, hide = true, conflicts_with = "keep_infra")]
         infra: bool,
         /// The lanes too: the daemon exits even while lanes run. A daemon

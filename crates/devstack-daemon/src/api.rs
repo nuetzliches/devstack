@@ -256,7 +256,7 @@ fn yes() -> bool {
 #[derive(Deserialize)]
 struct DownQuery {
     /// The containers too, volumes kept (the default since 0.25.0,
-    /// ADR-0066); `infra=false` leaves them running.
+    /// ADR-0068); `infra=false` leaves them running.
     #[serde(default = "yes")]
     infra: bool,
     /// The lanes first (`down --all`): each stops with its own containers
@@ -272,7 +272,7 @@ struct DownQuery {
 /// (`lanes = false`, and the containers it comes `after`) and, a lane here,
 /// the `shared` containers (ADR-0030): then `200` with `{"lanes": [...],
 /// "kept": [...], "containers": [...]}`; every other container goes
-/// (ADR-0066). With `all` the lanes stop first (`Lanes::stop_all`).
+/// (ADR-0068). With `all` the lanes stop first (`Lanes::stop_all`).
 async fn down(State(s): State<AppState>, Query(q): Query<DownQuery>) -> Response {
     let mut lanes_failed = Vec::new();
     if q.all

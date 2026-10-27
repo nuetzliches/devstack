@@ -933,7 +933,7 @@ fn lifecycle(with_compose: bool) {
         assert!(!out.status.success(), "no such group");
     }
 
-    // down: nothing left, containers included (ADR-0066).
+    // down: nothing left, containers included (ADR-0068).
     s.ok(&["down"]);
     assert!(s.api("/health").is_none());
     if let Some(p) = &s.project {
@@ -2853,7 +2853,7 @@ steps = [
     assert!(String::from_utf8_lossy(&refused.stderr).contains("lane stop"));
 
     // `down` in the main tree takes its own containers but the `shared`
-    // cache the lane uses (ADR-0066); the lane's are its own.
+    // cache the lane uses (ADR-0068); the lane's are its own.
     let down = s.ok(&["down"]);
     assert!(
         down.contains("lanes keep running") && down.contains("app.cache"),
