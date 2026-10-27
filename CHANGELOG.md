@@ -9,6 +9,19 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-10-27
+
+Setting a repository up offers devstack's MCP server, and the dashboard
+says when a stack's agents lack it. The dashboard gets a Usage tab that a
+lane switch keeps, and a quieter "stack file behind" banner that can be
+hidden until the next minor; agent skills count as outdated only when their
+text changed. `devstack up --workers` runs the workers of a lane on a pool
+node too (#314). Fixed: a lane's memory check looks at Docker Desktop's VM
+(#309), a refused start on the pool says how to go on (#310), an emptied
+linked `node_modules` is prepared again and the skills warn about it
+(#311), and the upgrade prompt checks the version and asks before a
+restart (#312).
+
 ### Added
 
 - **Setting a repository up offers devstack's MCP server**: the setup
@@ -1888,7 +1901,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.25.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/nuetzliches/devstack/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/nuetzliches/devstack/compare/v0.24.1...v0.25.0
 [0.24.1]: https://github.com/nuetzliches/devstack/compare/v0.24.0...v0.24.1
 [0.24.0]: https://github.com/nuetzliches/devstack/compare/v0.23.0...v0.24.0

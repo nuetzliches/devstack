@@ -607,7 +607,7 @@ impl RemoteLane {
         // (ADR-0031 point 8).
         let mut warning =
             release_warning(&offer).map_err(|e| format!("lane `{}`: {e}", spec.name))?;
-        // An agent before 0.25.1 does not pass `--workers` on (#314).
+        // An agent before 0.26.0 does not pass `--workers` on (#314).
         if spec.workers && !takes_workers(offer.node.devstack.as_ref()) {
             let w = format!(
                 "the node {} runs {}, which starts the lane without its background workers whatever `--workers` says; `devstack up --workers --on local` runs them here",
@@ -1975,11 +1975,11 @@ fn release_warning(
     Ok((!notes.is_empty()).then(|| notes.join("; ")))
 }
 
-/// A node's agent passes `--workers` on to its lane (#314): 0.25.1 and
+/// A node's agent passes `--workers` on to its lane (#314): 0.26.0 and
 /// later. One that does not say counts as older.
 fn takes_workers(node: Option<&devstack_node::version::Release>) -> bool {
     node.and_then(|r| devstack_config::version_triple(&r.version))
-        .is_some_and(|v| v >= (0, 25, 1))
+        .is_some_and(|v| v >= (0, 26, 0))
 }
 
 /// The warning of a lane a daemon before this one followed (ADR-0052), made
