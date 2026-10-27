@@ -23,6 +23,7 @@ http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 include_dir.workspace = true
+keyring.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true

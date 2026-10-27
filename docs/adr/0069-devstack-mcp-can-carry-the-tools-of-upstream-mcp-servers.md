@@ -1,6 +1,6 @@
 # ADR-0069: `devstack mcp` can carry the tools of upstream MCP servers, logged in once by the hub
 
-- **Status:** Proposed (2026-10-27)
+- **Status:** Proposed (2026-10-27); amended 2026-10-27 (the keychain spike: `keyring`, a file on Linux without a Secret Service)
 - **Date:** 2026-10-27
 - **Deciders:** project owner
 - **Related:** [#316](https://github.com/nuetzliches/devstack/issues/316), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md), [ADR-0054](0054-macos-is-a-developer-platform-in-preview.md), [ADR-0060](0060-the-tray-is-a-client-of-the-hub.md), [ADR-0067](0067-a-change-at-runtime-says-who-made-it.md)
@@ -83,6 +83,18 @@ MIT-compatible licence for Windows (Credential Manager), Linux (Secret
 Service, and what to do without one) and macOS (Keychain, ADR-0054). If
 none fits, this ADR is amended before any code depends on it.
 
+*Amended 2026-10-27, the keychain spike.* The crate is `keyring` 4 (MIT OR
+Apache-2.0, with its stores for Windows, macOS and the Linux Secret
+Service; Rust 1.88 at most): every crate it pulls in, on every platform, is
+on the licence list of `deny.toml`. Written, read and removed on Windows
+(Credential Manager); macOS and Linux run the same test in CI. A Linux
+machine without a Secret Service (a server, a headless session, CI) has no
+keychain to use: the hub finds that with a probe entry when it opens the
+store, and keeps the secrets in `secrets.json` in its state directory
+instead, readable by the user alone (`0600`, as the hub's sessions file);
+the dashboard is to say so. On Windows and macOS there is no file: a
+keychain that refuses is said when a secret is used.
+
 ## Alternatives considered
 
 - **A. Proxy in the hub, user level only.** Chosen.
@@ -142,8 +154,10 @@ of these?
 
 ## Enforced by
 
-To be built, after the keychain spike: `crates/devstack-hub` (upstream
-connections, OAuth client and redirect, token storage, a loopback API for
+`crates/devstack-hub/src/secrets.rs` (the store, with its test against
+the machine's real keychain on every platform). To be built:
+`crates/devstack-hub` (upstream
+connections, OAuth client and redirect, a loopback API for
 `devstack mcp`), `crates/devstack/src/mcp.rs` (merging the tool lists,
 forwarding calls, starting the hub), `ui/` (upstreams and logins),
 `docs/dashboard-api.md`.

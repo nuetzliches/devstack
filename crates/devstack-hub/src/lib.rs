@@ -43,6 +43,7 @@ mod open;
 mod pool;
 mod prompts;
 pub mod release;
+pub mod secrets;
 mod share;
 mod shared;
 mod summary;
