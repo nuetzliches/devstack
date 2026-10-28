@@ -1164,7 +1164,11 @@ pub fn run_lane(file: &Path, on: &str, lane: &str, keep: bool) -> Result<()> {
                 println!("compose group failed: {}", failed.join("; "));
                 break;
             }
-            moved |= states.iter().any(|s| !s.ends_with("=stopped"));
+            // A build while the containers start is no start: a service
+            // built ahead goes back to `stopped` until its turn.
+            moved |= states
+                .iter()
+                .any(|s| !s.ends_with("=stopped") && !s.ends_with("=building"));
             let settled = moved
                 && states.iter().all(|s| {
                     s.ends_with("=healthy") || s.ends_with("=failed") || s.ends_with("=stopped")

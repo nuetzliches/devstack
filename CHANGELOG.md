@@ -9,6 +9,19 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **`devstack up` waits for the containers too** (#66): it waited for the
+  autostart services only, so a stack of Compose groups alone answered
+  right away while its images were still built and its containers started.
+  It now follows every container its groups start (the group's
+  `services`, or every container of its project; not those a profile
+  skips, nor in a lane the `shared` ones) until it runs and, with a health
+  check, is healthy, or ran to completion. A container not ready 300 s
+  after the services, or a group whose Docker error holds for 10 s, fails
+  the `up` with its state. The MCP tools `up` and `lane_start` wait the
+  same way.
+
 ## [0.27.1] - 2026-10-28
 
 0.27.0 as tagged: its release stopped before publishing, at advisories
