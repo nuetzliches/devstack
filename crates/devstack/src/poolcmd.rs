@@ -1188,6 +1188,84 @@ pub fn run_lane(file: &Path, on: &str, lane: &str, keep: bool) -> Result<()> {
     result
 }
 
+/// `devstack pool upstreams [list|add|remove]`: the MCP upstreams the pool
+/// names for its members (ADR-0069 option B).
+pub fn upstreams(pool: &str, action: Option<crate::PoolUpstreamsAction>) -> Result<()> {
+    use crate::PoolUpstreamsAction as A;
+    use devstack_node::upstreams::{PoolAuth, PoolUpstream};
+    let local = Local::new(&member_dir(pool)?);
+    let list = match action.unwrap_or(A::List) {
+        A::List => local.upstreams()?,
+        A::Add {
+            name,
+            url,
+            prefix,
+            allow,
+            login,
+            client_id,
+        } => {
+            let auth = match login.as_str() {
+                "oauth" => PoolAuth::Oauth {
+                    client_id,
+                    scopes: Vec::new(),
+                },
+                "token" | "none" if client_id.is_some() => {
+                    bail!("`--client-id` is for `--login oauth`")
+                }
+                "token" => PoolAuth::Token,
+                "none" => PoolAuth::None,
+                o => bail!("`{o}`: `oauth`, `token` or `none`"),
+            };
+            let u = PoolUpstream {
+                name,
+                url,
+                prefix,
+                allow: allow.into_iter().filter(|t| !t.trim().is_empty()).collect(),
+                auth,
+            };
+            u.check().map_err(|e| anyhow!(e))?;
+            let list = local.admin_upstream_put(&u)?;
+            println!(
+                "pool `{pool}` names `{}`: each member's hub offers it in the dashboard, and uses it once its user accepts it",
+                u.name
+            );
+            list
+        }
+        A::Remove { name } => {
+            local.admin_upstream_remove(&name)?;
+            println!("pool `{pool}` no longer names `{name}`: members' hubs drop it and its login");
+            local.upstreams()?
+        }
+    };
+    if list.is_empty() {
+        println!("pool `{pool}` names no MCP upstreams");
+        return Ok(());
+    }
+    println!("MCP upstreams of pool `{pool}`:");
+    for u in &list {
+        let login = match &u.auth {
+            PoolAuth::None => "no login".to_string(),
+            PoolAuth::Token => "a token each member gives".to_string(),
+            PoolAuth::Oauth {
+                client_id: Some(c), ..
+            } => format!("OAuth (client id {c})"),
+            PoolAuth::Oauth { .. } => "OAuth".to_string(),
+        };
+        let tools = if u.allow.is_empty() {
+            "all tools".to_string()
+        } else {
+            u.allow.join(", ")
+        };
+        println!(
+            "  {:<16} {}  {}__…  {login}; {tools}",
+            u.name,
+            u.url,
+            u.prefix()
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::systemd_word;

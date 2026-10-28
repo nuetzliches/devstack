@@ -151,7 +151,7 @@ pub struct AuditEntry {
     /// Who: a member (`id (name)`) or [`SHELL`].
     pub by: String,
     /// `approve`, `reject`, `remove`, `role`, `pause`, `resume`, `end`,
-    /// `tags`, `policy`.
+    /// `tags`, `policy`, `provisioning`, `upstream`, `upstream-remove`.
     pub action: String,
     pub member: String,
     pub name: String,

@@ -48,7 +48,9 @@ impl Secrets {
         Self::open_as(SERVICE, dir)
     }
 
-    fn open_as(service: &str, dir: PathBuf) -> Self {
+    /// [`Self::open`] under another service (tests: one each, so tests
+    /// running side by side, and the user's own entries, stay apart).
+    pub(crate) fn open_as(service: &str, dir: PathBuf) -> Self {
         if probe(service) {
             return Self {
                 store: Store::Keychain {
@@ -81,7 +83,10 @@ impl Secrets {
     /// The secret of `upstream`; `None` when there is none.
     pub fn get(&self, upstream: &str) -> Result<Option<String>, String> {
         match &self.store {
-            Store::Keychain { service } => match entry(service, upstream)?.get_password() {
+            Store::Keychain { service } => match entry(service, upstream).map(|e| {
+                let _one = keychain();
+                e.get_password()
+            })? {
                 Ok(s) => Ok(Some(s)),
                 Err(keyring::Error::NoEntry) => Ok(None),
                 Err(e) => Err(e.to_string()),
@@ -96,9 +101,11 @@ impl Secrets {
 
     pub fn set(&self, upstream: &str, secret: &str) -> Result<(), String> {
         match &self.store {
-            Store::Keychain { service } => entry(service, upstream)?
-                .set_password(secret)
-                .map_err(|e| e.to_string()),
+            Store::Keychain { service } => {
+                let e = entry(service, upstream)?;
+                let _one = keychain();
+                e.set_password(secret).map_err(|e| e.to_string())
+            }
             Store::File { path, lock } => {
                 let _held = lock.lock().unwrap();
                 let mut all = read_file(path)?;
@@ -112,7 +119,10 @@ impl Secrets {
     /// Forget the secret of `upstream`; none there is no error.
     pub fn delete(&self, upstream: &str) -> Result<(), String> {
         match &self.store {
-            Store::Keychain { service } => match entry(service, upstream)?.delete_credential() {
+            Store::Keychain { service } => match entry(service, upstream).map(|e| {
+                let _one = keychain();
+                e.delete_credential()
+            })? {
                 Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
                 Err(e) => Err(e.to_string()),
             },
@@ -127,6 +137,15 @@ impl Secrets {
             Store::Nothing => Ok(()),
         }
     }
+}
+
+/// Held for each call into the keychain: the Windows Credential Manager
+/// loses writes and deletes made side by side from several threads (seen in
+/// the tests; the hub refreshes logins of parallel tool calls).
+fn keychain() -> std::sync::MutexGuard<'static, ()> {
+    static ONE: Mutex<()> = Mutex::new(());
+    ONE.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn entry(service: &str, upstream: &str) -> Result<keyring::Entry, String> {

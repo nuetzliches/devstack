@@ -12,6 +12,7 @@ import { connectedTo, usePool } from '@/stores/pool';
 import { sharedId } from '@/api';
 import Icon from '@/components/icons/Icon.vue';
 import CapacityChart from '@/components/CapacityChart.vue';
+import PoolUpstreams from '@/components/PoolUpstreams.vue';
 import type { PoolLease, PoolMember, PoolNode, PoolRelease } from '@/api/types';
 import { useUi } from '@/stores/ui';
 import { useHub } from '@/stores/hub';
@@ -56,6 +57,8 @@ const actionText: Record<string, string> = {
   provision: 'changed whether lanes cause provisioning for',
   confirm: 'confirmed the provisioned node',
   enrol: 'saw the provisioned node enrol:',
+  upstream: 'named an MCP upstream for the pool',
+  'upstream-remove': "took an MCP upstream off the pool's list",
 };
 
 // Provisioned nodes (ADR-0051): what the provisioner made, for admins the
@@ -443,6 +446,8 @@ function policyText(id: string) {
         </ul>
       </div>
     </section>
+
+    <PoolUpstreams v-if="!addingPool && me?.state === 'approved'" />
 
     <section v-if="!addingPool && me?.state === 'approved'" class="card" data-testid="pool-capacity">
       <header class="card-header">
@@ -921,7 +926,7 @@ function policyText(id: string) {
         <ul class="audit">
           <li v-for="(e, i) in audit" :key="i">
             <span class="faint tabular when">{{ ago(e.at * 1000, now) }}</span>
-            <span><strong>{{ e.by }}</strong> {{ actionText[e.action] ?? e.action }} <strong>{{ e.name }}</strong><template v-if="e.detail"> ({{ e.detail }})</template></span>
+            <span><strong>{{ e.by }}</strong> {{ actionText[e.action] ?? e.action }} <strong v-if="!e.action.startsWith('upstream')">{{ e.name }}</strong><template v-if="e.detail"> ({{ e.detail }})</template></span>
           </li>
         </ul>
       </div>

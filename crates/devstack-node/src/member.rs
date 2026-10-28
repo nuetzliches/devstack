@@ -630,6 +630,28 @@ impl Local {
     }
 
     /// Whether the pool collects telemetry (ADR-0037).
+    /// The MCP upstreams the pool names for its members (ADR-0069 option
+    /// B); none from a coordinator that names none yet (`404`).
+    pub fn upstreams(&self) -> Result<Vec<crate::upstreams::PoolUpstream>> {
+        match self.get("/v1/upstreams") {
+            Err(MemberError::Status(404, _)) => Ok(Vec::new()),
+            r => r,
+        }
+    }
+
+    /// Add an upstream to the pool's list, or change it (admins only).
+    pub fn admin_upstream_put(
+        &self,
+        u: &crate::upstreams::PoolUpstream,
+    ) -> Result<Vec<crate::upstreams::PoolUpstream>> {
+        self.post("/v1/admin/upstreams", u)
+    }
+
+    /// Take an upstream off the pool's list (admins only).
+    pub fn admin_upstream_remove(&self, name: &str) -> Result<()> {
+        self.delete(&format!("/v1/admin/upstreams/{name}"))
+    }
+
     pub fn telemetry_info(&self) -> Result<crate::telemetry::Info> {
         self.get("/v1/telemetry")
     }

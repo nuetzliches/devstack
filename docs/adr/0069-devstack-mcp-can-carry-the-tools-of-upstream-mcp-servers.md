@@ -1,6 +1,6 @@
 # ADR-0069: `devstack mcp` can carry the tools of upstream MCP servers, logged in once by the hub
 
-- **Status:** Accepted (2026-10-27, [card](https://github.com/nuetzliches/devstack/issues/316#issuecomment-6452598449)); amended 2026-10-27 (the keychain spike: `keyring`, a file on Linux without a Secret Service)
+- **Status:** Accepted (2026-10-27, [card](https://github.com/nuetzliches/devstack/issues/316#issuecomment-6452598449)); amended 2026-10-27 (the keychain spike: `keyring`, a file on Linux without a Secret Service); addendum 2026-10-28 (option B: a pool names upstreams, card approved 2026-10-28)
 - **Date:** 2026-10-27
 - **Deciders:** project owner
 - **Related:** [#316](https://github.com/nuetzliches/devstack/issues/316), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md), [ADR-0054](0054-macos-is-a-developer-platform-in-preview.md), [ADR-0060](0060-the-tray-is-a-client-of-the-hub.md), [ADR-0067](0067-a-change-at-runtime-says-who-made-it.md)
@@ -152,6 +152,47 @@ of these?
    upstream offers it, or no upstreams there?
 
 
+## Addendum 2026-10-28: a pool names upstreams (option B)
+
+Option B, left for later above, is built; its review card was approved by
+the owner on 2026-10-28 (all five points) and is in the description of the
+pull request that built it.
+
+1. **A pool names MCP upstreams for its members** (name, URL, prefix,
+   allowlist, how it logs in, a public client id), never a secret or a
+   token; logging in and the tokens stay in each member's hub (point 3
+   above is unchanged).
+2. **An entry is a URL, never a command.** If it could be one, whoever holds
+   the coordinator or an admin's machine would run code on every member's.
+   The URL is `https://` only: a pool's `localhost` is each member's own
+   machine. A token login names no variable either: a pool could otherwise
+   send a member's environment to its URL.
+3. **An entry is used only once the member accepted it** in the dashboard,
+   at the URL the pool names then; a pool that changes the URL has it
+   accepted again, and the login for the old one goes. Without this, a
+   coordinator could point every member's agents, and what they send, at a
+   server of its choosing, and feed them tool descriptions.
+4. **The member's own configuration goes first:** an entry with the name or
+   prefix of one of the member's upstreams is not used, a declined one stays
+   declined, and two pools' entries with one prefix are neither used until
+   the member gives one of them another.
+5. **The list lives with the coordinator** (`upstreams.json` in its
+   directory); an admin changes it with `devstack pool upstreams` or in the
+   pool area of the dashboard, each change in the audit log. Members read it
+   with `GET /v1/upstreams`; a coordinator of an earlier release answers
+   `404`, read as an empty list.
+
+Decided while building: the hub asks its pools every minute, off the
+requests, and at once after its own admin changed a list; it keeps the
+lists in `pool-upstreams.json` and uses the last one of a pool that does not
+answer. An accepted entry is `<pool>:<name>` in the hub (its keychain entry,
+its log, its tools' description). An entry the pool drops, or of a pool the
+machine left, goes with its decision and login. A change of an entry's
+prefix, allowlist or login kind by the pool needs no new acceptance; only
+its URL does. A pool names at most 64. Building it showed that the Windows
+Credential Manager loses writes and deletes made side by side from several
+threads: the hub now makes one keychain call at a time.
+
 ## Enforced by
 
 `crates/devstack-hub/src/secrets.rs` (the store, with its test against
@@ -177,3 +218,13 @@ configured, and looks for a change of their tools once a minute); the page
 *MCP upstreams* (`ui/src/views/UpstreamsView.vue`). One user token for
 every agent, as the owner chose on 2026-10-27; a token per agent was not
 built.
+
+*Option B, noted 2026-10-28:* `crates/devstack-node/src/upstreams.rs` (the
+entry and its check, `upstreams.json`), the coordinator's `/v1/upstreams`
+and `/v1/admin/upstreams` (`coordinator.rs`), `member.rs`;
+`crates/devstack-hub/src/upstreams.rs` (`refresh_pools`, `pooled`,
+`accept`, `decline`; the answers as `[[pool]]` in `upstreams.toml`),
+`pool.rs` and `lib.rs` (the routes); `crates/devstack/src/poolcmd.rs`
+(`devstack pool upstreams`); `ui/src/views/UpstreamsView.vue` and
+`ui/src/components/PoolUpstreams.vue`; tests in
+`crates/devstack-node/tests/upstreams.rs` and the hub's `upstreams.rs`.

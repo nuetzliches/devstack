@@ -443,6 +443,14 @@ pub fn serve() -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
         notify::start(state.clone());
+        // The pools' MCP upstreams (ADR-0069 option B), off the requests.
+        let ups = state.upstreams.clone();
+        std::thread::spawn(move || {
+            loop {
+                ups.refresh_pools();
+                std::thread::sleep(upstreams::POOLS_EVERY);
+            }
+        });
         tray::start_quietly();
         let app = router(state);
         if let Some(v6) = v6 {
@@ -493,6 +501,14 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/upstreams/{name}/login", post(upstream_login))
         .route("/hub/upstreams/{name}/token", post(upstream_token))
         .route("/hub/upstreams/{name}/logout", post(upstream_logout))
+        .route(
+            "/hub/upstreams/pool/{pool}/{name}/accept",
+            post(upstream_accept),
+        )
+        .route(
+            "/hub/upstreams/pool/{pool}/{name}/decline",
+            post(upstream_decline),
+        )
         .route("/hub/pair", post(pair))
         .route("/hub/shutdown", post(shutdown))
         .route("/hub/session", get(session))
@@ -567,6 +583,11 @@ fn router(state: AppState) -> axum::Router {
             get(pool::telemetry).put(pool::set_telemetry),
         )
         .route("/hub/pool/nodes/{id}/policy", post(pool::policy))
+        .route(
+            "/hub/pool/upstreams",
+            get(pool::upstreams).post(pool::upstream_put),
+        )
+        .route("/hub/pool/upstreams/{name}", delete(pool::upstream_remove))
         .route("/hub/pool/join", post(pool::join))
         .fallback(get(asset))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
@@ -2511,6 +2532,43 @@ async fn upstream_remove(State(s): State<AppState>, Path(name): Path<String>) ->
             .ok_or_else(|| format!("no upstream `{name}`"))
     })
     .await
+}
+
+#[derive(Deserialize, Default)]
+struct AcceptBody {
+    /// A prefix of the user's instead of the pool's.
+    #[serde(default)]
+    prefix: Option<String>,
+}
+
+/// `POST /hub/upstreams/pool/{pool}/{name}/accept {prefix?}`: use an
+/// upstream a pool names, at the URL it names now (ADR-0069 option B).
+async fn upstream_accept(
+    State(s): State<AppState>,
+    Path((pool, name)): Path<(String, String)>,
+    body: Option<Json<AcceptBody>>,
+) -> Response {
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    let what = serde_json::json!({ "pool": pool, "upstream": name });
+    let r = on_upstreams(&s, move |ups| ups.accept(&pool, &name, b.prefix)).await;
+    if r.status().is_success() {
+        diag::info("upstream_accept", what);
+    }
+    r
+}
+
+/// `POST /hub/upstreams/pool/{pool}/{name}/decline`: do not use it; its
+/// login goes.
+async fn upstream_decline(
+    State(s): State<AppState>,
+    Path((pool, name)): Path<(String, String)>,
+) -> Response {
+    let what = serde_json::json!({ "pool": pool, "upstream": name });
+    let r = on_upstreams(&s, move |ups| ups.decline(&pool, &name)).await;
+    if r.status().is_success() {
+        diag::info("upstream_decline", what);
+    }
+    r
 }
 
 #[derive(Deserialize)]
