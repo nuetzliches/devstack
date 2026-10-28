@@ -60,7 +60,7 @@ saying so.
    worktree" and "Discard data" buttons are gone; Remove worktree stays in
    the branch picker too.
 
-The card and its approval are in the pull request that built this.
+The [card](https://github.com/nuetzliches/devstack/pull/351) and its approval (2026-10-28, points 1–5) are in the pull request that built this.
 
 ## Consequences
 
