@@ -9,16 +9,19 @@ and listed with their assets on the
 
 ## [Unreleased]
 
-### Changed
+## [0.27.0] - 2026-10-28
 
-- **A stack starts sooner** (measured in the pool's telemetry: a lane on a
-  node took about 154 s, of which 51 s waiting for its containers before
-  any build, and 37 s building what an earlier lane had built). The
-  services are built while the containers start, Compose groups that no
-  `after` orders start side by side (here and on a node), and services
-  whose `after` is done start side by side. A node keeps the member's
-  build artifacts with its store (ADR-0062 addendum): the member's next
-  lane with the same inputs copies them instead of building.
+A pool grows by machines a provisioner makes, for members an admin
+allowed and within caps (ADR-0051). The MCP servers a user works with are
+configured once in the hub, which logs in to them and keeps the login in
+the keychain; `devstack mcp` offers their tools in every coding agent
+(ADR-0069). The dashboard's Activity page shows the live events and the
+journal in one timeline, with who changed what (ADR-0067), and the
+dashboard writes no file of a repository any more: a change there is a
+prompt for a coding agent (ADR-0071). A stack starts sooner: services
+build while the containers start, what is independent starts side by
+side, and a node keeps a member's build artifacts for the next lane. The
+card of a lane not started compares this machine with the pool's nodes.
 
 ### Added
 
@@ -48,8 +51,7 @@ and listed with their assets on the
   whoever runs the provisioner can read the lanes there. The contract is
   in [pool.md](docs/pool.md#grow-by-provisioned-nodes); `devstack node
   mock-provisioner` (hidden) tries it on one machine.
-
-- **MCP upstreams in the hub** (ADR-0069, first part): the dashboard's new
+- **MCP upstreams in the hub** (ADR-0069): the dashboard's new
   page *MCP upstreams* keeps the MCP servers a user works with once, per
   user: a URL, a prefix, which tools, and how it logs in. The hub logs in
   itself, with OAuth (it finds the authorization server, registers where
@@ -78,6 +80,14 @@ and listed with their assets on the
 
 ### Changed
 
+- **A stack starts sooner** (measured in the pool's telemetry: a lane on a
+  node took about 154 s, of which 51 s waiting for its containers before
+  any build, and 37 s building what an earlier lane had built). The
+  services are built while the containers start, Compose groups that no
+  `after` orders start side by side (here and on a node), and services
+  whose `after` is done start side by side. A node keeps the member's
+  build artifacts with its store (ADR-0062 addendum): the member's next
+  lane with the same inputs copies them instead of building.
 - **The dashboard writes no file of a repository** (ADR-0071): "Refresh
   skills", "Create draft" in "Add a stack" and "Copy the main tree's" for a
   worktree without a stack file are gone. Each is a prompt for a coding
@@ -1981,7 +1991,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/nuetzliches/devstack/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/nuetzliches/devstack/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/nuetzliches/devstack/compare/v0.24.1...v0.25.0
 [0.24.1]: https://github.com/nuetzliches/devstack/compare/v0.24.0...v0.24.1
