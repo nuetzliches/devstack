@@ -148,7 +148,7 @@ node), `down`, `start_service`, `stop_service`, `restart_service`,
 `dashboard:` page, `lanes` names each lane's. `lane_start` and `lane_stop` work from the main tree too: an
 agent there runs another worktree's lane without moving to it. `up` also
 takes `profile`, `run` and `yes` (as `--profile`, `--run`, `--yes`) and
-`timeout_s` (how long it waits for the services; the stack keeps starting);
+`timeout_s` (how long it waits for the services and containers; the stack keeps starting);
 `lane_start` takes `profile`, `run` and `timeout_s` too; `logs` takes `file` (one kept log, from its
 list); `diagnostics` takes `source: "hub"` for the hub's log. Each tool
 describes its parameters.

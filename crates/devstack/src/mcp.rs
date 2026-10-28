@@ -382,7 +382,7 @@ pub fn tools() -> Vec<Value> {
                 "on": { "type": "string", "description": "Where it runs (ADR-0025): a node of the pool (its name or member id), `pool` for the coordinator to choose (warm first), `<pool>:<node>` in another pool, `local` for this machine. Without it: where this machine starts lanes by default (`devstack pool default-on`; `local` unless the user set it). The worktree's files go to that machine: unless the default says so, ask the user before starting elsewhere; `placement` shows where it could go" },
                 "profile": { "type": "string", "description": "A profile of the stack file (ADR-0041), e.g. for an acceptance run of this lane's commit" },
                 "run": { "type": "boolean", "description": "With `profile`: once ready, run the profile's command in the lane and return its result" },
-                "timeout_s": { "type": "integer", "description": "How long to wait for its services (default 600)" },
+                "timeout_s": { "type": "integer", "description": "How long to wait for its services and containers (default 600)" },
             }),
             &["lane"],
             false,

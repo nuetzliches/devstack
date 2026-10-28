@@ -1123,7 +1123,8 @@ pub fn up(
 }
 
 pub enum UpOutcome {
-    /// Every autostart service is ready; the stack view at that moment.
+    /// Every autostart service and every container of the stack is ready;
+    /// the stack view at that moment.
     Ready(Value),
     Failed {
         service: String,
@@ -1133,8 +1134,9 @@ pub enum UpOutcome {
     TimedOut(Value),
 }
 
-/// `POST /v1/up`, then follow the stack until every autostart service is
-/// ready or one fails. `progress` hears every change of a service's state.
+/// `POST /v1/up`, then follow the stack until every autostart service and
+/// every container of its Compose groups is ready, or one fails. `progress`
+/// hears every change of a service's or a container's state.
 pub fn start_and_wait(
     c: &Client,
     stack_file: &Path,
@@ -1147,7 +1149,14 @@ pub fn start_and_wait(
     }
     let stack_cfg = devstack_config::load(stack_file)?;
     // What starts is what the profile the tree runs with says (ADR-0041).
-    let stack_cfg = match c.stack()?["profile"].as_str() {
+    let profile = c.stack()?["profile"].as_str().map(str::to_string);
+    // The containers the profile leaves out (`skip`, ADR-0058) never start.
+    let skip: Vec<String> = profile
+        .as_deref()
+        .and_then(|p| stack_cfg.profiles.get(p))
+        .map(|p| p.skip.clone())
+        .unwrap_or_default();
+    let stack_cfg = match profile.as_deref() {
         Some(p) => stack_cfg.with_profile(p).unwrap_or(stack_cfg),
         None => stack_cfg,
     };
@@ -1165,6 +1174,10 @@ pub fn start_and_wait(
         .collect();
     let mut last: std::collections::BTreeMap<String, String> = Default::default();
     let t0 = Instant::now();
+    // Since when the containers alone hold the start up, and since when a
+    // group's view has carried an error.
+    let mut containers_since: Option<Instant> = None;
+    let mut errored: std::collections::BTreeMap<String, Instant> = Default::default();
     loop {
         let stack = c.stack()?;
         // A lane serves the main ports: what it took over is stopped here
@@ -1194,6 +1207,65 @@ pub fn start_and_wait(
                 }
             }
         }
+        // Its containers too: a stack of Compose groups alone has no service
+        // to wait for, and `up` answered while its images were still built.
+        let mut waiting = Vec::new();
+        for (g, group) in &stack_cfg.compose {
+            if skip.iter().any(|k| k == &format!("compose.{g}")) {
+                continue;
+            }
+            let view = stack["infra"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|v| v["group"] == g.as_str());
+            match view.and_then(|v| v["error"].as_str()) {
+                Some(e) => {
+                    let since = *errored.entry(g.clone()).or_insert_with(Instant::now);
+                    if since.elapsed() >= CONTAINER_ERROR_FOR {
+                        failed.push((format!("compose.{g}"), e.to_string()));
+                        continue;
+                    }
+                }
+                None => {
+                    errored.remove(g);
+                }
+            }
+            for (svc, st) in container_states(group, view, c.lane().is_some()) {
+                let name = format!("{g}.{svc}");
+                if skip.iter().any(|k| k == &format!("compose.{name}")) {
+                    continue;
+                }
+                let shown = st.as_deref().unwrap_or("not created yet").to_string();
+                if st.is_some() && last.get(&name) != Some(&shown) {
+                    progress(&name, &shown);
+                    last.insert(name.clone(), shown.clone());
+                }
+                if !st.as_deref().is_some_and(container_ready) {
+                    waiting.push(format!("{name}: {shown}"));
+                }
+            }
+        }
+        if done && failed.is_empty() && !waiting.is_empty() {
+            done = false;
+            let since = *containers_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= CONTAINERS_READY_WITHIN {
+                return Ok(UpOutcome::Failed {
+                    service: "the containers".into(),
+                    reason: format!(
+                        "not ready within {} s:
+{}",
+                        CONTAINERS_READY_WITHIN.as_secs(),
+                        waiting.join(
+                            "
+"
+                        )
+                    ),
+                });
+            }
+        } else if waiting.is_empty() {
+            containers_since = None;
+        }
         // Wait until every autostart service is ready or failed: one failure
         // does not stop the others (the daemon starts what does not depend on it).
         if done && !failed.is_empty() {
@@ -1217,6 +1289,78 @@ pub fn start_and_wait(
             return Ok(UpOutcome::TimedOut(stack));
         }
         std::thread::sleep(Duration::from_millis(400));
+    }
+}
+
+/// How long the containers alone may hold `up` up once every service is
+/// ready: the daemon waits as long for a container to get healthy.
+const CONTAINERS_READY_WITHIN: Duration = Duration::from_secs(300);
+/// How long a group's view may carry an error (Docker answered with one)
+/// before `up` reports it: one failed `docker compose ps` is no failure.
+const CONTAINER_ERROR_FOR: Duration = Duration::from_secs(10);
+
+/// The containers `up` waits for in a group, each with its state as
+/// `state/health/exit code`, or `None` while it does not exist: the group's
+/// `services` (in a lane without its `shared` ones, which run in the main
+/// tree), or every container of its project when it names none (at least
+/// one).
+fn container_states(
+    group: &devstack_config::model::ComposeGroup,
+    view: Option<&Value>,
+    in_lane: bool,
+) -> Vec<(String, Option<String>)> {
+    let containers: Vec<&Value> = view
+        .and_then(|v| v["containers"].as_array())
+        .into_iter()
+        .flatten()
+        .filter(|c| c["managed"] != false)
+        .collect();
+    let state = |c: &Value| {
+        format!(
+            "{}/{}/{}",
+            c["state"].as_str().unwrap_or(""),
+            c["health"].as_str().unwrap_or(""),
+            c["exit_code"].as_i64().unwrap_or(0)
+        )
+    };
+    if group.services.is_empty() {
+        if containers.is_empty() {
+            return vec![("*".into(), None)];
+        }
+        return containers
+            .iter()
+            .map(|c| {
+                (
+                    c["service"].as_str().unwrap_or("").to_string(),
+                    Some(state(c)),
+                )
+            })
+            .collect();
+    }
+    group
+        .services
+        .iter()
+        .filter(|s| !(in_lane && group.shared.contains(s)))
+        .map(|s| {
+            let c = containers.iter().find(|c| c["service"] == s.as_str());
+            (s.clone(), c.map(|c| state(c)))
+        })
+        .collect()
+}
+
+/// A container is ready when it runs and, with a health check, is healthy,
+/// or when it ran to completion (an init container, exit code 0).
+fn container_ready(st: &str) -> bool {
+    let mut p = st.splitn(3, '/');
+    let (state, health, code) = (
+        p.next().unwrap_or(""),
+        p.next().unwrap_or(""),
+        p.next().unwrap_or(""),
+    );
+    match state {
+        "running" => matches!(health, "" | "none" | "healthy"),
+        "exited" => code == "0",
+        _ => false,
     }
 }
 
@@ -2513,6 +2657,47 @@ pub fn print_placement(stack_file: &Path, lane: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn up_waits_for_the_containers_a_group_starts() {
+        use super::{container_ready, container_states};
+        let group = |services: &[&str], shared: &[&str]| {
+            serde_json::from_value::<devstack_config::model::ComposeGroup>(serde_json::json!({
+                "project": "p", "files": ["c.yml"], "services": services, "shared": shared,
+            }))
+            .unwrap()
+        };
+        let view = serde_json::json!({ "group": "data", "error": null, "containers": [
+            { "service": "db", "state": "running", "health": "starting", "exit_code": 0, "managed": true },
+            { "service": "init", "state": "exited", "health": "", "exit_code": 0, "managed": true },
+            { "service": "old", "state": "exited", "health": "", "exit_code": 1, "managed": false },
+        ]});
+        // Named: each, a missing one as not created yet; in a lane not the
+        // `shared` ones, which run in the main tree.
+        let g = group(&["db", "cache"], &["cache"]);
+        assert_eq!(
+            container_states(&g, Some(&view), false),
+            vec![
+                ("db".to_string(), Some("running/starting/0".to_string())),
+                ("cache".to_string(), None)
+            ]
+        );
+        assert_eq!(container_states(&g, Some(&view), true).len(), 1);
+        // None named: every container the group manages, at least one.
+        let all = group(&[], &[]);
+        assert_eq!(container_states(&all, Some(&view), false).len(), 2);
+        assert_eq!(
+            container_states(&all, None, false),
+            vec![("*".to_string(), None)]
+        );
+        assert!(!container_ready("running/starting/0"));
+        assert!(!container_ready("running/unhealthy/0"));
+        assert!(container_ready("running/healthy/0"));
+        assert!(container_ready("running//0"));
+        assert!(container_ready("exited//0"));
+        assert!(!container_ready("exited//1"));
+        assert!(!container_ready("created//0"));
+    }
+
     use super::*;
 
     #[test]
