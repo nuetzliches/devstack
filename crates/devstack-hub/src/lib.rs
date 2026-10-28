@@ -3548,12 +3548,12 @@ mod daemon_send_tests {
     }
 
     /// A port nothing listens on.
+    /// A port nothing answers on: a privileged one, which no test (nor any
+    /// unprivileged process) can listen on. A port bound and let go of may
+    /// serve another test's listener a moment later (seen on macOS), and one
+    /// bound without listening is not refused there but left to time out.
     fn closed() -> u16 {
-        std::net::TcpListener::bind(("127.0.0.1", 0))
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port()
+        1
     }
 
     fn serves(port: u16) -> DaemonNow {
