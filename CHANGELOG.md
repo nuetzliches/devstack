@@ -54,6 +54,12 @@ and listed with their assets on the
   services, its start) showed as "by an unknown client" in that lane's
   *Activity*; it now shows as "by devstack". The client a person used is
   in the requester's journal.
+- **A node that cannot take a lane says what other starts hold there.**
+  For a minute after it is offered, a lease for another lane holds its
+  room on its node; the node's figures in the dashboard do not count it,
+  so a node with enough free read "cannot take it: offers 3.9 CPU …". The
+  reason now adds "4.8 CPU and 1802 MiB more are held for a lane starting
+  there".
 - **A lane on a node keeps its journal** (#287): the requester's take of
   the lane daemon's telemetry lines, every 30 seconds, went into that
   daemon's journal as "take the telemetry lines by an unknown client" and

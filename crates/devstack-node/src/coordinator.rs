@@ -1723,8 +1723,29 @@ fn placement_for(
     );
     for p in &mut out {
         p.need_from = Some(from.clone());
+        // What offers for other lanes hold there is not in the node's own
+        // figures the dashboard shows: say so where it decides.
+        if !p.eligible && (p.cpus < need.cpus || p.memory < need.memory) {
+            let held = held_by(&leases, &p.node, |l, at| {
+                l.state == "offered" && at.elapsed() < OFFER_HOLDS && !(own && mine(l))
+            });
+            p.why = with_held(&p.why, held);
+        }
     }
     out
+}
+
+/// A refusal for want of CPU or memory, with what offers for other lanes
+/// hold of the node's offer, if they hold any.
+fn with_held(why: &str, held: Held) -> String {
+    if held.cpus <= 0.0 && held.memory == 0 {
+        return why.to_string();
+    }
+    format!(
+        "{why}; {:.1} CPU and {} MiB more are held for a lane starting there",
+        held.cpus,
+        held.memory >> 20
+    )
 }
 
 /// `GET /v1/placement?repo=&lane=&cpus=&memory=&disk=&profile=`: where a
@@ -3741,6 +3762,15 @@ mod placement_tests {
             },
         );
         assert!(!o[0].1, "{o:?}");
+        // The refusal says what they hold; with nothing held, it is as it was.
+        assert_eq!(
+            with_held("offers 2.0 CPU", held),
+            "offers 2.0 CPU; 2.0 CPU and 6144 MiB more are held for a lane starting there"
+        );
+        assert_eq!(
+            with_held("offers 2.0 CPU", Held::default()),
+            "offers 2.0 CPU"
+        );
         // Their disk is held too.
         assert_eq!(held.disk, 6 * GIB);
         assert_eq!(rep.disk_room, Some(94 * GIB));
