@@ -641,6 +641,35 @@ fn a_lane_runs_on_a_node_of_the_pool() {
         body.contains("ok"),
         "GET /health on the main port after the restart: {body}"
     );
+
+    // With its service running, a warm restart restarts it through the
+    // lane's own API, and the lane daemon's journal names those calls as
+    // devstack's, not an unknown client's (ADR-0067). Only what came after:
+    // the CLI's restarts above are journaled as the CLI's.
+    let journal = || {
+        let (_, body) = api_request(&main, state.path(), "GET", "/v1/lanes/wt/v1/journal")
+            .expect("the lane answers");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        (v, body)
+    };
+    let (v, _) = journal();
+    let last = v
+        .as_array()
+        .and_then(|a| a.iter().filter_map(|e| e["at"].as_u64()).max())
+        .unwrap_or(0);
+    let (st, body) = api_request(&main, state.path(), "POST", "/v1/lanes/wt/restart")
+        .expect("the daemon answers");
+    assert_eq!(st, 200, "{body}");
+    let (v, body) = journal();
+    let restarts: Vec<&serde_json::Value> = v
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|e| e["at"].as_u64().is_some_and(|at| at > last))
+        .filter(|e| e["path"].as_str().is_some_and(|p| p.ends_with("/restart")))
+        .collect();
+    assert!(!restarts.is_empty(), "{body}");
+    assert!(restarts.iter().all(|e| e["via"] == "auto"), "{body}");
     cli(&main, &["promote", "--lane", "main"]);
 
     // `down` in the main tree stops the main tree only: the lane on the
