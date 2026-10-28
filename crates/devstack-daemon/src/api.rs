@@ -99,10 +99,7 @@ pub fn router(state: AppState) -> axum::Router {
 /// by the main API it came through (with the lane), not again by the lane's.
 async fn audit(State(s): State<AppState>, req: Request, next: Next) -> Response {
     let method = req.method().clone();
-    if method == axum::http::Method::GET
-        || method == axum::http::Method::HEAD
-        || !s.sup.lane.is_empty()
-    {
+    if !s.sup.lane.is_empty() || !audited(&method, req.uri().path()) {
         return next.run(req).await;
     }
     let path = req.uri().path().to_string();
@@ -148,6 +145,17 @@ async fn audit(State(s): State<AppState>, req: Request, next: Next) -> Response 
         fields,
     );
     res
+}
+
+/// Whether a request changes something a person may ask about afterwards.
+/// Not a read, and not the requester's take of a lane daemon's telemetry
+/// lines (#287): it comes every 30 seconds and would push the lane's real
+/// changes out of the journal within hours, and its own log line would be
+/// the next take's telemetry.
+fn audited(method: &axum::http::Method, path: &str) -> bool {
+    method != axum::http::Method::GET
+        && method != axum::http::Method::HEAD
+        && path != "/v1/telemetry/take"
 }
 
 #[derive(Deserialize)]
@@ -1949,6 +1957,15 @@ mod tests {
     use axum::body::Body;
 
     const GB: u64 = 1 << 30;
+
+    #[test]
+    fn the_telemetry_take_is_no_change_to_audit() {
+        use axum::http::Method;
+        assert!(!audited(&Method::POST, "/v1/telemetry/take"));
+        assert!(!audited(&Method::GET, "/v1/services/api/restart"));
+        assert!(audited(&Method::POST, "/v1/services/api/restart"));
+        assert!(audited(&Method::DELETE, "/v1/store/api/abc"));
+    }
 
     #[test]
     fn containers_in_docker_desktops_vm_are_checked_against_the_vm() {
