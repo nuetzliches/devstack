@@ -5,7 +5,7 @@
 // goes to the hub's keychain, an OAuth login runs in a browser tab and comes
 // back to the hub. A pool may name upstreams too (option B): they are listed
 // with their pool and used only once the user accepts them.
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { api, paths } from '@/api';
 import type { McpUpstream, McpUpstreamAuth, McpUpstreams } from '@/api/types';
 import { act } from '@/lib/actions';
@@ -140,9 +140,51 @@ async function login(u: McpUpstream) {
   if (r.ok && r.body?.url) {
     if (tab) tab.location.href = r.body.url;
     else window.open(r.body.url, '_blank');
-    ui.toast('info', `Log in to ${u.name} in the new tab`, 'Then come back and reload this list.');
+    ui.toast('info', `Log in to ${u.name} in the new tab`, 'This list follows once the login is done.');
+    watchLogin(u.name);
   } else tab?.close();
 }
+
+// A login ends in another tab, at the hub: the list asks the hub again until
+// the upstream is logged in, and at once when the user comes back here.
+const pending = new Set<string>();
+let timer: ReturnType<typeof setInterval> | null = null;
+let since = 0;
+
+function watchLogin(name: string) {
+  pending.add(name);
+  since = Date.now();
+  if (!timer) timer = setInterval(followLogins, 2000);
+}
+
+async function followLogins() {
+  await load();
+  for (const name of pending) {
+    if (state.value?.upstreams.find((u) => u.name === name)?.logged_in) pending.delete(name);
+  }
+  // A login nobody finishes is not asked about for ever.
+  if (pending.size === 0 || Date.now() - since > 10 * 60_000) stopWatching();
+}
+
+function stopWatching() {
+  pending.clear();
+  if (timer) clearInterval(timer);
+  timer = null;
+}
+
+function onReturn() {
+  if (pending.size > 0 && document.visibilityState === 'visible') void followLogins();
+}
+
+onMounted(() => {
+  window.addEventListener('focus', onReturn);
+  document.addEventListener('visibilitychange', onReturn);
+});
+onUnmounted(() => {
+  window.removeEventListener('focus', onReturn);
+  document.removeEventListener('visibilitychange', onReturn);
+  stopWatching();
+});
 
 const tokenFor = ref<string | null>(null);
 const tokenValue = ref('');

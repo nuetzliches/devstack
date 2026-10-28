@@ -9,6 +9,13 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **The MCP upstreams page follows a login**: after an OAuth login in the
+  other tab, the list shows the upstream logged in by itself (it asks the
+  hub every two seconds, and at once when you come back to the tab),
+  instead of only after a reload.
+
 ## [0.28.0] - 2026-10-28
 
 A restart is warm, a rebuild or cold, from every restart button and the
