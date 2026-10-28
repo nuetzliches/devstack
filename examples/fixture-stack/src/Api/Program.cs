@@ -4,6 +4,8 @@
 
 var app = WebApplication.CreateBuilder(args).Build();
 var workers = Environment.GetEnvironmentVariable("Jobs__Enabled") == "true";
+// One per process: a pid can come again (Windows reuses them quickly).
+var instance = Guid.NewGuid().ToString();
 
 app.MapGet("/health", () => Results.Ok("ok"));
 app.MapGet("/env/{name}", (string name) => Environment.GetEnvironmentVariable(name) ?? "");
@@ -13,6 +15,7 @@ app.MapGet("/info", () => new
     slot = Environment.GetEnvironmentVariable("DEVSTACK_SLOT"),
     workers,
     pid = Environment.ProcessId,
+    instance,
 });
 
 // Long-lived connections, for the promotion comparison (ADR-0010): which
