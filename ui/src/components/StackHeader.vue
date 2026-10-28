@@ -14,7 +14,9 @@ import { useStack } from '@/stores/stack';
 import { connectedTo, usePool } from '@/stores/pool';
 import { useUi } from '@/stores/ui';
 import { useOpenerPrefs } from '@/lib/openers';
+import { laneActions, type LaneAction } from '@/lib/laneActions';
 import BranchPicker from './BranchPicker.vue';
+import SplitButton from './SplitButton.vue';
 import Icon from './icons/Icon.vue';
 import McpHint from './McpHint.vue';
 import OpenersDialog from './OpenersDialog.vue';
@@ -36,6 +38,9 @@ function servedSince(name: string): string {
   return `${m.at ? ` since ${clock(m.at)}` : ''}, set ${viaText(m.via)}`;
 }
 const busyMain = computed(() => !!stack.busy['lane-main']);
+/** The shown lane's actions (Restart or Start, and the rest in the menu). */
+const laneMenu = computed(() => (current.value ? laneActions(current.value) : null));
+const laneBusy = computed(() => !!current.value && (stack.busy['lane-restart'] === current.value.name || stack.busy['lane-start'] === current.value.name));
 
 /** The shown tree's state and its event stream: live, or why not. */
 const liveState = computed(() => {
@@ -273,26 +278,20 @@ function openWith(o: Opener) {
             </button>
           </div>
         </div>
-        <button
-          v-if="current && current.active === false && !current.moving"
-          type="button"
-          class="btn btn-sm"
-          :title="`Throw ${laneLabel(current)}'s data away (its containers and volumes, here and on the nodes it ran on): it starts fresh`"
-          data-testid="lane-reset"
-          @click="stack.resetLane(current.name)"
-        >
-          <Icon name="trash" :size="14" /> Discard data
-        </button>
-        <button
-          v-if="current && !current.owns_main && current.active !== false"
-          type="button"
-          class="btn btn-sm btn-stop"
-          :title="`Stop ${laneLabel(current)}: its services and containers stop; the worktree stays`"
-          data-testid="lane-stop"
-          @click="stack.stopLane(current.name)"
-        >
-          <Icon name="stop" :size="14" /> Stop worktree
-        </button>
+        <!-- Every action of the lane in one place: Restart (or Start), and the rest in its menu. -->
+        <SplitButton
+          v-if="current && laneMenu"
+          :label="laneMenu.main.label"
+          :icon="laneMenu.main.icon"
+          :title="laneMenu.main.title ?? laneMenu.main.label"
+          :items="laneMenu.items"
+          :main-disabled="!!laneMenu.main.disabled"
+          :busy="laneBusy"
+          menu-label="Lane actions"
+          testid="lane-actions"
+          @main="stack.laneAction(current!, laneMenu.main.key)"
+          @pick="(k) => stack.laneAction(current!, k as LaneAction)"
+        />
         <template v-if="!current">
           <button v-if="!stack.running || stack.mainIdle" type="button" class="btn btn-primary btn-sm" :disabled="starting || !stack.entry" data-testid="action-stack-start" @click="stack.startStack()">
             <span v-if="starting" class="spinner" /><Icon v-else name="play" :size="14" /> Start stack

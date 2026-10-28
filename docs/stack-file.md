@@ -933,7 +933,10 @@ members = ["api", "web", "compose.app.db", "command.seed"]
 Labels for the dashboard and `devstack status`, not dependencies: a member may
 be in several groups, and members of no group appear under "Other".
 `label` defaults to the group's key; groups without `order` follow those
-with one, alphabetically.
+with one, alphabetically. `devstack start|stop|restart <group>` and the
+group's buttons in the dashboard act on every member, its containers too
+(a lane leaves the main tree's `shared` ones alone); `restart --rebuild`
+builds its services again even for inputs built before.
 `members` is required, not empty, lists each member once, and names what
 exists (a `compose.<group>.<service>` member is a service its group starts).
 

@@ -49,7 +49,7 @@ const routes: { method: string; re: RegExp; label: (m: string[]) => string }[] =
   { method: 'POST', re: /^\/v1\/runs\/(\d+)\/cancel$/, label: (m) => `cancel run #${m[1]}` },
   { method: 'POST', re: /^\/v1\/lanes$/, label: () => 'start a lane' },
   { method: 'POST', re: /^\/v1\/lanes\/prune$/, label: () => 'remove the stopped lanes' },
-  { method: 'POST', re: /^\/v1\/lanes\/([^/]+)\/(stop|reset|move|share)$/, label: (m) => `${m[2]} lane ${m[1]}` },
+  { method: 'POST', re: /^\/v1\/lanes\/([^/]+)\/(stop|reset|restart|move|share)$/, label: (m) => `${m[2]} lane ${m[1]}` },
   { method: 'POST', re: /^\/v1\/lanes\/([^/]+)\/main$/, label: (m) => (m[1] === 'main' ? 'main tree takes the main ports back' : `lane ${m[1]} takes the main ports`) },
   { method: 'AUTO', re: /^\/v1\/lanes\/([^/]+)\/main$/, label: (m) => (m[1] === 'main' ? 'main ports back to the main tree' : `main ports to lane ${m[1]}`) },
   { method: 'POST', re: /^\/v1\/main-slot$/, label: () => 'set the main slot' },

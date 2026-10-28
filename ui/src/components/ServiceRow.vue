@@ -8,6 +8,8 @@ import { useStack } from '@/stores/stack';
 import StatusPill from './StatusPill.vue';
 import ErrorLine from './ErrorLine.vue';
 import RowUsage from './RowUsage.vue';
+import SplitButton from './SplitButton.vue';
+import type { MenuItem } from '@/lib/laneActions';
 import { usePins } from '@/lib/pins';
 import Icon from './icons/Icon.vue';
 
@@ -25,6 +27,17 @@ const candLook = computed(() => (cand.value ? candidateLook(cand.value) : null))
 const reb = computed(() => (cand.value ? null : (props.service.rebuild ?? null)));
 const rebLook = computed(() => (reb.value ? rebuildLook(reb.value) : null));
 const busy = computed(() => stack.busy[`svc:${props.service.name}`]);
+/** Restart's menu: Rebuild, for a service that runs a build. */
+const restartItems = computed<MenuItem[]>(() => [
+  {
+    key: 'rebuild',
+    label: 'Rebuild',
+    icon: 'wrench',
+    hint: 'built again',
+    disabled: !props.service.build_id,
+    title: props.service.build_id ? `Build ${props.service.name} again, even for inputs built before, and restart it` : `${props.service.name} runs no build`,
+  },
+]);
 const isStopped = computed(() => ['stopped', 'completed', 'exited', 'failed'].includes(props.service.status.state));
 const to = computed(() => ({ name: 'service', params: { stack: stack.id ?? '', name: props.service.name } }));
 const route = useRoute();
@@ -78,18 +91,19 @@ function open(e: MouseEvent) {
         >
           <span v-if="busy" class="spinner" /><Icon v-else name="play" />
         </button>
-        <button
+        <SplitButton
           v-else
-          type="button"
-          class="btn btn-ghost btn-sm btn-icon"
-          :aria-label="`Restart ${service.name}`"
-          title="Restart (rebuild, switch when healthy)"
+          look="ghost"
+          icon="restart"
+          :title="`Restart ${service.name}: from the build there is for its inputs, else built; switches when healthy`"
+          :items="restartItems"
           :disabled="!!busy || stack.stale"
-          data-testid="action-restart"
-          @click="stack.serviceAction(service.name, 'restart')"
-        >
-          <span v-if="busy" class="spinner" /><Icon v-else name="restart" />
-        </button>
+          :busy="!!busy"
+          :menu-label="`More restarts of ${service.name}`"
+          testid="action-restart"
+          @main="stack.serviceAction(service.name, 'restart')"
+          @pick="stack.serviceAction(service.name, 'rebuild')"
+        />
         <button
           v-if="!isStopped"
           type="button"

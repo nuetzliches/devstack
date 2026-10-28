@@ -79,6 +79,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/lanes", get(lanes_list).post(lanes_start))
         .route("/v1/lanes/{lane}/stop", post(lanes_stop))
         .route("/v1/lanes/{lane}/reset", post(lanes_reset))
+        .route("/v1/lanes/{lane}/restart", post(lanes_restart))
         .route("/v1/lanes/prune", post(lanes_prune))
         .route("/v1/lanes/{lane}/move", post(lanes_move))
         .route("/v1/lanes/{lane}/share", post(lanes_share))
@@ -879,6 +880,49 @@ async fn lanes_reset(State(s): State<AppState>, Path(lane): Path<String>) -> Res
 }
 
 #[derive(Deserialize, Default)]
+struct LaneRestart {
+    /// `warm` (absent), `rebuild` or `cold`.
+    #[serde(default)]
+    mode: Option<String>,
+}
+
+/// `POST /v1/lanes/{lane}/restart` with `{"mode"}`: restart a started lane
+/// where it runs (`warm`: its running services, from the artifacts there
+/// are; `rebuild`: built again; `cold`: stopped, its data thrown away and
+/// started again at the same place). `warm` and `rebuild` answer when the
+/// services ran, `cold` once the lane is started again (its services start
+/// after, on a node its `moving` shows the start). The lanes after it.
+async fn lanes_restart(
+    State(s): State<AppState>,
+    Path(lane): Path<String>,
+    body: Option<Json<LaneRestart>>,
+) -> Response {
+    let lanes = match lanes_of(&s) {
+        Ok(l) => l.clone(),
+        Err(r) => return r,
+    };
+    let mode = body.and_then(|b| b.0.mode).unwrap_or_else(|| "warm".into());
+    if !matches!(mode.as_str(), "warm" | "rebuild" | "cold") {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!("mode `{mode}`: `warm`, `rebuild` or `cold`"),
+        );
+    }
+    let main = s.sup.clone();
+    let usage = s.usage.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        let need = lane_estimate(&main, &usage);
+        lanes.restart(&lane, &mode, need).map(|()| lanes.list())
+    })
+    .await;
+    match res {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err(StatusCode::CONFLICT, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize, Default)]
 struct Prune {
     /// Also kept lanes on nodes not used for this long (`7d`, `36h`).
     #[serde(default)]
@@ -1117,8 +1161,8 @@ async fn service_env(
     }
 }
 
-/// `POST /v1/groups/{name}/{start|stop|restart}`: every member; `409` names
-/// the members that failed (the others ran).
+/// `POST /v1/groups/{name}/{start|stop|restart|rebuild}`: every member,
+/// its containers too; `409` names the members that failed (the others ran).
 /// The node's agent acted on the containers this request names already
 /// (a lane on a node, #128): its daemon, which has no Docker, leaves them.
 fn node_acted(headers: &axum::http::HeaderMap) -> bool {
@@ -1134,7 +1178,7 @@ async fn group_action(
     if !s.sup.stack.groups.contains_key(&name) {
         return err(StatusCode::NOT_FOUND, format!("no group `{name}`"));
     }
-    if !matches!(action.as_str(), "start" | "stop" | "restart") {
+    if !matches!(action.as_str(), "start" | "stop" | "restart" | "rebuild") {
         return err(
             StatusCode::NOT_FOUND,
             format!("unknown group action `{action}`"),

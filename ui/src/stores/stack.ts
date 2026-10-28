@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia';
 import { computed, ref, shallowRef, triggerRef, watch } from 'vue';
-import { api, paths, sharedRef, v1, type GroupAction, type ServiceAction, type StreamState, type Subscription } from '@/api';
+import { api, paths, sharedRef, v1, type GroupAction, type RestartMode, type ServiceAction, type StreamState, type Subscription } from '@/api';
 import type { Branches, JournalEntry, LaneView, Point, Pruned, Run, ServiceView, SkillsState, StackEvent, StackView, UpgradeState, UsageReport, McpState } from '@/api/types';
-import { restartLanesText, restartPlan, samePath } from '@/lib/lanes';
+import { laneLabel, restartLanesText, restartPlan, samePath } from '@/lib/lanes';
+import type { LaneAction } from '@/lib/laneActions';
 import { act } from '@/lib/actions';
 import { forTree, sameEntry } from '@/lib/journal';
 import { persist } from '@/lib/persist';
@@ -319,6 +320,57 @@ export const useStack = defineStore('stack', () => {
     // The lane stays shown, with its start: the eyes are on the button that
     // stopped it, and "Stop stack" there would be the main tree's.
     if (res.ok) await loadLanes();
+  }
+
+  /**
+   * Restart a started lane where it runs: `warm` its running services from
+   * the artifacts there are, `rebuild` built again, `cold` stopped, its data
+   * thrown away and started again at the same place (asks first).
+   */
+  async function restartLane(name: string, mode: RestartMode) {
+    if (refuseReadOnly() || !id.value) return;
+    const what = { warm: 'Restart', rebuild: 'Rebuild', cold: 'Cold restart' }[mode];
+    busy.value['lane-restart'] = name;
+    try {
+      const r = await act<LaneView[]>({
+        label: `${what} lane ${name}`,
+        path: daemonPath(id.value, v1.laneRestart(name)),
+        body: { mode },
+        ...(mode === 'cold'
+          ? {
+              confirmText:
+                'It stops, its containers and volumes go (here and on the nodes it ran on), and it starts again where it ran: built again, its databases seeded again. The worktree stays.',
+              confirmLabel: 'Cold restart',
+              danger: true,
+            }
+          : {}),
+        success: mode === 'cold' ? `Lane ${name} starts again, fresh` : `${what} lane ${name}: done`,
+        conflictHint: mode === 'cold' ? undefined : 'Services that failed keep their running instance.',
+      });
+      if (r.ok && Array.isArray(r.body)) setLanes(r.body);
+    } finally {
+      delete busy.value['lane-restart'];
+    }
+  }
+
+  /** One of a lane's actions ([laneActions]), from the header or the branch picker. */
+  function laneAction(l: LaneView, action: LaneAction) {
+    switch (action) {
+      case 'restart':
+        return restartLane(l.name, 'warm');
+      case 'rebuild':
+        return restartLane(l.name, 'rebuild');
+      case 'cold':
+        return restartLane(l.name, 'cold');
+      case 'start':
+        return startLane(l.name);
+      case 'stop':
+        return stopLane(l.name);
+      case 'reset':
+        return resetLane(l.name);
+      case 'remove':
+        return removeWorktree(l.path, laneLabel(l));
+    }
   }
 
   /** Throw a stopped lane's data away, here and on its nodes (ADR-0038): its next start is fresh. */
@@ -860,7 +912,7 @@ export const useStack = defineStore('stack', () => {
         label: `${actionLabels[action]} ${label}`,
         path: daemonPath(id.value, v1.groupAction(group, action)),
         success: `${actionLabels[action]} ${label}: done`,
-        conflictHint: action === 'restart' ? 'Members that failed keep their running instance.' : undefined,
+        conflictHint: action === 'restart' || action === 'rebuild' ? 'Members that failed keep their running instance.' : undefined,
       });
       if (res.ok && res.body && 'services' in res.body) applyView(res.body);
     } finally {
@@ -1027,6 +1079,8 @@ export const useStack = defineStore('stack', () => {
     fetchBranches,
     newLane,
     removeWorktree,
+    restartLane,
+    laneAction,
     followLink,
     runningLanes,
     mainIdle,

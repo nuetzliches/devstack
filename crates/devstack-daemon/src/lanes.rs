@@ -2137,6 +2137,123 @@ impl Lanes {
         result
     }
 
+    /// Restart a started lane where it runs (`POST /v1/lanes/{lane}/restart`):
+    /// `warm` restarts its running services in place, from the artifacts
+    /// there are for their inputs, its data kept; `rebuild` builds them
+    /// again even so. On a node through the lane's own API: the lease, the
+    /// node and the ports stay. `cold` stops it, throws its data away
+    /// ([`Self::reset`]) and starts it again at the same place, with the
+    /// same profile and workers: built again and seeded again, as a lane
+    /// that moves is (ADR-0038). Its containers stay up on `warm` and
+    /// `rebuild`. `need`: what a start on a node is expected to take.
+    pub fn restart(
+        self: &Arc<Self>,
+        name: &str,
+        mode: &str,
+        need: crate::remote::Expected,
+    ) -> Result<(), String> {
+        let t0 = std::time::Instant::now();
+        let remote = self.remote(name);
+        if mode != "cold" {
+            let rebuild = mode == "rebuild";
+            let r = match &remote {
+                Some(r) => r.restart_services(&self.rt, rebuild),
+                None => self.started(name)?.sup.restart_running(rebuild),
+            };
+            crate::diag::info(
+                "lane_restarted",
+                serde_json::json!({ "lane": name, "mode": mode,
+                    "place": if remote.is_some() { "remote" } else { "local" },
+                    "ms": t0.elapsed().as_millis() as u64, "ok": r.is_ok() }),
+            );
+            return r;
+        }
+        // Cold: where it runs, and how, before the stop forgets it.
+        let on = remote.as_ref().map(|r| r.node.name.clone());
+        let (path, workers) = match &remote {
+            Some(_) => (
+                self.known
+                    .lock()
+                    .unwrap()
+                    .get(name)
+                    .map(|k| k.entry.path.clone())
+                    .ok_or_else(|| format!("no lane `{name}` (see `devstack lane list`)"))?,
+                self.workers.lock().unwrap().contains(name),
+            ),
+            None => {
+                let l = self.started(name)?;
+                (l.entry.path.clone(), l.sup.lane_workers())
+            }
+        };
+        let profile = self.profiles.lock().unwrap().get(name).cloned();
+        self.stop(name)?;
+        let failed: Vec<String> = self
+            .reset(name)?
+            .into_iter()
+            .filter(|p| !p.removed)
+            .map(|p| {
+                format!(
+                    "{}: {}",
+                    p.place,
+                    p.error.unwrap_or_else(|| "not removed".into())
+                )
+            })
+            .collect();
+        if !failed.is_empty() {
+            return Err(format!(
+                "lane `{name}` is stopped, but not all of its data went ({}): it was not started again",
+                failed.join("; ")
+            ));
+        }
+        crate::diag::info(
+            "lane_restarted",
+            serde_json::json!({ "lane": name, "mode": mode,
+                "place": if on.is_some() { "remote" } else { "local" } }),
+        );
+        match on {
+            Some(node) => {
+                self.activate_remote(&path, &node, need, profile.as_deref(), workers)?;
+                // Its services start once it runs there; `moving` shows the
+                // start meanwhile, and its error if it fails.
+                let lanes = self.clone();
+                let lane = name.to_string();
+                std::thread::Builder::new()
+                    .name(format!("lane-cold-{name}"))
+                    .spawn(move || {
+                        while lanes.pending.lock().unwrap().contains(&lane) {
+                            std::thread::sleep(std::time::Duration::from_secs(1));
+                        }
+                        if let Some(r) = lanes.remote(&lane)
+                            && let Err(e) = r.up(&lanes.rt)
+                        {
+                            crate::diag::warn(
+                                "lane_restart_failed",
+                                serde_json::json!({ "lane": lane, "mode": "cold", "error": e }),
+                            );
+                        }
+                    })
+                    .map_err(|e| format!("lane `{name}`: {e}"))?;
+            }
+            None => {
+                let lane = self.activate(&path, profile.as_deref())?;
+                lane.sup.set_lane_workers(workers);
+                let sup = lane.sup.clone();
+                std::thread::Builder::new()
+                    .name(format!("lane-cold-{name}"))
+                    .spawn(move || {
+                        if let Err(e) = sup.up() {
+                            sup.emit(crate::state::EventBody::Infra {
+                                group: "*".into(),
+                                message: format!("up stopped: {e}"),
+                            });
+                        }
+                    })
+                    .map_err(|e| format!("lane `{name}`: {e}"))?;
+            }
+        }
+        Ok(())
+    }
+
     /// `devstack lane stop`: the lane's services stop and it is no longer
     /// started; its snapshot and builds stay for the next start. The worktree
     /// is git's business and stays as it is.

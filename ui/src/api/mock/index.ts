@@ -756,6 +756,15 @@ export class MockTransport implements Transport {
       return json(200, []);
     }
     if (/^\/v1\/lanes\/[^/]+\/reset$/.test(p) && method === 'POST') return json(200, []);
+    // A lane restarts where it runs (warm, rebuild), or cold: stopped, its
+    // data gone, started again there.
+    const rs = /^\/v1\/lanes\/([^/]+)\/restart$/.exec(p);
+    if (rs && method === 'POST') {
+      const name = decodeURIComponent(rs[1]);
+      if (!s.startedLanes.has(name)) return json(409, { error: `lane \`${name}\` is not started` });
+      await sleep(body?.mode === 'cold' ? 2500 : 1500);
+      return json(200, lanes());
+    }
     const fw = /^\/v1\/lanes\/[^/]+(\/v1\/.*)$/.exec(p);
     if (fw) p = fw[1];
     const view = () => json(200, s.view);
@@ -807,11 +816,11 @@ export class MockTransport implements Transport {
       return text(200, `info: started\nwarn: something went wrong in ${q.get('file')}\nfail: Unhandled exception`);
     }
 
-    const ga = /^\/v1\/groups\/([^/]+)\/(start|stop|restart)$/.exec(p);
+    const ga = /^\/v1\/groups\/([^/]+)\/(start|stop|restart|rebuild)$/.exec(p);
     if (ga) {
       const g = s.view.groups.find((x) => x.name === decodeURIComponent(ga[1]));
       if (!g) return json(404, { error: `no group ${ga[1]}` });
-      await sleep(ga[2] === 'restart' ? 2500 : 900);
+      await sleep(ga[2] === 'restart' || ga[2] === 'rebuild' ? 2500 : 900);
       for (const m of g.members) {
         const svc = s.view.services.find((x) => x.name === m);
         if (!svc) continue;
@@ -820,7 +829,7 @@ export class MockTransport implements Transport {
       }
       return view();
     }
-    let m = /^\/v1\/services\/([^/]+)\/(start|stop|restart|promote|rollback|build-log|logs|hot-reload-on|hot-reload-off)$/.exec(p);
+    let m = /^\/v1\/services\/([^/]+)\/(start|stop|restart|rebuild|promote|rollback|build-log|logs|hot-reload-on|hot-reload-off)$/.exec(p);
     if (m) {
       const name = decodeURIComponent(m[1]);
       const action = m[2];
@@ -853,6 +862,7 @@ export class MockTransport implements Transport {
             if (svc.proxy) svc.proxy = { ...svc.proxy, upstream: null, active: 0 };
             s.setStatus(name, { state: 'stopped' });
             return view();
+          case 'rebuild':
           case 'restart': {
             if (s.failedBuild.has(name) && name === 'api') {
               s.cand(name, 'building');

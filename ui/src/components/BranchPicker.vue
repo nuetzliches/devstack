@@ -8,6 +8,7 @@
 import { computed, nextTick, ref } from 'vue';
 import type { BranchView, LaneView } from '@/api/types';
 import { ago, useNow } from '@/lib/format';
+import { laneActions, type LaneAction } from '@/lib/laneActions';
 import { laneLabel, samePath } from '@/lib/lanes';
 import { usePopover } from '@/lib/popover';
 import { useHub } from '@/stores/hub';
@@ -103,10 +104,25 @@ function remove(r: Row) {
   void stack.removeWorktree(r.b.worktree!, r.lane ? laneLabel(r.lane) : r.b.name);
 }
 
+// A lane's actions, as the header's menu has them: by its "…" button or a
+// right click on its row, under the row.
+const actionsOf = ref<string | null>(null);
+function toggleActions(r: Row) {
+  if (!r.lane || stack.readOnly) return;
+  creating.value = null;
+  actionsOf.value = actionsOf.value === r.b.name ? null : r.b.name;
+}
+function laneAct(r: Row, a: LaneAction) {
+  close();
+  actionsOf.value = null;
+  if (r.lane) void stack.laneAction(r.lane, a);
+}
+
 // A new branch from the one chosen, and a lane on it.
 const creating = ref<string | null>(null);
 const newName = ref('');
 function startNew(r: Row) {
+  actionsOf.value = null;
   creating.value = r.b.name;
   newName.value = '';
   void nextTick(() => root.value?.querySelector<HTMLInputElement>('[data-testid="branch-new-name"]')?.focus());
@@ -161,7 +177,15 @@ function create() {
       <template v-for="([group, list], gi) in groups" :key="group">
         <div class="group faint small" :class="{ sep: gi > 0 }">{{ group }}</div>
         <template v-for="r in list.slice(0, SHOWN)" :key="r.b.name">
-          <div class="row" :class="{ on: isShown(r) }" role="option" :aria-selected="isShown(r)" data-testid="branch-option" :data-branch="r.b.name">
+          <div
+            class="row"
+            :class="{ on: isShown(r) }"
+            role="option"
+            :aria-selected="isShown(r)"
+            data-testid="branch-option"
+            :data-branch="r.b.name"
+            @contextmenu="r.lane && !stack.readOnly && ($event.preventDefault(), toggleActions(r))"
+          >
             <button
               type="button"
               class="opt grow"
@@ -181,12 +205,33 @@ function create() {
               <span v-if="r.lane?.owns_main || (r.b.main && !stack.lanes.some((l) => l.owns_main))" class="pill sm ok">main ports</span>
               <span v-else class="faint small">{{ hint(r) }}</span>
             </button>
+            <button
+              v-if="r.lane && !stack.readOnly"
+              type="button"
+              class="icon-btn ghost"
+              :disabled="!!busy"
+              :aria-expanded="actionsOf === r.b.name"
+              :title="`Actions of lane ${laneLabel(r.lane)} (or a right click on its row)`"
+              data-testid="branch-lane-actions"
+              @click="toggleActions(r)"
+            >
+              <Icon name="more" :size="13" />
+            </button>
             <button type="button" class="icon-btn ghost" :disabled="!!busy" :title="`New branch from ${r.b.name}, and a lane on it`" data-testid="branch-new" @click="startNew(r)">
               <Icon name="plus" :size="13" />
             </button>
             <button v-if="removable(r)" type="button" class="icon-btn danger" :disabled="!!busy" :title="`Remove the worktree ${r.b.worktree} (git refuses one with changes; the branch stays)`" data-testid="branch-remove" @click="remove(r)">
               <Icon name="trash" :size="13" />
             </button>
+          </div>
+          <div v-if="actionsOf === r.b.name && r.lane" class="lane-actions" role="menu" :aria-label="`Actions of lane ${laneLabel(r.lane)}`" data-testid="branch-lane-menu">
+            <template v-for="a in [laneActions(r.lane).main, ...laneActions(r.lane).items]" :key="a.key">
+              <button type="button" class="opt" :class="{ danger: a.danger }" role="menuitem" :disabled="a.disabled" :title="a.title" :data-testid="`branch-lane-${a.key}`" @click="laneAct(r, a.key)">
+                <Icon :name="a.icon ?? 'gitBranch'" :size="13" class="muted" />
+                <span class="grow">{{ a.label }}</span>
+                <span v-if="a.hint" class="faint small">{{ a.hint }}</span>
+              </button>
+            </template>
           </div>
           <form v-if="creating === r.b.name" class="new" @submit.prevent="create">
             <input v-model="newName" class="input mono" placeholder="new branch name" data-testid="branch-new-name" @keydown.esc="creating = null" />
@@ -333,6 +378,14 @@ function create() {
 }
 .icon-btn.danger:hover {
   color: var(--danger);
+}
+.lane-actions {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 8px 6px 24px;
+}
+.lane-actions .opt.danger {
+  color: var(--danger-text, var(--danger));
 }
 .new {
   display: flex;

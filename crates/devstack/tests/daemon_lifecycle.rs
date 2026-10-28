@@ -2312,6 +2312,17 @@ fn a_worktree_runs_as_a_lane() {
         s.diag()
     );
     assert_eq!(s.info()["build"], main_build.as_str(), "main is untouched");
+    // A warm restart of the lane: its services restart from the artifact
+    // there is, in place; the main tree is not touched.
+    let lane_build = lane_info()["build"].as_str().unwrap().to_string();
+    assert_eq!(
+        s.daemon_post(&format!("/v1/lanes/{lane}/restart")),
+        200,
+        "{}",
+        s.diag()
+    );
+    assert_eq!(lane_info()["build"], lane_build.as_str(), "the same build");
+    assert_eq!(s.info()["build"], main_build.as_str(), "main is untouched");
 
     // 4. promote --lane: the main ports answer from the lane, the dev server's
     //    through a TCP forward, and the workers move with them. The static
