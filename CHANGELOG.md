@@ -11,6 +11,12 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A lane on a node keeps its journal** (#287): the requester's take of
+  the lane daemon's telemetry lines, every 30 seconds, went into that
+  daemon's journal as "take the telemetry lines by an unknown client" and
+  pushed the lane's real changes out within about four hours; its log
+  line was also the next take's telemetry. The take is no longer
+  journaled or logged as a request.
 - **`devstack up` waits for the containers too** (#66): it waited for the
   autostart services only, so a stack of Compose groups alone answered
   right away while its images were still built and its containers started.
