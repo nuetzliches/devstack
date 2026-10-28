@@ -236,7 +236,10 @@ fn link(scheme: &str, path: &str) -> String {
     match scheme {
         "claude" => format!("claude://code/new?folder={}", encode(path, b"")),
         "claude-cli" => format!("claude-cli://open?cwd={}", encode(path, b"")),
-        // The editors' `file` links (VS Code and its forks, Zed):
+        // Zed takes what follows `zed://file` as the path, slash and all:
+        // `zed://file/D:/src` would be `/D:/src`, an empty window.
+        "zed" => format!("zed://file{}", encode(&path.replace('\\', "/"), b"/:")),
+        // The editors' `file` links (VS Code and its forks):
         // `vscode://file/C:/src/app`, `vscode://file/home/me/app`.
         _ => {
             let p = path.replace('\\', "/");
@@ -322,6 +325,15 @@ mod tests {
             "vscode://file/D:/Sources/my%20app"
         );
         assert_eq!(link("cursor", "/home/me/app"), "cursor://file/home/me/app");
+    }
+
+    #[test]
+    fn zed_links_carry_the_path_as_it_is() {
+        assert_eq!(
+            link("zed", r"D:\Sources\my app"),
+            "zed://fileD:/Sources/my%20app"
+        );
+        assert_eq!(link("zed", "/home/me/app"), "zed://file/home/me/app");
     }
 
     #[test]

@@ -15,6 +15,9 @@ and listed with their assets on the
   other tab, the list shows the upstream logged in by itself (it asks the
   hub every two seconds, and at once when you come back to the tab),
   instead of only after a reload.
+- **Zed opens the folder on Windows**: the path menu's Zed opened an
+  empty window there, as the link handed it `/D:/...`; it now hands
+  `D:/...`.
 
 ## [0.28.0] - 2026-10-28
 
