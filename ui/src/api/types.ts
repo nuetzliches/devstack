@@ -759,6 +759,28 @@ export type McpUpstream = {
   allow?: string[];
   auth: McpUpstreamAuth;
   logged_in: boolean;
+  /** It is one a pool names (ADR-0069 option B); `name` is then `<pool>:<name>`. */
+  pool?: McpUpstreamFromPool;
+};
+
+/** What the user made of an upstream a pool names: `offered` (not answered), `accepted` (in use), `declined`, `changed` (the pool changed its URL since), `conflict` (`why` says with what). */
+export type McpUpstreamFromPool = {
+  pool: string;
+  /** Its name in the pool's list. */
+  name: string;
+  status: 'offered' | 'accepted' | 'declined' | 'changed' | 'conflict';
+  why?: string;
+  /** The prefix the pool gives it. */
+  pool_prefix: string;
+};
+
+/** An MCP upstream a pool names for its members (`GET /hub/pool/upstreams`): a URL, never a secret. */
+export type PoolUpstream = {
+  name: string;
+  url: string;
+  prefix?: string;
+  allow?: string[];
+  auth: { kind: 'none' } | { kind: 'token' } | { kind: 'oauth'; client_id?: string; scopes?: string[] };
 };
 
 /** `GET /hub/upstreams`. `file`: no keychain on this machine (Linux without a Secret Service). */

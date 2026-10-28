@@ -43,11 +43,10 @@ fn hub(path: &str, body: Option<Value>, within: Duration) -> Option<Value> {
     serde_json::from_str(&r.body_mut().read_to_string().ok()?).ok()
 }
 
-/// The user configured upstreams at all: else neither the hub is started
-/// nor anything asked.
+/// The user configured upstreams at all, or accepted one of a pool: else
+/// neither the hub is started nor anything asked.
 fn configured() -> bool {
-    std::fs::read_to_string(devstack_hub::upstreams::dir().join("upstreams.toml"))
-        .is_ok_and(|t| t.contains("[[upstream]]"))
+    devstack_hub::upstreams::Upstreams::configured(&devstack_hub::upstreams::dir())
 }
 
 fn direct() -> devstack_hub::upstreams::Upstreams {

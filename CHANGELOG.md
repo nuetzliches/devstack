@@ -29,6 +29,14 @@ and listed with their assets on the
   worktree… in its menu; the same menu opens from a lane's "…" button or a
   right click on its row in the branch picker. The separate "Stop
   worktree" and "Discard data" buttons are gone.
+- **A pool names MCP upstreams for its members** (ADR-0069 option B):
+  `devstack pool upstreams add|remove` (admins) or the pool area of the
+  dashboard keep a list of URLs on the coordinator, never a secret or a
+  command, each change in the audit log. Each member's hub offers them on
+  its *MCP upstreams* page, from which pool, and uses one only once its
+  user accepted it, with that user's own login; a new URL is accepted
+  again, the user's own upstreams go first, and an entry the pool drops
+  goes with its login.
 
 ### Changed
 
@@ -71,6 +79,10 @@ and listed with their assets on the
 - **The dashboard's MCP upstreams page** has the spacing of the other
   cards: a header with the Add button, the text and the form inside the
   card's padding instead of on its border.
+- **Logins in the Windows Credential Manager** can no longer be lost when
+  two are written or removed at once (seen in the tests; parallel tool
+  calls refreshing tokens could do it): the hub makes one keychain call at
+  a time.
 
 ## [0.27.1] - 2026-10-28
 

@@ -14,6 +14,15 @@
 //!   upstream as `resource` (RFC 8707). The browser comes back to the hub's
 //!   own loopback port; a callback is taken only for a flow the hub started,
 //!   by its one-time `state`, within ten minutes. No route hands a token out.
+//! - **A pool's upstreams** (ADR-0069 option B; review card approved
+//!   2026-10-28): each pool this machine is an approved member of may name
+//!   upstreams (URL only, never a secret). The hub keeps the last list it got
+//!   in `pool-upstreams.json` and offers them in the dashboard; one is used,
+//!   as `<pool>:<name>`, only once the user accepted it at its URL. The
+//!   user's own configuration goes first: an entry with the name or prefix
+//!   of one of theirs is not taken, nor two entries of different pools with
+//!   one prefix until the user gives one another. An entry the pool drops,
+//!   or of a pool the machine left, goes with its login.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -175,6 +184,54 @@ impl Upstream {
 struct File {
     #[serde(default, rename = "upstream")]
     upstreams: Vec<Upstream>,
+    /// What the user decided about a pool's upstreams.
+    #[serde(default, rename = "pool", skip_serializing_if = "Vec::is_empty")]
+    decisions: Vec<Decision>,
+}
+
+/// The user's answer to an upstream a pool names.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Decision {
+    pool: String,
+    name: String,
+    /// Accepted (at `url`), or declined.
+    accepted: bool,
+    /// The URL it was answered at: a pool that changes it asks again.
+    url: String,
+    /// The prefix the user gave it instead of the pool's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prefix: Option<String>,
+}
+
+/// The pools' lists as the hub got them last, by pool.
+type PoolLists = std::collections::BTreeMap<String, Vec<PoolUpstream>>;
+
+/// What asking the pools found: each pool this machine is an approved
+/// member of, with its list, or `None` when it could not be asked. A pool
+/// not in it is one the machine is no longer in.
+pub type Fetched = Vec<(String, Option<Vec<PoolUpstream>>)>;
+
+type Fetch = Box<dyn Fn() -> Fetched + Send + Sync>;
+
+/// How often the hub asks its pools for their upstreams.
+pub const POOLS_EVERY: Duration = Duration::from_secs(60);
+
+pub use devstack_node::upstreams::{PoolAuth, PoolUpstream};
+
+/// Where an upstream the dashboard lists comes from, when it is a pool's.
+#[derive(Debug, Clone, Serialize)]
+pub struct FromPool {
+    pub pool: String,
+    /// Its name in the pool's list.
+    pub name: String,
+    /// `offered` (not answered yet), `accepted` (in use), `declined`,
+    /// `changed` (the pool changed its URL since it was accepted), or
+    /// `conflict` (`why` says with what).
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    /// The prefix the pool gives it.
+    pub pool_prefix: String,
 }
 
 /// What the hub keeps of an upstream's login in the secrets store.
@@ -230,6 +287,11 @@ pub struct Upstreams {
     logs: PathBuf,
     /// When each upstream was asked last, and what it answered then.
     listed: Mutex<HashMap<String, Listed>>,
+    /// The pools' lists as last got (`pool-upstreams.json`).
+    pool_lists: PathBuf,
+    /// How the pools are asked; `None`: they are not (`devstack mcp`
+    /// without a hub uses what the hub got last).
+    fetch: Option<Fetch>,
 }
 
 /// An upstream as the dashboard lists it: never a secret.
@@ -241,11 +303,33 @@ pub struct View {
     /// It has a credential (a token, or tokens of a login); with `Auth::None`
     /// always.
     pub logged_in: bool,
+    /// It is a pool's, and what the user made of it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool: Option<FromPool>,
 }
 
 impl Upstreams {
     pub fn open(dir: PathBuf) -> Self {
-        Self::with(dir.clone(), Secrets::open(dir))
+        let state = dir.parent().map(PathBuf::from).unwrap_or_default();
+        let mut u = Self::with(dir.clone(), Secrets::open(dir));
+        u.fetch = Some(Box::new(move || ask_pools(&state)));
+        u
+    }
+
+    /// A hub's upstreams for a test: secrets under a keychain service of its
+    /// own (tests run side by side, and must not touch the user's), the
+    /// pools asked with `fetch`.
+    #[cfg(test)]
+    fn for_test(dir: PathBuf, fetch: impl Fn() -> Fetched + Send + Sync + 'static) -> Self {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let service = format!(
+            "devstack-test-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        let mut u = Self::with(dir.clone(), Secrets::open_as(&service, dir));
+        u.fetch = Some(Box::new(fetch));
+        u
     }
 
     /// Its configuration without any secret: what `devstack mcp` uses without
@@ -268,6 +352,8 @@ impl Upstreams {
             procs: Mutex::new(HashMap::new()),
             logs: dir.join("upstreams"),
             listed: Mutex::new(HashMap::new()),
+            pool_lists: dir.join("pool-upstreams.json"),
+            fetch: None,
         }
     }
 
@@ -279,41 +365,17 @@ impl Upstreams {
         }
     }
 
-    pub fn list(&self) -> Result<Vec<Upstream>, String> {
+    fn read(&self) -> Result<File, String> {
         let text = match std::fs::read_to_string(&self.file) {
             Ok(t) => t,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(File::default()),
             Err(e) => return Err(format!("{}: {e}", self.file.display())),
         };
-        toml::from_str::<File>(&text)
-            .map(|f| f.upstreams)
-            .map_err(|e| format!("{}: {e}", self.file.display()))
+        toml::from_str::<File>(&text).map_err(|e| format!("{}: {e}", self.file.display()))
     }
 
-    pub fn views(&self) -> Result<Vec<View>, String> {
-        Ok(self
-            .list()?
-            .into_iter()
-            .map(|u| {
-                let logged_in = match &u.auth {
-                    Auth::None => true,
-                    Auth::Token { env: Some(e) } => std::env::var_os(e).is_some(),
-                    _ => self.secrets.get(&u.name).ok().flatten().is_some(),
-                };
-                View {
-                    prefix: u.prefix(),
-                    upstream: u,
-                    logged_in,
-                }
-            })
-            .collect())
-    }
-
-    fn save(&self, all: &[Upstream]) -> Result<(), String> {
-        let text = toml::to_string_pretty(&File {
-            upstreams: all.to_vec(),
-        })
-        .map_err(|e| e.to_string())?;
+    fn write(&self, f: &File) -> Result<(), String> {
+        let text = toml::to_string_pretty(f).map_err(|e| e.to_string())?;
         if let Some(d) = self.file.parent() {
             std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
         }
@@ -322,13 +384,301 @@ impl Upstreams {
         std::fs::rename(&tmp, &self.file).map_err(|e| e.to_string())
     }
 
+    /// The user's own upstreams.
+    fn own(&self) -> Result<Vec<Upstream>, String> {
+        self.read().map(|f| f.upstreams)
+    }
+
+    /// Every upstream in use: the user's own, and the pools' they accepted
+    /// that nothing else stands in the way of.
+    pub fn list(&self) -> Result<Vec<Upstream>, String> {
+        let f = self.read()?;
+        let pooled = self
+            .pooled(&f)
+            .into_iter()
+            .filter(|(_, p)| p.status == "accepted")
+            .map(|(u, _)| u);
+        Ok(f.upstreams.clone().into_iter().chain(pooled).collect())
+    }
+
+    /// The user configured an upstream, or accepted one of a pool: what makes
+    /// `devstack mcp` ask the hub at all.
+    pub fn configured(dir: &std::path::Path) -> bool {
+        std::fs::read_to_string(dir.join("upstreams.toml"))
+            .ok()
+            .and_then(|t| toml::from_str::<File>(&t).ok())
+            .is_some_and(|f| !f.upstreams.is_empty() || f.decisions.iter().any(|d| d.accepted))
+    }
+
+    pub fn views(&self) -> Result<Vec<View>, String> {
+        let f = self.read()?;
+        let logged_in = |u: &Upstream| match &u.auth {
+            Auth::None => true,
+            Auth::Token { env: Some(e) } => std::env::var_os(e).is_some(),
+            _ => self.secrets.get(&u.name).ok().flatten().is_some(),
+        };
+        let own = f.upstreams.iter().cloned().map(|u| View {
+            prefix: u.prefix(),
+            logged_in: logged_in(&u),
+            upstream: u,
+            pool: None,
+        });
+        let pooled = self.pooled(&f).into_iter().map(|(u, p)| View {
+            prefix: u.prefix(),
+            logged_in: p.status == "accepted" && logged_in(&u),
+            upstream: u,
+            pool: Some(p),
+        });
+        Ok(own.chain(pooled).collect())
+    }
+
+    /// Keep `all` as the user's own upstreams.
+    fn save(&self, all: &[Upstream]) -> Result<(), String> {
+        let mut f = self.read()?;
+        f.upstreams = all.to_vec();
+        self.write(&f)
+    }
+
+    fn pool_lists(&self) -> PoolLists {
+        std::fs::read(&self.pool_lists)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    /// Every upstream the pools name, as the hub would use it
+    /// (`<pool>:<name>`, the user's prefix if they gave one), and what the
+    /// user made of it.
+    fn pooled(&self, f: &File) -> Vec<(Upstream, FromPool)> {
+        let mut out: Vec<(Upstream, FromPool)> = Vec::new();
+        for (pool, entries) in self.pool_lists() {
+            for e in entries {
+                // A list on disk is checked again: it came from elsewhere.
+                if e.check().is_err() {
+                    continue;
+                }
+                let d = f
+                    .decisions
+                    .iter()
+                    .find(|d| d.pool == pool && d.name == e.name);
+                let prefix = d
+                    .and_then(|d| d.prefix.clone())
+                    .unwrap_or_else(|| e.prefix());
+                let mine = f
+                    .upstreams
+                    .iter()
+                    .find(|o| o.name == e.name || o.prefix() == prefix);
+                let (status, why) = match (mine, d) {
+                    (Some(o), _) => (
+                        "conflict",
+                        Some(format!(
+                            "your upstream `{}` has this name or the prefix `{prefix}`",
+                            o.name
+                        )),
+                    ),
+                    (None, None) => ("offered", None),
+                    (None, Some(d)) if !d.accepted => ("declined", None),
+                    (None, Some(d)) if d.url != e.url => (
+                        "changed",
+                        Some(format!("the pool changed its URL from {}", d.url)),
+                    ),
+                    (None, Some(_)) => ("accepted", None),
+                };
+                let auth = match &e.auth {
+                    PoolAuth::None => Auth::None,
+                    PoolAuth::Token => Auth::Token { env: None },
+                    PoolAuth::Oauth { client_id, scopes } => Auth::Oauth {
+                        client_id: client_id.clone(),
+                        scopes: scopes.clone(),
+                    },
+                };
+                out.push((
+                    Upstream {
+                        name: format!("{pool}:{}", e.name),
+                        url: e.url.clone(),
+                        prefix: Some(prefix),
+                        allow: e.allow.clone(),
+                        auth,
+                        ..Default::default()
+                    },
+                    FromPool {
+                        pool: pool.clone(),
+                        name: e.name.clone(),
+                        status,
+                        why,
+                        pool_prefix: e.prefix(),
+                    },
+                ));
+            }
+        }
+        // Two pools' accepted entries with one prefix: neither, until the
+        // user gives one of them another.
+        let clash: Vec<usize> = (0..out.len())
+            .filter(|&i| {
+                out[i].1.status == "accepted"
+                    && out.iter().any(|o| {
+                        o.1.status == "accepted"
+                            && o.1.pool != out[i].1.pool
+                            && o.0.prefix() == out[i].0.prefix()
+                    })
+            })
+            .collect();
+        for i in clash {
+            let p = out[i].0.prefix();
+            out[i].1.status = "conflict";
+            out[i].1.why = Some(format!(
+                "another pool's upstream has the prefix `{p}`: give one of them another"
+            ));
+        }
+        out
+    }
+
+    /// Ask the pools for their upstreams (the hub does every
+    /// [`POOLS_EVERY`], off the requests: a coordinator that does not
+    /// answer takes seconds); keep what they name, and forget the decisions
+    /// and logins of entries a pool dropped or of pools this machine left.
+    /// A pool that cannot be asked keeps what it named last.
+    pub fn refresh_pools(&self) {
+        let Some(fetch) = &self.fetch else {
+            return;
+        };
+        let got = fetch();
+        let _one = self.write.lock().unwrap();
+        let mut lists = self.pool_lists();
+        lists.retain(|p, _| got.iter().any(|(g, _)| g == p));
+        for (pool, list) in got {
+            if let Some(l) = list {
+                lists.insert(pool, l);
+            }
+        }
+        if let Ok(text) = serde_json::to_vec_pretty(&lists) {
+            if let Some(d) = self.pool_lists.parent() {
+                let _ = std::fs::create_dir_all(d);
+            }
+            let _ = std::fs::write(&self.pool_lists, text);
+        }
+        let Ok(mut f) = self.read() else {
+            return;
+        };
+        let mut gone = Vec::new();
+        f.decisions.retain(|d| {
+            let named = lists
+                .get(&d.pool)
+                .is_some_and(|l| l.iter().any(|e| e.name == d.name));
+            if !named {
+                gone.push(format!("{}:{}", d.pool, d.name));
+            }
+            named
+        });
+        for key in &gone {
+            let _ = self.secrets.delete(key);
+            self.sessions.lock().unwrap().remove(key);
+        }
+        if !gone.is_empty() {
+            let _ = self.write(&f);
+        }
+    }
+
+    /// The entry `name` of `pool`, as the hub got it last.
+    fn entry(&self, pool: &str, name: &str) -> Result<PoolUpstream, String> {
+        self.pool_lists()
+            .remove(pool)
+            .and_then(|l| l.into_iter().find(|e| e.name == name))
+            .ok_or_else(|| format!("the pool `{pool}` names no upstream `{name}`"))
+    }
+
+    /// Use the upstream `name` of `pool` at the URL the pool names now,
+    /// with `prefix` instead of the pool's if given. A login for another
+    /// URL is forgotten.
+    pub fn accept(&self, pool: &str, name: &str, prefix: Option<String>) -> Result<(), String> {
+        let _one = self.write.lock().unwrap();
+        let mut f = self.read()?;
+        let entry = self.entry(pool, name)?;
+        let prefix = prefix
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty() && *p != entry.prefix());
+        let mut probe = entry.clone();
+        if prefix.is_some() {
+            probe.prefix = prefix.clone();
+        }
+        probe.check()?;
+        let p = probe.prefix();
+        let key = format!("{pool}:{name}");
+        if let Some(o) = f
+            .upstreams
+            .iter()
+            .find(|o| o.name == name || o.prefix() == p)
+        {
+            return Err(format!(
+                "your upstream `{}` has the name `{name}` or the prefix `{p}`",
+                o.name
+            ));
+        }
+        if let Some((o, _)) = self
+            .pooled(&f)
+            .into_iter()
+            .find(|(o, s)| o.name != key && s.status == "accepted" && o.prefix() == p)
+        {
+            return Err(format!("the prefix `{p}` is `{}`'s", o.name));
+        }
+        let d = Decision {
+            pool: pool.into(),
+            name: name.into(),
+            accepted: true,
+            url: entry.url.clone(),
+            prefix,
+        };
+        match f
+            .decisions
+            .iter_mut()
+            .find(|d| d.pool == pool && d.name == name)
+        {
+            Some(old) => {
+                if old.url != entry.url {
+                    self.secrets.delete(&key)?;
+                }
+                *old = d;
+            }
+            None => f.decisions.push(d),
+        }
+        self.sessions.lock().unwrap().remove(&key);
+        self.listed.lock().unwrap().remove(&key);
+        self.write(&f)
+    }
+
+    /// Do not use the upstream `name` of `pool`; its login goes.
+    pub fn decline(&self, pool: &str, name: &str) -> Result<(), String> {
+        let _one = self.write.lock().unwrap();
+        let mut f = self.read()?;
+        let entry = self.entry(pool, name)?;
+        let key = format!("{pool}:{name}");
+        let d = Decision {
+            pool: pool.into(),
+            name: name.into(),
+            accepted: false,
+            url: entry.url,
+            prefix: None,
+        };
+        match f
+            .decisions
+            .iter_mut()
+            .find(|d| d.pool == pool && d.name == name)
+        {
+            Some(old) => *old = d,
+            None => f.decisions.push(d),
+        }
+        self.secrets.delete(&key)?;
+        self.sessions.lock().unwrap().remove(&key);
+        self.write(&f)
+    }
+
     /// Add `u`, or replace the one of its name. A change of its URL or of how
     /// it logs in forgets its credential: it was for the other.
     pub fn put(&self, u: Upstream) -> Result<(), String> {
         u.check()?;
         let name = u.name.clone();
         let _one = self.write.lock().unwrap();
-        let mut all = self.list()?;
+        let mut all = self.own()?;
         if all
             .iter()
             .any(|o| o.name != u.name && o.prefix() == u.prefix())
@@ -354,7 +704,7 @@ impl Upstreams {
 
     pub fn remove(&self, name: &str) -> Result<bool, String> {
         let _one = self.write.lock().unwrap();
-        let mut all = self.list()?;
+        let mut all = self.own()?;
         let before = all.len();
         all.retain(|u| u.name != name);
         if all.len() == before {
@@ -1022,6 +1372,19 @@ pub fn dir() -> PathBuf {
     crate::state_dir()
 }
 
+/// Each pool the machine whose state is `state` is an approved member of,
+/// with the upstreams it names (`None`: it could not be asked).
+fn ask_pools(state: &std::path::Path) -> Fetched {
+    devstack_node::member::pools(state)
+        .into_iter()
+        .filter_map(|(name, dir)| {
+            let l = devstack_node::member::Local::new(&dir);
+            let m = l.membership().ok().flatten()?;
+            (m.state == devstack_node::store::State::Approved).then(|| (name, l.upstreams().ok()))
+        })
+        .collect()
+}
+
 /// The agent the hub talks to upstreams and their servers with: errors as
 /// answers, a time limit.
 pub fn http() -> ureq::Agent {
@@ -1066,7 +1429,7 @@ mod tests {
     #[test]
     fn the_configuration_keeps_no_secret_and_forgets_one_on_a_new_url() {
         let d = tempfile::tempdir().unwrap();
-        let ups = Upstreams::open(d.path().to_path_buf());
+        let ups = Upstreams::for_test(d.path().to_path_buf(), Vec::new);
         let tracker = Upstream {
             name: "tracker".into(),
             url: "https://mcp.example.com/mcp".into(),
@@ -1183,7 +1546,7 @@ mod tests {
     fn a_login_runs_once_with_pkce_and_refreshes() {
         let (base, seen) = fake_server();
         let d = tempfile::tempdir().unwrap();
-        let ups = Upstreams::open(d.path().to_path_buf());
+        let ups = Upstreams::for_test(d.path().to_path_buf(), Vec::new);
         let name = format!("t{}", std::process::id());
         ups.put(Upstream {
             name: name.clone(),
@@ -1336,7 +1699,7 @@ mod tests {
     fn an_upstreams_tools_are_offered_with_its_prefix_and_called_through_the_hub() {
         let (base, seen) = fake_mcp();
         let d = tempfile::tempdir().unwrap();
-        let ups = Upstreams::open(d.path().to_path_buf());
+        let ups = Upstreams::for_test(d.path().to_path_buf(), Vec::new);
         let name = format!("u{}", std::process::id());
         ups.put(Upstream {
             name: name.clone(),
@@ -1415,7 +1778,7 @@ mod tests {
     #[test]
     fn a_command_gets_the_token_the_hub_keeps_in_its_variable_and_nothing_else() {
         let d = tempfile::tempdir().unwrap();
-        let ups = Upstreams::open(d.path().to_path_buf());
+        let ups = Upstreams::for_test(d.path().to_path_buf(), Vec::new);
         let name = format!("c{}", std::process::id());
         let cmd = Upstream {
             name: name.clone(),
@@ -1457,5 +1820,175 @@ mod tests {
         assert_eq!(ups.procs.lock().unwrap().len(), 1);
         ups.remove(&name).unwrap();
         assert!(ups.procs.lock().unwrap().is_empty());
+    }
+
+    /// A pool's list for the fetch of a test.
+    fn entry(name: &str, url: &str, prefix: Option<&str>) -> PoolUpstream {
+        PoolUpstream {
+            name: name.into(),
+            url: url.into(),
+            prefix: prefix.map(str::to_string),
+            auth: PoolAuth::Token,
+            ..Default::default()
+        }
+    }
+
+    type Pools = std::sync::Arc<Mutex<Fetched>>;
+
+    fn pooled_hub(d: &std::path::Path, pools: &Pools) -> Upstreams {
+        let p = pools.clone();
+        Upstreams::for_test(d.to_path_buf(), move || p.lock().unwrap().clone())
+    }
+
+    fn status(ups: &Upstreams, key: &str) -> Option<&'static str> {
+        ups.views()
+            .unwrap()
+            .into_iter()
+            .find(|v| v.upstream.name == key)
+            .and_then(|v| v.pool.map(|p| p.status))
+    }
+
+    fn used(ups: &Upstreams) -> Vec<String> {
+        ups.list().unwrap().into_iter().map(|u| u.name).collect()
+    }
+
+    #[test]
+    fn a_pools_upstream_is_used_once_accepted_and_asks_again_at_a_new_url() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = format!("t{}a", std::process::id());
+        let key = format!("{pool}:wiki");
+        let pools: Pools = std::sync::Arc::new(Mutex::new(vec![(
+            pool.clone(),
+            Some(vec![entry("wiki", "https://wiki.example.com/mcp", None)]),
+        )]));
+        let ups = pooled_hub(d.path(), &pools);
+        ups.refresh_pools();
+        assert_eq!(status(&ups, &key), Some("offered"));
+        assert!(used(&ups).is_empty(), "offered is not used");
+        assert!(!Upstreams::configured(d.path()));
+
+        ups.accept(&pool, "wiki", None).unwrap();
+        assert_eq!(status(&ups, &key), Some("accepted"));
+        assert_eq!(used(&ups), [key.as_str()]);
+        assert!(Upstreams::configured(d.path()));
+        ups.set_token(&key, "t-1").unwrap();
+
+        // The pool moves it: not used, and its login is not sent there.
+        *pools.lock().unwrap() = vec![(
+            pool.clone(),
+            Some(vec![entry("wiki", "https://evil.example.com/mcp", None)]),
+        )];
+        ups.refresh_pools();
+        assert_eq!(status(&ups, &key), Some("changed"));
+        assert!(used(&ups).is_empty());
+        ups.accept(&pool, "wiki", None).unwrap();
+        assert_eq!(used(&ups), [key.as_str()]);
+        assert_eq!(
+            ups.secrets.get(&key).unwrap(),
+            None,
+            "the old login is gone"
+        );
+
+        // A pool that does not answer keeps what it named.
+        *pools.lock().unwrap() = vec![(pool.clone(), None)];
+        ups.refresh_pools();
+        assert_eq!(used(&ups), [key.as_str()]);
+
+        // Declined stays declined; its login goes.
+        ups.set_token(&key, "t-2").unwrap();
+        ups.decline(&pool, "wiki").unwrap();
+        assert_eq!(status(&ups, &key), Some("declined"));
+        assert!(used(&ups).is_empty());
+        assert_eq!(ups.secrets.get(&key).unwrap(), None);
+    }
+
+    #[test]
+    fn the_users_own_upstreams_go_first_and_two_pools_never_share_a_prefix() {
+        let d = tempfile::tempdir().unwrap();
+        let (a, b) = (
+            format!("t{}b", std::process::id()),
+            format!("t{}c", std::process::id()),
+        );
+        let pools: Pools = std::sync::Arc::new(Mutex::new(vec![
+            (
+                a.clone(),
+                Some(vec![
+                    entry("wiki", "https://wiki.example.com/mcp", None),
+                    entry("tracker", "https://tracker.example.com/mcp", None),
+                ]),
+            ),
+            (
+                b.clone(),
+                Some(vec![entry("docs", "https://docs.example.com/mcp", None)]),
+            ),
+        ]));
+        let ups = pooled_hub(d.path(), &pools);
+        ups.refresh_pools();
+        ups.put(Upstream {
+            name: "my-tracker".into(),
+            url: "https://mine.example.com/mcp".into(),
+            prefix: Some("tracker".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        // The user's own prefix: the pool's is not taken.
+        assert_eq!(status(&ups, &format!("{a}:tracker")), Some("conflict"));
+        assert!(ups.accept(&a, "tracker", None).is_err());
+        // Unless the user gives it a prefix of its own.
+        ups.accept(&a, "tracker", Some("team_tracker".into()))
+            .unwrap();
+        assert_eq!(status(&ups, &format!("{a}:tracker")), Some("accepted"));
+
+        ups.accept(&a, "wiki", None).unwrap();
+        ups.accept(&b, "docs", None).unwrap();
+        // Pool b gives its entry pool a's prefix: neither is used.
+        pools.lock().unwrap()[1].1 = Some(vec![entry(
+            "docs",
+            "https://docs.example.com/mcp",
+            Some("wiki"),
+        )]);
+        ups.refresh_pools();
+        assert_eq!(status(&ups, &format!("{a}:wiki")), Some("conflict"));
+        assert_eq!(status(&ups, &format!("{b}:docs")), Some("conflict"));
+        assert!(
+            !used(&ups)
+                .iter()
+                .any(|n| n.ends_with(":wiki") || n.ends_with(":docs"))
+        );
+        // The user gives one of them another: both are used.
+        ups.accept(&b, "docs", Some("docs".into())).unwrap();
+        assert_eq!(status(&ups, &format!("{a}:wiki")), Some("accepted"));
+        assert_eq!(status(&ups, &format!("{b}:docs")), Some("accepted"));
+    }
+
+    #[test]
+    fn an_entry_the_pool_drops_or_of_a_pool_left_goes_with_its_login() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = format!("t{}d", std::process::id());
+        let key = format!("{pool}:wiki");
+        let pools: Pools = std::sync::Arc::new(Mutex::new(vec![(
+            pool.clone(),
+            Some(vec![
+                entry("wiki", "https://wiki.example.com/mcp", None),
+                entry("docs", "https://docs.example.com/mcp", None),
+            ]),
+        )]));
+        let ups = pooled_hub(d.path(), &pools);
+        ups.refresh_pools();
+        ups.accept(&pool, "wiki", None).unwrap();
+        ups.accept(&pool, "docs", None).unwrap();
+        ups.set_token(&key, "t").unwrap();
+        pools.lock().unwrap()[0].1 =
+            Some(vec![entry("docs", "https://docs.example.com/mcp", None)]);
+        ups.refresh_pools();
+        assert_eq!(used(&ups), [format!("{pool}:docs")]);
+        assert_eq!(ups.secrets.get(&key).unwrap(), None);
+
+        // The machine left the pool: nothing of it stays.
+        pools.lock().unwrap().clear();
+        ups.refresh_pools();
+        assert!(used(&ups).is_empty());
+        assert!(ups.views().unwrap().is_empty());
+        assert!(!Upstreams::configured(d.path()));
     }
 }

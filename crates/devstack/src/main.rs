@@ -367,6 +367,34 @@ enum Cmd {
 }
 
 #[derive(Subcommand)]
+enum PoolUpstreamsAction {
+    /// The pool's list (the default).
+    List,
+    /// Add an upstream to the pool's list, or change the one of its name.
+    Add {
+        /// `[a-z0-9-]`, 1 to 32.
+        name: String,
+        /// Its MCP endpoint (Streamable HTTP), `https://` only.
+        url: String,
+        /// What its tools are prefixed with; the name with `_` for `-` by default.
+        #[arg(long)]
+        prefix: Option<String>,
+        /// The tools offered, comma-separated; all by default.
+        #[arg(long, value_delimiter = ',')]
+        allow: Vec<String>,
+        /// How it logs in: `oauth` (each member's hub, in the browser),
+        /// `token` (each member gives their hub one) or `none`.
+        #[arg(long, default_value = "oauth")]
+        login: String,
+        /// The OAuth client id, where the server registers no clients itself.
+        #[arg(long)]
+        client_id: Option<String>,
+    },
+    /// Take an upstream off the pool's list.
+    Remove { name: String },
+}
+
+#[derive(Subcommand)]
 enum PoolAction {
     /// Whether this machine's lanes may run on nodes the pool's provisioner
     /// made (ADR-0051): `on`, `off`, or nothing to show it.
@@ -374,6 +402,13 @@ enum PoolAction {
     /// Whether this machine sends the pool's collector telemetry (ADR-0037):
     /// `on`, `off`, or nothing to show it and what is sent.
     Telemetry { state: Option<String> },
+    /// The MCP upstreams the pool names for its members (ADR-0069): each
+    /// member's hub offers them in the dashboard, and uses one once its user
+    /// accepted it. Only an admin adds or removes one.
+    Upstreams {
+        #[command(subcommand)]
+        action: Option<PoolUpstreamsAction>,
+    },
     /// The lanes others share with this machine (ADR-0035).
     Shared,
     /// Connect to a lane someone shares with this machine (ADR-0053): each
@@ -987,6 +1022,18 @@ mod tests {
             parse(&["pool", "--pool", "team", "telemetry", "on"]).cmd,
             Cmd::Pool { pool: Some(p), action: Some(PoolAction::Telemetry { state: Some(s) }) }
                 if p == "team" && s == "on"
+        ));
+        assert!(matches!(
+            parse(&["pool", "upstreams", "add", "wiki", "https://wiki.example.com/mcp", "--allow", "search,get"]).cmd,
+            Cmd::Pool { action: Some(PoolAction::Upstreams { action: Some(PoolUpstreamsAction::Add { name, allow, login, .. }) }), .. }
+                if name == "wiki" && allow == ["search", "get"] && login == "oauth"
+        ));
+        assert!(matches!(
+            parse(&["pool", "upstreams"]).cmd,
+            Cmd::Pool {
+                action: Some(PoolAction::Upstreams { action: None }),
+                ..
+            }
         ));
         assert!(matches!(
             parse(&["pool", "default-on", "pool"]).cmd,

@@ -1200,6 +1200,8 @@ struct Inner {
     /// CA's fingerprint: what an enrolment names.
     public_url: String,
     fingerprint: String,
+    /// One change of the pool's MCP upstreams at a time (ADR-0069 option B).
+    upstreams: Mutex<()>,
 }
 
 /// A lease that waits for a machine (ADR-0051 point 5).
@@ -1295,6 +1297,12 @@ fn router(shared: Shared) -> Router {
         .route("/v1/shared", get(shared_list))
         .route("/v1/history", get(history))
         .route("/v1/telemetry", get(telemetry_info))
+        .route("/v1/upstreams", get(upstreams_list))
+        .route("/v1/admin/upstreams", post(admin_upstream_put))
+        .route(
+            "/v1/admin/upstreams/{name}",
+            axum::routing::delete(admin_upstream_remove),
+        )
         .route(
             "/v1/telemetry/{kind}",
             post(telemetry_post).layer(axum::extract::DefaultBodyLimit::max(4 << 20)),
@@ -3206,6 +3214,61 @@ async fn admin_role(
     Ok(Json(MemberView::for_admin(&m)))
 }
 
+/// `GET /v1/upstreams`: the MCP upstreams this pool names for its members
+/// (ADR-0069 option B), never a secret.
+async fn upstreams_list(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+) -> ApiResult<Json<Vec<crate::upstreams::PoolUpstream>>> {
+    member(&s, &peer)?;
+    Ok(Json(crate::upstreams::load(&s.dir)))
+}
+
+/// `POST /v1/admin/upstreams`: add an upstream to the pool's list, or
+/// change the one of its name (admins only; audited).
+async fn admin_upstream_put(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    Json(u): Json<crate::upstreams::PoolUpstream>,
+) -> ApiResult<Json<Vec<crate::upstreams::PoolUpstream>>> {
+    let (me, by) = admin(&s, &peer)?;
+    let detail = format!("{} {}", u.name, u.url);
+    {
+        let _one = s.upstreams.lock().unwrap();
+        crate::upstreams::put(&s.dir, u)
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?
+            .map_err(internal)?;
+    }
+    s.store
+        .record(&by, "upstream", &me.id, Some(detail))
+        .map_err(store_err)?;
+    Ok(Json(crate::upstreams::load(&s.dir)))
+}
+
+/// `DELETE /v1/admin/upstreams/{name}`: take an upstream off the pool's
+/// list (admins only; audited).
+async fn admin_upstream_remove(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(name): UrlPath<String>,
+) -> ApiResult<Json<Vec<crate::upstreams::PoolUpstream>>> {
+    let (me, by) = admin(&s, &peer)?;
+    let removed = {
+        let _one = s.upstreams.lock().unwrap();
+        crate::upstreams::remove(&s.dir, &name).map_err(internal)?
+    };
+    if !removed {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("the pool names no upstream `{name}`"),
+        ));
+    }
+    s.store
+        .record(&by, "upstream-remove", &me.id, Some(name))
+        .map_err(store_err)?;
+    Ok(Json(crate::upstreams::load(&s.dir)))
+}
+
 async fn admin_audit(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
@@ -3289,6 +3352,7 @@ pub async fn serve_with(
         public_url: format!("https://{host}:{port}"),
         fingerprint: pki::fingerprint(&ca_pem)?,
         provisioner: options.provisioner,
+        upstreams: Mutex::new(()),
         ca_pem,
     });
     if shared.provisioner.is_some() {

@@ -18,6 +18,9 @@
 //! - `POST /hub/pool/join` `{coordinator, fingerprint, name?}`: ask to join a
 //!   pool (`devstack join` without waiting)
 //! - `GET /hub/pools`: the pools this machine belongs to (ADR-0034)
+//! - `GET /hub/pool/upstreams`: the MCP upstreams the pool names for its
+//!   members; `POST /hub/pool/upstreams` (one), `DELETE
+//!   /hub/pool/upstreams/{name}`: an admin's changes (ADR-0069 option B)
 //!
 //! Each takes `?pool=<name>`; without it, the default pool.
 
@@ -553,6 +556,53 @@ pub async fn role(
     };
     match blocking(&q, move |l| l.admin_role(&id, role)).await {
         Ok(m) => Json(m).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+/// `GET /hub/pool/upstreams`: the MCP upstreams the pool names for its
+/// members (ADR-0069 option B).
+pub async fn upstreams(Query(q): Query<PoolQuery>) -> Response {
+    match blocking(&q, |l| l.upstreams()).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+/// This hub asks its pools again now: an admin changed a list.
+fn refresh(s: &crate::AppState) {
+    let ups = s.upstreams.clone();
+    tokio::task::spawn_blocking(move || ups.refresh_pools());
+}
+
+/// `POST /hub/pool/upstreams`: add an upstream to the pool's list, or
+/// change the one of its name (admins).
+pub async fn upstream_put(
+    axum::extract::State(s): axum::extract::State<crate::AppState>,
+    Query(q): Query<PoolQuery>,
+    Json(u): Json<devstack_node::upstreams::PoolUpstream>,
+) -> Response {
+    match blocking(&q, move |l| l.admin_upstream_put(&u)).await {
+        Ok(v) => {
+            refresh(&s);
+            Json(v).into_response()
+        }
+        Err(e) => error(&e),
+    }
+}
+
+/// `DELETE /hub/pool/upstreams/{name}`: take an upstream off the pool's
+/// list (admins).
+pub async fn upstream_remove(
+    axum::extract::State(s): axum::extract::State<crate::AppState>,
+    Path(name): Path<String>,
+    Query(q): Query<PoolQuery>,
+) -> Response {
+    match blocking(&q, move |l| l.admin_upstream_remove(&name)).await {
+        Ok(()) => {
+            refresh(&s);
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => error(&e),
     }
 }

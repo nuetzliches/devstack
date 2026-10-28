@@ -43,6 +43,11 @@ pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
             }
             Some(PoolAction::DefaultOn { on }) => poolcmd::default_on(on.as_deref()),
             Some(PoolAction::Placement { lane }) => crate::client::print_placement(file, &lane),
+            Some(PoolAction::Upstreams { action }) => poolcmd::upstreams(
+                pool.as_deref()
+                    .unwrap_or(devstack_node::member::DEFAULT_POOL),
+                action,
+            ),
             Some(PoolAction::Telemetry { state }) => poolcmd::telemetry(
                 pool.as_deref()
                     .unwrap_or(devstack_node::member::DEFAULT_POOL),

@@ -591,6 +591,38 @@ see the alarm), can refuse (`--refuse <reason>`), fail deletions
 and deletion. The tests in `crates/devstack-node/tests/provision.rs` use
 the same mock (`devstack_node::provision::mock`).
 
+## MCP upstreams for the members
+
+A pool can name the MCP servers its members work with
+([ADR-0069](adr/0069-devstack-mcp-can-carry-the-tools-of-upstream-mcp-servers.md),
+option B): name, URL, prefix, tool allowlist and how each logs in. Never a
+secret, and never a command: an entry is a URL over `https://`, so an admin
+cannot run anything on a member's machine.
+
+```sh
+devstack pool upstreams add tracker https://mcp.example.com/mcp      # OAuth by default
+devstack pool upstreams add wiki https://wiki.example.com/mcp --login token --allow search,get_page
+devstack pool upstreams remove wiki
+devstack pool upstreams                                              # the list, for any member
+```
+
+`--login` is `oauth` (each member's hub logs in, in the browser; `--client-id`
+where the server registers no clients itself), `token` (each member gives
+their hub one) or `none`. Only an admin changes the list; each change is in
+the audit log. The pool area of the dashboard shows the list to every member
+and lets an admin add, change and remove entries.
+
+Each member's hub asks its pools for the list every minute and offers the
+entries on its *MCP upstreams* page, from which pool. One is used, as
+`<pool>:<name>`, only once its user accepts it, at the URL the pool names
+then; a pool that changes the URL has it accepted again, and the login for
+the old one goes. The member's own configuration goes first: an entry with
+the name or prefix of one of the member's upstreams is not used, nor are two
+entries of different pools with one prefix until the member gives one of them
+another. A declined entry stays declined. An entry the pool drops, or every
+entry of a pool the machine leaves, goes with its login. A pool that does not
+answer keeps what it named last.
+
 ## Several pools
 
 A machine can belong to several pools, a customer's beside the team's, each
@@ -731,7 +763,8 @@ same arguments. "Prune" on a node removes the stopped lanes it keeps
 |---|---|
 | Membership (key, certificate, coordinator) | devstack's per-user state, `pool/`; other pools in `pools/<name>/`; `DEVSTACK_POOL_DIR` overrides the default pool's |
 | Share settings, telemetry consent | `share.json`, `telemetry.json` beside the membership |
-| Coordinator | `DEVSTACK_COORDINATOR_DIR`; `members.json` (changed under `members.lock`), `audit.jsonl`, `telemetry.json`; with a provisioner `provisioning.json` (the settings), `machines.json` (the machines asked for, until deleted), `provisioner.token` |
+| The pools' MCP upstreams on a member | in the hub's state: `pool-upstreams.json` (the lists as last got), the member's answers in `upstreams.toml` (`[[pool]]`) |
+| Coordinator | `DEVSTACK_COORDINATOR_DIR`; `members.json` (changed under `members.lock`), `audit.jsonl`, `telemetry.json`, `upstreams.json` (the MCP upstreams it names); with a provisioner `provisioning.json` (the settings), `machines.json` (the machines asked for, until deleted), `provisioner.token` |
 | Node agent state (leases, mirrors, uploaded files per member, `policy.json`, `secret`) | `node/` beside its membership |
 | Ports | coordinator and node agent: as you choose (`--listen`); mutual TLS with the pool's CA |
 | Certificates | the pool's CA 20 years, the coordinator's server certificate 10, a member's 5; not renewed: when one expires, that member (for the CA, the pool) is set up again |

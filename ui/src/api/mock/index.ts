@@ -12,7 +12,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { DockerEngine, Guest, HubEvent, LaneView, McpUpstream, NotifySettings, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
+import type { DockerEngine, Guest, HubEvent, LaneView, McpUpstream, NotifySettings, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -70,6 +70,15 @@ const MOCK_VERSION = '0.2.0';
 const mockUpstreams: McpUpstream[] = [
   { name: 'tracker', url: 'https://mcp.tracker.example.com/mcp', prefix: 'tracker', allow: [], auth: { kind: 'oauth' }, logged_in: true },
   { name: 'wiki', url: 'https://wiki.example.com/mcp', prefix: 'wiki', allow: ['search', 'get_page'], auth: { kind: 'token' }, logged_in: false },
+  // Named by the pool (ADR-0069 option B): one accepted, one offered.
+  { name: 'default:docs', url: 'https://docs.example.com/mcp', prefix: 'docs', auth: { kind: 'oauth' }, logged_in: true, pool: { pool: 'default', name: 'docs', status: 'accepted', pool_prefix: 'docs' } },
+  { name: 'default:crm', url: 'https://crm.example.com/mcp', prefix: 'crm', auth: { kind: 'oauth' }, logged_in: false, pool: { pool: 'default', name: 'crm', status: 'offered', pool_prefix: 'crm' } },
+];
+
+/** The MCP upstreams the mock pool names. */
+const mockPoolUpstreams: PoolUpstream[] = [
+  { name: 'docs', url: 'https://docs.example.com/mcp', auth: { kind: 'oauth' } },
+  { name: 'crm', url: 'https://crm.example.com/mcp', allow: ['search'], auth: { kind: 'oauth' } },
 ];
 
 class MockHub {
@@ -442,6 +451,30 @@ export class MockTransport implements Transport {
       const next = { ...u, prefix: u.prefix || u.name.replace(/-/g, '_'), logged_in: at >= 0 ? mockUpstreams[at].logged_in : u.auth.kind === 'none' };
       if (at >= 0) mockUpstreams[at] = next;
       else mockUpstreams.push(next);
+      return empty(204);
+    }
+    const ua = /^\/hub\/upstreams\/pool\/([^/]+)\/([^/]+)\/(accept|decline)$/.exec(p);
+    if (ua && method === 'POST') {
+      const u = mockUpstreams.find((o) => o.pool?.pool === decodeURIComponent(ua[1]) && o.pool.name === decodeURIComponent(ua[2]));
+      if (!u?.pool) return json(400, { error: 'the pool names no such upstream' });
+      u.pool.status = ua[3] === 'accept' ? 'accepted' : 'declined';
+      if (ua[3] === 'decline') u.logged_in = false;
+      return empty(204);
+    }
+    if (p === '/hub/pool/upstreams' && method === 'GET') return json(200, mockPoolUpstreams);
+    if (p === '/hub/pool/upstreams' && method === 'POST') {
+      const u = body as unknown as PoolUpstream;
+      if (!u.url.startsWith('https://')) return json(400, { error: `\`${u.url}\`: a pool's upstream is a URL reached over https` });
+      const at = mockPoolUpstreams.findIndex((o) => o.name === u.name);
+      if (at >= 0) mockPoolUpstreams[at] = u;
+      else mockPoolUpstreams.push(u);
+      return json(200, mockPoolUpstreams);
+    }
+    const pu = /^\/hub\/pool\/upstreams\/([^/]+)$/.exec(p);
+    if (pu && method === 'DELETE') {
+      const at = mockPoolUpstreams.findIndex((o) => o.name === decodeURIComponent(pu[1]));
+      if (at < 0) return json(404, { error: 'the pool names no such upstream' });
+      mockPoolUpstreams.splice(at, 1);
       return empty(204);
     }
     const up = /^\/hub\/upstreams\/([^/]+)(?:\/(login|token|logout))?$/.exec(p);

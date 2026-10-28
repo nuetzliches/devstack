@@ -79,6 +79,8 @@ export const paths = {
   upstreamLogin: (name: string) => `/hub/upstreams/${enc(name)}/login`,
   upstreamToken: (name: string) => `/hub/upstreams/${enc(name)}/token`,
   upstreamLogout: (name: string) => `/hub/upstreams/${enc(name)}/logout`,
+  upstreamAccept: (pool: string, name: string) => `/hub/upstreams/pool/${enc(pool)}/${enc(name)}/accept`,
+  upstreamDecline: (pool: string, name: string) => `/hub/upstreams/pool/${enc(pool)}/${enc(name)}/decline`,
   pools: '/hub/pools',
   poolShared: '/hub/pool/shared',
   poolTelemetry: '/hub/pool/telemetry',
@@ -107,6 +109,8 @@ export const paths = {
   poolGiveBack: (id: string) => `/hub/pool/nodes/${enc(id)}/give-back`,
   poolProvisioning: '/hub/pool/provisioning',
   poolProvisioned: '/hub/pool/provisioned',
+  poolUpstreams: '/hub/pool/upstreams',
+  poolUpstream: (name: string) => `/hub/pool/upstreams/${enc(name)}`,
   /**
    * A daemon path of `stack`. With a `lane` (plan §3.5) it goes to that
    * lane's API, except the lane routes themselves, which the main tree's

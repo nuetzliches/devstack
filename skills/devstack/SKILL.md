@@ -153,9 +153,10 @@ takes `profile`, `run` and `yes` (as `--profile`, `--run`, `--yes`) and
 list); `diagnostics` takes `source: "hub"` for the hub's log. Each tool
 describes its parameters.
 Tools named `<prefix>__<tool>` are not devstack's: they are the user's MCP
-upstreams, which the hub logs in to (the dashboard's *MCP upstreams*). One
-that answers it is not logged in needs the user, in the dashboard; tell them,
-do not look for another way in.
+upstreams, which the hub logs in to (the dashboard's *MCP upstreams*), some
+of them named by the user's pool and accepted there. One that answers it is
+not logged in needs the user, in the dashboard; tell them, do not look for
+another way in.
 Register it once (project `.mcp.json` or user configuration; the dashboard
 shows *no MCP* in the stack's head while neither has it):
 

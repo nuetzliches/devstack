@@ -3,7 +3,8 @@
 // in once by the hub, whose tools `devstack mcp` offers in every coding
 // agent. Per user, nothing per stack. The page never sees a secret: a token
 // goes to the hub's keychain, an OAuth login runs in a browser tab and comes
-// back to the hub.
+// back to the hub. A pool may name upstreams too (option B): they are listed
+// with their pool and used only once the user accepts them.
 import { computed, onMounted, ref } from 'vue';
 import { api, paths } from '@/api';
 import type { McpUpstream, McpUpstreamAuth, McpUpstreams } from '@/api/types';
@@ -159,6 +160,31 @@ async function logout(u: McpUpstream) {
   if (r.ok) await load();
 }
 
+/** A prefix of the user's for a pool's upstream whose own one is taken. */
+const prefixFor = ref<Record<string, string>>({});
+
+async function accept(u: McpUpstream) {
+  const p = u.pool!;
+  const prefix = prefixFor.value[u.name]?.trim();
+  busy.value[u.name] = 'accept';
+  const r = await act({ label: `Use ${p.name} of pool ${p.pool}`, path: paths.upstreamAccept(p.pool, p.name), body: prefix ? { prefix } : {}, success: `${p.name} is used now` });
+  delete busy.value[u.name];
+  if (r.ok) await load();
+}
+
+async function decline(u: McpUpstream) {
+  const p = u.pool!;
+  const r = await act({ label: `Do not use ${p.name} of pool ${p.pool}`, path: paths.upstreamDecline(p.pool, p.name), success: `${p.name} is not used` });
+  if (r.ok) await load();
+}
+
+const statusText: Record<string, string> = {
+  offered: 'offered, not used yet',
+  declined: 'declined',
+  changed: 'its URL changed: not used until you accept it again',
+  conflict: 'not used',
+};
+
 function how(u: McpUpstream): string {
   if (u.auth.kind === 'none') return 'no login';
   if (u.auth.kind === 'token') return u.auth.env ? `token from $${u.auth.env}` : 'token';
@@ -176,7 +202,8 @@ function how(u: McpUpstream): string {
       <div class="card-body">
         <p class="muted">
           MCP servers you use in every coding agent. The hub logs in to each once and keeps the login in your keychain; <code>devstack mcp</code> offers their tools as
-          <code>&lt;prefix&gt;__&lt;tool&gt;</code> in every agent that has it. They are yours, not a stack's.
+          <code>&lt;prefix&gt;__&lt;tool&gt;</code> in every agent that has it. They are yours, not a stack's. A pool can name some for its
+          members: they are listed here and used once you accept them, with your own login.
         </p>
         <p v-if="state?.store === 'file'" class="warn-text small" data-testid="upstreams-file-store">
           This machine has no keychain (no Secret Service): logins are kept in a file only you can read, beside the hub's state.
@@ -231,15 +258,34 @@ function how(u: McpUpstream): string {
         <ul v-if="state?.upstreams.length" class="list">
           <li v-for="u in state.upstreams" :key="u.name" class="item" data-testid="upstream" :data-name="u.name">
             <div class="main">
-              <strong>{{ u.name }}</strong>
+              <strong
+                >{{ u.pool ? u.pool.name : u.name }}
+                <span v-if="u.pool" class="pill sm outline" data-testid="upstream-pool">from pool {{ u.pool.pool }}</span></strong
+              >
               <span class="faint small">{{ u.command?.length ? line(u.command) : u.url }}</span>
               <span class="small">
                 <code>{{ u.prefix }}__…</code> · {{ how(u) }} ·
-                <span :class="u.logged_in ? 'ok-text' : 'warn-text'">{{ u.logged_in ? 'logged in' : 'logged out' }}</span>
+                <span v-if="!u.pool || u.pool.status === 'accepted'" :class="u.logged_in ? 'ok-text' : 'warn-text'">{{ u.logged_in ? 'logged in' : 'logged out' }}</span>
+                <span v-else :class="u.pool.status === 'declined' ? 'faint' : 'warn-text'" data-testid="upstream-status">{{ statusText[u.pool.status] }}</span>
                 <template v-if="u.allow?.length"> · {{ u.allow.length }} tool(s)</template>
               </span>
+              <span v-if="u.pool?.why" class="faint small">{{ u.pool.why }}</span>
             </div>
-            <div class="actions">
+            <div v-if="u.pool && u.pool.status !== 'accepted'" class="actions">
+              <input
+                v-if="u.pool.status === 'conflict'"
+                v-model="prefixFor[u.name]"
+                class="input prefix"
+                placeholder="another prefix"
+                spellcheck="false"
+                data-testid="upstream-prefix"
+              />
+              <button type="button" class="btn btn-primary btn-sm" :disabled="!!busy[u.name]" data-testid="upstream-accept" @click="accept(u)">
+                {{ u.pool.status === 'changed' ? 'Use the new URL' : 'Use' }}
+              </button>
+              <button v-if="u.pool.status !== 'declined'" type="button" class="btn btn-ghost btn-sm" data-testid="upstream-decline" @click="decline(u)">Decline</button>
+            </div>
+            <div v-else class="actions">
               <button v-if="u.auth.kind === 'oauth'" type="button" class="btn btn-sm" :disabled="!!busy[u.name]" data-testid="upstream-login" @click="login(u)">
                 <span v-if="busy[u.name]" class="spinner" /><Icon v-else name="key" :size="14" /> {{ u.logged_in ? 'Log in again' : 'Log in' }}
               </button>
@@ -247,8 +293,11 @@ function how(u: McpUpstream): string {
                 <Icon name="key" :size="14" /> {{ u.logged_in ? 'New token' : 'Give token' }}
               </button>
               <button v-if="u.logged_in && u.auth.kind !== 'none' && !(u.auth.kind === 'token' && u.auth.env)" type="button" class="btn btn-sm" @click="logout(u)">Log out</button>
-              <button type="button" class="btn btn-ghost btn-sm" @click="startEdit(u)">Change</button>
-              <button type="button" class="btn btn-ghost btn-sm" @click="remove(u)">Remove</button>
+              <button v-if="u.pool" type="button" class="btn btn-ghost btn-sm" data-testid="upstream-decline" @click="decline(u)">Stop using</button>
+              <template v-else>
+                <button type="button" class="btn btn-ghost btn-sm" @click="startEdit(u)">Change</button>
+                <button type="button" class="btn btn-ghost btn-sm" @click="remove(u)">Remove</button>
+              </template>
             </div>
             <form v-if="tokenFor === u.name" class="token" @submit.prevent="saveToken(u)">
               <input v-model="tokenValue" class="input grow" type="password" autocomplete="off" placeholder="the token; kept in your keychain, never shown again" />
@@ -318,6 +367,9 @@ function how(u: McpUpstream): string {
 }
 .warn-text {
   color: var(--warn-text);
+}
+.prefix {
+  width: 140px;
 }
 .token {
   display: flex;
