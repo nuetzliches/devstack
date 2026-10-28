@@ -95,46 +95,47 @@ const extraUrls = computed(() => webUrls.value.filter((u) => !props.container!.p
     >
       <Icon name="pin" :size="14" />
     </button>
-    <StatusPill class="row-pill" v-if="look" :tone="look.tone" :label="look.label" :busy="look.busy" :title="container ? `${container.name}: ${container.state}${container.health ? ` (${container.health})` : ''}` : undefined" />
-    <StatusPill v-else class="row-pill" tone="neutral" label="Missing" />
+    <StatusPill class="col-pill" v-if="look" :tone="look.tone" :label="look.label" :busy="look.busy" :title="container ? `${container.name}: ${container.state}${container.health ? ` (${container.health})` : ''}` : undefined" />
+    <StatusPill v-else class="col-pill" tone="neutral" label="Missing" />
     <!-- Someone else's lane (ADR-0040): nothing that would change it. -->
-    <template v-if="stack.readOnly" />
-    <button
-      v-else-if="!running"
-      type="button"
-      class="btn btn-ghost btn-sm btn-icon"
-      :aria-label="`Start container ${service}`"
-      :title="refuses ?? 'Start container'"
-      :disabled="busy || stack.stale || !!refuses"
-      data-testid="action-container-start"
-      @click="stack.containerAction(group, service, 'start')"
-    >
-      <span v-if="busy" class="spinner" /><Icon v-else name="play" />
-    </button>
-    <template v-else>
+    <div v-if="!stack.readOnly" class="col-actions">
       <button
+        v-if="!running"
         type="button"
         class="btn btn-ghost btn-sm btn-icon"
-        :aria-label="`Restart container ${service}`"
-        :title="refuses ?? 'Restart container'"
+        :aria-label="`Start container ${service}`"
+        :title="refuses ?? 'Start container'"
         :disabled="busy || stack.stale || !!refuses"
-        data-testid="action-container-restart"
-        @click="stack.containerAction(group, service, 'restart')"
+        data-testid="action-container-start"
+        @click="stack.containerAction(group, service, 'start')"
       >
-        <span v-if="busy" class="spinner" /><Icon v-else name="restart" />
+        <span v-if="busy" class="spinner" /><Icon v-else name="play" />
       </button>
-      <button
-        type="button"
-        class="btn btn-ghost btn-sm btn-icon btn-stop"
-        :aria-label="`Stop container ${service}`"
-        title="Stop container"
-        :disabled="busy || stack.stale"
-        data-testid="action-container-stop"
-        @click="stack.containerAction(group, service, 'stop')"
-      >
-        <Icon name="stop" />
-      </button>
-    </template>
+      <template v-else>
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm btn-icon"
+          :aria-label="`Restart container ${service}`"
+          :title="refuses ?? 'Restart container'"
+          :disabled="busy || stack.stale || !!refuses"
+          data-testid="action-container-restart"
+          @click="stack.containerAction(group, service, 'restart')"
+        >
+          <span v-if="busy" class="spinner" /><Icon v-else name="restart" />
+        </button>
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm btn-icon btn-stop"
+          :aria-label="`Stop container ${service}`"
+          title="Stop container"
+          :disabled="busy || stack.stale"
+          data-testid="action-container-stop"
+          @click="stack.containerAction(group, service, 'stop')"
+        >
+          <Icon name="stop" />
+        </button>
+      </template>
+    </div>
   </li>
 </template>
 
@@ -218,9 +219,5 @@ const extraUrls = computed(() => webUrls.value.filter((u) => !props.container!.p
 }
 .pin.on {
   color: var(--accent);
-}
-.row-pill {
-  min-width: 88px;
-  justify-content: center;
 }
 </style>

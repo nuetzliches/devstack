@@ -166,22 +166,24 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
                   <span class="count">{{ card.members.length }}</span>
                 </button>
                 <RowUsage :series-key="`grp:${card.key}`" :load="groupLoad(card.key)" />
-                <span class="grow" />
-                <div v-if="!stack.readOnly && card.key !== '__other' && card.key !== '__pinned' && card.members.some((m) => m.kind === 'service')" class="group-actions" role="group" :aria-label="`Actions for ${card.label}`">
-                  <button
-                    v-for="a in groupActions"
-                    :key="a.action"
-                    type="button"
-                    class="btn btn-ghost btn-sm btn-icon"
-                    :class="{ 'btn-stop': a.action === 'stop' }"
-                    :title="`${a.title} ${card.label}`"
-                    :aria-label="`${a.title} ${card.label}`"
-                    :disabled="!!stack.busy[`grp:${card.key}`] || stack.stale || hubAway"
-                    :data-testid="`group-${a.action}`"
-                    @click="stack.groupAction(card.key, card.label, a.action)"
-                  >
-                    <span v-if="stack.busy[`grp:${card.key}`] === a.action" class="spinner" /><Icon v-else :name="a.icon" />
-                  </button>
+                <!-- As wide as a row's pin, state and actions: the group's usage stands over its members'. -->
+                <div class="head-tail">
+                  <div v-if="!stack.readOnly && card.key !== '__other' && card.key !== '__pinned' && card.members.some((m) => m.kind === 'service')" class="group-actions" role="group" :aria-label="`Actions for ${card.label}`">
+                    <button
+                      v-for="a in groupActions"
+                      :key="a.action"
+                      type="button"
+                      class="btn btn-ghost btn-sm btn-icon"
+                      :class="{ 'btn-stop': a.action === 'stop' }"
+                      :title="`${a.title} ${card.label}`"
+                      :aria-label="`${a.title} ${card.label}`"
+                      :disabled="!!stack.busy[`grp:${card.key}`] || stack.stale || hubAway"
+                      :data-testid="`group-${a.action}`"
+                      @click="stack.groupAction(card.key, card.label, a.action)"
+                    >
+                      <span v-if="stack.busy[`grp:${card.key}`] === a.action" class="spinner" /><Icon v-else :name="a.icon" />
+                    </button>
+                </div>
                 </div>
               </header>
               <ul v-show="!folded[card.key]" class="members">
@@ -217,10 +219,16 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 </template>
 
 <style scoped>
+.head-tail {
+  flex: none;
+  width: calc(28px + var(--col-pill) + var(--col-actions) + 20px);
+  display: flex;
+  justify-content: flex-end;
+}
 .group-actions {
   display: flex;
   gap: 2px;
-  margin: -4px -8px -4px 0;
+  margin: -4px 0;
 }
 .summary {
   padding: 18px 20px;
@@ -400,7 +408,7 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
   }
 }
 .section-head {
-  gap: 8px;
+  gap: 10px;
 }
 .fold {
   display: inline-flex;
