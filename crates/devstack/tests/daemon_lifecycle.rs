@@ -2418,7 +2418,7 @@ fn a_worktree_runs_as_a_lane() {
         "the lanes' `tray` runs on\n{}",
         s.diag()
     );
-    let lane_pid = lane_info()["pid"].clone();
+    let lane_instance = lane_info()["instance"].clone();
     s.cli(&["up"], None); // `broken` fails, the rest runs
     assert!(
         wait_for(|| s.api("/health").is_some(), Duration::from_secs(120)),
@@ -2426,7 +2426,11 @@ fn a_worktree_runs_as_a_lane() {
         s.diag()
     );
     assert_eq!(s.daemon_pid(), daemon, "in the same daemon");
-    assert_eq!(lane_info()["pid"], lane_pid, "the lane ran on, untouched");
+    assert_eq!(
+        lane_info()["instance"],
+        lane_instance,
+        "the lane ran on, untouched"
+    );
 
     // A restart of the stack carries the lane over (ADR-0052): the next
     // daemon starts it again, from the artifact it ran, without `up` in its
@@ -2452,7 +2456,12 @@ fn a_worktree_runs_as_a_lane() {
         s.diag()
     );
     assert_ne!(s.daemon_pid(), daemon, "a new daemon");
-    assert_ne!(lane_info()["pid"], lane_pid, "the lane started again");
+    // Its process, not its pid: Windows may give the new one the old pid.
+    assert_ne!(
+        lane_info()["instance"],
+        lane_instance,
+        "the lane started again"
+    );
     // Logged once the lane's `up` is through, which waits for every service;
     // its api answers before that.
     assert!(
