@@ -3548,12 +3548,15 @@ mod daemon_send_tests {
     }
 
     /// A port nothing listens on.
+    /// A port nothing answers on, for the rest of the test run: bound but
+    /// not listening, so no other process takes it meanwhile (a port only
+    /// let go of may serve something else a moment later).
     fn closed() -> u16 {
-        std::net::TcpListener::bind(("127.0.0.1", 0))
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port()
+        let sock = tokio::net::TcpSocket::new_v4().unwrap();
+        sock.bind(([127, 0, 0, 1], 0).into()).unwrap();
+        let port = sock.local_addr().unwrap().port();
+        std::mem::forget(sock);
+        port
     }
 
     fn serves(port: u16) -> DaemonNow {
