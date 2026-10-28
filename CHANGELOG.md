@@ -41,6 +41,11 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A lane on a node names its requester in its journal**: what the
+  requester's daemon asks of the lane's daemon (a restart of its
+  services, its start) showed as "by an unknown client" in that lane's
+  *Activity*; it now shows as "by devstack". The client a person used is
+  in the requester's journal.
 - **A lane on a node keeps its journal** (#287): the requester's take of
   the lane daemon's telemetry lines, every 30 seconds, went into that
   daemon's journal as "take the telemetry lines by an unknown client" and

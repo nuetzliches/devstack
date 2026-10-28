@@ -363,6 +363,19 @@ fn a_lane_runs_on_a_node_of_the_pool() {
         .expect("the daemon answers");
     assert_eq!(st, 200, "{body}");
     assert_eq!(node_of(), before, "the lane stays on its node");
+    // The lane daemon's journal names the requester's calls as devstack's,
+    // not an unknown client's (ADR-0067).
+    let (_, body) = api_request(&main, state.path(), "GET", "/v1/lanes/wt/v1/journal")
+        .expect("the lane answers");
+    let journal: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let restarts: Vec<&serde_json::Value> = journal
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|e| e["path"].as_str().is_some_and(|p| p.ends_with("/restart")))
+        .collect();
+    assert!(!restarts.is_empty(), "{body}");
+    assert!(restarts.iter().all(|e| e["via"] == "auto"), "{body}");
 
     // What `prepare` made is linked into the worktree here, from a copy on
     // this machine (ADR-0063), and a git hook there finds it (#277).

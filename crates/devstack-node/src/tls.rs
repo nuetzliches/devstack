@@ -201,10 +201,14 @@ pub async fn request(
         .await
         .map_err(|e| TlsError::Other(format!("{authority}: {e}")))?;
     tokio::spawn(conn);
+    // What sends it is a devstack daemon, the lane's requester: the lane
+    // daemon's journal says "by devstack", not "an unknown client"
+    // (ADR-0067). The client a person used is in the requester's journal.
     let mut req = hyper::Request::builder()
         .method(method)
         .uri(path)
-        .header(hyper::header::HOST, authority);
+        .header(hyper::header::HOST, authority)
+        .header("x-devstack-client", "auto");
     let payload = match body {
         Some((ty, b)) => {
             req = req.header(hyper::header::CONTENT_TYPE, ty);
