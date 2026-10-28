@@ -28,6 +28,10 @@ patch version.
 - [ ] **CI on `main` is green.** A test that fails now and then is fixed in
       a pull request of its own, not in the release one; to get the release
       through, its failed job is run again (`gh run rerun <run> --failed`).
+- [ ] **No known advisory.** CI only warns about one; the release workflow
+      refuses it. Checked before the tag:
+      `cargo deny --all-features check advisories` and, in `ui/`,
+      `npm audit --omit=dev` (`cargo install cargo-deny --locked` once).
 
 ## 2. The release pull request
 
