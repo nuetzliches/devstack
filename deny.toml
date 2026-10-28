@@ -38,3 +38,12 @@ unknown-git = "deny"
 # should not turn every push red) and required in the release workflow: no
 # release ships a dependency with a known advisory.
 yanked = "warn"
+ignore = [
+    # zbus 5's `zvariant`, `zvariant_derive` and `zbus_names` are
+    # unmaintained since they went into zbus 6 (no vulnerability). Only the
+    # Linux keychain pulls them in: keyring 4.2 -> secret-service 5.2 ->
+    # zbus 5 (ADR-0069); removed once keyring moves to zbus 6.
+    { id = "RUSTSEC-2026-0370", reason = "unmaintained, via keyring's secret-service; no zbus 6 release of it yet" },
+    { id = "RUSTSEC-2026-0371", reason = "unmaintained, via keyring's secret-service; no zbus 6 release of it yet" },
+    { id = "RUSTSEC-2026-0372", reason = "unmaintained, via keyring's secret-service; no zbus 6 release of it yet" },
+]

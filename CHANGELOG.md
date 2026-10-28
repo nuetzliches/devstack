@@ -9,6 +9,20 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-10-28
+
+0.27.0 as tagged: its release stopped before publishing, at advisories
+that came out the same day. Fixed: the release's dependency check.
+
+### Fixed
+
+- **The release's advisory check** passes again: RUSTSEC-2026-0370,
+  -0371 and -0372 mark zbus 5's `zvariant`, `zvariant_derive` and
+  `zbus_names` unmaintained (they went into zbus 6; no vulnerability).
+  Only the Linux keychain pulls them in (keyring 4.2 through
+  secret-service 5.2, ADR-0069), which has no release on zbus 6 yet;
+  `deny.toml` ignores the three until it has.
+
 ## [0.27.0] - 2026-10-28
 
 A pool grows by machines a provisioner makes, for members an admin
@@ -1991,7 +2005,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.27.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.27.1...HEAD
+[0.27.1]: https://github.com/nuetzliches/devstack/compare/v0.27.0...v0.27.1
 [0.27.0]: https://github.com/nuetzliches/devstack/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/nuetzliches/devstack/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/nuetzliches/devstack/compare/v0.24.1...v0.25.0
