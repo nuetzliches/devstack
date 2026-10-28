@@ -169,92 +169,94 @@ function how(u: McpUpstream): string {
 <template>
   <div class="page upstreams" data-testid="upstreams">
     <section class="card">
-      <header class="head">
+      <header class="card-header">
         <h2>MCP upstreams</h2>
-        <button type="button" class="btn btn-primary btn-sm" data-testid="upstream-add" @click="startAdd"><Icon name="plus" :size="14" /> Add</button>
+        <button type="button" class="btn btn-primary btn-sm add" data-testid="upstream-add" @click="startAdd"><Icon name="plus" :size="14" /> Add</button>
       </header>
-      <p class="muted">
-        MCP servers you use in every coding agent. The hub logs in to each once and keeps the login in your keychain; <code>devstack mcp</code> offers their tools as
-        <code>&lt;prefix&gt;__&lt;tool&gt;</code> in every agent that has it. They are yours, not a stack's.
-      </p>
-      <p v-if="state?.store === 'file'" class="warn-text small" data-testid="upstreams-file-store">
-        This machine has no keychain (no Secret Service): logins are kept in a file only you can read, beside the hub's state.
-      </p>
-      <p v-if="problem" class="err">{{ problem }}</p>
+      <div class="card-body">
+        <p class="muted">
+          MCP servers you use in every coding agent. The hub logs in to each once and keeps the login in your keychain; <code>devstack mcp</code> offers their tools as
+          <code>&lt;prefix&gt;__&lt;tool&gt;</code> in every agent that has it. They are yours, not a stack's.
+        </p>
+        <p v-if="state?.store === 'file'" class="warn-text small" data-testid="upstreams-file-store">
+          This machine has no keychain (no Secret Service): logins are kept in a file only you can read, beside the hub's state.
+        </p>
+        <p v-if="problem" class="err">{{ problem }}</p>
 
-      <form v-if="formOpen" class="form" data-testid="upstream-form" @submit.prevent="save">
-        <label>Name <input v-model="form.name" class="input" :disabled="!!editing" placeholder="tracker" spellcheck="false" /></label>
-        <label
-          >Reached
-          <select v-model="form.transport" class="input" data-testid="upstream-transport">
-            <option value="url">at a URL</option>
-            <option value="command">as a command the hub starts</option>
-          </select>
-        </label>
-        <label v-if="form.transport === 'url'" class="wide">URL <input v-model="form.url" class="input" placeholder="https://mcp.example.com/mcp" spellcheck="false" /></label>
-        <template v-else>
-          <label class="wide"
-            >Command <input v-model="form.command" class="input" placeholder="npx -y @example/mcp-server" spellcheck="false" />
-            <span class="faint small">Started as you, with a base environment and only the variables below; never from a repository.</span>
+        <form v-if="formOpen" class="form" data-testid="upstream-form" @submit.prevent="save">
+          <label>Name <input v-model="form.name" class="input" :disabled="!!editing" placeholder="tracker" spellcheck="false" /></label>
+          <label
+            >Reached
+            <select v-model="form.transport" class="input" data-testid="upstream-transport">
+              <option value="url">at a URL</option>
+              <option value="command">as a command the hub starts</option>
+            </select>
           </label>
-          <label class="wide">Variables <textarea v-model="form.vars" class="input" rows="2" placeholder="KEY=value, one per line; no secret here" spellcheck="false" /></label>
-        </template>
-        <label>Prefix <input v-model="form.prefix" class="input" :placeholder="form.name.replace(/-/g, '_') || 'tracker'" spellcheck="false" /></label>
-        <label>Tools <input v-model="form.allow" class="input" placeholder="all; or: search, get_issue" spellcheck="false" /></label>
-        <label
-          >Login
-          <select v-model="form.kind" class="input">
-            <option v-if="form.transport === 'url'" value="oauth">OAuth (log in in the browser)</option>
-            <option value="token">A token</option>
-            <option value="none">None</option>
-          </select>
-        </label>
-        <label v-if="form.kind === 'oauth'">Client id <input v-model="form.client_id" class="input" placeholder="only where the server registers none itself" spellcheck="false" /></label>
-        <label v-if="form.kind === 'token'">From variable <input v-model="form.env" class="input" placeholder="empty: you give it the hub" spellcheck="false" /></label>
-        <label v-if="form.kind === 'token' && form.transport === 'command' && !form.env.trim()"
-          >Given to it as <input v-model="form.token_var" class="input" placeholder="API_TOKEN" spellcheck="false"
-        /></label>
-        <div class="row">
-          <button
-            type="submit"
-            class="btn btn-primary btn-sm"
-            :disabled="!form.name.trim() || !(form.transport === 'url' ? form.url.trim() : form.command.trim()) || (form.transport === 'command' && form.kind === 'oauth') || !!busy.form"
-          >
-            Save
-          </button>
-          <button type="button" class="btn btn-sm" @click="formOpen = false">Cancel</button>
-        </div>
-      </form>
+          <label v-if="form.transport === 'url'" class="wide">URL <input v-model="form.url" class="input" placeholder="https://mcp.example.com/mcp" spellcheck="false" /></label>
+          <template v-else>
+            <label class="wide"
+              >Command <input v-model="form.command" class="input" placeholder="npx -y @example/mcp-server" spellcheck="false" />
+              <span class="faint small">Started as you, with a base environment and only the variables below; never from a repository.</span>
+            </label>
+            <label class="wide">Variables <textarea v-model="form.vars" class="input" rows="2" placeholder="KEY=value, one per line; no secret here" spellcheck="false" /></label>
+          </template>
+          <label>Prefix <input v-model="form.prefix" class="input" :placeholder="form.name.replace(/-/g, '_') || 'tracker'" spellcheck="false" /></label>
+          <label>Tools <input v-model="form.allow" class="input" placeholder="all; or: search, get_issue" spellcheck="false" /></label>
+          <label
+            >Login
+            <select v-model="form.kind" class="input">
+              <option v-if="form.transport === 'url'" value="oauth">OAuth (log in in the browser)</option>
+              <option value="token">A token</option>
+              <option value="none">None</option>
+            </select>
+          </label>
+          <label v-if="form.kind === 'oauth'">Client id <input v-model="form.client_id" class="input" placeholder="only where the server registers none itself" spellcheck="false" /></label>
+          <label v-if="form.kind === 'token'">From variable <input v-model="form.env" class="input" placeholder="empty: you give it the hub" spellcheck="false" /></label>
+          <label v-if="form.kind === 'token' && form.transport === 'command' && !form.env.trim()"
+            >Given to it as <input v-model="form.token_var" class="input" placeholder="API_TOKEN" spellcheck="false"
+          /></label>
+          <div class="row">
+            <button
+              type="submit"
+              class="btn btn-primary btn-sm"
+              :disabled="!form.name.trim() || !(form.transport === 'url' ? form.url.trim() : form.command.trim()) || (form.transport === 'command' && form.kind === 'oauth') || !!busy.form"
+            >
+              Save
+            </button>
+            <button type="button" class="btn btn-sm" @click="formOpen = false">Cancel</button>
+          </div>
+        </form>
 
-      <p v-if="state && !state.upstreams.length && !formOpen" class="muted" data-testid="upstreams-empty">None yet.</p>
-      <ul v-if="state?.upstreams.length" class="list">
-        <li v-for="u in state.upstreams" :key="u.name" class="item" data-testid="upstream" :data-name="u.name">
-          <div class="main">
-            <strong>{{ u.name }}</strong>
-            <span class="faint small">{{ u.command?.length ? line(u.command) : u.url }}</span>
-            <span class="small">
-              <code>{{ u.prefix }}__…</code> · {{ how(u) }} ·
-              <span :class="u.logged_in ? 'ok-text' : 'warn-text'">{{ u.logged_in ? 'logged in' : 'logged out' }}</span>
-              <template v-if="u.allow?.length"> · {{ u.allow.length }} tool(s)</template>
-            </span>
-          </div>
-          <div class="actions">
-            <button v-if="u.auth.kind === 'oauth'" type="button" class="btn btn-sm" :disabled="!!busy[u.name]" data-testid="upstream-login" @click="login(u)">
-              <span v-if="busy[u.name]" class="spinner" /><Icon v-else name="key" :size="14" /> {{ u.logged_in ? 'Log in again' : 'Log in' }}
-            </button>
-            <button v-if="u.auth.kind === 'token' && !u.auth.env" type="button" class="btn btn-sm" data-testid="upstream-token" @click="tokenFor = tokenFor === u.name ? null : u.name">
-              <Icon name="key" :size="14" /> {{ u.logged_in ? 'New token' : 'Give token' }}
-            </button>
-            <button v-if="u.logged_in && u.auth.kind !== 'none' && !(u.auth.kind === 'token' && u.auth.env)" type="button" class="btn btn-sm" @click="logout(u)">Log out</button>
-            <button type="button" class="btn btn-ghost btn-sm" @click="startEdit(u)">Change</button>
-            <button type="button" class="btn btn-ghost btn-sm" @click="remove(u)">Remove</button>
-          </div>
-          <form v-if="tokenFor === u.name" class="token" @submit.prevent="saveToken(u)">
-            <input v-model="tokenValue" class="input grow" type="password" autocomplete="off" placeholder="the token; kept in your keychain, never shown again" />
-            <button type="submit" class="btn btn-primary btn-sm" :disabled="!tokenValue.trim()">Keep</button>
-          </form>
-        </li>
-      </ul>
+        <p v-if="state && !state.upstreams.length && !formOpen" class="muted" data-testid="upstreams-empty">None yet.</p>
+        <ul v-if="state?.upstreams.length" class="list">
+          <li v-for="u in state.upstreams" :key="u.name" class="item" data-testid="upstream" :data-name="u.name">
+            <div class="main">
+              <strong>{{ u.name }}</strong>
+              <span class="faint small">{{ u.command?.length ? line(u.command) : u.url }}</span>
+              <span class="small">
+                <code>{{ u.prefix }}__…</code> · {{ how(u) }} ·
+                <span :class="u.logged_in ? 'ok-text' : 'warn-text'">{{ u.logged_in ? 'logged in' : 'logged out' }}</span>
+                <template v-if="u.allow?.length"> · {{ u.allow.length }} tool(s)</template>
+              </span>
+            </div>
+            <div class="actions">
+              <button v-if="u.auth.kind === 'oauth'" type="button" class="btn btn-sm" :disabled="!!busy[u.name]" data-testid="upstream-login" @click="login(u)">
+                <span v-if="busy[u.name]" class="spinner" /><Icon v-else name="key" :size="14" /> {{ u.logged_in ? 'Log in again' : 'Log in' }}
+              </button>
+              <button v-if="u.auth.kind === 'token' && !u.auth.env" type="button" class="btn btn-sm" data-testid="upstream-token" @click="tokenFor = tokenFor === u.name ? null : u.name">
+                <Icon name="key" :size="14" /> {{ u.logged_in ? 'New token' : 'Give token' }}
+              </button>
+              <button v-if="u.logged_in && u.auth.kind !== 'none' && !(u.auth.kind === 'token' && u.auth.env)" type="button" class="btn btn-sm" @click="logout(u)">Log out</button>
+              <button type="button" class="btn btn-ghost btn-sm" @click="startEdit(u)">Change</button>
+              <button type="button" class="btn btn-ghost btn-sm" @click="remove(u)">Remove</button>
+            </div>
+            <form v-if="tokenFor === u.name" class="token" @submit.prevent="saveToken(u)">
+              <input v-model="tokenValue" class="input grow" type="password" autocomplete="off" placeholder="the token; kept in your keychain, never shown again" />
+              <button type="submit" class="btn btn-primary btn-sm" :disabled="!tokenValue.trim()">Keep</button>
+            </form>
+          </li>
+        </ul>
+      </div>
     </section>
   </div>
 </template>
@@ -263,16 +265,14 @@ function how(u: McpUpstream): string {
 .upstreams {
   max-width: 900px;
 }
-.head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.add {
+  margin-left: auto;
 }
 .form {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px 16px;
-  margin: 12px 0;
+  gap: 12px 16px;
+  margin: 16px 0 4px;
 }
 .form label {
   display: flex;

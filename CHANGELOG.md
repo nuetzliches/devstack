@@ -21,6 +21,9 @@ and listed with their assets on the
   after the services, or a group whose Docker error holds for 10 s, fails
   the `up` with its state. The MCP tools `up` and `lane_start` wait the
   same way.
+- **The dashboard's MCP upstreams page** has the spacing of the other
+  cards: a header with the Add button, the text and the form inside the
+  card's padding instead of on its border.
 
 ## [0.27.1] - 2026-10-28
 
