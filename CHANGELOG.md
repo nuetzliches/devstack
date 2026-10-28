@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-10-28
+
+A restart is warm, a rebuild or cold, from every restart button and the
+command palette, and a lane restarts where it runs, on a node too
+(ADR-0072); a group's start and stop take its containers along. A pool
+can name MCP upstreams for its members, which each member's hub offers
+and uses once its user accepted them, with that user's own login
+(ADR-0069 option B). `devstack up` waits for the containers too.
+Fixed: a lane's journal on a node, the dashboard's row columns, a node's
+refusal that did not say what other starts hold, and logins lost in the
+Windows Credential Manager.
+
 ### Added
 
 - **Restart, Rebuild, Cold** ([ADR-0072](docs/adr/0072-a-restart-is-warm-a-rebuild-or-cold.md)):
@@ -2086,7 +2098,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.27.1...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.28.0...HEAD
+[0.28.0]: https://github.com/nuetzliches/devstack/compare/v0.27.1...v0.28.0
 [0.27.1]: https://github.com/nuetzliches/devstack/compare/v0.27.0...v0.27.1
 [0.27.0]: https://github.com/nuetzliches/devstack/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/nuetzliches/devstack/compare/v0.25.0...v0.26.0
