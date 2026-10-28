@@ -3548,15 +3548,12 @@ mod daemon_send_tests {
     }
 
     /// A port nothing listens on.
-    /// A port nothing answers on, for the rest of the test run: bound but
-    /// not listening, so no other process takes it meanwhile (a port only
-    /// let go of may serve something else a moment later).
+    /// A port nothing answers on: a privileged one, which no test (nor any
+    /// unprivileged process) can listen on. A port bound and let go of may
+    /// serve another test's listener a moment later (seen on macOS), and one
+    /// bound without listening is not refused there but left to time out.
     fn closed() -> u16 {
-        let sock = tokio::net::TcpSocket::new_v4().unwrap();
-        sock.bind(([127, 0, 0, 1], 0).into()).unwrap();
-        let port = sock.local_addr().unwrap().port();
-        std::mem::forget(sock);
-        port
+        1
     }
 
     fn serves(port: u16) -> DaemonNow {
