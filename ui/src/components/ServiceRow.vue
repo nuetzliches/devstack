@@ -64,8 +64,8 @@ function open(e: MouseEvent) {
       >
         <Icon name="pin" :size="14" />
       </button>
-      <StatusPill class="row-pill" :tone="look.tone" :label="look.label" :busy="look.busy" :title="look.detail ?? `since ${ago(service.since, now)}`" />
-      <div v-if="!stack.readOnly" class="actions">
+      <StatusPill class="col-pill" :tone="look.tone" :label="look.label" :busy="look.busy" :title="look.detail ?? `since ${ago(service.since, now)}`" />
+      <div v-if="!stack.readOnly" class="col-actions">
         <button
           v-if="isStopped"
           type="button"
@@ -200,10 +200,6 @@ function open(e: MouseEvent) {
   color: var(--accent, inherit);
   text-decoration: underline;
 }
-.actions {
-  display: flex;
-  gap: 2px;
-}
 .detail {
   padding-left: 38px;
 }
@@ -291,9 +287,5 @@ function open(e: MouseEvent) {
 }
 .pin.on {
   color: var(--accent);
-}
-.row-pill {
-  min-width: 88px;
-  justify-content: center;
 }
 </style>

@@ -19,14 +19,18 @@ const mem = computed(() => (stack.history.get(props.seriesKey) ?? []).map((p) =>
       <span class="faint">{{ percent(load.cpu) }}</span>
     </span>
   </div>
+  <!-- Its column all the same: the next columns stay where the other rows have them. -->
+  <div v-else class="row-usage hide-sm" aria-hidden="true" />
 </template>
 
 <style scoped>
 .row-usage {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
   flex: none;
+  width: var(--col-usage);
 }
 .nums {
   display: flex;

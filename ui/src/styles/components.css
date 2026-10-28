@@ -25,6 +25,26 @@
   margin-top: 2px;
 }
 
+/* The trailing columns of a member row and of its group's head (overview,
+   infrastructure): fixed widths, so usage, pin, state and actions line up
+   from row to row and from card to card, whatever the ports and names. */
+:root {
+  --col-usage: 124px;
+  --col-pill: 100px;
+  --col-actions: 60px;
+}
+.col-pill {
+  width: var(--col-pill);
+  flex: none;
+  justify-content: center;
+}
+.col-actions {
+  width: var(--col-actions);
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+}
 .grid-cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));

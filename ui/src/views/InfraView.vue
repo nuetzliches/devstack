@@ -39,7 +39,8 @@ function summary(group: string) {
       <span class="grow"><strong>Docker:</strong> {{ stack.usage.docker_error }}</span>
     </div>
 
-    <div v-if="groups.length" class="grid-cards stale-dim">
+    <!-- One group under the other, full width: a container row needs the width the overview gives it. -->
+    <div v-if="groups.length" class="groups stale-dim">
       <section v-for="g in groups" :key="g.group" class="card" :data-testid="`infra-${g.group}`">
         <header class="card-header">
           <Icon name="layers" :size="16" class="muted" />
@@ -72,6 +73,11 @@ function summary(group: string) {
 </template>
 
 <style scoped>
+.groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
 .list {
   list-style: none;
   margin: 0;

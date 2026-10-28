@@ -17,6 +17,12 @@ and listed with their assets on the
   pushed the lane's real changes out within about four hours; its log
   line was also the next take's telemetry. The take is no longer
   journaled or logged as a request.
+- **The dashboard's rows line up**: a service's or container's usage,
+  pin, state and actions stand in fixed columns, so they line up from row
+  to row and under the group's usage in its head, whatever the ports and
+  names; a row without usage keeps the column. The *Infrastructure* page
+  shows its Compose groups one under the other at full width instead of
+  in narrow columns that cut the container names short.
 - **`devstack up` waits for the containers too** (#66): it waited for the
   autostart services only, so a stack of Compose groups alone answered
   right away while its images were still built and its containers started.
