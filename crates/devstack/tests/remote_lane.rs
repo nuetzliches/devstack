@@ -351,6 +351,19 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     .expect("the lane answers");
     assert!(!again.contains("daemon_start"), "taken once: {again}");
 
+    // A warm restart restarts its running services on the node, through
+    // the lane's own API: the lane stays where it is.
+    let node_of = || {
+        api("/v1/lanes")
+            .and_then(|v| v.as_array()?.iter().find(|l| l["name"] == "wt").cloned())
+            .map(|l| l["node"].clone())
+    };
+    let before = node_of();
+    let (st, body) = api_request(&main, state.path(), "POST", "/v1/lanes/wt/restart")
+        .expect("the daemon answers");
+    assert_eq!(st, 200, "{body}");
+    assert_eq!(node_of(), before, "the lane stays on its node");
+
     // What `prepare` made is linked into the worktree here, from a copy on
     // this machine (ADR-0063), and a git hook there finds it (#277).
     let until = Instant::now() + Duration::from_secs(120);

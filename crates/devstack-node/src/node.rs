@@ -2592,7 +2592,7 @@ async fn proxy(
 }
 
 /// `POST v1/services/{name}/{action}` or `POST v1/groups/{name}/{action}`
-/// of the lane daemon's API, for `start`, `stop` and `restart`.
+/// of the lane daemon's API, for `start`, `stop`, `restart` and `rebuild`.
 fn named_route(
     method: &hyper::Method,
     rest: &str,
@@ -2608,7 +2608,7 @@ fn named_route(
         (Named::Groups, rest.strip_prefix("groups/")?)
     };
     let (name, action) = rest.split_once('/')?;
-    (!name.is_empty() && matches!(action, "start" | "stop" | "restart"))
+    (!name.is_empty() && matches!(action, "start" | "stop" | "restart" | "rebuild"))
         .then(|| (route, name.to_string(), action.to_string()))
 }
 
@@ -2638,6 +2638,12 @@ fn act_named(
         return None;
     }
     let single = route == laneinfra::Named::Services && !stack.groups.contains_key(name);
+    // A group's `rebuild` restarts its containers: nothing of theirs is built.
+    let action = if action == "rebuild" {
+        "restart"
+    } else {
+        action
+    };
     let mut failed = Vec::new();
     for (group, service) in &targets {
         let r = laneinfra::may_act(&stack, group, service, action)
@@ -4197,9 +4203,15 @@ mod tests {
             named_route(&Method::POST, "v1/groups/server/restart"),
             some(Named::Groups, "server", "restart")
         );
+        // A rebuild may name a group (its containers restart): the stack
+        // file says whether it does.
+        assert_eq!(
+            named_route(&Method::POST, "v1/services/server/rebuild"),
+            some(Named::Services, "server", "rebuild")
+        );
         for (m, p) in [
             (Method::GET, "v1/services/web/restart"),
-            (Method::POST, "v1/services/web/rebuild"),
+            (Method::POST, "v1/services/web/promote"),
             (Method::POST, "v1/services/web/logs/x"),
             (Method::POST, "v1/services//restart"),
             (Method::POST, "v1/commands/seed"),

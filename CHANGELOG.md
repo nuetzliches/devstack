@@ -9,6 +9,36 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **Restart, Rebuild, Cold** ([ADR-0072](docs/adr/0072-a-restart-is-warm-a-rebuild-or-cold.md)):
+  every restart button in the dashboard (a service row, a group's head, a
+  lane's header) is a split button. A click restarts warm, from the build
+  there is for the inputs, the data kept; its arrow offers Rebuild (built
+  again even for inputs built before, the data kept) and, for a lane,
+  Cold (built again and seeded again; asks first). The command palette has
+  them too.
+- **A lane restarts where it runs**: `POST /v1/lanes/{lane}/restart` with
+  `{"mode": "warm" | "rebuild" | "cold"}`. On a node a warm restart and a
+  rebuild go through the lane's own API, so its lease, node and ports
+  stay; a cold restart stops it, throws its data away and starts it again
+  at the same place. A group has `rebuild` too
+  (`POST /v1/groups/{name}/rebuild`, `devstack restart --rebuild <group>`).
+- **A lane's actions in one menu**: the header's Restart (Start for a
+  stopped lane) has Rebuild, Cold…, Stop, Discard data… and Remove
+  worktree… in its menu; the same menu opens from a lane's "…" button or a
+  right click on its row in the branch picker. The separate "Stop
+  worktree" and "Discard data" buttons are gone.
+
+### Changed
+
+- **A group's start and stop take its containers along**, as its restart
+  did: `devstack start|stop <group>` and the group's buttons start its
+  containers before its services and stop them after (a lane leaves the
+  main tree's `shared` ones alone). A group of containers only gets its
+  buttons in the overview now. A lane on a node needs a node with devstack
+  0.28.0 or later for this.
+
 ### Fixed
 
 - **A lane on a node keeps its journal** (#287): the requester's take of

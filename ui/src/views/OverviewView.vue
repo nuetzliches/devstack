@@ -9,6 +9,8 @@ import ContainerRow from '@/components/ContainerRow.vue';
 import CommandRow from '@/components/CommandRow.vue';
 import Icon from '@/components/icons/Icon.vue';
 import RowUsage from '@/components/RowUsage.vue';
+import SplitButton from '@/components/SplitButton.vue';
+import type { MenuItem } from '@/lib/laneActions';
 import { persist } from '@/lib/persist';
 import { usePins } from '@/lib/pins';
 
@@ -125,7 +127,8 @@ const badges = computed<{ f: Filter; n: number; tone: string }[]>(() => [
 const shownBadges = computed(() => badges.value.filter((b) => b.n || b.f === 'healthy' || filter.value === b.f));
 
 const hubAway = computed(() => !hub.reachable);
-const groupActions: { action: 'start' | 'stop' | 'restart'; title: string; icon: 'play' | 'stop' | 'restart' }[] = [  { action: 'start', title: 'Start every service of', icon: 'play' },  { action: 'restart', title: 'Rebuild and restart every service and container of', icon: 'restart' },  { action: 'stop', title: 'Stop every service of', icon: 'stop' },];
+/** Restart's menu in a group's head. */
+const groupRestartItems: MenuItem[] = [{ key: 'rebuild', label: 'Rebuild', icon: 'wrench', hint: 'built again', title: 'Build every service of the group again, even for inputs built before, restart them and its containers' }];
 const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 </script>
 
@@ -168,22 +171,42 @@ const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
                 <RowUsage :series-key="`grp:${card.key}`" :load="groupLoad(card.key)" />
                 <!-- As wide as a row's pin, state and actions: the group's usage stands over its members'. -->
                 <div class="head-tail">
-                  <div v-if="!stack.readOnly && card.key !== '__other' && card.key !== '__pinned' && card.members.some((m) => m.kind === 'service')" class="group-actions" role="group" :aria-label="`Actions for ${card.label}`">
+                  <div v-if="!stack.readOnly && card.key !== '__other' && card.key !== '__pinned' && card.members.some((m) => m.kind === 'service' || m.kind === 'container')" class="group-actions" role="group" :aria-label="`Actions for ${card.label}`">
                     <button
-                      v-for="a in groupActions"
-                      :key="a.action"
                       type="button"
                       class="btn btn-ghost btn-sm btn-icon"
-                      :class="{ 'btn-stop': a.action === 'stop' }"
-                      :title="`${a.title} ${card.label}`"
-                      :aria-label="`${a.title} ${card.label}`"
+                      :title="`Start every service and container of ${card.label}`"
+                      :aria-label="`Start every service and container of ${card.label}`"
                       :disabled="!!stack.busy[`grp:${card.key}`] || stack.stale || hubAway"
-                      :data-testid="`group-${a.action}`"
-                      @click="stack.groupAction(card.key, card.label, a.action)"
+                      data-testid="group-start"
+                      @click="stack.groupAction(card.key, card.label, 'start')"
                     >
-                      <span v-if="stack.busy[`grp:${card.key}`] === a.action" class="spinner" /><Icon v-else :name="a.icon" />
+                      <span v-if="stack.busy[`grp:${card.key}`] === 'start'" class="spinner" /><Icon v-else name="play" />
                     </button>
-                </div>
+                    <SplitButton
+                      look="ghost"
+                      icon="restart"
+                      :title="`Restart every service and container of ${card.label}: from the builds there are for their inputs, else built`"
+                      :items="groupRestartItems"
+                      :disabled="!!stack.busy[`grp:${card.key}`] || stack.stale || hubAway"
+                      :busy="stack.busy[`grp:${card.key}`] === 'restart' || stack.busy[`grp:${card.key}`] === 'rebuild'"
+                      :menu-label="`More restarts of ${card.label}`"
+                      testid="group-restart"
+                      @main="stack.groupAction(card.key, card.label, 'restart')"
+                      @pick="stack.groupAction(card.key, card.label, 'rebuild')"
+                    />
+                    <button
+                      type="button"
+                      class="btn btn-ghost btn-sm btn-icon btn-stop"
+                      :title="`Stop every service and container of ${card.label}`"
+                      :aria-label="`Stop every service and container of ${card.label}`"
+                      :disabled="!!stack.busy[`grp:${card.key}`] || stack.stale || hubAway"
+                      data-testid="group-stop"
+                      @click="stack.groupAction(card.key, card.label, 'stop')"
+                    >
+                      <span v-if="stack.busy[`grp:${card.key}`] === 'stop'" class="spinner" /><Icon v-else name="stop" />
+                    </button>
+                  </div>
                 </div>
               </header>
               <ul v-show="!folded[card.key]" class="members">

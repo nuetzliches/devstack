@@ -1285,13 +1285,16 @@ impl Supervisor {
             .map_err(|e| e.to_string())
     }
 
-    /// `start`, `stop` or `restart` for every member of a group (plan §6).
-    /// Services start one after the other in member order (their `after`
-    /// pulls dependencies first) and stop in reverse; restarts build at the
-    /// same time. `restart` also restarts container members; commands are
-    /// left out. Errors name the members that failed, the others still ran.
-    /// In a lane on a node its agent restarts the container members
-    /// (`node_acted`, #128): this daemon has no Docker.
+    /// `start`, `stop`, `restart` or `rebuild` for every member of a group
+    /// (plan §6). Services start one after the other in member order (their
+    /// `after` pulls dependencies first) and stop in reverse; restarts build
+    /// at the same time, `rebuild` builds even when an artifact for the same
+    /// inputs exists (a member without `build` restarts). Container members
+    /// go with them: they start before the services and stop after them; a
+    /// lane's `shared` ones are the main tree's and are left alone.
+    /// Commands are left out. Errors name the members that failed, the
+    /// others still ran. In a lane on a node its agent acts on the container
+    /// members (`node_acted`, #128): this daemon has no Docker.
     pub fn group_action(
         self: &Arc<Self>,
         group: &str,
@@ -1309,18 +1312,11 @@ impl Supervisor {
             .filter(|m| self.stack.services.contains_key(m.as_str()))
             .cloned()
             .collect();
-        let containers: Vec<(String, String)> = g
-            .members
-            .iter()
-            .filter_map(|m| {
-                let rest = m.strip_prefix("compose.")?;
-                let (grp, svc) = rest.split_once('.')?;
-                Some((grp.to_string(), svc.to_string()))
-            })
-            .collect();
+        let containers = self.stack.group_containers(group);
         let mut failed: Vec<String> = Vec::new();
         match action {
             "start" => {
+                self.group_containers(&containers, "start", node_acted, &mut failed);
                 for s in &services {
                     if let Err(e) = self.start(s) {
                         failed.push(format!("{s}: {e}"));
@@ -1333,12 +1329,31 @@ impl Supervisor {
                         failed.push(format!("{s}: {e}"));
                     }
                 }
+                self.group_containers(&containers, "stop", node_acted, &mut failed);
             }
-            "restart" => {
+            "restart" | "rebuild" => {
+                let rebuild = action == "rebuild";
                 let results: Vec<(String, Result<(), String>)> = std::thread::scope(|scope| {
                     let handles: Vec<_> = services
                         .iter()
-                        .map(|s| (s.clone(), scope.spawn(|| self.restart(s))))
+                        .map(|s| {
+                            let built = rebuild
+                                && self
+                                    .stack
+                                    .services
+                                    .get(s)
+                                    .is_some_and(|v| v.build.is_some());
+                            (
+                                s.clone(),
+                                scope.spawn(move || {
+                                    if built {
+                                        self.rebuild(s)
+                                    } else {
+                                        self.restart(s)
+                                    }
+                                }),
+                            )
+                        })
                         .collect();
                     handles
                         .into_iter()
@@ -1350,27 +1365,7 @@ impl Supervisor {
                         .into_iter()
                         .filter_map(|(s, r)| r.err().map(|e| format!("{s}: {e}"))),
                 );
-                if self.external_infra().is_some() {
-                    // Never `docker compose` here: the lane container has
-                    // no Docker, and the project would be the main tree's.
-                    if !containers.is_empty() && !node_acted {
-                        let names: Vec<&str> = containers.iter().map(|(_, s)| s.as_str()).collect();
-                        failed.push(format!(
-                            "{}: {}",
-                            names.join(", "),
-                            super::infra::NODE_DID_NOT_ACT
-                        ));
-                    }
-                } else {
-                    for (grp, svc) in &containers {
-                        if let Err(e) = self.docker.restart(&self.compose_group(grp), svc) {
-                            failed.push(format!("{svc}: {e}"));
-                        }
-                    }
-                }
-                if !containers.is_empty() {
-                    self.refresh_containers();
-                }
+                self.group_containers(&containers, "restart", node_acted, &mut failed);
             }
             _ => return Err(format!("unknown group action `{action}`")),
         }
@@ -1379,6 +1374,106 @@ impl Supervisor {
         } else {
             Err(failed.join("\n"))
         }
+    }
+
+    /// Restart every service that runs now, at the same time, in place: a
+    /// lane's `restart` (warm), with `rebuild` building those with a `build`
+    /// even when an artifact for the same inputs exists. Stopped services
+    /// stay stopped; containers stay up. Errors name the services that
+    /// failed, the others still ran.
+    pub fn restart_running(self: &Arc<Self>, rebuild: bool) -> Result<(), String> {
+        let running: Vec<String> = self
+            .stack
+            .services
+            .keys()
+            .filter(|n| self.service_running(n))
+            .cloned()
+            .collect();
+        let failed: Vec<String> = std::thread::scope(|scope| {
+            let handles: Vec<_> = running
+                .iter()
+                .map(|s| {
+                    let built = rebuild
+                        && self
+                            .stack
+                            .services
+                            .get(s)
+                            .is_some_and(|v| v.build.is_some());
+                    (
+                        s,
+                        scope.spawn(move || {
+                            if built {
+                                self.rebuild(s)
+                            } else {
+                                self.restart(s)
+                            }
+                        }),
+                    )
+                })
+                .collect();
+            handles
+                .into_iter()
+                .filter_map(|(s, h)| {
+                    h.join()
+                        .unwrap_or_else(|_| Err("panicked".into()))
+                        .err()
+                        .map(|e| format!("{s}: {e}"))
+                })
+                .collect()
+        });
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(failed.join("\n"))
+        }
+    }
+
+    /// `action` (`start`, `stop`, `restart`) on a group's container members,
+    /// what failed added to `failed`. A lane's `shared` ones are left out:
+    /// the main tree runs them (ADR-0030). In a lane on a node its agent did
+    /// it before the request came (`node_acted`); this daemon never runs
+    /// `docker compose` there (the lane container has no Docker, and the
+    /// project would be the main tree's).
+    fn group_containers(
+        &self,
+        containers: &[(String, String)],
+        action: &str,
+        node_acted: bool,
+        failed: &mut Vec<String>,
+    ) {
+        if containers.is_empty() {
+            return;
+        }
+        if self.external_infra().is_some() {
+            if !node_acted {
+                let names: Vec<&str> = containers.iter().map(|(_, s)| s.as_str()).collect();
+                failed.push(format!(
+                    "{}: {}",
+                    names.join(", "),
+                    super::infra::NODE_DID_NOT_ACT
+                ));
+            }
+        } else {
+            for (grp, svc) in containers {
+                if self.is_shared(grp, svc) {
+                    continue;
+                }
+                let g = self.compose_group(grp);
+                let r = match action {
+                    "start" => {
+                        let mut one = g.clone();
+                        one.services = vec![svc.clone()];
+                        self.docker.up(&one, std::time::Duration::from_secs(300))
+                    }
+                    "stop" => self.docker.stop(&g, svc),
+                    _ => self.docker.restart(&g, svc),
+                };
+                if let Err(e) = r {
+                    failed.push(format!("{svc}: {e}"));
+                }
+            }
+        }
+        self.refresh_containers();
     }
 
     /// Start what `svc` comes after and is not ready yet (services, jobs that

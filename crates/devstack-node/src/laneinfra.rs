@@ -284,28 +284,27 @@ pub enum Named {
 
 /// The containers a `named` route acts on with `action`, `(group,
 /// service)`, as the lane's daemon reads the name (#128): none for one of
-/// its services; a group's Compose members on `restart` (a group's `start`
-/// and `stop` leave its containers alone); one Compose service named
-/// `<group>.<service>`, `compose.<group>.<service>` or, unambiguous,
-/// `<service>`.
+/// its services; a group's Compose members on `start`, `stop`, `restart`
+/// and `rebuild` (restarted); one Compose service named `<group>.<service>`,
+/// `compose.<group>.<service>` or, unambiguous, `<service>`, on `start`,
+/// `stop` and `restart`.
 pub fn named(
     stack: &devstack_config::Stack,
     route: Named,
     name: &str,
     action: &str,
 ) -> Vec<(String, String)> {
-    if !matches!(action, "start" | "stop" | "restart") {
+    if !matches!(action, "start" | "stop" | "restart" | "rebuild") {
         return Vec::new();
     }
     if route == Named::Services && stack.services.contains_key(name) {
         return Vec::new();
     }
     if stack.groups.contains_key(name) {
-        return if action == "restart" {
-            stack.group_containers(name)
-        } else {
-            Vec::new()
-        };
+        return stack.group_containers(name);
+    }
+    if action == "rebuild" {
+        return Vec::new();
     }
     match route {
         Named::Services => stack.compose_service(name).into_iter().collect(),
@@ -493,8 +492,15 @@ members = ["compose.app.db", "compose.app.web", "api"]
             named(&s, Named::Groups, "server", "restart"),
             vec![pair("app", "db"), pair("app", "web")]
         );
-        // A group's start and stop leave its containers alone, as locally.
-        assert!(named(&s, Named::Groups, "server", "stop").is_empty());
+        // A group's start, stop and rebuild take its containers along, as
+        // locally.
+        for action in ["start", "stop", "rebuild"] {
+            assert_eq!(
+                named(&s, Named::Groups, "server", action),
+                vec![pair("app", "db"), pair("app", "web")],
+                "{action}"
+            );
+        }
         // The daemon's own: a service, another action, an unknown name.
         assert!(named(&s, Named::Services, "api", "restart").is_empty());
         assert!(named(&s, Named::Services, "web", "rebuild").is_empty());

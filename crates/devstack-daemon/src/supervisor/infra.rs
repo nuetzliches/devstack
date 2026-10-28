@@ -1201,7 +1201,7 @@ impl Supervisor {
     }
 
     /// A Compose service a lane uses from the main tree (`shared`, ADR-0030).
-    fn is_shared(&self, group: &str, service: &str) -> bool {
+    pub(super) fn is_shared(&self, group: &str, service: &str) -> bool {
         !self.lane.is_empty()
             && self
                 .stack

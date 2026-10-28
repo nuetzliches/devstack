@@ -70,7 +70,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack pool connect <lane>` / `devstack pool disconnect <lane>` | forward all of a shared lane's services here, on its owner's ports if free; close them again and free the ports |
 | `devstack logs --daemon` | devstack's own log: every decision with its reason (`--grep <service>`, `--hub` for the dashboard hub) |
 | `devstack restart <service>` | rebuild now; the running instance stays until the new one is healthy. `--rebuild` builds again although an artifact for the same inputs exists (an input devstack does not see changed: the SDK, a file outside the repository) |
-| `devstack restart <group>` | every service of a group from the stack file, built at the same time, and its containers (`start`/`stop` take a group too) |
+| `devstack restart <group>` | every service of a group from the stack file, built at the same time, and its containers (`start`/`stop` take a group too, its containers with it; `--rebuild` builds its services again even for inputs built before) |
 | `devstack restart <group>.<service>` | one Compose container (`compose.app.web` or `web` work too; `start`/`stop` as well); in a lane its own container, on a node through the node |
 | `devstack promote <service>` | take over a candidate that is held (schema change, see below) |
 | `devstack rollback <service>` | back to the build before the last replacement, without building |

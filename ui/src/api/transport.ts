@@ -139,6 +139,7 @@ export const v1 = {
   lane: (lane: string) => `/v1/lanes/${enc(lane)}`,
   laneStop: (lane: string) => `/v1/lanes/${enc(lane)}/stop`,
   laneReset: (lane: string) => `/v1/lanes/${enc(lane)}/reset`,
+  laneRestart: (lane: string) => `/v1/lanes/${enc(lane)}/restart`,
   laneMove: (lane: string) => `/v1/lanes/${enc(lane)}/move`,
   events: '/v1/events',
   journal: (since = 0) => `/v1/journal?since=${since}`,
@@ -165,7 +166,9 @@ export const v1 = {
 };
 
 export type ServiceAction = 'start' | 'stop' | 'restart' | 'rebuild' | 'promote' | 'rollback' | 'hot-reload-on' | 'hot-reload-off';
-export type GroupAction = 'start' | 'stop' | 'restart';
+export type GroupAction = 'start' | 'stop' | 'restart' | 'rebuild';
+/** How a lane restarts: `warm` from the artifacts there are, `rebuild` built again, `cold` built again with its data seeded again. */
+export type RestartMode = 'warm' | 'rebuild' | 'cold';
 
 function enc(s: string): string {
   return encodeURIComponent(s);

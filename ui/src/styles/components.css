@@ -31,7 +31,7 @@
 :root {
   --col-usage: 124px;
   --col-pill: 100px;
-  --col-actions: 60px;
+  --col-actions: 76px;
 }
 .col-pill {
   width: var(--col-pill);

@@ -14,6 +14,8 @@ describe('journal', () => {
     expect(journalLabel(e('/v1/lanes/feat/main', { lane: 'feat' }))).toBe('lane feat takes the main ports');
     expect(journalLabel(e('/v1/lanes/main/main', { method: 'AUTO', via: 'auto' }))).toBe('main ports back to the main tree');
     expect(journalLabel(e('/v1/services/a%20b/start'))).toBe('start a b');
+    expect(journalLabel(e('/v1/lanes/feat/restart'))).toBe('restart lane feat');
+    expect(journalLabel(e('/v1/groups/backend/rebuild'))).toBe('rebuild group backend');
   });
 
   it('shows a route it does not know as it came', () => {

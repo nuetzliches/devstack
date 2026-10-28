@@ -1223,6 +1223,89 @@ impl RemoteLane {
         }
     }
 
+    /// Restart the services that run on the node now, in place, at the same
+    /// time, through the lane's own API: `restart`, with `rebuild` a
+    /// `rebuild` of those that run a build. The lease, the node and the
+    /// ports stay. Errors name the services that failed. Blocking.
+    pub fn restart_services(
+        &self,
+        rt: &tokio::runtime::Handle,
+        rebuild: bool,
+    ) -> Result<(), String> {
+        let (status, body) = rt
+            .block_on(self.client.api(&self.lease, "GET", "/v1/stack", None))
+            .map_err(|e| format!("lane `{}` on {}: {e}", self.name, self.node.name))?;
+        if status != 200 {
+            return Err(format!(
+                "lane `{}` on {} answered {status}: {body}",
+                self.name, self.node.name
+            ));
+        }
+        let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+        let running: Vec<(String, bool)> = v["services"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter(|s| matches!(s["status"]["state"].as_str(), Some("healthy" | "running")))
+            .filter_map(|s| {
+                let name = s["name"].as_str()?.to_string();
+                // A service that runs a build has its id; one without a
+                // `build` cannot be rebuilt, only restarted.
+                Some((name, s["build_id"].as_str().is_some()))
+            })
+            .collect();
+        let failed: Vec<String> = std::thread::scope(|scope| {
+            let handles: Vec<_> = running
+                .iter()
+                .map(|(name, built)| {
+                    let action = if rebuild && *built {
+                        "rebuild"
+                    } else {
+                        "restart"
+                    };
+                    let path = format!("/v1/services/{name}/{action}");
+                    (
+                        name,
+                        scope.spawn(move || {
+                            rt.block_on(self.client.api(&self.lease, "POST", &path, None))
+                        }),
+                    )
+                })
+                .collect();
+            handles
+                .into_iter()
+                .filter_map(|(name, h)| match h.join() {
+                    Ok(Ok((200, _))) => None,
+                    Ok(Ok((_, body))) => Some(format!(
+                        "{name}: {}",
+                        serde_json::from_str::<serde_json::Value>(&body)
+                            .ok()
+                            .and_then(|v| v["error"].as_str().map(str::to_string))
+                            .unwrap_or(body)
+                    )),
+                    Ok(Err(e)) => Some(format!("{name}: {e}")),
+                    Err(_) => Some(format!("{name}: panicked")),
+                })
+                .collect()
+        });
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(failed.join("\n"))
+        }
+    }
+
+    /// Start the lane's services on the node (`POST /v1/up` there), as a
+    /// client does after the lane was started. Blocking.
+    pub fn up(&self, rt: &tokio::runtime::Handle) -> Result<(), String> {
+        match rt.block_on(self.client.api(&self.lease, "POST", "/v1/up", None)) {
+            Ok((s, _)) if s < 300 => Ok(()),
+            Ok((s, body)) => Err(format!("starting its services: {s} {body}")),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
     /// Its services that run now (healthy or running), read from the lane
     /// at once rather than from the last poll. Blocking.
     pub fn active_now(&self, rt: &tokio::runtime::Handle) -> Vec<String> {
@@ -1923,7 +2006,8 @@ impl RemoteLane {
 /// The release a node needs to act on the containers `method path` names
 /// (`/v1/...` of the lane daemon's API): `/v1/infra/{group}/{service}/…`
 /// since #101, a service route that names containers (a group's restart,
-/// a Compose service by its name) since #128. `None`: it names none.
+/// a Compose service by its name) since #128, a group's start, stop and
+/// rebuild that name containers since 0.28.0. `None`: it names none.
 fn containers_need(
     stack: &devstack_config::Stack,
     method: &axum::http::Method,
@@ -1943,7 +2027,17 @@ fn containers_need(
             } else {
                 Named::Groups
             };
-            (!named(stack, route, name, action).is_empty()).then_some("0.12.0")
+            if named(stack, route, name, action).is_empty() {
+                return None;
+            }
+            // A group's start and stop took its containers along from
+            // 0.28.0 on, and its rebuild was new then.
+            let group = stack.groups.contains_key(*name);
+            Some(if group && *action != "restart" {
+                "0.28.0"
+            } else {
+                "0.12.0"
+            })
         }
         _ => None,
     }
@@ -2390,9 +2484,16 @@ members = ["api"]
         ] {
             assert_eq!(need(&Method::POST, p), Some("0.12.0"), "{p}");
         }
+        for p in [
+            "/v1/groups/server/start",
+            "/v1/groups/server/stop",
+            "/v1/groups/server/rebuild",
+            "/v1/services/server/stop",
+        ] {
+            assert_eq!(need(&Method::POST, p), Some("0.28.0"), "{p}");
+        }
         for (m, p) in [
             (Method::POST, "/v1/services/api/restart"),
-            (Method::POST, "/v1/services/server/stop"),
             (Method::POST, "/v1/groups/front/restart"),
             (Method::GET, "/v1/infra/app/db/logs"),
             (Method::GET, "/v1/services/web/restart"),

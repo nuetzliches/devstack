@@ -8,6 +8,8 @@ import { useRouter } from 'vue-router';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import { useUi } from '@/stores/ui';
+import { laneActions } from '@/lib/laneActions';
+import { laneLabel } from '@/lib/lanes';
 import Icon from './icons/Icon.vue';
 import type { IconName } from './icons/icons';
 
@@ -54,15 +56,24 @@ const items = computed<Item[]>(() => {
       out.push({ id: 'stack:stop', label: `Stop stack ${stack.entry.name}`, hint: 'stack', icon: 'stop', run: () => stack.stopStack() });
     } else out.push({ id: 'stack:start', label: `Start stack ${stack.entry.name}`, hint: 'stack', icon: 'play', run: () => stack.startStack() });
   }
+  // The shown lane's actions, as its menu in the header has them.
+  const lane = stack.shownLane;
+  if (lane && changes) {
+    const { main, items: more } = laneActions(lane);
+    for (const a of [main, ...more].filter((a) => !a.disabled))
+      out.push({ id: `lane:${a.key}`, label: `${a.label.replace(/…$/, '')} lane ${laneLabel(lane)}`, hint: a.hint ? `lane, ${a.hint}` : 'lane', icon: a.icon ?? 'gitBranch', run: () => stack.laneAction(lane, a.key) });
+  }
   if (v && stack.running) {
     for (const s of v.services) {
       out.push({ id: `svc:${s.name}`, label: s.name, hint: 'service', icon: 'server', run: () => go('service', { name: s.name }) });
-      if (changes) out.push({ id: `svc-restart:${s.name}`, label: `Restart ${s.name}`, hint: 'service, rebuild', icon: 'restart', run: () => stack.serviceAction(s.name, 'restart') });
+      if (changes) out.push({ id: `svc-restart:${s.name}`, label: `Restart ${s.name}`, hint: 'service', icon: 'restart', run: () => stack.serviceAction(s.name, 'restart') });
+      if (changes && s.build_id) out.push({ id: `svc-rebuild:${s.name}`, label: `Rebuild ${s.name}`, hint: 'service, built again', icon: 'wrench', run: () => stack.serviceAction(s.name, 'rebuild') });
     }
   }
   if (v && stack.running && changes) {
     for (const g of v.groups) {
       out.push({ id: `grp-restart:${g.name}`, label: `Restart group ${g.label}`, hint: 'group', icon: 'restart', run: () => stack.groupAction(g.name, g.label, 'restart') });
+      out.push({ id: `grp-rebuild:${g.name}`, label: `Rebuild group ${g.label}`, hint: 'group, built again', icon: 'wrench', run: () => stack.groupAction(g.name, g.label, 'rebuild') });
       out.push({ id: `grp-start:${g.name}`, label: `Start group ${g.label}`, hint: 'group', icon: 'play', run: () => stack.groupAction(g.name, g.label, 'start') });
       out.push({ id: `grp-stop:${g.name}`, label: `Stop group ${g.label}`, hint: 'group', icon: 'stop', run: () => stack.groupAction(g.name, g.label, 'stop') });
     }
