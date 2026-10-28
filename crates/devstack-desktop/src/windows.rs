@@ -251,16 +251,12 @@ pub fn launch(how: &Launch, dir: &Path, path: &str) -> Result<(), String> {
             .spawn()
             .map(drop)
             .map_err(|e| format!("start Windows Terminal: {e}")),
-        Launch::Console(exe) => {
-            const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-            Command::new(exe)
-                .arg("-NoExit")
-                .current_dir(dir)
-                .creation_flags(CREATE_NEW_CONSOLE)
-                .spawn()
-                .map(drop)
-                .map_err(|e| format!("start {}: {e}", exe.display()))
-        }
+        // Through the shell, not `CreateProcess`: the hub runs detached with
+        // its standard handles on `NUL`, and a child started from it gets
+        // those, not its new console's; PowerShell then reads the end of its
+        // input at once and closes again.
+        Launch::Console(exe) => shell_execute(&exe.to_string_lossy(), Some("-NoExit"), Some(dir))
+            .map_err(|e| format!("start {}: {e}", exe.display())),
     }
 }
 
@@ -328,13 +324,21 @@ pub fn orca() -> Option<PathBuf> {
 /// What double-clicking `target` does: a folder opens in Explorer, a
 /// link in the program its scheme names.
 pub fn shell_open(target: &str) -> Result<(), String> {
+    shell_execute(target, None, None)
+}
+
+/// `ShellExecuteW` with the `open` verb: `file` with `params`, in `dir`.
+fn shell_execute(file: &str, params: Option<&str>, dir: Option<&Path>) -> Result<(), String> {
     use windows_sys::Win32::System::Com::{
         COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
     };
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     let verb = wide("open");
-    let file = wide(target);
+    let file = wide(file);
+    let params = params.map(wide);
+    let dir = dir.map(|d| wide(&d.to_string_lossy()));
+    let ptr = |w: &Option<Vec<u16>>| w.as_ref().map_or(std::ptr::null(), |w| w.as_ptr());
     // SAFETY: COM for this thread (the shell's handlers may need it),
     // released again; ShellExecuteW on our own buffers.
     let code = unsafe {
@@ -346,8 +350,8 @@ pub fn shell_open(target: &str) -> Result<(), String> {
             std::ptr::null_mut(),
             verb.as_ptr(),
             file.as_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
+            ptr(&params),
+            ptr(&dir),
             SW_SHOWNORMAL,
         );
         if com >= 0 {
