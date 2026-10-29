@@ -197,6 +197,8 @@ class MockHub {
     if (q.includes('configchanged')) shop.view.config_changed = true;
     if (q.includes('startfailed')) docs.entry.start_error = 'Error: port 4000 (site) is taken by another process (node.exe, pid 4242)\n  devstack doctor names it; stop it or change the port in devstack.toml';
     // `?mock=skills`: shop was set up with an older devstack, crm's stack file changed since.
+    // `?mock=worktrees`: a worktree appears in docs (not running) after 4 s, as one made by `git worktree add` elsewhere.
+    if (q.includes('worktrees')) setTimeout(() => this.addWorktree(docs.entry.id, docs.entry.repo, 'hotfix', 'hotfix/footer'), 4000);
     if (q.includes('skills')) this.reviewed[shop.entry.id] = null;
     this.skills[shop.entry.id] = q.includes('skills') ? { from: '0.1.4', outdated: true } : { from: MOCK_VERSION, outdated: false };
     this.skills[crm.entry.id] = { from: MOCK_VERSION, outdated: q.includes('skills') };
@@ -233,6 +235,22 @@ class MockHub {
   publish(): void {
     const ev: HubEvent = { type: 'stacks', stacks: this.entries() };
     for (const l of this.hubSubs) l.send(ev);
+  }
+
+  /** Worktrees made in a stack (by the dashboard, or `?mock=worktrees`), by stack id; each stack has `fix-login` besides (ADR-0078). */
+  worktreesMade: Record<string, LaneView[]> = {};
+  worktreeVersions: Record<string, string> = {};
+  worktreesOf(id: string, repo: string): LaneView[] {
+    const base: LaneView = { name: 'fix-login', path: `${repo}.worktrees/fix-login`, branch: 'fix/login', number: 0, active: false, port_offset: 0, owns_main: false, running: 0, services: 0, main_stack_file: false };
+    return [base, ...(this.worktreesMade[id] ?? [])];
+  }
+  /** A worktree appears in `id`'s repository: the hub tells, as it does when `.git/worktrees` changes. */
+  addWorktree(id: string, repo: string, name: string, branch: string): string {
+    const path = `${repo}.worktrees/${name}`;
+    (this.worktreesMade[id] ??= []).push({ name, path, branch, number: 0, active: false, port_offset: 0, owns_main: false, running: 0, services: 0, main_stack_file: false });
+    this.worktreeVersions = { ...this.worktreeVersions, [id]: String(Date.now()) };
+    for (const l of this.hubSubs) l.send({ type: 'worktrees', worktrees: this.worktreeVersions });
+    return path;
   }
 
   stack(id: string): MockStack | undefined {
@@ -787,10 +805,7 @@ export class MockTransport implements Transport {
     }
     // A stopped stack's worktrees, from the hub (ADR-0078): one for each.
     if (rest === '/worktrees' && method === 'GET') {
-      const repo = stack.entry.repo;
-      return json(200, [
-        { name: 'fix-login', path: `${repo}.worktrees/fix-login`, branch: 'fix/login', number: 0, active: false, port_offset: 0, owns_main: false, running: 0, services: 0, main_stack_file: false },
-      ]);
+      return json(200, hub.worktreesOf(stack.entry.id, stack.entry.repo));
     }
     if (rest === '/lanes/start' && method === 'POST') {
       if (!stack.running) void stack.goUp();
@@ -831,7 +846,10 @@ export class MockTransport implements Transport {
     }
     if (rest === '/worktrees' && method === 'POST') {
       await sleep(600);
-      const name = String(body?.new ?? body?.branch ?? '').replace(/^origin\//, '').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+      const branch = String(body?.new ?? body?.branch ?? '').replace(/^origin\//, '');
+      const name = branch.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+      // A stopped stack's new worktree is listed by the hub at once (ADR-0078).
+      if (!stack.running) return json(200, { path: hub.addWorktree(stack.entry.id, stack.entry.repo, name, branch) });
       return json(200, { path: `C:\\work\\shop.worktrees\\${name}` });
     }
     if (rest === '/worktrees/remove' && method === 'POST') return json(409, { error: 'error: worktree contains modified or untracked files, use --force to delete it' });
@@ -1185,6 +1203,7 @@ export class MockTransport implements Transport {
       l.send({ type: 'guests', guests: hub.guests });
       l.send({ type: 'pools', pools: hub.pools });
       l.send({ type: 'skills', skills: hub.poolSkillState });
+      l.send({ type: 'worktrees', worktrees: hub.worktreeVersions });
       hub.hubSubs.add(l);
       return { stop: () => hub.hubSubs.delete(l) };
     }
