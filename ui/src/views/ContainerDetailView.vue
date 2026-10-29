@@ -3,7 +3,7 @@
 // state, ports, start/stop/restart, its load and its log.
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
-import { bytes, percent, webUrl } from '@/lib/format';
+import { CPU_HINT, bytes, percent, webUrl } from '@/lib/format';
 import { containerLook, containerRefuses } from '@/lib/status';
 import { notForwardedText } from '@/lib/lanes';
 import { useStack } from '@/stores/stack';
@@ -122,7 +122,7 @@ const kv = computed(() => {
         <div class="card-body res">
           <div class="metric">
             <div class="mh">
-              <span class="ml"><Icon name="cpu" :size="14" /> CPU</span>
+              <span class="ml" :title="CPU_HINT"><Icon name="cpu" :size="14" /> CPU</span>
               <span class="mv tabular">{{ percent(current?.cpu) }}</span>
             </div>
             <Sparkline :values="cpuValues" :width="300" :height="44" :min-max="5" fluid color="var(--accent)" label="CPU history" />

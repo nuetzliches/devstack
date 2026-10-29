@@ -2,7 +2,7 @@
 // What one lane costs now: CPU and memory with the last 10 minutes, and its
 // disk. The usage page shows one per lane, the overview the one it shows.
 import type { LaneDisk, LaneUsage as Lane } from '@/api/types';
-import { bytes, percent } from '@/lib/format';
+import { CPU_HINT, bytes, percent } from '@/lib/format';
 import { useStack } from '@/stores/stack';
 import Sparkline from '@/components/Sparkline.vue';
 import Icon from '@/components/icons/Icon.vue';
@@ -74,7 +74,7 @@ function diskTotal(d: LaneDisk) {
     </header>
     <div class="card-body lane-body">
       <div class="metric">
-        <span class="ml">CPU</span>
+        <span class="ml" :title="CPU_HINT">CPU</span>
         <span class="mv tabular">{{ percent(lane.cpu) }}</span>
         <Sparkline :values="cpuSeries(`lane:${lane.name}`)" :width="240" :height="40" :min-max="10" fluid :label="`Lane ${lane.name} CPU`" />
       </div>

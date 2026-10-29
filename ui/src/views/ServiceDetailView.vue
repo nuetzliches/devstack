@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { paths, v1, type ServiceAction } from '@/api';
-import { ago, bytes, dateTime, percent, serviceUrl, shortBuild, useNow } from '@/lib/format';
+import { CPU_HINT, ago, bytes, dateTime, percent, serviceUrl, shortBuild, useNow } from '@/lib/format';
 import { kindIcon, kindLabel, statusLook } from '@/lib/status';
 import { prepareLine } from '@/lib/store';
 import { viaText } from '@/lib/journal';
@@ -195,7 +195,7 @@ const kv = computed(() => {
             <div class="card-body res">
               <div class="metric">
                 <div class="mh">
-                  <span class="ml"><Icon name="cpu" :size="14" /> CPU</span>
+                  <span class="ml" :title="CPU_HINT"><Icon name="cpu" :size="14" /> CPU</span>
                   <span class="mv tabular">{{ percent(current?.cpu) }}</span>
                 </div>
                 <Sparkline :values="cpuValues" :width="300" :height="44" :min-max="5" fluid color="var(--accent)" :label="`CPU history, peak ${percent(peakCpu)}`" />
