@@ -1869,6 +1869,16 @@ fn need_of(s: &Inner, r: &LeaseRequest) -> (crate::share::Need, String) {
 /// paused, not the requester, admitted by their policy), ranked. `own`:
 /// the room the lane's own leases hold counts as its (what the dashboard
 /// shows while it starts or runs), not when it asks for another lease.
+/// Every node of `order` refuses a lane that cannot run on a node of the
+/// pool at all, saying `why` (ADR-0028): the requester knows it, the
+/// coordinator does not.
+pub fn not_in_pool(order: &mut [Placement], why: &str) {
+    for p in order {
+        p.eligible = false;
+        p.why = why.to_string();
+    }
+}
+
 fn placement_for(
     s: &Shared,
     ms: &[Member],

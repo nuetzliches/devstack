@@ -113,6 +113,10 @@ pub struct LaneView {
     /// working tree's (ADR-0055).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub main_stack_file: bool,
+    /// Why it cannot start on a node of the pool, read from the stack file
+    /// it runs with: it names no lane image (ADR-0028).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_in_pool: Option<String>,
     /// Its notices (ADR-0050): its own tree's while it runs here, and what
     /// the main tree's daemon knows of it (its worktree missing).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -134,8 +138,12 @@ type Shown = (
     Vec<Notice>,
     Vec<String>,
     bool,
+    Option<String>,
     Vec<crate::supervisor::NodeLink>,
 );
+
+/// [`not_in_pool`] of a stack file, and when the file changed as it was read.
+type PoolCheck = (Option<std::time::SystemTime>, Option<&'static str>);
 
 /// The notice of a lane whose worktree git lists but is not there, missing
 /// since `since` (unix ms): the lane goes after [`MISSING_GRACE`].
@@ -359,6 +367,9 @@ pub struct Lanes {
     shares: Mutex<BTreeMap<String, Vec<String>>>,
     /// The profile each started lane runs with (ADR-0041), while it runs.
     profiles: Mutex<BTreeMap<String, String>>,
+    /// [`not_in_pool`] of each stack file a lane runs with, by its time of
+    /// change: the lists ask often, the file changes rarely.
+    pool_checks: Mutex<BTreeMap<PathBuf, PoolCheck>>,
     /// The lanes on nodes that run their background workers (`--workers`,
     /// #314): a lane here keeps it in its supervisor.
     workers: Mutex<BTreeSet<String>>,
@@ -474,6 +485,28 @@ pub fn lane_name(s: &str) -> String {
         }
     }
     out.trim_end_matches('-').chars().take(40).collect()
+}
+
+/// Why a lane running with the stack file `file` cannot start on a node of
+/// the pool: it names no lane image (ADR-0028). `None` when it can, or when
+/// the file does not load (the start says why).
+pub fn not_in_pool(file: &Path) -> Option<&'static str> {
+    let stack = devstack_config::load(file).ok()?;
+    (!stack.lanes.names_image()).then_some(devstack_config::model::NO_LANE_IMAGE)
+}
+
+/// [`not_in_pool`] for the lane `lane` of the stack in `main_file`, by
+/// what `.devstack/lanes.json` remembers of its worktree: its own stack
+/// file, else (and for a lane it does not know) `main_file` (ADR-0055).
+/// What the hub's and the CLI's placement say before a node is picked.
+pub fn lane_not_in_pool(main_file: &Path, lane: &str) -> Option<&'static str> {
+    let own = main_file.parent().and_then(|repo| {
+        let text = std::fs::read(repo.join(".devstack").join("lanes.json")).ok()?;
+        let entries: Vec<LaneEntry> = serde_json::from_slice(&text).ok()?;
+        let entry = entries.into_iter().find(|e| e.name == lane)?;
+        Some(entry.path.join(main_file.file_name()?)).filter(|f| f.is_file())
+    });
+    not_in_pool(own.as_deref().unwrap_or(main_file))
 }
 
 /// The stack as a lane runs it: every service port moved by `offset`.
@@ -857,6 +890,7 @@ impl Lanes {
             forgetting: Mutex::new(BTreeSet::new()),
             shares: Mutex::new(shares),
             profiles: Mutex::new(BTreeMap::new()),
+            pool_checks: Mutex::new(BTreeMap::new()),
             workers: Mutex::new(BTreeSet::new()),
             handover: Mutex::new(Handover::default()),
             syncing: Mutex::new(()),
@@ -1372,6 +1406,7 @@ impl Lanes {
                     v.notices,
                     v.not_forwarded,
                     v.main_stack_file,
+                    v.not_in_pool,
                     v.links,
                 )
             })
@@ -1813,6 +1848,22 @@ impl Lanes {
         }
     }
 
+    /// [`not_in_pool`] of the stack file the lane in `repo` runs with, read
+    /// again when it changed.
+    fn not_in_pool_of(&self, repo: &Path) -> Option<String> {
+        let file = self.stack_file_of(repo);
+        let changed = std::fs::metadata(&file).and_then(|m| m.modified()).ok();
+        let mut checks = self.pool_checks.lock().unwrap();
+        if let Some((at, why)) = checks.get(&file)
+            && *at == changed
+        {
+            return why.map(str::to_string);
+        }
+        let why = not_in_pool(&file);
+        checks.insert(file, (changed, why));
+        why.map(str::to_string)
+    }
+
     /// What a lane on a node takes along besides its worktree's files:
     /// `[lanes] sync`, and the stack file, from the main tree while the
     /// worktree has none of its own (ADR-0055 point 2).
@@ -2014,6 +2065,7 @@ impl Lanes {
                     removing: forgetting.contains(&k.entry.name),
                     main_stack_file: k.entry.path.is_dir()
                         && !k.entry.path.join(&stack_file).is_file(),
+                    not_in_pool: self.not_in_pool_of(&k.entry.path),
                     notices: {
                         let mut n = lane.map(|l| l.sup.notices()).unwrap_or_default();
                         if let Some(t) = missing.get(&k.entry.name)
@@ -3386,6 +3438,10 @@ impl Lanes {
         let declared = devstack_config::load(&entry.path.join(&stack_file))
             .map(|s| s.lane_need(profile.as_deref()))
             .unwrap_or_else(|_| self.main.stack.lane_need(profile.as_deref()));
+        // No node can run it without an image: said before the lease.
+        if let Some(why) = not_in_pool(&self.stack_file_of(&entry.path)) {
+            return Err(format!("lane `{}`: {why}", entry.name));
+        }
         let worktree = devstack_proc::long_path(&entry.path);
         let offset = lane_offset(entry.number, self.main.stack.lanes.port_step)
             .ok_or_else(|| format!("lane `{}`: its ports are beyond 65535", entry.name))?;
@@ -3849,5 +3905,58 @@ port = 8080
         let other = PathBuf::from(p.to_string_lossy().replace('\\', "/") + "/");
         assert!(same_tree(p, &other));
         assert!(!same_tree(p, &p.join("x")));
+    }
+
+    #[test]
+    fn a_lane_without_a_lane_image_goes_to_no_node() {
+        let d = tempfile::tempdir().unwrap();
+        let (main, wt) = (d.path().join("main"), d.path().join("wt"));
+        std::fs::create_dir_all(main.join(".devstack")).unwrap();
+        std::fs::create_dir_all(&wt).unwrap();
+        let file = main.join("devstack.toml");
+        let bare = "version = 1
+[stack]
+name = \"s\"
+";
+        std::fs::write(&file, bare).unwrap();
+        let entries = vec![LaneEntry {
+            name: "fix".into(),
+            path: wt.clone(),
+            number: 1,
+        }];
+        std::fs::write(
+            main.join(".devstack").join("lanes.json"),
+            serde_json::to_vec(&entries).unwrap(),
+        )
+        .unwrap();
+        let none = Some(devstack_config::model::NO_LANE_IMAGE);
+        // Without a file of its own the lane runs with the main tree's.
+        assert_eq!(lane_not_in_pool(&file, "fix"), none);
+        assert_eq!(lane_not_in_pool(&file, "unknown"), none);
+        // Its own file names an image: it can go to the pool.
+        std::fs::write(
+            wt.join("devstack.toml"),
+            format!(
+                "{bare}[lanes]
+image = \"node:24\"
+"
+            ),
+        )
+        .unwrap();
+        assert_eq!(lane_not_in_pool(&file, "fix"), None);
+        assert_eq!(lane_not_in_pool(&file, "unknown"), none);
+        // A Dockerfile is as good; a file that does not load says nothing.
+        std::fs::write(
+            &file,
+            format!(
+                "{bare}[lanes]
+dockerfile = \"x\"
+"
+            ),
+        )
+        .unwrap();
+        assert_eq!(not_in_pool(&file), None);
+        std::fs::write(&file, "not toml [").unwrap();
+        assert_eq!(not_in_pool(&file), None);
     }
 }

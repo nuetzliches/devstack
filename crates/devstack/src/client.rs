@@ -1065,6 +1065,11 @@ pub fn up(
                 }
             })
             .map_err(|e| match on {
+                // No node runs it, now or later: the stack file is the way on.
+                Some(_) if format!("{e:#}").contains(devstack_config::model::NO_LANE_IMAGE) => anyhow!(
+                    "{e:#}
+no node of the pool can run this lane: name the Linux image it runs in there in the stack file (see `[lanes]` in docs/stack-file.md); `devstack up --on local` runs it on this machine"
+                ),
                 Some(node) => anyhow!(
                     "{e:#}
 {}",
@@ -2513,6 +2518,10 @@ pub fn placement(stack_file: &Path, lane: &str) -> Result<Value> {
     use devstack_node::member;
     let stack = devstack_config::load(stack_file)?;
     let repo = stack.stack.name.clone();
+    let blocked = devstack_daemon::lanes::lane_not_in_pool(
+        &devstack_proc::long_path(&std::path::absolute(stack_file)?),
+        lane,
+    );
     let state = devstack_daemon::remote::state_dir();
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
     let here = serde_json::json!({
@@ -2559,6 +2568,11 @@ pub fn placement(stack_file: &Path, lane: &str) -> Result<Value> {
                 ))
             });
         let leases = local.leases().unwrap_or_default();
+        // No node can run a lane without an image (ADR-0028).
+        let mut order = order;
+        if let (Ok(list), Some(why)) = (&mut order, blocked) {
+            devstack_node::coordinator::not_in_pool(list, why);
+        }
         let ranked: Vec<Value> = match &order {
             Ok(list) => list
                 .iter()

@@ -232,6 +232,8 @@ export type LaneView = {
   removing?: boolean;
   /** Its worktree has no stack file of its own: it runs with the main working tree's (ADR-0055). Older daemons omit it. */
   main_stack_file?: boolean;
+  /** Why it cannot start on a node of the pool: the stack file it runs with names no lane image (ADR-0028). Older daemons omit it. */
+  not_in_pool?: string;
   /** The dashboard's own: the daemon no longer lists it, it is shown as it was last. */
   gone?: boolean;
   /** Its notices (ADR-0050): its tree's while it runs here, and what the main tree knows of it (`worktree_missing`). */
@@ -778,8 +780,8 @@ export type Opener = {
 };
 
 /** The prompts the hub writes for a coding agent (`GET /hub/prompt`, ADR-0046 amendment 2026-10-22). */
-export type PromptKind = 'setup' | 'fix-file' | 'upgrade' | 'start-failed' | 'lane-file' | 'mcp' | 'skills';
-/** What a prompt is about: a registered stack, a folder before it is one, or a worktree of a stack (`lane-file`). */
+export type PromptKind = 'setup' | 'fix-file' | 'upgrade' | 'start-failed' | 'lane-file' | 'lane-image' | 'mcp' | 'skills';
+/** What a prompt is about: a registered stack, a folder before it is one, or a worktree of a stack (`lane-file`, `lane-image`). */
 export type PromptTarget = { stack: string } | { path: string } | { stack: string; path: string };
 
 /** A kind of desktop notification and whether it is on (ADR-0045). */

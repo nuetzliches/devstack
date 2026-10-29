@@ -671,6 +671,10 @@ disk   = "25G"                                # in all: images, source, dependen
 gpus   = { count = 1, memory = "16G" }        # a lane in the pool goes only to a node that offers them
 ```
 
+Without `image` or `dockerfile` a lane runs on this machine only: a start on
+a node is refused before anything is leased, and the dashboard and
+`devstack pool placement` say so.
+
 `port_step` is 1-10000. `dockerfile` and `sync` stay inside the repository
 (see "Names, paths, env files"); `sync` holds globs; `image`, if set, is
 not empty. Two services whose ports differ by a multiple of `port_step`

@@ -2034,6 +2034,46 @@ fn write_prompt(s: &AppState, q: &PromptQuery) -> Result<Written, Refusal> {
             tree = Some(lane);
             (text, e.repo, file)
         }
+        "lane-image" => {
+            let e = stack()?;
+            let p = q
+                .path
+                .as_deref()
+                .ok_or_else(|| bad("`lane-image` needs `path`".to_string()))?;
+            let raw = PathBuf::from(p);
+            if !raw.is_absolute() || !local_path(p, &raw) {
+                return Err(bad("a folder on this machine".to_string()));
+            }
+            let Some(lane) = devstack_daemon::lanes::worktree_of(&e.repo, &raw) else {
+                return Err(bad("not a worktree of this stack".to_string()));
+            };
+            // The file it runs with: its own, else the main tree's (ADR-0055),
+            // and the agent works where that file is.
+            let own = lane.join(stack_file_rel(&e));
+            let (file, at) = if own.is_file() {
+                (own, lane.clone())
+            } else {
+                (e.file.clone(), e.repo.clone())
+            };
+            if devstack_daemon::lanes::not_in_pool(&file).is_none() {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "its stack file names a lane image".to_string(),
+                ));
+            }
+            let branch = devstack_daemon::lanes::worktree_branches(&e.repo)
+                .unwrap_or_default()
+                .into_iter()
+                .find(|(t, _)| devstack_daemon::lanes::same_tree(t, &lane))
+                .and_then(|(_, b)| b);
+            let text = prompts::text(&Prompt::LaneImage {
+                tree: &lane,
+                branch: branch.as_deref(),
+                file: &file,
+            });
+            tree = Some(at);
+            (text, e.repo, file)
+        }
         other => return Err(bad(format!("no prompt `{other}`"))),
     };
     Ok(Written {

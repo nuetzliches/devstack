@@ -65,6 +65,8 @@ function startMove(to: string, t0: number) {
 
 /** The devstack the mock hub runs. */
 const MOCK_VERSION = '0.2.0';
+/** What the daemon says of a lane whose stack file names no lane image (ADR-0028). */
+const NO_LANE_IMAGE = 'the stack names no lane image: set `[lanes] image` or `[lanes] dockerfile` (ADR-0028)';
 
 /** The user's MCP upstreams in the mock (ADR-0069). */
 const mockUpstreams: McpUpstream[] = [
@@ -394,6 +396,18 @@ export class MockTransport implements Transport {
     if (p === '/hub/pool/placement' && method === 'GET') {
       // The default pool has one node; a lane named like one that ran there is warm.
       const lane = url.searchParams.get('lane') ?? '';
+      // 1242 runs with a stack file that names no lane image: no node takes it.
+      if (lane === '1242')
+        return json(200, [
+          {
+            node: '9f8e7d6c5b4a3921',
+            name: 'build-server',
+            eligible: false,
+            why: NO_LANE_IMAGE,
+            cpus: 12,
+            memory: 48 * 2 ** 30,
+          },
+        ]);
       return json(200, [
         {
           node: '9f8e7d6c5b4a3921',
@@ -673,6 +687,7 @@ export class MockTransport implements Transport {
         upgrade: `Bring the devstack setup of ${target} up to devstack ${MOCK_VERSION}.`,
         'start-failed': `The devstack stack ${target} does not start.`,
         'lane-file': `The git worktree ${url.searchParams.get('path')} has no devstack stack file of its own.`,
+        'lane-image': `The devstack lane of the git worktree ${url.searchParams.get('path')} cannot start on another machine of the devstack pool: its stack file names no lane image.`,
         mcp: `Register devstack's MCP server for the coding agents of ${target}.`,
         skills: `Refresh the devstack agent skills of the repository at ${target}.`,
       };
@@ -822,7 +837,8 @@ export class MockTransport implements Transport {
                   }
                 : {};
             const file = s.noStackFile.has(l.path) ? { main_stack_file: true } : {};
-            return { ...l, active, owns_main: owns, running: active ? (l.name === 'agent-login-fix' ? 3 : 5) : 0, services: 5, ...node, ...notices, ...file };
+            const image = l.name === '1242' ? { not_in_pool: NO_LANE_IMAGE } : {};
+            return { ...l, active, owns_main: owns, running: active ? (l.name === 'agent-login-fix' ? 3 : 5) : 0, services: 5, ...node, ...notices, ...file, ...image };
           })
           .filter((l) => l !== null)
         : [];
