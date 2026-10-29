@@ -28,6 +28,9 @@ and listed with their assets on the
 - **The sidebar keeps its order**: stacks by name, and a stack's trees
   with the main working tree first, then by name; a start or a stop no
   longer moves anything.
+- **The tab follows you**: opening another stack or lane keeps the tab
+  shown (Infrastructure, Commands, Usage, Activity), also coming back from
+  the pool area, instead of going back to Overview.
 
 ## [0.30.0] - 2026-10-29
 
