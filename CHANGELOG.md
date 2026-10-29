@@ -35,6 +35,12 @@ and listed with their assets on the
   pool loses the pool's upstreams at once. Update the coordinator first:
   with one of an earlier release the pool area is read when it opens and
   says it is not live.
+- **A lane's need says what it takes once up** (ADR-0075): beside the
+  peak, which includes its build, a node measures the 95th percentile of a
+  lane's CPU and memory after it is up. Where a lane can start, the
+  dashboard and `devstack pool placement` say "starts with up to 8.7 CPU
+  and 7.2 GB, its build included, then runs on about 0.8 CPU and 2.1 GB".
+  Admission is unchanged. Shown once a node of this release measured a run.
 
 ### Fixed
 

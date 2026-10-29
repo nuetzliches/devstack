@@ -7,10 +7,14 @@
 //! that failed, or one just begun, would make the footprint smaller than
 //! what the lane takes. Kept in memory: after a restart of the agent a
 //! run's peak starts again, and the coordinator keeps the larger.
+//!
+//! Besides the peak, its steady use: the 95th percentile of its CPU (the
+//! minute's average) and of its memory once the lane is up, so its build
+//! does not count. Shown, never admitted by.
 
 use crate::footprint::Run;
 use crate::share::{Amount, Need};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 /// Rounds a CPU reading is averaged over: about a minute at one round
@@ -20,6 +24,36 @@ const CPU_WINDOW: usize = 4;
 /// How long a lane runs before its run counts.
 pub const COUNTS_AFTER: Duration = Duration::from_secs(180);
 
+/// The steps steady use is counted in: a tenth of a core, 64 MiB.
+const CPU_STEP: f64 = 0.1;
+const MEMORY_STEP: u64 = 64 << 20;
+
+/// Readings counted by step, so a lane that runs for weeks keeps a few
+/// hundred numbers, not every reading.
+#[derive(Debug, Clone, Default)]
+struct Steps {
+    by: BTreeMap<u64, u32>,
+    n: u32,
+}
+
+impl Steps {
+    /// A reading of `steps` (rounded up: a step is its upper bound).
+    fn add(&mut self, steps: u64) {
+        *self.by.entry(steps).or_default() += 1;
+        self.n = self.n.saturating_add(1);
+    }
+
+    /// The 95th percentile, in steps; `None` without readings.
+    fn p95(&self) -> Option<u64> {
+        let want = (self.n as f64 * 0.95).ceil() as u32;
+        let mut seen = 0;
+        self.by.iter().find_map(|(k, c)| {
+            seen += c;
+            (seen >= want && self.n > 0).then_some(*k)
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 struct State {
     /// When its containers were first measured: the lane runs since.
@@ -28,6 +62,11 @@ struct State {
     profile: Option<String>,
     peak: Need,
     cpu: VecDeque<f64>,
+    /// The lane is up (started, its build done): readings since count as
+    /// steady use.
+    up: bool,
+    steady_cpu: Steps,
+    steady_memory: Steps,
     /// Its slot and its containers' images, as last measured.
     lane: u64,
     images: u64,
@@ -49,9 +88,21 @@ impl Runs {
             profile: None,
             peak: Need::default(),
             cpu: VecDeque::new(),
+            up: false,
+            steady_cpu: Steps::default(),
+            steady_memory: Steps::default(),
             lane: 0,
             images: 0,
         });
+    }
+
+    /// Its lane is up: what it uses from now on is its steady use.
+    pub fn up(&mut self, id: &str) {
+        if let Some(s) = self.by.get_mut(id) {
+            s.up = true;
+            // A minute that holds the build's end is not steady.
+            s.cpu.clear();
+        }
     }
 
     /// It runs with `profile` (ADR-0041).
@@ -76,6 +127,14 @@ impl Runs {
         if s.cpu.len() == CPU_WINDOW {
             let avg = s.cpu.iter().sum::<f64>() / CPU_WINDOW as f64;
             s.peak.cpus = s.peak.cpus.max(avg);
+            if s.up {
+                // Less a hair: 2.0 / 0.1 is 20.000000000000004.
+                s.steady_cpu
+                    .add((avg / CPU_STEP - 1e-9).ceil().max(0.0) as u64);
+            }
+        }
+        if s.up {
+            s.steady_memory.add(used.memory.div_ceil(MEMORY_STEP));
         }
     }
 
@@ -126,12 +185,20 @@ fn counts(s: &State) -> bool {
 }
 
 fn run(id: &str, s: State) -> Run {
+    let steady = match (s.steady_cpu.p95(), s.steady_memory.p95()) {
+        (Some(c), Some(m)) => Some(Amount {
+            cpus: c as f64 * CPU_STEP,
+            memory: m * MEMORY_STEP,
+        }),
+        _ => None,
+    };
     Run {
         id: id.to_string(),
         repo: s.repo,
         profile: s.profile,
         peak: s.peak,
         capped: true,
+        steady,
     }
 }
 
@@ -319,6 +386,45 @@ mod tests {
         r.load("l2", Amount::default(), 12.0);
         r.end("l2");
         assert!(r.report().is_empty());
+    }
+
+    #[test]
+    fn steady_use_counts_from_up_its_95th_percentile() {
+        let mut r = Runs::default();
+        r.begin("l1", "shop");
+        let at = |cpus, memory| Amount { cpus, memory };
+        // The build: 8 cores, 7 GiB; not steady use.
+        for _ in 0..8 {
+            r.load("l1", at(8.0, 7 * GIB), 12.0);
+        }
+        r.up("l1");
+        r.by.get_mut("l1").unwrap().since = Instant::now().checked_sub(COUNTS_AFTER);
+        for _ in 0..3 {
+            r.load("l1", at(1.0, 2 * GIB), 12.0);
+        }
+        // The window still holds a build reading: no steady CPU yet.
+        assert_eq!(r.report()[0].steady, None);
+        // 100 rounds at a core and 2 GiB, a half-minute hot reload at 8.
+        for i in 0..102 {
+            let hot = (50..52).contains(&i);
+            r.load("l1", at(if hot { 8.0 } else { 1.0 }, 2 * GIB), 12.0);
+        }
+        let run = &r.report()[0];
+        assert_eq!(run.peak.cpus, 8.0);
+        assert_eq!(run.peak.memory, 7 * GIB);
+        let s = run.steady.unwrap();
+        assert!((s.cpus - 1.0).abs() < 1e-9, "{}", s.cpus);
+        assert_eq!(s.memory, 2 * GIB);
+    }
+
+    #[test]
+    fn steps_p95() {
+        let mut s = Steps::default();
+        assert_eq!(s.p95(), None);
+        for k in 1..=100 {
+            s.add(k);
+        }
+        assert_eq!(s.p95(), Some(95));
     }
 
     #[test]
