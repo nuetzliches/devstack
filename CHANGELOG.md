@@ -20,6 +20,11 @@ and listed with their assets on the
   in the pool* brings its daemon up and starts the lane, the main working
   tree's services left stopped. A lane the branch picker makes for a
   stopped stack opens there.
+- **A stack's dot in the sidebar sums up its trees**: folded, it shows a
+  problem of any of them first (a failed start, a failing service, a lane
+  that failed or has trouble on its node), then whether anything runs;
+  unfolded it has none, as its trees show theirs. A stack whose daemon runs
+  but nothing of it says `idle`, as one without a daemon says `offline`.
 
 ## [0.30.0] - 2026-10-29
 

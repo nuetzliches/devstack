@@ -142,9 +142,22 @@ watch(
 type Dot = 'on' | 'off' | 'warn' | 'err' | 'unknown';
 /** Its daemon runs but nothing else: the main tree idle, no lane started. */
 const stackIdle = (s: StackEntry) => s.running && mainActive.value[s.id] === false && !(known.value[s.id] ?? []).some(started);
+/**
+ * All of a stack's trees in one dot, for when they are not listed under it
+ * (folded, or none): a problem first (a failed start, a failing service of
+ * the shown tree, a lane that failed or has trouble on its node), then
+ * whether anything runs.
+ */
 function stackDot(s: StackEntry): Dot {
-  return !hub.reachable ? 'unknown' : s.running && !stackIdle(s) ? 'on' : 'off';
+  if (!hub.reachable) return 'unknown';
+  const lanes = known.value[s.id] ?? [];
+  const shownFails = s.id === stack.id && stack.live && stack.services.some((x) => statusBucket(x.status) === 'failed');
+  if (s.start_error || shownFails || lanes.some((l) => l.moving?.error)) return 'err';
+  if (s.running && lanes.some((l) => l.node_error || l.notices?.length)) return 'warn';
+  return s.running && !stackIdle(s) ? 'on' : 'off';
 }
+/** Its trees are listed under it: their dots say it, the stack's own would repeat them. */
+const expanded = (s: StackEntry) => hasLanes(s) && !collapsed.value[s.id];
 function mainDot(s: StackEntry): Dot {
   if (!hub.reachable) return 'unknown';
   // A stack that does not run runs nothing, whatever was seen last.
@@ -333,9 +346,11 @@ async function copyPath(s: StackEntry) {
             @click="openStack(s)"
           >
             <span v-if="hub.starting[s.id]" class="spinner sm" aria-hidden="true" />
-            <span v-else class="dot" :class="stackDot(s)" aria-hidden="true" />
+            <span v-else-if="expanded(s)" class="dot-space" aria-hidden="true" />
+            <span v-else class="dot" :class="stackDot(s)" aria-hidden="true" data-testid="sidebar-stack-dot" />
             <span class="label truncate">{{ s.name }}</span>
             <span v-if="!s.running" class="faint small">offline</span>
+            <span v-else-if="stackIdle(s)" class="faint small" data-testid="sidebar-stack-idle">idle</span>
           </button>
           <button
             type="button"
@@ -646,6 +661,10 @@ ul {
 }
 .dot.unknown {
   background: var(--text-faint);
+}
+.dot-space {
+  width: 8px;
+  flex: none;
 }
 .dot.off {
   border: 1.5px solid var(--text-faint);
