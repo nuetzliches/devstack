@@ -102,6 +102,8 @@ whether its ports are opened on their machine, and see whether they are.
   `ui/src/views/PoolView.vue`.
 - `docs/pool.md`, `docs/dashboard-api.md`.
 
+*Paths as built, noted 2026-10-29.* The pool area moved from `ui/src/views/PoolView.vue` to `ui/src/views/pool/` (ADR-0076): the machine's page (`PoolMachine.vue`) holds what a node row held, the Admin tab (`PoolAdmin.vue`) the admin's lists, the Lanes tab (`PoolLanes.vue`) the lanes shared with this machine.
+
 ## What this ADR does not say
 
 - That a member can choose the ports here. The owner's, or another free

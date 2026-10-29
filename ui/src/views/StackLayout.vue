@@ -117,7 +117,8 @@ function isActive(name: string) {
 <template>
   <div>
     <StackHeader />
-    <nav class="subnav" aria-label="Stack views">
+    <!-- A lane not started has no views yet: its start options stand in for them. -->
+    <nav v-if="!idleLane" class="subnav" aria-label="Stack views">
       <div class="subnav-inner">
         <RouterLink
           v-for="t in tabs"

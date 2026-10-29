@@ -12,7 +12,7 @@ const shown = computed(() => guests.value.slice(0, 3));
 </script>
 
 <template>
-  <RouterLink v-if="guests.length" :to="{ name: 'pool' }" class="guests" title="Lanes of other members on this machine" data-testid="sidebar-guests">
+  <RouterLink v-if="guests.length" :to="{ name: 'pool-here' }" class="guests" title="Lanes of other members on this machine" data-testid="sidebar-guests">
     <strong>{{ guests.length === 1 ? '1 guest lane' : `${guests.length} guest lanes` }}</strong>
     <span class="small tabular">{{ guestsReserved(guests) }} reserved</span>
     <span v-for="g in shown" :key="`${g.pool}/${g.lease}`" class="small truncate">

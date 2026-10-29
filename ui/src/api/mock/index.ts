@@ -12,7 +12,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { DockerEngine, Guest, HubEvent, PoolFeed, PoolSkillsAdmin, PoolSkillsState, LaneView, McpUpstream, NotifySettings, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
+import type { DockerEngine, Guest, HubEvent, PoolFeed, PoolNode, PoolSkillsAdmin, PoolSkillsState, LaneView, McpUpstream, NotifySettings, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -423,6 +423,11 @@ export class MockTransport implements Transport {
             memory: 48 * 2 ** 30,
           },
         ]);
+      // The customer pool's coordinator orders its own node.
+      if (url.searchParams.get('pool') === 'customer')
+        return json(200, [
+          { node: 'feedbeef00112233', name: 'gpu-box', eligible: true, why: 'the most free capacity', cpus: 24, memory: 96 * 2 ** 30, disk: 6 * 2 ** 30, disk_room: 400 * 2 ** 30 },
+        ]);
       return json(200, [
         {
           node: '9f8e7d6c5b4a3921',
@@ -443,23 +448,33 @@ export class MockTransport implements Transport {
       const now = Math.floor(Date.now() / 1000);
       const node = url.searchParams.get('node');
       const n = 120;
+      // A node's history follows its last report (a phase of its own); the pool's is theirs summed.
+      const reported = this.hub.pool.overview().nodes?.filter((x: PoolNode) => x.report?.total && (!node || x.id === node)) ?? [];
+      // This machine reports no totals to the pool here: what its share report says (16 cores, 64 GiB).
+      if (node && !reported.length)
+        reported.push({ id: node, name: 'this', online: true, report: { sharing: false, cpus: 0, memory: 0, total: { cpus: 16, memory: 64 * 2 ** 30 }, used: { cpus: 2, memory: 8 * 2 ** 30 } } } as PoolNode);
+      const sum = (f: (r: NonNullable<PoolNode['report']>, w: number) => number, w: (k: number) => number) =>
+        reported.reduce((a: number, x: PoolNode, k: number) => a + f(x.report!, w(k)), 0);
+      const gpus = reported.flatMap((x: PoolNode) => x.report?.gpus ?? []);
       return json(
         200,
         Array.from({ length: n }, (_, i) => {
           const w = Math.sin(i / 9) * 0.5 + 0.5;
+          const wk = (k: number) => Math.sin(i / (7 + 3 * k) + k * 2) * 0.5 + 0.5;
           return {
             at: now - (n - i) * 30,
-            total_cpus: node ? 32 : 48,
-            total_memory: (node ? 128 : 192) * 2 ** 30,
-            offered_cpus: 12 + 4 * w,
-            offered_memory: (48 + 8 * w) * 2 ** 30,
-            used_cpus: 2 + 6 * w,
-            used_memory: (10 + 14 * w) * 2 ** 30,
-            gpus: 1,
-            gpus_offered: 1,
-            gpu_load: 10 + 60 * w * w,
-            gpu_memory: 24 * 2 ** 30,
-            gpu_memory_used: (2 + 8 * w) * 2 ** 30,
+            total_cpus: sum((r) => r.total!.cpus, wk),
+            total_memory: sum((r) => r.total!.memory, wk),
+            offered_cpus: sum((r, v) => r.cpus * (0.8 + 0.2 * v), wk),
+            offered_memory: sum((r, v) => r.memory * (0.85 + 0.15 * v), wk),
+            used_cpus: sum((r, v) => (r.used?.cpus ?? 0) * (0.4 + 1.2 * v), wk),
+            used_memory: sum((r, v) => (r.used?.memory ?? 0) * (0.5 + v), wk),
+            // GPUs only where a node reports one (build-server's L4).
+            gpus: gpus.length,
+            gpus_offered: gpus.filter((g) => g.offered).length,
+            gpu_load: gpus.length ? 10 + 60 * w * w : 0,
+            gpu_memory: gpus.reduce((a, g) => a + g.memory, 0),
+            gpu_memory_used: gpus.length ? (2 + 8 * w) * 2 ** 30 : 0,
           };
         }),
       );
