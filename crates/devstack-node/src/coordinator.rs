@@ -251,6 +251,12 @@ pub struct Placement {
     pub need: Option<crate::share::Need>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub need_from: Option<String>,
+    /// What the lane uses once up, beside its need (the peak, its build
+    /// included): the most of its last runs' steady use. Shown, never
+    /// admitted by; absent until a run measured it, and from an older
+    /// coordinator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steady: Option<crate::share::Amount>,
 }
 
 /// Rank the nodes for a lane of `member`'s `repo`/`lane` needing `need`:
@@ -394,6 +400,7 @@ pub fn rank_filling(
                     disk_room: room,
                     need: Some(need),
                     need_from: None,
+                    steady: None,
                 },
             )
         })
@@ -1894,6 +1901,7 @@ fn placement_for(
         .map(|m| m.id.clone())
         .collect();
     let (need, from) = need_of(s, r);
+    let steady = s.footprints.steady(&r.repo, r.profile.as_deref());
     let mut out = rank_filling(
         &nodes,
         &filled,
@@ -1905,6 +1913,7 @@ fn placement_for(
     );
     for p in &mut out {
         p.need_from = Some(from.clone());
+        p.steady = steady;
         // What offers for other lanes hold there is not in the node's own
         // figures the dashboard shows: say so where it decides.
         if !p.eligible && (p.cpus < need.cpus || p.memory < need.memory) {

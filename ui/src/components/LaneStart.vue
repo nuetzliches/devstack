@@ -72,7 +72,7 @@ const need = computed(() => {
   const p = Object.values(placement.value)
     .flat()
     .find((x) => x.need);
-  return p?.need ? { cpus: p.need.cpus, memory: p.need.memory, from: p.need_from ?? '' } : null;
+  return p?.need ? { cpus: p.need.cpus, memory: p.need.memory, from: p.need_from ?? '', steady: p.steady } : null;
 });
 /** A node's place in its pool's order: its rank (1: the pick) and why. */
 function placeOf(poolName: string, nodeId: string) {
@@ -174,8 +174,15 @@ function start(on?: string) {
         </button>
       </div>
       <p v-if="need && nodes.length" class="need small" data-testid="lane-start-need">
-        <span class="swatch" aria-hidden="true" /> The lane takes about <strong>{{ need.cpus.toFixed(1) }} CPU</strong> and
-        <strong>{{ bytes(need.memory) }}</strong> ({{ need.from }}).
+        <span class="swatch" aria-hidden="true" />
+        <span class="said"
+          >The lane starts with up to <strong>{{ need.cpus.toFixed(1) }} CPU</strong> and <strong>{{ bytes(need.memory) }}</strong>, its build
+          included<template v-if="need.steady"
+            >, then runs on about <strong>{{ need.steady.cpus.toFixed(1) }} CPU</strong> and
+            <strong>{{ bytes(need.steady.memory) }}</strong></template
+          >
+          ({{ need.from }}).</span
+        >
         <span class="faint">Each chart, on the scale of all the machine has: above, the last hour (dashed: what a node offers the pool); below, now, with the lane on top.</span>
       </p>
       <div v-if="nodes.length" class="targets" data-testid="lane-start-targets">
@@ -347,6 +354,11 @@ function start(on?: string) {
 }
 .need .faint {
   flex-basis: 100%;
+}
+/* One flex item: the gap would part its words from their commas. */
+.need .said {
+  flex: 1;
+  min-width: 0;
 }
 .swatch {
   display: inline-block;

@@ -2338,6 +2338,7 @@ async fn start(
         match result {
             Ok(started) => {
                 crate::telemetry::node_log("info", "node_lane_started", &what(Vec::new()));
+                s2.runs.lock().unwrap().up(&lid);
                 let running = bringing.running.lock().unwrap();
                 if bringing.ended() {
                     // Stopped, or its lease ended, while it started: what
@@ -4000,6 +4001,9 @@ pub async fn serve(
         let mut runs = s.runs.lock().unwrap();
         for l in leases.values() {
             runs.begin(&l.id, &l.repo);
+            // ponytail: taken as up; a lane still building when the agent
+            // restarted counts its build as steady use for that run.
+            runs.up(&l.id);
         }
     }
     let bg = tokio::spawn(background(s.clone()));

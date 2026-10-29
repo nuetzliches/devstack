@@ -707,6 +707,8 @@ export type Placement = {
   /** What the lane would hold there, and where that comes from (its footprint, or the estimate); absent from an older coordinator. */
   need?: { cpus: number; memory: number };
   need_from?: string;
+  /** What the lane uses once up (its build not counted): the most of its last runs' 95th percentile. Shown, never admitted by; absent until a run measured it. */
+  steady?: { cpus: number; memory: number };
 };
 
 /** A node's or the pool's capacity at one moment (ADR-0036), `GET /hub/pool/history`. */

@@ -2585,9 +2585,24 @@ pub fn placement(stack_file: &Path, lane: &str) -> Result<Value> {
                 .collect(),
             Err(_) => Vec::new(),
         };
+        // What the lane takes: its peak (the build included), what it
+        // uses once up, and where that comes from.
+        let need = order
+            .as_ref()
+            .ok()
+            .and_then(|l| l.iter().find(|p| p.need.is_some()))
+            .map(|p| {
+                serde_json::json!({
+                    "cpus": p.need.map(|n| n.cpus),
+                    "memory": p.need.map(|n| n.memory),
+                    "from": p.need_from,
+                    "steady": p.steady,
+                })
+            });
         pools.push(serde_json::json!({
             "pool": name,
             "on": if name == member::DEFAULT_POOL { "pool".to_string() } else { name.clone() },
+            "need": need,
             "nodes": ranked,
             "error": order.err(),
             "note": computed_here.then_some("the coordinator runs an older devstack: this order is computed here from its nodes' reports, without their policies"),
@@ -2633,6 +2648,25 @@ pub fn print_placement(stack_file: &Path, lane: &str) -> Result<()> {
         }
         if let Some(n) = pool["note"].as_str() {
             println!("  ({n})");
+        }
+        let need = &pool["need"];
+        if need.is_object() {
+            let steady = &need["steady"];
+            println!(
+                "  the lane starts with up to {:.1} CPU and {}{} ({})",
+                need["cpus"].as_f64().unwrap_or(0.0),
+                gib(&need["memory"]),
+                if steady.is_object() {
+                    format!(
+                        ", then runs on about {:.1} CPU and {}",
+                        steady["cpus"].as_f64().unwrap_or(0.0),
+                        gib(&steady["memory"])
+                    )
+                } else {
+                    String::new()
+                },
+                need["from"].as_str().unwrap_or("")
+            );
         }
         for n in pool["nodes"].as_array().into_iter().flatten() {
             println!(

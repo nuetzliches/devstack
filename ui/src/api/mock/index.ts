@@ -363,6 +363,7 @@ export class MockTransport implements Transport {
           disk_room: 180 * 2 ** 30,
           need: { cpus: 2.5, memory: 6 * 2 ** 30 },
           need_from: 'measured: the most of its last 3 runs in the pool',
+          steady: { cpus: 0.6, memory: 2.25 * 2 ** 30 },
         },
       ]);
     }

@@ -193,6 +193,15 @@ disk. `[lanes.need]` and the profile's `need` in the stack file raise each
 part to what they say. The lease says the need and where it came from, in
 the lane's start and in `daemon.log` (`remote_lane_need`).
 
+The need is a peak, its build included, and decides only whether a start
+fits the room free now: running lanes count by what they use. Besides it a
+node measures a run's steady use, the 95th percentile of its CPU and memory
+once the lane is up, and the coordinator keeps the most of the last five.
+The dashboard and `devstack pool placement` show both ("starts with up to
+8.7 CPU and 7.2 GB, its build included, then runs on about 0.8 CPU and
+2.1 GB"); admission never uses the steady use
+([ADR-0074](adr/0074-a-lanes-steady-use-is-measured-and-shown-never-admitted-by.md)).
+
 Disk counts per node: one that keeps this lane's data needs nothing more,
 one the repository ran on (its images are there) the lane's own part, any
 other both. A node reports what a new lane can take of its disk
