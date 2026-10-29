@@ -60,7 +60,7 @@ watch(
 );
 const hubDown = computed(() => hub.status === 'unreachable' || hub.stream === 'error');
 /** The main tree of a stack that does not run, shown: its start card, as a lane's (ADR-0078). */
-const showMainStart = computed(() => !hubDown.value && !!stack.entry && !stack.running && !stack.lane && !stack.readOnly && route.name === 'overview');
+const showMainStart = computed(() => !hubDown.value && !!stack.entry && !stack.running && !stack.lane && !stack.readOnly);
 const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 const unknown = computed(() => hub.fresh && !stack.entry && !stack.view);
 /** The daemon runs another devstack than the hub: a restart of the stack
@@ -122,7 +122,7 @@ function isActive(name: string) {
   <div>
     <StackHeader />
     <!-- A lane not started has no views yet: its start options stand in for them. -->
-    <nav v-if="!idleLane && !stack.offlineLane" class="subnav" aria-label="Stack views">
+    <nav v-if="!idleLane && !stack.offlineLane && !showMainStart" class="subnav" aria-label="Stack views">
       <div class="subnav-inner">
         <RouterLink
           v-for="t in tabs"
@@ -199,7 +199,8 @@ function isActive(name: string) {
         <Icon name="power" :size="18" />
         <span class="grow">
           <strong>{{ stack.entry.name }} is not running.</strong>
-          <template v-if="stack.view"> Showing the last known state<template v-if="stack.viewAt"> from {{ ago(stack.viewAt, now) }}</template>.</template>
+          <template v-if="showMainStart || stack.offlineLane" />
+          <template v-else-if="stack.view"> Showing the last known state<template v-if="stack.viewAt"> from {{ ago(stack.viewAt, now) }}</template>.</template>
           <template v-else> No state has been seen yet.</template>
           <template v-if="stack.entry.start_error">
             <span class="start-error-head"><strong>The last start failed:</strong></span>
@@ -255,8 +256,10 @@ function isActive(name: string) {
     <div v-else-if="stack.offlineLane" class="idle-lane">
       <OfflineLaneStart :lane="stack.offlineLane" />
     </div>
+    <div v-else-if="showMainStart" class="idle-lane">
+      <OfflineMainStart />
+    </div>
     <div v-else :data-stale="stack.stale && !!stack.view ? 'true' : 'false'">
-      <OfflineMainStart v-if="showMainStart" />
       <RouterView v-slot="{ Component }">
         <component :is="Component" />
       </RouterView>
@@ -266,7 +269,7 @@ function isActive(name: string) {
 
 <style scoped>
 .idle-lane {
-  padding: 0 var(--space-5);
+  padding: var(--space-4) var(--space-5) 0;
 }
 .subnav {
   border-bottom: 1px solid var(--border);

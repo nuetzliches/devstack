@@ -19,12 +19,12 @@ const branch = computed(() => stack.view?.branch ?? null);
   <section class="card offline-main" data-testid="offline-main">
     <header class="card-header">
       <Icon name="gitBranch" :size="16" />
-      <h2>{{ branch ?? 'main working tree' }}</h2>
+      <h2>{{ branch ?? 'main' }}</h2>
       <span class="faint small">main working tree</span>
       <span class="pill sm outline">not started</span>
     </header>
     <div class="card-body">
-      <p class="muted">The main working tree runs on this machine, on the stack's main ports. Its last known state is shown below.</p>
+      <p class="muted">{{ stack.entry?.name }} does not run. Its main working tree runs on this machine, on the stack's main ports.</p>
       <p class="faint small mono">{{ stack.entry?.repo }}</p>
       <div class="actions">
         <button type="button" class="btn btn-primary" :disabled="starting" data-testid="offline-main-start" @click="stack.startStack()">
@@ -42,7 +42,6 @@ const branch = computed(() => stack.view?.branch ?? null);
 <style scoped>
 .offline-main {
   max-width: 760px;
-  margin-bottom: 16px;
 }
 .actions {
   display: flex;
