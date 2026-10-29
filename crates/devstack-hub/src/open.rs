@@ -82,7 +82,17 @@ const EDITORS: &[(&str, &str, Kind)] = &[
 /// editors, then the agents of the agent table that say how they are
 /// opened (`[agent.open]`, ADR-0074).
 fn links() -> Vec<(&'static str, &'static str, Kind, Option<&'static str>)> {
-    let mut out: Vec<_> = EDITORS.iter().map(|&(s, l, k)| (s, l, k, None)).collect();
+    // An editor that is an agent of the table too (Cursor, Windsurf: the
+    // same id), with a skill folder: its skills switch is shown beside it.
+    let mut out: Vec<_> = EDITORS
+        .iter()
+        .map(|&(s, l, k)| {
+            let agent = devstack_skills::agents::get(s)
+                .filter(|a| a.skills.is_some())
+                .map(|a| a.id.as_str());
+            (s, l, k, agent)
+        })
+        .collect();
     for a in devstack_skills::agents::all() {
         for l in a.open.iter().flat_map(|o| &o.links) {
             out.push((
@@ -343,6 +353,22 @@ fn orca_run(exe: &Path, args: &[&str]) -> Result<(), (String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_program_that_is_an_agent_with_a_skill_folder_says_which() {
+        let agent = |scheme: &str| {
+            links()
+                .into_iter()
+                .find(|l| l.0 == scheme)
+                .and_then(|l| l.3)
+        };
+        assert_eq!(agent("claude-cli"), Some("claude-code"));
+        assert_eq!(agent("claude"), Some("claude-code"));
+        assert_eq!(agent("cursor"), Some("cursor"));
+        assert_eq!(agent("windsurf"), Some("windsurf"));
+        assert_eq!(agent("vscode"), None);
+        assert_eq!(agent("zed"), None);
+    }
 
     #[test]
     fn editor_links_carry_the_path_with_forward_slashes() {

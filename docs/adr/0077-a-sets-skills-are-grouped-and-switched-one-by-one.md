@@ -52,7 +52,7 @@ What was built:
    - Below, the agents the menu does not open (Codex, OpenCode, Copilot) with their folder and a switch.
    - The menu's order and choice stay in the browser, the skills switches in the hub; the dialog says which.
    - The path menu's entry reads "Programs and agents…".
-5. **The agent table** names Orca (`own = true`, kept by `scripts/sync-agents.py`) with `[agent.open] program = "orca"` and no skill folder. An opener says which agent it is (`agent`).
+5. **The agent table** names Orca (`own = true`, kept by `scripts/sync-agents.py`) with `[agent.open] program = "orca"` and no skill folder. An opener says which agent it is (`agent`): Claude Code and Claude Desktop the table's `claude-code`, the editors Cursor and Windsurf their agents of the same id. VS Code is not tied to GitHub Copilot's folder: whether Copilot in VS Code reads `~/.copilot/skills` is not established.
 
 ## Alternatives considered
 
