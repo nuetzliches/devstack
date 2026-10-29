@@ -9,6 +9,19 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-10-29
+
+A pool hands out agent skills: an admin names skill sets (a GitHub
+repository read with the coordinator's own token, or a folder on it), and
+each member's hub installs the ones its user accepted into the user skill
+folders of the coding agents switched on, never into a repository; a push
+reaches every member within seconds (ADR-0074). Members no longer poll the
+coordinator: one stream tells them which parts of the pool changed
+(ADR-0073). Where a lane can start says what it takes once up beside its
+peak (ADR-0075), and a lane without a lane image is refused before its
+lease. Fixed: PowerShell from the dashboard, Zed on Windows, the MCP
+upstreams page after a login, and dashboard details.
+
 ### Added
 
 - **A pool hands out agent skills** ([ADR-0074](docs/adr/0074-a-pool-hands-out-skill-sets-the-hub-installs-them-for-the-agents.md)):
@@ -51,6 +64,18 @@ and listed with their assets on the
 - **Zed opens the folder on Windows**: the path menu's Zed opened an
   empty window there, as the link handed it `/D:/...`; it now hands
   `D:/...`.
+- **PowerShell from the dashboard stays open**: the folder menu's
+  PowerShell closed again at once, as it inherited the hub's empty input;
+  it is started as a double-click starts it now (#359).
+- **A lane without a lane image is refused before its lease**: a stack
+  file that names neither `[lanes] image` nor `[lanes] dockerfile` cannot
+  run on a node; the start in the pool is refused at once, placement marks
+  every node not eligible with why, and the dashboard offers a prompt that
+  names a fitting image (#366). devstack's own stack file names one (#364).
+- **Dashboard details**: CPU says it is a share of one core (400 % is four
+  busy), the lane card's figures have icons, the pending count takes the
+  colour of what is pending, and a service's or container's detail closes
+  with ×, Escape or a second click on its row (#361).
 
 ## [0.28.0] - 2026-10-28
 
@@ -2141,7 +2166,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.29.0...HEAD
+[0.29.0]: https://github.com/nuetzliches/devstack/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/nuetzliches/devstack/compare/v0.27.1...v0.28.0
 [0.27.1]: https://github.com/nuetzliches/devstack/compare/v0.27.0...v0.27.1
 [0.27.0]: https://github.com/nuetzliches/devstack/compare/v0.26.0...v0.27.0
