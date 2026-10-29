@@ -46,6 +46,7 @@ export const router = createRouter({
       ],
     },
     { path: '/upstreams', name: 'upstreams', component: () => import('./views/UpstreamsView.vue'), meta: { title: 'MCP upstreams' } },
+    { path: '/board', name: 'board', component: () => import('./views/BoardView.vue'), meta: { title: 'Board' } },
     { path: '/skills', name: 'skills', component: () => import('./views/SkillsView.vue'), meta: { title: 'Skills' } },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],

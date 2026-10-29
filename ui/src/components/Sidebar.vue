@@ -403,6 +403,17 @@ async function copyPath(s: StackEntry) {
       <button
         type="button"
         class="item pool-item"
+        :class="{ active: route.name === 'board' }"
+        title="Your board: what needs you, and the tiles your agent built"
+        data-testid="sidebar-board"
+        @click="router.push({ name: 'board' })"
+      >
+        <Icon name="grid" :size="14" class="branch" />
+        <span class="label">Board</span>
+      </button>
+      <button
+        type="button"
+        class="item pool-item"
         :class="{ active: route.path.startsWith('/pool') }"
         :title="pool.dueAll ? `${pool.dueAll} waiting for an admin in the pools` : 'The machines that run lanes for each other'"
         data-testid="sidebar-pool"

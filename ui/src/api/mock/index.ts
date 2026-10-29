@@ -12,6 +12,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
+import { mockAttention, mockAttentionAct, mockBoard } from './board';
 import type { DockerEngine, Guest, HubEvent, PoolFeed, PoolNode, PoolSkillsAdmin, PoolSkillsState, LaneView, McpUpstream, NotifySettings, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
@@ -553,6 +554,11 @@ export class MockTransport implements Transport {
       if (ua[3] === 'decline') u.logged_in = false;
       return empty(204);
     }
+    // The board and the attention inbox (idea #378).
+    if (p === '/hub/board' && method === 'GET') return json(200, mockBoard());
+    if (p === '/hub/attention' && method === 'GET') return json(200, { items: mockAttention() });
+    const at = /^\/hub\/attention\/([^/]+)\/(seen|snooze|done)$/.exec(p);
+    if (at && method === 'POST') return mockAttentionAct(decodeURIComponent(at[1]), at[2]) ? empty(204) : json(404, { error: 'no such item' });
     // Skill sets (ADR-0074).
     if (p === '/hub/skills' && method === 'GET') return json(200, this.hub.poolSkillState);
     if (p === '/hub/skills/sync' && method === 'POST') return json(200, this.hub.poolSkillState);

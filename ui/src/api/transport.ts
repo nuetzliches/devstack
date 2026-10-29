@@ -82,6 +82,9 @@ export const paths = {
   upstreamAccept: (pool: string, name: string) => `/hub/upstreams/pool/${enc(pool)}/${enc(name)}/accept`,
   upstreamDecline: (pool: string, name: string) => `/hub/upstreams/pool/${enc(pool)}/${enc(name)}/decline`,
   pools: '/hub/pools',
+  board: '/hub/board',
+  attention: '/hub/attention',
+  attentionAct: (id: string, act: 'seen' | 'snooze' | 'done') => `/hub/attention/${enc(id)}/${act}`,
   poolShared: '/hub/pool/shared',
   poolTelemetry: '/hub/pool/telemetry',
   poolHistory: (pool: string, node: string | undefined, range: string) =>
