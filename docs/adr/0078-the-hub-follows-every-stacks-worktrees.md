@@ -59,10 +59,12 @@ What was built:
    the daemon runs, the lane's usual start page and views take over. The
    branch picker finds a stopped stack's worktrees too, and a lane it makes
    for a stopped stack opens on its start card.
-   The main working tree of a stopped stack shows a start card of the same
-   kind instead of its views and their tabs, as a lane not started does:
-   *Start here* (it runs on this machine only), and that a worktree's lane
-   is what runs on the pool. A stopped
+   The main working tree of a stopped stack shows the same start card, one
+   component for both, instead of its views and their tabs, as a lane not
+   started does; its *Start in the pool* is off, with why (the main tree
+   runs on this machine; a worktree's lane runs in the pool). The banner
+   above says only that the stack does not run, and has no start of its
+   own then, for either. A stopped
    stack's trees show no running dot, whatever was seen last.
 
 ## Alternatives considered
@@ -87,4 +89,4 @@ What was built:
 (the routes and `/hub/events`), `crates/devstack-daemon/src/lanes.rs`
 (`fingerprint`), `ui/src/components/Sidebar.vue`, `ui/src/stores/stack.ts`
 (`offlineLanes`, `offlineLane`, `startOfflineLane`),
-`ui/src/components/OfflineLaneStart.vue`, `ui/src/components/BranchPicker.vue`.
+`ui/src/components/OfflineTreeStart.vue`, `ui/src/components/BranchPicker.vue`.

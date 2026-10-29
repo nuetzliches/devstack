@@ -8,8 +8,7 @@ import { useStack } from '@/stores/stack';
 import Icon from '@/components/icons/Icon.vue';
 import StackHeader from '@/components/StackHeader.vue';
 import LaneStart from '@/components/LaneStart.vue';
-import OfflineLaneStart from '@/components/OfflineLaneStart.vue';
-import OfflineMainStart from '@/components/OfflineMainStart.vue';
+import OfflineTreeStart from '@/components/OfflineTreeStart.vue';
 import SkillsBanner from '@/components/SkillsBanner.vue';
 import UpgradeBanner from '@/components/UpgradeBanner.vue';
 import AgentPrompt from '@/components/AgentPrompt.vue';
@@ -60,7 +59,9 @@ watch(
 );
 const hubDown = computed(() => hub.status === 'unreachable' || hub.stream === 'error');
 /** The main tree of a stack that does not run, shown: its start card, as a lane's (ADR-0078). */
+/** A tree of a stack that does not run, shown: its start card instead of its views and tabs, the same for the main tree and a lane (ADR-0078). */
 const showMainStart = computed(() => !hubDown.value && !!stack.entry && !stack.running && !stack.lane && !stack.readOnly);
+const offlineStart = computed(() => showMainStart.value || !!stack.offlineLane);
 const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 const unknown = computed(() => hub.fresh && !stack.entry && !stack.view);
 /** The daemon runs another devstack than the hub: a restart of the stack
@@ -122,7 +123,7 @@ function isActive(name: string) {
   <div>
     <StackHeader />
     <!-- A lane not started has no views yet: its start options stand in for them. -->
-    <nav v-if="!idleLane && !stack.offlineLane && !showMainStart" class="subnav" aria-label="Stack views">
+    <nav v-if="!idleLane && !offlineStart" class="subnav" aria-label="Stack views">
       <div class="subnav-inner">
         <RouterLink
           v-for="t in tabs"
@@ -199,7 +200,7 @@ function isActive(name: string) {
         <Icon name="power" :size="18" />
         <span class="grow">
           <strong>{{ stack.entry.name }} is not running.</strong>
-          <template v-if="showMainStart || stack.offlineLane" />
+          <template v-if="offlineStart" />
           <template v-else-if="stack.view"> Showing the last known state<template v-if="stack.viewAt"> from {{ ago(stack.viewAt, now) }}</template>.</template>
           <template v-else> No state has been seen yet.</template>
           <template v-if="stack.entry.start_error">
@@ -213,7 +214,7 @@ function isActive(name: string) {
             <AgentPrompt v-if="!stack.readOnly && stack.id" kind="start-failed" :target="{ stack: stack.id }" />
           </template>
         </span>
-        <button v-if="!stack.readOnly && !showMainStart" type="button" class="btn btn-primary btn-sm" :disabled="starting" data-testid="action-start-stack" @click="stack.startStack()">
+        <button v-if="!stack.readOnly && !offlineStart" type="button" class="btn btn-primary btn-sm" :disabled="starting" data-testid="action-start-stack" @click="stack.startStack()">
           <span v-if="starting" class="spinner" /><Icon v-else name="play" :size="14" />
           {{ starting ? 'Starting…' : 'Start stack' }}
         </button>
@@ -253,11 +254,8 @@ function isActive(name: string) {
     <div v-if="idleLane" class="idle-lane">
       <LaneStart :lane="idleLane" />
     </div>
-    <div v-else-if="stack.offlineLane" class="idle-lane">
-      <OfflineLaneStart :lane="stack.offlineLane" />
-    </div>
-    <div v-else-if="showMainStart" class="idle-lane">
-      <OfflineMainStart />
+    <div v-else-if="offlineStart" class="idle-lane">
+      <OfflineTreeStart :lane="stack.offlineLane" />
     </div>
     <div v-else :data-stale="stack.stale && !!stack.view ? 'true' : 'false'">
       <RouterView v-slot="{ Component }">
