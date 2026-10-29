@@ -36,18 +36,13 @@ const o = computed(() => pool.overview);
 const me = computed(() => o.value?.me);
 const adding = computed(() => route.query.join !== undefined);
 const nodes = computed(() => o.value?.nodes ?? []);
-/** What waits for an admin: requests, provisioning alarms, nodes to confirm. */
-const adminDue = computed(
-  () => pool.pending.length + (o.value?.provisioning?.machines ?? []).filter((m) => m.alarm).length + nodes.value.filter((n) => n.provisioned?.unconfirmed).length,
-);
-
 const tabs = computed(() => {
   const t: { name: string; label: string; icon: IconName; count?: string; due?: number }[] = [
     { name: 'pool-overview', label: 'Overview', icon: 'grid' },
-    { name: 'pool-machines', label: 'Machines', icon: 'cpu', count: `${nodes.value.filter((n) => n.online).length}/${pool.machines.length}` },
+    { name: 'pool-machines', label: 'Machines', icon: 'cpu', count: `${nodes.value.filter((n) => n.online).length}/${pool.machines.length}`, due: pool.due().machines },
     { name: 'pool-lanes', label: 'Lanes', icon: 'gitBranch', count: String((o.value?.leases ?? []).length) },
   ];
-  if (pool.isAdmin) t.push({ name: 'pool-admin', label: 'Admin', icon: 'shield', due: adminDue.value });
+  if (pool.isAdmin) t.push({ name: 'pool-admin', label: 'Admin', icon: 'shield', due: pool.due().admin });
   return t;
 });
 const isActive = (name: string) => route.name === name || (name === 'pool-machines' && route.name === 'pool-machine');
@@ -73,7 +68,7 @@ const isActive = (name: string) => route.name === name || (name === 'pool-machin
           >
             <Icon :name="t.icon" :size="15" /> {{ t.label }}
             <span v-if="t.count" class="faint tabular">{{ t.count }}</span>
-            <span v-if="t.due" class="badge" data-testid="pool-admin-due">{{ t.due }}</span>
+            <span v-if="t.due" class="badge" :title="`${t.due} waiting for an admin here`" :data-testid="`pool-due-${t.name.slice(5)}`">{{ t.due }}</span>
           </RouterLink>
         </nav>
         <RouterView />
@@ -89,7 +84,7 @@ const isActive = (name: string) => route.name === name || (name === 'pool-machin
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 1100px;
+  max-width: 1800px;
 }
 .err {
   display: flex;

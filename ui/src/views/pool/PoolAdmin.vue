@@ -65,77 +65,83 @@ watchEffect(() => {
       </div>
     </section>
 
-    <section v-if="provisioning" class="card" data-testid="pool-provisioning">
-      <header class="card-header">
-        <Icon name="server" :size="18" />
-        <h2>Provisioning</h2>
-        <span v-if="alarms" class="pill sm danger" data-testid="pool-provision-alarms">{{ alarms }} alarm{{ alarms === 1 ? '' : 's' }}</span>
-        <span class="faint small">
-          <template v-if="provisioning.provisioner">{{ provisioning.provisioner }}</template>
-          <template v-else>no provisioner: the pool makes no nodes</template>
-        </span>
-      </header>
-      <div class="card-body flush table-wrap">
-        <p class="hint muted" data-testid="pool-provision-settings">
-          One node {{ provisioning.settings.per === 'repo' ? 'per repository' : 'for the whole pool' }} ·
-          {{ provisioning.settings.confirm === 'admin' ? 'an admin confirms each' : 'no confirmation' }} ·
-          given back after {{ provisioning.settings.idle_minutes }} min without a lane · at most {{ provisioning.settings.max_nodes }} node(s)<template
-            v-if="provisioning.settings.max_cpus"
-          >, {{ provisioning.settings.max_cpus }} CPU</template><template v-if="provisioning.settings.max_memory">, {{ bytes(provisioning.settings.max_memory) }}</template>
-        </p>
-        <table v-if="machines.length" class="table">
-          <thead>
-            <tr><th>Request</th><th>Machine</th><th>Address</th><th>State</th><th>Node</th><th>For</th></tr>
-          </thead>
-          <tbody>
-            <template v-for="m in machines" :key="m.request">
-              <tr :data-request="m.request" :class="{ alarm: m.alarm }">
-                <td class="mono faint">{{ m.request }}</td>
-                <td class="mono">{{ m.machine || '–' }}</td>
-                <td class="mono">{{ m.address || '–' }}</td>
-                <td class="nowrap">
-                  <span class="pill sm" :class="m.state === 'ready' ? 'ok' : m.state === 'returning' ? 'warn' : 'outline'">{{ m.state }}</span>
-                  <span v-if="m.size" class="faint small tabular"> {{ m.size.cpus }} CPU · {{ bytes(m.size.memory) }}</span>
-                </td>
-                <td><RouterLink v-if="m.member" :to="machine(m.member)">{{ pool.nameOf(m.member) }}</RouterLink><template v-else>–</template></td>
-                <td>{{ pool.nameOf(m.requester) }}<span v-if="m.repo" class="faint"> · {{ m.repo }}</span></td>
-              </tr>
-              <tr v-if="m.alarm || m.error" class="note-row">
-                <td colspan="6">
-                  <p v-if="m.alarm" class="err" data-testid="pool-provision-alarm"><Icon name="alert" :size="14" /> <strong>Alarm:</strong> {{ m.alarm }}</p>
-                  <p v-if="m.error" class="warn-line small" data-testid="pool-provision-error"><Icon name="alert" :size="14" /> Giving it back failed: {{ m.error }}</p>
-                </td>
-              </tr>
-            </template>
-          </tbody>
-        </table>
-        <p v-else class="hint muted">The provisioner has made no machine.</p>
+    <div class="cols">
+      <div class="col">
+        <PoolUpstreams />
+
       </div>
-    </section>
-
-    <PoolUpstreams />
-
-    <section v-if="audit.length" class="card" data-testid="pool-audit">
-      <header class="card-header">
-        <Icon name="history" :size="18" />
-        <h2>Admin log</h2>
-      </header>
-      <div class="card-body">
-        <ul class="audit">
-          <li v-for="(e, i) in audit" :key="i">
-            <span class="faint tabular when">{{ ago(e.at * 1000, now) }}</span>
-            <span>
-              <strong>{{ e.by }}</strong> {{ actionText[e.action] ?? e.action }}
-              <template v-if="!e.action.startsWith('upstream')">
-                <RouterLink v-if="pool.machines.some((x) => x.id === e.member)" :to="machine(e.member)"><strong>{{ e.name }}</strong></RouterLink>
-                <strong v-else>{{ e.name }}</strong>
-              </template>
-              <template v-if="e.detail"> ({{ e.detail }})</template>
+      <div class="col">
+        <section v-if="provisioning" class="card" data-testid="pool-provisioning">
+          <header class="card-header">
+            <Icon name="server" :size="18" />
+            <h2>Provisioning</h2>
+            <span v-if="alarms" class="pill sm danger" data-testid="pool-provision-alarms">{{ alarms }} alarm{{ alarms === 1 ? '' : 's' }}</span>
+            <span class="faint small">
+              <template v-if="provisioning.provisioner">{{ provisioning.provisioner }}</template>
+              <template v-else>no provisioner: the pool makes no nodes</template>
             </span>
-          </li>
-        </ul>
+          </header>
+          <div class="card-body flush table-wrap">
+            <p class="hint muted" data-testid="pool-provision-settings">
+              One node {{ provisioning.settings.per === 'repo' ? 'per repository' : 'for the whole pool' }} ·
+              {{ provisioning.settings.confirm === 'admin' ? 'an admin confirms each' : 'no confirmation' }} ·
+              given back after {{ provisioning.settings.idle_minutes }} min without a lane · at most {{ provisioning.settings.max_nodes }} node(s)<template
+                v-if="provisioning.settings.max_cpus"
+              >, {{ provisioning.settings.max_cpus }} CPU</template><template v-if="provisioning.settings.max_memory">, {{ bytes(provisioning.settings.max_memory) }}</template>
+            </p>
+            <table v-if="machines.length" class="table">
+              <thead>
+                <tr><th>Request</th><th>Machine</th><th>Address</th><th>State</th><th>Node</th><th>For</th></tr>
+              </thead>
+              <tbody>
+                <template v-for="m in machines" :key="m.request">
+                  <tr :data-request="m.request" :class="{ alarm: m.alarm }">
+                    <td class="mono faint">{{ m.request }}</td>
+                    <td class="mono">{{ m.machine || '–' }}</td>
+                    <td class="mono">{{ m.address || '–' }}</td>
+                    <td class="nowrap">
+                      <span class="pill sm" :class="m.state === 'ready' ? 'ok' : m.state === 'returning' ? 'warn' : 'outline'">{{ m.state }}</span>
+                      <span v-if="m.size" class="faint small tabular"> {{ m.size.cpus }} CPU · {{ bytes(m.size.memory) }}</span>
+                    </td>
+                    <td><RouterLink v-if="m.member" :to="machine(m.member)">{{ pool.nameOf(m.member) }}</RouterLink><template v-else>–</template></td>
+                    <td>{{ pool.nameOf(m.requester) }}<span v-if="m.repo" class="faint"> · {{ m.repo }}</span></td>
+                  </tr>
+                  <tr v-if="m.alarm || m.error" class="note-row">
+                    <td colspan="6">
+                      <p v-if="m.alarm" class="err" data-testid="pool-provision-alarm"><Icon name="alert" :size="14" /> <strong>Alarm:</strong> {{ m.alarm }}</p>
+                      <p v-if="m.error" class="warn-line small" data-testid="pool-provision-error"><Icon name="alert" :size="14" /> Giving it back failed: {{ m.error }}</p>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+            <p v-else class="hint muted">The provisioner has made no machine.</p>
+          </div>
+        </section>
+
+        <section v-if="audit.length" class="card" data-testid="pool-audit">
+          <header class="card-header">
+            <Icon name="history" :size="18" />
+            <h2>Admin log</h2>
+          </header>
+          <div class="card-body">
+            <ul class="audit">
+              <li v-for="(e, i) in audit" :key="i">
+                <span class="faint tabular when">{{ ago(e.at * 1000, now) }}</span>
+                <span>
+                  <strong>{{ e.by }}</strong> {{ actionText[e.action] ?? e.action }}
+                  <template v-if="!e.action.startsWith('upstream')">
+                    <RouterLink v-if="pool.machines.some((x) => x.id === e.member)" :to="machine(e.member)"><strong>{{ e.name }}</strong></RouterLink>
+                    <strong v-else>{{ e.name }}</strong>
+                  </template>
+                  <template v-if="e.detail"> ({{ e.detail }})</template>
+                </span>
+              </li>
+            </ul>
+          </div>
+        </section>
       </div>
-    </section>
+    </div>
   </template>
 </template>
 

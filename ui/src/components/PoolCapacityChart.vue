@@ -12,7 +12,8 @@ import { bytes, dateTime } from '@/lib/format';
 import { throttle } from '@/lib/throttle';
 import { usePool } from '@/stores/pool';
 
-const props = defineProps<{ pool: string }>();
+// With `node`: that machine alone, the same chart with one band.
+const props = defineProps<{ pool: string; node?: string }>();
 const pool = usePool();
 const range = ref<'1h' | '24h'>('1h');
 const total = ref<CapacityPoint[]>([]);
@@ -20,14 +21,17 @@ const perNode = ref<Record<string, CapacityPoint[]>>({});
 const error = ref<string | null>(null);
 
 /** The nodes that report, in a fixed order: a machine keeps its colour while others come and go. */
-const nodes = computed(() =>
-  (pool.overviews[props.pool]?.nodes ?? []).filter((n) => n.report?.total).sort((a, b) => a.id.localeCompare(b.id)),
-);
+const nodes = computed<{ id: string; name: string }[]>(() => {
+  const o = pool.overviews[props.pool];
+  if (props.node) return [{ id: props.node, name: o?.members?.find((m) => m.id === props.node)?.name ?? o?.nodes?.find((n) => n.id === props.node)?.name ?? props.node }];
+  return (o?.nodes ?? []).filter((n) => n.report?.total).sort((a, b) => a.id.localeCompare(b.id));
+});
 // ponytail: one request per node; a history endpoint per pool with every node in it, if pools grow past a few dozen nodes.
 async function load() {
   const get = (node?: string) => api().request<CapacityPoint[]>('GET', paths.poolHistory(props.pool, node, range.value));
   try {
-    const [t, ...each] = await Promise.all([get(), ...nodes.value.map((n) => get(n.id))]);
+    // One machine: its own history is the time axis too.
+    const [t, ...each] = props.node ? [await get(props.node)].flatMap((r) => [r, r]) : await Promise.all([get(), ...nodes.value.map((n) => get(n.id))]);
     if (t.ok && Array.isArray(t.body)) {
       total.value = t.body;
       error.value = null;
@@ -37,7 +41,7 @@ async function load() {
     error.value = 'the hub is not reachable';
   }
 }
-watch(() => [props.pool, range.value, nodes.value.map((n) => n.id).join()], () => void load(), { immediate: true });
+watch(() => [props.pool, props.node, range.value, nodes.value.map((n) => n.id).join()], () => void load(), { immediate: true });
 const again = throttle(() => void load(), 15_000);
 watch(() => pool.feeds[props.pool]?.versions.nodes, again);
 onBeforeUnmount(again.cancel);
@@ -55,10 +59,26 @@ function at(points: CapacityPoint[], t: number, f: (p: CapacityPoint) => number)
 const W = 1000;
 const H = 80;
 type Res = { key: string; label: string; used: (p: CapacityPoint) => number; offered: (p: CapacityPoint) => number; has: (p: CapacityPoint) => number; fmt: (v: number) => string };
-const resources: Res[] = [
+const base: Res[] = [
   { key: 'cpu', label: 'CPU', used: (p) => p.used_cpus, offered: (p) => p.offered_cpus, has: (p) => p.total_cpus, fmt: (v) => `${v.toFixed(1)} CPU` },
   { key: 'mem', label: 'Memory', used: (p) => p.used_memory, offered: (p) => p.offered_memory, has: (p) => p.total_memory, fmt: (v) => bytes(v) },
 ];
+// GPU memory where a GPU reports: what lanes use of it, all of it offered when a GPU is.
+const resources = computed<Res[]>(() =>
+  total.value.some((p) => p.gpus > 0)
+    ? [
+        ...base,
+        {
+          key: 'gpu',
+          label: 'GPU memory',
+          used: (p) => p.gpu_memory_used,
+          offered: (p) => (p.gpus_offered > 0 ? Math.max(0, p.gpu_memory - p.gpu_memory_used) : 0),
+          has: (p) => p.gpu_memory,
+          fmt: (v) => bytes(v),
+        },
+      ]
+    : base,
+);
 
 const rows = computed(() => {
   const t = total.value;
@@ -67,7 +87,7 @@ const rows = computed(() => {
   // Every number from the machines' own histories on the pool's time axis:
   // the bands, what is offered and what there is add up by construction.
   const sumAt = (p: CapacityPoint, f: (q: CapacityPoint) => number) => nodes.value.reduce((a, n) => a + at(perNode.value[n.id] ?? [], p.at, f), 0);
-  return resources.map((r) => {
+  return resources.value.map((r) => {
     const has = t.map((p) => sumAt(p, r.has));
     const ceiling = t.map((p) => sumAt(p, (q) => r.used(q) + r.offered(q)));
     const max = Math.max(1, ...has);
@@ -116,6 +136,7 @@ const hoverX = computed(() => (hover.value === null ? null : (hover.value / Math
       <button type="button" class="btn btn-xs" :class="{ 'btn-primary': range === '24h' }" @click="range = '24h'">24 h</button>
     </div>
     <p v-if="error && !total.length" class="faint small">{{ error }}</p>
+    <p v-else-if="!nodes.length" class="faint small">No node of the pool reports what it has yet.</p>
     <p v-else-if="total.length < 2" class="faint small">Collecting: the coordinator keeps a point per report (every 15 s), since it started.</p>
     <template v-else>
       <div v-for="r in rows" :key="r.key" class="row">
@@ -177,7 +198,7 @@ const hoverX = computed(() => (hover.value === null ? null : (hover.value / Math
   --series-5: #e87ba4;
   --series-6: #6250d6;
   display: grid;
-  grid-template-columns: 70px minmax(160px, 1fr);
+  grid-template-columns: 90px minmax(160px, 1fr);
   align-items: center;
   gap: 8px 12px;
 }

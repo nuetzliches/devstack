@@ -187,6 +187,9 @@ describe('stack store', () => {
     ]);
     expect(pool.nameOf('b')).toBe('build');
     expect(pool.nameOf('zz')).toBe('zz');
+    // The pending request waits under Admin; nothing to confirm under Machines.
+    expect(pool.due()).toEqual({ admin: 1, machines: 0, all: 1 });
+    expect(pool.dueAll).toBe(1);
   });
 
   it('a shared lane is read through its node, and changes nothing (ADR-0040)', async () => {

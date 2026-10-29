@@ -66,50 +66,7 @@ const onProvisioned = computed(() => !(me.value?.no_provisioned ?? myMember.valu
 </script>
 
 <template>
-  <section class="card">
-    <header class="card-header">
-      <Icon name="server" :size="18" />
-      <h2>Pool<template v-if="pool.current !== 'default'"> {{ pool.current }}</template></h2>
-      <span v-if="me?.role" class="pill sm" :class="me.role === 'admin' ? 'accent' : 'outline'" data-testid="pool-role">{{ me.role }}</span>
-    </header>
-    <div v-if="me" class="card-body">
-      <dl class="facts">
-        <dt>Coordinator</dt>
-        <dd>
-          <code>{{ me.coordinator }}</code>
-          <span
-            v-if="pool.share?.reported_at"
-            class="pill sm"
-            :class="releaseClass(pool.share.coordinator, true, hub.version)"
-            :title="releaseTitle(pool.share.coordinator, 'The coordinator', hub.version)"
-            data-testid="pool-coordinator-version"
-          >{{ pool.share.coordinator?.version ?? 'older' }}</span>
-        </dd>
-        <dt>This machine</dt>
-        <dd>{{ me.name }} <span class="faint mono">{{ me.id }}</span></dd>
-      </dl>
-      <p v-if="me.state === 'pending'" class="warn-line" data-testid="pool-waiting">
-        <Icon name="hourglass" :size="14" /> Waiting for an admin to approve this machine.
-      </p>
-      <p v-else-if="me.state === 'removed'" class="err"><Icon name="xCircle" :size="14" /> This machine was removed from the pool.</p>
-      <div v-if="approved && o?.join" class="join-cmd" data-testid="pool-join-command">
-        <span class="muted small">Another machine joins with</span>
-        <code class="mono">{{ o.join.command }}</code>
-        <button type="button" class="btn btn-xs" title="Copy the command" data-testid="pool-join-copy" @click="copyJoin">
-          <Icon name="copy" :size="13" /> Copy
-        </button>
-      </div>
-      <p v-if="pool.error" class="err small"><Icon name="alert" :size="14" /> {{ pool.error }} (showing the last answer)</p>
-      <p v-else-if="approved && pool.live?.live === 'old'" class="muted small" data-testid="pool-not-live">
-        <Icon name="info" :size="14" /> Not live: the pool's coordinator runs an older devstack. What shows here was read when the page opened.
-      </p>
-      <p v-else-if="approved && pool.live?.live === 'lost'" class="muted small" data-testid="pool-not-live">
-        <Icon name="alert" :size="14" /> Not live: {{ pool.live.error }}. Connecting again; what shows here may be behind.
-      </p>
-    </div>
-  </section>
-
-  <section v-if="due.length" class="card" data-testid="pool-due">
+  <section v-if="due.length" class="card due-card" data-testid="pool-due">
     <header class="card-header">
       <Icon name="bell" :size="18" />
       <h2>Waits for an admin</h2>
@@ -122,6 +79,97 @@ const onProvisioned = computed(() => !(me.value?.no_provisioned ?? myMember.valu
     </ul>
   </section>
 
+  <div class="cols even">
+    <div class="col">
+      <section class="card">
+        <header class="card-header">
+          <Icon name="server" :size="18" />
+          <h2>{{ pool.current === 'default' ? 'Pool' : `Pool ${pool.current}` }}</h2>
+          <span v-if="me?.role" class="pill sm" :class="me.role === 'admin' ? 'accent' : 'outline'" data-testid="pool-role">{{ me.role }}</span>
+        </header>
+        <div v-if="me" class="card-body">
+          <dl class="facts">
+            <dt>Coordinator</dt>
+            <dd>
+              <code>{{ me.coordinator }}</code>
+              <span
+                v-if="pool.share?.reported_at"
+                class="pill sm"
+                :class="releaseClass(pool.share.coordinator, true, hub.version)"
+                :title="releaseTitle(pool.share.coordinator, 'The coordinator', hub.version)"
+                data-testid="pool-coordinator-version"
+              >{{ pool.share.coordinator?.version ?? 'older' }}</span>
+            </dd>
+            <dt>This machine</dt>
+            <dd>{{ me.name }} <span class="faint mono">{{ me.id }}</span></dd>
+          </dl>
+          <p v-if="me.state === 'pending'" class="warn-line" data-testid="pool-waiting">
+            <Icon name="hourglass" :size="14" /> Waiting for an admin to approve this machine.
+          </p>
+          <p v-else-if="me.state === 'removed'" class="err"><Icon name="xCircle" :size="14" /> This machine was removed from the pool.</p>
+          <div v-if="approved && o?.join" class="join-cmd" data-testid="pool-join-command">
+            <span class="muted small">Another machine joins with</span>
+            <code class="mono">{{ o.join.command }}</code>
+            <button type="button" class="btn btn-xs" title="Copy the command" data-testid="pool-join-copy" @click="copyJoin">
+              <Icon name="copy" :size="13" /> Copy
+            </button>
+          </div>
+          <p v-if="pool.error" class="err small"><Icon name="alert" :size="14" /> {{ pool.error }} (showing the last answer)</p>
+          <p v-else-if="approved && pool.live?.live === 'old'" class="muted small" data-testid="pool-not-live">
+            <Icon name="info" :size="14" /> Not live: the pool's coordinator runs an older devstack. What shows here was read when the page opened.
+          </p>
+          <p v-else-if="approved && pool.live?.live === 'lost'" class="muted small" data-testid="pool-not-live">
+            <Icon name="alert" :size="14" /> Not live: {{ pool.live.error }}. Connecting again; what shows here may be behind.
+          </p>
+        </div>
+      </section>
+
+
+    </div>
+    <div class="col">
+      <section v-if="approved" class="card" data-testid="pool-mine">
+        <header class="card-header">
+          <Icon name="monitor" :size="18" />
+          <h2>This machine in this pool</h2>
+        </header>
+        <div class="card-body settings">
+          <div class="setting">
+            <label class="consent">
+              <input
+                type="checkbox"
+                :checked="onProvisioned"
+                data-testid="pool-on-provisioned"
+                @change="pool.setProvisioned(($event.target as HTMLInputElement).checked)"
+              />
+              <span>My lanes may run on provisioned nodes</span>
+            </label>
+            <p class="muted small">They run on a provider's machines: whoever runs the provisioner, and the provider, can read a lane there.</p>
+          </div>
+          <div v-if="pool.telemetry" class="setting" data-testid="pool-telemetry">
+            <label class="consent">
+              <input
+                type="checkbox"
+                :checked="pool.telemetry.consent"
+                data-testid="pool-telemetry-consent"
+                @change="pool.setTelemetry(($event.target as HTMLInputElement).checked)"
+              />
+              <span>Send this pool telemetry</span>
+              <span class="pill sm outline">{{ pool.telemetry.collects ? 'it collects' : 'it collects none' }}</span>
+            </label>
+            <p class="muted small">
+              To its coordinator, with this machine's identity; this pool only.<template v-if="!pool.telemetry.collects"> It has no collector now: nothing is sent.</template>
+            </p>
+            <details class="small muted">
+              <summary>What is sent</summary>
+              <ul class="what">
+                <li v-for="w in pool.telemetry.what" :key="w">{{ w }}</li>
+              </ul>
+            </details>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
   <section v-if="approved" class="card" data-testid="pool-capacity">
     <header class="card-header">
       <Icon name="gauge" :size="18" />
@@ -167,50 +215,6 @@ const onProvisioned = computed(() => !(me.value?.no_provisioned ?? myMember.valu
     </div>
   </section>
 
-  <section v-if="approved" class="card" data-testid="pool-mine">
-    <header class="card-header">
-      <Icon name="monitor" :size="18" />
-      <h2>This machine in this pool</h2>
-    </header>
-    <div class="card-body">
-      <label class="consent">
-        <input
-          type="checkbox"
-          :checked="onProvisioned"
-          data-testid="pool-on-provisioned"
-          @change="pool.setProvisioned(($event.target as HTMLInputElement).checked)"
-        />
-        <span>My lanes may run on provisioned nodes</span>
-      </label>
-      <p class="muted small">
-        Nodes the pool's provisioner makes run on a provider's machines: whoever runs the provisioner (and the provider) can read a lane
-        there. Off: this machine's lanes go to the pool's other nodes only.
-      </p>
-      <template v-if="pool.telemetry">
-        <label class="consent" data-testid="pool-telemetry">
-          <input
-            type="checkbox"
-            :checked="pool.telemetry.consent"
-            data-testid="pool-telemetry-consent"
-            @change="pool.setTelemetry(($event.target as HTMLInputElement).checked)"
-          />
-          <span>Send this pool's collector telemetry from this machine</span>
-          <span class="faint small">{{ pool.telemetry.collects ? 'this pool collects it' : 'this pool collects none' }}</span>
-        </label>
-        <p class="muted small">
-          Off until you turn it on, for this pool only; it goes to the pool's coordinator, which passes it on with this machine's
-          identity. <template v-if="!pool.telemetry.collects">Its coordinator has no collector now: nothing is sent.</template>
-        </p>
-        <ul class="small muted what">
-          <li v-for="w in pool.telemetry.what" :key="w">{{ w }}</li>
-        </ul>
-      </template>
-      <p class="muted small">
-        Where this machine's lanes start, and the lanes of others it runs, hold in every pool:
-        <RouterLink :to="{ name: 'pool-here' }">This machine</RouterLink>.
-      </p>
-    </div>
-  </section>
 </template>
 
 <style scoped>
@@ -225,13 +229,16 @@ const onProvisioned = computed(() => !(me.value?.no_provisioned ?? myMember.valu
   font-size: 12px;
   word-break: break-all;
 }
+.due-card {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+}
 .due {
   list-style: none;
   margin: 0;
   padding: 10px 16px 12px;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 6px 28px;
 }
 .due li {
   display: flex;
@@ -290,8 +297,18 @@ const onProvisioned = computed(() => !(me.value?.no_provisioned ?? myMember.valu
   margin: 6px 0 0;
   padding-left: 18px;
 }
-.card-body > .consent + .muted,
-.card-body > .what {
-  margin-bottom: 12px;
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.setting p {
+  margin: 2px 0 0 24px;
+}
+.setting details {
+  margin: 4px 0 0 24px;
+}
+.setting summary {
+  cursor: pointer;
 }
 </style>

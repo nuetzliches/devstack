@@ -23,7 +23,7 @@ const what = (l: PoolLease) => `lane ${l.repo}/${l.lane} on ${pool.nameOf(l.node
         <td><RouterLink :to="machine(l.node)">{{ pool.nameOf(l.node) }}</RouterLink></td>
         <td>
           <RouterLink :to="machine(l.member)">{{ pool.nameOf(l.member) }}</RouterLink>
-          <span v-if="isMe(l.member)" class="pill sm outline">this machine</span>
+          <span v-if="isMe(l.member)" class="pill sm outline me">this machine</span>
         </td>
         <td><span class="pill sm" :class="l.state === 'running' ? 'ok' : 'outline'">{{ l.state }}</span></td>
         <td v-if="pool.isAdmin" class="actions">
@@ -36,3 +36,9 @@ const what = (l: PoolLease) => `lane ${l.repo}/${l.lane} on ${pool.nameOf(l.node
   </table>
   <p v-else class="hint muted">{{ empty }}</p>
 </template>
+
+<style scoped>
+.me {
+  margin-left: 6px;
+}
+</style>

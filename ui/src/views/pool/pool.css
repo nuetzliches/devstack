@@ -89,3 +89,31 @@
 .pool .audit .when {
   min-width: 80px;
 }
+/* Two columns where the area is wide enough (its own width, not the
+   window's: the sidebar may be open or not); one below that. */
+.pool {
+  container-type: inline-size;
+}
+.pool .cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+.pool .col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+/* Both columns end on one line: the last card of the shorter one grows. */
+.pool .col > :last-child {
+  flex: 1;
+}
+@container (min-width: 1000px) {
+  .pool .cols {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  }
+  .pool .cols.even {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}

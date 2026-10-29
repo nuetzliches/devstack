@@ -372,6 +372,9 @@ export class MockTransport implements Transport {
       const n = 120;
       // A node's history follows its last report (a phase of its own); the pool's is theirs summed.
       const reported = this.hub.pool.overview().nodes?.filter((x: PoolNode) => x.report?.total && (!node || x.id === node)) ?? [];
+      // This machine reports no totals to the pool here: what its share report says (16 cores, 64 GiB).
+      if (node && !reported.length)
+        reported.push({ id: node, name: 'this', online: true, report: { sharing: false, cpus: 0, memory: 0, total: { cpus: 16, memory: 64 * 2 ** 30 }, used: { cpus: 2, memory: 8 * 2 ** 30 } } } as PoolNode);
       const sum = (f: (r: NonNullable<PoolNode['report']>, w: number) => number, w: (k: number) => number) =>
         reported.reduce((a: number, x: PoolNode, k: number) => a + f(x.report!, w(k)), 0);
       return json(

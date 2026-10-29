@@ -70,6 +70,20 @@ export const usePool = defineStore('pool', () => {
       return { id, name: member?.name ?? node?.name ?? id, member, node };
     });
   });
+  /**
+   * What waits for an admin of pool `p`, by where it is handled: requests and
+   * provisioning alarms under Admin, provisioned nodes to confirm under
+   * Machines. Nothing where this machine is no admin there.
+   */
+  function due(p = current.value) {
+    const o = overviews.value[p];
+    if (o?.me?.role !== 'admin') return { admin: 0, machines: 0, all: 0 };
+    const admin = (o.members ?? []).filter((m) => m.state === 'pending').length + (o.provisioning?.machines ?? []).filter((m) => m.alarm).length;
+    const machines = (o.nodes ?? []).filter((n) => n.provisioned?.unconfirmed).length;
+    return { admin, machines, all: admin + machines };
+  }
+  /** What waits for an admin in every pool joined. */
+  const dueAll = computed(() => pools.value.filter((x) => x.joined).reduce((a, x) => a + due(x.name).all, 0));
   /** A member's or node's name in the shown pool, else its id. */
   const nameOf = (id: string) => (overview.value?.members ?? []).find((m) => m.id === id)?.name ?? overview.value?.nodes?.find((n) => n.id === id)?.name ?? id;
 
@@ -526,6 +540,8 @@ export const usePool = defineStore('pool', () => {
     pending,
     machines,
     nameOf,
+    due,
+    dueAll,
     select,
     load,
     loadShare,

@@ -41,7 +41,7 @@ const sharedHere = computed(() => pool.shared.filter((l) => l.pool === pool.curr
               <RouterLink :to="{ name: 'overview', params: { stack: sharedId(l.pool, l.lease) } }" title="Its state, logs and events, read only" data-testid="pool-shared-view">
                 <strong>{{ l.lane }}</strong>
               </RouterLink>
-              <span class="faint"> {{ l.repo }}</span>
+              <span class="faint repo">{{ l.repo }}</span>
             </td>
             <td>{{ l.node.name }}</td>
             <td>{{ l.owner_name }}</td>
@@ -77,6 +77,9 @@ const sharedHere = computed(() => pool.shared.filter((l) => l.pool === pool.curr
 </template>
 
 <style scoped>
+.repo {
+  margin-left: 6px;
+}
 .svc + .svc {
   margin-left: 4px;
 }

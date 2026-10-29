@@ -17,7 +17,8 @@ and listed with their assets on the
   of fifteen cards on one page. The overview's capacity shows each node as
   starting a lane does: what it has free and offers, now and over the last
   hour; the pool's capacity over time is stacked machine by machine, one
-  colour each, against what the pool offered. A machine's page holds its membership and
+  colour each, against what the pool offered; a machine's page and *This
+  machine* show its own history the same way. A machine's page holds its membership and
   its node side together, with what it reports, its policy, its capacity
   over time, the lanes on it and every admin action on it; the nodes and
   members tables are one list. *This machine* shows what holds in every

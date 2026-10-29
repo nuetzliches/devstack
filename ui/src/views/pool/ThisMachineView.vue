@@ -11,7 +11,7 @@ import { kindText, kindTitle, policyText } from '@/lib/poolText';
 import { usePool } from '@/stores/pool';
 import { useHub } from '@/stores/hub';
 import Icon from '@/components/icons/Icon.vue';
-import CapacityChart from '@/components/CapacityChart.vue';
+import PoolCapacityChart from '@/components/PoolCapacityChart.vue';
 import LocalLoad from '@/components/LocalLoad.vue';
 import PoolNav from './PoolNav.vue';
 import './pool.css';
@@ -65,42 +65,77 @@ const chartId = computed(() => inPools.value.find((x) => x.pool === chartPool.va
   <div class="page pool" data-testid="pool-here">
     <PoolNav />
 
-    <section class="card" data-testid="pool-here-facts">
-      <header class="card-header">
-        <Icon name="monitor" :size="18" />
-        <h2>This machine</h2>
-      </header>
-      <div class="card-body">
-        <dl class="facts">
-          <template v-if="hub.version">
-            <dt>devstack</dt>
-            <dd><span class="pill sm outline">{{ hub.version }}</span><span v-if="hub.newer" class="faint small"> · {{ hub.newer }} is out</span></dd>
-          </template>
-          <template v-if="share">
-            <dt>Reports</dt>
-            <dd data-testid="pool-here-report">
-              <span v-if="share.error" class="warn-text">{{ share.error }}</span>
-              <template v-else-if="share.reported_at">to the coordinator, last {{ ago(share.reported_at, now) }}</template>
-              <span v-else class="faint">nothing: it is no approved member of a pool</span>
-              <span v-if="share.agent" class="faint"> · a node agent here reports the machine</span>
-            </dd>
-            <template v-if="share.unavailable">
-              <dt>Offers</dt>
-              <dd class="muted small">{{ share.unavailable }}</dd>
-            </template>
-          </template>
-          <template v-if="kept">
-            <dt>Keeps</dt>
-            <dd class="tabular">
-              <template v-if="kept.lanes">{{ kept.lanes }} stopped lane(s) of others, {{ bytes(kept.bytes - (kept.store_bytes ?? 0)) }}</template>
-              <span v-if="kept.store_bytes" class="faint"> · store {{ bytes(kept.store_bytes) }}</span>
-            </dd>
-          </template>
-        </dl>
-        <div class="local-load"><LocalLoad /></div>
-      </div>
-    </section>
+    <div class="cols">
+      <div class="col">
+        <section class="card" data-testid="pool-here-facts">
+          <header class="card-header">
+            <Icon name="monitor" :size="18" />
+            <h2>This machine</h2>
+          </header>
+          <div class="card-body">
+            <dl class="facts">
+              <template v-if="hub.version">
+                <dt>devstack</dt>
+                <dd><span class="pill sm outline">{{ hub.version }}</span><span v-if="hub.newer" class="faint small"> · {{ hub.newer }} is out</span></dd>
+              </template>
+              <template v-if="share">
+                <dt>Reports</dt>
+                <dd data-testid="pool-here-report">
+                  <span v-if="share.error" class="warn-text">{{ share.error }}</span>
+                  <template v-else-if="share.reported_at">to the coordinator, last {{ ago(share.reported_at, now) }}</template>
+                  <span v-else class="faint">nothing: it is no approved member of a pool</span>
+                  <span v-if="share.agent" class="faint"> · a node agent here reports the machine</span>
+                </dd>
+                <template v-if="share.unavailable">
+                  <dt>Offers</dt>
+                  <dd class="muted small">{{ share.unavailable }}</dd>
+                </template>
+              </template>
+              <template v-if="kept">
+                <dt>Keeps</dt>
+                <dd class="tabular">
+                  <template v-if="kept.lanes">{{ kept.lanes }} stopped lane(s) of others, {{ bytes(kept.bytes - (kept.store_bytes ?? 0)) }}</template>
+                  <span v-if="kept.store_bytes" class="faint"> · store {{ bytes(kept.store_bytes) }}</span>
+                </dd>
+              </template>
+            </dl>
+            <div class="local-load"><LocalLoad /></div>
+          </div>
+        </section>
 
+      </div>
+      <div class="col">
+        <section class="card" data-testid="pool-default-on">
+          <header class="card-header">
+            <Icon name="server" :size="18" />
+            <h2>Where lanes start</h2>
+            <span class="faint small">without a place named (`devstack up`, an agent's `lane_start`)</span>
+          </header>
+          <div class="card-body">
+            <label class="consent">
+              <input type="radio" name="default-on" :checked="!pool.defaultOn" data-testid="pool-default-on-here" @change="pool.setDefaultOn(null)" />
+              <span>On this machine</span>
+            </label>
+            <label v-for="p in joined" :key="p.name" class="consent">
+              <input
+                type="radio"
+                name="default-on"
+                :checked="pool.defaultOn === (p.name === 'default' ? 'pool' : p.name)"
+                :data-testid="`pool-default-on-${p.name}`"
+                @change="pool.setDefaultOn(p.name === 'default' ? 'pool' : p.name)"
+              />
+              <span>In the pool{{ p.name === 'default' ? '' : ` ${p.name}` }}: its coordinator picks the node (warm first, then free capacity)</span>
+            </label>
+            <p class="muted small">
+              <template v-if="!joined.length">This machine is in no pool yet: <RouterLink :to="{ name: 'pool' }">join one</RouterLink> to start lanes elsewhere. </template>
+              Choosing a pool lets the CLI and agents send a worktree's files to a node of it without asking each time. A place named
+              explicitly (`--on`, `on`) always wins; `local` keeps a lane here.
+            </p>
+          </div>
+        </section>
+
+      </div>
+    </div>
     <section v-if="chartPool && chartId" class="card" data-testid="pool-here-history">
       <header class="card-header">
         <Icon name="activity" :size="18" />
@@ -118,7 +153,7 @@ const chartId = computed(() => inPools.value.find((x) => x.pool === chartPool.va
           >{{ x.pool }}</button>
         </span>
       </header>
-      <div class="card-body"><CapacityChart :pool="chartPool" :node="chartId" /></div>
+      <div class="card-body"><PoolCapacityChart :pool="chartPool" :node="chartId" /></div>
     </section>
 
     <section v-if="inPools.length" class="card" data-testid="pool-here-pools">
@@ -129,23 +164,27 @@ const chartId = computed(() => inPools.value.find((x) => x.pool === chartPool.va
       <div class="card-body flush table-wrap">
         <table class="table">
           <thead>
-            <tr><th>Pool</th><th>As</th><th>Role</th><th>Kind</th><th>Others' lanes here</th><th /></tr>
+            <tr><th>Pool</th><th>As</th><th>Role</th><th>Kind</th><th>Others' lanes here</th></tr>
           </thead>
           <tbody>
             <tr v-for="x in inPools" :key="x.pool" :data-pool="x.pool">
-              <td><strong>{{ x.pool }}</strong></td>
-              <td>{{ x.name }} <span class="faint mono">{{ x.id }}</span></td>
+              <td><RouterLink :to="{ name: 'pool-overview', params: { pool: x.pool } }" :title="`The pool ${x.pool}`"><strong>{{ x.pool }}</strong></RouterLink></td>
               <td>
+                <RouterLink
+                  :to="{ name: 'pool-machine', params: { pool: x.pool, id: x.id } }"
+                  :title="`This machine as ${x.pool} sees it: what it reports, its policy, what an admin set`"
+                  data-testid="pool-here-page"
+                >{{ x.name }}</RouterLink>
+                <span class="faint mono id">{{ x.id }}</span>
+              </td>
+              <td class="pills">
                 <span class="pill sm" :class="x.member?.role === 'admin' ? 'accent' : 'outline'">{{ x.member?.role ?? 'member' }}</span>
-                <span v-for="t in x.member?.tags ?? []" :key="t" class="pill sm info"> {{ t }}</span>
+                <span v-for="t in x.member?.tags ?? []" :key="t" class="pill sm info">{{ t }}</span>
               </td>
               <td><span class="pill sm outline" :title="kindTitle[x.node?.kind ?? 'unknown']">{{ kindText[x.node?.kind ?? 'unknown'] }}</span></td>
               <td class="small">
                 <template v-if="x.member?.node">{{ x.node?.paused ? 'paused · ' : '' }}{{ policyText(x.member.policy) }}</template>
                 <span v-else class="faint">not granted: an admin has not let it run the pool's lanes</span>
-              </td>
-              <td class="actions">
-                <RouterLink :to="{ name: 'pool-machine', params: { pool: x.pool, id: x.id } }" class="btn btn-xs" data-testid="pool-here-page">Its page there</RouterLink>
               </td>
             </tr>
           </tbody>
@@ -217,34 +256,6 @@ const chartId = computed(() => inPools.value.find((x) => x.pool === chartPool.va
       </div>
     </section>
 
-    <section class="card" data-testid="pool-default-on">
-      <header class="card-header">
-        <Icon name="server" :size="18" />
-        <h2>Where lanes start</h2>
-        <span class="faint small">without a place named (`devstack up`, an agent's `lane_start`)</span>
-      </header>
-      <div class="card-body">
-        <label class="consent">
-          <input type="radio" name="default-on" :checked="!pool.defaultOn" data-testid="pool-default-on-here" @change="pool.setDefaultOn(null)" />
-          <span>On this machine</span>
-        </label>
-        <label v-for="p in joined" :key="p.name" class="consent">
-          <input
-            type="radio"
-            name="default-on"
-            :checked="pool.defaultOn === (p.name === 'default' ? 'pool' : p.name)"
-            :data-testid="`pool-default-on-${p.name}`"
-            @change="pool.setDefaultOn(p.name === 'default' ? 'pool' : p.name)"
-          />
-          <span>In the pool{{ p.name === 'default' ? '' : ` ${p.name}` }}: its coordinator picks the node (warm first, then free capacity)</span>
-        </label>
-        <p class="muted small">
-          <template v-if="!joined.length">This machine is in no pool yet: <RouterLink :to="{ name: 'pool' }">join one</RouterLink> to start lanes elsewhere. </template>
-          Choosing a pool lets the CLI and agents send a worktree's files to a node of it without asking each time. A place named
-          explicitly (`--on`, `on`) always wins; `local` keeps a lane here.
-        </p>
-      </div>
-    </section>
   </div>
 </template>
 
@@ -253,11 +264,17 @@ const chartId = computed(() => inPools.value.find((x) => x.pool === chartPool.va
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 1100px;
+  max-width: 1800px;
 }
 .local-load {
   max-width: 520px;
   margin-top: 12px;
+}
+.pills .pill + .pill {
+  margin-left: 4px;
+}
+.id {
+  margin-left: 6px;
 }
 .pick {
   display: inline-flex;
