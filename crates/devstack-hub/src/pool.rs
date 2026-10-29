@@ -631,3 +631,47 @@ mod tests {
         assert!(!ok("pool.example:4261"));
     }
 }
+
+/// `GET /hub/pool/skills`: the pool's skill sets with their state (admins,
+/// ADR-0074).
+pub async fn skills(Query(q): Query<PoolQuery>) -> Response {
+    match blocking(&q, |l| l.admin_skills()).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+/// `POST /hub/pool/skills`: add a skill set, or change the one of its
+/// name (admins).
+pub async fn skill_put(
+    Query(q): Query<PoolQuery>,
+    Json(set): Json<devstack_node::skills::SkillSet>,
+) -> Response {
+    match blocking(&q, move |l| l.admin_skill_put(&set)).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+/// `DELETE /hub/pool/skills/{name}`: stop handing a set out (admins).
+pub async fn skill_remove(Path(name): Path<String>, Query(q): Query<PoolQuery>) -> Response {
+    match blocking(&q, move |l| l.admin_skill_remove(&name)).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct SetQuery {
+    #[serde(default)]
+    set: Option<String>,
+}
+
+/// `POST /hub/pool/skills/refresh[?set=]`: have the coordinator fetch the
+/// sets again (admins).
+pub async fn skills_refresh(Query(q): Query<PoolQuery>, Query(s): Query<SetQuery>) -> Response {
+    match blocking(&q, move |l| l.admin_skills_refresh(s.set.as_deref())).await {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(e) => error(&e),
+    }
+}

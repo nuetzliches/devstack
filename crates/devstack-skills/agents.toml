@@ -1,0 +1,422 @@
+# The coding agents devstack knows (ADR-0074): each one's user skill folder,
+# and the paths that tell it installed. Taken from src/agents.ts of
+# https://github.com/vercel-labs/skills (MIT, Copyright (c) Vercel, Inc.)
+# by scripts/sync-agents.py; `[agent.open]` is devstack's own (how
+# "Open with" starts the agent) and kept when the table is taken again.
+# `~` is the user's home, `${VAR:-default}` a variable or its default.
+
+[[agent]]
+id = "aider-desk"
+name = "AiderDesk"
+skills = "~/.aider-desk/skills"
+detect = ["~/.aider-desk"]
+
+[[agent]]
+id = "amp"
+name = "Amp"
+skills = "${XDG_CONFIG_HOME:-~/.config}/agents/skills"
+detect = ["${XDG_CONFIG_HOME:-~/.config}/amp"]
+
+[[agent]]
+id = "antigravity"
+name = "Antigravity"
+skills = "~/.gemini/antigravity/skills"
+detect = ["~/.gemini/antigravity"]
+
+[[agent]]
+id = "antigravity-cli"
+name = "Antigravity CLI"
+skills = "~/.gemini/antigravity-cli/skills"
+detect = ["~/.gemini/antigravity-cli"]
+
+[[agent]]
+id = "astrbot"
+name = "AstrBot"
+skills = "~/.astrbot/data/skills"
+detect = ["~/.astrbot"]
+
+[[agent]]
+id = "autohand-code"
+name = "Autohand Code CLI"
+skills = "${AUTOHAND_HOME:-~/.autohand}/skills"
+detect = ["${AUTOHAND_HOME:-~/.autohand}"]
+
+[[agent]]
+id = "augment"
+name = "Augment"
+skills = "~/.augment/skills"
+detect = ["~/.augment"]
+
+[[agent]]
+id = "bob"
+name = "IBM Bob"
+skills = "~/.bob/skills"
+detect = ["~/.bob"]
+
+[[agent]]
+id = "claude-code"
+name = "Claude Code"
+skills = "${CLAUDE_CONFIG_DIR:-~/.claude}/skills"
+detect = ["${CLAUDE_CONFIG_DIR:-~/.claude}"]
+[agent.open]
+links = [{ scheme = "claude-cli", label = "Claude Code" }, { scheme = "claude", label = "Claude Desktop" }]
+
+[[agent]]
+id = "cline"
+name = "Cline"
+skills = "~/.agents/skills"
+detect = ["~/.cline"]
+
+[[agent]]
+id = "codearts-agent"
+name = "CodeArts Agent"
+skills = "~/.codeartsdoer/skills"
+detect = ["~/.codeartsdoer"]
+
+[[agent]]
+id = "codebuddy"
+name = "CodeBuddy"
+skills = "~/.codebuddy/skills"
+detect = ["~/.codebuddy"]
+
+[[agent]]
+id = "codemaker"
+name = "Codemaker"
+skills = "~/.codemaker/skills"
+detect = ["~/.codemaker"]
+
+[[agent]]
+id = "codestudio"
+name = "Code Studio"
+skills = "~/.codestudio/skills"
+detect = ["~/.codestudio"]
+
+[[agent]]
+id = "codex"
+name = "Codex"
+skills = "~/.agents/skills"
+detect = ["${CODEX_HOME:-~/.codex}", "/etc/codex"]
+
+[[agent]]
+id = "command-code"
+name = "Command Code"
+skills = "~/.commandcode/skills"
+detect = ["~/.commandcode"]
+
+[[agent]]
+id = "continue"
+name = "Continue"
+skills = "~/.continue/skills"
+detect = ["~/.continue"]
+
+[[agent]]
+id = "cortex"
+name = "Cortex Code"
+skills = "~/.snowflake/cortex/skills"
+detect = ["~/.snowflake/cortex"]
+
+[[agent]]
+id = "crush"
+name = "Crush"
+skills = "~/.config/crush/skills"
+detect = ["~/.config/crush"]
+
+[[agent]]
+id = "cursor"
+name = "Cursor"
+skills = "~/.cursor/skills"
+detect = ["~/.cursor"]
+
+[[agent]]
+id = "deepagents"
+name = "Deep Agents"
+skills = "~/.deepagents/agent/skills"
+detect = ["~/.deepagents"]
+
+[[agent]]
+id = "devin"
+name = "Devin for Terminal"
+skills = "${XDG_CONFIG_HOME:-~/.config}/devin/skills"
+detect = ["${XDG_CONFIG_HOME:-~/.config}/devin"]
+
+[[agent]]
+id = "dexto"
+name = "Dexto"
+skills = "~/.agents/skills"
+detect = ["~/.dexto"]
+
+[[agent]]
+id = "droid"
+name = "Droid"
+skills = "~/.factory/skills"
+detect = ["~/.factory"]
+
+[[agent]]
+id = "firebender"
+name = "Firebender"
+skills = "~/.firebender/skills"
+detect = ["~/.firebender"]
+
+[[agent]]
+id = "forgecode"
+name = "ForgeCode"
+skills = "~/.forge/skills"
+detect = ["~/.forge"]
+
+[[agent]]
+id = "fx"
+name = "fx"
+skills = "~/.agents/skills"
+detect = ["~/.fx"]
+
+[[agent]]
+id = "gemini-cli"
+name = "Gemini CLI"
+skills = "~/.gemini/skills"
+detect = ["~/.gemini"]
+
+[[agent]]
+id = "github-copilot"
+name = "GitHub Copilot"
+skills = "~/.copilot/skills"
+detect = ["~/.copilot"]
+
+[[agent]]
+id = "goose"
+name = "Goose"
+skills = "${XDG_CONFIG_HOME:-~/.config}/goose/skills"
+detect = ["${XDG_CONFIG_HOME:-~/.config}/goose"]
+
+[[agent]]
+id = "grok"
+name = "Grok Build"
+skills = "${GROK_HOME:-~/.grok}/skills"
+detect = ["${GROK_HOME:-~/.grok}"]
+
+[[agent]]
+id = "hermes-agent"
+name = "Hermes Agent"
+skills = "${HERMES_HOME:-~/.hermes}/skills"
+detect = ["${HERMES_HOME:-~/.hermes}"]
+
+[[agent]]
+id = "inference-sh"
+name = "inference.sh"
+skills = "~/.inferencesh/skills"
+detect = ["~/.inferencesh"]
+
+[[agent]]
+id = "jazz"
+name = "Jazz"
+skills = "~/.jazz/skills"
+detect = ["~/.jazz"]
+
+[[agent]]
+id = "junie"
+name = "Junie"
+skills = "~/.junie/skills"
+detect = ["~/.junie"]
+
+[[agent]]
+id = "iflow-cli"
+name = "iFlow CLI"
+skills = "~/.iflow/skills"
+detect = ["~/.iflow"]
+
+[[agent]]
+id = "kilo"
+name = "Kilo Code"
+skills = "~/.kilo/skills"
+detect = ["~/.kilo", "~/.kilocode"]
+
+[[agent]]
+id = "kimi-code-cli"
+name = "Kimi Code CLI"
+skills = "~/.agents/skills"
+detect = ["~/.kimi-code", "~/.kimi"]
+
+[[agent]]
+id = "kiro-cli"
+name = "Kiro CLI"
+skills = "~/.kiro/skills"
+detect = ["~/.kiro"]
+
+[[agent]]
+id = "kode"
+name = "Kode"
+skills = "~/.kode/skills"
+detect = ["~/.kode"]
+
+[[agent]]
+id = "lingma"
+name = "Lingma"
+skills = "~/.lingma/skills"
+detect = ["~/.lingma"]
+
+[[agent]]
+id = "loaf"
+name = "Loaf"
+skills = "~/.agents/skills"
+detect = ["~/.loaf"]
+
+[[agent]]
+id = "mcpjam"
+name = "MCPJam"
+skills = "~/.mcpjam/skills"
+detect = ["~/.mcpjam"]
+
+[[agent]]
+id = "mistral-vibe"
+name = "Mistral Vibe"
+skills = "${VIBE_HOME:-~/.vibe}/skills"
+detect = ["${VIBE_HOME:-~/.vibe}"]
+
+[[agent]]
+id = "moxby"
+name = "Moxby"
+skills = "~/.moxby/skills"
+detect = ["~/.moxby"]
+
+[[agent]]
+id = "mux"
+name = "Mux"
+skills = "~/.mux/skills"
+detect = ["~/.mux"]
+
+[[agent]]
+id = "opencode"
+name = "OpenCode"
+skills = "${XDG_CONFIG_HOME:-~/.config}/opencode/skills"
+detect = ["${XDG_CONFIG_HOME:-~/.config}/opencode"]
+
+[[agent]]
+id = "openhands"
+name = "OpenHands"
+skills = "~/.openhands/skills"
+detect = ["~/.openhands"]
+
+[[agent]]
+id = "ona"
+name = "Ona"
+skills = "~/.ona/skills"
+detect = ["~/.ona"]
+
+[[agent]]
+id = "pi"
+name = "Pi"
+skills = "~/.agents/skills"
+detect = ["~/.pi/agent"]
+
+[[agent]]
+id = "qoder"
+name = "Qoder"
+skills = "~/.qoder/skills"
+detect = ["~/.qoder"]
+
+[[agent]]
+id = "qoder-cn"
+name = "Qoder CN"
+skills = "~/.qoder-cn/skills"
+detect = ["~/.qoder-cn"]
+
+[[agent]]
+id = "qwen-code"
+name = "Qwen Code"
+skills = "~/.qwen/skills"
+detect = ["~/.qwen"]
+
+[[agent]]
+id = "reasonix"
+name = "Reasonix"
+skills = "~/.reasonix/skills"
+detect = ["~/.reasonix"]
+
+[[agent]]
+id = "rovodev"
+name = "Rovo Dev"
+skills = "~/.rovodev/skills"
+detect = ["~/.rovodev"]
+
+[[agent]]
+id = "roo"
+name = "Roo Code"
+skills = "~/.roo/skills"
+detect = ["~/.roo"]
+
+[[agent]]
+id = "sarvam-code"
+name = "Sarvam Code"
+skills = "~/.agents/skills"
+detect = ["${SARVAM_HOME:-~/.sarvam}"]
+
+[[agent]]
+id = "tabnine-cli"
+name = "Tabnine CLI"
+skills = "~/.tabnine/agent/skills"
+detect = ["~/.tabnine"]
+
+[[agent]]
+id = "terramind"
+name = "Terramind"
+skills = "~/.terramind/skills"
+detect = ["~/.terramind"]
+
+[[agent]]
+id = "tinycloud"
+name = "Tinycloud"
+skills = "~/.tinycloud/skills"
+detect = ["~/.tinycloud"]
+
+[[agent]]
+id = "trae"
+name = "Trae"
+skills = "~/.trae/skills"
+detect = ["~/.trae"]
+
+[[agent]]
+id = "trae-cn"
+name = "Trae CN"
+skills = "~/.trae-cn/skills"
+detect = ["~/.trae-cn"]
+
+[[agent]]
+id = "warp"
+name = "Warp"
+skills = "~/.agents/skills"
+detect = ["~/.warp"]
+
+[[agent]]
+id = "windsurf"
+name = "Windsurf"
+skills = "~/.codeium/windsurf/skills"
+detect = ["~/.codeium/windsurf"]
+
+[[agent]]
+id = "zencoder"
+name = "Zencoder"
+skills = "~/.zencoder/skills"
+detect = ["~/.zencoder"]
+
+[[agent]]
+id = "zenflow"
+name = "Zenflow"
+skills = "~/.zencoder/skills"
+detect = ["~/.zencoder"]
+
+[[agent]]
+id = "neovate"
+name = "Neovate"
+skills = "~/.neovate/skills"
+detect = ["~/.neovate"]
+
+[[agent]]
+id = "pochi"
+name = "Pochi"
+skills = "~/.pochi/skills"
+detect = ["~/.pochi"]
+
+[[agent]]
+id = "adal"
+name = "AdaL"
+skills = "~/.adal/skills"
+detect = ["~/.adal"]

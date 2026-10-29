@@ -27,9 +27,12 @@ pub const LEASES: &str = "leases";
 pub const UPSTREAMS: &str = "upstreams";
 /// Whether the pool collects telemetry, and what (`GET /v1/telemetry`).
 pub const TELEMETRY: &str = "telemetry";
+/// The skill sets given to the member, as last fetched (`GET /v1/skills`,
+/// ADR-0074); its version is the member's own.
+pub const SKILLS: &str = "skills";
 
 /// The topics, in the order the stream names them.
-pub const TOPICS: [&str; 5] = [MEMBERS, NODES, LEASES, UPSTREAMS, TELEMETRY];
+pub const TOPICS: [&str; 6] = [MEMBERS, NODES, LEASES, UPSTREAMS, TELEMETRY, SKILLS];
 
 /// A version per topic.
 pub type Versions = BTreeMap<String, String>;

@@ -17,6 +17,7 @@ pub mod provision;
 pub mod runs;
 pub mod safefs;
 pub mod share;
+pub mod skills;
 pub mod store;
 pub mod telemetry;
 pub mod tls;

@@ -43,6 +43,7 @@ mod notify;
 mod open;
 mod pool;
 mod poolfeed;
+mod poolskills;
 mod prompts;
 pub mod release;
 pub mod secrets;
@@ -162,6 +163,8 @@ struct AppState {
     board: Arc<summary::Board>,
     /// The user's MCP upstreams and their logins (ADR-0069).
     upstreams: Arc<upstreams::Upstreams>,
+    /// The pools' skill sets in the agents' folders (ADR-0074).
+    skills: Arc<poolskills::PoolSkills>,
 }
 
 fn now_ms() -> u128 {
@@ -423,6 +426,7 @@ pub fn serve() -> Result<(), String> {
             notify,
             board: Arc::default(),
             upstreams: Arc::new(upstreams::Upstreams::open(dir.clone())),
+            skills: Arc::new(poolskills::PoolSkills::open(dir.clone())),
         };
         // The port last: what accepts a connection answers it. Bound before
         // the setup above (a first `docker version` alone may take 5 s), the
@@ -446,7 +450,7 @@ pub fn serve() -> Result<(), String> {
         notify::start(state.clone());
         // The pools, followed over their coordinators' streams (ADR-0073):
         // their guest lanes and MCP upstreams (ADR-0069 option B).
-        poolfeed::start(state.upstreams.clone());
+        poolfeed::start(state.upstreams.clone(), state.skills.clone());
         tray::start_quietly();
         let app = router(state);
         if let Some(v6) = v6 {
@@ -585,6 +589,25 @@ fn router(state: AppState) -> axum::Router {
         )
         .route("/hub/pool/upstreams/{name}", delete(pool::upstream_remove))
         .route("/hub/pool/join", post(pool::join))
+        .route("/hub/pool/skills", get(pool::skills).post(pool::skill_put))
+        .route("/hub/pool/skills/refresh", post(pool::skills_refresh))
+        .route("/hub/pool/skills/{name}", delete(pool::skill_remove))
+        .route("/hub/skills", get(poolskills::get))
+        .route("/hub/skills/sync", post(poolskills::sync))
+        .route("/hub/skills/agents/{id}", put(poolskills::agent))
+        .route("/hub/skills/sets/{pool}/{set}", put(poolskills::auto))
+        .route(
+            "/hub/skills/sets/{pool}/{set}/accept",
+            post(poolskills::accept),
+        )
+        .route(
+            "/hub/skills/sets/{pool}/{set}/decline",
+            post(poolskills::decline),
+        )
+        .route(
+            "/hub/skills/sets/{pool}/{set}/update",
+            post(poolskills::update),
+        )
         .fallback(get(asset))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .layer(middleware::from_fn(audit))
@@ -1475,6 +1498,8 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
         .map(|guests| serde_json::json!({ "type": "guests", "guests": guests }));
     let pools = tokio_stream::wrappers::WatchStream::new(poolfeed::subscribe())
         .map(|pools| serde_json::json!({ "type": "pools", "pools": pools }));
+    let skills = tokio_stream::wrappers::WatchStream::new(s.skills.subscribe())
+        .map(|skills| serde_json::json!({ "type": "skills", "skills": skills }));
     // A dashboard that fell behind misses a toast, nothing it shows.
     let notices =
         tokio_stream::wrappers::BroadcastStream::new(notice::subscribe()).filter_map(|n| n.ok());
@@ -1484,6 +1509,7 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
         .merge(update)
         .merge(guests)
         .merge(pools)
+        .merge(skills)
         .merge(notices)
 }
 

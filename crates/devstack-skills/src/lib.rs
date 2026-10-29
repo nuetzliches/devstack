@@ -11,6 +11,8 @@
 //! specific to a project beyond that belongs in a skill of the project's own,
 //! which devstack never touches.
 
+pub mod agents;
+
 use anyhow::{Context, Result};
 use devstack_config::Stack;
 use devstack_config::model::{Kind, Service};
