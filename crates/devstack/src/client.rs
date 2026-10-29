@@ -993,6 +993,9 @@ pub fn up(
     // In a worktree, no `--on`: where this machine starts lanes by default
     // (ADR-0025); `--on local` keeps it here. The main tree runs here.
     let explicit = on.filter(|o| !devstack_node::member::is_here(o));
+    // `--on local` (or this machine's own name) said in so many words: a
+    // lane started on a node comes here, as `lane move --to local` does.
+    let asked_here = names_here(on);
     let resolved = if worktree().is_some() {
         devstack_daemon::remote::effective_on(on)
     } else {
@@ -1045,6 +1048,15 @@ pub fn up(
             );
         }
     }
+    // Started already somewhere else than `--on` names (here, or another
+    // node): it moves there, a cold start there that takes over once ready,
+    // as `devstack lane move` does. Without `--on`, a started lane stays
+    // where it runs.
+    let mut moved = false;
+    if let Some((name, to)) = move_wanted(&c, on, asked_here)? {
+        lane_move(stack_file, &name, &to)?;
+        moved = true;
+    }
     // Started already, here or on a node: nothing restarts it (#314).
     if c.lane().is_some_and(|l| l != "-") && (workers || force) {
         eprintln!(
@@ -1052,6 +1064,7 @@ pub fn up(
         );
     }
     if let Some(wt) = worktree()
+        && !moved
         && (on.is_some() || c.lane().is_none_or(|l| l == "-"))
     {
         if let Some(node) = on {
@@ -1776,6 +1789,67 @@ fn follow_steps(
         }
     });
     (done, handle)
+}
+
+/// `on` as given names this machine (`local`, `here`, its own member name).
+pub(crate) fn names_here(on: Option<&str>) -> bool {
+    on.is_some_and(|o| {
+        devstack_node::member::is_here(o.trim())
+            || devstack_daemon::remote::is_this_machine(o.trim())
+    })
+}
+
+/// The worktree's lane is started (here or on a node), and `on` (resolved:
+/// `None` here) or `asked_here` names another place than where it runs:
+/// the lane and where it is to move. A pool's own choice (`pool`) is no
+/// other place; without either, a started lane stays where it runs.
+pub(crate) fn move_wanted(
+    c: &Client,
+    on: Option<&str>,
+    asked_here: bool,
+) -> Result<Option<(String, String)>> {
+    let Some(name) = c.lane().filter(|l| *l != "-").map(str::to_string) else {
+        return Ok(None);
+    };
+    let now = lane_node(c, &name)?;
+    let node = on.and_then(|o| {
+        devstack_node::member::resolve_on(&devstack_daemon::remote::state_dir(), o)
+            .ok()
+            .filter(|(_, n)| n != "pool")
+            .map(|(_, n)| n)
+    });
+    let to = match (node, asked_here) {
+        (Some(n), _) if now.as_deref() != Some(n.as_str()) => on.map(str::to_string),
+        (None, true) if now.is_some() => Some("local".to_string()),
+        _ => None,
+    };
+    Ok(to.map(|t| (name, t)))
+}
+
+/// Move the lane `name` to `to` and wait until it runs there, without a
+/// word (for `devstack mcp`, whose output is its protocol).
+pub(crate) fn lane_move_quiet(stack_file: &Path, name: &str, to: &str) -> Result<()> {
+    let c = main_client(stack_file)?;
+    let (status, body) = c.call_raw(
+        "POST",
+        &format!("/v1/lanes/{name}/move"),
+        Some(serde_json::json!({ "to": to })),
+    )?;
+    if status >= 400 {
+        bail!("{}", error_text(&body));
+    }
+    Ok(())
+}
+
+/// The node the lane `name` runs on; `None`: this machine.
+fn lane_node(c: &Client, name: &str) -> Result<Option<String>> {
+    let (_, body) = c.call_raw("GET", "/v1/lanes", None)?;
+    let lanes: Vec<Value> = serde_json::from_str(&body).unwrap_or_default();
+    Ok(lanes
+        .iter()
+        .find(|l| l["name"] == name)
+        .and_then(|l| l["node"].as_str())
+        .map(str::to_string))
 }
 
 pub fn lane_move(stack_file: &Path, name: &str, to: &str) -> Result<()> {

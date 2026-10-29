@@ -11,6 +11,15 @@ and listed with their assets on the
 
 ### Fixed
 
+- **`devstack up --on` moves a started lane**: a lane started on a node
+  stayed there after `devstack down` (its lease and place stay, only its
+  services stop), and `devstack up --on local` started it there again.
+  `--on local` now brings it here, and `--on <node>` takes it to that node,
+  as `devstack lane move` does; without `--on` it stays where it runs.
+- **The MCP tool `up` does as `devstack up`**: in a worktree without `on`
+  it starts the lane where this machine starts lanes by default (*Where
+  lanes start*), not always here, and an `on` that names another place
+  than where a started lane runs moves it there.
 - **A lane on a node picks up edits**: its dev servers ran from a copy of
   the worktree that its daemon there never brought up to date, so hot
   reload showed the code of the lane's start; the file watcher took the
