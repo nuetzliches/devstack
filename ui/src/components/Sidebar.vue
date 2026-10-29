@@ -399,7 +399,7 @@ async function copyPath(s: StackEntry) {
       <button
         type="button"
         class="item pool-item"
-        :class="{ active: route.name === 'pool' }"
+        :class="{ active: route.path.startsWith('/pool') }"
         :title="pool.pending.length ? `${pool.pending.length} request(s) to join the pool` : 'The machines that run lanes for each other'"
         data-testid="sidebar-pool"
         @click="router.push({ name: 'pool' })"

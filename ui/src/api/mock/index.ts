@@ -12,7 +12,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { DockerEngine, Guest, HubEvent, PoolFeed, LaneView, McpUpstream, NotifySettings, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
+import type { DockerEngine, Guest, HubEvent, PoolFeed, PoolNode, LaneView, McpUpstream, NotifySettings, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -370,18 +370,23 @@ export class MockTransport implements Transport {
       const now = Math.floor(Date.now() / 1000);
       const node = url.searchParams.get('node');
       const n = 120;
+      // A node's history follows its last report (a phase of its own); the pool's is theirs summed.
+      const reported = this.hub.pool.overview().nodes?.filter((x: PoolNode) => x.report?.total && (!node || x.id === node)) ?? [];
+      const sum = (f: (r: NonNullable<PoolNode['report']>, w: number) => number, w: (k: number) => number) =>
+        reported.reduce((a: number, x: PoolNode, k: number) => a + f(x.report!, w(k)), 0);
       return json(
         200,
         Array.from({ length: n }, (_, i) => {
           const w = Math.sin(i / 9) * 0.5 + 0.5;
+          const wk = (k: number) => Math.sin(i / (7 + 3 * k) + k * 2) * 0.5 + 0.5;
           return {
             at: now - (n - i) * 30,
-            total_cpus: node ? 32 : 48,
-            total_memory: (node ? 128 : 192) * 2 ** 30,
-            offered_cpus: 12 + 4 * w,
-            offered_memory: (48 + 8 * w) * 2 ** 30,
-            used_cpus: 2 + 6 * w,
-            used_memory: (10 + 14 * w) * 2 ** 30,
+            total_cpus: sum((r) => r.total!.cpus, wk),
+            total_memory: sum((r) => r.total!.memory, wk),
+            offered_cpus: sum((r, v) => r.cpus * (0.8 + 0.2 * v), wk),
+            offered_memory: sum((r, v) => r.memory * (0.85 + 0.15 * v), wk),
+            used_cpus: sum((r, v) => (r.used?.cpus ?? 0) * (0.4 + 1.2 * v), wk),
+            used_memory: sum((r, v) => (r.used?.memory ?? 0) * (0.5 + v), wk),
             gpus: 1,
             gpus_offered: 1,
             gpu_load: 10 + 60 * w * w,

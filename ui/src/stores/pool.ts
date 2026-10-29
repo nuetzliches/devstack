@@ -8,7 +8,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, paths, Unreachable } from '@/api';
-import type { NodePolicy, PoolEntry, PoolFeed, PoolNode, PoolOverview, PoolRole, SharedLane, ShareStatus } from '@/api/types';
+import type { NodePolicy, PoolEntry, PoolFeed, PoolMember, PoolNode, PoolOverview, PoolRole, SharedLane, ShareStatus } from '@/api/types';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
 import { webUrl } from '@/lib/format';
@@ -18,6 +18,9 @@ export const DEFAULT_POOL = 'default';
 
 /** A node a lane can start on or move to, with what `--on` names it by. */
 export type LaneTarget = { pool: string; node: PoolNode; on: string; label: string };
+
+/** A machine of a pool: its membership and, once it reports, its node side. */
+export type PoolMachine = { id: string; name: string; member?: PoolMember; node?: PoolNode };
 
 /** Whether this machine is connected to a shared lane: its services forwarded here (ADR-0053). */
 export function connectedTo(l: SharedLane): boolean {
@@ -55,6 +58,20 @@ export const usePool = defineStore('pool', () => {
 
   const isAdmin = computed(() => overview.value?.me?.role === 'admin');
   const pending = computed(() => (overview.value?.members ?? []).filter((m) => m.state === 'pending'));
+  /** The shown pool's machines: each approved member with its node side, if it reports one. */
+  const machines = computed<PoolMachine[]>(() => {
+    const o = overview.value;
+    const members = (o?.members ?? []).filter((m) => m.state === 'approved');
+    const nodes = o?.nodes ?? [];
+    const ids = [...new Set([...members.map((m) => m.id), ...nodes.map((n) => n.id)])];
+    return ids.map((id) => {
+      const member = members.find((m) => m.id === id);
+      const node = nodes.find((n) => n.id === id);
+      return { id, name: member?.name ?? node?.name ?? id, member, node };
+    });
+  });
+  /** A member's or node's name in the shown pool, else its id. */
+  const nameOf = (id: string) => (overview.value?.members ?? []).find((m) => m.id === id)?.name ?? overview.value?.nodes?.find((n) => n.id === id)?.name ?? id;
 
   /** `path` for the pool `p` (the current one by default). */
   const at = (path: string, p = current.value) => (p === DEFAULT_POOL ? path : `${path}${path.includes('?') ? '&' : '?'}pool=${encodeURIComponent(p)}`);
@@ -507,6 +524,8 @@ export const usePool = defineStore('pool', () => {
     share,
     isAdmin,
     pending,
+    machines,
+    nameOf,
     select,
     load,
     loadShare,

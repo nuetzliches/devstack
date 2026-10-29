@@ -11,6 +11,21 @@ and listed with their assets on the
 
 ### Changed
 
+- **The pool area has tabs, and each machine a page** (ADR-0074): a pool
+  shows *Overview*, *Machines*, *Lanes* and, for admins, *Admin* (requests
+  to join, provisioning, the pool's MCP upstreams, the admin log), instead
+  of fifteen cards on one page. The overview's capacity shows each node as
+  starting a lane does: what it has free and offers, now and over the last
+  hour; the pool's capacity over time is stacked machine by machine, one
+  colour each, against what the pool offered. A machine's page holds its membership and
+  its node side together, with what it reports, its policy, its capacity
+  over time, the lanes on it and every admin action on it; the nodes and
+  members tables are one list. *This machine* shows what holds in every
+  pool: what this machine has and has free, its capacity over time, how
+  each pool sees it, the lanes of others it runs, its own lanes on other
+  machines, and where its lanes start. The
+  pool and the tab are in the URL (`#/pool/<pool>/machines/<id>`);
+  `#/pool` still opens the pool shown last.
 - **The pool is live, and nobody polls the coordinator** (ADR-0073): the
   coordinator tells its members over one stream (`GET /v1/events`) which
   parts of the pool changed, and each hub reads a part only then. The
@@ -23,6 +38,8 @@ and listed with their assets on the
 
 ### Fixed
 
+- **The pool's devstack column** no longer shows a stray "–" after a
+  node's version when no update runs.
 - **The MCP upstreams page follows a login**: after an OAuth login in the
   other tab, the list shows the upstream logged in by itself (it asks the
   hub every two seconds, and at once when you come back to the tab),

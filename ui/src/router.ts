@@ -1,4 +1,5 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
+import { persist } from './lib/persist';
 
 // Hash history: the hub serves the shell at `/` only, and the service worker's
 // navigation fallback stays trivial; deep links still work offline.
@@ -27,7 +28,23 @@ export const router = createRouter({
         { path: 'events', name: 'events', component: () => import('./views/EventsView.vue'), meta: { title: 'Activity' } },
       ],
     },
-    { path: '/pool', name: 'pool', component: () => import('./views/PoolView.vue'), meta: { title: 'Pool' } },
+    // The pool area: `#/pool` opens the pool shown last (notifications and
+    // `devstack://open?page=pool` link there); the pool and the tab are in
+    // the URL from then on. What holds for this machine in every pool has a
+    // place of its own (a static segment ranks above `:pool`).
+    { path: '/pool', name: 'pool', redirect: () => ({ name: 'pool-overview', params: { pool: persist.get<string>('pool.current') ?? 'default' } }) },
+    { path: '/pool/this-machine', name: 'pool-here', component: () => import('./views/pool/ThisMachineView.vue'), meta: { title: 'This machine' } },
+    {
+      path: '/pool/:pool',
+      component: () => import('./views/pool/PoolLayout.vue'),
+      children: [
+        { path: '', name: 'pool-overview', component: () => import('./views/pool/PoolOverview.vue'), meta: { title: 'Pool' } },
+        { path: 'machines', name: 'pool-machines', component: () => import('./views/pool/PoolMachines.vue'), meta: { title: 'Machines' } },
+        { path: 'machines/:id', name: 'pool-machine', component: () => import('./views/pool/PoolMachine.vue'), meta: { title: 'Machine' } },
+        { path: 'lanes', name: 'pool-lanes', component: () => import('./views/pool/PoolLanes.vue'), meta: { title: 'Lanes' } },
+        { path: 'admin', name: 'pool-admin', component: () => import('./views/pool/PoolAdmin.vue'), meta: { title: 'Admin' } },
+      ],
+    },
     { path: '/upstreams', name: 'upstreams', component: () => import('./views/UpstreamsView.vue'), meta: { title: 'MCP upstreams' } },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],

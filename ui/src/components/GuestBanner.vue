@@ -39,7 +39,7 @@ function dismiss() {
         </strong>
         {{ names }} <span class="faint">({{ guestsReserved(hub.guests) }} reserved)</span>
       </div>
-      <RouterLink v-if="route.name !== 'pool'" :to="{ name: 'pool' }" class="btn btn-sm" data-testid="guest-banner-show">Show</RouterLink>
+      <RouterLink v-if="route.name !== 'pool-here'" :to="{ name: 'pool-here' }" class="btn btn-sm" data-testid="guest-banner-show">Show</RouterLink>
       <button type="button" class="btn btn-ghost btn-sm btn-icon" title="Hide until a lane comes or goes" aria-label="Hide" data-testid="guest-banner-dismiss" @click="dismiss">
         <Icon name="x" :size="14" />
       </button>

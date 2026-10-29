@@ -1,0 +1,91 @@
+/* What the pool area's tabs share; under `.pool`, the area's root. */
+.pool .mono {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+.pool .small {
+  font-size: 12px;
+}
+.pool .actions {
+  text-align: right;
+  white-space: nowrap;
+}
+.pool .actions > .btn + .btn {
+  margin-left: 6px;
+}
+.pool .nowrap {
+  white-space: nowrap;
+}
+.pool .hint {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+}
+.pool .err,
+.pool .warn-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 0;
+}
+.pool .err {
+  color: var(--danger);
+}
+.pool .warn-line,
+.pool .warn-text {
+  color: var(--warn);
+}
+.pool .facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 0;
+}
+.pool .facts dt {
+  color: var(--text-muted);
+}
+.pool .facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.pool .consent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.pool .card-header .end {
+  margin-left: auto;
+}
+.pool .stack-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  margin: 4px 0 6px;
+}
+.pool .stack-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+.pool .stack-form .input {
+  width: 190px;
+}
+.pool .audit {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.pool .audit li {
+  display: flex;
+  gap: 12px;
+}
+.pool .audit .when {
+  min-width: 80px;
+}
