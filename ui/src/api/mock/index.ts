@@ -534,6 +534,7 @@ export class MockTransport implements Transport {
     if (sa && method === 'PUT') {
       const a = this.hub.poolSkillState.agents.find((x) => x.id === decodeURIComponent(sa[1]));
       if (a) a.enabled = !!(body as { enabled?: boolean })?.enabled;
+      for (const l of this.hub.hubSubs) l.send({ type: 'skills', skills: this.hub.poolSkillState });
       return json(200, this.hub.poolSkillState);
     }
     const sk = /^\/hub\/skills\/sets\/([^/]+)\/([^/]+)\/(skills|groups)\/([^/]+)$/.exec(p);

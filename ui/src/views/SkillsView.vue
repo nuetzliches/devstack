@@ -45,6 +45,9 @@ async function run(key: string, label: string, method: 'POST' | 'PUT', path: str
 }
 
 const agentsOn = computed(() => (state.value?.agents ?? []).filter((a) => a.enabled));
+function agentOff(a: { id: string; name: string }) {
+  void run(`agent:${a.id}`, `No skills into ${a.name}`, 'PUT', paths.skillsAgent(a.id), { enabled: false }, `${a.name} gets no pool skills; what devstack installed there goes`);
+}
 
 // Sets.
 const id = setKey;
@@ -152,7 +155,19 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
         <template v-if="state">
           <div class="agents" data-testid="skills-agents">
             <span class="label">Into</span>
-            <span v-for="a in agentsOn" :key="a.id" class="pill sm outline" :title="a.dir">{{ a.name }}</span>
+            <span v-for="a in agentsOn" :key="a.id" class="pill sm outline agent-chip" :title="a.dir" data-testid="skills-agent-chip">
+              {{ a.name }}
+              <button
+                type="button"
+                class="chip-x"
+                :aria-label="`No skills into ${a.name}`"
+                :title="`No skills into ${a.name}: what devstack installed in ${a.dir} goes`"
+                :disabled="busy === `agent:${a.id}`"
+                @click="agentOff(a)"
+              >
+                <Icon name="x" :size="11" />
+              </button>
+            </span>
             <span v-if="!agentsOn.length" class="warn-text small">no agent yet</span>
             <button type="button" class="btn btn-ghost btn-sm" data-testid="skills-agents-manage" @click="agentsDialog = true">
               <Icon name="wrench" :size="13" /> Programs and agents…
@@ -321,6 +336,22 @@ h3 {
   align-items: center;
   gap: 6px;
   margin-top: 12px;
+}
+.agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.chip-x {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.chip-x:hover {
+  color: var(--text);
 }
 .agents .label {
   font-size: 13px;

@@ -78,17 +78,20 @@ async function setSkills(id: string, enabled: boolean) {
           <span class="grow truncate">{{ o.label }}</span>
           <span class="faint small">{{ kindLabel[o.kind] ?? o.kind }}</span>
         </label>
-        <button
+        <label
           v-if="o.agent && skillAgents.has(o.agent)"
-          type="button"
-          class="skills-pill"
+          class="skills-pick"
           :class="{ on: skillAgents.get(o.agent)?.enabled }"
-          :title="skillAgents.get(o.agent)?.enabled ? `Gets the pools' skills in ${skillAgents.get(o.agent)?.dir}; click to stop` : `Click to install the pools' skills into ${skillAgents.get(o.agent)?.dir}`"
-          data-testid="opener-skills"
-          @click="setSkills(o.agent, !skillAgents.get(o.agent)?.enabled)"
+          :title="`The pools' skills into ${skillAgents.get(o.agent)?.dir}; kept on this machine`"
         >
-          <Icon :name="skillAgents.get(o.agent)?.enabled ? 'check' : 'layers'" :size="11" /> skills
-        </button>
+          <input
+            type="checkbox"
+            :checked="skillAgents.get(o.agent)?.enabled"
+            data-testid="opener-skills"
+            @change="setSkills(o.agent, !skillAgents.get(o.agent)?.enabled)"
+          />
+          skills
+        </label>
         <button type="button" class="move" :disabled="i === 0" :aria-label="`Move ${o.label} up`" data-testid="opener-up" @click="move(i, i - 1)">
           <Icon name="arrowUp" :size="13" />
         </button>
@@ -169,20 +172,18 @@ async function setSkills(id: string, enabled: boolean) {
   opacity: 0.35;
   cursor: default;
 }
-.skills-pill {
+.skills-pick {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 1px 7px;
-  border: 1px dashed var(--border-strong);
+  gap: 4px;
+  padding: 1px 8px 1px 4px;
+  border: 1px solid var(--border);
   border-radius: 999px;
-  background: transparent;
   color: var(--text-muted);
   font-size: 11px;
   cursor: pointer;
 }
-.skills-pill.on {
-  border-style: solid;
+.skills-pick.on {
   border-color: var(--ok-text);
   color: var(--ok-text);
 }
