@@ -22,9 +22,9 @@ const problem = ref<string | null>(null);
 const busy = ref<string | null>(null);
 const state = computed<PoolSkillsState | null>(() => hub.skills);
 
+// Read when the page opens: the hub looks again which agents are on this
+// machine (one installed since shows) and tells every dashboard.
 onMounted(async () => {
-  if (hub.skills) return;
-  // Once, in case the hub's stream has not told yet (an older hub never does).
   try {
     const r = await api().request<PoolSkillsState>('GET', paths.hubSkills);
     if (r.ok && r.body && typeof r.body === 'object') hub.skills = r.body;

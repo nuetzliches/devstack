@@ -753,6 +753,14 @@ impl PoolSkills {
         }
     }
 
+    /// Look again which agents are on this machine (one installed since
+    /// shows), and tell the dashboards: the Skills page asks when it opens.
+    pub fn refresh(&self) -> View {
+        let v = self.view();
+        self.tx.send_replace(v.clone());
+        v
+    }
+
     fn publish(&self) {
         let v = self.view();
         self.tx.send_replace(v);
@@ -831,8 +839,17 @@ async fn on(
 }
 
 /// `GET /hub/skills`: the agents, the pools' sets, what is installed.
+/// The agents are looked for again: one installed since shows.
 pub async fn get(State(s): State<crate::AppState>) -> Response {
-    on(&s, |_| Ok(())).await
+    let skills = s.skills.clone();
+    match tokio::task::spawn_blocking(move || skills.refresh()).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -953,11 +970,13 @@ mod tests {
             Box::new(move |a| match a.id.as_str() {
                 "claude-code" => Some(home.join(".claude").join("skills")),
                 "codex" | "cline" => Some(home.join(".agents").join("skills")),
+                "opencode" => Some(home.join(".config").join("opencode").join("skills")),
                 _ => None,
             }),
             Box::new(move |a| {
-                let _ = &h2;
-                a.id == "claude-code" || a.id == "codex"
+                a.id == "claude-code"
+                    || a.id == "codex"
+                    || (a.id == "opencode" && h2.join(".config").join("opencode").exists())
             }),
             Box::new(move |_, _, skill| {
                 a.lock()
@@ -994,6 +1013,10 @@ mod tests {
         assert!(std::fs::read_to_string(&claude).unwrap().ends_with("v1"));
         assert!(!home.path().join(".agents/skills/work-issue").exists());
         hub.set_agent("codex", true).unwrap();
+        assert_eq!(
+            hub.view().sets[0].skills[0].agents,
+            ["Claude Code", "Codex"]
+        );
         assert!(
             home.path()
                 .join(".agents/skills/work-issue/SKILL.md")
@@ -1011,6 +1034,22 @@ mod tests {
         // The set gone from the pool: its skill goes.
         hub.set_pool("default", Some(Vec::new()));
         assert!(!claude.exists());
+    }
+
+    #[test]
+    fn an_agent_installed_since_shows_when_the_page_asks() {
+        let (st, home) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (hub, _pool) = hub(st.path(), home.path());
+        let rx = hub.subscribe();
+        let ids = |v: &View| v.agents.iter().map(|a| a.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&rx.borrow()), ["claude-code", "codex"]);
+        std::fs::create_dir_all(home.path().join(".config/opencode")).unwrap();
+        hub.refresh();
+        assert_eq!(ids(&rx.borrow()), ["claude-code", "codex", "opencode"]);
+        assert!(
+            !rx.borrow().agents[2].enabled,
+            "a new agent is off until switched on"
+        );
     }
 
     #[test]

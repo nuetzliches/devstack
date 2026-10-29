@@ -125,6 +125,17 @@ class MockHub {
     ],
     conflicts: [],
   };
+  /** As the hub's sync does: each skill switched on of an accepted set into the folder of every agent switched on, the rest out. */
+  installSkills() {
+    const on = this.poolSkillState.agents.filter((a) => a.enabled).map((a) => a.name);
+    for (const s of this.poolSkillState.sets)
+      for (const k of s.skills) {
+        const want = s.state === 'accepted' && k.enabled !== false ? on : [];
+        if (want.join() !== (k.agents ?? []).join() && want.length) k.updated = Date.now();
+        k.agents = want;
+        k.installed = want.length > 0 && !k.pending;
+      }
+  }
   poolSkills: PoolSkillsAdmin = {
     sets: [
       {
@@ -534,6 +545,7 @@ export class MockTransport implements Transport {
     if (sa && method === 'PUT') {
       const a = this.hub.poolSkillState.agents.find((x) => x.id === decodeURIComponent(sa[1]));
       if (a) a.enabled = !!(body as { enabled?: boolean })?.enabled;
+      this.hub.installSkills();
       for (const l of this.hub.hubSubs) l.send({ type: 'skills', skills: this.hub.poolSkillState });
       return json(200, this.hub.poolSkillState);
     }
@@ -545,8 +557,9 @@ export class MockTransport implements Transport {
       const what = decodeURIComponent(sk[4]);
       for (const k of s.skills) {
         const hit = sk[3] === 'skills' ? k.name === what : (k.group ?? '') === (what === '-' ? '' : what);
-        if (hit) Object.assign(k, { enabled: on, installed: on, updated: on ? Date.now() : k.updated, agents: on ? ['Claude Code'] : [] });
+        if (hit) k.enabled = on;
       }
+      this.hub.installSkills();
       for (const l of this.hub.hubSubs) l.send({ type: 'skills', skills: this.hub.poolSkillState });
       return json(200, this.hub.poolSkillState);
     }
@@ -555,10 +568,11 @@ export class MockTransport implements Transport {
       const s = this.hub.poolSkillState.sets.find((x) => x.pool === decodeURIComponent(ss[1]) && x.set === decodeURIComponent(ss[2]));
       if (!s) return json(409, { error: 'no such set' });
       const b = (body ?? {}) as { auto?: boolean };
-      if (ss[3] === 'accept') Object.assign(s, { state: 'accepted', auto: !!b.auto, skills: s.skills.map((k) => ({ ...k, installed: true, pending: false })) });
-      else if (ss[3] === 'decline') Object.assign(s, { state: 'declined', skills: s.skills.map((k) => ({ ...k, installed: false, pending: false })) });
-      else if (ss[3] === 'update') s.skills = s.skills.map((k) => ({ ...k, installed: true, pending: false }));
+      if (ss[3] === 'accept') Object.assign(s, { state: 'accepted', auto: !!b.auto, skills: s.skills.map((k) => ({ ...k, enabled: true, pending: false })) });
+      else if (ss[3] === 'decline') Object.assign(s, { state: 'declined', skills: s.skills.map((k) => ({ ...k, pending: false })) });
+      else if (ss[3] === 'update') s.skills = s.skills.map((k) => ({ ...k, pending: false }));
       else s.auto = !!b.auto;
+      this.hub.installSkills();
       for (const l of this.hub.hubSubs) l.send({ type: 'skills', skills: this.hub.poolSkillState });
       return json(200, this.hub.poolSkillState);
     }
