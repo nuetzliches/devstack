@@ -403,14 +403,14 @@ async function copyPath(s: StackEntry) {
       <button
         type="button"
         class="item pool-item"
-        :class="{ active: route.name === 'pool' }"
-        :title="pool.pending.length ? `${pool.pending.length} request(s) to join the pool` : 'The machines that run lanes for each other'"
+        :class="{ active: route.path.startsWith('/pool') }"
+        :title="pool.dueAll ? `${pool.dueAll} waiting for an admin in the pools` : 'The machines that run lanes for each other'"
         data-testid="sidebar-pool"
         @click="router.push({ name: 'pool' })"
       >
         <Icon name="server" :size="14" class="branch" />
-        <span class="label">Pool</span>
-        <span v-if="pool.isAdmin && pool.pending.length" class="pill sm warn" data-testid="sidebar-pool-badge">{{ pool.pending.length }}</span>
+        <span class="label">Pools</span>
+        <span v-if="pool.dueAll" class="pill sm warn" data-testid="sidebar-pool-badge">{{ pool.dueAll }}</span>
         <span v-else class="faint small tabular">{{ poolHint }}</span>
       </button>
       <button

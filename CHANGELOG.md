@@ -9,8 +9,36 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **The pool area has tabs, and each machine a page** (ADR-0076): a pool
+  shows *Overview*, *Machines*, *Lanes* and, for admins, *Admin* (requests
+  to join, provisioning, the pool's MCP upstreams and skill sets, the admin
+  log), instead of fifteen cards on one page. A machine's page holds its
+  membership and its node side together, with what it reports, its policy,
+  its capacity over time, the lanes on it and every admin action on it;
+  the nodes and members tables are one list. *This machine* shows what
+  holds in every pool: what this machine has and has free, its capacity
+  over time, how each pool sees it, the lanes of others it runs, its own
+  lanes on other machines, and where its lanes start. The overview's
+  capacity shows each node as starting a lane does, and the pool's history
+  stacked machine by machine, one colour each, against what the pool
+  offered; a machine's page shows its own the same way. A badge sits where
+  what waits for an admin is handled. The pool and the tab are in the URL
+  (`#/pool/<pool>/machines/<id>`); `#/pool` still opens the pool shown
+  last.
+- **Starting a lane shows where it would go**: its machines are grouped by
+  pool in their coordinator's order; a card opens the machine's page and
+  its own *Start* starts the lane there; a pool's start names its pick, and
+  pointing at a start button lights the machines it means.
+
 ### Fixed
 
+- **A lane not started shows no tabs**: its start options stand in for its
+  views, so Overview, Infrastructure and the others no longer all led to
+  the same start page.
+- **The pool's devstack column** no longer shows a stray "–" after a
+  node's version when no update runs.
 - **A GitHub skill set names its commit**: the set showed
   `pax_global_header` where its commit belongs, the name of the first
   entry of GitHub's archive (ADR-0074).

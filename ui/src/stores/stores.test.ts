@@ -164,6 +164,34 @@ describe('stack store', () => {
     expect(lane.closed).toBe(true);
   });
 
+  it("a pool's machines are its approved members with their node side (ADR-0076)", async () => {
+    fake.on('/hub/pools', ok([{ name: 'default', joined: true, state: 'approved', coordinator: 'https://c' }]));
+    fake.on(
+      '/hub/pool',
+      ok({
+        joined: true,
+        me: { id: 'a', name: 'dev', state: 'approved', role: 'admin', coordinator: 'https://c' },
+        members: [
+          { id: 'a', name: 'dev', state: 'approved', role: 'admin', requested_at: 0 },
+          { id: 'b', name: 'build', state: 'approved', role: 'member', requested_at: 0, node: true },
+          { id: 'p', name: 'asks', state: 'pending', role: 'member', requested_at: 0 },
+        ],
+        nodes: [{ id: 'b', name: 'build', online: true, seen: 3, kind: 'server' }],
+      }),
+    );
+    const pool = usePool();
+    await pool.load();
+    expect(pool.machines.map((m) => [m.id, !!m.member, !!m.node])).toEqual([
+      ['a', true, false],
+      ['b', true, true],
+    ]);
+    expect(pool.nameOf('b')).toBe('build');
+    expect(pool.nameOf('zz')).toBe('zz');
+    // The pending request waits under Admin; nothing to confirm under Machines.
+    expect(pool.due()).toEqual({ admin: 1, machines: 0, all: 1 });
+    expect(pool.dueAll).toBe(1);
+  });
+
   it('a shared lane is read through its node, and changes nothing (ADR-0040)', async () => {
     fake.on('/hub/session', ok({ version: '0.9.8' }));
     fake.on('/hub/pools', ok([{ name: 'default', joined: true, state: 'approved', coordinator: 'https://c' }]));
