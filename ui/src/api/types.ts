@@ -49,6 +49,8 @@ export type HubEvent =
   | { type: 'pools'; pools: Record<string, PoolFeed> }
   /** The pools' skill sets on this machine (ADR-0074); older hubs never send it. */
   | { type: 'skills'; skills: PoolSkillsState }
+  /** A version of each stack's worktrees (ADR-0078): read a stack's lanes again when its version changes. Older hubs never send it. */
+  | { type: 'worktrees'; worktrees: Record<string, string> }
   /** Something happened once in the hub that no request reports (ADR-0050): a toast. */
   | { type: 'notice'; level: NoticeLevel; text: string };
 

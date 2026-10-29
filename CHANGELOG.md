@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **Worktrees show at once, and a stopped stack's lanes too**
+  ([ADR-0078](docs/adr/0078-the-hub-follows-every-stacks-worktrees.md)):
+  the hub follows every stack's worktrees and tells the dashboard when one
+  is added, removed or switches branch, so the sidebar shows it without
+  opening its stack first. A stack that does not run lists its worktrees
+  as lanes not started; one opens a start card, and *Start here* or *Start
+  in the pool* brings its daemon up and starts the lane, the main working
+  tree's services left stopped. A lane the branch picker makes for a
+  stopped stack opens there.
+
 ## [0.30.0] - 2026-10-29
 
 The skills of a pool's set can be taken one by one: each switched on or

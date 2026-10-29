@@ -8,6 +8,7 @@ import { useStack } from '@/stores/stack';
 import Icon from '@/components/icons/Icon.vue';
 import StackHeader from '@/components/StackHeader.vue';
 import LaneStart from '@/components/LaneStart.vue';
+import OfflineLaneStart from '@/components/OfflineLaneStart.vue';
 import SkillsBanner from '@/components/SkillsBanner.vue';
 import UpgradeBanner from '@/components/UpgradeBanner.vue';
 import AgentPrompt from '@/components/AgentPrompt.vue';
@@ -118,7 +119,7 @@ function isActive(name: string) {
   <div>
     <StackHeader />
     <!-- A lane not started has no views yet: its start options stand in for them. -->
-    <nav v-if="!idleLane" class="subnav" aria-label="Stack views">
+    <nav v-if="!idleLane && !stack.offlineLane" class="subnav" aria-label="Stack views">
       <div class="subnav-inner">
         <RouterLink
           v-for="t in tabs"
@@ -247,6 +248,9 @@ function isActive(name: string) {
 
     <div v-if="idleLane" class="idle-lane">
       <LaneStart :lane="idleLane" />
+    </div>
+    <div v-else-if="stack.offlineLane" class="idle-lane">
+      <OfflineLaneStart :lane="stack.offlineLane" />
     </div>
     <div v-else :data-stale="stack.stale && !!stack.view ? 'true' : 'false'">
       <RouterView v-slot="{ Component }">

@@ -1,11 +1,13 @@
 <script setup lang="ts">
 // Stacks and their worktrees (lanes, ADR-0024) as a sidebar: every stack the
-// hub knows, and under each running one all of its trees, named by their
-// branch: the main working tree first, then the started lanes, then the
-// worktrees nobody started. A tree's state is its dot, as a stack's is. A
-// stack's worktrees fold only with its toggle, never by navigating. The shown
-// stack's lanes come live from its stream; the others' are read when the
-// hub's list of stacks changes (no polling, ADR-0021). A stack's menu (its
+// hub knows, and under each all of its trees, named by their branch: the main
+// working tree first, then the started lanes, then the worktrees nobody
+// started (of a stack whose daemon does not run, the hub lists them,
+// ADR-0078). A tree's state is its dot, as a stack's is. A stack's worktrees
+// fold only with its toggle, never by navigating. The shown stack's lanes
+// come live from its stream; the others' are read when the hub's list of
+// stacks changes or it says a stack's worktrees did (no polling, ADR-0021,
+// ADR-0078). A stack's menu (its
 // "…" button, or a right click) starts, stops and removes it.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -81,9 +83,10 @@ watch(
 );
 async function loadAll(list: StackEntry[]) {
   for (const s of list) {
-    if (!s.running) continue;
     try {
-      const res = await api().request<LaneView[]>('GET', paths.api(s.id, v1.lanes));
+      // A stack whose daemon runs knows its lanes; of one that does not, the
+      // hub lists the worktrees, as lanes not started (ADR-0078).
+      const res = await api().request<LaneView[]>('GET', s.running ? paths.api(s.id, v1.lanes) : paths.worktrees(s.id));
       // The shown stack's list comes from its stream: a read that started
       // before a change and answers after it must not overwrite it.
       if (res.ok && Array.isArray(res.body) && stack.lanesOf !== s.id) known.value[s.id] = res.body;
@@ -97,14 +100,22 @@ watch(
   () => void loadAll(hub.stacks),
   { immediate: true },
 );
+// A worktree added, removed or switched to another branch, in any stack
+// (the hub looks, ADR-0078): that stack's lanes again.
+watch(
+  () => ({ ...hub.worktrees }),
+  (now, before) => {
+    const changed = hub.stacks.filter((s) => before && now[s.id] !== before[s.id]);
+    if (changed.length) void loadAll(changed);
+  },
+);
 
 /** Every worktree of a running stack: started ones first, then the rest. */
 function lanesOf(s: StackEntry): LaneView[] {
-  if (!s.running) return [];
   const { running, idle } = orderLanes(known.value[s.id] ?? []);
   return [...running, ...idle];
 }
-const hasLanes = (s: StackEntry) => s.running && (known.value[s.id]?.length ?? 0) > 0;
+const hasLanes = (s: StackEntry) => (known.value[s.id]?.length ?? 0) > 0;
 
 /**
  * Whether the main working tree runs something, as last seen while it was

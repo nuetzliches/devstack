@@ -146,7 +146,7 @@ fn git_with(
 }
 
 /// The repository's git directory shared by its worktrees.
-fn common_dir(repo: &Path) -> Result<PathBuf, String> {
+pub(crate) fn common_dir(repo: &Path) -> Result<PathBuf, String> {
     let d = git(repo, &["rev-parse", "--git-common-dir"], LOCAL)?;
     Ok(repo.join(d.trim()))
 }

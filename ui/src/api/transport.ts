@@ -69,6 +69,7 @@ export const paths = {
   branches: (stack: string) => `/hub/stacks/${enc(stack)}/branches`,
   worktrees: (stack: string) => `/hub/stacks/${enc(stack)}/worktrees`,
   worktreeRemove: (stack: string) => `/hub/stacks/${enc(stack)}/worktrees/remove`,
+  laneStart: (stack: string) => `/hub/stacks/${enc(stack)}/lanes/start`,
   fetch: (stack: string) => `/hub/stacks/${enc(stack)}/fetch`,
   skills: (stack: string) => `/hub/stacks/${enc(stack)}/skills`,
   upgrade: (stack: string) => `/hub/stacks/${enc(stack)}/upgrade`,

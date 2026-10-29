@@ -53,6 +53,7 @@ mod stdio;
 mod summary;
 pub mod tray;
 pub mod upstreams;
+mod worktrees;
 mod ws;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -451,6 +452,8 @@ pub fn serve() -> Result<(), String> {
         // The pools, followed over their coordinators' streams (ADR-0073):
         // their guest lanes and MCP upstreams (ADR-0069 option B).
         poolfeed::start(state.upstreams.clone(), state.skills.clone());
+        // Every stack's worktrees, its daemon running or not (ADR-0078).
+        worktrees::start();
         tray::start_quietly();
         let app = router(state);
         if let Some(v6) = v6 {
@@ -532,10 +535,14 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/stacks/add", post(stack_add))
         .route("/hub/stacks/scan", post(stack_scan))
         .route("/hub/stacks/{id}/up", post(stack_up))
+        .route("/hub/stacks/{id}/lanes/start", post(worktrees::start_lane))
         .route("/hub/stacks/{id}/down", post(stack_down))
         .route("/hub/stacks/{id}", delete(forget))
         .route("/hub/stacks/{id}/branches", get(stack_branches))
-        .route("/hub/stacks/{id}/worktrees", post(worktree_add))
+        .route(
+            "/hub/stacks/{id}/worktrees",
+            get(worktrees::list).post(worktree_add),
+        )
         .route("/hub/stacks/{id}/worktrees/remove", post(worktree_remove))
         .route("/hub/stacks/{id}/fetch", post(stack_fetch))
         // No route writes a file of a repository (ADR-0071).
@@ -1506,6 +1513,8 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
         .map(|guests| serde_json::json!({ "type": "guests", "guests": guests }));
     let pools = tokio_stream::wrappers::WatchStream::new(poolfeed::subscribe())
         .map(|pools| serde_json::json!({ "type": "pools", "pools": pools }));
+    let trees = tokio_stream::wrappers::WatchStream::new(worktrees::subscribe())
+        .map(|w| serde_json::json!({ "type": "worktrees", "worktrees": w }));
     let skills = tokio_stream::wrappers::WatchStream::new(s.skills.subscribe())
         .map(|skills| serde_json::json!({ "type": "skills", "skills": skills }));
     // A dashboard that fell behind misses a toast, nothing it shows.
@@ -1518,6 +1527,7 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
         .merge(guests)
         .merge(pools)
         .merge(skills)
+        .merge(trees)
         .merge(notices)
 }
 

@@ -785,6 +785,17 @@ export class MockTransport implements Transport {
       if (!stack.running) void stack.goUp();
       return empty(202);
     }
+    // A stopped stack's worktrees, from the hub (ADR-0078): one for each.
+    if (rest === '/worktrees' && method === 'GET') {
+      const repo = stack.entry.repo;
+      return json(200, [
+        { name: 'fix-login', path: `${repo}.worktrees/fix-login`, branch: 'fix/login', number: 0, active: false, port_offset: 0, owns_main: false, running: 0, services: 0, main_stack_file: false },
+      ]);
+    }
+    if (rest === '/lanes/start' && method === 'POST') {
+      if (!stack.running) void stack.goUp();
+      return empty(202);
+    }
     if (rest === '/down' && method === 'POST') {
       setTimeout(() => stack.goDown(), 600);
       return empty(202);
