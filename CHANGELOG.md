@@ -25,6 +25,9 @@ and listed with their assets on the
   that failed or has trouble on its node), then whether anything runs;
   unfolded it has none, as its trees show theirs. A stack whose daemon runs
   but nothing of it says `idle`, as one without a daemon says `offline`.
+- **The sidebar keeps its order**: stacks by name, and a stack's trees
+  with the main working tree first, then by name; a start or a stop no
+  longer moves anything.
 
 ## [0.30.0] - 2026-10-29
 

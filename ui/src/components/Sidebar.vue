@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // Stacks and their worktrees (lanes, ADR-0024) as a sidebar: every stack the
-// hub knows, and under each all of its trees, named by their branch: the main
-// working tree first, then the started lanes, then the worktrees nobody
-// started (of a stack whose daemon does not run, the hub lists them,
-// ADR-0078). A tree's state is its dot, as a stack's is. A stack's worktrees
+// hub knows, by name, and under each all of its trees, named by their branch:
+// the main working tree first, then the others by name, started or not (of a
+// stack whose daemon does not run, the hub lists them, ADR-0078); nothing
+// moves when something starts or stops. A tree's state is its dot, as a
+// stack's is. A stack's worktrees
 // fold only with its toggle, never by navigating. The shown stack's lanes
 // come live from its stream; the others' are read when the hub's list of
 // stacks changes or it says a stack's worktrees did (no polling, ADR-0021,
@@ -14,7 +15,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { api, paths, sharedId, v1 } from '@/api';
 import type { LaneView, StackEntry } from '@/api/types';
 import { act } from '@/lib/actions';
-import { laneLabel, laneTab, orderLanes, nodeLabel, runCounts, runsAnything, started } from '@/lib/lanes';
+import { laneLabel, laneTab, nodeLabel, runCounts, runsAnything, started } from '@/lib/lanes';
 import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
 import { useHub } from '@/stores/hub';
@@ -66,7 +67,8 @@ function toggle(id: string) {
   persist.set('sidebar.collapsed', collapsed.value);
 }
 
-const stacks = computed(() => [...hub.stacks].sort((a, b) => Number(b.running) - Number(a.running) || a.name.localeCompare(b.name)));
+// By name, never by state: a start or a stop moves nothing in the list.
+const stacks = computed(() => [...hub.stacks].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)));
 
 /**
  * The worktrees of every stack, kept across navigation: replaced when news
@@ -120,10 +122,9 @@ watch(
   },
 );
 
-/** Every worktree of a running stack: started ones first, then the rest. */
+/** Every worktree of a stack, by name: a lane that starts or stops keeps its place. */
 function lanesOf(s: StackEntry): LaneView[] {
-  const { running, idle } = orderLanes(known.value[s.id] ?? []);
-  return [...running, ...idle];
+  return [...(known.value[s.id] ?? [])].sort((a, b) => laneLabel(a).localeCompare(laneLabel(b)));
 }
 const hasLanes = (s: StackEntry) => (known.value[s.id]?.length ?? 0) > 0;
 

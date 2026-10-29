@@ -808,7 +808,11 @@ export class MockTransport implements Transport {
       return json(200, hub.worktreesOf(stack.entry.id, stack.entry.repo));
     }
     if (rest === '/lanes/start' && method === 'POST') {
-      if (!stack.running) void stack.goUp();
+      // `devstack up` in the worktree: the daemon and this lane, the main tree's services left stopped.
+      const l = hub.worktreesOf(stack.entry.id, stack.entry.repo).find((w) => w.path === body?.path);
+      if (!l) return json(400, { error: "not a worktree of this stack's repository" });
+      stack.startedLanes.add(l.name);
+      if (!stack.running) void stack.goUp({ main: false });
       return empty(202);
     }
     if (rest === '/down' && method === 'POST') {
@@ -877,9 +881,16 @@ export class MockTransport implements Transport {
   private async daemonApi(s: MockStack, method: string, p: string, q: URLSearchParams, body?: Record<string, unknown>): Promise<Response> {
     // Lanes (plan §3.5): the shop repository has two other worktrees, one
     // started; a lane's API is the stack's, here.
+    // Another stack's lanes are its worktrees as the hub lists them (ADR-0078).
+    const others = () =>
+      this.hub.worktreesOf(s.entry.id, s.entry.repo).map((w, i) => {
+        const active = s.startedLanes.has(w.name);
+        return { ...w, number: i + 1, port_offset: 100 * (i + 1), active, running: active ? 5 : 0, services: 5 };
+      });
     const lanes = () =>
-      s.view.name === 'shop'
-        ? [
+      s.view.name !== 'shop'
+        ? others()
+        : [
             { name: 'agent-login-fix', path: 'C:\\work\\shop-agent-login-fix', branch: 'agent/login-fix', number: 1, port_offset: 100 },
             { name: 'review-cart', path: 'C:\\work\\shop-review-cart', branch: 'review-cart', number: 2, port_offset: 200 },
             // Worktrees agents opened and left: lanes, not started.
@@ -917,8 +928,7 @@ export class MockTransport implements Transport {
             const image = l.name === '1242' ? { not_in_pool: NO_LANE_IMAGE } : {};
             return { ...l, active, owns_main: owns, running: active ? (l.name === 'agent-login-fix' ? 3 : 5) : 0, services: 5, ...node, ...notices, ...file, ...image };
           })
-          .filter((l) => l !== null)
-        : [];
+          .filter((l) => l !== null);
     if (p === '/v1/lanes' && method === 'GET') return json(200, lanes());
     if (p === '/v1/lanes' && method === 'POST') {
       await sleep(600);
