@@ -1422,7 +1422,7 @@ fn skills_here(post: Option<&str>) -> Result<()> {
             s["source"].as_str().unwrap_or(""),
             s["state"].as_str().unwrap_or(""),
             if s["auto"].as_bool() == Some(true) {
-                ", updates at once"
+                ", auto-update"
             } else {
                 ""
             }

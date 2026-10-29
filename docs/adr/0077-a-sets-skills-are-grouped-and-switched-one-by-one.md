@@ -43,7 +43,7 @@ What was built:
    skills without a group are the group `-` in the route.
 3. **The Skills page.**
    - Above: the agents found here, each with its skill folder and a switch.
-   - Then the sets with accept, updates at once or wait, take the updates, remove.
+   - Then the sets with accept (with or without auto-update), auto-update on or off, take the updates, remove.
    - Then every skill as a row, by group: a switch, the name (opens its detail: description, set and source, version, when written here, in which agents, a conflict), description, tags, state and "updated … ago".
    - Above the rows: search (name, description, tags), the set, and chips for the state (with counts) and the group.
    - A group switches all its skills at once.

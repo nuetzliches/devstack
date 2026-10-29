@@ -62,7 +62,14 @@ function decline(s: SkillSetState) {
   void run(id(s), `Decline ${s.set}`, 'POST', paths.skillSetDo(s.pool, s.set, 'decline'), undefined, `${s.set} declined`);
 }
 function setAuto(s: SkillSetState, auto: boolean) {
-  void run(id(s), auto ? `Updates of ${s.set} at once` : `Updates of ${s.set} wait`, 'PUT', paths.skillSet(s.pool, s.set), { auto }, auto ? 'Updates come at once' : 'Updates wait for you');
+  void run(
+    id(s),
+    auto ? `Auto-update ${s.set}` : `No auto-update for ${s.set}`,
+    'PUT',
+    paths.skillSet(s.pool, s.set),
+    { auto },
+    auto ? `${s.set}: a new version is installed as soon as the pool has it` : `${s.set}: a new version waits until you take it`,
+  );
 }
 function update(s: SkillSetState) {
   void run(id(s), `Update ${s.set}`, 'POST', paths.skillSetDo(s.pool, s.set, 'update'), undefined, `${s.set} updated`);
@@ -230,14 +237,14 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
           <div class="actions">
             <template v-if="s.state !== 'accepted'">
               <button type="button" class="btn btn-primary btn-sm" :disabled="busy === id(s)" data-testid="skills-accept" @click="accept(s, true)">Accept</button>
-              <button type="button" class="btn btn-sm" :disabled="busy === id(s)" title="Accept; updates wait until you take them" @click="accept(s, false)">
-                Accept, updates wait
+              <button type="button" class="btn btn-sm" :disabled="busy === id(s)" title="Accept now; a new version of a skill is installed only when you take it" @click="accept(s, false)">
+                Accept without auto-update
               </button>
               <button v-if="s.state !== 'declined'" type="button" class="btn btn-ghost btn-sm" :disabled="busy === id(s)" @click="decline(s)">Decline</button>
             </template>
             <template v-else>
-              <label class="toggle small" title="Updates of this set come at once; off: they wait until you take them">
-                <input type="checkbox" :checked="s.auto" :disabled="busy === id(s)" @change="setAuto(s, !s.auto)" /> updates at once
+              <label class="toggle small" title="On: a new version of a skill is installed as soon as the pool has fetched it from the source. Off: the installed version stays until you click Take the updates.">
+                <input type="checkbox" :checked="s.auto" :disabled="busy === id(s)" @change="setAuto(s, !s.auto)" /> auto-update
               </label>
               <button v-if="waiting(s)" type="button" class="btn btn-primary btn-sm" :disabled="busy === id(s)" data-testid="skills-update" @click="update(s)">
                 Take the updates
