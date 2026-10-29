@@ -1,11 +1,14 @@
 <script setup lang="ts">
 // A node's or the pool's capacity over time (ADR-0036): what its lanes use,
 // against what it offers and has, for CPU, memory and GPUs. Read from the
-// coordinator's history; `node` unset: the whole pool.
+// coordinator's history; `node` unset: the whole pool. Read again when the
+// pool's nodes changed (ADR-0073), at most every 15 s: a point is that long.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { api, paths } from '@/api';
 import type { CapacityPoint } from '@/api/types';
 import { bytes } from '@/lib/format';
+import { throttle } from '@/lib/throttle';
+import { usePool } from '@/stores/pool';
 import Sparkline from './Sparkline.vue';
 
 const props = defineProps<{ pool: string; node?: string }>();
@@ -25,8 +28,10 @@ async function load() {
   }
 }
 watch(() => [props.pool, props.node, range.value], () => void load(), { immediate: true });
-const timer = setInterval(() => void load(), 30_000);
-onBeforeUnmount(() => clearInterval(timer));
+const again = throttle(() => void load(), 15_000);
+const pool = usePool();
+watch(() => pool.feeds[props.pool]?.versions.nodes, again);
+onBeforeUnmount(again.cancel);
 
 const last = computed(() => points.value[points.value.length - 1] ?? null);
 const rows = computed(() => {

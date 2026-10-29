@@ -42,6 +42,7 @@ mod notice;
 mod notify;
 mod open;
 mod pool;
+mod poolfeed;
 mod prompts;
 pub mod release;
 pub mod secrets;
@@ -443,14 +444,9 @@ pub fn serve() -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
         notify::start(state.clone());
-        // The pools' MCP upstreams (ADR-0069 option B), off the requests.
-        let ups = state.upstreams.clone();
-        std::thread::spawn(move || {
-            loop {
-                ups.refresh_pools();
-                std::thread::sleep(upstreams::POOLS_EVERY);
-            }
-        });
+        // The pools, followed over their coordinators' streams (ADR-0073):
+        // their guest lanes and MCP upstreams (ADR-0069 option B).
+        poolfeed::start(state.upstreams.clone());
         tray::start_quietly();
         let app = router(state);
         if let Some(v6) = v6 {
@@ -1477,6 +1473,8 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
     });
     let guests = tokio_stream::wrappers::WatchStream::new(guests::subscribe())
         .map(|guests| serde_json::json!({ "type": "guests", "guests": guests }));
+    let pools = tokio_stream::wrappers::WatchStream::new(poolfeed::subscribe())
+        .map(|pools| serde_json::json!({ "type": "pools", "pools": pools }));
     // A dashboard that fell behind misses a toast, nothing it shows.
     let notices =
         tokio_stream::wrappers::BroadcastStream::new(notice::subscribe()).filter_map(|n| n.ok());
@@ -1485,6 +1483,7 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
         .merge(release)
         .merge(update)
         .merge(guests)
+        .merge(pools)
         .merge(notices)
 }
 

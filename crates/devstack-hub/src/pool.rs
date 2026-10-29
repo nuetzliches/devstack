@@ -70,6 +70,8 @@ impl PoolQuery {
 /// `GET /hub/pools`: the pools this machine belongs to, the default one
 /// first (joined or not).
 pub async fn pools() -> Response {
+    // A pool joined with the CLI, or approved since: followed from now on.
+    crate::poolfeed::sync();
     let list = tokio::task::spawn_blocking(|| {
         devstack_node::member::pools(&state())
             .into_iter()
@@ -174,6 +176,13 @@ pub async fn overview(Query(q): Query<PoolQuery>) -> Response {
         Ok(v)
     })
     .await;
+    // Approved since the last look (the refresh above), or a coordinator
+    // without a stream, whose parts are read now that the area opens.
+    crate::poolfeed::sync();
+    let shown = q.name().unwrap_or_default();
+    if crate::poolfeed::live(&shown) == Some(crate::poolfeed::Follow::Old) {
+        crate::poolfeed::read_once(&shown);
+    }
     match r {
         Ok(v) => Json(v).into_response(),
         Err(e) => error(&e),

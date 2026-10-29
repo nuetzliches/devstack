@@ -12,7 +12,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { DockerEngine, Guest, HubEvent, LaneView, McpUpstream, NotifySettings, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
+import type { DockerEngine, Guest, HubEvent, PoolFeed, LaneView, McpUpstream, NotifySettings, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -84,6 +84,10 @@ const mockPoolUpstreams: PoolUpstream[] = [
 class MockHub {
   stacks: MockStack[] = [];
   hubSubs = new Set<Listener<HubEvent>>();
+  /** The pools as a hub follows them (ADR-0073): the default one live. */
+  pools: Record<string, PoolFeed> = {
+    default: { live: 'live', versions: { members: 'm1', nodes: 'n1', leases: 'l1', upstreams: 'u1', telemetry: 't1' } },
+  };
   /** A lane of laptop-anna's runs here, a second one is admitted. */
   guests: Guest[] = [
     { pool: 'default', lease: 'l-7f3a', member: '1122334455667788', owner: 'laptop-anna', repo: 'shop', lane: 'feat-cart', state: 'running', since: Math.floor(Date.now() / 1000) - 2400, cpus: 2, memory: 4 * 2 ** 30 },
@@ -1038,6 +1042,7 @@ export class MockTransport implements Transport {
       l.send({ type: 'docker', docker: hub.docker });
       l.send({ type: 'release', current: '0.4.0', newer: hub.newer, error: hub.releaseError });
       l.send({ type: 'guests', guests: hub.guests });
+      l.send({ type: 'pools', pools: hub.pools });
       hub.hubSubs.add(l);
       return { stop: () => hub.hubSubs.delete(l) };
     }

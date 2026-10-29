@@ -490,6 +490,40 @@ describe('stack store', () => {
 });
 
 describe('pool store', () => {
+  it('reads the pool when shown and again only when the hub says a part changed (ADR-0073)', async () => {
+    vi.useFakeTimers();
+    try {
+      fake.on('/hub/pools', ok([{ name: 'default', joined: true }]));
+      fake.on('/hub/pool', ok({ joined: true, me: { id: 'a', name: 'pc', state: 'approved', coordinator: 'https://c' }, nodes: [], leases: [] }));
+      const reads = () => fake.requests.filter((r) => r.path === '/hub/pool').length;
+      const pool = usePool();
+      const feed = (nodes: string, upstreams = 'u1') => ({
+        default: { live: 'live' as const, versions: { members: 'm1', nodes, leases: 'l1', upstreams, telemetry: 't1' } },
+      });
+      pool.onFeed(feed('n1'));
+      const stop = pool.watch();
+      await vi.runOnlyPendingTimersAsync();
+      expect(reads()).toBe(1);
+      // The same versions again, or only the MCP upstreams (their own page): nothing to read.
+      pool.onFeed(feed('n1'));
+      pool.onFeed(feed('n1', 'u2'));
+      await vi.runOnlyPendingTimersAsync();
+      expect(reads()).toBe(1);
+      pool.onFeed(feed('n2', 'u2'));
+      await vi.runOnlyPendingTimersAsync();
+      expect(reads()).toBe(2);
+      // No timer reads it: nothing happens for a minute.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reads()).toBe(2);
+      stop();
+      pool.onFeed(feed('n3', 'u2'));
+      await vi.runOnlyPendingTimersAsync();
+      expect(reads()).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('opens a shared service only as a web page (H-4)', async () => {
     const opened: string[] = [];
     vi.spyOn(window, 'open').mockImplementation((url) => {

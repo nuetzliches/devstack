@@ -161,15 +161,15 @@ fn run() {
                 Err(e) => st.error = Some(e),
             }
             drop(map);
-            crate::guests::seen(&pool, guests(&pool));
         }
     }
 }
 
 /// Other members' lanes on this machine in `pool`; `None` when the
 /// coordinator could not be asked. The member list is read only when a
-/// lease names this machine.
-fn guests(pool: &str) -> Option<Vec<crate::guests::Guest>> {
+/// lease names this machine. Read when the pool's stream says its leases
+/// or nodes changed (`poolfeed`, ADR-0073).
+pub(crate) fn guests(pool: &str) -> Option<Vec<crate::guests::Guest>> {
     let local = devstack_node::member::Local::new(&dir(pool));
     let m = match local.membership() {
         Ok(Some(m)) if m.state == State::Approved => m,

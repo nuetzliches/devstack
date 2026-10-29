@@ -45,8 +45,23 @@ export type HubEvent =
   | { type: 'update'; update: UpdateState }
   /** Lanes of other members that run on this machine, every pool; older hubs never send it. */
   | { type: 'guests'; guests: Guest[] }
+  /** The pools this machine follows over their coordinators' streams (ADR-0073), by name. */
+  | { type: 'pools'; pools: Record<string, PoolFeed> }
   /** Something happened once in the hub that no request reports (ADR-0050): a toast. */
   | { type: 'notice'; level: NoticeLevel; text: string };
+
+/**
+ * A pool as the hub follows it (ADR-0073): `live` while its coordinator's
+ * stream is open; `old` for a coordinator without one (read when the pool
+ * area opens). `versions`: of each part of the pool (`members`, `nodes`,
+ * `leases`, `upstreams`, `telemetry`); a part is read again when its
+ * version is not the one read last.
+ */
+export type PoolFeed = {
+  live: 'connecting' | 'live' | 'lost' | 'old';
+  error?: string;
+  versions: Record<string, string>;
+};
 
 export type NoticeLevel = 'warn' | 'error';
 /** A condition the user should know of that no request reports, while it holds (ADR-0050). */

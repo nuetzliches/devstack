@@ -233,6 +233,65 @@ pub async fn request(
     Ok(Answer { status, body })
 }
 
+/// Send `req` to the coordinator at `url` (`https://host:port`), checked
+/// by the name its certificate was made for (the host in `url`), and hand
+/// back the answer as it arrives: a stream stays a stream (ADR-0073).
+pub async fn send_to<B>(
+    config: Arc<rustls::ClientConfig>,
+    url: &str,
+    mut req: hyper::Request<B>,
+) -> Result<hyper::Response<hyper::body::Incoming>>
+where
+    B: hyper::body::Body + Send + 'static,
+    B::Data: Send,
+    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    let authority = url
+        .strip_prefix("https://")
+        .ok_or_else(|| TlsError::Other(format!("`{url}` is no https:// address")))?
+        .trim_end_matches('/')
+        .to_string();
+    let host = host_of(&authority);
+    let tcp = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::net::TcpStream::connect(&authority),
+    )
+    .await
+    .map_err(|_| TlsError::Other(format!("{authority}: no answer within 10 s")))?
+    .map_err(|e| TlsError::Other(format!("{authority}: {e}")))?;
+    let _ = tcp.set_nodelay(true);
+    let name = ServerName::try_from(host.to_string())
+        .map_err(|e| TlsError::Other(format!("server name `{host}`: {e}")))?;
+    let tls = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio_rustls::TlsConnector::from(config).connect(name, tcp),
+    )
+    .await
+    .map_err(|_| TlsError::Other(format!("{authority}: TLS: no answer within 10 s")))?
+    .map_err(|e| TlsError::Other(format!("{authority}: TLS: {e}")))?;
+    let (mut s, conn) = hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(tls))
+        .await
+        .map_err(|e| TlsError::Other(format!("{authority}: {e}")))?;
+    tokio::spawn(conn);
+    req.headers_mut().insert(
+        hyper::header::HOST,
+        hyper::header::HeaderValue::from_str(&authority)
+            .map_err(|e| TlsError::Other(e.to_string()))?,
+    );
+    tokio::time::timeout(Duration::from_secs(15), s.send_request(req))
+        .await
+        .map_err(|_| TlsError::Other(format!("{authority}: no answer within 15 s")))?
+        .map_err(|e| TlsError::Other(format!("{authority}: {e}")))
+}
+
+/// The host of `host:port`, `[v6]:port` without its brackets.
+fn host_of(authority: &str) -> &str {
+    if let Some(rest) = authority.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or(rest);
+    }
+    authority.rsplit_once(':').map_or(authority, |(h, _)| h)
+}
+
 /// Compare two secrets in constant time.
 pub fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |x, (p, q)| x | (p ^ q)) == 0

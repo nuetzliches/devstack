@@ -18,7 +18,7 @@ import { useUi } from '@/stores/ui';
 import { useHub } from '@/stores/hub';
 
 const pool = usePool();
-const stop = pool.watch(10_000);
+const stop = pool.watch();
 onBeforeUnmount(stop);
 
 const now = ref(Date.now());
@@ -337,6 +337,12 @@ function policyText(id: string) {
             </button>
           </div>
           <p v-if="pool.error" class="err small"><Icon name="alert" :size="14" /> {{ pool.error }} (showing the last answer)</p>
+          <p v-else-if="me.state === 'approved' && pool.live?.live === 'old'" class="muted small" data-testid="pool-not-live">
+            <Icon name="info" :size="14" /> Not live: the pool's coordinator runs an older devstack. What shows here was read when the page opened.
+          </p>
+          <p v-else-if="me.state === 'approved' && pool.live?.live === 'lost'" class="muted small" data-testid="pool-not-live">
+            <Icon name="alert" :size="14" /> Not live: {{ pool.live.error }}. Connecting again; what shows here may be behind.
+          </p>
         </template>
         <p v-else class="muted">Reading the pool…</p>
       </div>

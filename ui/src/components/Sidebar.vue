@@ -31,7 +31,7 @@ const route = useRoute();
 // The pool (ADR-0032): always in reach, with the requests waiting for an
 // admin as a badge.
 const pool = usePool();
-onBeforeUnmount(pool.watch(30_000));
+onBeforeUnmount(pool.watch());
 const poolHint = computed(() => {
   const o = pool.overview;
   if (!o) return '';

@@ -1202,6 +1202,10 @@ struct Inner {
     fingerprint: String,
     /// One change of the pool's MCP upstreams at a time (ADR-0069 option B).
     upstreams: Mutex<()>,
+    /// The version of each part of the pool its members read (ADR-0073).
+    versions: tokio::sync::watch::Sender<crate::events::Versions>,
+    /// Count the versions again: something may have changed.
+    recount: Arc<tokio::sync::Notify>,
 }
 
 /// A lease that waits for a machine (ADR-0051 point 5).
@@ -1323,6 +1327,11 @@ fn router(shared: Shared) -> Router {
         .route("/v1/admin/members/{id}/tags", post(admin_tags))
         .route("/v1/admin/members/{id}/node", post(admin_node))
         .route("/v1/admin/nodes/{id}/policy", post(admin_policy))
+        .route("/v1/events", get(events))
+        .layer(axum::middleware::from_fn_with_state(
+            shared.clone(),
+            recount_after,
+        ))
         .with_state(shared)
 }
 
@@ -1408,10 +1417,12 @@ async fn me(
 async fn members(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
-) -> ApiResult<Json<Vec<MemberView>>> {
+    headers: axum::http::HeaderMap,
+) -> ApiResult<Response> {
     member(&s, &peer)?;
     let ms = s.store.list().map_err(internal)?;
-    Ok(Json(ms.iter().map(MemberView::from).collect()))
+    let views: Vec<MemberView> = ms.iter().map(MemberView::from).collect();
+    Ok(etagged(&headers, &views))
 }
 
 async fn report(
@@ -1604,31 +1615,202 @@ fn provisioned_admits(m: &Member, me: &Member, s: &Settings) -> std::result::Res
 async fn nodes(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
-) -> ApiResult<Json<Vec<NodeView>>> {
+    headers: axum::http::HeaderMap,
+) -> ApiResult<Response> {
     member(&s, &peer)?;
+    Ok(etagged(&headers, &node_views(&s)?))
+}
+
+/// Every approved member as a node: its last report, whether it is online.
+fn node_views(s: &Inner) -> ApiResult<Vec<NodeView>> {
     let ms = s.store.list().map_err(internal)?;
     let settings = Settings::load(&s.dir);
     let machines = s.machines.lock().unwrap().clone();
     let reports = s.reports.lock().unwrap();
-    Ok(Json(
-        ms.iter()
-            .filter(|m| m.state == State::Approved)
-            .map(|m| {
-                let r = reports.get(&m.id);
-                let age = r.map(|(at, _)| at.elapsed());
-                NodeView {
-                    provisioned: provisioned_view(m, &machines, &settings),
-                    id: m.id.clone(),
-                    name: m.name.clone(),
-                    online: age.is_some_and(|a| a < ONLINE_FOR),
-                    seen: age.map(|a| a.as_secs()),
-                    report: r.map(|(_, r)| r.clone()),
-                    paused: m.paused,
-                    kind: kind_of(r.map(|(_, r)| r)).into(),
+    Ok(ms
+        .iter()
+        .filter(|m| m.state == State::Approved)
+        .map(|m| {
+            let r = reports.get(&m.id);
+            let age = r.map(|(at, _)| at.elapsed());
+            NodeView {
+                provisioned: provisioned_view(m, &machines, &settings),
+                id: m.id.clone(),
+                name: m.name.clone(),
+                online: age.is_some_and(|a| a < ONLINE_FOR),
+                seen: age.map(|a| a.as_secs()),
+                report: r.map(|(_, r)| r.clone()),
+                paused: m.paused,
+                kind: kind_of(r.map(|(_, r)| r)).into(),
+            }
+        })
+        .collect())
+}
+
+/// `body` as JSON with an `ETag` of its content, or `304` when the caller
+/// has that already (`If-None-Match`).
+fn etagged(headers: &axum::http::HeaderMap, body: &impl Serialize) -> Response {
+    let tag = format!("\"{}\"", crate::events::version(body));
+    let has = headers
+        .get(axum::http::header::IF_NONE_MATCH)
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|h| h.split(',').any(|t| t.trim() == tag));
+    let mut r = if has {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        Json(body).into_response()
+    };
+    if let Ok(v) = axum::http::HeaderValue::from_str(&tag) {
+        r.headers_mut().insert(axum::http::header::ETAG, v);
+    }
+    r
+}
+
+/// The version of each part of the pool (ADR-0073), as every member reads
+/// it: what changes with time alone (how long ago a node reported, when a
+/// lease expires) left out, whether a node is online kept.
+fn versions(s: &Inner) -> crate::events::Versions {
+    use crate::events::{self, version};
+    let mut v = crate::events::Versions::new();
+    if let Ok(ms) = s.store.list() {
+        let views: Vec<MemberView> = ms.iter().map(MemberView::from).collect();
+        v.insert(events::MEMBERS.into(), version(&views));
+    }
+    if let Ok(mut nodes) = node_views(s) {
+        for n in &mut nodes {
+            n.seen = None;
+        }
+        v.insert(events::NODES.into(), version(&nodes));
+    }
+    let mut leases: Vec<Lease> = s
+        .leases
+        .lock()
+        .unwrap()
+        .values()
+        .map(|(l, _, _)| Lease {
+            expires_in: None,
+            ..l.clone()
+        })
+        .collect();
+    leases.sort_by(|a, b| (a.created, &a.id).cmp(&(b.created, &b.id)));
+    v.insert(events::LEASES.into(), version(&leases));
+    v.insert(
+        events::UPSTREAMS.into(),
+        version(&crate::upstreams::load(&s.dir)),
+    );
+    v.insert(
+        events::TELEMETRY.into(),
+        version(&(s.collector.is_some(), crate::telemetry::collects())),
+    );
+    v
+}
+
+/// Count the versions again after each change a request made
+/// ([`recount_after`]), and every few seconds for what changes with time
+/// alone: a node that stopped reporting goes offline, an offer expires.
+/// Ends with the coordinator.
+async fn count_versions(s: std::sync::Weak<Inner>, recount: Arc<tokio::sync::Notify>) {
+    const EVERY: Duration = Duration::from_secs(5);
+    loop {
+        let _ = tokio::time::timeout(EVERY, recount.notified()).await;
+        let Some(strong) = s.upgrade() else { return };
+        let Ok(now) = tokio::task::spawn_blocking(move || {
+            let v = versions(&strong);
+            (strong, v)
+        })
+        .await
+        else {
+            return;
+        };
+        let (strong, v) = now;
+        strong.versions.send_if_modified(|old| {
+            if *old == v {
+                false
+            } else {
+                *old = v;
+                true
+            }
+        });
+    }
+}
+
+/// After a request that may have changed something (anything but `GET`
+/// and `HEAD`), have the versions counted again.
+async fn recount_after(
+    AxState(s): AxState<Shared>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let changes = !matches!(
+        *req.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD
+    );
+    let res = next.run(req).await;
+    if changes {
+        s.recount.notify_one();
+    }
+    res
+}
+
+/// `GET /v1/events` (members, ADR-0073): which parts of the pool changed,
+/// all of them first; changes within [`COALESCE`](crate::events::COALESCE)
+/// in one event, a comment on a quiet stream every
+/// [`PING_EVERY`](crate::events::PING_EVERY). It ends when the member is
+/// removed (or its certificate no longer approved).
+async fn events(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+) -> ApiResult<Response> {
+    use crate::events::{COALESCE, Event, PING_EVERY, frame};
+    member(&s, &peer)?;
+    let (mut tx, body) = http_body_util::channel::Channel::<bytes::Bytes, std::io::Error>::new(8);
+    let mut rx = s.versions.subscribe();
+    tokio::spawn(async move {
+        let mut sent = crate::events::Versions::new();
+        loop {
+            // Removed since: the stream ends, and with it what the member
+            // follows of the pool.
+            if member(&s, &peer).is_err() {
+                return;
+            }
+            let now = rx.borrow_and_update().clone();
+            let topics: crate::events::Versions = now
+                .iter()
+                .filter(|(t, v)| sent.get(*t) != Some(*v))
+                .map(|(t, v)| (t.clone(), v.clone()))
+                .collect();
+            if !topics.is_empty() {
+                if tx.send_data(frame(&Event { topics })).await.is_err() {
+                    return;
                 }
-            })
-            .collect(),
-    ))
+                sent = now;
+            }
+            loop {
+                tokio::select! {
+                    r = rx.changed() => {
+                        if r.is_err() {
+                            return;
+                        }
+                        break;
+                    }
+                    () = tokio::time::sleep(PING_EVERY) => {
+                        if tx.send_data(bytes::Bytes::from_static(b": ping\n\n")).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+            tokio::time::sleep(COALESCE).await;
+        }
+    });
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "text/event-stream"),
+            (axum::http::header::CACHE_CONTROL, "no-cache"),
+        ],
+        axum::body::Body::new(body),
+    )
+        .into_response())
 }
 
 /// The need a lease of `r` holds (ADR-0049 point 4), and where it comes
@@ -2346,7 +2528,8 @@ async fn lease_get(
 async fn leases(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
-) -> ApiResult<Json<Vec<Lease>>> {
+    headers: axum::http::HeaderMap,
+) -> ApiResult<Response> {
     member(&s, &peer)?;
     let mut v: Vec<Lease> = s
         .leases
@@ -2356,7 +2539,7 @@ async fn leases(
         .map(|(l, _, _)| l.clone())
         .collect();
     v.sort_by_key(|l| l.created);
-    Ok(Json(v))
+    Ok(etagged(&headers, &v))
 }
 
 /// `PUT /v1/leases/{id}/share` (its owner): share the lane, or stop
@@ -2400,7 +2583,8 @@ async fn lease_shared(
 async fn shared_list(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
-) -> ApiResult<Json<Vec<SharedLane>>> {
+    headers: axum::http::HeaderMap,
+) -> ApiResult<Response> {
     let me = member(&s, &peer)?;
     let all = s.store.list().map_err(internal)?;
     let name = |id: &str| all.iter().find(|m| m.id == id).map(|m| m.name.clone());
@@ -2436,7 +2620,7 @@ async fn shared_list(
         })
         .collect();
     out.sort_by(|a, b| (&a.node.name, &a.repo, &a.lane).cmp(&(&b.node.name, &b.repo, &b.lane)));
-    Ok(Json(out))
+    Ok(etagged(&headers, &out))
 }
 
 #[derive(Deserialize)]
@@ -2473,18 +2657,22 @@ async fn history(
 async fn telemetry_info(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
-) -> ApiResult<Json<crate::telemetry::Info>> {
+    headers: axum::http::HeaderMap,
+) -> ApiResult<Response> {
     let m = member(&s, &peer)?;
-    Ok(Json(crate::telemetry::Info {
-        enabled: s.collector.is_some(),
-        // The collector's failures are the pool's admins' to see.
-        last_error: if m.role == Role::Admin {
-            s.telemetry_error.lock().unwrap().0.clone()
-        } else {
-            None
+    Ok(etagged(
+        &headers,
+        &crate::telemetry::Info {
+            enabled: s.collector.is_some(),
+            // The collector's failures are the pool's admins' to see.
+            last_error: if m.role == Role::Admin {
+                s.telemetry_error.lock().unwrap().0.clone()
+            } else {
+                None
+            },
+            collects: crate::telemetry::collects(),
         },
-        collects: crate::telemetry::collects(),
-    }))
+    ))
 }
 
 /// `POST /v1/telemetry/{logs|metrics}`: OTLP/JSON from a member, passed on
@@ -3240,9 +3428,10 @@ async fn admin_role(
 async fn upstreams_list(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,
-) -> ApiResult<Json<Vec<crate::upstreams::PoolUpstream>>> {
+    headers: axum::http::HeaderMap,
+) -> ApiResult<Response> {
     member(&s, &peer)?;
-    Ok(Json(crate::upstreams::load(&s.dir)))
+    Ok(etagged(&headers, &crate::upstreams::load(&s.dir)))
 }
 
 /// `POST /v1/admin/upstreams`: add an upstream to the pool's list, or
@@ -3374,8 +3563,15 @@ pub async fn serve_with(
         fingerprint: pki::fingerprint(&ca_pem)?,
         provisioner: options.provisioner,
         upstreams: Mutex::new(()),
+        versions: tokio::sync::watch::Sender::new(crate::events::Versions::new()),
+        recount: Arc::new(tokio::sync::Notify::new()),
         ca_pem,
     });
+    shared.versions.send_replace(versions(&shared));
+    tokio::spawn(count_versions(
+        Arc::downgrade(&shared),
+        shared.recount.clone(),
+    ));
     if shared.provisioner.is_some() {
         let s = shared.clone();
         tokio::spawn(async move {
