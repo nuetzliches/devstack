@@ -86,17 +86,10 @@ def kept(old: str) -> dict:
     return out
 
 
-def own(old: str) -> list:
-    """devstack's own `[[agent]]` blocks (`own = true`), kept as they are."""
-    blocks = re.split(r"\n\n+", old)
-    return [b.strip() for b in blocks if re.search(r"^own = true$", b, re.M)]
-
-
 def main():
     src = Path(sys.argv[1]).read_text(encoding="utf-8")
     old = OUT.read_text(encoding="utf-8") if OUT.exists() else ""
     opens = kept(old)
-    mine = own(old)
     lines = [
         "# The coding agents devstack knows (ADR-0074): each one's user skill folder,",
         "# and the paths that tell it installed. Taken from src/agents.ts of",
@@ -119,8 +112,6 @@ def main():
         if aid in opens:
             lines.append(opens[aid])
         lines.append("")
-    for block in mine:
-        lines += [block, ""]
     OUT.write_text("\n".join(lines), encoding="utf-8", newline="\n")
     print(f"{n} agents written to {OUT}")
 

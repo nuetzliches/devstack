@@ -690,9 +690,6 @@ metadata:
 ---
 ```
 
-Which agents get the skills is chosen in *Programs and agents* (the path
-menu's dialog, also linked from the Skills page).
-
 ## Several pools
 
 A machine can belong to several pools, a customer's beside the team's, each

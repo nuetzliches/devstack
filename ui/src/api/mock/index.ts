@@ -691,9 +691,9 @@ export class MockTransport implements Transport {
         { id: 'powershell', label: 'PowerShell', kind: 'terminal' },
         { id: 'vscode', label: 'VS Code', kind: 'editor' },
         { id: 'github-desktop', label: 'GitHub Desktop', kind: 'git' },
-        { id: 'claude', label: 'Claude Desktop', kind: 'agent', prompt: 'prefill', agent: 'claude-code' },
-        { id: 'claude-cli', label: 'Claude Code', kind: 'agent', prompt: 'prefill', agent: 'claude-code' },
-        { id: 'orca', label: 'Orca', kind: 'agent', prompt: 'send', agent: 'orca' },
+        { id: 'claude', label: 'Claude Desktop', kind: 'agent', prompt: 'prefill' },
+        { id: 'claude-cli', label: 'Claude Code', kind: 'agent', prompt: 'prefill' },
+        { id: 'orca', label: 'Orca', kind: 'agent', prompt: 'send' },
       ]);
     if (p === '/hub/open' && method === 'POST') return empty(204);
     // The hub writes the prompts (ADR-0046, amendment 2026-10-22); the mock's are short.

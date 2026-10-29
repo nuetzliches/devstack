@@ -18,9 +18,6 @@ and listed with their assets on the
   frontmatter group and tag it. The Skills page lists every skill as a
   row by group, with search, filters by set, state and group, when it was
   written here and into which agents, and its detail on a click.
-- **Programs and agents**: the path menu's dialog also says which coding
-  agents get the pools' skills, those the menu cannot open (Codex,
-  OpenCode, Copilot) included; the Skills page opens it.
 
 ### Fixed
 

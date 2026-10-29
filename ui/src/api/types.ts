@@ -799,8 +799,6 @@ export type Opener = {
   kind: 'files' | 'terminal' | 'editor' | 'git' | 'agent';
   /** An agent started with a prompt the hub writes: shown for the user to send, or sent at once. */
   prompt?: 'prefill' | 'send';
-  /** The agent of the agent table it is (ADR-0077): its skills switch is shown beside it. */
-  agent?: string;
 };
 
 /** The prompts the hub writes for a coding agent (`GET /hub/prompt`, ADR-0046 amendment 2026-10-22). */

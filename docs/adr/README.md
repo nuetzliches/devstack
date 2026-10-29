@@ -158,4 +158,4 @@ stay.
 | [0073](0073-a-pool-tells-its-members-what-changed-over-one-stream.md) | A pool tells its members what changed, over one stream; nobody polls the coordinator | Accepted (card in the pull request) |
 | [0074](0074-a-pool-hands-out-skill-sets-the-hub-installs-them-for-the-agents.md) | A pool hands out skill sets; each member's hub installs them into the coding agents' user skill folders | Accepted (card in the pull request) |
 | [0075](0075-a-lanes-steady-use-is-measured-and-shown-never-admitted-by.md) | A lane's steady use is measured and shown, never admitted by | Accepted (card in the pull request) |
-| [0077](0077-a-sets-skills-are-grouped-and-switched-one-by-one.md) | A set's skills are grouped by their frontmatter and switched one by one; "agent" is one term | Accepted (card in the pull request) |
+| [0077](0077-a-sets-skills-are-grouped-and-switched-one-by-one.md) | A set's skills are grouped by their frontmatter and switched one by one | Accepted (card in the pull request; point 5 taken back) |

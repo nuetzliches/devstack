@@ -5,8 +5,8 @@
 // by default, a skill the set gains later too), a group at once. Its updates
 // come at once or wait, as chosen per set. The hub writes only what it
 // installed and left unchanged: a skill of the user's own, or one changed
-// by hand, stays and is shown as a conflict. Which agents get the skills is
-// chosen in "Programs and agents". The state arrives on `/hub/events`.
+// by hand, stays and is shown as a conflict. The user switches each agent
+// found on. The state arrives on `/hub/events`.
 import { computed, onMounted, ref } from 'vue';
 import { api, paths } from '@/api';
 import type { PoolSkillsState, SkillSetState, SkillState } from '@/api/types';
@@ -15,17 +15,14 @@ import { ago, useNow } from '@/lib/format';
 import { counts, filtered, groupOf, groups, NO_FILTER, rows, setKey, STATUS_LABEL, type SkillFilter, type SkillRow, type SkillStatus } from '@/lib/skills';
 import { useHub } from '@/stores/hub';
 import Icon from '@/components/icons/Icon.vue';
-import OpenersDialog from '@/components/OpenersDialog.vue';
 
 const hub = useHub();
 const now = useNow();
 const problem = ref<string | null>(null);
 const busy = ref<string | null>(null);
 const state = computed<PoolSkillsState | null>(() => hub.skills);
-const agentsDialog = ref(false);
 
 onMounted(async () => {
-  void hub.loadOpeners();
   if (hub.skills) return;
   // Once, in case the hub's stream has not told yet (an older hub never does).
   try {
@@ -45,8 +42,15 @@ async function run(key: string, label: string, method: 'POST' | 'PUT', path: str
 }
 
 const agentsOn = computed(() => (state.value?.agents ?? []).filter((a) => a.enabled));
-function agentOff(a: { id: string; name: string }) {
-  void run(`agent:${a.id}`, `No skills into ${a.name}`, 'PUT', paths.skillsAgent(a.id), { enabled: false }, `${a.name} gets no pool skills; what devstack installed there goes`);
+function toggleAgent(a: { id: string; name: string; enabled: boolean }) {
+  void run(
+    `agent:${a.id}`,
+    a.enabled ? `No skills into ${a.name}` : `Skills into ${a.name}`,
+    'PUT',
+    paths.skillsAgent(a.id),
+    { enabled: !a.enabled },
+    a.enabled ? `${a.name} gets no pool skills; what devstack installed there goes` : `${a.name} gets the accepted sets' skills`,
+  );
 }
 
 // Sets.
@@ -153,25 +157,23 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
         <p v-if="!state && !problem" class="muted">Reading…</p>
 
         <template v-if="state">
+          <h3>Agents</h3>
+          <p v-if="!state.agents.length" class="muted small" data-testid="skills-no-agents">No coding agent found on this machine.</p>
+          <p v-else-if="!agentsOn.length" class="warn-text small">Switch on the agents that should get the skills.</p>
           <div class="agents" data-testid="skills-agents">
-            <span class="label">Into</span>
-            <span v-for="a in agentsOn" :key="a.id" class="pill sm outline agent-chip" :title="a.dir" data-testid="skills-agent-chip">
-              {{ a.name }}
-              <button
-                type="button"
-                class="chip-x"
-                :aria-label="`No skills into ${a.name}`"
-                :title="`No skills into ${a.name}: what devstack installed in ${a.dir} goes`"
-                :disabled="busy === `agent:${a.id}`"
-                @click="agentOff(a)"
-              >
-                <Icon name="x" :size="11" />
-              </button>
-            </span>
-            <span v-if="!agentsOn.length" class="warn-text small">no agent yet</span>
-            <button type="button" class="btn btn-ghost btn-sm" data-testid="skills-agents-manage" @click="agentsDialog = true">
-              <Icon name="wrench" :size="13" /> Programs and agents…
-            </button>
+            <label
+              v-for="a in state.agents"
+              :key="a.id"
+              class="agent"
+              :class="{ on: a.enabled }"
+              :title="a.dir"
+              data-testid="skills-agent"
+              :data-id="a.id"
+            >
+              <input type="checkbox" :checked="a.enabled" :disabled="busy === `agent:${a.id}`" data-testid="skills-agent-on" @change="toggleAgent(a)" />
+              <strong>{{ a.name }}</strong>
+              <code class="faint small">{{ a.dir }}</code>
+            </label>
           </div>
 
           <h3>Sets</h3>
@@ -315,7 +317,6 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
         </template>
       </div>
     </section>
-    <OpenersDialog :open="agentsDialog" :openers="hub.openers ?? []" @close="agentsDialog = false" />
   </div>
 </template>
 
@@ -334,28 +335,19 @@ h3 {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  margin-top: 12px;
+  gap: 8px;
 }
-.agent-chip {
+.agent {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-}
-.chip-x {
-  display: inline-flex;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
+  gap: 6px;
+  padding: 4px 10px 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
   cursor: pointer;
 }
-.chip-x:hover {
-  color: var(--text);
-}
-.agents .label {
-  font-size: 13px;
-  color: var(--text-muted);
+.agent.on {
+  border-color: var(--border-strong);
 }
 .list,
 .skill-list {

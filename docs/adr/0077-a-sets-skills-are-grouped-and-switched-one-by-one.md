@@ -1,4 +1,4 @@
-# ADR-0077: A set's skills are grouped by their frontmatter and switched one by one; "agent" is one term
+# ADR-0077: A set's skills are grouped by their frontmatter and switched one by one
 
 - **Status:** Accepted (2026-10-29)
 - **Date:** 2026-10-29
@@ -14,14 +14,14 @@ things were missing on the Skills page:
 - when a skill reached this machine, as opposed to when the pool fetched it.
 
 The page listed the agents that get skills, and the path menu's dialog
-listed the programs "Open with" starts, Claude Code among them. These were
-two lists with no link between them, and the menu did not know Codex,
-OpenCode or Copilot at all: they register no URL scheme.
+listed the programs "Open with" starts, Claude Code among them: two lists
+with no link between them.
 
 ## Decision
 
 The owner approved the review card in the conversation on **2026-10-29**,
-all five points:
+all five points. After trying it the same day, the owner took point 5 back
+(see below): it was built and removed again before the merge.
 
 | Category | Point | Beats | Reversing costs |
 |---|---|---|---|
@@ -29,7 +29,7 @@ all five points:
 | contract | A set's manifest carries per skill `group` (and `tags` from `metadata.tags`), additively; an older coordinator leaves them out, the skills then have no group. | Groups derived in the hub (every hub would read the archives). | Fields in the pool protocol; additive. |
 | concept | A member switches single skills and groups of an accepted set on or off; on accepting everything is on, a skill the set gains later too; a skill switched off goes from the agents' folders (unless changed there). | Whole sets only; new skills only after the user's word. | The switches live in the hub; without them the whole set applies again. |
 | contract | `GET /hub/skills` carries per skill `enabled`, `group`, `tags`, `updated` (when this hub wrote it) and the agents that hold it; `PUT /hub/skills/sets/{pool}/{set}/skills/{name} {enabled}` and the same for a group. | Only the coordinator's fetch time. | Hub API, additive. |
-| term | "Agent" is one term: an entry of the agent table, with a skill folder and/or a way to open it. One dialog, "Programs and agents", shows both: in the menu (per browser) and skills (per machine); the Skills page links to it. | Two lists with terms of their own; moving the menu's choice into the hub. | Two dialogs again; UI only. |
+| term (taken back) | "Agent" is one term: an entry of the agent table, with a skill folder and/or a way to open it. One dialog, "Programs and agents", shows both: in the menu (per browser) and skills (per machine); the Skills page links to it. | Two lists with terms of their own; moving the menu's choice into the hub. | Two dialogs again; UI only. |
 
 What was built:
 
@@ -42,17 +42,21 @@ What was built:
    Switching a group switches each skill of it that the set has now; the
    skills without a group are the group `-` in the route.
 3. **The Skills page.**
-   - Above: the agents that get skills, and "Programs and agents…".
+   - Above: the agents found here, each with its skill folder and a switch.
    - Then the sets with accept, updates at once or wait, take the updates, remove.
    - Then every skill as a row, by group: a switch, the name (opens its detail: description, set and source, version, when written here, in which agents, a conflict), description, tags, state and "updated … ago".
    - Above the rows: search (name, description, tags), the set, and chips for the state (with counts) and the group.
    - A group switches all its skills at once.
-4. **"Programs and agents"** (the path menu's dialog, now also from the Skills page):
-   - The menu's programs as before. An agent among them that has a skill folder has a `skills` pill that switches it.
-   - Below, the agents the menu does not open (Codex, OpenCode, Copilot) with their folder and a switch.
-   - The menu's order and choice stay in the browser, the skills switches in the hub; the dialog says which.
-   - The path menu's entry reads "Programs and agents…".
-5. **The agent table** names Orca (`own = true`, kept by `scripts/sync-agents.py`) with `[agent.open] program = "orca"` and no skill folder. An opener says which agent it is (`agent`): Claude Code and Claude Desktop the table's `claude-code`, the editors Cursor and Windsurf their agents of the same id. VS Code is not tied to GitHub Copilot's folder: whether Copilot in VS Code reads `~/.copilot/skills` is not established.
+
+**Point 5 taken back.** One dialog, "Programs and agents", showed the
+path menu's programs and the agents' skills switches side by side: an
+agent in the menu with a skill folder had a switch beside it, the agents
+the menu cannot open a section of their own, and Orca and the editors
+Cursor and Windsurf were tied to their agents of the table. Tried, it
+mixed two choices that are kept in different places (the menu per
+browser, the skills per machine) and raised more questions than it
+answered (why Orca has no switch, whether VS Code is Copilot). The menu's
+dialog is as before; the Skills page chooses the agents itself.
 
 ## Alternatives considered
 
@@ -70,14 +74,10 @@ What was built:
 
 - A member can take a set in part; its owner still decides who gets the
   set at all.
-- The menu's dialog is reachable from two places; it lists agents it cannot
-  open.
 
 ## Enforced by
 
 `crates/devstack-node/src/skills.rs` (`Front`, `frontmatter`, `SkillEntry`),
 `crates/devstack-hub/src/poolskills.rs` (`Decision::off`, `set_skill`,
-`set_group`, `Installed::updated`, the view), `crates/devstack-hub/src/open.rs`
-(`Opener::agent`), `crates/devstack-skills/src/agents.rs`,
-`crates/devstack-skills/agents.toml`, `ui/src/views/SkillsView.vue`,
-`ui/src/lib/skills.ts`, `ui/src/components/OpenersDialog.vue`.
+`set_group`, `Installed::updated`, the view), `ui/src/views/SkillsView.vue`,
+`ui/src/lib/skills.ts`.

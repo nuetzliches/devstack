@@ -43,10 +43,6 @@ pub struct Opener {
     /// Whether, and how, it can be started with a prompt.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<PromptMode>,
-    /// The agent of the agent table it is (ADR-0077): the dialog shows its
-    /// skills switch beside it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent: Option<&'static str>,
 }
 
 /// A program found, and how it is started.
@@ -81,26 +77,11 @@ const EDITORS: &[(&str, &str, Kind)] = &[
 /// The programs found by their registered scheme, in menu order: the
 /// editors, then the agents of the agent table that say how they are
 /// opened (`[agent.open]`, ADR-0074).
-fn links() -> Vec<(&'static str, &'static str, Kind, Option<&'static str>)> {
-    // An editor that is an agent of the table too (Cursor, Windsurf: the
-    // same id), with a skill folder: its skills switch is shown beside it.
-    let mut out: Vec<_> = EDITORS
-        .iter()
-        .map(|&(s, l, k)| {
-            let agent = devstack_skills::agents::get(s)
-                .filter(|a| a.skills.is_some())
-                .map(|a| a.id.as_str());
-            (s, l, k, agent)
-        })
-        .collect();
+fn links() -> Vec<(&'static str, &'static str, Kind)> {
+    let mut out = EDITORS.to_vec();
     for a in devstack_skills::agents::all() {
         for l in a.open.iter().flat_map(|o| &o.links) {
-            out.push((
-                l.scheme.as_str(),
-                l.label.as_str(),
-                Kind::Agent,
-                Some(a.id.as_str()),
-            ));
+            out.push((l.scheme.as_str(), l.label.as_str(), Kind::Agent));
         }
     }
     out
@@ -120,7 +101,6 @@ pub fn found() -> Vec<Found> {
                     LocalKind::Terminal => Kind::Terminal,
                 },
                 prompt: None,
-                agent: None,
             },
             how: How::Local(l),
         })
@@ -131,7 +111,7 @@ pub fn found() -> Vec<Found> {
     let links = links();
     let schemes: Vec<&str> = links.iter().map(|l| l.0).collect();
     let registered = devstack_desktop::registered_schemes(&schemes);
-    for &(scheme, label, kind, agent) in &links {
+    for &(scheme, label, kind) in &links {
         if registered.contains(&scheme) {
             out.push(Found {
                 opener: Opener {
@@ -139,7 +119,6 @@ pub fn found() -> Vec<Found> {
                     label,
                     kind,
                     prompt: (kind == Kind::Agent).then_some(PromptMode::Prefill),
-                    agent,
                 },
                 how: How::Link(scheme),
             });
@@ -152,20 +131,17 @@ pub fn found() -> Vec<Found> {
                 label: "GitHub Desktop",
                 kind: Kind::Git,
                 prompt: None,
-                agent: None,
             },
             how: How::GitHubDesktop(exe),
         });
     }
     if let Some(orca) = devstack_desktop::orca() {
-        let a = devstack_skills::agents::Agent::by_program("orca");
         out.push(Found {
             opener: Opener {
                 id: "orca",
-                label: a.map_or("Orca", |a| a.name.as_str()),
+                label: "Orca",
                 kind: Kind::Agent,
                 prompt: Some(PromptMode::Send),
-                agent: a.map(|a| a.id.as_str()),
             },
             how: How::Orca(orca),
         });
@@ -353,22 +329,6 @@ fn orca_run(exe: &Path, args: &[&str]) -> Result<(), (String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_program_that_is_an_agent_with_a_skill_folder_says_which() {
-        let agent = |scheme: &str| {
-            links()
-                .into_iter()
-                .find(|l| l.0 == scheme)
-                .and_then(|l| l.3)
-        };
-        assert_eq!(agent("claude-cli"), Some("claude-code"));
-        assert_eq!(agent("claude"), Some("claude-code"));
-        assert_eq!(agent("cursor"), Some("cursor"));
-        assert_eq!(agent("windsurf"), Some("windsurf"));
-        assert_eq!(agent("vscode"), None);
-        assert_eq!(agent("zed"), None);
-    }
 
     #[test]
     fn editor_links_carry_the_path_with_forward_slashes() {
