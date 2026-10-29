@@ -12,7 +12,7 @@ const mem = computed(() => (stack.history.get(props.seriesKey) ?? []).map((p) =>
 </script>
 
 <template>
-  <div v-if="load" class="row-usage hide-sm" :title="`CPU ${percent(load.cpu)} · memory ${bytes(load.memory)} (last 10 min in the graph)`" data-testid="row-usage">
+  <div v-if="load" class="row-usage hide-sm" :title="`CPU ${percent(load.cpu)} of one core · memory ${bytes(load.memory)} (last 10 min in the graph)`" data-testid="row-usage">
     <Sparkline :values="mem" :width="56" :height="18" :min-max="8 * 1024 * 1024" :zero-based="false" color="var(--ok)" />
     <span class="nums tabular">
       <span>{{ bytes(load.memory) }}</span>

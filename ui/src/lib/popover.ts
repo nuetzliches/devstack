@@ -9,6 +9,7 @@ export function usePopover(root: Ref<HTMLElement | null>, trigger: Ref<HTMLEleme
   }
   function onKey(e: KeyboardEvent) {
     if (e.key === 'Escape' && open.value) {
+      e.preventDefault();
       open.value = false;
       trigger.value?.focus();
     }

@@ -43,10 +43,11 @@ const to = computed(() => ({ name: 'service', params: { stack: stack.id ?? '', n
 const route = useRoute();
 const router = useRouter();
 const selected = computed(() => route.name === 'service' && route.params.name === props.service.name);
-/** A click anywhere on the row but its buttons and links opens the detail. */
+/** A click anywhere on the row but its buttons and links opens the detail;
+ *  on the row picked, closes it. */
 function open(e: MouseEvent) {
   if ((e.target as Element).closest('button, a, input, label')) return;
-  void router.push(to.value);
+  void router.push(selected.value ? { name: 'overview', params: { stack: stack.id ?? '' } } : to.value);
 }
 </script>
 

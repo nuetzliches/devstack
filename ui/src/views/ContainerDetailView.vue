@@ -3,7 +3,7 @@
 // state, ports, start/stop/restart, its load and its log.
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
-import { bytes, percent, webUrl } from '@/lib/format';
+import { CPU_HINT, bytes, percent, webUrl } from '@/lib/format';
 import { containerLook, containerRefuses } from '@/lib/status';
 import { notForwardedText } from '@/lib/lanes';
 import { useStack } from '@/stores/stack';
@@ -12,6 +12,7 @@ import LogView from '@/components/LogView.vue';
 import { paths, v1 } from '@/api';
 import Sparkline from '@/components/Sparkline.vue';
 import Icon from '@/components/icons/Icon.vue';
+import DetailClose from '@/components/DetailClose.vue';
 
 const route = useRoute();
 const stack = useStack();
@@ -74,16 +75,19 @@ const kv = computed(() => {
           </div>
         </div>
       </div>
-      <div v-if="!stack.readOnly" class="btn-group">
-        <button v-if="!running" type="button" class="btn btn-primary" :disabled="!!busy || stack.stale || !!refuses" :title="refuses ?? undefined" data-testid="action-container-start" @click="stack.containerAction(group, service, 'start')">
-          <span v-if="busy === 'start'" class="spinner" /><Icon v-else name="play" /> Start
-        </button>
-        <button v-if="running" type="button" class="btn" :disabled="!!busy || stack.stale || !!refuses" :title="refuses ?? undefined" data-testid="action-container-restart" @click="stack.containerAction(group, service, 'restart')">
-          <span v-if="busy === 'restart'" class="spinner" /><Icon v-else name="restart" /> Restart
-        </button>
-        <button v-if="running" type="button" class="btn btn-stop" :disabled="!!busy || stack.stale" data-testid="action-container-stop" @click="stack.containerAction(group, service, 'stop')">
-          <span v-if="busy === 'stop'" class="spinner" /><Icon v-else name="stop" /> Stop
-        </button>
+      <div class="row head-right">
+        <div v-if="!stack.readOnly" class="btn-group">
+          <button v-if="!running" type="button" class="btn btn-primary" :disabled="!!busy || stack.stale || !!refuses" :title="refuses ?? undefined" data-testid="action-container-start" @click="stack.containerAction(group, service, 'start')">
+            <span v-if="busy === 'start'" class="spinner" /><Icon v-else name="play" /> Start
+          </button>
+          <button v-if="running" type="button" class="btn" :disabled="!!busy || stack.stale || !!refuses" :title="refuses ?? undefined" data-testid="action-container-restart" @click="stack.containerAction(group, service, 'restart')">
+            <span v-if="busy === 'restart'" class="spinner" /><Icon v-else name="restart" /> Restart
+          </button>
+          <button v-if="running" type="button" class="btn btn-stop" :disabled="!!busy || stack.stale" data-testid="action-container-stop" @click="stack.containerAction(group, service, 'stop')">
+            <span v-if="busy === 'stop'" class="spinner" /><Icon v-else name="stop" /> Stop
+          </button>
+        </div>
+        <DetailClose />
       </div>
     </header>
 
@@ -122,14 +126,14 @@ const kv = computed(() => {
         <div class="card-body res">
           <div class="metric">
             <div class="mh">
-              <span class="ml"><Icon name="cpu" :size="14" /> CPU</span>
+              <span class="ml" :title="CPU_HINT"><Icon name="cpu" :size="14" /> CPU</span>
               <span class="mv tabular">{{ percent(current?.cpu) }}</span>
             </div>
             <Sparkline :values="cpuValues" :width="300" :height="44" :min-max="5" fluid color="var(--accent)" label="CPU history" />
           </div>
           <div class="metric">
             <div class="mh">
-              <span class="ml"><Icon name="hardDrive" :size="14" /> Memory</span>
+              <span class="ml"><Icon name="memoryStick" :size="14" /> Memory</span>
               <span class="mv tabular">{{ bytes(current?.memory) }}</span>
             </div>
             <Sparkline :values="memValues" :width="300" :height="44" :min-max="8 * 1024 * 1024" :zero-based="false" fluid color="var(--ok)" label="Memory history" />

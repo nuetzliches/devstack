@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { paths, v1, type ServiceAction } from '@/api';
-import { ago, bytes, dateTime, percent, serviceUrl, shortBuild, useNow } from '@/lib/format';
+import { CPU_HINT, ago, bytes, dateTime, percent, serviceUrl, shortBuild, useNow } from '@/lib/format';
 import { kindIcon, kindLabel, statusLook } from '@/lib/status';
 import { prepareLine } from '@/lib/store';
 import { viaText } from '@/lib/journal';
@@ -17,6 +17,7 @@ import KeptLogsModal from '@/components/KeptLogsModal.vue';
 import BuildTimeline from '@/components/BuildTimeline.vue';
 import Sparkline from '@/components/Sparkline.vue';
 import Icon from '@/components/icons/Icon.vue';
+import DetailClose from '@/components/DetailClose.vue';
 import type { IconName } from '@/components/icons/icons';
 
 const route = useRoute();
@@ -115,22 +116,25 @@ const kv = computed(() => {
             </div>
           </div>
         </div>
-        <div v-if="!stack.readOnly" class="btn-group">
-          <template v-for="a in actions" :key="a.action">
-            <button
-              v-if="a.show"
-              type="button"
-              class="btn"
-              :class="{ 'btn-primary': a.primary && a.action !== 'promote', 'btn-warn': a.action === 'promote', 'btn-stop': a.action === 'stop' }"
-              :disabled="!!busy || stack.stale"
-              :title="a.title"
-              :data-testid="`action-${a.action}`"
-              @click="stack.serviceAction(svc.name, a.action)"
-            >
-              <span v-if="busy === a.action" class="spinner" /><Icon v-else :name="a.icon" />
-              {{ busy === a.action ? `${a.label}…` : a.label }}
-            </button>
-          </template>
+        <div class="row head-right">
+          <div v-if="!stack.readOnly" class="btn-group">
+            <template v-for="a in actions" :key="a.action">
+              <button
+                v-if="a.show"
+                type="button"
+                class="btn"
+                :class="{ 'btn-primary': a.primary && a.action !== 'promote', 'btn-warn': a.action === 'promote', 'btn-stop': a.action === 'stop' }"
+                :disabled="!!busy || stack.stale"
+                :title="a.title"
+                :data-testid="`action-${a.action}`"
+                @click="stack.serviceAction(svc.name, a.action)"
+              >
+                <span v-if="busy === a.action" class="spinner" /><Icon v-else :name="a.icon" />
+                {{ busy === a.action ? `${a.label}…` : a.label }}
+              </button>
+            </template>
+          </div>
+          <DetailClose />
         </div>
       </header>
 
@@ -195,7 +199,7 @@ const kv = computed(() => {
             <div class="card-body res">
               <div class="metric">
                 <div class="mh">
-                  <span class="ml"><Icon name="cpu" :size="14" /> CPU</span>
+                  <span class="ml" :title="CPU_HINT"><Icon name="cpu" :size="14" /> CPU</span>
                   <span class="mv tabular">{{ percent(current?.cpu) }}</span>
                 </div>
                 <Sparkline :values="cpuValues" :width="300" :height="44" :min-max="5" fluid color="var(--accent)" :label="`CPU history, peak ${percent(peakCpu)}`" />
@@ -203,7 +207,7 @@ const kv = computed(() => {
               </div>
               <div class="metric">
                 <div class="mh">
-                  <span class="ml"><Icon name="hardDrive" :size="14" /> Memory</span>
+                  <span class="ml"><Icon name="memoryStick" :size="14" /> Memory</span>
                   <span class="mv tabular">{{ bytes(current?.memory) }}</span>
                 </div>
                 <Sparkline :values="memValues" :width="300" :height="44" :min-max="8 * 1024 * 1024" :zero-based="false" fluid color="var(--ok)" :label="`Memory history, peak ${bytes(peakMem)}`" />

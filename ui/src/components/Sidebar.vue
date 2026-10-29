@@ -209,7 +209,10 @@ function onDown(e: PointerEvent) {
   if (menuEl.value && !menuEl.value.contains(e.target as Node)) closeMenu();
 }
 function onKey(e: KeyboardEvent) {
-  if (e.key === 'Escape') closeMenu();
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeMenu();
+  }
 }
 watch(menu, (m, before) => {
   if (m && !before) {

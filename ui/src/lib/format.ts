@@ -18,6 +18,9 @@ export function bytes(n: number | null | undefined): string {
 
 /** CPU as a share of one core: one decimal up to 100% (so values side by
  *  side read alike, 4.5% next to 23.0%), whole numbers above (several cores). */
+/** The tooltip that explains `percent` where CPU is shown. */
+export const CPU_HINT = '% of one core: 100% is one core busy, a build on four cores shows 400%.';
+
 export function percent(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
   if (n === 0) return '0%';

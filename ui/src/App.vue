@@ -44,7 +44,10 @@ function onGlobalKey(e: KeyboardEvent) {
     if (t?.closest('input, textarea, [contenteditable]')) return;
     e.preventDefault();
     ui.toggleSidebar();
-  } else if (e.key === 'Escape' && ui.drawerOpen) ui.drawerOpen = false;
+  } else if (e.key === 'Escape' && ui.drawerOpen) {
+    e.preventDefault();
+    ui.drawerOpen = false;
+  }
 }
 onMounted(() => window.addEventListener('keydown', onGlobalKey));
 onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKey));

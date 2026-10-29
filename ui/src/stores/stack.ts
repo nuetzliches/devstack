@@ -69,6 +69,14 @@ export const useStack = defineStore('stack', () => {
   const stale = computed(() => !live.value);
   const services = computed(() => view.value?.services ?? []);
   const pending = computed(() => services.value.filter((s) => s.candidate));
+  /** The colour of what is not live yet, from the worst of it: a failed
+   *  candidate, one held for a promote, else one on its way. */
+  const pendingTone = computed<'danger' | 'warn' | 'accent'>(() => {
+    const states = pending.value.map((s) => s.candidate!.state);
+    if (states.includes('failed')) return 'danger';
+    if (states.includes('held')) return 'warn';
+    return 'accent';
+  });
 
   // ------------------------------------------------------------ selection
 
@@ -1092,6 +1100,7 @@ export const useStack = defineStore('stack', () => {
     busy,
     services,
     pending,
+    pendingTone,
     changeTick,
     select,
     svc,
