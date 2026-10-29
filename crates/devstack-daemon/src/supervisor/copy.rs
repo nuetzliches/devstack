@@ -15,7 +15,7 @@ impl Supervisor {
     /// A lane runs from a copy of its worktree, never from the worktree itself
     /// (ADR-0024): git and the tools that manage worktrees can remove one at
     /// any time, and a process inside it would hold it open (Windows).
-    pub(super) fn runs_from_copy(&self) -> bool {
+    pub(crate) fn runs_from_copy(&self) -> bool {
         // A lane on a node runs from a copy of its mirror too: `prepare`
         // installs there what the mirror lacks (ignored files, node_modules).
         !self.lane.is_empty() || crate::remote_lane()
