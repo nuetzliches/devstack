@@ -129,7 +129,7 @@ const kv = computed(() => {
           </div>
           <div class="metric">
             <div class="mh">
-              <span class="ml"><Icon name="hardDrive" :size="14" /> Memory</span>
+              <span class="ml"><Icon name="memoryStick" :size="14" /> Memory</span>
               <span class="mv tabular">{{ bytes(current?.memory) }}</span>
             </div>
             <Sparkline :values="memValues" :width="300" :height="44" :min-max="8 * 1024 * 1024" :zero-based="false" fluid color="var(--ok)" label="Memory history" />

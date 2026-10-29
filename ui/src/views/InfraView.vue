@@ -58,7 +58,7 @@ function summary(group: string) {
         <div v-else class="empty"><p>No containers.</p></div>
         <footer v-if="usageOf(g.group)" class="card-foot muted">
           <span><Icon name="cpu" :size="13" /> {{ percent(usageOf(g.group)!.cpu) }}</span>
-          <span><Icon name="hardDrive" :size="13" /> {{ bytes(usageOf(g.group)!.memory) }}</span>
+          <span><Icon name="memoryStick" :size="13" /> {{ bytes(usageOf(g.group)!.memory) }}</span>
         </footer>
       </section>
     </div>

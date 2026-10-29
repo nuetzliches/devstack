@@ -74,17 +74,17 @@ function diskTotal(d: LaneDisk) {
     </header>
     <div class="card-body lane-body">
       <div class="metric">
-        <span class="ml" :title="CPU_HINT">CPU</span>
+        <span class="ml" :title="CPU_HINT"><Icon name="cpu" :size="13" /> CPU</span>
         <span class="mv tabular">{{ percent(lane.cpu) }}</span>
         <Sparkline :values="cpuSeries(`lane:${lane.name}`)" :width="240" :height="40" :min-max="10" fluid :label="`Lane ${lane.name} CPU`" />
       </div>
       <div class="metric">
-        <span class="ml">Memory</span>
+        <span class="ml"><Icon name="memoryStick" :size="13" /> Memory</span>
         <span class="mv tabular">{{ bytes(lane.memory) }}</span>
         <Sparkline :values="memSeries(`lane:${lane.name}`)" :width="240" :height="40" :min-max="16 * 1024 * 1024" :zero-based="false" fluid color="var(--ok)" :label="`Lane ${lane.name} memory`" />
       </div>
       <div v-if="lane.disk" class="metric disk">
-        <span class="ml">Disk</span>
+        <span class="ml"><Icon name="hardDrive" :size="13" /> Disk</span>
         <span class="mv tabular">{{ bytes(diskTotal(lane.disk)) }}</span>
         <div class="bar" role="img" :aria-label="`Disk use of lane ${lane.name}`">
           <span v-for="p in diskParts(lane.disk)" :key="p.k" :title="`${p.label}: ${p.na ? 'n/a' : bytes(p.v)}. ${p.tip}`" :style="{ width: `${(p.v / Math.max(1, diskTotal(lane.disk))) * 100}%`, background: p.color }" />
@@ -132,6 +132,9 @@ function diskTotal(d: LaneDisk) {
   min-width: 0;
 }
 .ml {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
