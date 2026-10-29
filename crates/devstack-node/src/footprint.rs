@@ -5,7 +5,7 @@
 //! Only the running coordinator writes the file (a temporary file, then
 //! rename).
 
-use crate::share::Need;
+use crate::share::{Amount, Need};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -33,6 +33,10 @@ pub struct Run {
     /// absent from an older node, whose CPU is not counted.
     #[serde(default)]
     pub capped: bool,
+    /// Its steady use once up (the 95th percentile of CPU and memory);
+    /// absent until it was up for a minute, and from an older node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steady: Option<Amount>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +48,8 @@ struct Entry {
     /// Its CPU counts (ADR-0066); absent from an entry stored before.
     #[serde(default)]
     capped: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    steady: Option<Amount>,
 }
 
 pub struct Footprints {
@@ -92,9 +98,13 @@ impl Footprints {
                     was.cpus = 0.0;
                 }
                 let raised = was.max(peak);
-                let changed = raised != e.peak || run.capped != e.capped;
+                // A percentile is not raised: the latest covers more of
+                // the run.
+                let steady = run.steady.or(e.steady);
+                let changed = raised != e.peak || run.capped != e.capped || steady != e.steady;
                 e.peak = raised;
                 e.capped = run.capped;
+                e.steady = steady;
                 e.at = now;
                 changed
             }
@@ -104,6 +114,7 @@ impl Footprints {
                     at: now,
                     peak,
                     capped: run.capped,
+                    steady: run.steady,
                 });
                 if runs.len() > RUNS {
                     runs.remove(0);
@@ -136,6 +147,19 @@ impl Footprints {
         Some((most, runs.len()))
     }
 
+    /// The most steady use of those runs that measured one; `None`: none
+    /// did. Shown beside the need, never admitted by.
+    pub fn steady(&self, repo: &str, profile: Option<&str>) -> Option<Amount> {
+        let by = self.by.lock().unwrap();
+        by.get(&key(repo, profile))?
+            .iter()
+            .filter_map(|e| e.steady)
+            .reduce(|a, b| Amount {
+                cpus: a.cpus.max(b.cpus),
+                memory: a.memory.max(b.memory),
+            })
+    }
+
     pub fn save(&self) -> std::io::Result<()> {
         let text =
             serde_json::to_vec_pretty(&*self.by.lock().unwrap()).expect("footprints serialise");
@@ -163,6 +187,7 @@ mod tests {
                 ..Need::default()
             },
             capped: true,
+            steady: None,
         }
     }
 
@@ -214,6 +239,34 @@ mod tests {
         new.peak.cpus = 10.0;
         assert!(f.record(&new, 3));
         assert_eq!(f.get("shop", None).unwrap().0.cpus, 10.0);
+    }
+
+    #[test]
+    fn steady_use_is_the_latest_per_run_the_most_over_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = Footprints::load(dir.path());
+        let at = |cpus, memory| Some(Amount { cpus, memory });
+        f.record(&run("a", 8 * GIB, GIB), 1);
+        assert_eq!(f.steady("shop", None), None, "not up long enough yet");
+        let mut a = run("a", 8 * GIB, GIB);
+        a.steady = at(2.0, 3 * GIB);
+        assert!(f.record(&a, 2));
+        // Reported again, lower: the percentile follows, the peak stays.
+        a.steady = at(0.5, 2 * GIB);
+        assert!(f.record(&a, 3));
+        let mut b = run("b", GIB, GIB);
+        b.steady = at(0.8, GIB);
+        f.record(&b, 4);
+        assert_eq!(f.steady("shop", None), at(0.8, 2 * GIB));
+        assert_eq!(f.get("shop", None).unwrap().0.memory, 8 * GIB);
+        // Reported without one (an older node): the last one stays.
+        b.steady = None;
+        assert!(!f.record(&b, 5));
+        f.save().unwrap();
+        assert_eq!(
+            Footprints::load(dir.path()).steady("shop", None),
+            at(0.8, 2 * GIB)
+        );
     }
 
     #[test]

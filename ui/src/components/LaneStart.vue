@@ -12,12 +12,15 @@ import { bytes, duration, useNow } from '@/lib/format';
 import { laneLabel } from '@/lib/lanes';
 import { throttle } from '@/lib/throttle';
 import { usePool } from '@/stores/pool';
+import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
+import AgentPrompt from './AgentPrompt.vue';
 import Icon from './icons/Icon.vue';
 import LocalLoad from './LocalLoad.vue';
 import NodeLoad from './NodeLoad.vue';
 
 const props = defineProps<{ lane: LaneView }>();
+const hub = useHub();
 const stack = useStack();
 const pool = usePool();
 onBeforeUnmount(pool.watch());
@@ -27,6 +30,9 @@ const nodes = computed(() => pool.targets);
 const busy = computed(() => stack.busy['lane-start'] === props.lane.name);
 const m = computed(() => props.lane.moving ?? null);
 const running = computed(() => !!m.value && !m.value.error && m.value.kind === 'start');
+/** Why no node of the pool can run it: its stack file names no lane image
+ * (ADR-0028). Said before a start, not after a lease and a sync. */
+const notInPool = computed(() => props.lane.not_in_pool ?? null);
 const failed = computed(() => (m.value?.error && m.value.kind === 'start' ? m.value : null));
 const placeName = (to: string) => (to === 'pool' ? 'the pool' : pool.pools.some((p) => p.name === to) ? `the pool ${to}` : to);
 const now = useNow();
@@ -72,7 +78,7 @@ const need = computed(() => {
   const p = Object.values(placement.value)
     .flat()
     .find((x) => x.need);
-  return p?.need ? { cpus: p.need.cpus, memory: p.need.memory, from: p.need_from ?? '' } : null;
+  return p?.need ? { cpus: p.need.cpus, memory: p.need.memory, from: p.need_from ?? '', steady: p.steady } : null;
 });
 /** A node's place in its pool's order: its rank (1: the pick) and why. */
 function placeOf(poolName: string, nodeId: string) {
@@ -206,8 +212,14 @@ function start(on?: string) {
           type="button"
           class="btn"
           :class="{ 'pick-btn': pickOf(p.pool) }"
-          :disabled="busy || running"
-          :title="placement[p.pool]?.[0]?.eligible ? `The coordinator would start it on ${placement[p.pool][0].name}: ${placement[p.pool][0].why}` : 'The coordinator picks the node: warm first, then free capacity'"
+          :disabled="busy || running || !!notInPool"
+          :title="
+            notInPool
+              ? `No node can run it: ${notInPool}`
+              : placement[p.pool]?.[0]?.eligible
+                ? `The coordinator would start it on ${placement[p.pool][0].name}: ${placement[p.pool][0].why}`
+                : 'The coordinator picks the node: warm first, then free capacity'
+          "
           data-testid="lane-start-pool"
           @click="start(p.on)"
           @mouseenter="hl = { pool: p.pool }"
@@ -219,9 +231,24 @@ function start(on?: string) {
           <span v-if="pickOf(p.pool)" class="to">→ {{ pickOf(p.pool)!.name }}</span>
         </button>
       </div>
-      <p v-if="need && nodes.length" class="need small" data-testid="lane-start-need">
-        <span class="swatch" aria-hidden="true" /> The lane takes about <strong>{{ need.cpus.toFixed(1) }} CPU</strong> and
-        <strong>{{ bytes(need.memory) }}</strong> ({{ need.from }}).
+      <div v-if="notInPool && pool.joinedAny" class="no-image small" data-testid="lane-start-no-image">
+        <Icon name="info" :size="14" />
+        <span class="grow">
+          <strong>It cannot start in the pool:</strong> the stack file it runs with names no lane image, the Linux image a node runs the lane in
+          (<code>[lanes] image</code> or <code>[lanes] dockerfile</code>). A coding agent picks one with the stack's toolchains.
+        </span>
+        <AgentPrompt v-if="stack.id && hub.reachable && !stack.readOnly" compact label="Name one" kind="lane-image" :target="{ stack: stack.id, path: lane.path }" />
+      </div>
+      <p v-if="need && nodes.length && !notInPool" class="need small" data-testid="lane-start-need">
+        <span class="swatch" aria-hidden="true" />
+        <span class="said"
+          >The lane starts with up to <strong>{{ need.cpus.toFixed(1) }} CPU</strong> and <strong>{{ bytes(need.memory) }}</strong>, its build
+          included<template v-if="need.steady"
+            >, then runs on about <strong>{{ need.steady.cpus.toFixed(1) }} CPU</strong> and
+            <strong>{{ bytes(need.steady.memory) }}</strong></template
+          >
+          ({{ need.from }}).</span
+        >
         <span class="faint">Each chart, on the scale of all the machine has: above, the last hour (dashed: what a node offers the pool); below, now, with the lane on top.</span>
       </p>
       <!-- A card opens the machine's page (its name is the link, over the whole
@@ -252,7 +279,7 @@ function start(on?: string) {
               type="button"
               class="btn btn-xs go"
               :class="{ 'pick-btn': placeOf(n.pool, n.node.id)?.pick }"
-              :disabled="busy || running"
+              :disabled="busy || running || !!notInPool"
               :title="placeOf(n.pool, n.node.id)?.eligible === false ? `It cannot take it: ${placeOf(n.pool, n.node.id)?.why}` : `Start the lane on ${n.label}`"
               data-testid="lane-start-node"
               @click="start(n.on)"
@@ -286,6 +313,15 @@ function start(on?: string) {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
+}
+.no-image {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.no-image .grow {
+  flex: 1;
 }
 .progress {
   display: flex;
@@ -470,6 +506,11 @@ function start(on?: string) {
 }
 .need .faint {
   flex-basis: 100%;
+}
+/* One flex item: the gap would part its words from their commas. */
+.need .said {
+  flex: 1;
+  min-width: 0;
 }
 .swatch {
   display: inline-block;

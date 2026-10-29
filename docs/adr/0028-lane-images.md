@@ -1,6 +1,6 @@
 # ADR-0028: A remote lane runs in a stack-provided toolchain image; the node supplies devstack
 
-- **Status:** Accepted (2026-10-16), amended 2026-10-16 (a Dockerfile the node builds); point 3 noted 2026-10-26 (what `prepare` makes is in a store, [ADR-0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md))
+- **Status:** Accepted (2026-10-16), amended 2026-10-16 (a Dockerfile the node builds); point 3 noted 2026-10-26 (what `prepare` makes is in a store, [ADR-0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md)); addendum 2026-10-29 (a stack without a lane image is refused before the lease)
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0023](0023-stack-file-compatibility.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md)
@@ -69,6 +69,26 @@ belongs to the node and the requester and must match their protocol.
 - A stale warm-state layer only costs build time: the snapshot overwrites what
   changed, and the build id is still the hash of the inputs (ADR-0002).
 
+## Addendum 2026-10-29: a stack without a lane image goes to no node
+
+A lane whose stack file (its own, else the main tree's, ADR-0055) names
+neither `[lanes] image` nor `dockerfile` cannot run on any node. That was
+found out on the node, after the lease and the sync. Approved by the owner
+on 2026-10-29, three points:
+
+1. The requester refuses a start or a move of such a lane on a node before
+   it asks for a lease, with the node's words ("the stack names no lane
+   image ...").
+2. Placement (`GET /hub/pool/placement`, `devstack pool placement`, the MCP
+   `placement`) marks every node of the coordinator's order `eligible:
+   false` with that reason: the requester knows the stack file, the
+   coordinator does not.
+3. The dashboard says so on the lane's start card instead of offering the
+   pool: its pool buttons and nodes are disabled, and a prompt for a coding
+   agent (`lane-image`) names an image fitting the stack's toolchains.
+
+A file that does not load is not refused here: the start says why.
+
 ## Enforced by
 
 Will live in: `crates/devstack-config` (`[lanes] image`, with a frozen compat
@@ -85,3 +105,10 @@ build, a copy per version, mounted read-only; `DEVSTACK_LANE_BIN` names
 another one for tests), `.github/workflows/release.yml`
 (`x86_64-unknown-linux-musl`). Not built: a Dockerfile template in `devstack
 init` and placement by present layers (point 4).
+
+*The addendum of 2026-10-29.* `crates/devstack-daemon/src/lanes.rs`
+(`not_in_pool`, `lane_not_in_pool`, checked in `with_spec` before the lease;
+`not_in_pool` of `GET /v1/lanes`), `crates/devstack-node/src/coordinator.rs`
+(`not_in_pool` on an order), `crates/devstack-hub/src/pool.rs` (`placement`),
+`crates/devstack/src/client.rs` (`placement`), `crates/devstack-hub/src/prompts.rs`
+(`LaneImage`), `ui/src/components/LaneStart.vue`.

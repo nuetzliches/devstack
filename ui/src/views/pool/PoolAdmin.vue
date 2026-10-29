@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // What only an admin sees (ADR-0032): the requests to join, the nodes the
-// provisioner made (ADR-0051), the MCP upstreams the pool names (ADR-0069)
-// and the admin log. The coordinator checks the role on every action.
+// provisioner made (ADR-0051), the MCP upstreams the pool names (ADR-0069),
+// the skill sets it hands out (ADR-0074) and the admin log. The coordinator checks the role on every action.
 import { computed, watchEffect } from 'vue';
 import { useRouter } from 'vue-router';
 import { ago, bytes, useNow } from '@/lib/format';
@@ -9,6 +9,7 @@ import { actionText } from '@/lib/poolText';
 import { usePool } from '@/stores/pool';
 import Icon from '@/components/icons/Icon.vue';
 import PoolUpstreams from '@/components/PoolUpstreams.vue';
+import PoolSkills from '@/components/PoolSkills.vue';
 
 const pool = usePool();
 const now = useNow();
@@ -68,6 +69,7 @@ watchEffect(() => {
     <div class="cols">
       <div class="col">
         <PoolUpstreams />
+        <PoolSkills />
 
       </div>
       <div class="col">

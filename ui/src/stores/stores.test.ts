@@ -164,7 +164,7 @@ describe('stack store', () => {
     expect(lane.closed).toBe(true);
   });
 
-  it("a pool's machines are its approved members with their node side (ADR-0074)", async () => {
+  it("a pool's machines are its approved members with their node side (ADR-0076)", async () => {
     fake.on('/hub/pools', ok([{ name: 'default', joined: true, state: 'approved', coordinator: 'https://c' }]));
     fake.on(
       '/hub/pool',

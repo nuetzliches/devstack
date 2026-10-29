@@ -7,7 +7,12 @@ version = 1
 [stack]
 name = "devstack"
 requires = "0.20.0"
-reviewed = "0.28.0"
+reviewed = "0.29.0"
+
+# A lane on another machine of the pool runs in this image (ADR-0028): the
+# dashboard needs Node.js only (CI builds it with Node 24).
+[lanes]
+image = "node:24"
 
 [services.dashboard]
 kind = "devserver"

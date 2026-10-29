@@ -1,6 +1,6 @@
 # ADR-0032: The pool is administered in the dashboard, by members with the admin role
 
-- **Status:** Accepted (2026-10-16), amended 2026-10-17 (admins grant which members are nodes); extended by [ADR-0039](0039-an-admin-can-update-a-server-node.md) (2026-10-19: an admin can have a server update its devstack); point 4 (the pool area) detailed by [ADR-0074](0074-a-pool-machine-has-one-page-the-pool-area-has-tabs.md)
+- **Status:** Accepted (2026-10-16), amended 2026-10-17 (admins grant which members are nodes); extended by [ADR-0039](0039-an-admin-can-update-a-server-node.md) (2026-10-19: an admin can have a server update its devstack); point 4 (the pool area) detailed by [ADR-0076](0076-a-pool-machine-has-one-page-the-pool-area-has-tabs.md)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0031](0031-a-coordinator-places-lanes.md) (point 2 extended here), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0019](0019-control-api-security.md), [ADR-0006](0006-dashboard-vue-same-origin.md)
@@ -106,6 +106,8 @@ tests in `crates/devstack-node/tests/pool.rs`. The node grant of the
 amendment: `/v1/admin/members/{id}/node` on the coordinator,
 `devstack node members node <id> on|off`, `POST /hub/pool/members/{id}/node`
 and the "Allow lanes" toggle of the member list in the dashboard.
+
+*Paths as built, noted 2026-10-29.* The pool area moved from `ui/src/views/PoolView.vue` to `ui/src/views/pool/` (ADR-0076): the machine's page (`PoolMachine.vue`) holds what a node row held, the Admin tab (`PoolAdmin.vue`) the admin's lists, the Lanes tab (`PoolLanes.vue`) the lanes shared with this machine.
 
 ## What this ADR does not say
 

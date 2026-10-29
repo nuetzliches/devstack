@@ -47,6 +47,8 @@ export type HubEvent =
   | { type: 'guests'; guests: Guest[] }
   /** The pools this machine follows over their coordinators' streams (ADR-0073), by name. */
   | { type: 'pools'; pools: Record<string, PoolFeed> }
+  /** The pools' skill sets on this machine (ADR-0074); older hubs never send it. */
+  | { type: 'skills'; skills: PoolSkillsState }
   /** Something happened once in the hub that no request reports (ADR-0050): a toast. */
   | { type: 'notice'; level: NoticeLevel; text: string };
 
@@ -61,6 +63,47 @@ export type PoolFeed = {
   live: 'connecting' | 'live' | 'lost' | 'old';
   error?: string;
   versions: Record<string, string>;
+};
+
+/** The pools' skill sets on this machine (ADR-0074), as `GET /hub/skills` and `skills` events give them. */
+export type PoolSkillsState = {
+  /** The coding agents found here (and those switched on), with their user skill folder. */
+  agents: { id: string; name: string; dir: string; enabled: boolean }[];
+  sets: SkillSetState[];
+  conflicts: { dir: string; name: string; reason: string }[];
+  errors?: string[];
+  synced?: number;
+};
+
+export type SkillSetState = {
+  pool: string;
+  set: string;
+  /** `github:owner/repo@ref/path` or `folder:path`. */
+  source: string;
+  /** `changed`: its source is another than the one accepted, offered again. */
+  state: 'offered' | 'accepted' | 'declined' | 'changed';
+  /** Updates at once; else they wait for the user. */
+  auto: boolean;
+  fetched?: number;
+  commit?: string;
+  error?: string;
+  skills: { name: string; description: string; sha256: string; installed: boolean; pending: boolean }[];
+};
+
+/** A pool's skill set as an admin names it (`/hub/pool/skills`). */
+export type PoolSkillSet = {
+  name: string;
+  source: { kind: 'github'; repo: string; ref: string; path: string } | { kind: 'folder'; path: string };
+  to: string[];
+};
+
+/** `GET /hub/pool/skills` (admins): the sets with what the coordinator last fetched. */
+export type PoolSkillsAdmin = {
+  sets: (PoolSkillSet & {
+    manifest: { source: string; fetched?: number; commit?: string; error?: string; skills: { name: string; description: string }[]; skipped?: string[] };
+  })[];
+  github_token: boolean;
+  refresh_signed: boolean;
 };
 
 export type NoticeLevel = 'warn' | 'error';
@@ -189,6 +232,8 @@ export type LaneView = {
   removing?: boolean;
   /** Its worktree has no stack file of its own: it runs with the main working tree's (ADR-0055). Older daemons omit it. */
   main_stack_file?: boolean;
+  /** Why it cannot start on a node of the pool: the stack file it runs with names no lane image (ADR-0028). Older daemons omit it. */
+  not_in_pool?: string;
   /** The dashboard's own: the daemon no longer lists it, it is shown as it was last. */
   gone?: boolean;
   /** Its notices (ADR-0050): its tree's while it runs here, and what the main tree knows of it (`worktree_missing`). */
@@ -707,6 +752,8 @@ export type Placement = {
   /** What the lane would hold there, and where that comes from (its footprint, or the estimate); absent from an older coordinator. */
   need?: { cpus: number; memory: number };
   need_from?: string;
+  /** What the lane uses once up (its build not counted): the most of its last runs' 95th percentile. Shown, never admitted by; absent until a run measured it. */
+  steady?: { cpus: number; memory: number };
 };
 
 /** A node's or the pool's capacity at one moment (ADR-0036), `GET /hub/pool/history`. */
@@ -735,8 +782,8 @@ export type Opener = {
 };
 
 /** The prompts the hub writes for a coding agent (`GET /hub/prompt`, ADR-0046 amendment 2026-10-22). */
-export type PromptKind = 'setup' | 'fix-file' | 'upgrade' | 'start-failed' | 'lane-file' | 'mcp' | 'skills';
-/** What a prompt is about: a registered stack, a folder before it is one, or a worktree of a stack (`lane-file`). */
+export type PromptKind = 'setup' | 'fix-file' | 'upgrade' | 'start-failed' | 'lane-file' | 'lane-image' | 'mcp' | 'skills';
+/** What a prompt is about: a registered stack, a folder before it is one, or a worktree of a stack (`lane-file`, `lane-image`). */
 export type PromptTarget = { stack: string } | { path: string } | { stack: string; path: string };
 
 /** A kind of desktop notification and whether it is on (ADR-0045). */

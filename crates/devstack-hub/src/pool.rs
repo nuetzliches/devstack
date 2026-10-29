@@ -433,7 +433,8 @@ pub async fn history(Query(h): Query<HistoryQuery>) -> Response {
 /// `GET /hub/pool/placement?pool=&repo=&lane=&cpus=&memory=&profile=`:
 /// where the coordinator would start a lane of this machine's, best first,
 /// with why (ADR-0026 point 3), by what the lane's runs with `profile`
-/// took (ADR-0049): what the dashboard shows beside the nodes.
+/// took (ADR-0049): what the dashboard shows beside the nodes. A lane whose
+/// stack file names no lane image goes to no node (ADR-0028).
 pub async fn placement(Query(q): Query<PlacementQuery>) -> Response {
     let p = PoolQuery { pool: q.pool };
     let need = devstack_node::share::Need {
@@ -443,7 +444,15 @@ pub async fn placement(Query(q): Query<PlacementQuery>) -> Response {
     };
     let profile = q.profile.filter(|p| !p.is_empty());
     match blocking(&p, move |l| {
-        l.placement(&q.repo, &q.lane, need, profile.as_deref())
+        let mut order = l.placement(&q.repo, &q.lane, need, profile.as_deref())?;
+        let blocked = devstack_daemon::registry::list()
+            .into_iter()
+            .filter(|e| e.name == q.repo)
+            .find_map(|e| devstack_daemon::lanes::lane_not_in_pool(&e.file, &q.lane));
+        if let Some(why) = blocked {
+            devstack_node::coordinator::not_in_pool(&mut order, why);
+        }
+        Ok(order)
     })
     .await
     {
@@ -629,5 +638,49 @@ mod tests {
         assert!(!ok("https://user@pool.example"));
         assert!(!ok("https://"));
         assert!(!ok("pool.example:4261"));
+    }
+}
+
+/// `GET /hub/pool/skills`: the pool's skill sets with their state (admins,
+/// ADR-0074).
+pub async fn skills(Query(q): Query<PoolQuery>) -> Response {
+    match blocking(&q, |l| l.admin_skills()).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+/// `POST /hub/pool/skills`: add a skill set, or change the one of its
+/// name (admins).
+pub async fn skill_put(
+    Query(q): Query<PoolQuery>,
+    Json(set): Json<devstack_node::skills::SkillSet>,
+) -> Response {
+    match blocking(&q, move |l| l.admin_skill_put(&set)).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+/// `DELETE /hub/pool/skills/{name}`: stop handing a set out (admins).
+pub async fn skill_remove(Path(name): Path<String>, Query(q): Query<PoolQuery>) -> Response {
+    match blocking(&q, move |l| l.admin_skill_remove(&name)).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct SetQuery {
+    #[serde(default)]
+    set: Option<String>,
+}
+
+/// `POST /hub/pool/skills/refresh[?set=]`: have the coordinator fetch the
+/// sets again (admins).
+pub async fn skills_refresh(Query(q): Query<PoolQuery>, Query(s): Query<SetQuery>) -> Response {
+    match blocking(&q, move |l| l.admin_skills_refresh(s.set.as_deref())).await {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(e) => error(&e),
     }
 }

@@ -11,26 +11,68 @@ and listed with their assets on the
 
 ### Changed
 
-- **The pool area has tabs, and each machine a page** (ADR-0074): a pool
+- **The pool area has tabs, and each machine a page** (ADR-0076): a pool
   shows *Overview*, *Machines*, *Lanes* and, for admins, *Admin* (requests
-  to join, provisioning, the pool's MCP upstreams, the admin log), instead
-  of fifteen cards on one page. The overview's capacity shows each node as
-  starting a lane does: what it has free and offers, now and over the last
-  hour; the pool's capacity over time is stacked machine by machine, one
-  colour each, against what the pool offered; a machine's page and *This
-  machine* show its own history the same way.
+  to join, provisioning, the pool's MCP upstreams and skill sets, the admin
+  log), instead of fifteen cards on one page. A machine's page holds its
+  membership and its node side together, with what it reports, its policy,
+  its capacity over time, the lanes on it and every admin action on it;
+  the nodes and members tables are one list. *This machine* shows what
+  holds in every pool: what this machine has and has free, its capacity
+  over time, how each pool sees it, the lanes of others it runs, its own
+  lanes on other machines, and where its lanes start. The overview's
+  capacity shows each node as starting a lane does, and the pool's history
+  stacked machine by machine, one colour each, against what the pool
+  offered; a machine's page shows its own the same way. A badge sits where
+  what waits for an admin is handled. The pool and the tab are in the URL
+  (`#/pool/<pool>/machines/<id>`); `#/pool` still opens the pool shown
+  last.
 - **Starting a lane shows where it would go**: its machines are grouped by
   pool in their coordinator's order; a card opens the machine's page and
   its own *Start* starts the lane there; a pool's start names its pick, and
-  pointing at a start button lights the machines it means. A machine's page holds its membership and
-  its node side together, with what it reports, its policy, its capacity
-  over time, the lanes on it and every admin action on it; the nodes and
-  members tables are one list. *This machine* shows what holds in every
-  pool: what this machine has and has free, its capacity over time, how
-  each pool sees it, the lanes of others it runs, its own lanes on other
-  machines, and where its lanes start. The
-  pool and the tab are in the URL (`#/pool/<pool>/machines/<id>`);
-  `#/pool` still opens the pool shown last.
+  pointing at a start button lights the machines it means.
+
+### Fixed
+
+- **A lane not started shows no tabs**: its start options stand in for its
+  views, so Overview, Infrastructure and the others no longer all led to
+  the same start page.
+- **The pool's devstack column** no longer shows a stray "–" after a
+  node's version when no update runs.
+- **A GitHub skill set names its commit**: the set showed
+  `pax_global_header` where its commit belongs, the name of the first
+  entry of GitHub's archive (ADR-0074).
+
+## [0.29.0] - 2026-10-29
+
+A pool hands out agent skills: an admin names skill sets (a GitHub
+repository read with the coordinator's own token, or a folder on it), and
+each member's hub installs the ones its user accepted into the user skill
+folders of the coding agents switched on, never into a repository; a push
+reaches every member within seconds (ADR-0074). Members no longer poll the
+coordinator: one stream tells them which parts of the pool changed
+(ADR-0073). Where a lane can start says what it takes once up beside its
+peak (ADR-0075), and a lane without a lane image is refused before its
+lease. Fixed: PowerShell from the dashboard, Zed on Windows, the MCP
+upstreams page after a login, and dashboard details.
+
+### Added
+
+- **A pool hands out agent skills** ([ADR-0074](docs/adr/0074-a-pool-hands-out-skill-sets-the-hub-installs-them-for-the-agents.md)):
+  an admin names skill sets (`devstack pool skills add`, or the pool
+  area): a GitHub repository, read with the coordinator's own token, or a
+  folder on the coordinator, given to every member, member ids or tags.
+  Each member's hub offers them on the new *Skills* page and, once
+  accepted, installs them into the user skill folders of the coding agents
+  switched on there (Claude Code, Codex, OpenCode, Copilot, Cursor and
+  some sixty more): no repository is touched. Updates come at once or wait
+  for the user, per set; a skill of the user's own, or one changed by
+  hand, is left alone. A push reaches every member within seconds through
+  a signed `POST /v1/skills/refresh` (Hookaido's signature). "Open with"
+  takes its agents from the same agent table.
+
+### Changed
+
 - **The pool is live, and nobody polls the coordinator** (ADR-0073): the
   coordinator tells its members over one stream (`GET /v1/events`) which
   parts of the pool changed, and each hub reads a part only then. The
@@ -40,14 +82,15 @@ and listed with their assets on the
   pool loses the pool's upstreams at once. Update the coordinator first:
   with one of an earlier release the pool area is read when it opens and
   says it is not live.
+- **A lane's need says what it takes once up** (ADR-0075): beside the
+  peak, which includes its build, a node measures the 95th percentile of a
+  lane's CPU and memory after it is up. Where a lane can start, the
+  dashboard and `devstack pool placement` say "starts with up to 8.7 CPU
+  and 7.2 GB, its build included, then runs on about 0.8 CPU and 2.1 GB".
+  Admission is unchanged. Shown once a node of this release measured a run.
 
 ### Fixed
 
-- **A lane not started shows no tabs**: its start options stand in for its
-  views, so Overview, Infrastructure and the others no longer all led to
-  the same start page.
-- **The pool's devstack column** no longer shows a stray "–" after a
-  node's version when no update runs.
 - **The MCP upstreams page follows a login**: after an OAuth login in the
   other tab, the list shows the upstream logged in by itself (it asks the
   hub every two seconds, and at once when you come back to the tab),
@@ -55,6 +98,18 @@ and listed with their assets on the
 - **Zed opens the folder on Windows**: the path menu's Zed opened an
   empty window there, as the link handed it `/D:/...`; it now hands
   `D:/...`.
+- **PowerShell from the dashboard stays open**: the folder menu's
+  PowerShell closed again at once, as it inherited the hub's empty input;
+  it is started as a double-click starts it now (#359).
+- **A lane without a lane image is refused before its lease**: a stack
+  file that names neither `[lanes] image` nor `[lanes] dockerfile` cannot
+  run on a node; the start in the pool is refused at once, placement marks
+  every node not eligible with why, and the dashboard offers a prompt that
+  names a fitting image (#366). devstack's own stack file names one (#364).
+- **Dashboard details**: CPU says it is a share of one core (400 % is four
+  busy), the lane card's figures have icons, the pending count takes the
+  colour of what is pending, and a service's or container's detail closes
+  with ×, Escape or a second click on its row (#361).
 
 ## [0.28.0] - 2026-10-28
 
@@ -2145,7 +2200,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.29.0...HEAD
+[0.29.0]: https://github.com/nuetzliches/devstack/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/nuetzliches/devstack/compare/v0.27.1...v0.28.0
 [0.27.1]: https://github.com/nuetzliches/devstack/compare/v0.27.0...v0.27.1
 [0.27.0]: https://github.com/nuetzliches/devstack/compare/v0.26.0...v0.27.0

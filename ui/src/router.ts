@@ -46,6 +46,7 @@ export const router = createRouter({
       ],
     },
     { path: '/upstreams', name: 'upstreams', component: () => import('./views/UpstreamsView.vue'), meta: { title: 'MCP upstreams' } },
+    { path: '/skills', name: 'skills', component: () => import('./views/SkillsView.vue'), meta: { title: 'Skills' } },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
   scrollBehavior(to, from) {

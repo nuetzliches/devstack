@@ -11,6 +11,8 @@ publish = false
 [dependencies]
 axum.workspace = true
 blake3.workspace = true
+flate2.workspace = true
+hmac.workspace = true
 devstack-proc.workspace = true
 bytes.workspace = true
 devstack-build.workspace = true
@@ -29,6 +31,7 @@ sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["fs"] }
+tar.workspace = true
 tokio-rustls.workspace = true
 ureq.workspace = true
 x509-parser.workspace = true

@@ -1,4 +1,4 @@
-# ADR-0074: A machine of the pool has one page; the pool area has tabs, and the pool and the tab are in the URL
+# ADR-0076: A machine of the pool has one page; the pool area has tabs, and the pool and the tab are in the URL
 
 - **Status:** Accepted (card in the pull request, points 1 to 4 approved 2026-10-29)
 - **Date:** 2026-10-29
@@ -37,7 +37,8 @@ no link led to a pool, a part of it, or a machine.
    it and for the whole pool over time, this machine's settings
    for this pool), *Machines*, *Lanes* (the pool's lanes, the lanes shared
    with this machine), and for admins *Admin* (requests to join, with a
-   badge; provisioning; the MCP upstreams the pool names; the admin log).
+   badge; provisioning; the MCP upstreams the pool names; the skill sets it hands
+   out, ADR-0074; the admin log).
 4. **What holds for this machine in every pool has a place of its own**,
    *This machine* (`#/pool/this-machine`): what it has, has free and
    reports (the hub's share report), its capacity over time as a pool

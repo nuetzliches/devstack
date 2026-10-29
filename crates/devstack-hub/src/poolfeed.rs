@@ -4,6 +4,7 @@
 //!
 //! - `leases` or `nodes`: the guest lanes on this machine (`guests`)
 //! - `upstreams`: the pool's MCP upstreams (ADR-0069 option B)
+//! - `skills`: the skill sets the pool gives this machine (ADR-0074)
 //! - every change: the dashboard hears the pools' versions on `/hub/events`
 //!   (`pools`) and reads what it shows of a pool again when they differ
 //!
@@ -51,17 +52,22 @@ struct Feed {
     /// The followers, by pool, with the membership's directory.
     followers: Mutex<HashMap<String, (PathBuf, tokio::task::JoinHandle<()>)>>,
     upstreams: Arc<crate::upstreams::Upstreams>,
+    skills: Arc<crate::poolskills::PoolSkills>,
     rt: tokio::runtime::Handle,
 }
 
 static FEED: OnceLock<Feed> = OnceLock::new();
 
 /// Start following this machine's pools (once per hub).
-pub fn start(upstreams: Arc<crate::upstreams::Upstreams>) {
+pub fn start(
+    upstreams: Arc<crate::upstreams::Upstreams>,
+    skills: Arc<crate::poolskills::PoolSkills>,
+) {
     let feed = Feed {
         tx: watch::channel(BTreeMap::new()).0,
         followers: Mutex::new(HashMap::new()),
         upstreams,
+        skills,
         rt: tokio::runtime::Handle::current(),
     };
     if FEED.set(feed).is_ok() {
@@ -83,7 +89,7 @@ pub fn live(pool: &str) -> Option<Follow> {
     FEED.get()?.tx.borrow().get(pool).map(|p| p.live)
 }
 
-fn state() -> PathBuf {
+pub(crate) fn state() -> PathBuf {
     devstack_daemon::token::token_path()
         .parent()
         .expect("token path has a parent")
@@ -129,9 +135,11 @@ pub fn sync() {
 fn left(feed: &Feed, pool: &str) {
     feed.tx.send_if_modified(|m| m.remove(pool).is_some());
     let ups = feed.upstreams.clone();
+    let skills = feed.skills.clone();
     let pool = pool.to_string();
     feed.rt.spawn_blocking(move || {
         ups.set_pool(&pool, None);
+        skills.set_pool(&pool, None);
         crate::guests::seen(&pool, Some(Vec::new()));
     });
 }
@@ -155,10 +163,12 @@ fn read(pool: &str, dir: &std::path::Path, topics: &[&str]) {
     let Some(feed) = FEED.get() else { return };
     let guests = topics.contains(&events::LEASES) || topics.contains(&events::NODES);
     let upstreams = topics.contains(&events::UPSTREAMS);
-    if !guests && !upstreams {
+    let skill_sets = topics.contains(&events::SKILLS);
+    if !guests && !upstreams && !skill_sets {
         return;
     }
     let (pool, dir, ups) = (pool.to_string(), dir.to_path_buf(), feed.upstreams.clone());
+    let skills = feed.skills.clone();
     feed.rt.spawn_blocking(move || {
         if guests {
             crate::guests::seen(&pool, crate::share::guests(&pool));
@@ -169,6 +179,9 @@ fn read(pool: &str, dir: &std::path::Path, topics: &[&str]) {
             if let Ok(list) = Local::new(&dir).upstreams() {
                 ups.set_pool(&pool, Some(list));
             }
+        }
+        if skill_sets && let Ok(sets) = Local::new(&dir).skills() {
+            skills.set_pool(&pool, Some(sets));
         }
     });
 }

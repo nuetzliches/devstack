@@ -437,6 +437,19 @@ pub struct Lanes {
     pub need: Need,
 }
 
+/// Why a lane of a stack without `[lanes] image` or `dockerfile` cannot
+/// run on a node of the pool (ADR-0028).
+pub const NO_LANE_IMAGE: &str =
+    "the stack names no lane image: set `[lanes] image` or `[lanes] dockerfile` (ADR-0028)";
+
+impl Lanes {
+    /// Whether a lane can run on a node of the pool: it names the image it
+    /// runs in there, or the Dockerfile the node builds it from (ADR-0028).
+    pub fn names_image(&self) -> bool {
+        self.image.is_some() || self.dockerfile.is_some()
+    }
+}
+
 impl Default for Lanes {
     fn default() -> Self {
         Self {

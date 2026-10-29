@@ -32,6 +32,10 @@ const route = useRoute();
 // admin as a badge.
 const pool = usePool();
 onBeforeUnmount(pool.watch());
+/** Skill sets offered and not answered, and updates that wait for the user (ADR-0074). */
+const skillsWaiting = computed(
+  () => (hub.skills?.sets ?? []).filter((x) => x.state === 'offered' || x.state === 'changed' || x.skills.some((k) => k.pending)).length,
+);
 const poolHint = computed(() => {
   const o = pool.overview;
   if (!o) return '';
@@ -419,6 +423,18 @@ async function copyPath(s: StackEntry) {
       >
         <Icon name="link" :size="14" class="branch" />
         <span class="label">MCP upstreams</span>
+      </button>
+      <button
+        type="button"
+        class="item pool-item"
+        :class="{ active: route.name === 'skills' }"
+        title="Skill sets your pools hand out, installed into your coding agents"
+        data-testid="sidebar-skills"
+        @click="router.push({ name: 'skills' })"
+      >
+        <Icon name="layers" :size="14" class="branch" />
+        <span class="label">Skills</span>
+        <span v-if="skillsWaiting" class="pill sm warn" data-testid="sidebar-skills-badge">{{ skillsWaiting }}</span>
       </button>
     </div>
     <AddStackDialog :open="adding" @close="adding = false" />
