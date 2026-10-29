@@ -652,6 +652,14 @@ pub fn from_github_archive(bytes: &[u8], path: &str) -> Result<(Found, Option<St
     let mut commit = None;
     for e in a.entries().map_err(|e| e.to_string())? {
         let mut e = e.map_err(|e| e.to_string())?;
+        // GitHub's archive starts with a pax global header (the commit in
+        // its comment), named `pax_global_header`: not the top folder.
+        if !matches!(
+            e.header().entry_type(),
+            tar::EntryType::Regular | tar::EntryType::Directory
+        ) {
+            continue;
+        }
         let p = e.path().map_err(|e| e.to_string())?.into_owned();
         let parts: Vec<String> = p
             .components()
@@ -881,6 +889,15 @@ mod tests {
     fn a_github_archive_gives_the_skills_below_its_path() {
         let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         let mut t = tar::Builder::new(gz);
+        // As GitHub sends it: a pax global header first.
+        let comment = b"52 comment=abc1234abc1234abc1234abc1234abc1234abc1
+";
+        let mut g = tar::Header::new_ustar();
+        g.set_path("pax_global_header").unwrap();
+        g.set_size(comment.len() as u64);
+        g.set_entry_type(tar::EntryType::XGlobalHeader);
+        g.set_cksum();
+        t.append(&g, &comment[..]).unwrap();
         for (p, text) in [
             ("org-repo-abc1234/README.md", "top"),
             (

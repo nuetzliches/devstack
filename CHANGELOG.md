@@ -9,6 +9,12 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **A GitHub skill set names its commit**: the set showed
+  `pax_global_header` where its commit belongs, the name of the first
+  entry of GitHub's archive (ADR-0074).
+
 ## [0.29.0] - 2026-10-29
 
 A pool hands out agent skills: an admin names skill sets (a GitHub
