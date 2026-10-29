@@ -608,6 +608,14 @@ fn router(state: AppState) -> axum::Router {
             "/hub/skills/sets/{pool}/{set}/update",
             post(poolskills::update),
         )
+        .route(
+            "/hub/skills/sets/{pool}/{set}/skills/{name}",
+            put(poolskills::skill),
+        )
+        .route(
+            "/hub/skills/sets/{pool}/{set}/groups/{group}",
+            put(poolskills::group),
+        )
         .fallback(get(asset))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .layer(middleware::from_fn(audit))

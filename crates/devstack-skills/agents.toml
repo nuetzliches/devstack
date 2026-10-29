@@ -420,3 +420,12 @@ id = "adal"
 name = "AdaL"
 skills = "~/.adal/skills"
 detect = ["~/.adal"]
+
+# devstack's own: an agent "Open with" starts that is in no table of skill
+# folders. Kept by scripts/sync-agents.py (`own = true`).
+[[agent]]
+id = "orca"
+name = "Orca"
+own = true
+[agent.open]
+program = "orca"

@@ -1428,14 +1428,20 @@ fn skills_here(post: Option<&str>) -> Result<()> {
             }
         );
         for k in s["skills"].as_array().into_iter().flatten() {
-            let state = if k["pending"].as_bool() == Some(true) {
+            let state = if k["enabled"].as_bool() == Some(false) {
+                "off"
+            } else if k["pending"].as_bool() == Some(true) {
                 "update waits"
             } else if k["installed"].as_bool() == Some(true) {
                 "installed"
             } else {
                 ""
             };
-            println!("  {:<24} {state}", k["name"].as_str().unwrap_or(""));
+            let group = k["group"]
+                .as_str()
+                .map(|g| format!("  [{g}]"))
+                .unwrap_or_default();
+            println!("  {:<24} {state}{group}", k["name"].as_str().unwrap_or(""));
         }
     }
     for c in v["conflicts"].as_array().into_iter().flatten() {

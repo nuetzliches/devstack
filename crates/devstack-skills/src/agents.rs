@@ -17,19 +17,25 @@ const TABLE: &str = include_str!("../agents.toml");
 pub struct Agent {
     pub id: String,
     pub name: String,
-    /// Its user skill folder, as the table writes it.
-    pub skills: String,
+    /// Its user skill folder, as the table writes it; none for an agent
+    /// devstack only opens (Orca).
+    #[serde(default)]
+    pub skills: Option<String>,
     /// Paths of which one exists when it is installed.
+    #[serde(default)]
     pub detect: Vec<String>,
     #[serde(default)]
     pub open: Option<Open>,
 }
 
-/// How "Open with" starts an agent: links of a URL scheme it registered.
+/// How "Open with" starts an agent: links of a URL scheme it registered,
+/// or a program found on this machine (`orca`: its CLI, ADR-0046).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Open {
     #[serde(default)]
     pub links: Vec<Link>,
+    #[serde(default)]
+    pub program: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -111,7 +117,14 @@ pub fn resolve(p: &str) -> Option<PathBuf> {
 impl Agent {
     /// Its user skill folder on this machine.
     pub fn skills_dir(&self) -> Option<PathBuf> {
-        resolve(&self.skills)
+        resolve(self.skills.as_deref()?)
+    }
+
+    /// The agent `open.program` names, if one does.
+    pub fn by_program(program: &str) -> Option<&'static Agent> {
+        all()
+            .iter()
+            .find(|a| a.open.as_ref().and_then(|o| o.program.as_deref()) == Some(program))
     }
 
     /// Whether it is installed here: one of its `detect` paths exists.
@@ -140,6 +153,8 @@ mod tests {
         }
         let links = &get("claude-code").unwrap().open.as_ref().unwrap().links;
         assert!(links.iter().any(|l| l.scheme == "claude-cli"));
+        let orca = Agent::by_program("orca").unwrap();
+        assert!(orca.skills.is_none() && orca.skills_dir().is_none());
     }
 
     #[test]

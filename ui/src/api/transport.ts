@@ -118,6 +118,8 @@ export const paths = {
   skillsAgent: (id: string) => `/hub/skills/agents/${enc(id)}`,
   skillSet: (pool: string, set: string) => `/hub/skills/sets/${enc(pool)}/${enc(set)}`,
   skillSetDo: (pool: string, set: string, what: 'accept' | 'decline' | 'update') => `/hub/skills/sets/${enc(pool)}/${enc(set)}/${what}`,
+  skillSwitch: (pool: string, set: string, name: string) => `/hub/skills/sets/${enc(pool)}/${enc(set)}/skills/${enc(name)}`,
+  skillGroup: (pool: string, set: string, group: string) => `/hub/skills/sets/${enc(pool)}/${enc(set)}/groups/${enc(group || '-')}`,
   poolUpstream: (name: string) => `/hub/pool/upstreams/${enc(name)}`,
   /**
    * A daemon path of `stack`. With a `lane` (plan §3.5) it goes to that

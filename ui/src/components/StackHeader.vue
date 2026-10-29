@@ -340,7 +340,7 @@ function openWith(o: Opener) {
               <Icon :name="openerIcon[o.kind] ?? 'external'" :size="14" class="muted" /><span class="grow">{{ o.label }}</span>
             </button>
             <div v-if="hub.openers?.length" class="menu-foot">
-              <button type="button" class="link-btn" role="menuitem" data-testid="path-manage" @click="manage">Manage programs…</button>
+              <button type="button" class="link-btn" role="menuitem" data-testid="path-manage" @click="manage">Programs and agents…</button>
             </div>
           </template>
         </div>

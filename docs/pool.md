@@ -672,6 +672,27 @@ nobody changed since: a skill of the user's own of the same name, or one
 changed by hand, is left and shown as a conflict. `devstack pool skills
 status` and `sync` do the same from a terminal.
 
+Each skill of an accepted set can be switched off, and a group of them at
+once ([ADR-0077](adr/0077-a-sets-skills-are-grouped-and-switched-one-by-one.md));
+all are on when a set is accepted, a skill the set gains later too. Who
+gets a set is still the set's `--to`: split a repository into sets by
+`--path` where some skills are not for everyone. Within a set, a skill
+names its group and tags in its frontmatter, for the page's grouping and
+filters:
+
+```yaml
+---
+name: work-issue
+description: Work on an issue from the tracker to a pull request
+metadata:
+  group: Development
+  tags: [git, tracker]
+---
+```
+
+Which agents get the skills is chosen in *Programs and agents* (the path
+menu's dialog, also linked from the Skills page).
+
 ## Several pools
 
 A machine can belong to several pools, a customer's beside the team's, each

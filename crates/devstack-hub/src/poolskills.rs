@@ -40,6 +40,10 @@ pub struct Decision {
     /// The version of each skill the user agreed to (`auto` off).
     #[serde(default)]
     pub approved: BTreeMap<String, String>,
+    /// The skills the user switched off (ADR-0077); every other one is on,
+    /// one the set gains later too.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub off: BTreeSet<String>,
 }
 
 /// A skill the hub installed.
@@ -53,6 +57,9 @@ pub struct Installed {
     pub sha256: String,
     /// The hash of the files as written.
     pub tree: String,
+    /// When this hub wrote it (Unix ms); 0 from a hub before ADR-0077.
+    #[serde(default)]
+    pub updated: u128,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -76,6 +83,18 @@ pub struct SkillView {
     pub installed: bool,
     /// A version the user has not agreed to yet (updates wait).
     pub pending: bool,
+    /// Switched on (ADR-0077): on unless the user switched it off.
+    pub enabled: bool,
+    /// `metadata.group` and `metadata.tags` of its frontmatter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// When this hub last wrote it into an agent's folder (Unix ms).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated: Option<u128>,
+    /// The agents whose folder holds it as the set has it.
+    pub agents: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -330,6 +349,7 @@ impl PoolSkills {
                     .iter()
                     .map(|k| (k.name.clone(), k.sha256.clone()))
                     .collect(),
+                off: BTreeSet::new(),
             });
             self.save(&s)?;
         }
@@ -351,6 +371,7 @@ impl PoolSkills {
                 accepted: false,
                 auto: false,
                 approved: BTreeMap::new(),
+                off: BTreeSet::new(),
             });
             self.save(&s)?;
         }
@@ -397,6 +418,56 @@ impl PoolSkills {
         Ok(())
     }
 
+    /// Switch the skill `name` of an accepted set on or off (ADR-0077):
+    /// off, it goes from the agents' folders (unless changed there).
+    pub fn set_skill(&self, pool: &str, set: &str, name: &str, on: bool) -> Result<(), String> {
+        self.switch(pool, set, on, |k| k.name == name)
+    }
+
+    /// Switch every skill of `group` in an accepted set on or off; `""`:
+    /// the skills without a group.
+    pub fn set_group(&self, pool: &str, set: &str, group: &str, on: bool) -> Result<(), String> {
+        self.switch(pool, set, on, |k| k.group.as_deref().unwrap_or("") == group)
+    }
+
+    fn switch(
+        &self,
+        pool: &str,
+        set: &str,
+        on: bool,
+        which: impl Fn(&devstack_node::skills::SkillEntry) -> bool,
+    ) -> Result<(), String> {
+        {
+            let _one = self.lock.lock().unwrap();
+            let m = self.manifest(pool, set)?;
+            let names: Vec<String> = m
+                .skills
+                .iter()
+                .filter(|k| which(k))
+                .map(|k| k.name.clone())
+                .collect();
+            if names.is_empty() {
+                return Err(format!("`{pool}:{set}` has no such skill"));
+            }
+            let mut s = self.settings();
+            let d = s
+                .sets
+                .iter_mut()
+                .find(|d| d.pool == pool && d.set == set && d.accepted && d.source == m.source)
+                .ok_or_else(|| format!("`{pool}:{set}` is not accepted from its source"))?;
+            for n in names {
+                if on {
+                    d.off.remove(&n);
+                } else {
+                    d.off.insert(n);
+                }
+            }
+            self.save(&s)?;
+        }
+        self.sync();
+        Ok(())
+    }
+
     /// What each skill name should be (pool, set, sha256), and the names
     /// two sets give.
     fn wanted(
@@ -413,7 +484,7 @@ impl PoolSkills {
                 }) else {
                     continue;
                 };
-                for k in &m.skills {
+                for k in m.skills.iter().filter(|k| !d.off.contains(&k.name)) {
                     let sha = if d.auto {
                         Some(k.sha256.clone())
                     } else {
@@ -558,6 +629,7 @@ impl PoolSkills {
                             set: set.clone(),
                             sha256: sha.clone(),
                             tree: t,
+                            updated: now_ms(),
                         });
                     }
                     Err(e) => errors.push(format!("{name} into {}: {e}", dir.display())),
@@ -627,20 +699,45 @@ impl PoolSkills {
                     skills: m
                         .skills
                         .iter()
-                        .map(|k| SkillView {
-                            name: k.name.clone(),
-                            description: k.description.clone(),
-                            sha256: k.sha256.clone(),
-                            installed: accepted
-                                && !dirs.is_empty()
-                                && dirs.iter().all(|dir| {
-                                    s.installed.iter().any(|i| {
-                                        &i.dir == dir && i.name == k.name && i.sha256 == k.sha256
-                                    })
-                                }),
-                            pending: accepted
-                                && !auto
-                                && d.and_then(|d| d.approved.get(&k.name)) != Some(&k.sha256),
+                        .map(|k| {
+                            let enabled = !d.is_some_and(|d| d.off.contains(&k.name));
+                            let mine = |i: &&Installed| {
+                                &i.pool == pool && i.set == m.name && i.name == k.name
+                            };
+                            let here = |dir: &PathBuf| {
+                                s.installed
+                                    .iter()
+                                    .filter(mine)
+                                    .any(|i| &i.dir == dir && i.sha256 == k.sha256)
+                            };
+                            SkillView {
+                                name: k.name.clone(),
+                                description: k.description.clone(),
+                                sha256: k.sha256.clone(),
+                                installed: accepted
+                                    && enabled
+                                    && !dirs.is_empty()
+                                    && dirs.iter().all(here),
+                                pending: accepted
+                                    && enabled
+                                    && !auto
+                                    && d.and_then(|d| d.approved.get(&k.name)) != Some(&k.sha256),
+                                enabled,
+                                group: k.group.clone(),
+                                tags: k.tags.clone(),
+                                updated: s
+                                    .installed
+                                    .iter()
+                                    .filter(mine)
+                                    .map(|i| i.updated)
+                                    .filter(|u| *u > 0)
+                                    .max(),
+                                agents: agents
+                                    .iter()
+                                    .filter(|a| a.enabled && here(&PathBuf::from(&a.dir)))
+                                    .map(|a| a.name.clone())
+                                    .collect(),
+                            }
                         })
                         .collect(),
                 });
@@ -836,6 +933,8 @@ mod tests {
                 description: "d".into(),
                 sha256: devstack_node::skills::hex(&Sha256::digest(&b)),
                 size: b.len() as u64,
+                group: name.starts_with("biz").then(|| "Business".to_string()),
+                tags: Vec::new(),
             };
             self.archives.lock().unwrap().insert(name.into(), b);
             e
@@ -965,6 +1064,57 @@ mod tests {
     }
 
     #[test]
+    fn a_skill_or_a_group_is_switched_off_and_on_again() {
+        let (st, home) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (hub, pool) = hub(st.path(), home.path());
+        let a = pool.put("work-issue", "v1");
+        let b = pool.put("biz-validate", "v1");
+        let c = pool.put("biz-overview", "v1");
+        hub.set_pool("default", Some(set(vec![a, b, c])));
+        hub.set_agent("claude-code", true).unwrap();
+        hub.accept("default", "core", true).unwrap();
+        let dir = home.path().join(".claude/skills");
+        let v = hub.view();
+        let k = &v.sets[0].skills[0];
+        assert!(k.enabled && k.installed && k.updated.is_some(), "{k:?}");
+        assert_eq!(k.agents, ["Claude Code"]);
+
+        hub.set_skill("default", "core", "work-issue", false)
+            .unwrap();
+        assert!(!dir.join("work-issue").exists());
+        let v = hub.view();
+        let k = v.sets[0]
+            .skills
+            .iter()
+            .find(|k| k.name == "work-issue")
+            .unwrap();
+        assert!(!k.enabled && !k.installed);
+
+        hub.set_group("default", "core", "Business", false).unwrap();
+        assert!(!dir.join("biz-validate").exists() && !dir.join("biz-overview").exists());
+        hub.set_group("default", "core", "Business", true).unwrap();
+        hub.set_skill("default", "core", "work-issue", true)
+            .unwrap();
+        for n in ["work-issue", "biz-validate", "biz-overview"] {
+            assert!(dir.join(n).join("SKILL.md").exists(), "{n}");
+        }
+        // A skill the set gains later is on.
+        let d = pool.put("push-tag", "v1");
+        let all: Vec<_> = hub.view().sets[0]
+            .skills
+            .iter()
+            .map(|k| k.name.clone())
+            .collect();
+        assert_eq!(all.len(), 3);
+        let mut entries = set(vec![d]);
+        entries[0]
+            .skills
+            .extend(["work-issue", "biz-validate", "biz-overview"].map(|n| pool.put(n, "v1")));
+        hub.set_pool("default", Some(entries));
+        assert!(dir.join("push-tag").exists());
+    }
+
+    #[test]
     fn a_set_from_another_source_is_offered_again() {
         let (st, home) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let (hub, pool) = hub(st.path(), home.path());
@@ -978,4 +1128,30 @@ mod tests {
         assert_eq!(hub.view().sets[0].state, "changed");
         assert!(!home.path().join(".claude/skills/work-issue").exists());
     }
+}
+
+#[derive(Deserialize)]
+pub struct EnabledBody {
+    pub enabled: bool,
+}
+
+/// `PUT /hub/skills/sets/{pool}/{set}/skills/{name}` `{enabled}`: switch
+/// one skill of an accepted set on or off (ADR-0077).
+pub async fn skill(
+    State(s): State<crate::AppState>,
+    UrlPath((pool, set, name)): UrlPath<(String, String, String)>,
+    Json(b): Json<EnabledBody>,
+) -> Response {
+    on(&s, move |k| k.set_skill(&pool, &set, &name, b.enabled)).await
+}
+
+/// `PUT /hub/skills/sets/{pool}/{set}/groups/{group}` `{enabled}`: switch
+/// every skill of a group on or off; `-` is the skills without one.
+pub async fn group(
+    State(s): State<crate::AppState>,
+    UrlPath((pool, set, group)): UrlPath<(String, String, String)>,
+    Json(b): Json<EnabledBody>,
+) -> Response {
+    let group = if group == "-" { String::new() } else { group };
+    on(&s, move |k| k.set_group(&pool, &set, &group, b.enabled)).await
 }

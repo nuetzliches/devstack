@@ -95,6 +95,7 @@ class MockHub {
     agents: [
       { id: 'claude-code', name: 'Claude Code', dir: '~/.claude/skills', enabled: true },
       { id: 'codex', name: 'Codex', dir: '~/.agents/skills', enabled: false },
+      { id: 'opencode', name: 'OpenCode', dir: '~/.config/opencode/skills', enabled: false },
     ],
     sets: [
       {
@@ -106,8 +107,11 @@ class MockHub {
         fetched: Math.floor(Date.now() / 1000) - 600,
         commit: 'a1b2c3d',
         skills: [
-          { name: 'work-issue', description: 'Work on an issue from the tracker to a pull request', sha256: 'aa', installed: true, pending: false },
-          { name: 'push-tag', description: 'Tag a release and push it', sha256: 'bb', installed: true, pending: false },
+          { name: 'work-issue', description: 'Work on an issue from the tracker to a pull request', sha256: 'aa11', installed: true, pending: false, enabled: true, group: 'Development', tags: ['git', 'tracker'], updated: Date.now() - 3_600_000, agents: ['Claude Code'] },
+          { name: 'push-tag', description: 'Tag a release and push it', sha256: 'bb22', installed: true, pending: false, enabled: true, group: 'Development', tags: ['release'], updated: Date.now() - 3_600_000, agents: ['Claude Code'] },
+          { name: 'timetrack', description: 'Book time entries from the commits of a day', sha256: 'cc33', installed: true, pending: false, enabled: true, group: 'Time', updated: Date.now() - 600_000, agents: ['Claude Code'] },
+          { name: 'idea-validate', description: 'Validate a business idea in six phases, as an HTML report', sha256: 'dd44', installed: false, pending: false, enabled: false, group: 'Business', tags: ['html'] },
+          { name: 'idea-overview', description: 'A one-page overview of a business idea', sha256: 'ee55', installed: false, pending: false, enabled: false, group: 'Business', tags: ['html'] },
         ],
       },
       {
@@ -116,7 +120,7 @@ class MockHub {
         source: 'github:example-org/shop-agent@main/skills',
         state: 'offered',
         auto: false,
-        skills: [{ name: 'shop-add-feature', description: 'Add a feature to the shop the way its team does', sha256: 'cc', installed: false, pending: false }],
+        skills: [{ name: 'shop-add-feature', description: 'Add a feature to the shop the way its team does', sha256: 'ff66', installed: false, pending: false, enabled: true }],
       },
     ],
     conflicts: [],
@@ -532,6 +536,19 @@ export class MockTransport implements Transport {
       if (a) a.enabled = !!(body as { enabled?: boolean })?.enabled;
       return json(200, this.hub.poolSkillState);
     }
+    const sk = /^\/hub\/skills\/sets\/([^/]+)\/([^/]+)\/(skills|groups)\/([^/]+)$/.exec(p);
+    if (sk && method === 'PUT') {
+      const s = this.hub.poolSkillState.sets.find((x) => x.pool === decodeURIComponent(sk[1]) && x.set === decodeURIComponent(sk[2]));
+      if (!s || s.state !== 'accepted') return json(409, { error: 'not accepted' });
+      const on = !!(body as { enabled?: boolean })?.enabled;
+      const what = decodeURIComponent(sk[4]);
+      for (const k of s.skills) {
+        const hit = sk[3] === 'skills' ? k.name === what : (k.group ?? '') === (what === '-' ? '' : what);
+        if (hit) Object.assign(k, { enabled: on, installed: on, updated: on ? Date.now() : k.updated, agents: on ? ['Claude Code'] : [] });
+      }
+      for (const l of this.hub.hubSubs) l.send({ type: 'skills', skills: this.hub.poolSkillState });
+      return json(200, this.hub.poolSkillState);
+    }
     const ss = /^\/hub\/skills\/sets\/([^/]+)\/([^/]+)(?:\/(accept|decline|update))?$/.exec(p);
     if (ss) {
       const s = this.hub.poolSkillState.sets.find((x) => x.pool === decodeURIComponent(ss[1]) && x.set === decodeURIComponent(ss[2]));
@@ -674,8 +691,8 @@ export class MockTransport implements Transport {
         { id: 'vscode', label: 'VS Code', kind: 'editor' },
         { id: 'github-desktop', label: 'GitHub Desktop', kind: 'git' },
         { id: 'claude', label: 'Claude Desktop', kind: 'agent', prompt: 'prefill' },
-        { id: 'claude-cli', label: 'Claude Code', kind: 'agent', prompt: 'prefill' },
-        { id: 'orca', label: 'Orca', kind: 'agent', prompt: 'send' },
+        { id: 'claude-cli', label: 'Claude Code', kind: 'agent', prompt: 'prefill', agent: 'claude-code' },
+        { id: 'orca', label: 'Orca', kind: 'agent', prompt: 'send', agent: 'orca' },
       ]);
     if (p === '/hub/open' && method === 'POST') return empty(204);
     // The hub writes the prompts (ADR-0046, amendment 2026-10-22); the mock's are short.

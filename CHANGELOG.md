@@ -9,6 +9,19 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **Skills one by one** ([ADR-0077](docs/adr/0077-a-sets-skills-are-grouped-and-switched-one-by-one.md)):
+  each skill of an accepted set can be switched off and on again, a group
+  at once; all are on when a set is accepted, and a skill the set gains
+  later too. A skill's `metadata.group` and `metadata.tags` in its
+  frontmatter group and tag it. The Skills page lists every skill as a
+  row by group, with search, filters by set, state and group, when it was
+  written here and into which agents, and its detail on a click.
+- **Programs and agents**: the path menu's dialog also says which coding
+  agents get the pools' skills, those the menu cannot open (Codex,
+  OpenCode, Copilot) included; the Skills page opens it.
+
 ### Fixed
 
 - **A GitHub skill set names its commit**: the set showed
