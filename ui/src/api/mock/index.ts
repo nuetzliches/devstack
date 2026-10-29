@@ -351,6 +351,11 @@ export class MockTransport implements Transport {
     if (p === '/hub/pool/placement' && method === 'GET') {
       // The default pool has one node; a lane named like one that ran there is warm.
       const lane = url.searchParams.get('lane') ?? '';
+      // The customer pool's coordinator orders its own node.
+      if (url.searchParams.get('pool') === 'customer')
+        return json(200, [
+          { node: 'feedbeef00112233', name: 'gpu-box', eligible: true, why: 'the most free capacity', cpus: 24, memory: 96 * 2 ** 30, disk: 6 * 2 ** 30, disk_room: 400 * 2 ** 30 },
+        ]);
       return json(200, [
         {
           node: '9f8e7d6c5b4a3921',
@@ -377,6 +382,7 @@ export class MockTransport implements Transport {
         reported.push({ id: node, name: 'this', online: true, report: { sharing: false, cpus: 0, memory: 0, total: { cpus: 16, memory: 64 * 2 ** 30 }, used: { cpus: 2, memory: 8 * 2 ** 30 } } } as PoolNode);
       const sum = (f: (r: NonNullable<PoolNode['report']>, w: number) => number, w: (k: number) => number) =>
         reported.reduce((a: number, x: PoolNode, k: number) => a + f(x.report!, w(k)), 0);
+      const gpus = reported.flatMap((x: PoolNode) => x.report?.gpus ?? []);
       return json(
         200,
         Array.from({ length: n }, (_, i) => {
@@ -390,11 +396,12 @@ export class MockTransport implements Transport {
             offered_memory: sum((r, v) => r.memory * (0.85 + 0.15 * v), wk),
             used_cpus: sum((r, v) => (r.used?.cpus ?? 0) * (0.4 + 1.2 * v), wk),
             used_memory: sum((r, v) => (r.used?.memory ?? 0) * (0.5 + v), wk),
-            gpus: 1,
-            gpus_offered: 1,
-            gpu_load: 10 + 60 * w * w,
-            gpu_memory: 24 * 2 ** 30,
-            gpu_memory_used: (2 + 8 * w) * 2 ** 30,
+            // GPUs only where a node reports one (build-server's L4).
+            gpus: gpus.length,
+            gpus_offered: gpus.filter((g) => g.offered).length,
+            gpu_load: gpus.length ? 10 + 60 * w * w : 0,
+            gpu_memory: gpus.reduce((a, g) => a + g.memory, 0),
+            gpu_memory_used: gpus.length ? (2 + 8 * w) * 2 ** 30 : 0,
           };
         }),
       );

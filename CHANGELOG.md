@@ -18,7 +18,11 @@ and listed with their assets on the
   starting a lane does: what it has free and offers, now and over the last
   hour; the pool's capacity over time is stacked machine by machine, one
   colour each, against what the pool offered; a machine's page and *This
-  machine* show its own history the same way. A machine's page holds its membership and
+  machine* show its own history the same way.
+- **Starting a lane shows where it would go**: its machines are grouped by
+  pool in their coordinator's order; a card opens the machine's page and
+  its own *Start* starts the lane there; a pool's start names its pick, and
+  pointing at a start button lights the machines it means. A machine's page holds its membership and
   its node side together, with what it reports, its policy, its capacity
   over time, the lanes on it and every admin action on it; the nodes and
   members tables are one list. *This machine* shows what holds in every

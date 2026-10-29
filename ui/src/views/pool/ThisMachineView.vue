@@ -4,7 +4,7 @@
 // how each pool sees it (role, grants, policy, what it keeps), the lanes of
 // other members it runs (the hub's `guests`), its own lanes on other
 // machines, and where its lanes start without a place named (ADR-0025).
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount } from 'vue';
 import { ago, bytes, useNow } from '@/lib/format';
 import { guestsReserved } from '@/lib/guests';
 import { kindText, kindTitle, policyText } from '@/lib/poolText';
@@ -49,15 +49,10 @@ const inPools = computed(() =>
 const kept = computed(() => inPools.value.map((x) => x.node?.report?.kept).find((k) => k?.lanes || k?.store_bytes));
 const mine = computed(() => inPools.value.flatMap((x) => x.mine.map((l) => ({ ...l, pool: x.pool }))));
 
-// The history the coordinator keeps of this machine, from one pool at a time.
-const chartPool = ref<string | null>(null);
-watch(
-  inPools,
-  (list) => {
-    if (!list.some((x) => x.pool === chartPool.value)) chartPool.value = list.find((x) => x.pool === pool.current)?.pool ?? list[0]?.pool ?? null;
-  },
-  { immediate: true },
-);
+// The hub keeps no history of this machine; its pools' coordinators do, of
+// what it reported to each: the same machine, so one of them is enough
+// (the default pool's, else the first).
+const chartPool = computed(() => (inPools.value.find((x) => x.pool === 'default') ?? inPools.value[0])?.pool ?? null);
 const chartId = computed(() => inPools.value.find((x) => x.pool === chartPool.value)?.id);
 </script>
 
@@ -140,18 +135,7 @@ const chartId = computed(() => inPools.value.find((x) => x.pool === chartPool.va
       <header class="card-header">
         <Icon name="activity" :size="18" />
         <h2>Capacity over time</h2>
-        <span class="faint small">what it had, offered and lanes used here, as {{ chartPool === 'default' ? 'the pool' : `the pool ${chartPool}` }} recorded it</span>
-        <span v-if="inPools.length > 1" class="end pick">
-          <button
-            v-for="x in inPools"
-            :key="x.pool"
-            type="button"
-            class="btn btn-xs"
-            :class="{ 'btn-primary': x.pool === chartPool }"
-            :aria-pressed="x.pool === chartPool"
-            @click="chartPool = x.pool"
-          >{{ x.pool }}</button>
-        </span>
+        <span class="faint small">of this machine: what it had, offered and lanes used here, as it reported to {{ chartPool === 'default' ? 'its pool' : `the pool ${chartPool}` }}</span>
       </header>
       <div class="card-body"><PoolCapacityChart :pool="chartPool" :node="chartId" /></div>
     </section>
@@ -275,9 +259,5 @@ const chartId = computed(() => inPools.value.find((x) => x.pool === chartPool.va
 }
 .id {
   margin-left: 6px;
-}
-.pick {
-  display: inline-flex;
-  gap: 4px;
 }
 </style>

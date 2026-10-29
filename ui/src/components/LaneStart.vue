@@ -91,6 +91,36 @@ function startingOn(n: LaneTarget) {
   return [mv.what, ...(mv.phases ?? []).map((p) => p.phase)].some((w) => w === lease || w.startsWith(`${lease}:`) || w.startsWith(`on ${n.node.name}:`));
 }
 
+/** The node a pool's coordinator would pick, if it said. */
+const pickOf = (poolName: string) => {
+  const first = placement.value[poolName]?.[0];
+  // Only a node of that pool's own (an order for another pool's nodes shows nothing).
+  return first?.eligible && nodes.value.some((n) => n.pool === poolName && n.node.id === first.node) ? first : null;
+};
+/** The cards by pool, each pool's in its coordinator's order (its pick first). */
+const groups = computed(() =>
+  pool.pools
+    .map((p) => ({
+      pool: p.name,
+      nodes: nodes.value
+        .filter((n) => n.pool === p.name)
+        .sort((a, b) => (placeOf(a.pool, a.node.id)?.rank ?? 1e9) - (placeOf(b.pool, b.node.id)?.rank ?? 1e9)),
+    }))
+    .filter((g) => g.nodes.length),
+);
+/** Where the start button under the pointer (or focus) would put the lane: its cards stand out, the others step back. */
+const hl = ref<{ local: true } | { pool: string } | null>(null);
+/** Whether the lit cards are a pool's pick (its colour) or all its nodes (no pick known). */
+const litPick = computed(() => !!hl.value && 'pool' in hl.value && !!pickOf(hl.value.pool));
+function lit(n: LaneTarget | null) {
+  const h = hl.value;
+  if (!h) return null;
+  if ('local' in h) return !n;
+  if (!n || n.pool !== h.pool) return false;
+  const pick = pickOf(h.pool);
+  return pick ? pick.node === n.node.id : true;
+}
+
 function start(on?: string) {
   void stack.startLane(props.lane.name, on, profile.value || undefined);
 }
@@ -147,7 +177,17 @@ function start(on?: string) {
         <span v-if="chosen?.fresh" class="faint small">starts with fresh data: its databases are seeded again</span>
       </label>
       <div class="choices">
-        <button type="button" class="btn btn-primary" :disabled="busy || running" data-testid="lane-start-here" @click="start()">
+        <button
+          type="button"
+          class="btn btn-primary"
+          :disabled="busy || running"
+          data-testid="lane-start-here"
+          @click="start()"
+          @mouseenter="hl = { local: true }"
+          @mouseleave="hl = null"
+          @focus="hl = { local: true }"
+          @blur="hl = null"
+        >
           <span v-if="busy && !running" class="spinner" /><Icon v-else name="play" :size="14" /> Start here
         </button>
         <button
@@ -165,12 +205,18 @@ function start(on?: string) {
           :key="p.pool"
           type="button"
           class="btn"
+          :class="{ 'pick-btn': pickOf(p.pool) }"
           :disabled="busy || running"
           :title="placement[p.pool]?.[0]?.eligible ? `The coordinator would start it on ${placement[p.pool][0].name}: ${placement[p.pool][0].why}` : 'The coordinator picks the node: warm first, then free capacity'"
           data-testid="lane-start-pool"
           @click="start(p.on)"
+          @mouseenter="hl = { pool: p.pool }"
+          @mouseleave="hl = null"
+          @focus="hl = { pool: p.pool }"
+          @blur="hl = null"
         >
           <Icon name="server" :size="14" /> Start in the pool{{ p.pool === 'default' ? '' : ` ${p.pool}` }}
+          <span v-if="pickOf(p.pool)" class="to">→ {{ pickOf(p.pool)!.name }}</span>
         </button>
       </div>
       <p v-if="need && nodes.length" class="need small" data-testid="lane-start-need">
@@ -178,23 +224,41 @@ function start(on?: string) {
         <strong>{{ bytes(need.memory) }}</strong> ({{ need.from }}).
         <span class="faint">Each chart, on the scale of all the machine has: above, the last hour (dashed: what a node offers the pool); below, now, with the lane on top.</span>
       </p>
+      <!-- A card opens the machine's page (its name is the link, over the whole
+           card); its button starts the lane there. -->
       <div v-if="nodes.length" class="targets" data-testid="lane-start-targets">
-        <button type="button" class="target local" :disabled="busy || running" data-testid="lane-start-local" @click="start()">
-          <span class="tname"><Icon name="monitor" :size="14" /> <strong>this machine</strong></span>
-          <LocalLoad :need="need ?? undefined" />
-        </button>
-        <button
-          v-for="n in nodes"
-          :key="n.on"
-          type="button"
-          class="target"
-          :disabled="busy || running"
-          data-testid="lane-start-node"
-          @click="start(n.on)"
-        >
+        <p class="group"><Icon name="monitor" :size="13" /> Here</p>
+        <div class="target local" :class="{ lit: lit(null) === true, dim: lit(null) === false }">
           <span class="tname">
-            <Icon name="server" :size="14" /> on <strong>{{ n.label }}</strong>
+            <Icon name="monitor" :size="14" />
+            <RouterLink :to="{ name: 'pool-here' }" class="open" title="This machine: what it has, runs and reported">this machine</RouterLink>
+            <button type="button" class="btn btn-xs btn-primary go" :disabled="busy || running" title="Start the lane on this machine" data-testid="lane-start-local" @click="start()">
+              <Icon name="play" :size="12" /> Start
+            </button>
+          </span>
+          <LocalLoad :need="need ?? undefined" />
+        </div>
+        <template v-for="g in groups" :key="g.pool">
+        <p class="group" data-testid="lane-start-group">
+          <Icon name="server" :size="13" /> {{ g.pool === 'default' ? 'The pool' : `The pool ${g.pool}` }}
+          <span class="faint">· {{ g.nodes.length }} machine{{ g.nodes.length === 1 ? '' : 's' }}<template v-if="pickOf(g.pool)">, its coordinator would pick {{ pickOf(g.pool)!.name }}</template></span>
+        </p>
+        <div v-for="n in g.nodes" :key="n.on" class="target" :class="{ lit: lit(n) === true, pick: lit(n) === true && litPick, dim: lit(n) === false }" data-testid="lane-start-target">
+          <span class="tname">
+            <Icon name="server" :size="14" /> on
+            <RouterLink :to="{ name: 'pool-machine', params: { pool: n.pool, id: n.node.id } }" class="open" :title="`${n.label}: its page in the pool`" data-testid="lane-start-open">{{ n.node.name }}</RouterLink>
             <span v-if="placeOf(n.pool, n.node.id)?.pick" class="pill sm info" data-testid="lane-start-pick" :title="`The coordinator would start it here: ${placeOf(n.pool, n.node.id)?.why}`">pool's pick</span>
+            <button
+              type="button"
+              class="btn btn-xs go"
+              :class="{ 'pick-btn': placeOf(n.pool, n.node.id)?.pick }"
+              :disabled="busy || running"
+              :title="placeOf(n.pool, n.node.id)?.eligible === false ? `It cannot take it: ${placeOf(n.pool, n.node.id)?.why}` : `Start the lane on ${n.label}`"
+              data-testid="lane-start-node"
+              @click="start(n.on)"
+            >
+              <Icon name="play" :size="12" /> Start
+            </button>
           </span>
           <span v-if="startingOn(n)" class="why" data-testid="lane-start-why">the lane is starting here</span>
           <span v-else-if="placeOf(n.pool, n.node.id)" class="why" :class="{ err: !placeOf(n.pool, n.node.id)?.eligible }" data-testid="lane-start-why">
@@ -202,7 +266,8 @@ function start(on?: string) {
             }}<template v-if="placeOf(n.pool, n.node.id)?.eligible && placeOf(n.pool, n.node.id)?.disk"> · needs {{ bytes(placeOf(n.pool, n.node.id)?.disk) }} of disk there</template>
           </span>
           <NodeLoad :pool="n.pool" :node="n.node" :lanes="lanesOn(n.pool, n.node.id)" :need="need ?? undefined" />
-        </button>
+        </div>
+        </template>
       </div>
       <p v-if="!pool.joinedAny" class="muted small">
         Lanes on other machines need a pool: <RouterLink :to="{ name: 'pool' }">join one</RouterLink>.
@@ -213,7 +278,7 @@ function start(on?: string) {
 
 <style scoped>
 .lane-start {
-  max-width: 820px;
+  max-width: 1800px;
   margin: 16px 0;
 }
 .choices {
@@ -309,6 +374,7 @@ function start(on?: string) {
   margin-top: 10px;
 }
 .target {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -316,22 +382,79 @@ function start(on?: string) {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  text-align: left;
 }
-.target:hover:not(:disabled) {
+.target:hover {
   border-color: var(--accent);
   background: var(--surface-hover);
 }
-.target.local {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+/* The name is the card's link: its box covers the card. The button sits above it. */
+.open {
+  color: inherit;
+  font-weight: 700;
+  text-decoration: none;
 }
-.target:disabled {
-  opacity: 0.6;
-  cursor: default;
+.open::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+.open:focus-visible {
+  outline: none;
+}
+.target:has(.open:focus-visible) {
+  box-shadow: var(--focus);
+}
+.group {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.target {
+  transition: opacity 0.15s, border-color 0.15s;
+}
+.target.dim {
+  opacity: 0.4;
+}
+/* Lit by the start button under the pointer: blue here, the pick's colour for a pool's pick, plain for a pool's nodes when it named none. */
+.target.lit {
+  border-color: var(--text-muted);
+  box-shadow: 0 0 0 1px var(--text-muted);
+}
+.target.lit.pick {
+  border-color: var(--info);
+  box-shadow: 0 0 0 1px var(--info);
+}
+.target.local.lit {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+/* The pool's pick, in its colour: the pill, its card's button and the pool's start. */
+.pick-btn {
+  border-color: color-mix(in srgb, var(--info) 55%, var(--border));
+  background: var(--info-soft);
+  color: var(--info-text);
+}
+.pick-btn:hover:not(:disabled) {
+  border-color: var(--info);
+  background: color-mix(in srgb, var(--info) 22%, var(--surface));
+}
+.pick-btn .to {
+  color: inherit;
+  opacity: 0.8;
+}
+.to {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.go {
+  position: relative;
+  z-index: 1;
+  margin-left: auto;
 }
 .tname {
   display: flex;
