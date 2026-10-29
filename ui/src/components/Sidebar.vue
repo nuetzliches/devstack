@@ -15,7 +15,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { api, paths, sharedId, v1 } from '@/api';
 import type { LaneView, StackEntry } from '@/api/types';
 import { act } from '@/lib/actions';
-import { laneLabel, laneTab, nodeLabel, runCounts, runsAnything, started } from '@/lib/lanes';
+import { laneLabel, lastTab, nodeLabel, runCounts, runsAnything, started } from '@/lib/lanes';
 import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
 import { useHub } from '@/stores/hub';
@@ -87,9 +87,11 @@ watch(
 );
 // The shown stack while it does not run: its worktrees as the hub lists them (ADR-0078).
 watch(
-  () => [stack.id, stack.running, stack.offlineLanes] as const,
+  () => [stack.offlineLanesOf, stack.running, stack.offlineLanes] as const,
   ([sid, running, list]) => {
-    if (sid && !running) known.value[sid] = list;
+    // Only a list read for this stack: while a switch loads, the one before
+    // is another stack's (its group would fold for a moment).
+    if (sid && sid === stack.id && !running) known.value[sid] = list;
   },
   { immediate: true },
 );
@@ -206,7 +208,7 @@ function openStack(s: StackEntry) {
   ui.drawerOpen = false;
   if (s.id === stack.id && stack.lane) stack.selectLane(null);
   persist.set(`lane.${s.id}`, null);
-  void router.push({ name: isCurrent(s) ? laneTab(route.name) : 'overview', params: { stack: s.id } });
+  void router.push({ name: lastTab(route.name), params: { stack: s.id } });
 }
 
 // A lane not started is shown with its start options (here, a node, the
@@ -215,11 +217,11 @@ async function openLane(s: StackEntry, l: LaneView) {
   ui.drawerOpen = false;
   if (s.id === stack.id) {
     stack.selectLane(l.name);
-    void router.push({ name: laneTab(route.name), params: { stack: s.id } });
+    void router.push({ name: lastTab(route.name), params: { stack: s.id } });
     return;
   }
   persist.set(`lane.${s.id}`, l.name);
-  await router.push({ name: 'overview', params: { stack: s.id } });
+  await router.push({ name: lastTab(route.name), params: { stack: s.id } });
 }
 
 const isCurrent = (s: StackEntry) => s.id === stack.id;

@@ -9,12 +9,15 @@ import Icon from '@/components/icons/Icon.vue';
 import StackHeader from '@/components/StackHeader.vue';
 import LaneStart from '@/components/LaneStart.vue';
 import OfflineTreeStart from '@/components/OfflineTreeStart.vue';
+import { rememberTab } from '@/lib/lanes';
 import SkillsBanner from '@/components/SkillsBanner.vue';
 import UpgradeBanner from '@/components/UpgradeBanner.vue';
 import AgentPrompt from '@/components/AgentPrompt.vue';
 import type { IconName } from '@/components/icons/icons';
 
 const route = useRoute();
+// The tab shown, for the next stack or lane opened (`lastTab`).
+watch(() => route.name, (n) => rememberTab(n), { immediate: true });
 const router = useRouter();
 const hub = useHub();
 const stack = useStack();

@@ -71,15 +71,21 @@ export const useStack = defineStore('stack', () => {
    * not started: read from the hub, again when its version of them changes.
    */
   const offlineLanes = ref<LaneView[]>([]);
+  /** Which stack `offlineLanes` belongs to: it lags behind `id` while a switch loads. */
+  const offlineLanesOf = ref<string | null>(null);
   async function loadOfflineLanes() {
     const sid = id.value;
     if (!sid || running.value || foreign.value) {
       offlineLanes.value = [];
+      offlineLanesOf.value = null;
       return;
     }
     try {
       const r = await api().request<LaneView[]>('GET', paths.worktrees(sid));
-      if (sid === id.value && r.ok && Array.isArray(r.body)) offlineLanes.value = r.body;
+      if (sid === id.value && r.ok && Array.isArray(r.body)) {
+        offlineLanes.value = r.body;
+        offlineLanesOf.value = sid;
+      }
     } catch {
       /* keep what is known */
     }
@@ -1109,6 +1115,7 @@ export const useStack = defineStore('stack', () => {
 
   return {
     offlineLanes,
+    offlineLanesOf,
     offlineLane,
     startOfflineLane,
     keepContainers,

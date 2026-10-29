@@ -2,6 +2,7 @@
 // worktree, so it is named by its branch; its name (from the directory) is
 // what the API and `{lane}` use.
 import type { LaneView } from '@/api/types';
+import { persist } from './persist';
 
 /** The branch, else the lane's name for a detached HEAD. */
 export function laneLabel(l: LaneView): string {
@@ -119,4 +120,21 @@ export function notForwardedText(ports: string[] | undefined, reason?: string): 
  */
 export function laneTab(route: unknown): string {
   return typeof route === 'string' && ['infra', 'commands', 'usage', 'events'].includes(route) ? route : 'overview';
+}
+
+/** The stack tab last shown, in any stack or lane: kept across switches and pages, in this browser. */
+let tabShown: string = persist.get<string>('stack.tab') ?? 'overview';
+/** Remember the tab of `route` when it is one of a stack's. */
+export function rememberTab(route: unknown): void {
+  if (typeof route !== 'string' || !['overview', 'service', 'container', 'infra', 'commands', 'usage', 'events'].includes(route)) return;
+  const t = laneTab(route);
+  if (t !== tabShown) {
+    tabShown = t;
+    persist.set('stack.tab', t);
+  }
+}
+/** The tab to open another stack or lane on: the one shown now, or the last shown when no stack is (the pool area). */
+export function lastTab(route: unknown): string {
+  rememberTab(route);
+  return tabShown;
 }
