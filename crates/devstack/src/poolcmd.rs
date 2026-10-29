@@ -1266,6 +1266,192 @@ pub fn upstreams(pool: &str, action: Option<crate::PoolUpstreamsAction>) -> Resu
     Ok(())
 }
 
+/// `devstack pool skills [list|add|remove|refresh|status|sync]`: the skill
+/// sets the pool hands out (ADR-0074).
+pub fn skills(pool: &str, action: Option<crate::PoolSkillsAction>) -> Result<()> {
+    use crate::PoolSkillsAction as A;
+    use devstack_node::skills::{SkillSet, Source};
+    let local = Local::new(&member_dir(pool)?);
+    match action.unwrap_or(A::List) {
+        A::List => {}
+        A::Add {
+            name,
+            github,
+            reference,
+            path,
+            folder,
+            to,
+        } => {
+            let source = match (github, folder) {
+                (Some(repo), None) => Source::Github {
+                    repo,
+                    reference,
+                    path,
+                },
+                (None, Some(path)) => Source::Folder { path },
+                _ => bail!("name a source: `--github owner/name` or `--folder <path>`"),
+            };
+            let set = SkillSet {
+                name,
+                source,
+                to: to.into_iter().filter(|t| !t.trim().is_empty()).collect(),
+            };
+            set.check().map_err(|e| anyhow!(e))?;
+            local.admin_skill_put(&set)?;
+            println!(
+                "pool `{pool}` hands out `{}` ({}); the coordinator fetches it now, and each member's hub offers it in the dashboard",
+                set.name,
+                set.source.label()
+            );
+        }
+        A::Remove { name } => {
+            local.admin_skill_remove(&name)?;
+            println!("pool `{pool}` no longer hands out `{name}`: members' hubs remove its skills");
+        }
+        A::Refresh { set } => {
+            local.admin_skills_refresh(set.as_deref())?;
+            println!(
+                "the coordinator fetches {} again",
+                set.map_or("every set".into(), |s| format!("`{s}`"))
+            );
+            return Ok(());
+        }
+        A::Status => return skills_here(None),
+        A::Sync => return skills_here(Some("/hub/skills/sync")),
+    }
+    match local.admin_skills() {
+        Ok(v) => {
+            if v.sets.is_empty() {
+                println!("pool `{pool}` hands out no skill sets");
+            }
+            for s in &v.sets {
+                let m = &s.manifest;
+                println!(
+                    "{:<16} {}  to {}",
+                    s.set.name,
+                    s.set.source.label(),
+                    s.set.to.join(",")
+                );
+                print_manifest(m);
+            }
+            if !v.github_token {
+                println!(
+                    "(no DEVSTACK_SKILLS_GITHUB_TOKEN on the coordinator: public repositories only)"
+                );
+            }
+            if !v.refresh_signed {
+                println!(
+                    "(no DEVSTACK_SKILLS_REFRESH_SECRET on the coordinator: a push is not told, refresh by hand)"
+                );
+            }
+        }
+        Err(devstack_node::member::MemberError::Status(403, _)) => {
+            let sets = local.skills()?;
+            if sets.is_empty() {
+                println!("pool `{pool}` gives this machine no skill sets");
+            }
+            for m in &sets {
+                println!("{:<16} {}", m.name, m.source);
+                print_manifest(m);
+            }
+        }
+        Err(e) => return Err(e.into()),
+    }
+    Ok(())
+}
+
+fn print_manifest(m: &devstack_node::skills::SetManifest) {
+    if let Some(e) = &m.error {
+        println!("  last fetch failed: {e}");
+    }
+    for k in &m.skills {
+        println!("  {:<24} {}", k.name, k.description);
+    }
+    for k in &m.skipped {
+        println!("  left out: {k}");
+    }
+}
+
+/// This machine's state from the hub, after `post` (a path) if given.
+fn skills_here(post: Option<&str>) -> Result<()> {
+    let port = devstack_hub::ensure_running().map_err(|e| anyhow!("the hub: {e}"))?;
+    let token = devstack_daemon::token::load()
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| anyhow!("no user token: start the hub once (`devstack ui`)"))?;
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(300)))
+        .http_status_as_error(false)
+        .build()
+        .new_agent();
+    let auth = format!("Bearer {token}");
+    let mut r = match post {
+        Some(p) => agent
+            .post(&format!("http://127.0.0.1:{port}{p}"))
+            .header("Authorization", &auth)
+            .header("X-Devstack-Client", "cli")
+            .send("")?,
+        None => agent
+            .get(&format!("http://127.0.0.1:{port}/hub/skills"))
+            .header("Authorization", &auth)
+            .header("X-Devstack-Client", "cli")
+            .call()?,
+    };
+    let text = r.body_mut().read_to_string()?;
+    if !r.status().is_success() {
+        bail!("the hub answered {}: {text}", r.status());
+    }
+    let v: serde_json::Value = serde_json::from_str(&text)?;
+    println!("agents (installed into when on):");
+    for a in v["agents"].as_array().into_iter().flatten() {
+        println!(
+            "  [{}] {:<20} {}",
+            if a["enabled"].as_bool() == Some(true) {
+                "x"
+            } else {
+                " "
+            },
+            a["name"].as_str().unwrap_or(""),
+            a["dir"].as_str().unwrap_or("")
+        );
+    }
+    for s in v["sets"].as_array().into_iter().flatten() {
+        println!(
+            "{}:{}  {}  {}{}",
+            s["pool"].as_str().unwrap_or(""),
+            s["set"].as_str().unwrap_or(""),
+            s["source"].as_str().unwrap_or(""),
+            s["state"].as_str().unwrap_or(""),
+            if s["auto"].as_bool() == Some(true) {
+                ", updates at once"
+            } else {
+                ""
+            }
+        );
+        for k in s["skills"].as_array().into_iter().flatten() {
+            let state = if k["pending"].as_bool() == Some(true) {
+                "update waits"
+            } else if k["installed"].as_bool() == Some(true) {
+                "installed"
+            } else {
+                ""
+            };
+            println!("  {:<24} {state}", k["name"].as_str().unwrap_or(""));
+        }
+    }
+    for c in v["conflicts"].as_array().into_iter().flatten() {
+        println!(
+            "conflict: {} in {}: {}",
+            c["name"].as_str().unwrap_or(""),
+            c["dir"].as_str().unwrap_or(""),
+            c["reason"].as_str().unwrap_or("")
+        );
+    }
+    for e in v["errors"].as_array().into_iter().flatten() {
+        println!("error: {}", e.as_str().unwrap_or(""));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::systemd_word;

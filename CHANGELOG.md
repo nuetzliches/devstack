@@ -9,6 +9,21 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **A pool hands out agent skills** ([ADR-0074](docs/adr/0074-a-pool-hands-out-skill-sets-the-hub-installs-them-for-the-agents.md)):
+  an admin names skill sets (`devstack pool skills add`, or the pool
+  area): a GitHub repository, read with the coordinator's own token, or a
+  folder on the coordinator, given to every member, member ids or tags.
+  Each member's hub offers them on the new *Skills* page and, once
+  accepted, installs them into the user skill folders of the coding agents
+  switched on there (Claude Code, Codex, OpenCode, Copilot, Cursor and
+  some sixty more): no repository is touched. Updates come at once or wait
+  for the user, per set; a skill of the user's own, or one changed by
+  hand, is left alone. A push reaches every member within seconds through
+  a signed `POST /v1/skills/refresh` (Hookaido's signature). "Open with"
+  takes its agents from the same agent table.
+
 ### Changed
 
 - **The pool is live, and nobody polls the coordinator** (ADR-0073): the
@@ -20,7 +35,7 @@ and listed with their assets on the
   pool loses the pool's upstreams at once. Update the coordinator first:
   with one of an earlier release the pool area is read when it opens and
   says it is not live.
-- **A lane's need says what it takes once up** (ADR-0074): beside the
+- **A lane's need says what it takes once up** (ADR-0075): beside the
   peak, which includes its build, a node measures the 95th percentile of a
   lane's CPU and memory after it is up. Where a lane can start, the
   dashboard and `devstack pool placement` say "starts with up to 8.7 CPU

@@ -200,7 +200,7 @@ once the lane is up, and the coordinator keeps the most of the last five.
 The dashboard and `devstack pool placement` show both ("starts with up to
 8.7 CPU and 7.2 GB, its build included, then runs on about 0.8 CPU and
 2.1 GB"); admission never uses the steady use
-([ADR-0074](adr/0074-a-lanes-steady-use-is-measured-and-shown-never-admitted-by.md)).
+([ADR-0075](adr/0075-a-lanes-steady-use-is-measured-and-shown-never-admitted-by.md)).
 
 Disk counts per node: one that keeps this lane's data needs nothing more,
 one the repository ran on (its images are there) the lane's own part, any
@@ -633,6 +633,45 @@ another. A declined entry stays declined. An entry the pool drops, or every
 entry of a pool the machine leaves, goes with its login. A pool that does not
 answer keeps what it named last.
 
+## Skill sets for the members
+
+A pool can hand its members agent skills
+([ADR-0074](adr/0074-a-pool-hands-out-skill-sets-the-hub-installs-them-for-the-agents.md)):
+folders with a `SKILL.md`, from a GitHub repository or a folder on the
+coordinator, which each member's hub installs into the user skill folders of
+the coding agents on the machine (`~/.claude/skills`, `~/.agents/skills`,
+`~/.config/opencode/skills`, ...). Nothing goes into a repository. An admin
+names the sets:
+
+```bash
+devstack pool skills add core --github example-org/skills --path skills --to '*'
+devstack pool skills add shop --github example-org/shop-agent --path skills --to shop-team
+devstack pool skills add local --folder core            # below skill-sources/ in the coordinator's directory
+devstack pool skills refresh                            # fetch again now
+devstack pool skills remove shop
+devstack pool skills                                    # the sets: for an admin with their last fetch
+```
+
+`--to` gives a set to every member (`*`), member ids or tags (`devstack node
+members tags`). The coordinator fetches a set with its own access: a private
+repository needs `DEVSTACK_SKILLS_GITHUB_TOKEN` (a read-only token) in its
+environment. Each skill folder whose `SKILL.md` names the folder and has a
+description is packed; the others are listed as left out. A fetch runs when
+the coordinator starts, when an admin saves or refreshes a set, and when a
+push says so: with `DEVSTACK_SKILLS_REFRESH_SECRET` set, `POST
+/v1/skills/refresh` takes a request signed as Hookaido signs a delivery
+(`sign hmac` with the same secret), without a client certificate. Point a
+repository's push webhook there through Hookaido and members have a change
+within seconds. Every download is in the audit log.
+
+On a member, the *Skills* page lists the agents found, each with a switch,
+and the sets offered. A set is installed once accepted; its updates come at
+once, or wait for "Take the updates", as chosen per set. A set whose source
+changes is offered again. The hub writes only the skills it installed and
+nobody changed since: a skill of the user's own of the same name, or one
+changed by hand, is left and shown as a conflict. `devstack pool skills
+status` and `sync` do the same from a terminal.
+
 ## Several pools
 
 A machine can belong to several pools, a customer's beside the team's, each
@@ -774,7 +813,8 @@ Members never ask the coordinator on a timer
 Each member's hub (and a node agent) keeps one stream open to the
 coordinator, `GET /v1/events`, which names the parts of the pool that
 changed: `members`, `nodes`, `leases` (with whom lanes are shared),
-`upstreams` and `telemetry`, each with a version. The hub reads a part when
+`upstreams`, `telemetry` and `skills` (the sets given to this member), each
+with a version. The hub reads a part when
 its version is new to it: the guest lanes on this machine when leases or
 nodes changed, the MCP upstreams when they did; the dashboard reads what it
 shows of the pool then. A change reaches every member within about two
@@ -801,6 +841,8 @@ until it is approved.
 |---|---|
 | Membership (key, certificate, coordinator) | devstack's per-user state, `pool/`; other pools in `pools/<name>/`; `DEVSTACK_POOL_DIR` overrides the default pool's |
 | Share settings, telemetry consent | `share.json`, `telemetry.json` beside the membership |
+| The pools' skill sets on a member | in the hub's state: `pool-skills.json` (the sets as last read), `skills.json` (the user's choices and the lock of what it installed), `skill-store/` (archives by SHA-256) |
+| Skill sets on the coordinator | `skills.json` (the sets), `skills/<set>/` (manifest and archives of the last fetch), `skill-sources/` (folder sources); `DEVSTACK_SKILLS_GITHUB_TOKEN`, `DEVSTACK_SKILLS_REFRESH_SECRET` |
 | The pools' MCP upstreams on a member | in the hub's state: `pool-upstreams.json` (the lists as last got), the member's answers in `upstreams.toml` (`[[pool]]`) |
 | Coordinator | `DEVSTACK_COORDINATOR_DIR`; `members.json` (changed under `members.lock`), `audit.jsonl`, `telemetry.json`, `upstreams.json` (the MCP upstreams it names); with a provisioner `provisioning.json` (the settings), `machines.json` (the machines asked for, until deleted), `provisioner.token` |
 | Node agent state (leases, mirrors, uploaded files per member, `policy.json`, `secret`) | `node/` beside its membership |

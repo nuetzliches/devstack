@@ -52,7 +52,8 @@ What was built:
    and every 5 s for what changes with time alone (a node goes offline after
    45 s without a report, an offer expires). That is the coordinator looking
    at its own state, not asking anyone.
-3. **The topics** and what they cover: `members` (`GET /v1/members`),
+3. **The topics** and what they cover (ADR-0074 adds `skills`, each
+   member's own version of the sets given to it): `members` (`GET /v1/members`),
    `nodes` (`GET /v1/nodes`, a node's report and whether it is online),
    `leases` (`GET /v1/leases`, `GET /v1/shared`: whom a lane is shared with),
    `upstreams` (`GET /v1/upstreams`), `telemetry` (`GET /v1/telemetry`).

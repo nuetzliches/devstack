@@ -56,7 +56,7 @@ pub struct Found {
 enum How {
     /// The file manager or a terminal of this desktop, in the folder.
     Local(devstack_desktop::Local),
-    /// A link of the program's scheme (`LINKS`).
+    /// A link of the program's scheme (`links`).
     Link(&'static str),
     /// Orca's CLI.
     Orca(PathBuf),
@@ -65,16 +65,27 @@ enum How {
     GitHubDesktop(PathBuf),
 }
 
-/// The programs found by their registered scheme, in menu order.
-const LINKS: &[(&str, &str, Kind)] = &[
+/// The editors found by their registered scheme, in menu order.
+const EDITORS: &[(&str, &str, Kind)] = &[
     ("vscode", "VS Code", Kind::Editor),
     ("vscode-insiders", "VS Code Insiders", Kind::Editor),
     ("cursor", "Cursor", Kind::Editor),
     ("windsurf", "Windsurf", Kind::Editor),
     ("zed", "Zed", Kind::Editor),
-    ("claude", "Claude Desktop", Kind::Agent),
-    ("claude-cli", "Claude Code", Kind::Agent),
 ];
+
+/// The programs found by their registered scheme, in menu order: the
+/// editors, then the agents of the agent table that say how they are
+/// opened (`[agent.open]`, ADR-0074).
+fn links() -> Vec<(&'static str, &'static str, Kind)> {
+    let mut out = EDITORS.to_vec();
+    for a in devstack_skills::agents::all() {
+        for l in a.open.iter().flat_map(|o| &o.links) {
+            out.push((l.scheme.as_str(), l.label.as_str(), Kind::Agent));
+        }
+    }
+    out
+}
 
 /// What this machine can open a folder with, in menu order: files,
 /// terminals, editors, Git clients, agents. Nothing without a desktop.
@@ -97,9 +108,10 @@ pub fn found() -> Vec<Found> {
     if out.is_empty() {
         return out;
     }
-    let schemes: Vec<&str> = LINKS.iter().map(|l| l.0).collect();
+    let links = links();
+    let schemes: Vec<&str> = links.iter().map(|l| l.0).collect();
     let registered = devstack_desktop::registered_schemes(&schemes);
-    for &(scheme, label, kind) in LINKS {
+    for &(scheme, label, kind) in &links {
         if registered.contains(&scheme) {
             out.push(Found {
                 opener: Opener {

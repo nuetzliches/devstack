@@ -12,7 +12,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { DockerEngine, Guest, HubEvent, PoolFeed, LaneView, McpUpstream, NotifySettings, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
+import type { DockerEngine, Guest, HubEvent, PoolFeed, PoolSkillsAdmin, PoolSkillsState, LaneView, McpUpstream, NotifySettings, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -86,7 +86,50 @@ class MockHub {
   hubSubs = new Set<Listener<HubEvent>>();
   /** The pools as a hub follows them (ADR-0073): the default one live. */
   pools: Record<string, PoolFeed> = {
-    default: { live: 'live', versions: { members: 'm1', nodes: 'n1', leases: 'l1', upstreams: 'u1', telemetry: 't1' } },
+    default: { live: 'live', versions: { members: 'm1', nodes: 'n1', leases: 'l1', upstreams: 'u1', telemetry: 't1', skills: 's1' } },
+  };
+  /** The pool's skill sets on this machine (ADR-0074): one accepted, one offered. */
+  poolSkillState: PoolSkillsState = {
+    agents: [
+      { id: 'claude-code', name: 'Claude Code', dir: '~/.claude/skills', enabled: true },
+      { id: 'codex', name: 'Codex', dir: '~/.agents/skills', enabled: false },
+    ],
+    sets: [
+      {
+        pool: 'default',
+        set: 'core',
+        source: 'github:example-org/skills@main/skills',
+        state: 'accepted',
+        auto: true,
+        fetched: Math.floor(Date.now() / 1000) - 600,
+        commit: 'a1b2c3d',
+        skills: [
+          { name: 'work-issue', description: 'Work on an issue from the tracker to a pull request', sha256: 'aa', installed: true, pending: false },
+          { name: 'push-tag', description: 'Tag a release and push it', sha256: 'bb', installed: true, pending: false },
+        ],
+      },
+      {
+        pool: 'default',
+        set: 'shop',
+        source: 'github:example-org/shop-agent@main/skills',
+        state: 'offered',
+        auto: false,
+        skills: [{ name: 'shop-add-feature', description: 'Add a feature to the shop the way its team does', sha256: 'cc', installed: false, pending: false }],
+      },
+    ],
+    conflicts: [],
+  };
+  poolSkills: PoolSkillsAdmin = {
+    sets: [
+      {
+        name: 'core',
+        source: { kind: 'github', repo: 'example-org/skills', ref: 'main', path: 'skills' },
+        to: ['*'],
+        manifest: { source: 'github:example-org/skills@main/skills', fetched: Math.floor(Date.now() / 1000) - 600, commit: 'a1b2c3d', skills: [{ name: 'work-issue', description: '' }, { name: 'push-tag', description: '' }] },
+      },
+    ],
+    github_token: true,
+    refresh_signed: true,
   };
   /** A lane of laptop-anna's runs here, a second one is admitted. */
   guests: Guest[] = [
@@ -466,6 +509,29 @@ export class MockTransport implements Transport {
       if (ua[3] === 'decline') u.logged_in = false;
       return empty(204);
     }
+    // Skill sets (ADR-0074).
+    if (p === '/hub/skills' && method === 'GET') return json(200, this.hub.poolSkillState);
+    if (p === '/hub/skills/sync' && method === 'POST') return json(200, this.hub.poolSkillState);
+    const sa = /^\/hub\/skills\/agents\/([^/]+)$/.exec(p);
+    if (sa && method === 'PUT') {
+      const a = this.hub.poolSkillState.agents.find((x) => x.id === decodeURIComponent(sa[1]));
+      if (a) a.enabled = !!(body as { enabled?: boolean })?.enabled;
+      return json(200, this.hub.poolSkillState);
+    }
+    const ss = /^\/hub\/skills\/sets\/([^/]+)\/([^/]+)(?:\/(accept|decline|update))?$/.exec(p);
+    if (ss) {
+      const s = this.hub.poolSkillState.sets.find((x) => x.pool === decodeURIComponent(ss[1]) && x.set === decodeURIComponent(ss[2]));
+      if (!s) return json(409, { error: 'no such set' });
+      const b = (body ?? {}) as { auto?: boolean };
+      if (ss[3] === 'accept') Object.assign(s, { state: 'accepted', auto: !!b.auto, skills: s.skills.map((k) => ({ ...k, installed: true, pending: false })) });
+      else if (ss[3] === 'decline') Object.assign(s, { state: 'declined', skills: s.skills.map((k) => ({ ...k, installed: false, pending: false })) });
+      else if (ss[3] === 'update') s.skills = s.skills.map((k) => ({ ...k, installed: true, pending: false }));
+      else s.auto = !!b.auto;
+      for (const l of this.hub.hubSubs) l.send({ type: 'skills', skills: this.hub.poolSkillState });
+      return json(200, this.hub.poolSkillState);
+    }
+    if (p === '/hub/pool/skills' && method === 'GET') return json(200, this.hub.poolSkills);
+    if (p === '/hub/pool/skills/refresh' && method === 'POST') return json(202, {});
     if (p === '/hub/pool/upstreams' && method === 'GET') return json(200, mockPoolUpstreams);
     if (p === '/hub/pool/upstreams' && method === 'POST') {
       const u = body as unknown as PoolUpstream;
@@ -1044,6 +1110,7 @@ export class MockTransport implements Transport {
       l.send({ type: 'release', current: '0.4.0', newer: hub.newer, error: hub.releaseError });
       l.send({ type: 'guests', guests: hub.guests });
       l.send({ type: 'pools', pools: hub.pools });
+      l.send({ type: 'skills', skills: hub.poolSkillState });
       hub.hubSubs.add(l);
       return { stop: () => hub.hubSubs.delete(l) };
     }

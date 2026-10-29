@@ -1207,8 +1207,11 @@ struct Inner {
     /// CA's fingerprint: what an enrolment names.
     public_url: String,
     fingerprint: String,
-    /// One change of the pool's MCP upstreams at a time (ADR-0069 option B).
+    /// One change of the pool's lists at a time: its MCP upstreams
+    /// (ADR-0069 option B) and its skill sets (ADR-0074).
     upstreams: Mutex<()>,
+    /// The skill sets to fetch again, and whether a fetch runs (ADR-0074).
+    skill_fetch: Mutex<SkillFetch>,
     /// The version of each part of the pool its members read (ADR-0073).
     versions: tokio::sync::watch::Sender<crate::events::Versions>,
     /// Count the versions again: something may have changed.
@@ -1335,6 +1338,15 @@ fn router(shared: Shared) -> Router {
         .route("/v1/admin/members/{id}/node", post(admin_node))
         .route("/v1/admin/nodes/{id}/policy", post(admin_policy))
         .route("/v1/events", get(events))
+        .route("/v1/skills", get(skills_list))
+        .route("/v1/skills/refresh", post(skills_refresh_signed))
+        .route("/v1/skills/{set}/{file}", get(skill_archive))
+        .route("/v1/admin/skills", get(admin_skills).post(admin_skill_put))
+        .route("/v1/admin/skills/refresh", post(admin_skills_refresh))
+        .route(
+            "/v1/admin/skills/{name}",
+            axum::routing::delete(admin_skill_remove),
+        )
         .layer(axum::middleware::from_fn_with_state(
             shared.clone(),
             recount_after,
@@ -1709,6 +1721,9 @@ fn versions(s: &Inner) -> crate::events::Versions {
         events::TELEMETRY.into(),
         version(&(s.collector.is_some(), crate::telemetry::collects())),
     );
+    // Every set; each member's stream tells the version of its own.
+    let sets: Vec<crate::skills::SetView> = crate::skills::admin_view(&s.dir).sets;
+    v.insert(events::SKILLS.into(), version(&sets));
     v
 }
 
@@ -1777,10 +1792,15 @@ async fn events(
         loop {
             // Removed since: the stream ends, and with it what the member
             // follows of the pool.
-            if member(&s, &peer).is_err() {
+            let Ok(me) = member(&s, &peer) else {
                 return;
+            };
+            let mut now = rx.borrow_and_update().clone();
+            // The sets given to this member: another's change is not told.
+            if now.contains_key(crate::events::SKILLS) {
+                let mine = crate::skills::for_member(&s.dir, &me.id, &me.tags);
+                now.insert(crate::events::SKILLS.into(), crate::events::version(&mine));
             }
-            let now = rx.borrow_and_update().clone();
             let topics: crate::events::Versions = now
                 .iter()
                 .filter(|(t, v)| sent.get(*t) != Some(*v))
@@ -3572,6 +3592,7 @@ pub async fn serve_with(
         fingerprint: pki::fingerprint(&ca_pem)?,
         provisioner: options.provisioner,
         upstreams: Mutex::new(()),
+        skill_fetch: Mutex::new(SkillFetch::default()),
         versions: tokio::sync::watch::Sender::new(crate::events::Versions::new()),
         recount: Arc::new(tokio::sync::Notify::new()),
         ca_pem,
@@ -3581,6 +3602,10 @@ pub async fn serve_with(
         Arc::downgrade(&shared),
         shared.recount.clone(),
     ));
+    // The skill sets as their sources hold them now (ADR-0074).
+    if !crate::skills::load(&shared.dir).is_empty() {
+        fetch_skills(&shared, None);
+    }
     if shared.provisioner.is_some() {
         let s = shared.clone();
         tokio::spawn(async move {
@@ -4048,4 +4073,234 @@ mod share_tests {
             assert!(serde_json::from_str::<SharedService>(&j).is_err(), "{bad}");
         }
     }
+}
+
+/// The skill sets to fetch again (all of them, or these), and whether a
+/// fetch runs: one at a time, the ones asked for meanwhile after it.
+#[derive(Default)]
+struct SkillFetch {
+    running: bool,
+    all: bool,
+    sets: std::collections::BTreeSet<String>,
+}
+
+/// Fetch the set `set` (`None`: every set) again, after a fetch that runs.
+fn fetch_skills(s: &Shared, set: Option<String>) {
+    {
+        let mut f = s.skill_fetch.lock().unwrap();
+        match set {
+            Some(n) => {
+                f.sets.insert(n);
+            }
+            None => f.all = true,
+        }
+        if f.running {
+            return;
+        }
+        f.running = true;
+    }
+    let s = s.clone();
+    tokio::spawn(async move {
+        loop {
+            let (all, sets) = {
+                let mut f = s.skill_fetch.lock().unwrap();
+                if !f.all && f.sets.is_empty() {
+                    f.running = false;
+                    return;
+                }
+                (std::mem::take(&mut f.all), std::mem::take(&mut f.sets))
+            };
+            let dir = s.dir.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                for set in crate::skills::load(&dir) {
+                    if all || sets.contains(&set.name) {
+                        crate::skills::refresh(&dir, &set);
+                    }
+                }
+            })
+            .await;
+            s.recount.notify_one();
+        }
+    });
+}
+
+/// `GET /v1/skills` (members, ADR-0074): the sets given to the caller, as
+/// last fetched.
+async fn skills_list(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    headers: axum::http::HeaderMap,
+) -> ApiResult<Response> {
+    let m = member(&s, &peer)?;
+    Ok(etagged(
+        &headers,
+        &crate::skills::for_member(&s.dir, &m.id, &m.tags),
+    ))
+}
+
+/// `GET /v1/skills/{set}/{skill}.tar.gz` (members given the set): a
+/// skill's archive; each download in the audit log.
+async fn skill_archive(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath((set, file)): UrlPath<(String, String)>,
+) -> ApiResult<Response> {
+    let m = member(&s, &peer)?;
+    let not_found = || {
+        (
+            StatusCode::NOT_FOUND,
+            format!("no skill `{file}` in a set `{set}` given to you"),
+        )
+    };
+    let skill = file.strip_suffix(".tar.gz").ok_or_else(not_found)?;
+    let given = crate::skills::load(&s.dir)
+        .into_iter()
+        .any(|x| x.name == set && x.given_to(&m.id, &m.tags));
+    if !given {
+        return Err(not_found());
+    }
+    let bytes = crate::skills::archive(&s.dir, &set, skill).ok_or_else(not_found)?;
+    use sha2::Digest;
+    let sha = crate::skills::hex(&sha2::Sha256::digest(&bytes));
+    let by = format!("{} ({})", m.id, m.name);
+    s.store
+        .record(
+            &by,
+            "skill",
+            &m.id,
+            Some(format!("{set}/{skill} {}", &sha[..12])),
+        )
+        .map_err(store_err)?;
+    Ok((
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/gzip".to_string(),
+            ),
+            (axum::http::header::ETAG, format!("\"{sha}\"")),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+/// `POST /v1/skills/refresh`: a source says it changed (a push, through a
+/// webhook relay). No client certificate: signed as Hookaido signs a
+/// delivery (`X-Hookaido-Signature`, `X-Hookaido-Timestamp`) with
+/// `DEVSTACK_SKILLS_REFRESH_SECRET`. It only has every set fetched again;
+/// its body is read for nothing else. Without the secret: `404`.
+async fn skills_refresh_signed(
+    AxState(s): AxState<Shared>,
+    req: axum::extract::Request,
+) -> ApiResult<StatusCode> {
+    let Some(secret) = crate::skills::refresh_secret() else {
+        return Err((StatusCode::NOT_FOUND, "no signed refresh here".into()));
+    };
+    let (parts, body) = req.into_parts();
+    let header = |n: &str| {
+        parts
+            .headers
+            .get(n)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string()
+    };
+    let body = axum::body::to_bytes(body, 1 << 20)
+        .await
+        .map_err(|_| (StatusCode::PAYLOAD_TOO_LARGE, "body over 1 MiB".into()))?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    if !crate::skills::signed(
+        &secret,
+        parts.method.as_str(),
+        parts.uri.path(),
+        &header("x-hookaido-timestamp"),
+        &header("x-hookaido-signature"),
+        &body,
+        now,
+    ) {
+        return Err((StatusCode::UNAUTHORIZED, "not signed for this pool".into()));
+    }
+    fetch_skills(&s, None);
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// `GET /v1/admin/skills`: every set with its state (admins).
+async fn admin_skills(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+) -> ApiResult<Json<crate::skills::AdminView>> {
+    admin(&s, &peer)?;
+    Ok(Json(crate::skills::admin_view(&s.dir)))
+}
+
+/// `POST /v1/admin/skills`: add a set, or change the one of its name
+/// (admins; audited); it is fetched at once.
+async fn admin_skill_put(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    Json(set): Json<crate::skills::SkillSet>,
+) -> ApiResult<Json<crate::skills::AdminView>> {
+    let (me, by) = admin(&s, &peer)?;
+    let detail = format!(
+        "{} {} to {}",
+        set.name,
+        set.source.label(),
+        set.to.join(",")
+    );
+    let name = set.name.clone();
+    {
+        let _one = s.upstreams.lock().unwrap();
+        crate::skills::put(&s.dir, set)
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?
+            .map_err(internal)?;
+    }
+    s.store
+        .record(&by, "skill-set", &me.id, Some(detail))
+        .map_err(store_err)?;
+    fetch_skills(&s, Some(name));
+    Ok(Json(crate::skills::admin_view(&s.dir)))
+}
+
+/// `DELETE /v1/admin/skills/{name}`: stop handing a set out (admins;
+/// audited). Members' hubs remove what they installed of it.
+async fn admin_skill_remove(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    UrlPath(name): UrlPath<String>,
+) -> ApiResult<Json<crate::skills::AdminView>> {
+    let (me, by) = admin(&s, &peer)?;
+    let removed = {
+        let _one = s.upstreams.lock().unwrap();
+        crate::skills::remove(&s.dir, &name).map_err(internal)?
+    };
+    if !removed {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("the pool hands out no set `{name}`"),
+        ));
+    }
+    s.store
+        .record(&by, "skill-set-remove", &me.id, Some(name))
+        .map_err(store_err)?;
+    Ok(Json(crate::skills::admin_view(&s.dir)))
+}
+
+#[derive(Deserialize, Default)]
+pub struct RefreshQuery {
+    #[serde(default)]
+    pub set: Option<String>,
+}
+
+/// `POST /v1/admin/skills/refresh[?set=]`: fetch the sets again now
+/// (admins).
+async fn admin_skills_refresh(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    axum::extract::Query(q): axum::extract::Query<RefreshQuery>,
+) -> ApiResult<StatusCode> {
+    admin(&s, &peer)?;
+    fetch_skills(&s, q.set.filter(|x| !x.is_empty()));
+    Ok(StatusCode::ACCEPTED)
 }

@@ -47,6 +47,8 @@ export type HubEvent =
   | { type: 'guests'; guests: Guest[] }
   /** The pools this machine follows over their coordinators' streams (ADR-0073), by name. */
   | { type: 'pools'; pools: Record<string, PoolFeed> }
+  /** The pools' skill sets on this machine (ADR-0074); older hubs never send it. */
+  | { type: 'skills'; skills: PoolSkillsState }
   /** Something happened once in the hub that no request reports (ADR-0050): a toast. */
   | { type: 'notice'; level: NoticeLevel; text: string };
 
@@ -61,6 +63,47 @@ export type PoolFeed = {
   live: 'connecting' | 'live' | 'lost' | 'old';
   error?: string;
   versions: Record<string, string>;
+};
+
+/** The pools' skill sets on this machine (ADR-0074), as `GET /hub/skills` and `skills` events give them. */
+export type PoolSkillsState = {
+  /** The coding agents found here (and those switched on), with their user skill folder. */
+  agents: { id: string; name: string; dir: string; enabled: boolean }[];
+  sets: SkillSetState[];
+  conflicts: { dir: string; name: string; reason: string }[];
+  errors?: string[];
+  synced?: number;
+};
+
+export type SkillSetState = {
+  pool: string;
+  set: string;
+  /** `github:owner/repo@ref/path` or `folder:path`. */
+  source: string;
+  /** `changed`: its source is another than the one accepted, offered again. */
+  state: 'offered' | 'accepted' | 'declined' | 'changed';
+  /** Updates at once; else they wait for the user. */
+  auto: boolean;
+  fetched?: number;
+  commit?: string;
+  error?: string;
+  skills: { name: string; description: string; sha256: string; installed: boolean; pending: boolean }[];
+};
+
+/** A pool's skill set as an admin names it (`/hub/pool/skills`). */
+export type PoolSkillSet = {
+  name: string;
+  source: { kind: 'github'; repo: string; ref: string; path: string } | { kind: 'folder'; path: string };
+  to: string[];
+};
+
+/** `GET /hub/pool/skills` (admins): the sets with what the coordinator last fetched. */
+export type PoolSkillsAdmin = {
+  sets: (PoolSkillSet & {
+    manifest: { source: string; fetched?: number; commit?: string; error?: string; skills: { name: string; description: string }[]; skipped?: string[] };
+  })[];
+  github_token: boolean;
+  refresh_signed: boolean;
 };
 
 export type NoticeLevel = 'warn' | 'error';

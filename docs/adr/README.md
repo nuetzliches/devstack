@@ -156,4 +156,5 @@ stay.
 | [0071](0071-the-dashboard-writes-no-file-of-a-repository.md) | The dashboard writes no file of a repository; a change to one is a prompt for a coding agent | Accepted |
 | [0072](0072-a-restart-is-warm-a-rebuild-or-cold.md) | A restart is warm, a rebuild or cold; a group acts on its containers too | Accepted ([card](https://github.com/nuetzliches/devstack/pull/351)) |
 | [0073](0073-a-pool-tells-its-members-what-changed-over-one-stream.md) | A pool tells its members what changed, over one stream; nobody polls the coordinator | Accepted (card in the pull request) |
-| [0074](0074-a-lanes-steady-use-is-measured-and-shown-never-admitted-by.md) | A lane's steady use is measured and shown, never admitted by | Accepted (card in the pull request) |
+| [0074](0074-a-pool-hands-out-skill-sets-the-hub-installs-them-for-the-agents.md) | A pool hands out skill sets; each member's hub installs them into the coding agents' user skill folders | Accepted (card in the pull request) |
+| [0075](0075-a-lanes-steady-use-is-measured-and-shown-never-admitted-by.md) | A lane's steady use is measured and shown, never admitted by | Accepted (card in the pull request) |

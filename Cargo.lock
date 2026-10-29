@@ -910,6 +910,7 @@ dependencies = [
  "devstack-node",
  "devstack-proc",
  "devstack-skills",
+ "flate2",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -919,6 +920,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tar",
  "tempfile",
  "tokio",
  "tokio-stream",
@@ -937,6 +939,8 @@ dependencies = [
  "devstack-compose",
  "devstack-config",
  "devstack-proc",
+ "flate2",
+ "hmac",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -948,6 +952,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tar",
  "tempfile",
  "thiserror",
  "time",
@@ -976,7 +981,9 @@ version = "0.28.0"
 dependencies = [
  "anyhow",
  "devstack-config",
+ "serde",
  "tempfile",
+ "toml",
 ]
 
 [[package]]

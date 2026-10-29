@@ -1,4 +1,4 @@
-# ADR-0074: A lane's steady use is measured and shown, never admitted by
+# ADR-0075: A lane's steady use is measured and shown, never admitted by
 
 - **Status:** Accepted (2026-10-29)
 - **Date:** 2026-10-29
