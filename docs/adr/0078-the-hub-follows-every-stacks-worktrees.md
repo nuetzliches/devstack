@@ -61,8 +61,9 @@ What was built:
    The main working tree of a stopped stack shows that page too, instead of
    its views and their tabs: *Start here* starts the stack, *Start in the
    pool* is off with why (the main tree runs on this machine; a worktree's
-   lane runs in the pool). The banner above says only that the stack does
-   not run, and has no start of its own then. The branch picker finds a
+   lane runs in the pool). Above that page, across its width, a dashed box
+   says the tree does not run, unlike any running tree's view; the stack's
+   offline banner gives way to it, and shows only a failed start then. The branch picker finds a
    stopped stack's worktrees too, and a lane it makes for a stopped stack
    opens on its start page. A stopped stack's trees show no running dot,
    whatever was seen last.

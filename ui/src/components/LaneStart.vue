@@ -143,6 +143,17 @@ function start(on?: string) {
 </script>
 
 <template>
+  <!-- Nothing of this tree runs: said first, across the page, unlike any running tree's view. -->
+  <div class="not-running" data-testid="tree-not-running">
+    <Icon name="power" :size="26" class="nr-icon" />
+    <div class="nr-text">
+      <strong>{{ isMain ? `${stack.entry?.name ?? 'The stack'} is not running` : `${title} is not running` }}</strong>
+      <span v-if="isMain">Nothing of it runs on this machine. Its main working tree starts here, on the stack's main ports.</span>
+      <span v-else-if="!stack.running">{{ stack.entry?.name }} does not run either: its daemon comes up with this lane, its main working tree stays stopped.</span>
+      <span v-else>{{ stack.entry?.name }} runs; this worktree's lane does not yet. Start it below, here or on a machine of the pool.</span>
+    </div>
+    <span class="pill sm outline">not started</span>
+  </div>
   <section class="card lane-start" data-testid="lane-start">
     <header class="card-header">
       <Icon name="gitBranch" :size="18" />
@@ -330,6 +341,32 @@ function start(on?: string) {
 .lane-start {
   max-width: 1800px;
   margin: 16px 0;
+}
+.not-running {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 16px;
+  padding: 22px 26px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: 12px;
+  color: var(--text-muted);
+  background: repeating-linear-gradient(135deg, transparent 0 10px, color-mix(in srgb, var(--text-faint) 6%, transparent) 10px 20px);
+}
+.nr-icon {
+  flex: none;
+  color: var(--text-faint);
+}
+.nr-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+.nr-text strong {
+  color: var(--text);
+  font-size: 15px;
 }
 .choices {
   display: flex;

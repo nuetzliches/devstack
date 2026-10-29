@@ -198,7 +198,7 @@ function isActive(name: string) {
         <Icon name="info" :size="18" />
         <span class="grow">This stack is not registered with the hub. It appears once its daemon starts.</span>
       </div>
-      <div v-else-if="!hubDown && stack.entry && !stack.running" class="banner warn" data-testid="stack-offline">
+      <div v-else-if="!hubDown && stack.entry && !stack.running && (!offlineStart || stack.entry.start_error)" class="banner warn" data-testid="stack-offline">
         <Icon name="power" :size="18" />
         <span class="grow">
           <strong>{{ stack.entry.name }} is not running.</strong>

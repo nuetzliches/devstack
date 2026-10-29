@@ -81,6 +81,9 @@ since not showing, and dashboard details.
 - **A lane not started shows no tabs**: its start options stand in for its
   views, so Overview, Infrastructure and the others no longer all led to
   the same start page.
+- **A tree not started says so first**: a dashed box across the page
+  above its start options, which no running tree shows; the stack's
+  offline banner no longer repeats it.
 - **The pool's devstack column** no longer shows a stray "–" after a
   node's version when no update runs.
 - **A GitHub skill set names its commit**: the set showed
