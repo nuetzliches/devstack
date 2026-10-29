@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-10-29
+
+The skills of a pool's set can be taken one by one: each switched on or
+off, a group at once, grouped and tagged by their own frontmatter, and the
+Skills page shows each set in its own card with its skills, when they were
+written here and into which agents (ADR-0077). The pool area has tabs and
+each machine a page of its own, and starting a lane shows where it would
+go (ADR-0076). Fixed: a GitHub skill set's commit, an agent installed
+since not showing, and dashboard details.
+
 ### Added
 
 - **Skills one by one** ([ADR-0077](docs/adr/0077-a-sets-skills-are-grouped-and-switched-one-by-one.md)):
@@ -52,6 +62,11 @@ and listed with their assets on the
 - **A GitHub skill set names its commit**: the set showed
   `pax_global_header` where its commit belongs, the name of the first
   entry of GitHub's archive (ADR-0074).
+- **An agent installed since shows on the Skills page**: the hub looks
+  again which agents are on the machine when the page opens, instead of
+  only after another change.
+- **"Check for updates" is hidden once an update is found**, beside
+  "Update to X" in the version popover (#370).
 
 ## [0.29.0] - 2026-10-29
 
@@ -2210,7 +2225,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.29.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.30.0...HEAD
+[0.30.0]: https://github.com/nuetzliches/devstack/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/nuetzliches/devstack/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/nuetzliches/devstack/compare/v0.27.1...v0.28.0
 [0.27.1]: https://github.com/nuetzliches/devstack/compare/v0.27.0...v0.27.1
