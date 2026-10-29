@@ -59,6 +59,10 @@ What was built:
    the daemon runs, the lane's usual start page and views take over. The
    branch picker finds a stopped stack's worktrees too, and a lane it makes
    for a stopped stack opens on its start card.
+   The main working tree of a stopped stack shows a start card of the same
+   kind above its last known state: *Start here* (it runs on this machine
+   only), and that a worktree's lane is what runs on the pool. A stopped
+   stack's trees show no running dot, whatever was seen last.
 
 ## Alternatives considered
 

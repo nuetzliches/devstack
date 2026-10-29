@@ -9,6 +9,7 @@ import Icon from '@/components/icons/Icon.vue';
 import StackHeader from '@/components/StackHeader.vue';
 import LaneStart from '@/components/LaneStart.vue';
 import OfflineLaneStart from '@/components/OfflineLaneStart.vue';
+import OfflineMainStart from '@/components/OfflineMainStart.vue';
 import SkillsBanner from '@/components/SkillsBanner.vue';
 import UpgradeBanner from '@/components/UpgradeBanner.vue';
 import AgentPrompt from '@/components/AgentPrompt.vue';
@@ -58,6 +59,8 @@ watch(
   },
 );
 const hubDown = computed(() => hub.status === 'unreachable' || hub.stream === 'error');
+/** The main tree of a stack that does not run, shown: its start card, as a lane's (ADR-0078). */
+const showMainStart = computed(() => !hubDown.value && !!stack.entry && !stack.running && !stack.lane && !stack.readOnly && route.name === 'overview');
 const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 const unknown = computed(() => hub.fresh && !stack.entry && !stack.view);
 /** The daemon runs another devstack than the hub: a restart of the stack
@@ -209,7 +212,7 @@ function isActive(name: string) {
             <AgentPrompt v-if="!stack.readOnly && stack.id" kind="start-failed" :target="{ stack: stack.id }" />
           </template>
         </span>
-        <button v-if="!stack.readOnly" type="button" class="btn btn-primary btn-sm" :disabled="starting" data-testid="action-start-stack" @click="stack.startStack()">
+        <button v-if="!stack.readOnly && !showMainStart" type="button" class="btn btn-primary btn-sm" :disabled="starting" data-testid="action-start-stack" @click="stack.startStack()">
           <span v-if="starting" class="spinner" /><Icon v-else name="play" :size="14" />
           {{ starting ? 'Starting…' : 'Start stack' }}
         </button>
@@ -253,6 +256,7 @@ function isActive(name: string) {
       <OfflineLaneStart :lane="stack.offlineLane" />
     </div>
     <div v-else :data-stale="stack.stale && !!stack.view ? 'true' : 'false'">
+      <OfflineMainStart v-if="showMainStart" />
       <RouterView v-slot="{ Component }">
         <component :is="Component" />
       </RouterView>

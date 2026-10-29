@@ -77,7 +77,17 @@ const known = ref<Record<string, LaneView[]>>({});
 watch(
   () => [stack.lanesOf, stack.lanes] as const,
   ([sid, list]) => {
-    if (sid) known.value[sid] = list;
+    // A daemon on its way out tells an empty list: a stopped stack's
+    // worktrees come from the hub instead (below, and `loadAll`).
+    if (sid && hub.entry(sid)?.running) known.value[sid] = list;
+  },
+  { immediate: true },
+);
+// The shown stack while it does not run: its worktrees as the hub lists them (ADR-0078).
+watch(
+  () => [stack.id, stack.running, stack.offlineLanes] as const,
+  ([sid, running, list]) => {
+    if (sid && !running) known.value[sid] = list;
   },
   { immediate: true },
 );
@@ -137,6 +147,8 @@ function stackDot(s: StackEntry): Dot {
 }
 function mainDot(s: StackEntry): Dot {
   if (!hub.reachable) return 'unknown';
+  // A stack that does not run runs nothing, whatever was seen last.
+  if (!s.running) return 'off';
   return mainActive.value[s.id] === false ? 'off' : 'on';
 }
 const servedBy = (s: StackEntry) => (known.value[s.id] ?? []).find((l) => l.owns_main) ?? null;
