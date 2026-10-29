@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **Skills one by one** ([ADR-0077](docs/adr/0077-a-sets-skills-are-grouped-and-switched-one-by-one.md)):
+  each skill of an accepted set can be switched off and on again, a group
+  at once; all are on when a set is accepted, and a skill the set gains
+  later too. A skill's `metadata.group` and `metadata.tags` in its
+  frontmatter group and tag it. The Skills page lists every skill as a
+  row by group, with search, filters by set, state and group, when it was
+  written here and into which agents, and its detail on a click.
+
 ### Changed
 
 - **The pool area has tabs, and each machine a page** (ADR-0076): a pool

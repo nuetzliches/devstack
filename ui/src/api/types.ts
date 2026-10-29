@@ -87,7 +87,27 @@ export type SkillSetState = {
   fetched?: number;
   commit?: string;
   error?: string;
-  skills: { name: string; description: string; sha256: string; installed: boolean; pending: boolean }[];
+  skills: SkillState[];
+};
+
+/** A skill of a set on this machine (ADR-0074, ADR-0077). */
+export type SkillState = {
+  name: string;
+  description: string;
+  sha256: string;
+  /** In every folder of the agents switched on, as the set has it. */
+  installed: boolean;
+  /** A version the user has not taken yet (updates wait). */
+  pending: boolean;
+  /** Switched on; older hubs leave it out (on). */
+  enabled?: boolean;
+  /** `metadata.group` and `metadata.tags` of its frontmatter. */
+  group?: string;
+  tags?: string[];
+  /** When this hub last wrote it into an agent's folder (Unix ms). */
+  updated?: number;
+  /** The agents whose folder holds it. */
+  agents?: string[];
 };
 
 /** A pool's skill set as an admin names it (`/hub/pool/skills`). */

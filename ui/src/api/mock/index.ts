@@ -95,6 +95,7 @@ class MockHub {
     agents: [
       { id: 'claude-code', name: 'Claude Code', dir: '~/.claude/skills', enabled: true },
       { id: 'codex', name: 'Codex', dir: '~/.agents/skills', enabled: false },
+      { id: 'opencode', name: 'OpenCode', dir: '~/.config/opencode/skills', enabled: false },
     ],
     sets: [
       {
@@ -106,8 +107,11 @@ class MockHub {
         fetched: Math.floor(Date.now() / 1000) - 600,
         commit: 'a1b2c3d',
         skills: [
-          { name: 'work-issue', description: 'Work on an issue from the tracker to a pull request', sha256: 'aa', installed: true, pending: false },
-          { name: 'push-tag', description: 'Tag a release and push it', sha256: 'bb', installed: true, pending: false },
+          { name: 'work-issue', description: 'Work on an issue from the tracker to a pull request', sha256: 'aa11', installed: true, pending: false, enabled: true, group: 'Development', tags: ['git', 'tracker'], updated: Date.now() - 3_600_000, agents: ['Claude Code'] },
+          { name: 'push-tag', description: 'Tag a release and push it', sha256: 'bb22', installed: true, pending: false, enabled: true, group: 'Development', tags: ['release'], updated: Date.now() - 3_600_000, agents: ['Claude Code'] },
+          { name: 'timetrack', description: 'Book time entries from the commits of a day', sha256: 'cc33', installed: true, pending: false, enabled: true, group: 'Time', updated: Date.now() - 600_000, agents: ['Claude Code'] },
+          { name: 'idea-validate', description: 'Validate a business idea in six phases, as an HTML report', sha256: 'dd44', installed: false, pending: false, enabled: false, group: 'Business', tags: ['html'] },
+          { name: 'idea-overview', description: 'A one-page overview of a business idea', sha256: 'ee55', installed: false, pending: false, enabled: false, group: 'Business', tags: ['html'] },
         ],
       },
       {
@@ -116,11 +120,22 @@ class MockHub {
         source: 'github:example-org/shop-agent@main/skills',
         state: 'offered',
         auto: false,
-        skills: [{ name: 'shop-add-feature', description: 'Add a feature to the shop the way its team does', sha256: 'cc', installed: false, pending: false }],
+        skills: [{ name: 'shop-add-feature', description: 'Add a feature to the shop the way its team does', sha256: 'ff66', installed: false, pending: false, enabled: true }],
       },
     ],
     conflicts: [],
   };
+  /** As the hub's sync does: each skill switched on of an accepted set into the folder of every agent switched on, the rest out. */
+  installSkills() {
+    const on = this.poolSkillState.agents.filter((a) => a.enabled).map((a) => a.name);
+    for (const s of this.poolSkillState.sets)
+      for (const k of s.skills) {
+        const want = s.state === 'accepted' && k.enabled !== false ? on : [];
+        if (want.join() !== (k.agents ?? []).join() && want.length) k.updated = Date.now();
+        k.agents = want;
+        k.installed = want.length > 0 && !k.pending;
+      }
+  }
   poolSkills: PoolSkillsAdmin = {
     sets: [
       {
@@ -545,6 +560,22 @@ export class MockTransport implements Transport {
     if (sa && method === 'PUT') {
       const a = this.hub.poolSkillState.agents.find((x) => x.id === decodeURIComponent(sa[1]));
       if (a) a.enabled = !!(body as { enabled?: boolean })?.enabled;
+      this.hub.installSkills();
+      for (const l of this.hub.hubSubs) l.send({ type: 'skills', skills: this.hub.poolSkillState });
+      return json(200, this.hub.poolSkillState);
+    }
+    const sk = /^\/hub\/skills\/sets\/([^/]+)\/([^/]+)\/(skills|groups)\/([^/]+)$/.exec(p);
+    if (sk && method === 'PUT') {
+      const s = this.hub.poolSkillState.sets.find((x) => x.pool === decodeURIComponent(sk[1]) && x.set === decodeURIComponent(sk[2]));
+      if (!s || s.state !== 'accepted') return json(409, { error: 'not accepted' });
+      const on = !!(body as { enabled?: boolean })?.enabled;
+      const what = decodeURIComponent(sk[4]);
+      for (const k of s.skills) {
+        const hit = sk[3] === 'skills' ? k.name === what : (k.group ?? '') === (what === '-' ? '' : what);
+        if (hit) k.enabled = on;
+      }
+      this.hub.installSkills();
+      for (const l of this.hub.hubSubs) l.send({ type: 'skills', skills: this.hub.poolSkillState });
       return json(200, this.hub.poolSkillState);
     }
     const ss = /^\/hub\/skills\/sets\/([^/]+)\/([^/]+)(?:\/(accept|decline|update))?$/.exec(p);
@@ -552,10 +583,11 @@ export class MockTransport implements Transport {
       const s = this.hub.poolSkillState.sets.find((x) => x.pool === decodeURIComponent(ss[1]) && x.set === decodeURIComponent(ss[2]));
       if (!s) return json(409, { error: 'no such set' });
       const b = (body ?? {}) as { auto?: boolean };
-      if (ss[3] === 'accept') Object.assign(s, { state: 'accepted', auto: !!b.auto, skills: s.skills.map((k) => ({ ...k, installed: true, pending: false })) });
-      else if (ss[3] === 'decline') Object.assign(s, { state: 'declined', skills: s.skills.map((k) => ({ ...k, installed: false, pending: false })) });
-      else if (ss[3] === 'update') s.skills = s.skills.map((k) => ({ ...k, installed: true, pending: false }));
+      if (ss[3] === 'accept') Object.assign(s, { state: 'accepted', auto: !!b.auto, skills: s.skills.map((k) => ({ ...k, enabled: true, pending: false })) });
+      else if (ss[3] === 'decline') Object.assign(s, { state: 'declined', skills: s.skills.map((k) => ({ ...k, pending: false })) });
+      else if (ss[3] === 'update') s.skills = s.skills.map((k) => ({ ...k, pending: false }));
       else s.auto = !!b.auto;
+      this.hub.installSkills();
       for (const l of this.hub.hubSubs) l.send({ type: 'skills', skills: this.hub.poolSkillState });
       return json(200, this.hub.poolSkillState);
     }

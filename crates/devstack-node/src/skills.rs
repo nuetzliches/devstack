@@ -176,6 +176,13 @@ pub struct SkillEntry {
     /// Of its archive.
     pub sha256: String,
     pub size: u64,
+    /// `metadata.group` of its frontmatter (ADR-0077); absent from an older
+    /// coordinator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    /// `metadata.tags` of its frontmatter.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 /// A set as its members read it: what the last fetch that worked found,
@@ -404,7 +411,7 @@ fn pack(
     let mut archives = Vec::new();
     for (folder, files) in found {
         match skill(&folder, &files) {
-            Ok(description) => {
+            Ok(front) => {
                 let bytes = tar_gz(&files).map_err(|e| format!("{folder}: {e}"))?;
                 if bytes.len() as u64 > MAX_ARCHIVE {
                     m.skipped.push(format!(
@@ -415,9 +422,11 @@ fn pack(
                 }
                 m.skills.push(SkillEntry {
                     name: folder.clone(),
-                    description,
+                    description: front.description,
                     sha256: hex(&Sha256::digest(&bytes)),
                     size: bytes.len() as u64,
+                    group: front.group,
+                    tags: front.tags,
                 });
                 archives.push((folder, bytes));
             }
@@ -456,8 +465,8 @@ fn pack(
     Ok(m)
 }
 
-/// Whether `files` are a skill named `folder`: its description, or why not.
-fn skill(folder: &str, files: &BTreeMap<String, (Vec<u8>, bool)>) -> Result<String, String> {
+/// Whether `files` are a skill named `folder`: its frontmatter, or why not.
+fn skill(folder: &str, files: &BTreeMap<String, (Vec<u8>, bool)>) -> Result<Front, String> {
     if !valid_skill_name(folder) {
         return Err("a skill's folder is 1 to 64 of a-z, 0-9 and -".into());
     }
@@ -471,39 +480,89 @@ fn skill(folder: &str, files: &BTreeMap<String, (Vec<u8>, bool)>) -> Result<Stri
     if total > MAX_UNPACKED {
         return Err(format!("over {} MiB unpacked", MAX_UNPACKED >> 20));
     }
-    let (name, description) = frontmatter(&String::from_utf8_lossy(md))?;
-    if name != folder {
-        return Err(format!("SKILL.md names `{name}`, its folder is `{folder}`"));
+    let front = frontmatter(&String::from_utf8_lossy(md))?;
+    if front.name != folder {
+        return Err(format!(
+            "SKILL.md names `{}`, its folder is `{folder}`",
+            front.name
+        ));
     }
-    if description.is_empty() || description.len() > 1024 {
+    if front.description.is_empty() || front.description.len() > 1024 {
         return Err("its description is 1 to 1024 characters".into());
     }
-    Ok(description)
+    Ok(front)
 }
 
-/// `name` and `description` of a `SKILL.md`'s frontmatter.
-pub fn frontmatter(md: &str) -> Result<(String, String), String> {
+/// What a `SKILL.md`'s frontmatter says: `name`, `description`, and from
+/// its `metadata` (the Agent Skills format's free map) `group` and `tags`,
+/// which group and filter the skills of a set (ADR-0077).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Front {
+    pub name: String,
+    pub description: String,
+    pub group: Option<String>,
+    pub tags: Vec<String>,
+}
+
+/// The frontmatter of a `SKILL.md`.
+pub fn frontmatter(md: &str) -> Result<Front, String> {
+    enum Block {
+        None,
+        /// A folded or literal description, its lines so far.
+        Description(Vec<String>),
+        /// The `metadata` map, and its key last seen (a `tags` list may
+        /// follow on the lines after it).
+        Metadata(String),
+    }
     let md = md.strip_prefix('\u{feff}').unwrap_or(md);
     let mut lines = md.lines();
     if lines.next().map(str::trim) != Some("---") {
         return Err("SKILL.md starts without frontmatter (`---`)".into());
     }
     let (mut name, mut description) = (None, None);
-    let mut block: Option<(&str, Vec<String>)> = None;
+    let (mut group, mut tags) = (None, Vec::new());
+    let mut block = Block::None;
+    let list = |v: &str| -> Vec<String> {
+        v.trim_start_matches('[')
+            .trim_end_matches(']')
+            .split(',')
+            .map(unquote)
+            .filter(|t| !t.is_empty())
+            .collect()
+    };
     for l in lines {
         if l.trim() == "---" {
             break;
         }
-        if let Some((key, ref mut acc)) = block {
-            if l.starts_with(' ') || l.starts_with('\t') || l.trim().is_empty() {
+        let indented = l.starts_with(' ') || l.starts_with('\t');
+        match &mut block {
+            Block::Description(acc) if indented || l.trim().is_empty() => {
                 acc.push(l.trim().to_string());
                 continue;
             }
-            let text = acc.join(" ").trim().to_string();
-            if key == "description" {
-                description = Some(text);
+            Block::Description(acc) => {
+                description = Some(acc.join(" ").trim().to_string());
+                block = Block::None;
             }
-            block = None;
+            Block::Metadata(last) if indented => {
+                let t = l.trim();
+                if let Some(item) = t.strip_prefix("- ") {
+                    if last == "tags" {
+                        tags.push(unquote(item));
+                    }
+                } else if let Some((k, v)) = t.split_once(':') {
+                    let (k, v) = (k.trim(), v.trim());
+                    *last = k.to_string();
+                    match k {
+                        "group" if !v.is_empty() => group = Some(unquote(v)),
+                        "tags" if !v.is_empty() => tags = list(v),
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+            Block::Metadata(_) => block = Block::None,
+            Block::None => {}
         }
         let Some((k, v)) = l.split_once(':') else {
             continue;
@@ -512,19 +571,25 @@ pub fn frontmatter(md: &str) -> Result<(String, String), String> {
         match k.trim() {
             "name" => name = Some(unquote(v)),
             "description" if v.is_empty() || v == ">" || v == "|" || v == ">-" || v == "|-" => {
-                block = Some(("description", Vec::new()));
+                block = Block::Description(Vec::new());
             }
             "description" => description = Some(unquote(v)),
+            "metadata" if v.is_empty() => block = Block::Metadata(String::new()),
             _ => {}
         }
     }
-    if let Some(("description", acc)) = block {
+    if let Block::Description(acc) = block {
         description = Some(acc.join(" ").trim().to_string());
     }
-    Ok((
-        name.ok_or("SKILL.md names no `name`")?,
-        description.ok_or("SKILL.md has no `description`")?,
-    ))
+    let group = group.filter(|g| !g.is_empty() && g.chars().count() <= 48);
+    tags.retain(|t| t.chars().count() <= 32);
+    tags.truncate(16);
+    Ok(Front {
+        name: name.ok_or("SKILL.md names no `name`")?,
+        description: description.ok_or("SKILL.md has no `description`")?,
+        group,
+        tags,
+    })
 }
 
 fn unquote(v: &str) -> String {
@@ -800,19 +865,36 @@ mod tests {
 
     #[test]
     fn a_frontmatter_gives_name_and_description_in_its_forms() {
-        let (n, d) =
-            frontmatter("---\nname: work-issue\ndescription: \"Works on: an issue\"\n---\n# x")
-                .unwrap();
+        let f = frontmatter("---\nname: work-issue\ndescription: \"Works on: an issue\"\n---\n# x")
+            .unwrap();
         assert_eq!(
-            (n.as_str(), d.as_str()),
+            (f.name.as_str(), f.description.as_str()),
             ("work-issue", "Works on: an issue")
         );
-        let (_, d) =
-            frontmatter("---\nname: a\ndescription: >\n  Two\n  lines\nlicense: MIT\n---\n")
-                .unwrap();
-        assert_eq!(d, "Two lines");
+        assert_eq!((f.group, f.tags.len()), (None, 0));
+        let f = frontmatter("---\nname: a\ndescription: >\n  Two\n  lines\nlicense: MIT\n---\n")
+            .unwrap();
+        assert_eq!(f.description, "Two lines");
         assert!(frontmatter("# no frontmatter").is_err());
         assert!(frontmatter("---\nname: a\n---\n").is_err());
+    }
+
+    #[test]
+    fn metadata_gives_group_and_tags_in_their_forms() {
+        let f = frontmatter(
+            "---\nname: a\ndescription: >\n  d\nmetadata:\n  group: Business\n  tags: [biz, \"html\"]\n  author: x\nlicense: MIT\n---\n",
+        )
+        .unwrap();
+        assert_eq!(f.description, "d");
+        assert_eq!(f.group.as_deref(), Some("Business"));
+        assert_eq!(f.tags, ["biz", "html"]);
+        let f = frontmatter(
+            "---\nname: a\nmetadata:\n  tags:\n    - time\n    - 'linear'\n  group: \"Time\"\ndescription: d\n---\n",
+        )
+        .unwrap();
+        assert_eq!(f.tags, ["time", "linear"]);
+        assert_eq!(f.group.as_deref(), Some("Time"));
+        assert_eq!(f.description, "d");
     }
 
     #[test]
