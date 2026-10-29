@@ -30,6 +30,19 @@
    no maintainer has a Mac, so platform code gets a macOS module (or says
    "not on macOS yet") and must keep the `macos-14` CI jobs green.
 
+## Running the stack
+
+This repository runs itself with devstack (`devstack.toml`: the dashboard as
+a Vite dev server against the mock hub, on port 5199). When devstack is
+installed, start, restart and stop services through it: the devstack MCP
+server (`status`, `up`, `start_service`, `restart_service`, `logs`) or the
+CLI, as the skill `devstack` describes. Do not start a service by hand
+(`npx vite …`, `npm run dev`, a background shell): such a process is not
+devstack's, outlives the session and holds the port, so the stack's own
+service then fails with "port 5199 is already in use". In a git worktree,
+`devstack up` starts the worktree's lane on its own ports. Only when devstack
+is not installed, start the service by hand, and stop it before you finish.
+
 ## Stack file changes
 
 A change to the stack file format (`crates/devstack-config`) that makes an
