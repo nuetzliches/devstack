@@ -20,6 +20,10 @@ and listed with their assets on the
   it starts the lane where this machine starts lanes by default (*Where
   lanes start*), not always here, and an `on` that names another place
   than where a started lane runs moves it there.
+- **A lane on a node picks up edits**: its dev servers ran from a copy of
+  the worktree that its daemon there never brought up to date, so hot
+  reload showed the code of the lane's start; the file watcher took the
+  lane's daemon on the node for a main tree, which runs in place.
 
 ## [0.30.0] - 2026-10-29
 

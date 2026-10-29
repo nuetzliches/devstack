@@ -315,7 +315,10 @@ fn watch(sup: Arc<Supervisor>) -> Result<Watcher, String> {
                 .filter_map(move |(s, p)| set(p).map(|set| (g.clone(), s.clone(), set)))
         })
         .collect();
-    let lane = !sup.lane.is_empty();
+    // What runs from a copy of the tree, to keep in step with it: a lane
+    // here, and a lane's daemon on a node, which is its own main tree there
+    // (its `lane` is empty) and runs from a copy of the mirror all the same.
+    let lane = sup.runs_from_copy();
     let only_stack_file =
         built.is_empty() && devservers.is_empty() && containers.is_empty() && !lane;
     let stack_rel = sup
