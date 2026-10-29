@@ -9,6 +9,13 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **A lane on a node picks up edits**: its dev servers ran from a copy of
+  the worktree that its daemon there never brought up to date, so hot
+  reload showed the code of the lane's start; the file watcher took the
+  lane's daemon on the node for a main tree, which runs in place.
+
 ## [0.30.0] - 2026-10-29
 
 The skills of a pool's set can be taken one by one: each switched on or
