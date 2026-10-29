@@ -1378,6 +1378,34 @@ fn the_hub_writes_the_prompts_and_starts_only_agents_with_them() {
         &with,
     );
     assert_eq!(s, 400, "not a worktree of the stack");
+    // The main tree's file names no lane image (ADR-0028): the prompt to
+    // name one, for the file the lane runs with, until it does.
+    let (s, _, body) = get(
+        p,
+        &format!("/hub/prompt?kind=lane-image&stack={id}&path={wt_enc}"),
+        &with,
+    );
+    assert_eq!(s, 200, "{body}");
+    assert!(
+        text(&body).contains("(branch old) cannot start on another machine"),
+        "{body}"
+    );
+    std::fs::write(
+        shop.join("devstack.toml"),
+        "version = 1
+[stack]
+name = \"shop\"
+[lanes]
+image = \"node:24\"
+",
+    )
+    .unwrap();
+    let (s, _, body) = get(
+        p,
+        &format!("/hub/prompt?kind=lane-image&stack={id}&path={wt_enc}"),
+        &with,
+    );
+    assert_eq!(s, 409, "{body}");
     // The hub does not copy the file there itself (ADR-0071): the prompt
     // above is the way.
     let give = format!(
