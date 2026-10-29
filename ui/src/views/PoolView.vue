@@ -13,6 +13,7 @@ import { sharedId } from '@/api';
 import Icon from '@/components/icons/Icon.vue';
 import CapacityChart from '@/components/CapacityChart.vue';
 import PoolUpstreams from '@/components/PoolUpstreams.vue';
+import PoolSkills from '@/components/PoolSkills.vue';
 import type { PoolLease, PoolMember, PoolNode, PoolRelease } from '@/api/types';
 import { useUi } from '@/stores/ui';
 import { useHub } from '@/stores/hub';
@@ -454,6 +455,7 @@ function policyText(id: string) {
     </section>
 
     <PoolUpstreams v-if="!addingPool && me?.state === 'approved'" />
+    <PoolSkills v-if="!addingPool && me?.state === 'approved'" />
 
     <section v-if="!addingPool && me?.state === 'approved'" class="card" data-testid="pool-capacity">
       <header class="card-header">

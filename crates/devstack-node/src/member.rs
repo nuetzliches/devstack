@@ -652,6 +652,59 @@ impl Local {
         self.delete(&format!("/v1/admin/upstreams/{name}"))
     }
 
+    /// The skill sets the pool gives this member, as last fetched
+    /// (ADR-0074); none from a coordinator before them (`404`).
+    pub fn skills(&self) -> Result<Vec<crate::skills::SetManifest>> {
+        match self.get("/v1/skills") {
+            Err(MemberError::Status(404, _)) => Ok(Vec::new()),
+            r => r,
+        }
+    }
+
+    /// A skill's archive (`.tar.gz`), at most [`crate::skills::MAX_ARCHIVE`].
+    pub fn skill_archive(&self, set: &str, skill: &str) -> Result<Vec<u8>> {
+        let (m, a) = self.client()?;
+        let mut r = fetch(
+            &a,
+            &format!("{}/v1/skills/{set}/{skill}.tar.gz", m.coordinator),
+        )?;
+        if !r.status().is_success() {
+            return Err(MemberError::Status(
+                r.status().as_u16(),
+                r.body_mut().read_to_string().unwrap_or_default(),
+            ));
+        }
+        Ok(r.body_mut()
+            .with_config()
+            .limit(crate::skills::MAX_ARCHIVE)
+            .read_to_vec()?)
+    }
+
+    /// Every skill set with its state (admins only).
+    pub fn admin_skills(&self) -> Result<crate::skills::AdminView> {
+        self.get("/v1/admin/skills")
+    }
+
+    /// Add a skill set, or change it (admins only).
+    pub fn admin_skill_put(&self, s: &crate::skills::SkillSet) -> Result<crate::skills::AdminView> {
+        self.post("/v1/admin/skills", s)
+    }
+
+    /// Stop handing a skill set out (admins only).
+    pub fn admin_skill_remove(&self, name: &str) -> Result<()> {
+        self.delete(&format!("/v1/admin/skills/{name}"))
+    }
+
+    /// Have the coordinator fetch the sets (or `set`) again (admins only).
+    pub fn admin_skills_refresh(&self, set: Option<&str>) -> Result<()> {
+        let path = match set {
+            Some(s) => format!("/v1/admin/skills/refresh?set={s}"),
+            None => "/v1/admin/skills/refresh".into(),
+        };
+        self.post::<serde_json::Value>(&path, &serde_json::json!({}))?;
+        Ok(())
+    }
+
     pub fn telemetry_info(&self) -> Result<crate::telemetry::Info> {
         self.get("/v1/telemetry")
     }

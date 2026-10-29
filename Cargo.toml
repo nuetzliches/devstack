@@ -95,6 +95,7 @@ base64 = "0.22"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 flate2 = "1"
 tar = "0.4"
+hmac = "0.13"
 # WinRT toasts (ADR-0045); windows-sys has no WinRT.
 windows = { version = "0.62", features = ["Data_Xml_Dom", "Foundation", "UI_Notifications"] }
 # Desktop notifications on Linux over the session bus, pure Rust (ADR-0045).

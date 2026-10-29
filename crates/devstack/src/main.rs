@@ -395,6 +395,44 @@ enum PoolUpstreamsAction {
 }
 
 #[derive(Subcommand)]
+enum PoolSkillsAction {
+    /// The pool's skill sets (the default): with their state for an
+    /// admin, else the ones given to this machine.
+    List,
+    /// Add a skill set, or change the one of its name (admins). The
+    /// coordinator fetches it at once.
+    Add {
+        /// `[a-z0-9-]`, 1 to 32.
+        name: String,
+        /// A GitHub repository, `owner/name` (private ones need
+        /// `DEVSTACK_SKILLS_GITHUB_TOKEN` on the coordinator).
+        #[arg(long, conflicts_with = "folder", required_unless_present = "folder")]
+        github: Option<String>,
+        /// The branch, tag or commit of `--github`.
+        #[arg(long = "ref", default_value = "main")]
+        reference: String,
+        /// The folder of the skills in the repository; the top by default.
+        #[arg(long, default_value = "")]
+        path: String,
+        /// A folder below `skill-sources/` in the coordinator's directory.
+        #[arg(long)]
+        folder: Option<String>,
+        /// Whom it is given to, comma-separated: `*`, member ids, tags.
+        #[arg(long, value_delimiter = ',', default_value = "*")]
+        to: Vec<String>,
+    },
+    /// Stop handing a set out (admins): members' hubs remove its skills.
+    Remove { name: String },
+    /// Have the coordinator fetch the sets (or one) again now (admins).
+    Refresh { set: Option<String> },
+    /// This machine: its agents, the sets offered and accepted, what is
+    /// installed, and conflicts (from the hub).
+    Status,
+    /// Bring this machine's agents' folders to the accepted sets again.
+    Sync,
+}
+
+#[derive(Subcommand)]
 enum PoolAction {
     /// Whether this machine's lanes may run on nodes the pool's provisioner
     /// made (ADR-0051): `on`, `off`, or nothing to show it.
@@ -408,6 +446,13 @@ enum PoolAction {
     Upstreams {
         #[command(subcommand)]
         action: Option<PoolUpstreamsAction>,
+    },
+    /// The skill sets the pool hands out (ADR-0074): each member's hub
+    /// installs the ones its user accepted into the agents' user skill
+    /// folders. Only an admin adds or removes one.
+    Skills {
+        #[command(subcommand)]
+        action: Option<PoolSkillsAction>,
     },
     /// The lanes others share with this machine (ADR-0035).
     Shared,
@@ -1027,6 +1072,11 @@ mod tests {
             parse(&["pool", "upstreams", "add", "wiki", "https://wiki.example.com/mcp", "--allow", "search,get"]).cmd,
             Cmd::Pool { action: Some(PoolAction::Upstreams { action: Some(PoolUpstreamsAction::Add { name, allow, login, .. }) }), .. }
                 if name == "wiki" && allow == ["search", "get"] && login == "oauth"
+        ));
+        assert!(matches!(
+            parse(&["pool", "skills", "add", "core", "--github", "org/skills", "--path", "skills", "--to", "team,*"]).cmd,
+            Cmd::Pool { action: Some(PoolAction::Skills { action: Some(PoolSkillsAction::Add { name, github: Some(repo), reference, path, to, .. }) }), .. }
+                if name == "core" && repo == "org/skills" && reference == "main" && path == "skills" && to == ["team", "*"]
         ));
         assert!(matches!(
             parse(&["pool", "upstreams"]).cmd,

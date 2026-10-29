@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, paths, Unreachable, type StreamState, type Subscription } from '@/api';
-import type { DockerEngine, Guest, HubEvent, HubSession, Opener, StackEntry, UpdateState } from '@/api/types';
+import type { DockerEngine, Guest, HubEvent, HubSession, Opener, PoolSkillsState, StackEntry, UpdateState } from '@/api/types';
 import { act } from '@/lib/actions';
 import { checkForAppUpdate } from '@/lib/app-update';
 import { persist } from '@/lib/persist';
@@ -42,6 +42,8 @@ export const useHub = defineStore('hub', () => {
   const checkingUpdate = ref(false);
   /** Lanes of other members running (or about to) on this machine. */
   const guests = ref<Guest[]>([]);
+  /** The pools' skill sets on this machine (ADR-0074); `null` until the hub tells (older hubs never do). */
+  const skills = ref<PoolSkillsState | null>(null);
   /** What this machine opens a stack's folder with (ADR-0046); null until asked. */
   const openers = ref<Opener[] | null>(null);
   let sub: Subscription | null = null;
@@ -120,6 +122,10 @@ export const useHub = defineStore('hub', () => {
         }
         if (ev.type === 'guests') {
           guests.value = ev.guests;
+          return;
+        }
+        if (ev.type === 'skills') {
+          skills.value = ev.skills;
           return;
         }
         if (ev.type === 'pools') {
@@ -244,6 +250,7 @@ export const useHub = defineStore('hub', () => {
     newer,
     releaseError,
     guests,
+    skills,
     updating,
     lastCheck,
     checkingUpdate,
