@@ -566,14 +566,23 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                     "the profile starts the main working tree with fresh data (its volumes go): ask the user, then `yes`, or run it in a lane"
                 );
             }
-            let on = args["on"].as_str().filter(|o| !o.trim().is_empty());
-            if on.is_some_and(|o| !devstack_node::member::is_here(o))
+            let asked = args["on"].as_str().filter(|o| !o.trim().is_empty());
+            if asked.is_some_and(|o| !devstack_node::member::is_here(o))
                 && client::worktree().is_none()
             {
                 anyhow::bail!(
                     "`on` runs a worktree's lane on a node: this is the main working tree"
                 );
             }
+            // As `devstack up`: in a worktree, no `on` is where this machine
+            // starts lanes by default (ADR-0025); `local` keeps it here.
+            let asked_here = client::names_here(asked);
+            let resolved = if client::worktree().is_some() {
+                devstack_daemon::remote::effective_on(asked)
+            } else {
+                None
+            };
+            let on = resolved.as_deref();
             // Like `devstack up`: start Docker Desktop if the stack needs it
             // (a lane on a node needs no Docker here), and say so.
             let mut notes = String::new();
@@ -600,7 +609,16 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                     );
                 }
             }
+            // Started already elsewhere than `on` names: it moves there, as
+            // `devstack up --on` and `lane move` do.
+            let mut moved = false;
+            if let Some((name, to)) = client::move_wanted(&c, on, asked_here)? {
+                client::lane_move_quiet(file, &name, &to)?;
+                notes.push_str(&format!("lane `{name}` moved to {to}\n"));
+                moved = true;
+            }
             if let Some(wt) = client::worktree()
+                && !moved
                 && (on.is_some() || c.lane().is_none_or(|l| l == "-"))
             {
                 // A start on a node is followed within the same timeout.

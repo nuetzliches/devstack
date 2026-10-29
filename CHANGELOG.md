@@ -16,6 +16,10 @@ and listed with their assets on the
   services stop), and `devstack up --on local` started it there again.
   `--on local` now brings it here, and `--on <node>` takes it to that node,
   as `devstack lane move` does; without `--on` it stays where it runs.
+- **The MCP tool `up` does as `devstack up`**: in a worktree without `on`
+  it starts the lane where this machine starts lanes by default (*Where
+  lanes start*), not always here, and an `on` that names another place
+  than where a started lane runs moves it there.
 
 ## [0.30.0] - 2026-10-29
 
