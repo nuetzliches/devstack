@@ -4001,7 +4001,7 @@ pub async fn serve(
         let mut runs = s.runs.lock().unwrap();
         for l in leases.values() {
             runs.begin(&l.id, &l.repo);
-            // ponytail: taken as up; a lane still building when the agent
+            // Taken as up: a lane still building when the agent
             // restarted counts its build as steady use for that run.
             runs.up(&l.id);
         }

@@ -38,6 +38,13 @@ pub enum Prompt<'a> {
         main_file: &'a Path,
         file: &'a Path,
     },
+    /// The stack file a lane runs with names no lane image: the lane cannot
+    /// start on a node of the pool (ADR-0028).
+    LaneImage {
+        tree: &'a Path,
+        branch: Option<&'a str>,
+        file: &'a Path,
+    },
     /// No agent configuration registers `devstack mcp` for the repository.
     Mcp { repo: &'a Path },
     /// The generated agent skills differ from what this devstack writes
@@ -158,6 +165,20 @@ pub fn text(p: &Prompt) -> String {
             tree = display(tree),
             on = branch.map(|b| format!(" (branch {b})")).unwrap_or_default(),
             main_file = display(main_file),
+            file = display(file),
+        ),
+        Prompt::LaneImage { tree, branch, file } => format!(
+            "The devstack lane of the git worktree {tree}{on} cannot start on another machine of the devstack pool: its stack file {file} names no lane image.
+
+{about} A lane on a node of the pool runs in a Linux container there, built from that image; its ports are forwarded to this machine.
+
+1. Read the `[lanes]` section of the stack file reference: {at}/docs/stack-file.md
+2. Find out what the stack's services need to build and run: their toolchains and versions (look at the CI configuration, version files such as `.nvmrc`, `global.json`, `go.mod`, `rust-toolchain.toml`). The containers of its Compose files run beside it and need nothing in the image.
+3. In {file}, set `[lanes] image` to a Linux image that has them, an official one where it covers them (such as `node:24`, `mcr.microsoft.com/dotnet/sdk:9.0`); where it takes more than one toolchain, write a Dockerfile in the repository and set `[lanes] dockerfile` to it instead.
+4. Validate with `devstack check`.
+5. Ask me before starting the lane on a node (`devstack up --on pool` in the worktree): its files go to that machine. Then fix what fails there. {careful}",
+            tree = display(tree),
+            on = branch.map(|b| format!(" (branch {b})")).unwrap_or_default(),
             file = display(file),
         ),
         Prompt::Mcp { repo } => format!(
@@ -286,6 +307,11 @@ mod tests {
             }),
             text(&Prompt::Mcp { repo }),
             text(&Prompt::Skills { repo }),
+            text(&Prompt::LaneImage {
+                tree: Path::new("/src/shop.worktrees/feat-x"),
+                branch: Some("feat/x"),
+                file,
+            }),
         ]
     }
 
@@ -364,5 +390,11 @@ mod tests {
             "every one about the stack file links the reference"
         );
         assert!(p[8].contains("/skills/devstack/SKILL.md"), "the tools");
+        assert!(p[10].contains("feat-x (branch feat/x) cannot start on another machine"));
+        assert!(p[10].contains("devstack.toml names no lane image"));
+        assert!(
+            p[10].contains(&reference)
+                && p[10].contains("Ask me before starting the lane on a node")
+        );
     }
 }

@@ -680,8 +680,7 @@ impl LaneRun {
         }
         let Some(df) = &stack.lanes.dockerfile else {
             return Err(RunError::Config(
-                "the stack names no lane image: set `[lanes] image` or `[lanes] dockerfile` (ADR-0028)"
-                    .into(),
+                devstack_config::model::NO_LANE_IMAGE.into(),
             ));
         };
         let base_rel = Path::new(&self.stack_file)
