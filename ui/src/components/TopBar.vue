@@ -150,7 +150,7 @@ const mismatch = computed(() => {
           <p v-else-if="hub.releaseError" class="err small" data-testid="version-check-failed">The last check for updates failed: {{ hub.releaseError }}</p>
           <p v-else-if="hub.lastCheck" class="faint small" data-testid="version-current">Up to date · checked {{ ago(hub.lastCheck.at, now) }}</p>
           <div class="ver-actions">
-            <button type="button" class="btn btn-sm" :disabled="hub.checkingUpdate" data-testid="version-check" @click="hub.checkUpdate()">
+            <button v-if="!hub.newer" type="button" class="btn btn-sm" :disabled="hub.checkingUpdate" data-testid="version-check" @click="hub.checkUpdate()">
               <span v-if="hub.checkingUpdate" class="spinner" /><Icon v-else name="restart" :size="13" /> Check for updates
             </button>
             <button v-if="hub.newer" type="button" class="btn btn-sm btn-primary" :disabled="hub.updating" @click="install()">
