@@ -192,7 +192,8 @@ function laneDot(s: StackEntry, l: LaneView): Dot {
   if (!hub.reachable) return 'unknown';
   if (l.moving?.error) return 'err';
   // The shown lane's own services, from its stream.
-  if (s.id === stack.id && stack.lane === l.name && stack.live && stack.services.some((x) => statusBucket(x.status) === 'failed')) return 'err';
+  // (A lane not started has no stream: the one shown is the main tree's.)
+  if (started(l) && s.id === stack.id && stack.lane === l.name && stack.live && stack.services.some((x) => statusBucket(x.status) === 'failed')) return 'err';
   if (started(l) && (l.node_error || l.notices?.length)) return 'warn';
   if (!started(l)) return 'off';
   const [cr, c] = laneContainers(s, l);

@@ -8,7 +8,6 @@ import { useStack } from '@/stores/stack';
 import Icon from '@/components/icons/Icon.vue';
 import StackHeader from '@/components/StackHeader.vue';
 import LaneStart from '@/components/LaneStart.vue';
-import OfflineTreeStart from '@/components/OfflineTreeStart.vue';
 import { rememberTab } from '@/lib/lanes';
 import SkillsBanner from '@/components/SkillsBanner.vue';
 import UpgradeBanner from '@/components/UpgradeBanner.vue';
@@ -258,7 +257,7 @@ function isActive(name: string) {
       <LaneStart :lane="idleLane" />
     </div>
     <div v-else-if="offlineStart" class="idle-lane">
-      <OfflineTreeStart :lane="stack.offlineLane" />
+      <LaneStart :lane="stack.offlineLane" />
     </div>
     <div v-else :data-stale="stack.stale && !!stack.view ? 'true' : 'false'">
       <RouterView v-slot="{ Component }">
@@ -270,7 +269,11 @@ function isActive(name: string) {
 
 <style scoped>
 .idle-lane {
-  padding: var(--space-4) var(--space-5) 0;
+  padding: 0 var(--space-5);
+}
+/* Below a banner, the same gap as between banners and the page. */
+.banners:has(> *) ~ .idle-lane {
+  padding-top: var(--space-4);
 }
 .subnav {
   border-bottom: 1px solid var(--border);

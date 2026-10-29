@@ -160,9 +160,12 @@ pub struct StartBody {
     pub path: String,
     #[serde(default)]
     pub on: Option<String>,
+    /// A profile of the stack file (ADR-0041).
+    #[serde(default)]
+    pub profile: Option<String>,
 }
 
-/// `POST /hub/stacks/{id}/lanes/start {path, on?}`: `devstack up` in the
+/// `POST /hub/stacks/{id}/lanes/start {path, on?, profile?}`: `devstack up` in the
 /// worktree `path` (one git lists for the stack), `--on local` without
 /// `on`. `202` once started; a start that fails before the daemon runs is
 /// the stack's `start_error`, as a stack's start.
@@ -185,6 +188,18 @@ pub async fn start_lane(
             StatusCode::BAD_REQUEST,
             "`on`: a node, `<pool>:<node>` or `pool`",
         );
+    }
+    let profile = b
+        .profile
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty());
+    if profile.as_deref().is_some_and(|p| {
+        p.len() > 64
+            || !p
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_".contains(c))
+    }) {
+        return crate::err(StatusCode::BAD_REQUEST, "`profile`: a profile's name");
     }
     let raw = PathBuf::from(&b.path);
     let repo = e.repo.clone();
@@ -216,6 +231,7 @@ pub async fn start_lane(
     cmd.arg("up")
         .arg("--on")
         .arg(on.as_deref().unwrap_or("local"))
+        .args(profile.iter().flat_map(|p| ["--profile", p.as_str()]))
         .current_dir(&tree)
         .env("NO_COLOR", "1")
         .stdin(std::process::Stdio::null())

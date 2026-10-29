@@ -94,14 +94,14 @@ export const useStack = defineStore('stack', () => {
   /** The lane shown while its stack does not run: its start page stands in. */
   const offlineLane = computed(() => (!running.value && lane.value ? (offlineLanes.value.find((l) => l.name === lane.value) ?? null) : null));
   /** Start a worktree's lane of a stack that does not run: its daemon comes up, the main tree's services stay stopped. */
-  async function startOfflineLane(l: LaneView, on: string | null) {
+  async function startOfflineLane(l: LaneView, on: string | null, profile?: string) {
     const sid = id.value;
     if (!sid) return;
     busy.value['lane-start'] = l.name;
     const r = await act({
       label: on ? `Start ${l.name} on ${on === 'pool' ? 'the pool' : on}` : `Start ${l.name}`,
       path: paths.laneStart(sid),
-      body: { path: l.path, ...(on ? { on } : {}) },
+      body: { path: l.path, ...(on ? { on } : {}), ...(profile ? { profile } : {}) },
       success: on ? `${l.name} starts on ${on === 'pool' ? 'the pool' : on}; its stack's daemon comes up first` : `${l.name} starts here; its stack's daemon comes up first`,
     });
     if (!r.ok) delete busy.value['lane-start'];

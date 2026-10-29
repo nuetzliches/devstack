@@ -46,7 +46,7 @@ What was built:
    names them (`lane_name` of the folder; a second one of the same name
    gets `-2` there and not here), with `main_stack_file` and `not_in_pool`
    for the stack file it runs with.
-3. **`POST /hub/stacks/{id}/lanes/start`**: `path` must be a worktree git
+3. **`POST /hub/stacks/{id}/lanes/start`** (`profile` too): `path` must be a worktree git
    lists for the stack's repository, not the main tree; `on` a node,
    `<pool>:<node>` or `pool`, else `--on local`. The hub runs `devstack up`
    in the worktree, its output in `up-<id>-lane.log`; a start that fails
@@ -54,18 +54,18 @@ What was built:
    `202` once started.
 4. **The dashboard.** The sidebar lists every stack's worktrees, of a
    stopped one from the hub, and reads a stack's lanes again when its
-   version in `worktrees` changes. A stopped stack's lane opens a start
-   card (here; in the pool, unless the stack file names no lane image); once
-   the daemon runs, the lane's usual start page and views take over. The
-   branch picker finds a stopped stack's worktrees too, and a lane it makes
-   for a stopped stack opens on its start card.
-   The main working tree of a stopped stack shows the same start card, one
-   component for both, instead of its views and their tabs, as a lane not
-   started does; its *Start in the pool* is off, with why (the main tree
-   runs on this machine; a worktree's lane runs in the pool). The banner
-   above says only that the stack does not run, and has no start of its
-   own then, for either. A stopped
-   stack's trees show no running dot, whatever was seen last.
+   version in `worktrees` changes. A stopped stack's lane opens the same
+   start page as a lane of a running stack (machines, the coordinator's
+   order, profiles; `LaneStart`), and its starts go through the hub route
+   above; once the daemon runs, the lane's own start and views take over.
+   The main working tree of a stopped stack shows that page too, instead of
+   its views and their tabs: *Start here* starts the stack, *Start in the
+   pool* is off with why (the main tree runs on this machine; a worktree's
+   lane runs in the pool). The banner above says only that the stack does
+   not run, and has no start of its own then. The branch picker finds a
+   stopped stack's worktrees too, and a lane it makes for a stopped stack
+   opens on its start page. A stopped stack's trees show no running dot,
+   whatever was seen last.
 
 ## Alternatives considered
 
@@ -89,4 +89,4 @@ What was built:
 (the routes and `/hub/events`), `crates/devstack-daemon/src/lanes.rs`
 (`fingerprint`), `ui/src/components/Sidebar.vue`, `ui/src/stores/stack.ts`
 (`offlineLanes`, `offlineLane`, `startOfflineLane`),
-`ui/src/components/OfflineTreeStart.vue`, `ui/src/components/BranchPicker.vue`.
+`ui/src/components/LaneStart.vue`, `ui/src/components/BranchPicker.vue`.
