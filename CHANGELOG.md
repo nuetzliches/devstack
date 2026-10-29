@@ -9,6 +9,14 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **`devstack up --on` moves a started lane**: a lane started on a node
+  stayed there after `devstack down` (its lease and place stay, only its
+  services stop), and `devstack up --on local` started it there again.
+  `--on local` now brings it here, and `--on <node>` takes it to that node,
+  as `devstack lane move` does; without `--on` it stays where it runs.
+
 ## [0.30.0] - 2026-10-29
 
 The skills of a pool's set can be taken one by one: each switched on or
