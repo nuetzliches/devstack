@@ -135,10 +135,15 @@ const hasLanes = (s: StackEntry) => (known.value[s.id]?.length ?? 0) > 0;
  * shown; a stack not shown yet counts as running while its daemon does.
  */
 const mainActive = ref<Record<string, boolean>>({});
+/** Whether a service of the main working tree fails, as last seen while it was shown. */
+const mainFails = ref<Record<string, boolean>>({});
 watch(
   () => [stack.id, stack.lane, stack.live, stack.services] as const,
   ([id, lane, live, services]) => {
-    if (id && lane === null && live && services.length) mainActive.value[id] = services.some((x) => statusBucket(x.status) !== 'idle');
+    if (id && lane === null && live && services.length) {
+      mainActive.value[id] = services.some((x) => statusBucket(x.status) !== 'idle');
+      mainFails.value[id] = services.some((x) => statusBucket(x.status) === 'failed');
+    }
   },
   { immediate: true },
 );
@@ -153,11 +158,10 @@ const stackIdle = (s: StackEntry) => s.running && mainActive.value[s.id] === fal
  */
 function stackDot(s: StackEntry): Dot {
   if (!hub.reachable) return 'unknown';
-  const lanes = known.value[s.id] ?? [];
-  const shownFails = s.id === stack.id && stack.live && stack.services.some((x) => statusBucket(x.status) === 'failed');
-  if (s.start_error || shownFails || lanes.some((l) => l.moving?.error)) return 'err';
-  if (s.running && lanes.some((l) => l.node_error || l.notices?.length)) return 'warn';
-  return s.running && !stackIdle(s) ? 'on' : 'off';
+  if (s.start_error) return 'err';
+  // The worst of its trees' dots, as they show unfolded.
+  const dots = [mainDot(s), ...(known.value[s.id] ?? []).map((l) => laneDot(s, l))];
+  return (['err', 'warn', 'on'] as Dot[]).find((d) => dots.includes(d)) ?? 'off';
 }
 /** Its trees are listed under it: their dots say it, the stack's own would repeat them. */
 const expanded = (s: StackEntry) => hasLanes(s) && !collapsed.value[s.id];
@@ -165,6 +169,7 @@ function mainDot(s: StackEntry): Dot {
   if (!hub.reachable) return 'unknown';
   // A stack that does not run runs nothing, whatever was seen last.
   if (!s.running) return 'off';
+  if (mainFails.value[s.id]) return 'err';
   return mainActive.value[s.id] === false ? 'off' : 'on';
 }
 const servedBy = (s: StackEntry) => (known.value[s.id] ?? []).find((l) => l.owns_main) ?? null;
@@ -186,6 +191,9 @@ function laneContainers(s: StackEntry, l: LaneView): [number, number] {
 function laneDot(s: StackEntry, l: LaneView): Dot {
   if (!hub.reachable) return 'unknown';
   if (l.moving?.error) return 'err';
+  // The shown lane's own services, from its stream.
+  if (s.id === stack.id && stack.lane === l.name && stack.live && stack.services.some((x) => statusBucket(x.status) === 'failed')) return 'err';
+  if (started(l) && (l.node_error || l.notices?.length)) return 'warn';
   if (!started(l)) return 'off';
   const [cr, c] = laneContainers(s, l);
   return runsAnything({ running: laneRuns(s, l), services: l.services, containersRunning: cr, containers: c }) ? 'on' : 'warn';
