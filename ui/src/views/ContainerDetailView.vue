@@ -12,6 +12,7 @@ import LogView from '@/components/LogView.vue';
 import { paths, v1 } from '@/api';
 import Sparkline from '@/components/Sparkline.vue';
 import Icon from '@/components/icons/Icon.vue';
+import DetailClose from '@/components/DetailClose.vue';
 
 const route = useRoute();
 const stack = useStack();
@@ -74,16 +75,19 @@ const kv = computed(() => {
           </div>
         </div>
       </div>
-      <div v-if="!stack.readOnly" class="btn-group">
-        <button v-if="!running" type="button" class="btn btn-primary" :disabled="!!busy || stack.stale || !!refuses" :title="refuses ?? undefined" data-testid="action-container-start" @click="stack.containerAction(group, service, 'start')">
-          <span v-if="busy === 'start'" class="spinner" /><Icon v-else name="play" /> Start
-        </button>
-        <button v-if="running" type="button" class="btn" :disabled="!!busy || stack.stale || !!refuses" :title="refuses ?? undefined" data-testid="action-container-restart" @click="stack.containerAction(group, service, 'restart')">
-          <span v-if="busy === 'restart'" class="spinner" /><Icon v-else name="restart" /> Restart
-        </button>
-        <button v-if="running" type="button" class="btn btn-stop" :disabled="!!busy || stack.stale" data-testid="action-container-stop" @click="stack.containerAction(group, service, 'stop')">
-          <span v-if="busy === 'stop'" class="spinner" /><Icon v-else name="stop" /> Stop
-        </button>
+      <div class="row head-right">
+        <div v-if="!stack.readOnly" class="btn-group">
+          <button v-if="!running" type="button" class="btn btn-primary" :disabled="!!busy || stack.stale || !!refuses" :title="refuses ?? undefined" data-testid="action-container-start" @click="stack.containerAction(group, service, 'start')">
+            <span v-if="busy === 'start'" class="spinner" /><Icon v-else name="play" /> Start
+          </button>
+          <button v-if="running" type="button" class="btn" :disabled="!!busy || stack.stale || !!refuses" :title="refuses ?? undefined" data-testid="action-container-restart" @click="stack.containerAction(group, service, 'restart')">
+            <span v-if="busy === 'restart'" class="spinner" /><Icon v-else name="restart" /> Restart
+          </button>
+          <button v-if="running" type="button" class="btn btn-stop" :disabled="!!busy || stack.stale" data-testid="action-container-stop" @click="stack.containerAction(group, service, 'stop')">
+            <span v-if="busy === 'stop'" class="spinner" /><Icon v-else name="stop" /> Stop
+          </button>
+        </div>
+        <DetailClose />
       </div>
     </header>
 

@@ -28,7 +28,7 @@ const router = useRouter();
 const selected = computed(() => route.name === 'container' && route.params.group === props.group && route.params.service === props.service);
 function open(e: MouseEvent) {
   if ((e.target as Element).closest('button, a, input, label')) return;
-  void router.push(to.value);
+  void router.push(selected.value ? { name: 'overview', params: { stack: stack.id ?? '' } } : to.value);
 }
 
 /** "5432->127.0.0.1:15432" -> host side first, which is what people type. */

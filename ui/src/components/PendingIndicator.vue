@@ -16,12 +16,7 @@ const trigger = ref<HTMLButtonElement | null>(null);
 const { open, toggle, close } = usePopover(root, trigger);
 
 const items = computed(() => stack.pending);
-const worst = computed(() => {
-  const states = items.value.map((s) => s.candidate!.state);
-  if (states.includes('failed')) return 'danger';
-  if (states.includes('held')) return 'warn';
-  return 'accent';
-});
+const worst = computed(() => stack.pendingTone);
 const anyBusy = computed(() => items.value.some((s) => candidateLook(s.candidate!).busy));
 
 function go(name: string) {

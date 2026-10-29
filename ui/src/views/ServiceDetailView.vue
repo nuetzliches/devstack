@@ -17,6 +17,7 @@ import KeptLogsModal from '@/components/KeptLogsModal.vue';
 import BuildTimeline from '@/components/BuildTimeline.vue';
 import Sparkline from '@/components/Sparkline.vue';
 import Icon from '@/components/icons/Icon.vue';
+import DetailClose from '@/components/DetailClose.vue';
 import type { IconName } from '@/components/icons/icons';
 
 const route = useRoute();
@@ -115,22 +116,25 @@ const kv = computed(() => {
             </div>
           </div>
         </div>
-        <div v-if="!stack.readOnly" class="btn-group">
-          <template v-for="a in actions" :key="a.action">
-            <button
-              v-if="a.show"
-              type="button"
-              class="btn"
-              :class="{ 'btn-primary': a.primary && a.action !== 'promote', 'btn-warn': a.action === 'promote', 'btn-stop': a.action === 'stop' }"
-              :disabled="!!busy || stack.stale"
-              :title="a.title"
-              :data-testid="`action-${a.action}`"
-              @click="stack.serviceAction(svc.name, a.action)"
-            >
-              <span v-if="busy === a.action" class="spinner" /><Icon v-else :name="a.icon" />
-              {{ busy === a.action ? `${a.label}…` : a.label }}
-            </button>
-          </template>
+        <div class="row head-right">
+          <div v-if="!stack.readOnly" class="btn-group">
+            <template v-for="a in actions" :key="a.action">
+              <button
+                v-if="a.show"
+                type="button"
+                class="btn"
+                :class="{ 'btn-primary': a.primary && a.action !== 'promote', 'btn-warn': a.action === 'promote', 'btn-stop': a.action === 'stop' }"
+                :disabled="!!busy || stack.stale"
+                :title="a.title"
+                :data-testid="`action-${a.action}`"
+                @click="stack.serviceAction(svc.name, a.action)"
+              >
+                <span v-if="busy === a.action" class="spinner" /><Icon v-else :name="a.icon" />
+                {{ busy === a.action ? `${a.label}…` : a.label }}
+              </button>
+            </template>
+          </div>
+          <DetailClose />
         </div>
       </header>
 

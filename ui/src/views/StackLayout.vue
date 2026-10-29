@@ -130,7 +130,7 @@ function isActive(name: string) {
         >
           <Icon :name="t.icon" :size="15" />
           {{ t.label }}
-          <span v-if="t.name === 'overview' && stack.pending.length" class="badge">{{ stack.pending.length }}</span>
+          <span v-if="t.name === 'overview' && stack.pending.length" class="badge" :class="stack.pendingTone" data-testid="pending-badge">{{ stack.pending.length }}</span>
         </RouterLink>
       </div>
     </nav>
@@ -314,6 +314,14 @@ function isActive(name: string) {
   font-weight: 700;
   display: inline-grid;
   place-items: center;
+}
+.badge.warn {
+  background: var(--warn);
+  color: #1a1204;
+}
+.badge.danger {
+  background: var(--danger);
+  color: #fff;
 }
 .banners {
   display: flex;

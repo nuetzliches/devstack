@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import type { CommandView, ContainerView, ServiceView } from '@/api/types';
 import { containerBucket, parseComposeMember, statusBucket } from '@/lib/status';
 import { useHub } from '@/stores/hub';
@@ -120,7 +121,7 @@ const badges = computed<{ f: Filter; n: number; tone: string }[]>(() => [
   { f: 'starting', n: counts.value.starting, tone: 'accent' },
   { f: 'failed', n: counts.value.failed, tone: 'danger' },
   { f: 'idle', n: counts.value.idle, tone: 'neutral' },
-  { f: 'pending', n: stack.pending.length, tone: 'warn' },
+  { f: 'pending', n: stack.pending.length, tone: stack.pendingTone },
 ]);
 
 /** A state nothing is in is left out (healthy stays, as the anchor), unless it is the filter. */
@@ -130,6 +131,19 @@ const hubAway = computed(() => !hub.reachable);
 /** Restart's menu in a group's head. */
 const groupRestartItems: MenuItem[] = [{ key: 'rebuild', label: 'Rebuild', icon: 'wrench', hint: 'built again', title: 'Build every service of the group again, even for inputs built before, restart them and its containers' }];
 const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
+
+// Escape closes the detail (its × does too), unless it closed something
+// else first (a menu, the drawer, a dialog) or goes to a field.
+const route = useRoute();
+const router = useRouter();
+function onKey(e: KeyboardEvent) {
+  if (e.key !== 'Escape' || e.defaultPrevented || (route.name !== 'service' && route.name !== 'container')) return;
+  if ((e.target as Element | null)?.closest('input, textarea, select, [contenteditable], dialog')) return;
+  if (document.querySelector('dialog[open]')) return;
+  void router.push({ name: 'overview', params: { stack: stack.id ?? '' } });
+}
+onMounted(() => window.addEventListener('keydown', onKey));
+onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 </script>
 
 <template>
