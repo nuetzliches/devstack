@@ -43,6 +43,9 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A lane not started shows no tabs**: its start options stand in for its
+  views, so Overview, Infrastructure and the others no longer all led to
+  the same start page.
 - **The pool's devstack column** no longer shows a stray "–" after a
   node's version when no update runs.
 - **The MCP upstreams page follows a login**: after an OAuth login in the
