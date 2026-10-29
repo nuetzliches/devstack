@@ -112,7 +112,7 @@ impl Settings {
     }
 }
 
-fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension(format!("{}.tmp", crate::coordinator::random_hex(4)));
     std::fs::write(&tmp, bytes)
         .and_then(|()| std::fs::rename(&tmp, path))

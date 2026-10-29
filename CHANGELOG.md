@@ -34,6 +34,10 @@ and listed with their assets on the
 
 ### Fixed
 
+- **The pool's capacity history survives a restart of the coordinator**
+  (ADR-0036): it keeps it in `history.json` and writes it every minute.
+  The chart puts each point at its time, so a short history fills only its
+  part of the hour or day, and a time without points stays a gap.
 - **A lane not started shows no tabs**: its start options stand in for its
   views, so Overview, Infrastructure and the others no longer all led to
   the same start page.
