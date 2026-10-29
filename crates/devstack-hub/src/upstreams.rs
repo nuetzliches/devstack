@@ -213,9 +213,6 @@ pub type Fetched = Vec<(String, Option<Vec<PoolUpstream>>)>;
 
 type Fetch = Box<dyn Fn() -> Fetched + Send + Sync>;
 
-/// How often the hub asks its pools for their upstreams.
-pub const POOLS_EVERY: Duration = Duration::from_secs(60);
-
 pub use devstack_node::upstreams::{PoolAuth, PoolUpstream};
 
 /// Where an upstream the dashboard lists comes from, when it is a pool's.
@@ -533,24 +530,44 @@ impl Upstreams {
         out
     }
 
-    /// Ask the pools for their upstreams (the hub does every
-    /// [`POOLS_EVERY`], off the requests: a coordinator that does not
-    /// answer takes seconds); keep what they name, and forget the decisions
-    /// and logins of entries a pool dropped or of pools this machine left.
-    /// A pool that cannot be asked keeps what it named last.
+    /// Ask every pool for its upstreams now (after an admin of this machine
+    /// changed a list, off the requests: a coordinator that does not answer
+    /// takes seconds); keep what they name, and forget the decisions and
+    /// logins of entries a pool dropped or of pools this machine left. A
+    /// pool that cannot be asked keeps what it named last.
     pub fn refresh_pools(&self) {
         let Some(fetch) = &self.fetch else {
             return;
         };
         let got = fetch();
+        self.apply(|lists| {
+            lists.retain(|p, _| got.iter().any(|(g, _)| g == p));
+            for (pool, list) in got {
+                if let Some(l) = list {
+                    lists.insert(pool, l);
+                }
+            }
+        });
+    }
+
+    /// One pool's list, read when its stream said it changed (ADR-0073):
+    /// `Some` what it names now, `None` when this machine is no member of
+    /// it any more (its entries go, with their decisions and logins).
+    pub fn set_pool(&self, pool: &str, list: Option<Vec<PoolUpstream>>) {
+        self.apply(|lists| {
+            match list {
+                Some(l) => lists.insert(pool.to_string(), l),
+                None => lists.remove(pool),
+            };
+        });
+    }
+
+    /// Change the pools' lists, and forget the decisions and logins of
+    /// entries no list names any more.
+    fn apply(&self, change: impl FnOnce(&mut PoolLists)) {
         let _one = self.write.lock().unwrap();
         let mut lists = self.pool_lists();
-        lists.retain(|p, _| got.iter().any(|(g, _)| g == p));
-        for (pool, list) in got {
-            if let Some(l) = list {
-                lists.insert(pool, l);
-            }
-        }
+        change(&mut lists);
         if let Ok(text) = serde_json::to_vec_pretty(&lists) {
             if let Some(d) = self.pool_lists.parent() {
                 let _ = std::fs::create_dir_all(d);

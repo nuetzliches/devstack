@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **The pool is live, and nobody polls the coordinator** (ADR-0073): the
+  coordinator tells its members over one stream (`GET /v1/events`) which
+  parts of the pool changed, and each hub reads a part only then. The
+  pool area, the capacity charts, where a lane can start, the guest lanes
+  on this machine and the pool's MCP upstreams follow within about two
+  seconds instead of every 10 s to a minute; a member removed from the
+  pool loses the pool's upstreams at once. Update the coordinator first:
+  with one of an earlier release the pool area is read when it opens and
+  says it is not live.
+
 ### Fixed
 
 - **The MCP upstreams page follows a login**: after an OAuth login in the

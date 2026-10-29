@@ -3512,6 +3512,48 @@ async fn next_round(wait: Duration, changed: &tokio::sync::Notify) {
     }
 }
 
+/// Whether the pool of the membership in `local` collects telemetry, read
+/// when its stream says the setting changed (ADR-0073), and once from a
+/// coordinator without a stream; `None` until known.
+fn follow_telemetry(local: &Local) -> Arc<Mutex<Option<bool>>> {
+    use crate::events::{Ended, Heard, TELEMETRY};
+    let known = Arc::new(Mutex::new(None));
+    let dir = local.dir().to_path_buf();
+    let k = known.clone();
+    tokio::spawn(async move {
+        let read = |k: Arc<Mutex<Option<bool>>>, dir: std::path::PathBuf| async move {
+            // Only an answer is kept: a coordinator that does not answer
+            // now sends the setting again with the next connect.
+            if let Ok(Ok(info)) =
+                tokio::task::spawn_blocking(move || Local::new(&dir).telemetry_info()).await
+            {
+                *k.lock().unwrap() = Some(info.enabled);
+            }
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let follower = tokio::spawn(crate::events::follow(Local::new(&dir), move |h| {
+            if let Heard::Changed(v) = h
+                && v.contains_key(TELEMETRY)
+            {
+                let _ = tx.send(());
+            }
+        }));
+        let mut follower = std::pin::pin!(follower);
+        loop {
+            tokio::select! {
+                Some(()) = rx.recv() => read(k.clone(), dir.clone()).await,
+                ended = &mut follower => {
+                    if let Ok(Ended::Unsupported) = ended {
+                        read(k.clone(), dir.clone()).await;
+                    }
+                    return;
+                }
+            }
+        }
+    });
+    known
+}
+
 /// Measure, let expired leases go, and report, every `EVERY`, and at once
 /// when a lease came or went.
 async fn background(s: Shared) {
@@ -3520,8 +3562,9 @@ async fn background(s: Shared) {
     let mut measured = Instant::now();
     let mut free_cpus = 0.0;
     let mut wait = Duration::from_secs(2);
-    // Whether the pool collects telemetry, and when that was asked (ADR-0037).
-    let mut collects: Option<(Instant, bool)> = None;
+    // Whether the pool collects telemetry (ADR-0037), as its stream tells
+    // (ADR-0073).
+    let collects = follow_telemetry(&s.local);
     let mut sent = Instant::now() - Duration::from_secs(60);
     let mut purged: Option<Instant> = None;
     let mut disk_at: Option<Instant> = None;
@@ -3656,19 +3699,7 @@ async fn background(s: Shared) {
             // send waits up to that long; the next is due a minute after
             // this one was, not after it went (one per round at most).
             sent = (sent + Duration::from_secs(60)).max(Instant::now() - EVERY);
-            if collects.is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(600)) {
-                let s2 = s.clone();
-                // Only an answer is kept: a coordinator that does not answer
-                // yet (it restarted with this node) is asked again next time.
-                if let Some(info) = tokio::task::spawn_blocking(move || s2.local.telemetry_info())
-                    .await
-                    .ok()
-                    .and_then(Result::ok)
-                {
-                    collects = Some((Instant::now(), info.enabled));
-                }
-            }
-            if collects.is_some_and(|(_, on)| on) {
+            if *collects.lock().unwrap() == Some(true) {
                 let body = capacity_metrics(
                     total,
                     available,

@@ -65,7 +65,7 @@ const pathParts = computed(() => {
 // Where a started lane can move (ADR-0025 point 10): this machine, and the
 // pool's nodes that are online and run lanes.
 const pool = usePool();
-onBeforeUnmount(pool.watch(30_000));
+onBeforeUnmount(pool.watch());
 // A shared lane (ADR-0053): connected, its services forwarded here; one off
 // its owner's port is named, links between its services may not reach it.
 const sharedConn = computed(() => {

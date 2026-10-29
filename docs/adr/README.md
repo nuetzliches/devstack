@@ -103,7 +103,7 @@ stay.
 | [0018](0018-dashboard-is-a-browser-page.md) | The dashboard is a browser page; native integration is a tray in the daemon, not a desktop wrapper | Accepted; who serves it amended by ADR-0021; notifications from the hub by ADR-0045; the tray a client process the hub starts by ADR-0060 |
 | [0019](0019-control-api-security.md) | The control API trusts the user's own processes, never a web page | Accepted, amended (own page for reads too; the hub proves itself; IPv4 loopback and `DEVSTACK_LISTEN`; the cookie is the hub's, no `token rotate`) |
 | [0020](0020-builds-share-one-long-lived-build-job.md) | Builds share one long-lived build job; a cancel ends only the cancelled build's tree | Accepted |
-| [0021](0021-a-hub-serves-the-dashboard.md) | A hub on a fixed port serves the dashboard for every stack | Accepted, amended (streams over WebSocket; the pool area polls); the tray is the hub's client, ADR-0060 |
+| [0021](0021-a-hub-serves-the-dashboard.md) | A hub on a fixed port serves the dashboard for every stack | Accepted, amended (streams over WebSocket; the pool area polls, ended by ADR-0073); the tray is the hub's client, ADR-0060 |
 | [0022](0022-network-egress-sandbox.md) | Outbound network calls of supervised services are visible and need an allow rule | Proposed |
 | [0023](0023-stack-file-compatibility.md) | Stack files stay readable; migrations once devstack has outside users | Accepted |
 | [0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) | A lane is a supervisor in the main working tree's daemon | Accepted, amended twice (lanes are the worktrees, run from a copy); point 4 replaced by ADR-0030; point 1 replaced in part for the hub by ADR-0047; point 7 amended 2026-10-21 (the removal is shown while it runs); point 6 amended by ADR-0052 (a restart carries the lanes over) |
@@ -155,3 +155,4 @@ stay.
 | [0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md) | A review card comes before the code; an ADR records what was built | Accepted (supersedes ADR-0001); point 1 amended 2026-10-28 (the card in the conversation and the pull request, no issue) |
 | [0071](0071-the-dashboard-writes-no-file-of-a-repository.md) | The dashboard writes no file of a repository; a change to one is a prompt for a coding agent | Accepted |
 | [0072](0072-a-restart-is-warm-a-rebuild-or-cold.md) | A restart is warm, a rebuild or cold; a group acts on its containers too | Accepted ([card](https://github.com/nuetzliches/devstack/pull/351)) |
+| [0073](0073-a-pool-tells-its-members-what-changed-over-one-stream.md) | A pool tells its members what changed, over one stream; nobody polls the coordinator | Accepted (card in the pull request) |

@@ -5,6 +5,7 @@ import type { DockerEngine, Guest, HubEvent, HubSession, Opener, StackEntry, Upd
 import { act } from '@/lib/actions';
 import { checkForAppUpdate } from '@/lib/app-update';
 import { persist } from '@/lib/persist';
+import { usePool } from '@/stores/pool';
 import { useUi } from '@/stores/ui';
 
 export type SessionStatus = 'loading' | 'ok' | 'unpaired' | 'unreachable';
@@ -119,6 +120,10 @@ export const useHub = defineStore('hub', () => {
         }
         if (ev.type === 'guests') {
           guests.value = ev.guests;
+          return;
+        }
+        if (ev.type === 'pools') {
+          usePool().onFeed(ev.pools);
           return;
         }
         if (ev.type === 'notice') {

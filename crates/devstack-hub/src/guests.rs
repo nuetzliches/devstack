@@ -2,8 +2,8 @@
 //! sits at a machine that runs the pool's lanes sees, without asking, that
 //! someone else's code runs on it. The coordinator lists every lease of the
 //! pool to every member; those whose node is this machine and whose owner is
-//! someone else are the guests. The share loop (`share.rs`) asks after each
-//! report, every 15 s per pool. The dashboard hears them on `/hub/events`
+//! someone else are the guests. They are read when the pool's stream says
+//! its leases or nodes changed (`poolfeed.rs`, ADR-0073). The dashboard hears them on `/hub/events`
 //! (`guests`), and a guest lane that starts notifies (ADR-0045,
 //! `guest_lane`).
 

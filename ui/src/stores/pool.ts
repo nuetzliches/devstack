@@ -1,12 +1,14 @@
 // The pools this machine belongs to (ADR-0031, ADR-0032, ADR-0034), as the hub
 // reads them from their coordinators with this machine's certificates. Read
-// on a timer: a coordinator has no stream yet, and its answer is small. The
+// when shown, and again when the hub says a pool changed (`pools` on
+// `/hub/events`, ADR-0073): never on a timer, but while this machine waits
+// for its approval (it has no certificate to follow a stream with yet). The
 // pool area shows one pool at a time (`current`); lanes start and move to the
 // nodes of all of them.
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, paths, Unreachable } from '@/api';
-import type { NodePolicy, PoolEntry, PoolNode, PoolOverview, PoolRole, SharedLane, ShareStatus } from '@/api/types';
+import type { NodePolicy, PoolEntry, PoolFeed, PoolNode, PoolOverview, PoolRole, SharedLane, ShareStatus } from '@/api/types';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
 import { webUrl } from '@/lib/format';
@@ -38,8 +40,18 @@ export const usePool = defineStore('pool', () => {
   const loading = ref(false);
   /** What this machine shares; `null` until read (or from an older hub). */
   const share = ref<ShareStatus | null>(null);
-  let timer: ReturnType<typeof setInterval> | null = null;
+  /** The pools as the hub follows them (ADR-0073); empty from a hub that does not. */
+  const feeds = ref<Record<string, PoolFeed>>({});
+  /** The versions each pool had when it was read last. */
+  let readAt: Record<string, string> = {};
+  /** While this machine waits for its approval: read again until it has it. */
+  let pendingTimer: ReturnType<typeof setInterval> | null = null;
   let users = 0;
+  /** A read under way, and whether another is due once it is done. */
+  let reading: Promise<void> | null = null;
+  let again = false;
+  /** How the shown pool is followed; `null` from a hub that does not follow pools. */
+  const live = computed<PoolFeed | null>(() => feeds.value[current.value] ?? null);
 
   const isAdmin = computed(() => overview.value?.me?.role === 'admin');
   const pending = computed(() => (overview.value?.members ?? []).filter((m) => m.state === 'pending'));
@@ -117,7 +129,45 @@ export const usePool = defineStore('pool', () => {
     }
   }
 
+  /** Read everything shown; one read at a time, one more after it when asked meanwhile. */
   async function load() {
+    if (reading) {
+      again = true;
+      return reading;
+    }
+    reading = (async () => {
+      do {
+        again = false;
+        await readAll();
+      } while (again);
+    })();
+    try {
+      await reading;
+    } finally {
+      reading = null;
+    }
+  }
+
+  /** The version key of what a pool's read shows: every part but the MCP upstreams (their own page). */
+  function stamp(f: PoolFeed | undefined) {
+    if (!f) return '';
+    const v = f.versions;
+    return [f.live, v.members, v.nodes, v.leases, v.telemetry].join('|');
+  }
+
+  /** The hub's pools changed (ADR-0073): read again what changed, if anything is shown. */
+  function onFeed(next: Record<string, PoolFeed>) {
+    const before = feeds.value;
+    feeds.value = next;
+    if (users <= 0) return;
+    const changed = Object.keys({ ...before, ...next }).some((p) => stamp(next[p]) !== (readAt[p] ?? ''));
+    if (changed) void load();
+    const t = next[current.value]?.versions.telemetry;
+    if (t && t !== before[current.value]?.versions.telemetry) void loadTelemetry();
+  }
+
+  async function readAll() {
+    readAt = Object.fromEntries(Object.entries(feeds.value).map(([p, f]) => [p, stamp(f)]));
     loading.value = true;
     void loadShare();
     void loadTelemetry();
@@ -153,23 +203,30 @@ export const usePool = defineStore('pool', () => {
       error.value = e instanceof Unreachable ? 'the hub is not reachable' : String(e);
     } finally {
       loading.value = false;
+      waitForApproval();
     }
   }
 
-  /** Keep reading every `ms` while someone shows the pool; `stop` when gone. */
-  function watch(ms: number) {
+  /** Read again every 10 s while the shown pool has not approved this machine yet, and stop then. */
+  function waitForApproval() {
+    const waiting = users > 0 && overview.value?.me?.state === 'pending';
+    if (waiting && !pendingTimer) pendingTimer = setInterval(() => void load(), 10_000);
+    if (!waiting && pendingTimer) {
+      clearInterval(pendingTimer);
+      pendingTimer = null;
+    }
+  }
+
+  /** Read once now, and again on each change the hub tells, while someone shows the pool; `stop` when gone. */
+  function watch() {
     users++;
-    if (!timer) {
+    if (users === 1) {
+      readAt = {};
       void load();
-      timer = setInterval(() => void load(), ms);
     }
     return () => {
-      users--;
-      if (users <= 0 && timer) {
-        clearInterval(timer);
-        timer = null;
-        users = 0;
-      }
+      users = Math.max(0, users - 1);
+      if (users === 0) waitForApproval();
     };
   }
 
@@ -429,6 +486,9 @@ export const usePool = defineStore('pool', () => {
   return {
     overview,
     overviews,
+    feeds,
+    live,
+    onFeed,
     pools,
     current,
     targets,

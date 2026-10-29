@@ -10,6 +10,7 @@ import type { LaneView, Placement } from '@/api/types';
 import type { LaneTarget } from '@/stores/pool';
 import { bytes, duration, useNow } from '@/lib/format';
 import { laneLabel } from '@/lib/lanes';
+import { throttle } from '@/lib/throttle';
 import { usePool } from '@/stores/pool';
 import { useStack } from '@/stores/stack';
 import Icon from './icons/Icon.vue';
@@ -19,7 +20,7 @@ import NodeLoad from './NodeLoad.vue';
 const props = defineProps<{ lane: LaneView }>();
 const stack = useStack();
 const pool = usePool();
-onBeforeUnmount(pool.watch(30_000));
+onBeforeUnmount(pool.watch());
 
 /** The nodes that can take a lane now, of every pool (ADR-0034). */
 const nodes = computed(() => pool.targets);
@@ -61,8 +62,10 @@ async function loadPlacement() {
   placement.value = out;
 }
 watch(() => [props.lane.name, stack.view?.name, pool.placeable.map((p) => p.pool).join(), profile.value], () => void loadPlacement(), { immediate: true });
-const placementTimer = setInterval(() => void loadPlacement(), 30_000);
-onBeforeUnmount(() => clearInterval(placementTimer));
+// Read again when a pool's nodes or leases changed (ADR-0073), at most every 10 s.
+const placementAgain = throttle(() => void loadPlacement(), 10_000);
+watch(() => pool.placeable.map((p) => `${pool.feeds[p.pool]?.versions.nodes}|${pool.feeds[p.pool]?.versions.leases}`).join(), placementAgain);
+onBeforeUnmount(placementAgain.cancel);
 /** What the lane would take where it starts (ADR-0049 point 4), and where
  * that comes from: its footprint in the pool, else the estimate. */
 const need = computed(() => {

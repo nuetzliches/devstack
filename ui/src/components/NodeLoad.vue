@@ -2,11 +2,15 @@
 // How busy a node of the pool is, to choose where a lane starts (ADR-0036):
 // per resource one chart on the scale of what the machine has: the last hour
 // of what its lanes used against what it offered (the coordinator's
-// history), and now, with what the lane would take on top (`need`).
+// history), and now, with what the lane would take on top (`need`). The
+// history is read again when the pool's nodes changed (ADR-0073), at most
+// every 15 s.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { api, paths } from '@/api';
 import type { CapacityPoint, PoolNode } from '@/api/types';
 import { bytes } from '@/lib/format';
+import { throttle } from '@/lib/throttle';
+import { usePool } from '@/stores/pool';
 import LoadChart from './LoadChart.vue';
 
 const props = defineProps<{ pool: string; node: PoolNode; lanes: number; need?: { cpus: number; memory: number } }>();
@@ -21,8 +25,10 @@ async function load() {
   }
 }
 watch(() => [props.pool, props.node.id], () => void load(), { immediate: true });
-const timer = setInterval(() => void load(), 30_000);
-onBeforeUnmount(() => clearInterval(timer));
+const again = throttle(() => void load(), 15_000);
+const pool = usePool();
+watch(() => pool.feeds[props.pool]?.versions.nodes, again);
+onBeforeUnmount(again.cancel);
 
 const r = computed(() => props.node.report);
 /** Free now: what it offers a new lane (the report's `cpus`/`memory`); its

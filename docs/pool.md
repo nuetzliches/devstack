@@ -612,8 +612,9 @@ their hub one) or `none`. Only an admin changes the list; each change is in
 the audit log. The pool area of the dashboard shows the list to every member
 and lets an admin add, change and remove entries.
 
-Each member's hub asks its pools for the list every minute and offers the
-entries on its *MCP upstreams* page, from which pool. One is used, as
+Each member's hub reads a pool's list when the pool's stream says it changed
+(see [What changed, live](#what-changed-live)) and offers the entries on its
+*MCP upstreams* page, from which pool. One is used, as
 `<pool>:<name>`, only once its user accepts it, at the URL the pool names
 then; a pool that changes the URL has it accepted again, and the login for
 the old one goes. The member's own configuration goes first: an entry with
@@ -757,6 +758,34 @@ happens: `devstack node agent ... --print-unit` prints the unit for the
 same arguments. "Prune" on a node removes the stopped lanes it keeps
 (ADR-0038).
 
+## What changed, live
+
+Members never ask the coordinator on a timer
+([ADR-0073](adr/0073-a-pool-tells-its-members-what-changed-over-one-stream.md)).
+Each member's hub (and a node agent) keeps one stream open to the
+coordinator, `GET /v1/events`, which names the parts of the pool that
+changed: `members`, `nodes`, `leases` (with whom lanes are shared),
+`upstreams` and `telemetry`, each with a version. The hub reads a part when
+its version is new to it: the guest lanes on this machine when leases or
+nodes changed, the MCP upstreams when they did; the dashboard reads what it
+shows of the pool then. A change reaches every member within about two
+seconds. The stream carries no content, only versions of what the member may
+read anyway; the coordinator closes the stream of a member it removes, and
+that member's hub drops the pool's upstreams and guests.
+
+A quiet stream gets a comment every 15 s; a member that hears nothing for
+45 s (a laptop that slept, another network) connects again, with a back-off
+up to a minute. Put no proxy that buffers `text/event-stream` between
+members and the coordinator.
+
+A coordinator of an earlier release has no stream: its members read it once
+when their hub starts following it and each time the pool area opens, and
+the pool area says the pool is not live. Update the coordinator first. Still
+on timers, since they send rather than ask: a node's report (every 15 s), a
+lease's renewal (every 30 s), telemetry. A machine whose request to join
+waits for an admin has no certificate yet: the pool area reads every 10 s
+until it is approved.
+
 ## Reference
 
 | What | Where |
@@ -769,6 +798,7 @@ same arguments. "Prune" on a node removes the stopped lanes it keeps
 | Ports | coordinator and node agent: as you choose (`--listen`); mutual TLS with the pool's CA |
 | Certificates | the pool's CA 20 years, the coordinator's server certificate 10, a member's 5; not renewed: when one expires, that member (for the CA, the pool) is set up again |
 | Leases | live 120 s; the requester renews every 30 s |
+| Event stream | `GET /v1/events` (members): an event per change of a part (within 2 s), a comment every 15 s; silent for 45 s is lost |
 | Uploads to a node | at most 512 MiB per file, 8 GiB per member |
 | Kept lanes on a node | `GET /v1/slots` (the caller's own), `DELETE /v1/slots?repo=&lane=` (`lane reset`, `lane prune`, a removed worktree) |
 | HTTP API | the hub's `/hub/pool...` routes in [dashboard-api.md](dashboard-api.md) |

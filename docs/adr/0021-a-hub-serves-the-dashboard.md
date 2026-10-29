@@ -1,6 +1,6 @@
 # ADR-0021: A hub on a fixed port serves the dashboard for every stack
 
-- **Status:** Accepted (2026-10-15), amended 2026-10-15 (the dashboard's streams come over WebSocket), amended 2026-10-18 (the pool area polls; cookie, sessions file and ping in detail)
+- **Status:** Accepted (2026-10-15), amended 2026-10-15 (the dashboard's streams come over WebSocket), amended 2026-10-18 (the pool area polls; cookie, sessions file and ping in detail), amended 2026-10-29 (the pool area no longer polls, [ADR-0073](0073-a-pool-tells-its-members-what-changed-over-one-stream.md))
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** [ADR-0018](0018-dashboard-is-a-browser-page.md) (amended here), [ADR-0019](0019-control-api-security.md), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0006](0006-dashboard-vue-same-origin.md) (who serves the dashboard, replaced here)
@@ -91,7 +91,12 @@ answered in 2 ms over WebSockets, and not within 8 s once each window held one
   polling the coordinator in the dashboard's stead and pushing the result
   over `/hub/events` would move the timer, not remove it. This is the one
   exception to "no timers that ask for state"; it ends when the coordinator
-  gets a stream.
+  gets a stream. *Ended 2026-10-29 by
+  [ADR-0073](0073-a-pool-tells-its-members-what-changed-over-one-stream.md):
+  the coordinator has a stream; the hub follows it and tells the dashboard
+  on `/hub/events` (`pools`) which parts of a pool changed, and the pool
+  area reads them then. Only a machine waiting for its approval still reads
+  on a timer: it has no certificate to follow the stream with yet.*
 - **Point 5, the session cookie is no boundary by itself.** `SameSite=Strict`
   does not separate loopback ports, so every request with the cookie must
   come from the hub's own page, reads included (ADR-0019 as amended), and the
