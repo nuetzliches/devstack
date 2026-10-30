@@ -579,15 +579,49 @@ impl Point {
 }
 
 /// A node's history (ADR-0036 point 2): every report of the last hour, then
-/// a point per minute for a day. In memory: a restart starts it again.
-#[derive(Debug, Default)]
+/// a point per minute for a day. Kept in `history.json` too, so a restart
+/// loses a minute at most.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct History {
+    #[serde(default)]
     raw: std::collections::VecDeque<Point>,
+    #[serde(default)]
     minutes: std::collections::VecDeque<Point>,
 }
 
 const HOUR: u64 = 3600;
 const DAY: u64 = 24 * HOUR;
+/// Where the coordinator keeps its nodes' histories.
+const HISTORY: &str = "history.json";
+/// How often it writes them.
+const HISTORY_EVERY: Duration = Duration::from_secs(60);
+
+/// The histories `dir` kept, without what is too old by `now`; none when
+/// the file is missing or unreadable.
+pub fn load_history(dir: &Path, now: u64) -> HashMap<String, History> {
+    let path = dir.join(HISTORY);
+    let mut all: HashMap<String, History> = match std::fs::read(&path) {
+        Ok(b) => serde_json::from_slice(&b).unwrap_or_else(|e| {
+            eprintln!(
+                "coordinator: {}: {e}; the history starts again",
+                path.display()
+            );
+            HashMap::new()
+        }),
+        Err(_) => HashMap::new(),
+    };
+    for h in all.values_mut() {
+        h.raw.retain(|x| x.at + HOUR >= now);
+        h.minutes.retain(|x| x.at + DAY >= now);
+    }
+    all.retain(|_, h| !h.raw.is_empty() || !h.minutes.is_empty());
+    all
+}
+
+fn save_history(dir: &Path, all: &HashMap<String, History>) -> std::io::Result<()> {
+    let bytes = serde_json::to_vec(all).expect("histories serialise");
+    provision::write_whole(&dir.join(HISTORY), &bytes)
+}
 
 impl History {
     pub fn push(&mut self, p: Point) {
@@ -3584,7 +3618,7 @@ pub async fn serve_with(
     let shared = Arc::new(Inner {
         dir: dir.to_path_buf(),
         leases: Mutex::new(HashMap::new()),
-        history: Mutex::new(HashMap::new()),
+        history: Mutex::new(load_history(dir, store::now())),
         collector: crate::telemetry::Collector::of(dir),
         telemetry_error: Arc::default(),
         telemetry_slots: Arc::new(tokio::sync::Semaphore::new(TELEMETRY_IN_FLIGHT)),
@@ -3612,6 +3646,25 @@ pub async fn serve_with(
         Arc::downgrade(&shared),
         shared.recount.clone(),
     ));
+    // The nodes' histories to disk, so a restart keeps them (ADR-0036).
+    {
+        let s = Arc::downgrade(&shared);
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(HISTORY_EVERY);
+            every.tick().await;
+            loop {
+                every.tick().await;
+                let Some(s) = s.upgrade() else { return };
+                let all = s.history.lock().unwrap().clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Err(e) = save_history(&s.dir, &all) {
+                        eprintln!("coordinator: {HISTORY}: {e}");
+                    }
+                })
+                .await;
+            }
+        });
+    }
     // The skill sets as their sources hold them now (ADR-0074).
     if !crate::skills::load(&shared.dir).is_empty() {
         fetch_skills(&shared, None);
@@ -3708,6 +3761,31 @@ mod history_tests {
         h.push(p(2 * HOUR, 0.0));
         assert_eq!(h.series(false).len(), 1);
         assert_eq!(h.series(true).len(), 2);
+    }
+
+    #[test]
+    fn the_history_survives_a_restart_without_what_is_too_old() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = History::default();
+        a.push(p(0, 1.0));
+        a.push(p(60, 2.0));
+        a.push(p(2 * HOUR, 3.0));
+        let mut old = History::default();
+        old.push(p(0, 1.0));
+        let all = HashMap::from([("a".to_string(), a), ("old".to_string(), old)]);
+        save_history(dir.path(), &all).unwrap();
+        // Two days on, `old` is gone; `a` keeps what is younger than an hour
+        // (raw) and a day (minutes) at `now`.
+        let back = load_history(dir.path(), DAY + 30);
+        assert_eq!(back.len(), 1);
+        assert_eq!(back["a"].series(false).len(), 0);
+        assert_eq!(back["a"].series(true).len(), 1);
+        let back = load_history(dir.path(), 2 * HOUR);
+        assert_eq!(back["a"].series(false), vec![p(2 * HOUR, 3.0)]);
+        assert!(!back.contains_key("old"));
+        // No file, or a broken one: it starts again.
+        std::fs::write(dir.path().join(HISTORY), "{").unwrap();
+        assert!(load_history(dir.path(), 0).is_empty());
     }
 
     #[test]

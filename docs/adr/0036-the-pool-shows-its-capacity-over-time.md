@@ -28,7 +28,8 @@ pool has to know which nodes have one before it can place such a lane.
 2. **The coordinator keeps the history.** In memory, per node: every
    report for the last hour, then one point per minute (averaged) for 24
    hours. A restart of the coordinator starts it again; longer history is
-   the collector's (ADR-0037).
+   the collector's (ADR-0037). (Amended 2026-10-29: a restart keeps it,
+   see the addendum.)
 3. **The pool area shows totals and charts.** At the top: total, offered
    and used CPU, memory and GPUs over all nodes online, with a chart of
    the last hour (and 24 h to choose). Each node gets the same chart in
@@ -56,6 +57,22 @@ hub keeps no history of them, so its chart grows from the samples the page
 takes while it is open. A node that reports no total is drawn on the scale
 of what it offers.
 
+## Addendum 2026-10-29: the history survives a restart
+
+An update restarts the coordinator, and every restart left the pool's
+charts empty for an hour, and incomplete for a day. The coordinator now
+keeps each node's history in `history.json` in its directory as well: it
+writes it every minute (to a new file it then renames, like
+`machines.json`), not with every report, and reads it when it starts,
+without the points older than the hour or the day. A missing or broken
+file starts the history again, with a line in the log. A restart loses a
+minute at most; the time the coordinator did not run stays a gap.
+
+The chart puts every point at its time on the hour or the day it shows,
+instead of spreading the points it has over its width: a history that
+began half an hour ago fills half of the hour, and a gap is drawn as one,
+not joined across.
+
 ## Consequences
 
 - An admin sees whether the pool is too small, before members wait.
@@ -80,6 +97,6 @@ of what it offers.
 `docker stats`, its GPUs in the report), `crates/devstack-hub/src/share.rs`
 (a developer's machine reports its total and GPUs),
 `crates/devstack-node/src/coordinator.rs` (`History`, `pool_series`,
-`GET /v1/history`), the hub's `GET /hub/pool/history`, the pool area in `ui/`
-(the capacity card with the pool's history, a node's history by its row;
+`load_history`, `save_history`, `GET /v1/history`), the hub's `GET /hub/pool/history`, the pool area in `ui/`
+(the capacity card with the pool's history, `PoolCapacityChart.vue`, a node's history by its row;
 `LoadChart.vue`, `NodeLoad.vue`, `LocalLoad.vue` beside a lane to start).
