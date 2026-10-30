@@ -9,6 +9,17 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-10-30
+
+A pool's project skills stay in their repository: a skill bound with
+`metadata.repos` goes into the agents' skill folders of that repository's
+working trees only, each folder ignored by git, and a skill set can give
+each of its folders to other members (ADR-0079). devstack's own generated
+skills are local to the working tree too and are no longer committed; the
+hub keeps them current. The Skills page's groups fold away. Fixed: an MCP
+upstream's tools show right after its login, and a stopped stack's main
+tree says why it does not start in the pool.
+
 ### Added
 
 - **A pool's project skills stay in their repository** (ADR-0079): a skill
@@ -24,6 +35,9 @@ and listed with their assets on the
   skills --to '*' --path projects/shop/skills --to shop --repos -
   --repos org/shop`, or as rows in the pool area. A member reads and
   downloads only the skills of its folders.
+- **The Skills page's groups fold away**: a click on a group's heading
+  hides its skills and shows them again, remembered in this browser. While
+  a filter is on, every group with a match shows.
 
 ### Changed
 
@@ -46,6 +60,11 @@ and listed with their assets on the
 - **The pool's MCP upstreams card no longer says it keeps nothing secret**:
   it can hold an OAuth app's client secret (never shown) since 0.31.0, and it
   says where a member uses or logs in to an upstream.
+- **A stopped stack's main tree says why it does not start in the pool**:
+  its pool and node buttons said "No node can run it" (the wording for a
+  lane without a lane image); now they say only a worktree's lane starts
+  there, hovering them lights no machine, and *Start* says it starts the
+  stack.
 
 ## [0.31.0] - 2026-10-30
 
@@ -2338,7 +2357,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.31.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.32.0...HEAD
+[0.32.0]: https://github.com/nuetzliches/devstack/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/nuetzliches/devstack/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/nuetzliches/devstack/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/nuetzliches/devstack/compare/v0.28.0...v0.29.0
