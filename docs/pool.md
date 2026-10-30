@@ -122,6 +122,13 @@ why. A member that only shares from the dashboard is no node.
   admin's fields it takes `keep_lanes_hours` and `keep_lanes_gib`: how long
   and how much of stopped lanes it keeps (ADR-0038), and `warm`: `false`
   refuses warm leases (ADR-0065), which an admin's policy can say too.
+  `lease_grace_minutes`, in either policy (the smaller wins), says how long
+  a lease lives without a renewal: an hour on a dedicated node, 15 minutes
+  on another by default. A lane survives that long when its requester's
+  machine restarts, sleeps or loses the network, and its daemon follows it
+  again when it starts; for as long, a requester that never comes back
+  holds the lane's CPU, memory and disk on the node. Ending the lease in
+  the pool area frees them at once.
 - It reads each lane's Compose model in a throwaway `docker:cli` container
   (`DEVSTACK_NODE_COMPOSE_IMAGE` names another image with `docker
   compose`), pulled once.
@@ -881,7 +888,7 @@ until it is approved.
 | Node agent state (leases, mirrors, uploaded files per member, `policy.json`, `secret`) | `node/` beside its membership |
 | Ports | coordinator and node agent: as you choose (`--listen`); mutual TLS with the pool's CA |
 | Certificates | the pool's CA 20 years, the coordinator's server certificate 10, a member's 5; not renewed: when one expires, that member (for the CA, the pool) is set up again |
-| Leases | live 120 s; the requester renews every 30 s |
+| Leases | live an hour without a renewal on a dedicated node, 15 minutes on another (`lease_grace_minutes`); the requester renews every 30 s |
 | Event stream | `GET /v1/events` (members): an event per change of a part (within 2 s), a comment every 15 s; silent for 45 s is lost |
 | Uploads to a node | at most 512 MiB per file, 8 GiB per member |
 | Kept lanes on a node | `GET /v1/slots` (the caller's own), `DELETE /v1/slots?repo=&lane=` (`lane reset`, `lane prune`, a removed worktree) |

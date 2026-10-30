@@ -683,8 +683,9 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     );
 
     // A daemon that ends without stopping the lane (killed, as by a reboot):
-    // the next one says with the lane that it is gone, and its lease goes
-    // (ADR-0052 point 6).
+    // the node keeps the lease for its grace (#379), so the next daemon says
+    // so in its log and follows the lane again, as after a restart (ADR-0052
+    // point 6 as amended).
     let info: serde_json::Value = serde_json::from_slice(
         &std::fs::read(main.join(".devstack").join("daemon.json")).expect("daemon.json"),
     )
@@ -706,22 +707,28 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     loop {
         let lane = api("/v1/lanes")
             .and_then(|v| v.as_array()?.iter().find(|l| l["name"] == "wt").cloned());
-        if let Some(l) = &lane
-            && let Some(e) = l["moving"]["error"].as_str()
+        if lane
+            .as_ref()
+            .is_some_and(|l| l["active"] == true && l["node"] == "ci-node" && l["moving"].is_null())
         {
-            assert!(e.contains("ended without stopping it"), "{l}");
-            assert_ne!(l["active"], true, "{l}");
             break;
         }
         assert!(
             Instant::now() < until,
-            "the lane nobody followed was not said: {lane:?}"
+            "the lane nobody followed was not taken up again: {lane:?}"
         );
         std::thread::sleep(Duration::from_millis(250));
     }
     let log =
         std::fs::read_to_string(main.join(".devstack").join("daemon.log")).unwrap_or_default();
     assert!(log.contains("\"remote_lane_unfollowed\""), "{log}");
+    let body = http_get(port, "/health");
+    assert!(
+        body.contains("ok"),
+        "GET /health on {port} after the lane was taken up again: {body}"
+    );
+    // Stopped, its lease goes and the node is clear.
+    cli(&main, &["lane", "stop", "wt"]);
     node_is_clear();
 
     // Its data thrown away, the lane starts afresh on the node: its build's

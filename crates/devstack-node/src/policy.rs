@@ -100,6 +100,11 @@ pub struct NodePolicy {
     /// the least recently used goes first). Default 20.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep_lanes_gib: Option<u64>,
+    /// How long a lease lives here without a renewal, minutes: what a lane
+    /// survives of its requester's absence (a reboot, a sleep). Default: an
+    /// hour on a dedicated node, 15 minutes on another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_grace_minutes: Option<u64>,
     /// Whether an admin of the pool may have this node update its devstack
     /// (ADR-0039); only this node's own `policy.json` says `false`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -176,6 +181,7 @@ impl NodePolicy {
                     network: a.network.max(p.network),
                     keep_lanes_hours: lower(a.keep_lanes_hours, p.keep_lanes_hours),
                     keep_lanes_gib: lower(a.keep_lanes_gib, p.keep_lanes_gib),
+                    lease_grace_minutes: lower(a.lease_grace_minutes, p.lease_grace_minutes),
                     remote_update: a.remote_update.or(p.remote_update),
                     // `false` anywhere wins.
                     warm: match (a.warm, p.warm) {

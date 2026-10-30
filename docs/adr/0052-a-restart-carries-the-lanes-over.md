@@ -1,6 +1,6 @@
 # ADR-0052: A restart of the stack carries its lanes over to the next daemon
 
-- **Status:** Accepted (2026-10-22), amended 2026-10-26 (point 6: a lane on a node the daemon ended without stopping is said, not silently gone)
+- **Status:** Accepted (2026-10-22), amended 2026-10-26 (point 6: a lane on a node the daemon ended without stopping is said, not silently gone); amended 2026-10-30 (point 6: such a lane is followed again while its lease runs)
 - **Date:** 2026-10-22
 - **Deciders:** project owner
 - **Related:** [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md) (a daemon restart is clean), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) point 6 (lanes start only with `devstack up`), [ADR-0025](0025-a-lane-can-run-on-another-node.md) point 7 (a daemon restart releases the lanes on nodes), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) (sync and ports of a lane on a node), [ADR-0037](0037-telemetry-goes-to-the-pools-collector-with-consent.md) (telemetry)
@@ -92,6 +92,18 @@ What a restart costs a lane differs by where it runs:
    the lane shows the start that failed, with the reason and how to start it
    again (`devstack up --on <node>`, from its data kept there, ADR-0038). The
    lane is not started again by itself.
+
+   *Amended 2026-10-30 ([#379](https://github.com/nuetzliches/devstack/issues/379)).*
+   A node keeps a lease for a grace without renewals (ADR-0026, amended
+   2026-10-30: an hour on a dedicated node, 15 minutes on another). The next
+   daemon renews the lease of such a lane first, as point 2 does: renewed,
+   the lane is followed again (synced, renewed, its ports forwarded) and
+   nothing on the node notices; only a lease that is over is said as above.
+   It is not released any more: following again takes nothing on the node
+   the lane did not hold, which point 6's reason for not starting it again
+   was about. The note carries no profile and no workers, so the main slot
+   stays with the main tree. `Lanes::unfollowed` in `lanes.rs`, through
+   `take_up_remote`.
 
 This amends ADR-0024 point 6 and ADR-0025 point 7 for a restart; ADR-0016's
 rule that the daemon re-attaches to no process stays: nothing of a lane on
