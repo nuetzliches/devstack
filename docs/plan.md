@@ -1,7 +1,7 @@
 # devstack: plan
 
 - **Status:** Active: phases 0 to 2 done (0.4.0), phase 3 done (lanes per worktree 0.7.0, each with its own infrastructure since 0.8.0, ADR-0030), phase 4 under way; the pool since 0.9.0: lanes on other machines, moved, shared, given the main ports; node policies, several pools, capacity over time, telemetry with consent (ADR-0025 to ADR-0037, 0.9.0 to 0.9.8; [pool.md](pool.md), §7.4, backlog §13); 0.10.0 (2026-10-18) carries the fixes of the review of 0.9.8: lanes confined on a node, nodes granted by an admin, the promotion gate and restore of ADR-0013/0016 as written, the hub's origin rules; 0.11.0 (2026-10-19): lanes that outlive the main tree's stop, keep their data on a node, run with a profile, and can be viewed when shared; a server updated by an admin (ADR-0038 to ADR-0041); 0.12.0 (2026-10-20): sharing a lane includes viewing it (ADR-0040 amended), a remote lane's containers controlled through its node, a dev server's rebuilds shown like builds (ADR-0042), a node's own lines in the pool's telemetry; 0.13.0 (2026-10-20): a dev server's fixed port is devstack's, forwarded to its instance (ADR-0043); 0.14.0 (2026-10-21): the pool places a lane where it starts warm (ADR-0026 point 3), where a lane starts without `--on` is the machine's choice (ADR-0025 amended), a lane's start on a node shows its phases; 0.15.0 (2026-10-21) carries the fixes of a review of the whole code base: a node runs the Compose model it checked, several agents share one engine, the supervisor keeps edits and stops, stack file paths stay in the repository; 0.16.0 (2026-10-21): desktop notifications from the hub and lanes of other members shown (ADR-0045), winget on Windows, a stack's folder opened in one's own programs (ADR-0046), the share switch removed (ADR-0031 amended); 0.17.0 (2026-10-21): a lane made from a branch in the dashboard (ADR-0047), containers on the main ports (ADR-0048), a lane's need measured where it ran, disk included (ADR-0049); 0.18.0 (2026-10-21): notices for what no request reports (ADR-0050), a lane whose worktree is removed shown while it goes (ADR-0024 point 7 amended); 0.19.0 (2026-10-22): a restart of the stack carries its lanes over (ADR-0052), the agent skills where the stack file says, a node's policy says what part of what is free it offers (ADR-0031 amended); 0.20.0 (2026-10-23): macOS in preview with Homebrew (ADR-0054), UDP ports of a lane on a node relayed (ADR-0056), announced ports moved with their lane (ADR-0057); 0.21.0 (2026-10-23): a tray icon on every desktop, a client of the hub (ADR-0060), profiles that leave out containers (ADR-0058), a service's `stop` command (ADR-0059); 0.22.0 (2026-10-24): the dashboard opens in its installed app (ADR-0061); 0.23.0 (2026-10-26): what `prepare` makes kept in a store per machine (ADR-0062), Compose told the lane (ADR-0064); 0.24.0 (2026-10-26): a lane on a node gets its worktree linked and a store on its node (ADR-0062, ADR-0063), the store warmed ahead for a ref (ADR-0065) and shown in the dashboard, its own telemetry through its requester; 0.25.0 (2026-10-27): a stop takes the containers too (ADR-0068), who changed the stack at runtime on record (ADR-0067), a measured CPU need capped (ADR-0066); 0.26.0 (2026-10-27): devstack's MCP server offered at setup, a lane's workers on a node, the memory check against Docker Desktop's VM; 0.27.0 (2026-10-28): a pool grows by provisioned machines (ADR-0051), MCP upstreams through the hub (ADR-0069), one timeline of events and the journal (ADR-0067), the dashboard writes no repository file (ADR-0071), a faster start (builds during the containers' start, a node's artifact store), where a lane starts compared (ADR-0036 addendum); 0.27.1 (2026-10-28): 0.27.0 published, its release had stopped at new advisories ([CHANGELOG](../CHANGELOG.md))
-- **Date:** 2026-10-14, status updated 2026-10-30 (0.32.0)
+- **Date:** 2026-10-14, status updated 2026-10-31 (0.33.0)
 - **Inputs:** [problem-statement.md](problem-statement.md), [ADR index](adr/README.md)
 
 This document is the planning artefact. Decisions it relies on are recorded as
@@ -937,6 +937,16 @@ each of its folders to its own members, checked on download too. devstack's
 generated skills are local to the working tree as well and no longer
 committed; the hub keeps them current (ADR-0079). The details are in the
 [changelog](../CHANGELOG.md).
+
+**0.33.0 (2026-10-31): a page per stack, its ports, one view per lane.**
+The dashboard gives each stack a page above its lanes (its daemon, the
+main slot, its lanes, its singleton services) and draws the ports of the
+stack as a graph, with overlaps with other stacks on the machine. The main
+working tree answers as the lane `main`, in the API and in a view that is
+the same for every lane (ADR-0080, ADR-0081). Daemons and the hub list
+the ports of a machine, the first step towards a port shift for stacks
+that declare the same ports (ADR-0082, #387). `shared` is deprecated. The
+details are in the [changelog](../CHANGELOG.md).
 
 ## 8. Open questions
 

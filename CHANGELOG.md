@@ -9,6 +9,20 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-10-31
+
+A stack has a page of its own, above its lanes: its daemon, who serves the
+main ports, its lanes with where they run and what they take, the services
+that run once per machine, and its ports drawn as a graph, with the ports
+another stack on this machine uses too in red. Every lane, the main
+working tree included as `main`, has the same view, and the lane is in the
+URL. A daemon lists every port its stack holds (`/v1/ports`), the hub
+every stack's (`/hub/ports`), and `devstack doctor` warns where two
+stacks meet (ADR-0080, ADR-0081, ADR-0082). `singleton = true` replaces
+`lanes = false`; `[compose.<group>] shared` is deprecated. Fixed: a node
+leaves no gone lane's containers running, and a hub that stopped answering
+no longer blocks every start.
+
 ### Changed
 
 - **`singleton = true` replaces `lanes = false`** (ADR-0080): a service that
@@ -2431,7 +2445,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.32.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.33.0...HEAD
+[0.33.0]: https://github.com/nuetzliches/devstack/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/nuetzliches/devstack/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/nuetzliches/devstack/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/nuetzliches/devstack/compare/v0.29.0...v0.30.0
