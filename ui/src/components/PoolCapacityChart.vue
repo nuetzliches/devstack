@@ -9,6 +9,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { api, paths } from '@/api';
 import type { CapacityPoint } from '@/api/types';
 import { bytes, dateTime } from '@/lib/format';
+import { runs as runsOf } from '@/lib/runs';
 import { throttle } from '@/lib/throttle';
 import { usePool } from '@/stores/pool';
 
@@ -80,10 +81,17 @@ const resources = computed<Res[]>(() =>
     : base,
 );
 
+/** The time axis: the range up to the last point, so a short history fills only its part. */
+const span = computed(() => (range.value === '24h' ? 86_400 : 3_600));
+const end = computed(() => total.value[total.value.length - 1]?.at ?? 0);
+const xAt = (at: number) => Math.max(0, ((at - (end.value - span.value)) / span.value) * W);
+/** The runs of points without a gap (the coordinator did not run, or no node reported): drawn apart, not joined. */
+const runs = computed(() => runsOf(total.value.map((p) => p.at), range.value === '24h' ? 300 : 120));
+
 const rows = computed(() => {
   const t = total.value;
   if (t.length < 2) return [];
-  const x = (i: number) => (i / (t.length - 1)) * W;
+  const x = (i: number) => xAt(t[i].at);
   // Every number from the machines' own histories on the pool's time axis:
   // the bands, what is offered and what there is add up by construction.
   const sumAt = (p: CapacityPoint, f: (q: CapacityPoint) => number) => nodes.value.reduce((a, n) => a + at(perNode.value[n.id] ?? [], p.at, f), 0);
@@ -95,24 +103,28 @@ const rows = computed(() => {
     // Per machine its values, stacked from the bottom.
     const series = nodes.value.map((n) => ({ id: n.id, name: n.name, values: t.map((p) => at(perNode.value[n.id] ?? [], p.at, r.used)) }));
     const base = t.map(() => 0);
+    const pt = (i: number, v: number) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`;
     const bands = series.map((s, k) => {
       const lower = [...base];
       s.values.forEach((v, i) => (base[i] += v));
-      const top = base.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
-      const bottom = lower.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).reverse();
-      return { ...s, slot: (k % 6) + 1, points: [...top, ...bottom].join(' ') };
+      const polygons = runs.value.map((run) => [...run.map((i) => pt(i, base[i])), ...run.map((i) => pt(i, lower[i])).reverse()].join(' '));
+      return { ...s, slot: (k % 6) + 1, polygons };
     });
-    const offeredLine = ceiling.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
-    return { ...r, max, bands, offeredLine, has, ceiling };
+    const offeredLines = runs.value.map((run) => run.map((i) => pt(i, ceiling[i])).join(' '));
+    return { ...r, max, bands, offeredLines, has, ceiling };
   });
 });
 
-// The hover: the point under the pointer, and each machine's value there.
+// The hover: the point nearest the pointer's time, and each machine's value there.
 const hover = ref<number | null>(null);
 function move(e: PointerEvent) {
   const box = (e.currentTarget as SVGElement).getBoundingClientRect();
-  const n = total.value.length;
-  hover.value = Math.max(0, Math.min(n - 1, Math.round(((e.clientX - box.left) / box.width) * (n - 1))));
+  const at = end.value - span.value + ((e.clientX - box.left) / box.width) * span.value;
+  let best = 0;
+  total.value.forEach((p, i) => {
+    if (Math.abs(p.at - at) < Math.abs(total.value[best].at - at)) best = i;
+  });
+  hover.value = total.value.length ? best : null;
 }
 const now = computed(() => total.value.length - 1);
 /** What the tooltip says at the point under the pointer. */
@@ -126,7 +138,7 @@ const tip = computed(() => {
   };
 });
 const sumOf = (r: (typeof rows.value)[number], i: number) => r.bands.reduce((a, b) => a + (b.values[i] ?? 0), 0);
-const hoverX = computed(() => (hover.value === null ? null : (hover.value / Math.max(1, total.value.length - 1)) * 100));
+const hoverX = computed(() => (hover.value === null || !total.value[hover.value] ? null : (xAt(total.value[hover.value].at) / W) * 100));
 </script>
 
 <template>
@@ -150,8 +162,10 @@ const hoverX = computed(() => (hover.value === null ? null : (hover.value / Math
             @pointermove="move"
             @pointerleave="hover = null"
           >
-            <polygon v-for="b in r.bands" :key="b.id" :points="b.points" class="band" :style="{ fill: `var(--series-${b.slot})` }" />
-            <polyline :points="r.offeredLine" class="offered" />
+            <template v-for="b in r.bands" :key="b.id">
+              <polygon v-for="(pts, j) in b.polygons" :key="j" :points="pts" class="band" :style="{ fill: `var(--series-${b.slot})` }" />
+            </template>
+            <polyline v-for="(pts, j) in r.offeredLines" :key="j" :points="pts" class="offered" />
           </svg>
           <span v-if="hoverX !== null" class="cross" :style="{ left: `${hoverX}%` }" />
           <div

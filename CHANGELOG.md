@@ -33,6 +33,22 @@ and listed with their assets on the
   shown (Infrastructure, Commands, Usage, Activity), also coming back from
   the pool area, instead of going back to Overview.
 
+### Fixed
+
+- **`devstack up --on` moves a started lane**: a lane started on a node
+  stayed there after `devstack down` (its lease and place stay, only its
+  services stop), and `devstack up --on local` started it there again.
+  `--on local` now brings it here, and `--on <node>` takes it to that node,
+  as `devstack lane move` does; without `--on` it stays where it runs.
+- **The MCP tool `up` does as `devstack up`**: in a worktree without `on`
+  it starts the lane where this machine starts lanes by default (*Where
+  lanes start*), not always here, and an `on` that names another place
+  than where a started lane runs moves it there.
+- **A lane on a node picks up edits**: its dev servers ran from a copy of
+  the worktree that its daemon there never brought up to date, so hot
+  reload showed the code of the lane's start; the file watcher took the
+  lane's daemon on the node for a main tree, which runs in place.
+
 ## [0.30.0] - 2026-10-29
 
 The skills of a pool's set can be taken one by one: each switched on or
@@ -78,6 +94,10 @@ since not showing, and dashboard details.
 
 ### Fixed
 
+- **The pool's capacity history survives a restart of the coordinator**
+  (ADR-0036): it keeps it in `history.json` and writes it every minute.
+  The chart puts each point at its time, so a short history fills only its
+  part of the hour or day, and a time without points stays a gap.
 - **A lane not started shows no tabs**: its start options stand in for its
   views, so Overview, Infrastructure and the others no longer all led to
   the same start page.

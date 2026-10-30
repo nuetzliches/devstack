@@ -720,7 +720,8 @@ earlier-release agent beside it would still remove the other's.
 
 The pool area shows what the pool has, offers and its lanes use, GPUs
 included (found with `nvidia-smi`), for the last hour or day, and the same per
-node. The coordinator keeps that history in memory.
+node. The coordinator keeps that history in `history.json` in its directory
+(written every minute), so a restart loses a minute of it at most.
 
 A pool can collect **telemetry**: devstack's diagnostic log and how long
 lane starts, syncs, moves and stops, service starts, builds and tunnel
