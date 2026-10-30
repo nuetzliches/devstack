@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Write crates/devstack-skills/agents.toml from vercel-labs/skills' agent table.
 
-devstack keeps the coding agents' user skill folders, and how each agent is
-told installed, as data taken from `src/agents.ts` of
+devstack keeps the coding agents' user skill folders, their skill folders in
+a working tree, and how each agent is told installed, as data taken from `src/agents.ts` of
 https://github.com/vercel-labs/skills (MIT, Copyright (c) Vercel, Inc.):
 the skill folders a pool's sets go to, and the agents "Open with" knows
 (ADR-0074). Run it to take a newer table:
@@ -65,6 +65,7 @@ def agents(src: str):
         aid, body = m.group(1), m.group(2)
         name = re.search(r"displayName: '([^']*)'", body)
         skills = re.search(r"globalSkillsDir: ([^\n]*?),?\n", body)
+        project = re.search(r"\bskillsDir: '([^'/][^']*)'", body)
         detect = re.search(r"detectInstalled: async \(\) => \{(.*?)\n    \}", body, re.S)
         if not (name and skills and detect):
             continue
@@ -72,7 +73,7 @@ def agents(src: str):
         found = [path(e, b) for e in re.findall(r"existsSync\(((?:[^()]|\([^()]*\))*)\)", detect.group(1))]
         if not skills_path or not found or None in found:
             continue
-        yield aid, name.group(1), skills_path, found
+        yield aid, name.group(1), skills_path, project.group(1) if project else None, found
 
 
 def kept(old: str) -> dict:
@@ -92,7 +93,8 @@ def main():
     opens = kept(old)
     lines = [
         "# The coding agents devstack knows (ADR-0074): each one's user skill folder,",
-        "# and the paths that tell it installed. Taken from src/agents.ts of",
+        "# its skill folder in a working tree (`project`, ADR-0079), and the paths",
+        "# that tell it installed. Taken from src/agents.ts of",
         "# https://github.com/vercel-labs/skills (MIT, Copyright (c) Vercel, Inc.)",
         "# by scripts/sync-agents.py; `[agent.open]` is devstack's own (how",
         "# \"Open with\" starts the agent) and kept when the table is taken again.",
@@ -100,13 +102,17 @@ def main():
         "",
     ]
     n = 0
-    for aid, name, skills, detect in agents(src):
+    for aid, name, skills, project, detect in agents(src):
         n += 1
         lines += [
             "[[agent]]",
             f'id = "{aid}"',
             f'name = "{name}"',
             f'skills = "{skills}"',
+        ]
+        if project:
+            lines.append(f'project = "{project}"')
+        lines += [
             "detect = [" + ", ".join(f'"{d}"' for d in detect) + "]",
         ]
         if aid in opens:

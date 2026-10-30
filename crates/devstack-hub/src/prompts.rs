@@ -68,6 +68,10 @@ pub fn text(p: &Prompt) -> String {
     // Where the MCP server goes: the project's file of each agent, an
     // existing file merged into.
     let mcp = "devstack's MCP server (`devstack mcp`, stdio) gives coding agents its tools (status, logs, restart, lanes). Register it in the project's configuration of the coding agents this repository is worked on with, next to the servers already there: `.mcp.json` (Claude Code) `{ \"mcpServers\": { \"devstack\": { \"command\": \"devstack\", \"args\": [\"mcp\"] } } }`; `.vscode/mcp.json` (VS Code) the same under `servers`, with `\"type\": \"stdio\"`; `.codex/config.toml` (Codex) `[mcp_servers.devstack]` with `command = \"devstack\"`, `args = [\"mcp\"]`. Keep the files' other entries and their formatting; an agent loads a new server when it starts again.";
+    // Generated skills are local to the working tree since 0.32.0
+    // (ADR-0079): copies an earlier devstack had committed leave git. A
+    // migration aid, removed again once repositories have moved (#389).
+    let untrack = "The generated skills are local to each working tree, not the repository's: each of their folders holds a `.gitignore` that ignores it, and the devstack hub keeps them current. Where git still tracks one (`git ls-files` lists a skill folder whose SKILL.md has the line `(devstack skills install)`, such as `.claude/skills/devstack`), take it out of git with `git rm -r --cached <folder>`: the files stay. A skill the project wrote itself stays tracked.";
     match *p {
         Prompt::Setup { repo, drafted } => format!(
             "Set up devstack for the repository at {repo}.
@@ -142,7 +146,7 @@ pub fn text(p: &Prompt) -> String {
 4. Run `devstack check` (and `devstack check --compose`) and `devstack doctor`, and fix every error and warning.
 5. Tell me which new features would help this stack, and add only those I agree to. Raise `[stack] requires` only when the file uses something an older devstack does not know: it shuts out everyone still on one.
 6. Set `reviewed = \"{current}\"` in `[stack]`: the stack file is up to date with devstack {current} then, and the dashboard stops offering this.{requires}
-7. Run `devstack skills install` to refresh the generated skills. Check the project's own skills, CLAUDE.md and AGENTS.md for anything that contradicts devstack {current}. Where no agent configuration of the project registers devstack's MCP server, ask me whether to; suggest yes. {mcp}
+7. Run `devstack skills install` to refresh the generated skills. {untrack} Check the project's own skills, CLAUDE.md and AGENTS.md for anything that contradicts devstack {current}. Where no agent configuration of the project registers devstack's MCP server, ask me whether to; suggest yes. {mcp}
 8. Restart the stack so it runs devstack {current}, and check that every service becomes healthy. Before you stop it, look at `devstack status` and `devstack lane list`: when lanes run, a lane holds the main ports, or other sessions may use this stack, ask me first. Restart with `devstack down --keep-infra`, then `devstack up`: the containers keep running (a plain `down` removes them since 0.25.0). {careful}",
                 repo = display(repo),
                 file = display(file),
@@ -199,8 +203,9 @@ pub fn text(p: &Prompt) -> String {
 
 1. `devstack --version` must say {v}; if it says another, run `devstack update` first and tell me.
 2. Run `devstack skills install` in the repository. It rewrites the generated skills only (their marker line says so); a skill the project wrote itself stays.
-3. Read what changed in them (`git diff`). Check the project's own skills, CLAUDE.md and AGENTS.md for anything that now contradicts them, and tell me what you would change there.
-4. {careful}",
+3. {untrack}
+4. Check the project's own skills, CLAUDE.md and AGENTS.md for anything that now contradicts the generated ones, and tell me what you would change there.
+5. {careful}",
             repo = display(repo),
         ),
         Prompt::StartFailed {

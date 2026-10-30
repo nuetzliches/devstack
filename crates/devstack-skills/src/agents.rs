@@ -1,5 +1,6 @@
 //! The coding agents devstack knows (ADR-0074): each one's user skill
-//! folder and how it is told installed, as data (`agents.toml`, taken from
+//! folder, its skill folder in a working tree (ADR-0079), and how it is
+//! told installed, as data (`agents.toml`, taken from
 //! vercel-labs/skills by `scripts/sync-agents.py`). The hub installs a
 //! pool's skill sets into these folders; "Open with" takes its agents from
 //! here too, with what `[agent.open]` adds.
@@ -19,6 +20,10 @@ pub struct Agent {
     pub name: String,
     /// Its user skill folder, as the table writes it.
     pub skills: String,
+    /// Its skill folder in a working tree (`.claude/skills`), where the
+    /// skills bound to a repository go (ADR-0079); `None`: it has none.
+    #[serde(default)]
+    pub project: Option<String>,
     /// Paths of which one exists when it is installed.
     pub detect: Vec<String>,
     #[serde(default)]
@@ -138,6 +143,14 @@ mod tests {
         ] {
             assert!(get(id).is_some(), "{id}");
         }
+        assert_eq!(
+            get("claude-code").unwrap().project.as_deref(),
+            Some(".claude/skills")
+        );
+        assert_eq!(
+            get("codex").unwrap().project.as_deref(),
+            Some(".agents/skills")
+        );
         let links = &get("claude-code").unwrap().open.as_ref().unwrap().links;
         assert!(links.iter().any(|l| l.scheme == "claude-cli"));
     }

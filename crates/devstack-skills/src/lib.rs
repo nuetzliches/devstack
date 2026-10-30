@@ -10,6 +10,11 @@
 //! this stack file (a new version alone does not count). What is
 //! specific to a project beyond that belongs in a skill of the project's own,
 //! which devstack never touches.
+//!
+//! A generated skill is local to the working tree (ADR-0079): its folder
+//! holds a `.gitignore` that ignores the folder, so git leaves it out, and
+//! the hub keeps it in step with this devstack ([`install_into`]); one git
+//! still tracks (an earlier devstack's) is left to the upgrade prompt.
 
 pub mod agents;
 
@@ -23,6 +28,10 @@ const VERSION: &str = devstack_config::VERSION;
 const REPO_URL: &str = "https://github.com/nuetzliches/devstack";
 /// The words that tell a generated skill from one a project wrote itself.
 const MARKER_TAG: &str = "(devstack skills install)";
+/// The `.gitignore` of a skill folder devstack writes into a working tree
+/// (ADR-0079): it ignores the folder, itself included.
+pub const IGNORE_ALL: &str =
+    "# Written by devstack: this skill is local to the working tree, not the repository's.\n*\n";
 
 const TEMPLATES: &[(&str, &str)] = &[
     (
@@ -369,6 +378,49 @@ pub fn install(
     Ok(done)
 }
 
+/// What the hub writes (ADR-0079): the skills into `dirs` (the agents' skill
+/// folders in the working tree of `stack_file`), and a generated copy found
+/// in another agent's folder refreshed. A path `skip` says no to (one git
+/// tracks) is left alone; a skill the project wrote itself too.
+pub fn install_into(
+    stack: &Stack,
+    stack_file: &Path,
+    dirs: &[PathBuf],
+    skip: &dyn Fn(&Path) -> bool,
+) -> Result<Vec<Outcome>> {
+    let rendered = render_all(stack, stack_file);
+    let mut targets: Vec<(PathBuf, bool)> = dirs.iter().map(|d| (d.clone(), true)).collect();
+    for d in search_dirs(stack, stack_file)? {
+        if !targets.iter().any(|(t, _)| *t == d) {
+            targets.push((d, false));
+        }
+    }
+    let mut done = Vec::new();
+    for (dir, asked) in targets {
+        for (name, content) in &rendered {
+            let folder = dir.join(name);
+            if !asked && !generated(&folder) {
+                continue;
+            }
+            // Asked (git, for `skip`) only when something is to be written.
+            let path = folder.join("SKILL.md");
+            let same = std::fs::read_to_string(&path)
+                .is_ok_and(|e| normalize(&e) == normalize(content))
+                && std::fs::read_to_string(folder.join(".gitignore"))
+                    .is_ok_and(|e| normalize(&e) == IGNORE_ALL);
+            if same {
+                done.push(Outcome::Unchanged(path));
+                continue;
+            }
+            if skip(&folder) {
+                continue;
+            }
+            done.push(write_one(&path, content, false)?);
+        }
+    }
+    Ok(done)
+}
+
 /// A generated skill in `skill_dir` (its own folder, `…/skills/devstack`).
 fn generated(skill_dir: &Path) -> bool {
     std::fs::read_to_string(skill_dir.join("SKILL.md")).is_ok_and(|e| e.contains(MARKER_TAG))
@@ -376,15 +428,30 @@ fn generated(skill_dir: &Path) -> bool {
 
 fn write_one(path: &Path, content: &str, force: bool) -> Result<Outcome> {
     let path = path.to_path_buf();
+    let folder = path.parent().expect("has a parent");
     match std::fs::read_to_string(&path).ok() {
-        Some(e) if normalize(&e) == normalize(content) => return Ok(Outcome::Unchanged(path)),
+        Some(e) if normalize(&e) == normalize(content) => {
+            ignore_folder(folder)?;
+            return Ok(Outcome::Unchanged(path));
+        }
         Some(e) if !e.contains(MARKER_TAG) && !force => return Ok(Outcome::Kept(path)),
         _ => {}
     }
-    std::fs::create_dir_all(path.parent().expect("has a parent"))
-        .with_context(|| format!("create {}", path.display()))?;
+    std::fs::create_dir_all(folder).with_context(|| format!("create {}", folder.display()))?;
+    // The ignore first: git, and a watcher that reads the ignore rules,
+    // never take the skill for the repository's.
+    ignore_folder(folder)?;
     std::fs::write(&path, content).with_context(|| format!("write {}", path.display()))?;
     Ok(Outcome::Written(path))
+}
+
+/// The `.gitignore` that keeps a generated skill's folder out of git.
+fn ignore_folder(folder: &Path) -> Result<()> {
+    let p = folder.join(".gitignore");
+    if std::fs::read_to_string(&p).is_ok_and(|e| normalize(&e) == IGNORE_ALL) {
+        return Ok(());
+    }
+    std::fs::write(&p, IGNORE_ALL).with_context(|| format!("write {}", p.display()))
 }
 
 fn normalize(s: &str) -> String {
@@ -729,5 +796,35 @@ ours"
             5,
             "two folders named, one copy elsewhere"
         );
+    }
+
+    #[test]
+    fn a_generated_skill_ignores_itself_and_the_hub_leaves_a_tracked_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("devstack.toml");
+        std::fs::write(&file, STACK).unwrap();
+        let stack = devstack_config::load(&file).unwrap();
+        install(&stack, &file, None, false).unwrap();
+        let claude = dir.path().join(".claude/skills/devstack");
+        assert_eq!(
+            std::fs::read_to_string(claude.join(".gitignore")).unwrap(),
+            IGNORE_ALL
+        );
+
+        // The hub: into the folders it is given, a copy elsewhere refreshed,
+        // one `skip` says no to (git tracks it) left as it is.
+        let agents = dir.path().join(".agents/skills");
+        age(&claude.join("SKILL.md"), true);
+        let old = std::fs::read_to_string(claude.join("SKILL.md")).unwrap();
+        let tracked = |f: &Path| f.ends_with(".claude/skills/devstack");
+        install_into(&stack, &file, std::slice::from_ref(&agents), &tracked).unwrap();
+        assert!(agents.join("devstack/SKILL.md").is_file());
+        assert!(agents.join("devstack/.gitignore").is_file());
+        assert_eq!(
+            std::fs::read_to_string(claude.join("SKILL.md")).unwrap(),
+            old
+        );
+        install_into(&stack, &file, &[], &|_| false).unwrap();
+        assert!(outdated(&file).is_empty(), "{:?}", outdated(&file));
     }
 }

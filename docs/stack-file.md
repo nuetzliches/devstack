@@ -952,7 +952,11 @@ skills = [".claude/skills", ".agents/skills"]   # default: [".claude/skills"]
 ```
 
 `skills` names the folders `devstack skills install` writes the generated
-agent skills to, relative to the stack file. Claude Code reads
+agent skills to, relative to the stack file. The skills are local to the
+working tree ([ADR-0079](adr/0079-skills-local-to-a-working-tree.md)):
+each folder holds a `.gitignore` that ignores it, so they are not
+committed; the hub writes them, for the agents switched on on its Skills
+page, into those agents' folders, whatever this key names. Claude Code reads
 `.claude/skills` only, Codex `.agents/skills` only; Copilot, Cursor,
 Gemini CLI, OpenCode, Amp and Windsurf read `.agents/skills`, most of them
 `.claude/skills` too, and then find each skill twice: name both only when

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 // Skills (ADR-0074, ADR-0077): the skill sets this machine's pools hand out,
-// installed into the user skill folders of the coding agents switched on.
+// installed into the user skill folders of the coding agents switched on; a
+// skill bound to repositories (ADR-0079) into the agents' folders in the
+// working trees of those repositories instead, ignored by git.
 // A set is used once accepted; each of its skills can be switched off (on
 // by default, a skill the set gains later too), a group at once. Its updates
 // come at once or wait, as chosen per set. The hub writes only what it
@@ -93,7 +95,7 @@ const shown = computed(() => filtered(all.value, filter.value));
 const statusCounts = computed(() => counts(all.value));
 const groupList = computed(() => groups(all.value));
 const filterOn = computed(() => !!(filter.value.text || filter.value.group !== null || filter.value.status));
-const statusOrder: SkillStatus[] = ['installed', 'pending', 'off', 'conflict', 'not-installed', 'not-accepted'];
+const statusOrder: SkillStatus[] = ['installed', 'pending', 'off', 'conflict', 'elsewhere', 'not-installed', 'not-accepted'];
 const expanded = ref<Set<string>>(new Set());
 function expand(key: string) {
   const s = new Set(expanded.value);
@@ -151,6 +153,7 @@ const statusClass: Record<SkillStatus, string> = {
   pending: 'warn-text',
   off: 'faint',
   conflict: 'warn-text',
+  elsewhere: 'faint',
   'not-installed': 'faint',
   'not-accepted': 'faint',
 };
@@ -163,7 +166,8 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
       <div>
         <h1>Skills</h1>
         <p class="subtitle">
-          Skill sets your pools hand out, installed into the user skill folders of the agents you switch on; nothing goes into a repository. A skill of your own
+          Skill sets your pools hand out, installed into the user skill folders of the agents you switch on. A skill bound to repositories goes into the
+          agents' folders in their working trees instead, where it ignores itself: git never sees it, and no file of a repository changes. A skill of your own
           of the same name, or one you changed, is left as it is. An agent sees a new or removed skill in its next session.
         </p>
       </div>
@@ -190,7 +194,7 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
               :key="a.id"
               class="agent"
               :class="{ on: a.enabled }"
-              :title="a.dir"
+              :title="a.project ? `${a.dir}; in a working tree: ${a.project}` : a.dir"
               data-testid="skills-agent"
               :data-id="a.id"
             >
@@ -198,6 +202,7 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
               <span class="agent-text">
                 <strong>{{ a.name }}</strong>
                 <code class="faint small">{{ a.dir }}</code>
+                <code v-if="a.project" class="faint small">{{ a.project }}</code>
               </span>
             </label>
           </div>
@@ -207,7 +212,7 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
       <p v-if="!state.sets.length" class="muted" data-testid="skills-no-sets">Your pools hand out no skill sets.</p>
 
       <div v-if="all.length" class="filters" data-testid="skills-filters">
-        <input v-model="filter.text" class="input search" type="search" placeholder="Search name, description, tag" spellcheck="false" data-testid="skills-search" />
+        <input v-model="filter.text" class="input search" type="search" placeholder="Search name, description, tag, repository" spellcheck="false" data-testid="skills-search" />
         <div class="chips">
           <button
             v-for="st in statusOrder.filter((x) => statusCounts[x])"
@@ -324,6 +329,13 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
                   </button>
                   <span class="desc faint small" :title="r.skill.description">{{ r.skill.description }}</span>
                   <span v-for="t in r.skill.tags ?? []" :key="t" class="pill sm outline tag">{{ t }}</span>
+                  <span
+                    v-if="r.skill.repos?.length"
+                    class="pill sm outline bound"
+                    :title="`Only in the working trees of ${r.skill.repos.join(', ')}`"
+                    data-testid="skills-skill-repos"
+                    >only {{ r.skill.repos.join(', ') }}</span
+                  >
                   <span v-if="s.state === 'accepted'" class="status small" :class="statusClass[r.status]">
                     <Icon v-if="r.status === 'installed'" name="check" :size="12" /> {{ STATUS_LABEL[r.status] }}
                   </span>
@@ -340,6 +352,17 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
                     <dd>{{ r.skill.updated ? new Date(r.skill.updated).toLocaleString() : 'not yet' }}</dd>
                     <dt>In</dt>
                     <dd>{{ r.skill.agents?.length ? r.skill.agents.join(', ') : 'no agent' }}</dd>
+                    <template v-if="r.skill.repos?.length">
+                      <dt>Bound to</dt>
+                      <dd>{{ r.skill.repos.join(', ') }}</dd>
+                      <dt>Working trees</dt>
+                      <dd>
+                        <template v-if="r.skill.trees?.length"
+                          ><code v-for="t in r.skill.trees" :key="t" class="tree">{{ t }}</code></template
+                        >
+                        <template v-else>none of these repositories is a stack here</template>
+                      </dd>
+                    </template>
                     <template v-if="conflictOf(r.skill)">
                       <dt>Conflict</dt>
                       <dd class="warn-text">{{ conflictOf(r.skill)?.reason }} ({{ conflictOf(r.skill)?.dir }})</dd>
@@ -539,8 +562,12 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tag {
+.tag,
+.bound {
   flex: none;
+}
+.tree {
+  display: block;
 }
 .status {
   display: inline-flex;

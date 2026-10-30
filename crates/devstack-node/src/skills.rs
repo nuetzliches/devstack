@@ -52,6 +52,109 @@ pub struct SkillSet {
     /// Whom it is given to: `*`, member ids, tags.
     #[serde(default)]
     pub to: Vec<String>,
+    /// The repositories its skills without `metadata.repos` of their own
+    /// are bound to (ADR-0079); none: no binding.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<String>,
+    /// Several folders of the source, each given to its own members
+    /// (ADR-0079); none: the source's path, given to `to`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folders: Vec<SkillFolder>,
+}
+
+/// A folder of a set's source with its own members (ADR-0079).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillFolder {
+    /// Below the source's path; `""`: the source's path itself.
+    pub path: String,
+    /// Whom its skills are given to: `*`, member ids, tags.
+    #[serde(default)]
+    pub to: Vec<String>,
+    /// The repositories its skills without `metadata.repos` are bound to.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<String>,
+}
+
+/// At most this many folders in a set.
+pub const MAX_FOLDERS: usize = 16;
+/// At most this many repositories a skill or folder is bound to.
+pub const MAX_REPOS: usize = 16;
+
+/// Whether `r` names a repository as `metadata.repos` does: `owner/name`,
+/// or more segments (`project/_git/name`), without a host.
+pub fn valid_repo(r: &str) -> bool {
+    let parts: Vec<&str> = r.split('/').collect();
+    parts.len() >= 2
+        && r.len() <= 200
+        && parts.iter().all(|p| {
+            !p.is_empty()
+                && *p != "."
+                && *p != ".."
+                && p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+        })
+}
+
+/// The path of a remote's URL, by segment: `git@github.com:acme/shop.git`,
+/// `https://github.com/acme/shop`, `ssh://git@host:22/acme/shop.git` all
+/// give `["acme", "shop"]`.
+fn url_path(url: &str) -> Vec<String> {
+    let u = url.trim().trim_end_matches('/');
+    let u = u.strip_suffix(".git").unwrap_or(u);
+    let rest = if let Some((_, r)) = u.split_once("://") {
+        // Past the host (and a port).
+        r.split_once('/').map_or("", |(_, p)| p)
+    } else if let Some((host, p)) = u.split_once(':')
+        && !host.contains('/')
+        && host.len() > 1
+    {
+        // scp-like `user@host:path`; `C:` (a drive) is a path.
+        p
+    } else {
+        u
+    };
+    rest.split(['/', '\\'])
+        .filter(|s| !s.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+/// Whether a working tree whose `origin` is `url` is one of `repos`: an
+/// entry matches the last segments of the URL's path, case aside, the host
+/// left out (ADR-0079).
+pub fn repo_matches(repos: &[String], url: &str) -> bool {
+    let path = url_path(url);
+    repos.iter().any(|r| {
+        let want: Vec<String> = r
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .map(str::to_ascii_lowercase)
+            .collect();
+        want.len() >= 2 && path.len() >= want.len() && path[path.len() - want.len()..] == want[..]
+    })
+}
+
+fn check_repos(repos: &[String]) -> Result<(), String> {
+    if repos.len() > MAX_REPOS {
+        return Err(format!("{MAX_REPOS} repositories at most"));
+    }
+    match repos.iter().find(|r| !valid_repo(r)) {
+        Some(r) => Err(format!("`{r}`: a repository is owner/name, without a host")),
+        None => Ok(()),
+    }
+}
+
+/// One folder of a set as fetched: its path below the source's, whom it is
+/// given to, its repositories.
+pub struct Part<'a> {
+    pub path: &'a str,
+    pub to: &'a [String],
+    pub repos: &'a [String],
+}
+
+fn given(to: &[String], id: &str, tags: &[String]) -> bool {
+    to.iter()
+        .any(|t| t == "*" || t == id || tags.iter().any(|x| x == t))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,17 +257,75 @@ impl SkillSet {
                 }
             }
         }
-        if self.to.len() > 256 || self.to.iter().any(|t| t.is_empty() || t.len() > 64) {
+        let to_ok =
+            |to: &[String]| to.len() <= 256 && to.iter().all(|t| !t.is_empty() && t.len() <= 64);
+        if !to_ok(&self.to) {
             return Err("`to` names 1 to 64 characters each, 256 at most".into());
+        }
+        check_repos(&self.repos)?;
+        if self.folders.len() > MAX_FOLDERS {
+            return Err(format!("a set has {MAX_FOLDERS} folders at most"));
+        }
+        if !self.folders.is_empty() && !(self.to.is_empty() && self.repos.is_empty()) {
+            return Err("a set with folders names `to` and `repos` per folder".into());
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for f in &self.folders {
+            let p = f.path.trim_matches('/');
+            if !relative(p) {
+                return Err(format!(
+                    "`{}`: a folder of the source, without `..`",
+                    f.path
+                ));
+            }
+            if !seen.insert(p) {
+                return Err(format!("`{p}`: a folder named twice"));
+            }
+            if !to_ok(&f.to) {
+                return Err(format!(
+                    "`{p}`: `to` names 1 to 64 characters each, 256 at most"
+                ));
+            }
+            check_repos(&f.repos)?;
         }
         Ok(())
     }
 
-    /// Whether the member `id` with `tags` gets it.
+    /// Its folders: the ones it names, else the source's path given to `to`.
+    pub fn parts(&self) -> Vec<Part<'_>> {
+        if self.folders.is_empty() {
+            vec![Part {
+                path: "",
+                to: &self.to,
+                repos: &self.repos,
+            }]
+        } else {
+            self.folders
+                .iter()
+                .map(|f| Part {
+                    path: f.path.trim_matches('/'),
+                    to: &f.to,
+                    repos: &f.repos,
+                })
+                .collect()
+        }
+    }
+
+    /// Whether the member `id` with `tags` gets it, or a folder of it.
     pub fn given_to(&self, id: &str, tags: &[String]) -> bool {
-        self.to
-            .iter()
-            .any(|t| t == "*" || t == id || tags.iter().any(|x| x == t))
+        self.parts().iter().any(|p| given(p.to, id, tags))
+    }
+
+    /// Whether the member gets the skills of the folder `folder` (`None`:
+    /// a set of one folder).
+    pub fn folder_given_to(&self, folder: Option<&str>, id: &str, tags: &[String]) -> bool {
+        match folder {
+            None => self.folders.is_empty() && given(&self.to, id, tags),
+            Some(f) => self
+                .folders
+                .iter()
+                .any(|x| x.path.trim_matches('/') == f && given(&x.to, id, tags)),
+        }
     }
 }
 
@@ -183,6 +344,13 @@ pub struct SkillEntry {
     /// `metadata.tags` of its frontmatter.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// The repositories it is bound to (ADR-0079): `metadata.repos` of its
+    /// frontmatter, else its folder's; none: every repository.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<String>,
+    /// The folder of the set it is from, for a set of several folders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
 }
 
 /// A set as its members read it: what the last fetch that worked found,
@@ -300,13 +468,31 @@ pub fn manifest(dir: &Path, s: &SkillSet) -> SetManifest {
         })
 }
 
-/// The sets given to the member `id` with `tags`, as last fetched.
+/// The sets given to the member `id` with `tags`, as last fetched: of a set
+/// of several folders, the skills of the folders given to it.
 pub fn for_member(dir: &Path, id: &str, tags: &[String]) -> Vec<SetManifest> {
     load(dir)
         .iter()
         .filter(|s| s.given_to(id, tags))
-        .map(|s| manifest(dir, s))
+        .map(|s| {
+            let mut m = manifest(dir, s);
+            m.skills
+                .retain(|k| s.folder_given_to(k.folder.as_deref(), id, tags));
+            m
+        })
         .collect()
+}
+
+/// Whether the member gets the skill `skill` of the set `set` as last
+/// fetched: the set and the skill's folder are given to it.
+pub fn skill_given_to(dir: &Path, set: &str, skill: &str, id: &str, tags: &[String]) -> bool {
+    load(dir).iter().any(|s| {
+        s.name == set
+            && manifest(dir, s)
+                .skills
+                .iter()
+                .any(|k| k.name == skill && s.folder_given_to(k.folder.as_deref(), id, tags))
+    })
 }
 
 /// Every set with its state.
@@ -354,15 +540,38 @@ pub fn refresh(dir: &Path, s: &SkillSet) -> SetManifest {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     let old = manifest(dir, s);
-    let fetched = match &s.source {
+    let below = |base: &str, p: &str| {
+        [base.trim_matches('/'), p]
+            .iter()
+            .filter(|x| !x.is_empty())
+            .copied()
+            .collect::<Vec<_>>()
+            .join("/")
+    };
+    let fetched: Result<(Vec<Fetched>, Option<String>), String> = match &s.source {
         Source::Github {
             repo,
             reference,
             path,
-        } => fetch_github(repo, reference, path),
-        Source::Folder { path } => {
-            read_folder(&dir.join(SOURCES).join(path.trim_matches('/'))).map(|f| (f, None))
-        }
+        } => fetch_github(repo, reference).and_then(|bytes| {
+            let mut commit = None;
+            let mut all = Vec::new();
+            for p in s.parts() {
+                let (found, c) = from_github_archive(&bytes, &below(path, p.path))?;
+                commit = commit.or(c);
+                all.push(fetched_part(s, &p, found));
+            }
+            Ok((all, commit))
+        }),
+        Source::Folder { path } => s
+            .parts()
+            .iter()
+            .map(|p| {
+                read_folder(&dir.join(SOURCES).join(below(path, p.path)))
+                    .map(|found| fetched_part(s, p, found))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|all| (all, None)),
     };
     let target = cache(dir, &s.name);
     let m = match fetched
@@ -393,11 +602,27 @@ pub fn refresh(dir: &Path, s: &SkillSet) -> SetManifest {
     m
 }
 
+/// The skills one folder of a set holds: the folder (`None` for a set of
+/// one), its repositories, its skill folders.
+struct Fetched {
+    folder: Option<String>,
+    repos: Vec<String>,
+    found: Found,
+}
+
+fn fetched_part(s: &SkillSet, p: &Part<'_>, found: Found) -> Fetched {
+    Fetched {
+        folder: (!s.folders.is_empty()).then(|| p.path.to_string()),
+        repos: p.repos.to_vec(),
+        found,
+    }
+}
+
 fn pack(
     target: &Path,
     set: &str,
     source: &str,
-    found: Found,
+    parts: Vec<Fetched>,
     commit: Option<String>,
     now: u64,
 ) -> Result<SetManifest, String> {
@@ -408,31 +633,64 @@ fn pack(
         commit,
         ..Default::default()
     };
-    let mut archives = Vec::new();
-    for (folder, files) in found {
-        match skill(&folder, &files) {
-            Ok(front) => {
-                let bytes = tar_gz(&files).map_err(|e| format!("{folder}: {e}"))?;
-                if bytes.len() as u64 > MAX_ARCHIVE {
-                    m.skipped.push(format!(
-                        "{folder}: its archive is over {} MiB",
-                        MAX_ARCHIVE >> 20
-                    ));
-                    continue;
-                }
-                m.skills.push(SkillEntry {
-                    name: folder.clone(),
-                    description: front.description,
-                    sha256: hex(&Sha256::digest(&bytes)),
-                    size: bytes.len() as u64,
-                    group: front.group,
-                    tags: front.tags,
-                });
-                archives.push((folder, bytes));
-            }
-            Err(e) => m.skipped.push(format!("{folder}: {e}")),
+    // A skill name in two folders: neither is handed out.
+    let mut count: BTreeMap<&str, usize> = BTreeMap::new();
+    for p in &parts {
+        for name in p.found.keys() {
+            *count.entry(name).or_default() += 1;
         }
     }
+    let twice: Vec<String> = count
+        .into_iter()
+        .filter(|(_, n)| *n > 1)
+        .map(|(k, _)| k.to_string())
+        .collect();
+    let mut archives = Vec::new();
+    for p in parts {
+        let at = |folder: &str| match &p.folder {
+            Some(f) if !f.is_empty() => format!("{f}/{folder}"),
+            _ => folder.to_string(),
+        };
+        for (folder, files) in p.found {
+            if twice.contains(&folder) {
+                m.skipped.push(format!(
+                    "{}: a skill of this name is in another folder of the set too",
+                    at(&folder)
+                ));
+                continue;
+            }
+            match skill(&folder, &files) {
+                Ok(front) => {
+                    let bytes = tar_gz(&files).map_err(|e| format!("{}: {e}", at(&folder)))?;
+                    if bytes.len() as u64 > MAX_ARCHIVE {
+                        m.skipped.push(format!(
+                            "{}: its archive is over {} MiB",
+                            at(&folder),
+                            MAX_ARCHIVE >> 20
+                        ));
+                        continue;
+                    }
+                    m.skills.push(SkillEntry {
+                        name: folder.clone(),
+                        description: front.description,
+                        sha256: hex(&Sha256::digest(&bytes)),
+                        size: bytes.len() as u64,
+                        group: front.group,
+                        tags: front.tags,
+                        repos: if front.repos.is_empty() {
+                            p.repos.clone()
+                        } else {
+                            front.repos
+                        },
+                        folder: p.folder.clone(),
+                    });
+                    archives.push((folder, bytes));
+                }
+                Err(e) => m.skipped.push(format!("{}: {e}", at(&folder))),
+            }
+        }
+    }
+    m.skills.sort_by(|a, b| a.name.cmp(&b.name));
     if m.skills.is_empty() && !m.skipped.is_empty() {
         return Err(format!(
             "no skill there to hand out: {}",
@@ -502,6 +760,9 @@ pub struct Front {
     pub description: String,
     pub group: Option<String>,
     pub tags: Vec<String>,
+    /// `metadata.repos`: the repositories it is bound to (ADR-0079), the
+    /// ones not of the form `owner/name` left out.
+    pub repos: Vec<String>,
 }
 
 /// The frontmatter of a `SKILL.md`.
@@ -520,7 +781,7 @@ pub fn frontmatter(md: &str) -> Result<Front, String> {
         return Err("SKILL.md starts without frontmatter (`---`)".into());
     }
     let (mut name, mut description) = (None, None);
-    let (mut group, mut tags) = (None, Vec::new());
+    let (mut group, mut tags, mut repos) = (None, Vec::new(), Vec::new());
     let mut block = Block::None;
     let list = |v: &str| -> Vec<String> {
         v.trim_start_matches('[')
@@ -547,8 +808,10 @@ pub fn frontmatter(md: &str) -> Result<Front, String> {
             Block::Metadata(last) if indented => {
                 let t = l.trim();
                 if let Some(item) = t.strip_prefix("- ") {
-                    if last == "tags" {
-                        tags.push(unquote(item));
+                    match last.as_str() {
+                        "tags" => tags.push(unquote(item)),
+                        "repos" => repos.push(unquote(item)),
+                        _ => {}
                     }
                 } else if let Some((k, v)) = t.split_once(':') {
                     let (k, v) = (k.trim(), v.trim());
@@ -556,6 +819,7 @@ pub fn frontmatter(md: &str) -> Result<Front, String> {
                     match k {
                         "group" if !v.is_empty() => group = Some(unquote(v)),
                         "tags" if !v.is_empty() => tags = list(v),
+                        "repos" if !v.is_empty() => repos = list(v),
                         _ => {}
                     }
                 }
@@ -584,11 +848,14 @@ pub fn frontmatter(md: &str) -> Result<Front, String> {
     let group = group.filter(|g| !g.is_empty() && g.chars().count() <= 48);
     tags.retain(|t| t.chars().count() <= 32);
     tags.truncate(16);
+    repos.retain(|r| valid_repo(r));
+    repos.truncate(MAX_REPOS);
     Ok(Front {
         name: name.ok_or("SKILL.md names no `name`")?,
         description: description.ok_or("SKILL.md has no `description`")?,
         group,
         tags,
+        repos,
     })
 }
 
@@ -765,11 +1032,8 @@ fn github_api() -> String {
     std::env::var("DEVSTACK_SKILLS_GITHUB_API").unwrap_or_else(|_| "https://api.github.com".into())
 }
 
-fn fetch_github(
-    repo: &str,
-    reference: &str,
-    path: &str,
-) -> Result<(Found, Option<String>), String> {
+/// The repository's archive at `reference`.
+fn fetch_github(repo: &str, reference: &str) -> Result<Vec<u8>, String> {
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(120)))
         .http_status_as_error(false)
@@ -799,13 +1063,11 @@ fn fetch_github(
             s => format!("GitHub answered {s}"),
         });
     }
-    let bytes = res
-        .body_mut()
+    res.body_mut()
         .with_config()
         .limit(MAX_SOURCE)
         .read_to_vec()
-        .map_err(|e| format!("GitHub: {e}"))?;
-    from_github_archive(&bytes, path)
+        .map_err(|e| format!("GitHub: {e}"))
 }
 
 /// The secret a refresh is signed with, if the coordinator takes one.
@@ -854,6 +1116,8 @@ mod tests {
             name: "core".into(),
             source: Source::Folder { path: path.into() },
             to: vec!["*".into()],
+            repos: Vec::new(),
+            folders: Vec::new(),
         }
     }
 
@@ -895,6 +1159,117 @@ mod tests {
         assert_eq!(f.tags, ["time", "linear"]);
         assert_eq!(f.group.as_deref(), Some("Time"));
         assert_eq!(f.description, "d");
+    }
+
+    #[test]
+    fn metadata_binds_a_skill_to_repositories() {
+        let f = frontmatter(
+            "---\nname: a\ndescription: d\nmetadata:\n  repos: [acme/shop, \"https://x/y\", org/proj/_git/app]\n---\n",
+        )
+        .unwrap();
+        assert_eq!(f.repos, ["acme/shop", "org/proj/_git/app"]);
+        let f = frontmatter(
+            "---\nname: a\ndescription: d\nmetadata:\n  repos:\n    - Acme/Shop\n---\n",
+        )
+        .unwrap();
+        assert_eq!(f.repos, ["Acme/Shop"]);
+    }
+
+    #[test]
+    fn a_repository_matches_its_origin_in_every_form() {
+        let r = vec!["Acme/Shop".to_string()];
+        for url in [
+            "git@github.com:acme/shop.git",
+            "https://github.com/acme/shop",
+            "https://github.com/acme/shop.git/",
+            "ssh://git@git.example:2222/acme/shop.git",
+            "https://gitlab.example/group/acme/shop",
+        ] {
+            assert!(repo_matches(&r, url), "{url}");
+        }
+        for url in [
+            "git@github.com:acme/shopping.git",
+            "https://github.com/other/shop",
+            "https://github.com/shop",
+            "",
+        ] {
+            assert!(!repo_matches(&r, url), "{url}");
+        }
+        assert!(repo_matches(
+            &["proj/_git/app".to_string()],
+            "https://dev.azure.com/org/proj/_git/app"
+        ));
+        assert!(!repo_matches(&["shop".to_string()], "git@h:acme/shop.git"));
+    }
+
+    #[test]
+    fn a_set_of_folders_gives_each_its_members() {
+        let mut s = set("core");
+        s.folders = vec![
+            SkillFolder {
+                path: "".into(),
+                to: vec!["*".into()],
+                repos: Vec::new(),
+            },
+            SkillFolder {
+                path: "projects/shop/".into(),
+                to: vec!["shop".into()],
+                repos: vec!["acme/shop".into()],
+            },
+        ];
+        s.to = Vec::new();
+        assert!(s.check().is_ok());
+        assert!(s.folder_given_to(Some(""), "x", &[]));
+        assert!(!s.folder_given_to(Some("projects/shop"), "x", &[]));
+        assert!(s.folder_given_to(Some("projects/shop"), "x", &["shop".into()]));
+        assert!(!s.folder_given_to(None, "x", &[]), "a skill of no folder");
+        s.to = vec!["*".into()];
+        assert!(s.check().is_err(), "`to` goes per folder");
+        s.to = Vec::new();
+        s.folders[1].path = "../x".into();
+        assert!(s.check().is_err());
+        s.folders[1].path = "".into();
+        assert!(s.check().is_err(), "a folder twice");
+    }
+
+    #[test]
+    fn a_skill_in_two_folders_is_handed_out_from_neither() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join(SOURCES).join("core");
+        write(&src, "a/SKILL.md", "---\nname: a\ndescription: d\n---\n");
+        write(&src, "b/SKILL.md", "---\nname: b\ndescription: d\n---\n");
+        write(
+            &src,
+            "p/shop/a/SKILL.md",
+            "---\nname: a\ndescription: d\n---\n",
+        );
+        write(
+            &src,
+            "p/shop/page/SKILL.md",
+            "---\nname: page\ndescription: d\nmetadata:\n  repos: [acme/web]\n---\n",
+        );
+        let mut s = set("core");
+        s.to = Vec::new();
+        s.folders = vec![
+            SkillFolder {
+                path: "".into(),
+                to: vec!["*".into()],
+                repos: Vec::new(),
+            },
+            SkillFolder {
+                path: "p/shop".into(),
+                to: vec!["shop".into()],
+                repos: vec!["acme/shop".into()],
+            },
+        ];
+        let m = refresh(dir.path(), &s);
+        let names: Vec<&str> = m.skills.iter().map(|k| k.name.as_str()).collect();
+        assert_eq!(names, ["b", "page"], "{:?}", m.skipped);
+        // Its own `metadata.repos` before its folder's.
+        assert_eq!(m.skills[1].repos, ["acme/web"]);
+        assert_eq!(m.skills[1].folder.as_deref(), Some("p/shop"));
+        assert_eq!(m.skills[0].folder.as_deref(), Some(""));
+        assert_eq!(m.skipped.len(), 3, "{:?}", m.skipped);
     }
 
     #[test]

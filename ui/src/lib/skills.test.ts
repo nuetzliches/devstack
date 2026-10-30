@@ -46,6 +46,18 @@ describe('the skills list', () => {
     expect(names({ status: 'off' })).toEqual(['biz']);
   });
 
+  it('tells a skill bound to repositories that are no stack here', () => {
+    const bound = (trees: string[], installed: boolean): PoolSkillsState => ({
+      ...state,
+      conflicts: [],
+      sets: [{ ...state.sets[0], skills: [{ name: 'shop-page', description: 'd', sha256: 'f', installed, pending: false, enabled: true, repos: ['acme/shop'], trees }] }],
+    });
+    expect(rows(bound([], false))[0].status).toBe('elsewhere');
+    expect(rows(bound(['/src/shop'], true))[0].status).toBe('installed');
+    expect(rows(bound(['/src/shop'], false))[0].status).toBe('not-installed');
+    expect(filtered(rows(bound([], false)), { ...NO_FILTER, text: 'acme/' }).length).toBe(1);
+  });
+
   it('lists the groups, the skills without one last', () => {
     expect(groups(rows(state))).toEqual(['Dev', 'Business', '']);
   });

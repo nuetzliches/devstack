@@ -146,6 +146,21 @@ fn git_with(
 }
 
 /// The repository's git directory shared by its worktrees.
+/// The URL of the remote `origin` of the working tree `tree`, if it has one.
+pub(crate) fn origin(tree: &Path) -> Option<String> {
+    git(tree, &["remote", "get-url", "origin"], LOCAL)
+        .ok()
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty())
+}
+
+/// Whether git tracks a file at or below `rel` in the working tree `tree`
+/// (ADR-0079: what devstack writes there must not be one).
+pub(crate) fn tracked(tree: &Path, rel: &Path) -> bool {
+    git(tree, &["ls-files", "--", &rel.to_string_lossy()], LOCAL)
+        .is_ok_and(|o| !o.trim().is_empty())
+}
+
 pub(crate) fn common_dir(repo: &Path) -> Result<PathBuf, String> {
     let d = git(repo, &["rev-parse", "--git-common-dir"], LOCAL)?;
     Ok(repo.join(d.trim()))

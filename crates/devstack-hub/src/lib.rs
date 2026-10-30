@@ -452,8 +452,10 @@ pub fn serve() -> Result<(), String> {
         // The pools, followed over their coordinators' streams (ADR-0073):
         // their guest lanes and MCP upstreams (ADR-0069 option B).
         poolfeed::start(state.upstreams.clone(), state.skills.clone());
-        // Every stack's worktrees, its daemon running or not (ADR-0078).
+        // Every stack's worktrees, its daemon running or not (ADR-0078),
+        // and the skills local to them (ADR-0079).
         worktrees::start();
+        poolskills::follow(state.skills.clone());
         tray::start_quietly();
         let app = router(state);
         if let Some(v6) = v6 {

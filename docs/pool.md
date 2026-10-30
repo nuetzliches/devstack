@@ -661,8 +661,9 @@ A pool can hand its members agent skills
 folders with a `SKILL.md`, from a GitHub repository or a folder on the
 coordinator, which each member's hub installs into the user skill folders of
 the coding agents on the machine (`~/.claude/skills`, `~/.agents/skills`,
-`~/.config/opencode/skills`, ...). Nothing goes into a repository. An admin
-names the sets:
+`~/.config/opencode/skills`, ...). A skill bound to repositories goes into
+their working trees instead (see below); no file of a repository changes.
+An admin names the sets:
 
 ```bash
 devstack pool skills add core --github example-org/skills --path skills --to '*'
@@ -696,8 +697,7 @@ status` and `sync` do the same from a terminal.
 Each skill of an accepted set can be switched off, and a group of them at
 once ([ADR-0077](adr/0077-a-sets-skills-are-grouped-and-switched-one-by-one.md));
 all are on when a set is accepted, a skill the set gains later too. Who
-gets a set is still the set's `--to`: split a repository into sets by
-`--path` where some skills are not for everyone. Within a set, a skill
+gets a skill is the set's `--to`, or its folder's. Within a set, a skill
 names its group and tags in its frontmatter, for the page's grouping and
 filters:
 
@@ -710,6 +710,42 @@ metadata:
   tags: [git, tracker]
 ---
 ```
+
+### A project's skills
+
+A project's skills ("add a page", "add a grid") have generic triggers and
+content only one codebase fits. Two things keep them where they belong
+([ADR-0079](adr/0079-skills-local-to-a-working-tree.md)):
+
+- **Folders with their own members.** One set can name several folders of
+  its source, each with its own `--to` (one `--to`, and `--repos` or none,
+  per `--path`, in their order); a member reads and downloads only the
+  skills of its folders:
+
+  ```bash
+  devstack pool skills add team --github example-org/team-skills \
+    --path skills --to '*' \
+    --path projects/shop/skills --to shop-team --repos - --repos example-org/shop
+  ```
+
+- **A binding to repositories.** A skill with `metadata.repos` (or of a
+  folder with `--repos`) goes into no user folder: the member's hub writes
+  it into the skill folders of the agents switched on in each working tree
+  whose `origin` is one of those repositories (`.claude/skills` for Claude
+  Code, `.agents/skills` for most others), its worktrees too. Each such
+  folder holds a `.gitignore` that ignores it, so git never sees it; a file
+  git tracks there is never written. An entry matches the last segments of
+  the `origin` URL, case and host aside:
+
+  ```yaml
+  metadata:
+    repos: [example-org/shop]
+  ```
+
+The Skills page shows a bound skill's repositories and the working trees it
+is in; *no working tree here* when none of them is a stack on this
+machine. devstack's own generated skills live in the same place, ignored
+the same way.
 
 ## Several pools
 

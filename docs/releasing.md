@@ -58,7 +58,8 @@ On a branch `chore/X.Y.Z` from `main`:
       raised, the binary built here is already `X.Y.Z`, so it writes what
       the release will:
       `cargo run -q -p devstack -- skills install` refreshes
-      `.claude/skills/devstack*`, and `devstack.toml` gets
+      `.claude/skills/devstack*` (local, ignored by git since ADR-0079;
+      nothing to commit), and `devstack.toml` gets
       `reviewed = "X.Y.Z"` in `[stack]`. Raise `requires` only when the
       file uses something new. `cargo run -q -p devstack -- check` is
       clean. Otherwise `main` lags one release behind, and the dashboard

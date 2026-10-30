@@ -1306,23 +1306,84 @@ pub fn skills(pool: &str, action: Option<crate::PoolSkillsAction>) -> Result<()>
             path,
             folder,
             to,
+            repos,
         } => {
+            let list = |s: &str| -> Vec<String> {
+                s.split(',')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty() && t != "-")
+                    .collect()
+            };
+            // One path: the source's; several: the set's folders below its top.
+            let several = path.len() > 1;
+            let top = if several {
+                String::new()
+            } else {
+                path.first().cloned().unwrap_or_default()
+            };
             let source = match (github, folder) {
                 (Some(repo), None) => Source::Github {
                     repo,
                     reference,
-                    path,
+                    path: top,
                 },
-                (None, Some(path)) => Source::Folder { path },
+                (None, Some(f)) if top.is_empty() => Source::Folder { path: f },
+                (None, Some(f)) => Source::Folder {
+                    path: format!("{}/{}", f.trim_end_matches('/'), top.trim_matches('/')),
+                },
                 _ => bail!("name a source: `--github owner/name` or `--folder <path>`"),
             };
-            let set = SkillSet {
-                name,
-                source,
-                to: to.into_iter().filter(|t| !t.trim().is_empty()).collect(),
+            let set = if several {
+                if to.len() != path.len() {
+                    bail!("with several `--path`, give one `--to` per path, in their order");
+                }
+                if !repos.is_empty() && repos.len() != path.len() {
+                    bail!("with several `--path`, give no `--repos` or one per path (`-`: none)");
+                }
+                SkillSet {
+                    name,
+                    source,
+                    to: Vec::new(),
+                    repos: Vec::new(),
+                    folders: path
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| devstack_node::skills::SkillFolder {
+                            path: p.trim_matches('/').to_string(),
+                            to: list(&to[i]),
+                            repos: repos.get(i).map(|r| list(r)).unwrap_or_default(),
+                        })
+                        .collect(),
+                }
+            } else {
+                if to.len() > 1 || repos.len() > 1 {
+                    bail!("one `--to` and one `--repos` for a set of one path (comma-separated)");
+                }
+                SkillSet {
+                    name,
+                    source,
+                    to: to.first().map_or_else(|| vec!["*".into()], |t| list(t)),
+                    repos: repos.first().map(|r| list(r)).unwrap_or_default(),
+                    folders: Vec::new(),
+                }
             };
             set.check().map_err(|e| anyhow!(e))?;
-            local.admin_skill_put(&set)?;
+            let back = local.admin_skill_put(&set)?;
+            // A coordinator before ADR-0079 drops the folders and the
+            // binding: the set is taken out again rather than handed out
+            // wider than asked.
+            let kept = back
+                .sets
+                .iter()
+                .find(|s| s.set.name == set.name)
+                .is_some_and(|s| s.set.folders == set.folders && s.set.repos == set.repos);
+            if !kept {
+                let _ = local.admin_skill_remove(&set.name);
+                bail!(
+                    "the coordinator is older and left the folders or `--repos` out, so `{}` was removed again: update the coordinator first",
+                    set.name
+                );
+            }
             println!(
                 "pool `{pool}` hands out `{}` ({}); the coordinator fetches it now, and each member's hub offers it in the dashboard",
                 set.name,
@@ -1351,12 +1412,25 @@ pub fn skills(pool: &str, action: Option<crate::PoolSkillsAction>) -> Result<()>
             }
             for s in &v.sets {
                 let m = &s.manifest;
-                println!(
-                    "{:<16} {}  to {}",
-                    s.set.name,
-                    s.set.source.label(),
-                    s.set.to.join(",")
-                );
+                if s.set.folders.is_empty() {
+                    println!(
+                        "{:<16} {}  to {}{}",
+                        s.set.name,
+                        s.set.source.label(),
+                        s.set.to.join(","),
+                        bound(&s.set.repos)
+                    );
+                } else {
+                    println!("{:<16} {}", s.set.name, s.set.source.label());
+                    for f in &s.set.folders {
+                        println!(
+                            "  folder {:<24} to {}{}",
+                            if f.path.is_empty() { "(top)" } else { &f.path },
+                            f.to.join(","),
+                            bound(&f.repos)
+                        );
+                    }
+                }
                 print_manifest(m);
             }
             if !v.github_token {
@@ -1385,12 +1459,21 @@ pub fn skills(pool: &str, action: Option<crate::PoolSkillsAction>) -> Result<()>
     Ok(())
 }
 
+/// `  (only in acme/shop)` for a binding (ADR-0079), else nothing.
+fn bound(repos: &[String]) -> String {
+    if repos.is_empty() {
+        String::new()
+    } else {
+        format!("  (only in {})", repos.join(", "))
+    }
+}
+
 fn print_manifest(m: &devstack_node::skills::SetManifest) {
     if let Some(e) = &m.error {
         println!("  last fetch failed: {e}");
     }
     for k in &m.skills {
-        println!("  {:<24} {}", k.name, k.description);
+        println!("  {:<24} {}{}", k.name, k.description, bound(&k.repos));
     }
     for k in &m.skipped {
         println!("  left out: {k}");

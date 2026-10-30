@@ -93,9 +93,9 @@ class MockHub {
   /** The pool's skill sets on this machine (ADR-0074): one accepted, one offered. */
   poolSkillState: PoolSkillsState = {
     agents: [
-      { id: 'claude-code', name: 'Claude Code', dir: '~/.claude/skills', enabled: true },
-      { id: 'codex', name: 'Codex', dir: '~/.agents/skills', enabled: false },
-      { id: 'opencode', name: 'OpenCode', dir: '~/.config/opencode/skills', enabled: false },
+      { id: 'claude-code', name: 'Claude Code', dir: '~/.claude/skills', project: '.claude/skills', enabled: true },
+      { id: 'codex', name: 'Codex', dir: '~/.agents/skills', project: '.agents/skills', enabled: false },
+      { id: 'opencode', name: 'OpenCode', dir: '~/.config/opencode/skills', project: '.agents/skills', enabled: false },
     ],
     sets: [
       {
@@ -112,6 +112,9 @@ class MockHub {
           { name: 'timetrack', description: 'Book time entries from the commits of a day', sha256: 'cc33', installed: true, pending: false, enabled: true, group: 'Time', updated: Date.now() - 600_000, agents: ['Claude Code'] },
           { name: 'idea-validate', description: 'Validate a business idea in six phases, as an HTML report', sha256: 'dd44', installed: false, pending: false, enabled: false, group: 'Business', tags: ['html'] },
           { name: 'idea-overview', description: 'A one-page overview of a business idea', sha256: 'ee55', installed: false, pending: false, enabled: false, group: 'Business', tags: ['html'] },
+          // Bound to a repository (ADR-0079): in the working trees of shop only; crm's is no stack here.
+          { name: 'shop-page', description: 'Scaffold a page of the shop with its router and store', sha256: 'ab12', installed: true, pending: false, enabled: true, group: 'Shop', updated: Date.now() - 1_800_000, agents: ['Claude Code'], repos: ['example-org/shop'], trees: ['~/src/shop', '~/src/shop-feat-cart'] },
+          { name: 'crm-report', description: 'Add a report to the CRM', sha256: 'cd34', installed: false, pending: false, enabled: true, group: 'CRM', repos: ['example-org/crm-legacy'] },
         ],
       },
       {
@@ -132,8 +135,10 @@ class MockHub {
       for (const k of s.skills) {
         const want = s.state === 'accepted' && k.enabled !== false ? on : [];
         if (want.join() !== (k.agents ?? []).join() && want.length) k.updated = Date.now();
-        k.agents = want;
-        k.installed = want.length > 0 && !k.pending;
+        // A bound skill whose repositories are no stack here goes nowhere.
+        const nowhere = !!k.repos?.length && !k.trees?.length;
+        k.agents = nowhere ? [] : want;
+        k.installed = !nowhere && want.length > 0 && !k.pending;
       }
   }
   poolSkills: PoolSkillsAdmin = {
@@ -143,6 +148,24 @@ class MockHub {
         source: { kind: 'github', repo: 'example-org/skills', ref: 'main', path: 'skills' },
         to: ['*'],
         manifest: { source: 'github:example-org/skills@main/skills', fetched: Math.floor(Date.now() / 1000) - 600, commit: 'a1b2c3d', skills: [{ name: 'work-issue', description: '' }, { name: 'push-tag', description: '' }] },
+      },
+      {
+        name: 'team',
+        source: { kind: 'github', repo: 'example-org/team-skills', ref: 'main', path: '' },
+        to: [],
+        folders: [
+          { path: 'skills', to: ['*'] },
+          { path: 'projects/shop/skills', to: ['shop'], repos: ['example-org/shop'] },
+        ],
+        manifest: {
+          source: 'github:example-org/team-skills@main',
+          fetched: Math.floor(Date.now() / 1000) - 900,
+          commit: 'e4f5a6b',
+          skills: [
+            { name: 'review-pr', description: '', folder: 'skills' },
+            { name: 'shop-page', description: '', folder: 'projects/shop/skills', repos: ['example-org/shop'] },
+          ],
+        },
       },
     ],
     github_token: true,

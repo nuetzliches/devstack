@@ -1,5 +1,8 @@
 //! The skill sets this machine's pools hand out, installed into the coding
-//! agents' user skill folders (ADR-0074).
+//! agents' user skill folders (ADR-0074); a skill bound to repositories
+//! (`metadata.repos`, ADR-0079) into the agents' skill folders of the
+//! working trees of those repositories instead, each folder it writes
+//! there ignored by a `.gitignore` of its own.
 //!
 //! - A set is used only once its user accepted it, from the source it names
 //!   then; a set whose source changed is offered again. Its updates come at
@@ -44,6 +47,24 @@ pub struct Decision {
     /// one the set gains later too.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub off: BTreeSet<String>,
+}
+
+/// A working tree the hub follows (ADR-0078), and the URL of its `origin`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tree {
+    pub root: PathBuf,
+    pub origin: Option<String>,
+}
+
+/// A folder a skill goes to: an agent's user folder, or (a skill bound to
+/// repositories) an agent's folder in a working tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Place {
+    dir: PathBuf,
+    /// The working tree it is in.
+    tree: Option<PathBuf>,
+    /// The agents switched on that read it.
+    agents: Vec<String>,
 }
 
 /// A skill the hub installed.
@@ -95,6 +116,12 @@ pub struct SkillView {
     pub updated: Option<u128>,
     /// The agents whose folder holds it as the set has it.
     pub agents: Vec<String>,
+    /// The repositories it is bound to (ADR-0079); none: every one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<String>,
+    /// The working trees it is in as the set has it (a bound skill).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub trees: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -121,6 +148,10 @@ pub struct AgentView {
     pub id: String,
     pub name: String,
     pub dir: String,
+    /// Its folder in a working tree, for the skills bound to repositories
+    /// (ADR-0079).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     pub enabled: bool,
 }
 
@@ -152,8 +183,19 @@ type Folder = Box<dyn Fn(&devstack_skills::agents::Agent) -> Option<PathBuf> + S
 type Found = Box<dyn Fn(&devstack_skills::agents::Agent) -> bool + Send + Sync>;
 /// How a skill's archive is fetched: pool, set, skill.
 type Download = Box<dyn Fn(&str, &str, &str) -> Result<Vec<u8>, String> + Send + Sync>;
-/// What each skill name should be: pool, set, SHA-256.
-type Wanted = BTreeMap<String, (String, String, String)>;
+/// The working trees the hub follows.
+type Trees = Box<dyn Fn() -> Vec<Tree> + Send + Sync>;
+/// Whether git tracks a file at or below a path (relative) of a tree.
+type Tracked = Box<dyn Fn(&Path, &Path) -> bool + Send + Sync>;
+
+/// What a skill name should be.
+struct Want {
+    pool: String,
+    set: String,
+    sha: String,
+    repos: Vec<String>,
+}
+type Wanted = BTreeMap<String, Want>;
 
 pub struct PoolSkills {
     dir: PathBuf,
@@ -167,6 +209,10 @@ pub struct PoolSkills {
     found: Found,
     /// How a skill's archive is fetched: pool, set, skill.
     download: Download,
+    /// The working trees the hub follows, and the ones the last sync saw.
+    trees: Trees,
+    seen: Mutex<Vec<Tree>>,
+    tracked: Tracked,
 }
 
 fn now_ms() -> u128 {
@@ -209,9 +255,10 @@ pub fn tree(dir: &Path) -> Option<String> {
 }
 
 impl PoolSkills {
-    /// The hub's: the table's folders, archives from the pools.
+    /// The hub's: the table's folders, archives from the pools, the
+    /// working trees of the stacks registered here.
     pub fn open(dir: PathBuf) -> Self {
-        Self::with(
+        let mut s = Self::with(
             dir,
             Box::new(|a| a.skills_dir()),
             Box::new(|a| a.installed()),
@@ -221,7 +268,10 @@ impl PoolSkills {
                     .skill_archive(set, skill)
                     .map_err(|e| e.to_string())
             }),
-        )
+        );
+        s.trees = Box::new(registered_trees);
+        s.tracked = Box::new(crate::branches::tracked);
+        s
     }
 
     fn with(dir: PathBuf, folder: Folder, found: Found, download: Download) -> Self {
@@ -233,6 +283,9 @@ impl PoolSkills {
             folder,
             found,
             download,
+            trees: Box::new(Vec::new),
+            seen: Mutex::new(Vec::new()),
+            tracked: Box::new(|_, _| false),
         };
         s.publish();
         s
@@ -301,6 +354,7 @@ impl PoolSkills {
                     id: a.id.clone(),
                     name: a.name.clone(),
                     dir: (self.folder)(a)?.to_string_lossy().into_owned(),
+                    project: a.project.clone(),
                     enabled: s.agents.get(&a.id) == Some(&true),
                 })
             })
@@ -320,7 +374,70 @@ impl PoolSkills {
             self.save(&s)?;
         }
         self.sync();
+        self.local();
         Ok(())
+    }
+
+    /// The generated devstack skills (`devstack skills install`) in every
+    /// working tree of the stacks registered here (ADR-0079): into the
+    /// folders there of the agents switched on, and refreshed where an
+    /// earlier one is; each folder ignores itself. A skill git tracks is
+    /// left to the upgrade prompt.
+    pub fn local(&self) {
+        let s = self.settings();
+        let mut rels: Vec<&str> = Vec::new();
+        for a in devstack_skills::agents::all() {
+            if s.agents.get(&a.id) == Some(&true)
+                && let Some(p) = a.project.as_deref()
+                && !rels.contains(&p)
+            {
+                rels.push(p);
+            }
+        }
+        for e in devstack_daemon::registry::list() {
+            let rel = e
+                .file
+                .strip_prefix(&e.repo)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|_| PathBuf::from("devstack.toml"));
+            let mut roots = vec![e.repo.clone()];
+            roots.extend(
+                devstack_daemon::lanes::worktree_branches(&e.repo)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(p, _)| p)
+                    .filter(|p| !devstack_daemon::lanes::same_tree(p, &e.repo)),
+            );
+            for root in roots {
+                // A worktree without a stack file of its own runs with the
+                // main tree's (ADR-0055); its skills say so too.
+                let file = root.join(&rel);
+                let Ok(stack) = devstack_config::load(if file.is_file() { &file } else { &e.file })
+                else {
+                    continue;
+                };
+                let base = file.parent().unwrap_or(&root).to_path_buf();
+                let dirs: Vec<PathBuf> = rels
+                    .iter()
+                    .map(|r| {
+                        let mut d = base.clone();
+                        d.extend(r.split('/').filter(|p| !p.is_empty()));
+                        d
+                    })
+                    .collect();
+                let skip = |folder: &Path| {
+                    folder
+                        .strip_prefix(&root)
+                        .is_ok_and(|rel| (self.tracked)(&root, rel))
+                };
+                if let Err(err) = devstack_skills::install_into(&stack, &file, &dirs, &skip) {
+                    devstack_daemon::diag::warn(
+                        "local_skills",
+                        serde_json::json!({ "tree": root, "error": format!("{err:#}") }),
+                    );
+                }
+            }
+        }
     }
 
     fn manifest(&self, pool: &str, set: &str) -> Result<SetManifest, String> {
@@ -494,7 +611,15 @@ impl PoolSkills {
                     if want.contains_key(&k.name) {
                         twice.insert(k.name.clone());
                     } else {
-                        want.insert(k.name.clone(), (pool.clone(), m.name.clone(), sha));
+                        want.insert(
+                            k.name.clone(),
+                            Want {
+                                pool: pool.clone(),
+                                set: m.name.clone(),
+                                sha,
+                                repos: k.repos.clone(),
+                            },
+                        );
                     }
                 }
             }
@@ -543,24 +668,23 @@ impl PoolSkills {
             })
             .collect();
         let mut errors = Vec::new();
-        // The folders written to, once each.
-        let mut dirs: Vec<PathBuf> = Vec::new();
-        for a in devstack_skills::agents::all() {
-            if s.agents.get(&a.id) == Some(&true)
-                && let Some(d) = (self.folder)(a)
-                && !dirs.contains(&d)
-            {
-                dirs.push(d);
-            }
-        }
+        let trees = (self.trees)();
+        *self.seen.lock().unwrap() = trees.clone();
+        // The folders each skill goes to.
+        let places: BTreeMap<&String, Vec<Place>> = want
+            .iter()
+            .map(|(n, w)| (n, self.places(&s, &w.repos, &trees)))
+            .collect();
         // What goes: in a folder no longer written to, or no longer wanted
         // as it is there.
         let mut keep = Vec::new();
         for i in std::mem::take(&mut s.installed) {
-            let wanted_here = dirs.contains(&i.dir)
-                && want
+            let wanted_here = want
+                .get(&i.name)
+                .is_some_and(|w| w.pool == i.pool && w.set == i.set)
+                && places
                     .get(&i.name)
-                    .is_some_and(|(p, set, _)| *p == i.pool && *set == i.set);
+                    .is_some_and(|ps| ps.iter().any(|p| p.dir == i.dir));
             if wanted_here {
                 keep.push(i);
                 continue;
@@ -582,8 +706,10 @@ impl PoolSkills {
             }
         }
         s.installed = keep;
-        for dir in &dirs {
-            for (name, (pool, set, sha)) in &want {
+        for (name, w) in &want {
+            let (pool, set, sha) = (&w.pool, &w.set, &w.sha);
+            for place in &places[name] {
+                let dir = &place.dir;
                 let path = dir.join(name);
                 let mine = s
                     .installed
@@ -616,9 +742,21 @@ impl PoolSkills {
                     }
                     None => {}
                 }
+                // A file git tracks there is the repository's (ADR-0071).
+                if let Some(root) = &place.tree
+                    && let Ok(rel) = path.strip_prefix(root)
+                    && (self.tracked)(root, rel)
+                {
+                    conflicts.push(Conflict {
+                        dir: dir.to_string_lossy().into_owned(),
+                        name: name.clone(),
+                        reason: "git tracks a file of this skill in the working tree: devstack writes none of the repository's files".into(),
+                    });
+                    continue;
+                }
                 let result = self
                     .archive(pool, set, name, sha)
-                    .and_then(|bytes| install(dir, name, &bytes));
+                    .and_then(|bytes| install(dir, name, &bytes, place.tree.is_some()));
                 match result {
                     Ok(t) => {
                         s.installed.retain(|i| !(&i.dir == dir && &i.name == name));
@@ -641,6 +779,47 @@ impl PoolSkills {
         *self.last.lock().unwrap() = (conflicts, errors, Some(now_ms()));
         drop(_one);
         self.publish();
+    }
+
+    /// The folders a skill bound to `repos` goes to: the user folders of the
+    /// agents switched on, or, bound, their folders in the working trees of
+    /// those repositories. Each once, with the agents that read it.
+    fn places(&self, s: &Settings, repos: &[String], trees: &[Tree]) -> Vec<Place> {
+        let mut out: Vec<Place> = Vec::new();
+        let mut add = |dir: PathBuf, tree: Option<PathBuf>, agent: &str| match out
+            .iter_mut()
+            .find(|p| p.dir == dir)
+        {
+            Some(p) => p.agents.push(agent.to_string()),
+            None => out.push(Place {
+                dir,
+                tree,
+                agents: vec![agent.to_string()],
+            }),
+        };
+        for a in devstack_skills::agents::all() {
+            if s.agents.get(&a.id) != Some(&true) {
+                continue;
+            }
+            if repos.is_empty() {
+                if let Some(d) = (self.folder)(a) {
+                    add(d, None, &a.name);
+                }
+                continue;
+            }
+            let Some(rel) = &a.project else { continue };
+            for t in trees {
+                if t.origin
+                    .as_deref()
+                    .is_some_and(|o| devstack_node::skills::repo_matches(repos, o))
+                {
+                    let mut d = t.root.clone();
+                    d.extend(rel.split('/').filter(|p| !p.is_empty()));
+                    add(d, Some(t.root.clone()), &a.name);
+                }
+            }
+        }
+        out
     }
 
     /// Archives no set names any more go from the store.
@@ -670,11 +849,7 @@ impl PoolSkills {
         let s = self.settings();
         let lists = self.lists();
         let agents = self.agents(&s);
-        let dirs: Vec<PathBuf> = agents
-            .iter()
-            .filter(|a| a.enabled)
-            .map(|a| PathBuf::from(&a.dir))
-            .collect();
+        let trees = self.seen.lock().unwrap().clone();
         let mut sets = Vec::new();
         for (pool, ms) in &lists {
             for m in ms {
@@ -700,6 +875,7 @@ impl PoolSkills {
                         .skills
                         .iter()
                         .map(|k| {
+                            let places = self.places(&s, &k.repos, &trees);
                             let enabled = !d.is_some_and(|d| d.off.contains(&k.name));
                             let mine = |i: &&Installed| {
                                 &i.pool == pool && i.set == m.name && i.name == k.name
@@ -716,8 +892,8 @@ impl PoolSkills {
                                 sha256: k.sha256.clone(),
                                 installed: accepted
                                     && enabled
-                                    && !dirs.is_empty()
-                                    && dirs.iter().all(here),
+                                    && !places.is_empty()
+                                    && places.iter().all(|p| here(&p.dir)),
                                 pending: accepted
                                     && enabled
                                     && !auto
@@ -734,9 +910,25 @@ impl PoolSkills {
                                     .max(),
                                 agents: agents
                                     .iter()
-                                    .filter(|a| a.enabled && here(&PathBuf::from(&a.dir)))
+                                    .filter(|a| {
+                                        places
+                                            .iter()
+                                            .any(|p| p.agents.contains(&a.name) && here(&p.dir))
+                                    })
                                     .map(|a| a.name.clone())
                                     .collect(),
+                                repos: k.repos.clone(),
+                                trees: {
+                                    let mut t: Vec<String> = places
+                                        .iter()
+                                        .filter(|p| here(&p.dir))
+                                        .filter_map(|p| p.tree.as_ref())
+                                        .map(|t| t.to_string_lossy().into_owned())
+                                        .collect();
+                                    t.sort();
+                                    t.dedup();
+                                    t
+                                },
                             }
                         })
                         .collect(),
@@ -782,13 +974,22 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 /// Unpack a skill into `dir/name`: into a folder beside it first, then
-/// swapped in. The hash of what was written.
-fn install(dir: &Path, name: &str, bytes: &[u8]) -> Result<String, String> {
+/// swapped in; in a working tree (`ignored`) with a `.gitignore` that
+/// ignores the folder. The hash of what was written.
+fn install(dir: &Path, name: &str, bytes: &[u8], ignored: bool) -> Result<String, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let n = rand::random::<u32>();
     let fresh = dir.join(format!(".{name}.devstack-new-{n:08x}"));
     let old = dir.join(format!(".{name}.devstack-old-{n:08x}"));
-    if let Err(e) = devstack_node::skills::unpack(bytes, &fresh) {
+    let unpacked = devstack_node::skills::unpack(bytes, &fresh).and_then(|()| {
+        if ignored {
+            std::fs::write(fresh.join(".gitignore"), devstack_skills::IGNORE_ALL)
+                .map_err(|e| e.to_string())
+        } else {
+            Ok(())
+        }
+    });
+    if let Err(e) = unpacked {
         let _ = std::fs::remove_dir_all(&fresh);
         return Err(e);
     }
@@ -806,6 +1007,73 @@ fn install(dir: &Path, name: &str, bytes: &[u8]) -> Result<String, String> {
     }
     let _ = std::fs::remove_dir_all(&old);
     tree(&target).ok_or_else(|| format!("{}: not readable after writing", target.display()))
+}
+
+/// Keep the skills of the working trees in step (ADR-0079): when a stack is
+/// registered or forgotten, a worktree comes or goes or checks out another
+/// branch, a stack file changes, or devstack is another version, the bound
+/// skills of the pools and the generated ones are written again. Once a
+/// minute at the latest.
+pub fn follow(skills: std::sync::Arc<PoolSkills>) {
+    let _ = std::thread::Builder::new()
+        .name("tree-skills".into())
+        .spawn(move || {
+            let worktrees = crate::worktrees::subscribe();
+            let mut last: Option<(u64, std::time::Instant)> = None;
+            loop {
+                let print = {
+                    use std::hash::{Hash, Hasher};
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    worktrees.borrow().hash(&mut h);
+                    for e in devstack_daemon::registry::list() {
+                        e.file.hash(&mut h);
+                        std::fs::metadata(&e.file)
+                            .and_then(|m| m.modified())
+                            .ok()
+                            .hash(&mut h);
+                    }
+                    h.finish()
+                };
+                let due = last.is_none_or(|(p, at)| {
+                    p != print || at.elapsed() >= std::time::Duration::from_secs(60)
+                });
+                if due {
+                    skills.sync();
+                    skills.local();
+                    last = Some((print, std::time::Instant::now()));
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        });
+}
+
+/// The working trees of the stacks registered here (their main working
+/// trees and worktrees), with their `origin`, asked of git once per
+/// repository.
+fn registered_trees() -> Vec<Tree> {
+    let mut out: Vec<Tree> = Vec::new();
+    for e in devstack_daemon::registry::list() {
+        let origin = crate::branches::origin(&e.repo);
+        let mut roots = vec![e.repo.clone()];
+        roots.extend(
+            devstack_daemon::lanes::worktree_branches(&e.repo)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(p, _)| p),
+        );
+        for root in roots {
+            if !out
+                .iter()
+                .any(|t| devstack_daemon::lanes::same_tree(&t.root, &root))
+            {
+                out.push(Tree {
+                    root,
+                    origin: origin.clone(),
+                });
+            }
+        }
+    }
+    out
 }
 
 // ------------------------------------------------------------------ routes
@@ -952,10 +1220,101 @@ mod tests {
                 size: b.len() as u64,
                 group: name.starts_with("biz").then(|| "Business".to_string()),
                 tags: Vec::new(),
+                repos: if name.starts_with("shop") {
+                    vec!["acme/shop".into()]
+                } else {
+                    Vec::new()
+                },
+                folder: None,
             };
             self.archives.lock().unwrap().insert(name.into(), b);
             e
         }
+    }
+
+    #[test]
+    fn a_bound_skill_goes_into_the_working_trees_of_its_repository_only() {
+        let (st, home, wt) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        let (mut hub, pool) = hub(st.path(), home.path());
+        let (shop, lane, other) = (
+            wt.path().join("shop"),
+            wt.path().join("shop-lane"),
+            wt.path().join("blog"),
+        );
+        let tree = |root: &Path, origin: &str| Tree {
+            root: root.to_path_buf(),
+            origin: Some(origin.into()),
+        };
+        let trees = Arc::new(Mutex::new(vec![
+            tree(&shop, "git@github.com:acme/shop.git"),
+            tree(&lane, "https://github.com/Acme/Shop"),
+            tree(&other, "git@github.com:acme/blog.git"),
+        ]));
+        let t = trees.clone();
+        hub.trees = Box::new(move || t.lock().unwrap().clone());
+        let a = pool.put("work-issue", "v1");
+        let b = pool.put("shop-page", "v1");
+        hub.set_pool("default", Some(set(vec![a, b.clone()])));
+        hub.set_agent("claude-code", true).unwrap();
+        hub.set_agent("codex", true).unwrap();
+        hub.accept("default", "core", true).unwrap();
+
+        // Unbound: the user folders. Bound: the agents' folders of the
+        // working trees of acme/shop, each ignoring itself.
+        assert!(home.path().join(".claude/skills/work-issue").exists());
+        assert!(!home.path().join(".claude/skills/shop-page").exists());
+        for root in [&shop, &lane] {
+            for d in [".claude/skills", ".agents/skills"] {
+                let k = root.join(d).join("shop-page");
+                assert!(k.join("SKILL.md").exists(), "{}", k.display());
+                assert_eq!(
+                    std::fs::read_to_string(k.join(".gitignore")).unwrap(),
+                    devstack_skills::IGNORE_ALL
+                );
+            }
+            assert!(!root.join(".claude/skills/work-issue").exists());
+        }
+        assert!(!other.join(".claude").exists());
+        let v = hub.view();
+        let k = v.sets[0]
+            .skills
+            .iter()
+            .find(|k| k.name == "shop-page")
+            .unwrap();
+        assert!(k.installed, "{k:?}");
+        assert_eq!(k.repos, ["acme/shop"]);
+        assert_eq!(k.trees.len(), 2);
+        assert_eq!(k.agents, ["Claude Code", "Codex"]);
+
+        // A worktree removed: its folders are no longer the hub's.
+        trees.lock().unwrap().retain(|t| t.root != lane);
+        std::fs::remove_dir_all(&lane).unwrap();
+        hub.sync();
+        assert_eq!(hub.view().sets[0].skills[1].trees.len(), 1);
+
+        // A file git tracks there is the repository's: not written over.
+        hub.tracked = Box::new(|_, rel| rel.starts_with(".agents"));
+        std::fs::remove_dir_all(shop.join(".agents/skills/shop-page")).unwrap();
+        hub.sync();
+        assert!(!shop.join(".agents/skills/shop-page").exists());
+        assert!(
+            hub.view()
+                .conflicts
+                .iter()
+                .any(|c| c.name == "shop-page" && c.reason.contains("git tracks"))
+        );
+        hub.tracked = Box::new(|_, _| false);
+
+        // A skill bound later leaves the user folders for the working trees.
+        let mut bound = pool.put("work-issue", "v1");
+        bound.repos = vec!["acme/blog".into()];
+        hub.set_pool("default", Some(set(vec![bound, b])));
+        assert!(!home.path().join(".claude/skills/work-issue").exists());
+        assert!(other.join(".claude/skills/work-issue/SKILL.md").exists());
     }
 
     /// A hub whose agents `claude-code` and `codex` are found, with their

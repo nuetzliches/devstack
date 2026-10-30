@@ -419,15 +419,23 @@ enum PoolSkillsAction {
         /// The branch, tag or commit of `--github`.
         #[arg(long = "ref", default_value = "main")]
         reference: String,
-        /// The folder of the skills in the repository; the top by default.
-        #[arg(long, default_value = "")]
-        path: String,
+        /// The folder of the skills in the source; the top by default.
+        /// Several (ADR-0079): each its own folder of the set, below the
+        /// top, with the `--to` (and `--repos`) of the same place.
+        #[arg(long)]
+        path: Vec<String>,
         /// A folder below `skill-sources/` in the coordinator's directory.
         #[arg(long)]
         folder: Option<String>,
         /// Whom it is given to, comma-separated: `*`, member ids, tags.
-        #[arg(long, value_delimiter = ',', default_value = "*")]
+        /// With several `--path`, one per path, in their order.
+        #[arg(long)]
         to: Vec<String>,
+        /// The repositories its skills without `metadata.repos` are bound
+        /// to, comma-separated `owner/name` (ADR-0079). With several
+        /// `--path`, none or one per path (`-`: none).
+        #[arg(long)]
+        repos: Vec<String>,
     },
     /// Stop handing a set out (admins): members' hubs remove its skills.
     Remove { name: String },
@@ -1089,7 +1097,12 @@ mod tests {
         assert!(matches!(
             parse(&["pool", "skills", "add", "core", "--github", "org/skills", "--path", "skills", "--to", "team,*"]).cmd,
             Cmd::Pool { action: Some(PoolAction::Skills { action: Some(PoolSkillsAction::Add { name, github: Some(repo), reference, path, to, .. }) }), .. }
-                if name == "core" && repo == "org/skills" && reference == "main" && path == "skills" && to == ["team", "*"]
+                if name == "core" && repo == "org/skills" && reference == "main" && path == ["skills"] && to == ["team,*"]
+        ));
+        assert!(matches!(
+            parse(&["pool", "skills", "add", "team", "--github", "org/skills", "--path", "skills", "--to", "*", "--path", "projects/shop/skills", "--to", "tag:shop", "--repos", "-", "--repos", "acme/shop"]).cmd,
+            Cmd::Pool { action: Some(PoolAction::Skills { action: Some(PoolSkillsAction::Add { path, to, repos, .. }) }), .. }
+                if path == ["skills", "projects/shop/skills"] && to == ["*", "tag:shop"] && repos == ["-", "acme/shop"]
         ));
         assert!(matches!(
             parse(&["pool", "upstreams"]).cmd,
