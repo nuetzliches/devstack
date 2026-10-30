@@ -11,6 +11,7 @@ import { computed, onMounted, ref } from 'vue';
 import { api, paths } from '@/api';
 import type { PoolSkillsState, SkillSetState, SkillState } from '@/api/types';
 import { act } from '@/lib/actions';
+import { persist } from '@/lib/persist';
 import { ago, useNow } from '@/lib/format';
 import { counts, filtered, groupOf, groups, NO_FILTER, rows, setKey, STATUS_LABEL, type SkillFilter, type SkillRow, type SkillStatus } from '@/lib/skills';
 import { useHub } from '@/stores/hub';
@@ -99,6 +100,21 @@ function expand(key: string) {
   if (s.has(key)) s.delete(key);
   else s.add(key);
   expanded.value = s;
+}
+// A group folds away with a click on its heading; which ones are folded is
+// remembered in this browser. While a filter is on, every group with a match
+// shows, folded or not.
+const COLLAPSED = 'skills.collapsed';
+const collapsed = ref<Set<string>>(new Set(persist.get<string[]>(COLLAPSED) ?? []));
+const groupKey = (s: SkillSetState, g: string) => `${setKey(s)}#${g}`;
+const isCollapsed = (s: SkillSetState, g: string) => !filterOn.value && collapsed.value.has(groupKey(s, g));
+function toggleGroup(s: SkillSetState, g: string) {
+  const c = new Set(collapsed.value);
+  const k = groupKey(s, g);
+  if (c.has(k)) c.delete(k);
+  else c.add(k);
+  collapsed.value = c;
+  persist.set(COLLAPSED, [...c]);
 }
 /** A set's shown rows by group, in the groups' order, those without one last. */
 function groupsOf(s: SkillSetState) {
@@ -266,8 +282,18 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
 
           <div v-for="g in groupsOf(s)" :key="g.group || '-'" class="group" data-testid="skills-group" :data-group="g.group">
             <div v-if="grouped(s)" class="group-head">
-              <span class="group-name">{{ g.group || 'No group' }}</span>
-              <span class="faint small">{{ g.rows.length }}</span>
+              <button
+                type="button"
+                class="group-toggle"
+                :aria-expanded="!isCollapsed(s, g.group)"
+                :title="isCollapsed(s, g.group) ? 'Show the skills of the group' : 'Fold the group away'"
+                data-testid="skills-group-toggle"
+                @click="toggleGroup(s, g.group)"
+              >
+                <Icon :name="isCollapsed(s, g.group) ? 'chevronRight' : 'chevronDown'" :size="12" class="faint" />
+                <span class="group-name">{{ g.group || 'No group' }}</span>
+                <span class="faint small">{{ g.rows.length }}</span>
+              </button>
               <label v-if="s.state === 'accepted'" class="toggle small" :title="`Switch every skill of ${g.group || 'no group'} on or off`">
                 <input
                   type="checkbox"
@@ -279,7 +305,7 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
                 all on
               </label>
             </div>
-            <ul class="skill-list">
+            <ul v-if="!grouped(s) || !isCollapsed(s, g.group)" class="skill-list">
               <li v-for="r in g.rows" :key="r.key" class="skill" :class="{ off: r.status === 'off' || r.status === 'not-accepted' }" data-testid="skills-skill" :data-name="r.skill.name">
                 <div class="skill-row">
                   <input
@@ -453,6 +479,16 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
   padding: 4px 8px;
   border-radius: 6px;
   background: var(--surface-hover);
+}
+.group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
 .group-name {
   font-size: 12px;
