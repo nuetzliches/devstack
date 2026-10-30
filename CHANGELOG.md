@@ -9,7 +9,29 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-10-30
+
+The hub follows every stack's worktrees, so a new one shows in the
+sidebar at once, and a stopped stack's worktrees can be started as lanes
+straight away (ADR-0078). An MCP upstream that logs in with OAuth can carry
+an OAuth app's client secret, which GitHub's MCP server needs; a pool can
+name one for its members (ADR-0069). Lanes on nodes survive a reboot or a
+sleep of the machine that started them. Fixed: `devstack up --on` and the
+MCP tool `up` move a started lane, a lane on a node picks up edits, and the
+pool's capacity history survives a restart of the coordinator.
+
 ### Added
+
+- **An OAuth app's client secret for an MCP upstream** (ADR-0069 addendum
+  2026-10-30): GitHub's MCP server wants one even with PKCE, so an OAuth
+  upstream with a client id may carry it. The hub sends it only to the
+  token endpoint; the user's own goes into the keychain, a pool's comes
+  with its list (`devstack pool upstreams add --client-secret … --scope …`),
+  and the dashboard, the CLI and the audit log only say that one is set.
+  Both upstream forms in the dashboard gain the client secret and the
+  scopes (an edit there no longer drops the scopes). A token endpoint that
+  refuses with `200` and an `error`, as GitHub's does, is taken as a
+  refusal.
 
 - **Worktrees show at once, and a stopped stack's lanes too**
   ([ADR-0078](docs/adr/0078-the-hub-follows-every-stacks-worktrees.md)):
@@ -54,6 +76,10 @@ and listed with their assets on the
   lives an hour without renewals on a dedicated node, 15 minutes on another
   (`lease_grace_minutes` in a node's policy), and the daemon follows its
   lanes there again when it starts.
+- **The pool's capacity history survives a restart of the coordinator**
+  (ADR-0036): it keeps it in `history.json` and writes it every minute.
+  The chart puts each point at its time, so a short history fills only its
+  part of the hour or day, and a time without points stays a gap.
 
 ## [0.30.0] - 2026-10-29
 
@@ -100,10 +126,6 @@ since not showing, and dashboard details.
 
 ### Fixed
 
-- **The pool's capacity history survives a restart of the coordinator**
-  (ADR-0036): it keeps it in `history.json` and writes it every minute.
-  The chart puts each point at its time, so a short history fills only its
-  part of the hour or day, and a time without points stays a gap.
 - **A lane not started shows no tabs**: its start options stand in for its
   views, so Overview, Infrastructure and the others no longer all led to
   the same start page.
@@ -2278,7 +2300,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.30.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/nuetzliches/devstack/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/nuetzliches/devstack/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/nuetzliches/devstack/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/nuetzliches/devstack/compare/v0.27.1...v0.28.0
