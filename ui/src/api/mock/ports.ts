@@ -18,13 +18,14 @@ function hostPort(shown: string): { port: number; target: number } | null {
 function tree(s: MockStack, lane: string, offset: number): PortEntry[] {
   const out: PortEntry[] = [];
   const servedBy = lane === 'main' ? s.view.main_served?.lane : undefined;
-  for (const v of s.view.services) {
+  for (const [i, v] of s.view.services.entries()) {
     if (v.port === null || (lane !== 'main' && v.singleton)) continue;
     const port = v.port + offset;
     const running = v.status.state === 'healthy' || v.status.state === 'running';
     const toLane = servedBy && !v.singleton ? { target_lane: servedBy } : {};
     if (v.proxy) {
-      const instance = (v.proxy.upstream ?? 49000) + offset;
+      // Stable, not the view's random one, so the graph and its tests are deterministic.
+      const instance = 49010 + 10 * i + offset;
       out.push({ port, proto: 'tcp', lane, kind: 'fixed', holder: v.name, via: 'proxy', target: instance, ...toLane, listening: true });
       if (!toLane.target_lane) out.push({ port: instance, proto: 'tcp', lane, kind: 'instance', holder: v.name, via: 'direct', listening: running });
     } else if (v.kind === 'devserver') {

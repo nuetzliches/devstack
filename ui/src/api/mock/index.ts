@@ -214,6 +214,8 @@ class MockHub {
     const now = Date.now();
     const shop = new MockStack(shopSeed(now));
     shop.serveMain('agent-login-fix', 'mcp', now - 12 * 60_000);
+    // On build-server, as the pool's lease for it says: a lane on a node, with its forwards (ADR-0082).
+    shop.startedLanes.add('review-cart');
     const crm = new MockStack(crmSeed(now));
     const docs = new MockStack(docsSeed(now));
     this.stacks = [shop, crm, docs];

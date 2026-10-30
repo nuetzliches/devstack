@@ -44,7 +44,7 @@ Decided by the agent alone (not asked):
 
 ## Built
 
-Only point 1 is built so far (0.33.0):
+Points 1 (0.33.0) and 2 are built:
 
 1. **`GET /v1/ports`** answers `{ports: [PortEntry]}`, one entry per port
    and protocol a tree holds or uses: `port`, `proto` (`tcp`, `udp`),
@@ -80,11 +80,28 @@ Only point 1 is built so far (0.33.0):
    way without it (each running daemon, each stopped stack's file). It
    does not start the hub for that.
 4. The dashboard's mock answers both routes, with one overlap; the types
-   are in `ui/src/api/types.ts`. No view yet.
+   are in `ui/src/api/types.ts`.
+5. **The stack page's Ports card** (point 2) reads the daemon's `/v1/ports`
+   and `/hub/ports` when the page opens, when the stack's lanes or the main
+   slot change, and every 10 s while it is shown; a stack that does not run
+   shows what its stack file declares, from the hub. It draws one band per
+   lane, `main` first: on the left the machine's fixed ports of the stack
+   (the main tree's fixed, held and published ports, in the band of the
+   lane they lead to, `target_lane` or `main`) and a lane on a node's
+   forwarded ports with the node's name; in the middle the lane, the one
+   serving the main ports marked; on the right its holders (services,
+   `<group>.<service>` containers) with their own ports. SVG connectors
+   join port, lane and holder; hovering or focusing one highlights its
+   path. A port another stack uses too is red, its title names that
+   stack, lane and holder, the header counts them and a list below the
+   graph repeats them. Instance ports are hidden behind a toggle; lanes
+   without ports collapse into one line; what does not listen is dashed.
+   Below 560 px of card width a grouped list (lane, holder, ports) says
+   the same. The mock's instance ports are stable, and its shop has a lane
+   on a node (`review-cart` on `build-server`) from the start.
 
-What follows: the graph on the stack's page (point 2); then the shift with
-the claims in the registry, `up --shift`, the stack page's button and the
-start check (points 3 to 7).
+What follows: the shift with the claims in the registry, `up --shift`, the
+stack page's button and the start check (points 3 to 7).
 
 ## Consequences
 
