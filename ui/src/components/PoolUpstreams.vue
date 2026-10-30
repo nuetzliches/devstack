@@ -125,8 +125,8 @@ function how(u: PoolUpstream): string {
     <div class="card-body">
       <p class="muted small">
         MCP servers this pool names for its members. Each member's hub offers them on its <router-link to="/upstreams">MCP upstreams</router-link> page
-        and uses one only once its user accepts it, with that user's own login; nothing secret is kept here. A URL over https only, never a
-        command.
+        (use or log in there) and uses one only once its user accepts it, with that user's own login. No member's credential is kept here, only an
+        OAuth app's client secret where a server needs one, never shown. A URL over https only, never a command.
       </p>
       <p v-if="problem" class="err">{{ problem }}</p>
 
