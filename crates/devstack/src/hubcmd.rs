@@ -325,7 +325,8 @@ pub fn pairing_url() -> Result<String> {
 
 /// Where the dashboard shows a stack, on a lane or its main working tree.
 pub struct DashboardLinks {
-    /// The hash route: `/#/s/<id>?lane=<lane>`.
+    /// The hash route: `/#/s/<id>/l/<lane>`, `main` for the main working
+    /// tree (ADR-0081).
     pub route: String,
     /// The page, for a browser paired before.
     pub page: String,
@@ -341,7 +342,10 @@ pub fn dashboard_links(main_file: &Path, lane: Option<&str>) -> DashboardLinks {
     let abs = std::path::absolute(main_file).unwrap_or_else(|_| main_file.to_path_buf());
     let id = devstack_daemon::registry::id_for(&devstack_proc::long_path(&abs));
     let lane = crate::client::enc(lane.unwrap_or(""));
-    let route = format!("/#/s/{id}?lane={lane}");
+    let route = format!(
+        "/#/s/{id}/l/{}",
+        if lane.is_empty() { "main" } else { &lane }
+    );
     DashboardLinks {
         page: format!("http://127.0.0.1:{}{route}", devstack_hub::port()),
         link: if lane.is_empty() {
@@ -358,7 +362,7 @@ pub fn dashboard_line(main_file: &Path, lane: Option<&str>) -> String {
     format!("dashboard: {}", dashboard_links(main_file, lane).page)
 }
 
-/// Open the dashboard at `route` (a hash route, `/#/s/<id>?lane=`), paired
+/// Open the dashboard at `route` (a hash route, `/#/s/<id>/l/<lane>`), paired
 /// like `devstack ui`: a click on a notification (`devstack://open`).
 pub fn open_dashboard(route: &str) -> Result<()> {
     let url = format!(
@@ -557,13 +561,16 @@ mod tests {
         let id = devstack_daemon::registry::id_for(&devstack_proc::long_path(&file));
         let port = devstack_hub::port();
         let main = super::dashboard_links(&file, None);
-        assert_eq!(main.route, format!("/#/s/{id}?lane="));
-        assert_eq!(main.page, format!("http://127.0.0.1:{port}/#/s/{id}?lane="));
+        assert_eq!(main.route, format!("/#/s/{id}/l/main"));
+        assert_eq!(
+            main.page,
+            format!("http://127.0.0.1:{port}/#/s/{id}/l/main")
+        );
         assert_eq!(main.link, format!("devstack://open?stack={id}"));
         let lane = super::dashboard_links(&file, Some("feat-x"));
         assert_eq!(
             lane.page,
-            format!("http://127.0.0.1:{port}/#/s/{id}?lane=feat-x")
+            format!("http://127.0.0.1:{port}/#/s/{id}/l/feat-x")
         );
         assert_eq!(lane.link, format!("devstack://open?stack={id}&lane=feat-x"));
     }

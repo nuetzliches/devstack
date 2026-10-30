@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { computed, ref, shallowRef, triggerRef, watch } from 'vue';
 import { api, paths, sharedRef, v1, type GroupAction, type RestartMode, type ServiceAction, type StreamState, type Subscription } from '@/api';
 import type { Branches, JournalEntry, LaneView, Point, Pruned, Run, ServiceView, SkillsState, StackEvent, StackView, UpgradeState, UsageReport, McpState } from '@/api/types';
-import { laneLabel, restartLanesText, restartPlan, samePath } from '@/lib/lanes';
+import { laneLabel, MAIN, restartLanesText, restartPlan, samePath } from '@/lib/lanes';
 import type { LaneAction } from '@/lib/laneActions';
 import { act } from '@/lib/actions';
 import { forTree, sameEntry } from '@/lib/journal';
@@ -91,8 +91,11 @@ export const useStack = defineStore('stack', () => {
     }
   }
   watch(() => [id.value, running.value, id.value ? hub.worktrees[id.value] : undefined] as const, () => void loadOfflineLanes(), { immediate: true });
-  /** The lane shown while its stack does not run: its start page stands in. */
-  const offlineLane = computed(() => (!running.value && lane.value ? (offlineLanes.value.find((l) => l.name === lane.value) ?? null) : null));
+  /** The lane shown while its stack does not run, `main` too: its start page stands in. */
+  const offlineLane = computed(() => {
+    if (running.value || foreign.value) return null;
+    return lane.value ? (offlineLanes.value.find((l) => l.name === lane.value) ?? null) : mainLane.value;
+  });
   /** Start a worktree's lane of a stack that does not run: its daemon comes up, the main tree's services stay stopped. */
   async function startOfflineLane(l: LaneView, on: string | null, profile?: string) {
     const sid = id.value;
@@ -153,6 +156,7 @@ export const useStack = defineStore('stack', () => {
     } catch {
       // keep the list; the next connect loads it again
     }
+    void loadMain();
   }
 
   /** At most every few seconds: a stream that keeps failing asks once a round. */
@@ -189,8 +193,43 @@ export const useStack = defineStore('stack', () => {
     // The shown lane started, or stopped: its own stream, or the main tree's.
     if (id.value && wasActive !== laneActive(lane.value)) reset(id.value);
   }
-  /** The lane shown, also once it is gone (see `setLanes`); `null`: the main tree. */
-  const shownLane = computed(() => (lane.value ? (lanes.value.find((l) => l.name === lane.value) ?? (goneLane.value?.name === lane.value ? goneLane.value : null)) : null));
+  /**
+   * The main working tree as the lane `main` (ADR-0080, ADR-0081), so the
+   * header, the start card and the branch picker treat it as any lane: at
+   * the repository, on offset 0, holding the main ports unless a lane does,
+   * started unless nothing of it runs. `null` for someone else's lane.
+   */
+  const mainLane = computed<LaneView | null>(() => {
+    if (!id.value || foreign.value) return null;
+    const mv = mainView.value;
+    const services = mv?.services ?? [];
+    const containers = (mv?.infra ?? []).flatMap((g) => g.containers).filter((c) => c.managed !== false);
+    return {
+      name: MAIN,
+      path: mv?.repo ?? entry.value?.repo ?? '',
+      branch: mv?.branch ?? null,
+      number: 0,
+      active: mainActive.value,
+      port_offset: 0,
+      owns_main: !(lanesOf.value === id.value && lanes.value.some((l) => l.owns_main)),
+      running: services.filter((x) => statusBucket(x.status) !== 'idle').length,
+      services: services.length,
+      containers_running: containers.filter((c) => c.state === 'running').length,
+      containers: containers.length,
+      ...(mv?.profile ? { profile: mv.profile } : {}),
+    };
+  });
+  /**
+   * The lane shown, also once it is gone (see `setLanes`); the main working
+   * tree as `main`; of a stack that does not run, its worktree as the hub
+   * lists it. `null` for someone else's lane, or one not known (yet).
+   */
+  const shownLane = computed<LaneView | null>(() => {
+    if (!lane.value) return mainLane.value;
+    const l = lanes.value.find((x) => x.name === lane.value) ?? (goneLane.value?.name === lane.value ? goneLane.value : null);
+    if (l) return l;
+    return running.value ? null : (offlineLanes.value.find((x) => x.name === lane.value) ?? null);
+  });
   /** The shown lane's worktree is gone: it is being removed, or was. */
   const ending = computed(() => (shownLane.value?.removing || shownLane.value?.gone ? shownLane.value : null));
 
@@ -201,22 +240,65 @@ export const useStack = defineStore('stack', () => {
     () => running.value && lane.value === null && live.value && services.value.length > 0 && services.value.every((s) => statusBucket(s.status) === 'idle'),
   );
 
+  /**
+   * The main working tree's view as last seen: its own stream's while it is
+   * shown (or the stack page is), else read with the lanes. The stack page
+   * and the lane `main` take its branch, state and singletons from it.
+   */
+  const mainSeen = shallowRef<StackView | null>(null);
+  const mainView = computed<StackView | null>(() => (lane.value === null && live.value && view.value ? view.value : mainSeen.value));
+  watch([view, live, lane], ([v, l, ln]) => {
+    if (v && l && ln === null) mainSeen.value = v;
+  });
+  async function loadMain() {
+    const sid = id.value;
+    if (!sid || !running.value || foreign.value || lane.value === null) return;
+    try {
+      const res = await api().request<StackView>('GET', paths.api(sid, v1.stack));
+      if (sid === id.value && res.ok && res.body && typeof res.body === 'object' && Array.isArray(res.body.services)) mainSeen.value = res.body;
+    } catch {
+      /* keep what is known */
+    }
+  }
+  /**
+   * Whether the main working tree runs something: its services, or with
+   * none its containers. Not known yet: it does while the daemon runs.
+   */
+  const mainActive = computed(() => {
+    if (!running.value) return false;
+    const mv = mainView.value;
+    if (!mv) return true;
+    if (mv.services.length) return mv.services.some((x) => statusBucket(x.status) !== 'idle');
+    const containers = mv.infra.flatMap((g) => g.containers).filter((c) => c.managed !== false);
+    return !containers.length || containers.some((c) => c.state === 'running');
+  });
+
   /** A lane that is started; one not started has no API of its own. */
   function laneActive(name: string) {
     return lanes.value.find((l) => l.name === name)?.active !== false;
   }
 
-  function selectLane(next: string | null) {
+  /**
+   * Show lane `next` (`null`: the main working tree). `remember`: it is the
+   * lane an older link without one opens (the stack page follows the main
+   * tree's stream without making it the lane shown last).
+   */
+  function selectLane(next: string | null, remember = true) {
+    if (remember && id.value) persist.set(`lane.${id.value}`, next);
     if (next === lane.value) return;
     goneLane.value = null;
     lane.value = next;
-    if (id.value) persist.set(`lane.${id.value}`, next);
     reset(id.value!);
   }
 
-  function select(next: string) {
-    if (next === id.value) return;
+  /** Show stack `next`, on `lane` when named (`null`: the main tree), else on the lane shown last. */
+  function select(next: string, opts: { lane?: string | null; remember?: boolean } = {}) {
+    if (next === id.value) {
+      if (opts.lane !== undefined) selectLane(opts.lane, opts.remember ?? true);
+      return;
+    }
     id.value = next;
+    mainSeen.value = persist.stack(next)?.view ?? null;
     // Another stack's lanes are not this one's, even while it is offline and
     // loads none.
     lanes.value = [];
@@ -230,7 +312,8 @@ export const useStack = defineStore('stack', () => {
     void loadUpgrade();
     void loadMcp();
     persist.saveLastStack(next);
-    lane.value = persist.get<string | null>(`lane.${next}`) ?? null;
+    lane.value = opts.lane !== undefined ? opts.lane : (persist.get<string | null>(`lane.${next}`) ?? null);
+    if (opts.lane !== undefined && (opts.remember ?? true)) persist.set(`lane.${next}`, opts.lane);
     reset(next);
   }
 
@@ -258,9 +341,9 @@ export const useStack = defineStore('stack', () => {
     busy.value['lane-main'] = 'promote';
     try {
       await act({
-        label: name === 'main' ? 'Main ports back to the main tree' : `Lane ${name} serves the main ports`,
+        label: `Lane ${name} serves the main ports`,
         path: daemonPath(id.value, v1.laneMain(name)),
-        success: name === 'main' ? 'The main working tree serves the main ports again' : `Lane ${name} serves the main ports`,
+        success: `Lane ${name} serves the main ports`,
       });
       await loadLanes();
     } finally {
@@ -406,8 +489,73 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
+  /**
+   * The main working tree's actions as a lane's (ADR-0081), on what its
+   * daemon offers: Start its `up`, Stop its `down` (its services and
+   * containers; the daemon and the other lanes stay), Restart and Rebuild
+   * each of its running services. The rest is disabled in its menu.
+   */
+  function mainAction(action: LaneAction) {
+    switch (action) {
+      case 'start':
+        return startStack();
+      case 'stop':
+        return stopMain();
+      case 'restart':
+        return restartMain('restart');
+      case 'rebuild':
+        return restartMain('rebuild');
+      default:
+        return undefined;
+    }
+  }
+
+  /** Stop the main working tree only: its services and containers; the daemon and every lane keep running. */
+  async function stopMain() {
+    if (refuseReadOnly() || !id.value) return;
+    busy.value['lane-stop'] = MAIN;
+    try {
+      await act({ label: 'Stop main', path: paths.api(id.value, v1.downTree), success: 'main stopped' });
+    } finally {
+      delete busy.value['lane-stop'];
+    }
+  }
+
+  /**
+   * Restart (or rebuild) the main working tree's running services where they
+   * run, as a lane's warm restart does: the daemon has no restart of the
+   * whole main tree, so each one's own, at the same time. Its containers stay.
+   */
+  async function restartMain(how: 'restart' | 'rebuild') {
+    if (refuseReadOnly() || !id.value) return;
+    const sid = id.value;
+    const what = how === 'restart' ? 'Restart' : 'Rebuild';
+    busy.value['lane-restart'] = MAIN;
+    try {
+      let list = mainView.value?.services ?? [];
+      try {
+        const res = await api().request<StackView>('GET', paths.api(sid, v1.stack));
+        if (res.ok && res.body && typeof res.body === 'object' && Array.isArray(res.body.services)) list = res.body.services;
+      } catch {
+        /* the last view seen */
+      }
+      const names = list.filter((x) => statusBucket(x.status) !== 'idle' && (how === 'restart' || x.build_id)).map((x) => x.name);
+      if (!names.length) {
+        ui.toast('info', `${what} main`, 'Nothing of it runs.');
+        return;
+      }
+      const results = await Promise.all(
+        names.map((n) => act({ label: `${what} ${n}`, path: paths.api(sid, v1.serviceAction(n, how)), success: false, conflictHint: 'The running instance stays as it is.' })),
+      );
+      if (results.every((r) => r.ok)) ui.toast('success', `${what} main: done`);
+    } finally {
+      delete busy.value['lane-restart'];
+    }
+  }
+
   /** One of a lane's actions ([laneActions]), from the header or the branch picker. */
   function laneAction(l: LaneView, action: LaneAction) {
+    if (l.name === MAIN) return mainAction(action);
     switch (action) {
       case 'restart':
         return restartLane(l.name, 'warm');
@@ -416,7 +564,7 @@ export const useStack = defineStore('stack', () => {
       case 'cold':
         return restartLane(l.name, 'cold');
       case 'start':
-        return startLane(l.name);
+        return running.value ? startLane(l.name) : startOfflineLane(l, null);
       case 'stop':
         return stopLane(l.name);
       case 'reset':
@@ -1003,8 +1151,13 @@ export const useStack = defineStore('stack', () => {
     if (!id.value) return;
     const stackId = id.value;
     if (running.value) {
-      // The daemon stayed for its lanes: the main tree starts in it.
-      await act({ label: `Start ${entry.value?.name ?? 'stack'}`, path: paths.api(stackId, v1.up), success: 'Starting the main working tree…' });
+      // The daemon runs (for its lanes, or the main tree was stopped): the main tree starts in it.
+      busy.value['lane-start'] = MAIN;
+      try {
+        await act({ label: 'Start main', path: paths.api(stackId, v1.up), success: 'main is starting…' });
+      } finally {
+        delete busy.value['lane-start'];
+      }
       return;
     }
     hub.starting[stackId] = true;
@@ -1078,18 +1231,19 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
+  /** Stop the whole stack (ADR-0081): every lane, the main working tree, and the daemon. */
   async function stopStack() {
     if (refuseReadOnly()) return;
     if (!id.value) return;
     const name = entry.value?.name ?? 'stack';
-    const kept = runningLanes.value;
+    const stopping = runningLanes.value;
     // Stop takes the containers too (ADR-0068), unless asked to keep them.
-    const containers = view.value?.infra.some((g) => g.containers.length) ?? true;
+    const containers = (mainView.value ?? view.value)?.infra.some((g) => g.containers.length) ?? true;
     const option = containers ? keepContainers() : undefined;
     const ok = await ui.confirm({
       title: `Stop ${name}`,
-      text: kept.length
-        ? `The main working tree's services and containers stop. ${laneList(kept)} keep running, and with them the daemon and the shared containers they use.`
+      text: stopping.length
+        ? `All services and containers of this stack stop: the main working tree's, and ${laneList(stopping)}. Its daemon exits; their volumes stay.`
         : 'All services and containers of this stack stop and its daemon exits. Their volumes stay.',
       confirmLabel: 'Stop stack',
       danger: true,
@@ -1098,7 +1252,7 @@ export const useStack = defineStore('stack', () => {
     if (!ok) return;
     busy.value['stack'] = 'stop';
     try {
-      await act({ label: `Stop ${name}`, path: paths.down(id.value, !option?.checked), success: 'Stopping the stack…' });
+      await act({ label: `Stop ${name}`, path: paths.down(id.value, !option?.checked, false, true), success: 'Stopping the stack…' });
     } finally {
       delete busy.value['stack'];
     }
@@ -1110,7 +1264,7 @@ export const useStack = defineStore('stack', () => {
   }
 
   function laneList(names: string[]) {
-    return names.length === 1 ? `Lane ${names[0]} and its ports` : `Lanes ${names.join(', ')} and their ports`;
+    return names.length === 1 ? `those of lane ${names[0]}` : `those of lanes ${names.join(', ')}`;
   }
 
   return {
@@ -1130,6 +1284,10 @@ export const useStack = defineStore('stack', () => {
     readOnly,
     foreign,
     shownLane,
+    mainLane,
+    mainView,
+    mainActive,
+    loadMain,
     ending,
     sharedLane,
     skills,

@@ -26,3 +26,30 @@ describe('a lane’s actions', () => {
     expect([moving.main, ...moving.items].every((i) => i.disabled)).toBe(true);
   });
 });
+
+describe('the lane main’s actions (ADR-0081)', () => {
+  const main = (more: Partial<LaneView> = {}) => lane({ name: 'main', path: '/src/shop', port_offset: 0, owns_main: true, ...more });
+
+  it('has the same items as any lane', () => {
+    expect(keys(main())).toEqual(['restart', 'rebuild', 'cold', 'stop']);
+    expect(keys(main({ active: false }))).toEqual(['start', 'reset', 'remove']);
+  });
+
+  it('restarts, rebuilds and stops while it serves the main ports', () => {
+    const a = laneActions(main());
+    expect(a.main.disabled).toBeFalsy();
+    expect(a.items.filter((i) => !i.disabled).map((i) => i.key)).toEqual(['rebuild', 'stop']);
+  });
+
+  it('shows what has no meaning for it disabled, each with the reason', () => {
+    const running = laneActions(main()).items.find((i) => i.key === 'cold')!;
+    expect(running.disabled).toBe(true);
+    expect(running.title).toMatch(/main working tree/);
+    const stopped = laneActions(main({ active: false }));
+    expect(stopped.main.disabled).toBeFalsy();
+    for (const i of stopped.items) {
+      expect(i.disabled).toBe(true);
+      expect(i.title).toMatch(/main working tree/);
+    }
+  });
+});

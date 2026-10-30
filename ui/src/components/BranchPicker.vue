@@ -6,10 +6,12 @@
 // working tree's checkout is never changed. Switching between lanes is the
 // sidebar's too.
 import { computed, nextTick, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import type { BranchView, LaneView } from '@/api/types';
 import { ago, useNow } from '@/lib/format';
 import { laneActions, type LaneAction } from '@/lib/laneActions';
-import { laneLabel, samePath } from '@/lib/lanes';
+import { laneLabel, laneTab, MAIN, samePath } from '@/lib/lanes';
+import { laneView } from '@/lib/stackRoutes';
 import { usePopover } from '@/lib/popover';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
@@ -18,11 +20,13 @@ import Icon from './icons/Icon.vue';
 const hub = useHub();
 const stack = useStack();
 const now = useNow();
+const route = useRoute();
+const router = useRouter();
 
 const current = computed(() => stack.shownLane);
-const branch = computed(() => (current.value ? current.value.branch : stack.view?.branch) ?? null);
-/** A lane is named by its branch (shown already): only what kind of tree it is. */
-const tree = computed(() => (current.value ? 'lane' : 'main working tree'));
+const branch = computed(() => current.value?.branch ?? stack.view?.branch ?? null);
+/** A lane is named by its branch (shown already): only what kind of tree it is; `main` is the main working tree. */
+const tree = computed(() => (current.value?.name === MAIN ? 'main working tree' : 'lane'));
 /** Someone else's lane, or no hub: the branch is shown, nothing more. */
 const canPick = computed(() => !stack.foreign && hub.reachable && !!stack.id);
 const busy = computed(() => stack.busy.branches);
@@ -53,7 +57,7 @@ const rows = computed<Row[]>(() => {
   return (stack.branches?.branches ?? [])
     .filter((b) => !q || b.name.toLowerCase().includes(q))
     // A stack that does not run has its worktrees from the hub (ADR-0078).
-    .map((b) => ({ b, lane: b.worktree && !b.main ? ([...stack.lanes, ...stack.offlineLanes].find((l) => samePath(l.path, b.worktree!)) ?? null) : null }))
+    .map((b) => ({ b, lane: b.main ? stack.mainLane : b.worktree ? ([...stack.lanes, ...stack.offlineLanes].find((l) => samePath(l.path, b.worktree!)) ?? null) : null }))
     .sort((x, y) => Number(y.b.main) - Number(x.b.main) || x.b.name.localeCompare(y.b.name));
 });
 /** The branches with a worktree (the main tree's first), then the other local ones, then the remote ones; each by name. */
@@ -74,7 +78,7 @@ function isShown(r: Row): boolean {
 
 /** What a click on the row does, said on it. */
 function hint(r: Row): string {
-  if (r.b.main) return 'main tree';
+  if (r.b.main) return 'lane main';
   if (r.lane?.removing) return 'lane · removing';
   if (r.lane) return r.lane.owns_main ? 'main ports' : r.lane.active === false ? 'lane · not started' : 'lane · running';
   if (r.b.worktree) return 'worktree';
@@ -83,12 +87,9 @@ function hint(r: Row): string {
 
 function pick(r: Row) {
   if (busy.value) return;
-  if (r.b.main) {
+  if (r.b.main || r.lane) {
     close();
-    stack.selectLane(null);
-  } else if (r.lane) {
-    close();
-    stack.selectLane(r.lane.name);
+    if (stack.id) void router.push(laneView(stack.id, r.b.main ? null : r.lane!.name, laneTab(route.name)));
   } else if (!r.b.worktree) {
     close();
     void stack.newLane(r.b.name);

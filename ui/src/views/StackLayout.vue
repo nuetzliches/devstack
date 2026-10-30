@@ -2,7 +2,8 @@
 import { computed, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ago, useNow } from '@/lib/format';
-import { restartLanesText } from '@/lib/lanes';
+import { laneTab } from '@/lib/lanes';
+import { laneOfParam, laneParam, laneView, stackPage } from '@/lib/stackRoutes';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import Icon from '@/components/icons/Icon.vue';
@@ -22,32 +23,41 @@ const hub = useHub();
 const stack = useStack();
 const now = useNow();
 
+// The lane shown is the route's (ADR-0081): `#/s/<stack>/l/<lane>/...`,
+// `main` for the main working tree; the store follows it.
 watch(
-  () => route.params.stack as string | undefined,
-  (id) => {
-    if (id) stack.select(id);
+  () => [route.params.stack, route.params.lane] as const,
+  ([id, lane]) => {
+    if (typeof id !== 'string' || !id) return;
+    stack.select(id, { lane: laneOfParam(lane) });
   },
   { immediate: true },
 );
-
-// A link names the lane to show (`?lane=`, empty: the main working tree), as
-// a notification's does (ADR-0045); shown, the query goes again.
+// And the route the store, when it shows another lane by itself (one made
+// from a branch, the main tree after a lane's worktree went): that lane's
+// list of the same tab, as a switch in the sidebar does.
 watch(
-  () => route.query.lane,
+  () => stack.lane,
   (lane) => {
-    if (typeof lane !== 'string' || !route.params.stack) return;
-    stack.selectLane(lane || null);
-    const { lane: _, ...rest } = route.query;
-    void router.replace({ query: rest });
+    const id = route.params.stack;
+    if (typeof id !== 'string' || id !== stack.id || typeof route.params.lane !== 'string' || route.params.lane === laneParam(lane)) return;
+    void router.replace(laneView(id, lane, laneTab(route.name)));
   },
-  { immediate: true },
 );
 
-/** The shown lane, when it is not started: its start options instead of its views. */
+const hubDown = computed(() => hub.status === 'unreachable' || hub.stream === 'error');
+/**
+ * The shown lane, `main` too, when it is not started: its start options
+ * instead of its views and tabs, the same for every lane and whether the
+ * stack's daemon runs or not (ADR-0078, ADR-0081).
+ */
 const idleLane = computed(() => {
-  const l = stack.lanes.find((x) => x.name === stack.lane);
-  return l && l.active === false && !l.removing ? l : null;
+  const l = stack.shownLane;
+  if (!l || l.active !== false || l.removing) return null;
+  if (!stack.running && (hubDown.value || stack.readOnly || !stack.entry)) return null;
+  return l;
 });
+const offlineStart = computed(() => !stack.running && !!idleLane.value);
 /** The shown lane's worktree is gone: made again on its branch, if the branch is still there. */
 const restorable = computed(() => {
   const l = stack.ending;
@@ -59,26 +69,7 @@ watch(
     if (gone) void stack.loadBranches();
   },
 );
-const hubDown = computed(() => hub.status === 'unreachable' || hub.stream === 'error');
-/** The main tree of a stack that does not run, shown: its start card, as a lane's (ADR-0078). */
-/** A tree of a stack that does not run, shown: its start card instead of its views and tabs, the same for the main tree and a lane (ADR-0078). */
-const showMainStart = computed(() => !hubDown.value && !!stack.entry && !stack.running && !stack.lane && !stack.readOnly);
-const offlineStart = computed(() => showMainStart.value || !!stack.offlineLane);
-const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 const unknown = computed(() => hub.fresh && !stack.entry && !stack.view);
-/** The daemon runs another devstack than the hub: a restart of the stack
- * starts it with the hub's (the installed) one. */
-const daemonOutdated = computed(() => {
-  const d = stack.entry?.daemon?.version;
-  const h = hub.version;
-  return d && h && d !== h ? { daemon: d, hub: h } : null;
-});
-const restartReason = computed(() => {
-  if (!stack.running) return null;
-  if (daemonOutdated.value) return 'version';
-  if (stack.view?.config_changed && !stack.ending) return 'config';
-  return null;
-});
 /** What no request reports (ADR-0050): this tree's own, and what the main
  * tree knows of the lane shown (its worktree missing). */
 const notices = computed(() => {
@@ -125,12 +116,12 @@ function isActive(name: string) {
   <div>
     <StackHeader />
     <!-- A lane not started has no views yet: its start options stand in for them. -->
-    <nav v-if="!idleLane && !offlineStart" class="subnav" aria-label="Stack views">
+    <nav v-if="!idleLane" class="subnav" aria-label="Stack views">
       <div class="subnav-inner">
         <RouterLink
           v-for="t in tabs"
           :key="t.name"
-          :to="{ name: t.name, params: { stack: stack.id ?? '' } }"
+          :to="laneView(stack.id ?? '', stack.lane, t.name)"
           class="tab"
           :class="{ active: isActive(t.name) }"
           :aria-current="isActive(t.name) ? 'page' : undefined"
@@ -161,19 +152,6 @@ function isActive(name: string) {
         >
           <span v-if="hub.dockerStarting" class="spinner" /><Icon v-else name="play" :size="14" />
           {{ hub.dockerStarting ? 'Starting…' : `Start ${dockerDown.starter}` }}
-        </button>
-      </div>
-      <div v-if="!hubDown && restartReason" class="banner warn" :data-testid="restartReason === 'version' ? 'daemon-outdated' : 'config-changed'">
-        <Icon :name="restartReason === 'version' ? 'alert' : 'file'" :size="18" />
-        <span v-if="restartReason === 'version'" class="grow">
-          <strong>{{ stack.entry?.name ?? 'This stack' }} runs devstack {{ daemonOutdated?.daemon }}, devstack {{ daemonOutdated?.hub }} is installed.</strong>
-          {{ ' ' }}A restart of the stack switches it over<template v-if="stack.view?.config_changed"> and applies the changed stack file</template>.
-          <template v-if="restartLanesText(stack.restartLanes)">{{ ' ' }}{{ restartLanesText(stack.restartLanes) }}</template>
-        </span>
-        <span v-else class="grow"><strong>The stack file changed since {{ stack.entry?.name ?? 'the stack' }} started.</strong> It applies after a restart.</span>
-        <button v-if="!stack.readOnly" type="button" class="btn btn-primary btn-sm" :disabled="!!stack.busy['stack']" data-testid="action-restart-stack" @click="stack.restartStack()">
-          <span v-if="stack.busy['stack'] === 'restart'" class="spinner" /><Icon v-else name="restart" :size="14" />
-          {{ stack.busy['stack'] === 'restart' ? 'Restarting…' : 'Restart stack' }}
         </button>
       </div>
       <div v-if="!hubDown && stack.running && stack.view?.watcher_error" class="banner warn" data-testid="watcher-error">
@@ -216,10 +194,9 @@ function isActive(name: string) {
             <AgentPrompt v-if="!stack.readOnly && stack.id" kind="start-failed" :target="{ stack: stack.id }" />
           </template>
         </span>
-        <button v-if="!stack.readOnly && !offlineStart" type="button" class="btn btn-primary btn-sm" :disabled="starting" data-testid="action-start-stack" @click="stack.startStack()">
-          <span v-if="starting" class="spinner" /><Icon v-else name="play" :size="14" />
-          {{ starting ? 'Starting…' : 'Start stack' }}
-        </button>
+        <RouterLink v-if="!stack.readOnly && !offlineStart && stack.id" :to="stackPage(stack.id)" class="btn btn-sm" data-testid="stack-page-link">
+          <Icon name="layers" :size="14" /> Stack page
+        </RouterLink>
       </div>
       <div v-else-if="stack.ending" class="banner warn" data-testid="lane-ending">
         <span v-if="stack.ending.removing" class="spinner" /><Icon v-else name="trash" :size="18" />
@@ -242,7 +219,7 @@ function isActive(name: string) {
         >
           <span v-if="stack.busy.branches" class="spinner" /><Icon v-else name="rollback" :size="14" /> Restore worktree
         </button>
-        <button type="button" class="btn btn-primary btn-sm" data-testid="lane-ending-main" @click="stack.selectLane(null)">Main working tree</button>
+        <RouterLink :to="laneView(stack.id ?? '', null)" class="btn btn-primary btn-sm" data-testid="lane-ending-main">Show main</RouterLink>
       </div>
       <div v-else-if="!hubDown && stack.running && !stack.live" class="banner info" data-testid="stack-connecting">
         <span class="spinner" />
@@ -255,9 +232,6 @@ function isActive(name: string) {
 
     <div v-if="idleLane" class="idle-lane">
       <LaneStart :lane="idleLane" />
-    </div>
-    <div v-else-if="offlineStart" class="idle-lane">
-      <LaneStart :lane="stack.offlineLane" />
     </div>
     <div v-else :data-stale="stack.stale && !!stack.view ? 'true' : 'false'">
       <RouterView v-slot="{ Component }">

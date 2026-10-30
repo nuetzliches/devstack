@@ -4,8 +4,12 @@
 import type { LaneView } from '@/api/types';
 import { persist } from './persist';
 
-/** The branch, else the lane's name for a detached HEAD. */
+/** The name of the main working tree as a lane (ADR-0080): no lane is ever named so. */
+export const MAIN = 'main';
+
+/** The branch, else the lane's name for a detached HEAD; the main working tree is `main`. */
 export function laneLabel(l: LaneView): string {
+  if (l.name === MAIN) return MAIN;
   return l.branch ?? `${l.name} (detached)`;
 }
 

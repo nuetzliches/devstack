@@ -1,9 +1,11 @@
 <script setup lang="ts">
 // Stacks and their worktrees (lanes, ADR-0024) as a sidebar: every stack the
-// hub knows, by name, and under each all of its trees, named by their branch:
-// the main working tree first, then the others by name, started or not (of a
-// stack whose daemon does not run, the hub lists them, ADR-0078); nothing
-// moves when something starts or stops. A tree's state is its dot, as a
+// hub knows, by name (a click opens the stack's page, ADR-0081), and under
+// each all of its trees, named by their branch: the lane `main` (the main
+// working tree) first, then the others by name, started or not (of a stack
+// whose daemon does not run, the hub lists them, ADR-0078); a click opens
+// the lane's views. The highlight follows the route. Nothing moves when
+// something starts or stops. A tree's state is its dot, as a
 // stack's is. A stack's worktrees
 // fold only with its toggle, never by navigating. The shown stack's lanes
 // come live from its stream; the others' are read when the hub's list of
@@ -15,7 +17,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { api, paths, sharedId, v1 } from '@/api';
 import type { LaneView, StackEntry } from '@/api/types';
 import { act } from '@/lib/actions';
-import { laneLabel, lastTab, nodeLabel, runCounts, runsAnything, started } from '@/lib/lanes';
+import { laneLabel, lastTab, MAIN, nodeLabel, runCounts, runsAnything, started } from '@/lib/lanes';
+import { laneView, stackPage } from '@/lib/stackRoutes';
 import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
 import { useHub } from '@/stores/hub';
@@ -128,7 +131,6 @@ watch(
 function lanesOf(s: StackEntry): LaneView[] {
   return [...(known.value[s.id] ?? [])].sort((a, b) => laneLabel(a).localeCompare(laneLabel(b)));
 }
-const hasLanes = (s: StackEntry) => (known.value[s.id]?.length ?? 0) > 0;
 
 /**
  * Whether the main working tree runs something, as last seen while it was
@@ -163,8 +165,8 @@ function stackDot(s: StackEntry): Dot {
   const dots = [mainDot(s), ...(known.value[s.id] ?? []).map((l) => laneDot(s, l))];
   return (['err', 'warn', 'on'] as Dot[]).find((d) => dots.includes(d)) ?? 'off';
 }
-/** Its trees are listed under it: their dots say it, the stack's own would repeat them. */
-const expanded = (s: StackEntry) => hasLanes(s) && !collapsed.value[s.id];
+/** Its trees are listed under it (`main` at least): their dots say it, the stack's own would repeat them. */
+const expanded = (s: StackEntry) => !collapsed.value[s.id];
 function mainDot(s: StackEntry): Dot {
   if (!hub.reachable) return 'unknown';
   // A stack that does not run runs nothing, whatever was seen last.
@@ -211,29 +213,25 @@ function laneTitle(s: StackEntry, l: LaneView): string {
   return `${l.path}\n${laneCounts(s, l)} · ${where}${l.owns_main ? ' · serves the main ports' : ''}`;
 }
 
-// Choosing where to go closes the drawer of a narrow screen, even when only
-// the shown stack's lane changes and the route stays.
+// Choosing where to go closes the drawer of a narrow screen.
 function openStack(s: StackEntry) {
   ui.drawerOpen = false;
-  if (s.id === stack.id && stack.lane) stack.selectLane(null);
-  persist.set(`lane.${s.id}`, null);
-  void router.push({ name: lastTab(route.name), params: { stack: s.id } });
+  void router.push(stackPage(s.id));
 }
 
-// A lane not started is shown with its start options (here, a node, the
-// pool), never started by navigating to it.
-async function openLane(s: StackEntry, l: LaneView) {
+// A lane (`null`: main) on the tab shown last. One not started is shown
+// with its start options (here, a node, the pool), never started by
+// navigating to it.
+function openLane(s: StackEntry, lane: string | null) {
   ui.drawerOpen = false;
-  if (s.id === stack.id) {
-    stack.selectLane(l.name);
-    void router.push({ name: lastTab(route.name), params: { stack: s.id } });
-    return;
-  }
-  persist.set(`lane.${s.id}`, l.name);
-  await router.push({ name: lastTab(route.name), params: { stack: s.id } });
+  void router.push(laneView(s.id, lane, lastTab(route.name)));
 }
 
 const isCurrent = (s: StackEntry) => s.id === stack.id;
+/** The stack's page is shown. */
+const pageShown = (s: StackEntry) => route.name === 'stack' && route.params.stack === s.id;
+/** That lane's views are shown (`main` for the main working tree). */
+const laneShown = (s: StackEntry, lane: string) => route.params.stack === s.id && route.params.lane === lane;
 
 // ------------------------------------------------------------ stack menu
 
@@ -292,12 +290,12 @@ async function stopStack(s: StackEntry) {
   const option = stack.keepContainers();
   const ok = await ui.confirm({
     title: `Stop ${s.name}`,
-    text: 'Its services and containers stop; their volumes stay. Lanes that still run keep its daemon and the shared containers they use.',
+    text: 'All services and containers of this stack stop, its lanes’ too, and its daemon exits. Their volumes stay.',
     confirmLabel: 'Stop stack',
     danger: true,
     option,
   });
-  if (ok) await act({ label: `Stop ${s.name}`, path: paths.down(s.id, !option.checked), success: 'Stopping the stack…' });
+  if (ok) await act({ label: `Stop ${s.name}`, path: paths.down(s.id, !option.checked, false, true), success: 'Stopping the stack…' });
 }
 async function removeStack(s: StackEntry) {
   closeMenu();
@@ -337,7 +335,6 @@ async function copyPath(s: StackEntry) {
       <li v-for="s in stacks" :key="s.id" class="stack" :class="{ current: isCurrent(s) }" :data-stack="s.id">
         <div class="stack-row" @contextmenu.prevent="openMenu(s, $event)">
           <button
-            v-if="hasLanes(s)"
             type="button"
             class="fold-btn"
             :aria-expanded="!collapsed[s.id]"
@@ -348,11 +345,11 @@ async function copyPath(s: StackEntry) {
           >
             <Icon :name="collapsed[s.id] ? 'chevronRight' : 'chevronDown'" :size="13" />
           </button>
-          <span v-else class="fold-space" />
           <button
             type="button"
             class="item"
-            :class="{ active: isCurrent(s) && !stack.lane && !hasLanes(s) }"
+            :class="{ active: pageShown(s) }"
+            :aria-current="pageShown(s) ? 'page' : undefined"
             :title="`${s.repo}\n${stackIdle(s) ? 'nothing runs, its daemon is up' : s.running ? 'running' : 'offline'} · right click for more`"
             data-testid="sidebar-stack"
             @click="openStack(s)"
@@ -378,30 +375,32 @@ async function copyPath(s: StackEntry) {
             <Icon name="more" :size="14" />
           </button>
         </div>
-        <ul v-if="hasLanes(s) && !collapsed[s.id]" class="lanes">
+        <ul v-if="!collapsed[s.id]" class="lanes">
           <li>
             <button
               type="button"
               class="item lane"
-              :class="{ active: isCurrent(s) && !stack.lane }"
-              :title="`${s.repo}\nthe main working tree${servedBy(s) ? ` · its ports serve ${laneLabel(servedBy(s)!)}` : ''}`"
+              :class="{ active: laneShown(s, MAIN) }"
+              :aria-current="laneShown(s, MAIN) ? 'page' : undefined"
+              :title="`${s.repo}\nthe main working tree${servedBy(s) ? ` · ${laneLabel(servedBy(s)!)} serves the main ports` : ''}`"
               data-testid="sidebar-lane-main"
-              @click="openStack(s)"
+              @click="openLane(s, null)"
             >
               <span class="dot" :class="mainDot(s)" aria-hidden="true" />
               <span class="label truncate">main</span>
-              <span v-if="!servedBy(s)" class="pill sm ok" title="The main working tree serves the main ports" data-testid="sidebar-main-ports">main ports</span>
+              <span v-if="s.running && !servedBy(s)" class="pill sm ok" title="The main working tree serves the main ports" data-testid="sidebar-main-ports">main ports</span>
             </button>
           </li>
           <li v-for="l in lanesOf(s)" :key="l.name">
             <button
               type="button"
               class="item lane"
-              :class="{ active: isCurrent(s) && stack.lane === l.name, idle: !started(l) }"
+              :class="{ active: laneShown(s, l.name), idle: !started(l) }"
+              :aria-current="laneShown(s, l.name) ? 'page' : undefined"
               :title="laneTitle(s, l)"
               data-testid="sidebar-lane"
               :data-lane="l.name"
-              @click="openLane(s, l)"
+              @click="openLane(s, l.name)"
             >
               <span v-if="l.moving && !l.moving.error" class="spinner sm" aria-hidden="true" />
               <span v-else class="dot" :class="laneDot(s, l)" aria-hidden="true" />
@@ -437,7 +436,7 @@ async function copyPath(s: StackEntry) {
               :title="sharedTitle(l)"
               :data-connected="connectedTo(l)"
               data-testid="sidebar-shared-lane"
-              @click="router.push({ name: 'overview', params: { stack: sharedId(l.pool, l.lease) } })"
+              @click="router.push(laneView(sharedId(l.pool, l.lease), null))"
             >
               <span class="dot" :class="connectedTo(l) ? 'on' : 'off'" aria-hidden="true" />
               <span class="label truncate">{{ l.repo }} · {{ l.lane }}</span>

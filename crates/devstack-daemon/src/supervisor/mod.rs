@@ -413,6 +413,7 @@ impl Supervisor {
                         rebuild: None,
                         hot_reload: false,
                         hot_reload_available: svc.hot_reload.is_some(),
+                        singleton: svc.singleton(),
                         prepare: None,
                         last_action: None,
                     },

@@ -2,14 +2,16 @@
 // Ctrl+K / Cmd+K: go anywhere and run anything of the current stack by typing
 // (plan §6): views, stacks, services, groups, containers, the stack file's
 // commands. Actions that change something go through the same calls as the
-// buttons, a command with a confirmation text still asks.
+// buttons, a command with a confirmation text still asks. On a stack's page
+// the stack's actions and its lanes; in a lane's views that lane's (ADR-0081).
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import { useUi } from '@/stores/ui';
 import { laneActions } from '@/lib/laneActions';
-import { laneLabel } from '@/lib/lanes';
+import { laneLabel, lastTab } from '@/lib/lanes';
+import { laneView, stackPage } from '@/lib/stackRoutes';
 import Icon from './icons/Icon.vue';
 import type { IconName } from './icons/icons';
 
@@ -17,6 +19,7 @@ const hub = useHub();
 const stack = useStack();
 const ui = useUi();
 const router = useRouter();
+const route = useRoute();
 
 const open = ref(false);
 const query = ref('');
@@ -28,14 +31,20 @@ type Item = { id: string; label: string; hint: string; icon: IconName; run: () =
 
 function go(name: string, params: Record<string, string> = {}) {
   if (!stack.id) return;
-  void router.push({ name, params: { stack: stack.id, ...params } });
+  void router.push(laneView(stack.id, stack.lane, name, params));
 }
 
 const items = computed<Item[]>(() => {
   const out: Item[] = [];
-  const v = stack.view;
   const sid = stack.id;
-  if (sid) {
+  // The stack's page: its actions and its lanes, nothing of one lane.
+  const onPage = route.name === 'stack';
+  const v = onPage ? null : stack.view;
+  if (sid && onPage) {
+    for (const l of [stack.mainLane, ...stack.lanes].filter((x) => !!x))
+      out.push({ id: `lane-open:${l!.name}`, label: laneLabel(l!), hint: 'lane', icon: 'gitBranch', run: () => router.push(laneView(sid, l!.name, lastTab(route.name))) });
+  } else if (sid && !stack.foreign) out.push({ id: 'view:stack', label: `Stack ${stack.entry?.name ?? ''}`.trim(), hint: 'stack page', icon: 'layers', run: () => router.push(stackPage(sid)) });
+  if (sid && !onPage) {
     for (const [name, label, icon] of [
       ['overview', 'Overview', 'grid'],
       ['infra', 'Infrastructure', 'box'],
@@ -47,18 +56,18 @@ const items = computed<Item[]>(() => {
   }
   out.push({ id: 'ui:sidebar', label: `${ui.sidebarShown ? 'Hide' : 'Show'} sidebar`, hint: 'layout · Ctrl+B', icon: 'panelLeft', run: () => ui.toggleSidebar() });
   for (const s of hub.stacks)
-    if (s.id !== sid) out.push({ id: `stack:${s.id}`, label: s.name, hint: `stack${s.running ? '' : ', stopped'}`, icon: 'layers', run: () => router.push({ name: 'overview', params: { stack: s.id } }) });
+    if (s.id !== sid) out.push({ id: `stack:${s.id}`, label: s.name, hint: `stack${s.running ? '' : ', stopped'}`, icon: 'layers', run: () => router.push(stackPage(s.id)) });
   // Someone else's lane (ADR-0040) is viewed: nothing that would change it is offered.
   const changes = !stack.readOnly;
-  if (sid && stack.entry && changes) {
+  if (sid && stack.entry && changes && onPage) {
     if (stack.running) {
       out.push({ id: 'stack:restart', label: `Restart stack ${stack.entry.name}`, hint: 'stack', icon: 'restart', run: () => stack.restartStack() });
       out.push({ id: 'stack:stop', label: `Stop stack ${stack.entry.name}`, hint: 'stack', icon: 'stop', run: () => stack.stopStack() });
     } else out.push({ id: 'stack:start', label: `Start stack ${stack.entry.name}`, hint: 'stack', icon: 'play', run: () => stack.startStack() });
   }
   // The shown lane's actions, as its menu in the header has them.
-  const lane = stack.shownLane;
-  if (lane && changes) {
+  const lane = onPage ? null : stack.shownLane;
+  if (lane && changes && stack.running) {
     const { main, items: more } = laneActions(lane);
     for (const a of [main, ...more].filter((a) => !a.disabled))
       out.push({ id: `lane:${a.key}`, label: `${a.label.replace(/…$/, '')} lane ${laneLabel(lane)}`, hint: a.hint ? `lane, ${a.hint}` : 'lane', icon: a.icon ?? 'gitBranch', run: () => stack.laneAction(lane, a.key) });

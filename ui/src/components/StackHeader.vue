@@ -1,10 +1,12 @@
 <script setup lang="ts">
-// The stack's head on every tab: name, state, version, where it runs from and
-// which worktree (branch) is shown, with the branch picker (lanes from
-// branches, ADR-0047), the lane's actions and start/stop. Replaces the lane
-// banner.
+// A lane's head on every tab, the same for every lane, `main` (the main
+// working tree) included (ADR-0081): its stack (a link to the stack's page),
+// state, version, where it runs from and which branch, with the branch
+// picker (lanes from branches, ADR-0047) and the lane's actions. What has no
+// meaning for `main` is shown disabled, with the reason. The stack's own
+// actions (start, stop, restart, the daemon) are on the stack's page.
 import { computed, onBeforeUnmount, ref } from 'vue';
-import { clock, duration, ago, useNow } from '@/lib/format';
+import { clock, ago, useNow } from '@/lib/format';
 import { viaText } from '@/lib/journal';
 import { laneLabel, nodeLabel, notForwardedText } from '@/lib/lanes';
 import { usePopover } from '@/lib/popover';
@@ -14,7 +16,9 @@ import { useStack } from '@/stores/stack';
 import { connectedTo, usePool } from '@/stores/pool';
 import { useUi } from '@/stores/ui';
 import { useOpenerPrefs } from '@/lib/openers';
-import { laneActions, type LaneAction } from '@/lib/laneActions';
+import { laneActions, NOT_FOR_MAIN, type LaneAction } from '@/lib/laneActions';
+import { MAIN } from '@/lib/lanes';
+import { stackPage } from '@/lib/stackRoutes';
 import BranchPicker from './BranchPicker.vue';
 import SplitButton from './SplitButton.vue';
 import Icon from './icons/Icon.vue';
@@ -28,9 +32,8 @@ const now = useNow();
 const view = computed(() => stack.view);
 const daemon = computed(() => stack.entry?.daemon ?? null);
 const hubAway = computed(() => !hub.reachable);
-const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 const current = computed(() => stack.shownLane);
-const servedBy = computed(() => stack.lanes.find((l) => l.owns_main) ?? null);
+const isMain = computed(() => current.value?.name === MAIN);
 /** Since when and by what the lane `name` serves the main ports (ADR-0067), from the view: "since 10:42, set via the dashboard". */
 function servedSince(name: string): string {
   const m = view.value?.main_served;
@@ -40,16 +43,19 @@ function servedSince(name: string): string {
 const busyMain = computed(() => !!stack.busy['lane-main']);
 /** The shown lane's actions (Restart or Start, and the rest in the menu). */
 const laneMenu = computed(() => (current.value ? laneActions(current.value) : null));
-const laneBusy = computed(() => !!current.value && (stack.busy['lane-restart'] === current.value.name || stack.busy['lane-start'] === current.value.name));
+const laneBusy = computed(
+  () => !!current.value && [stack.busy['lane-restart'], stack.busy['lane-start'], stack.busy['lane-stop']].includes(current.value.name),
+);
+/** "Serve main ports": the same button for every lane that does not hold them; `main` takes them back whether it runs or not. */
+const canServeMain = computed(() => !!current.value && !current.value.owns_main && (current.value.active !== false || isMain.value) && !view.value?.no_main_ports);
 
 /** The shown tree's state and its event stream: live, or why not. */
 const liveState = computed(() => {
   if (stack.ending?.removing) return { tone: 'warn', label: 'removing', title: 'Its worktree is gone: the lane stops and its data is removed' };
   if (stack.ending) return { tone: '', label: 'removed', title: 'Its worktree is gone, and the lane with it' };
   if (!stack.running) return { tone: '', label: 'offline', title: 'The stack daemon is not running' };
-  if (current.value && current.value.active === false) return { tone: '', label: 'not started', title: 'This worktree runs nothing yet' };
-  if (stack.mainIdle) return { tone: '', label: 'stopped', title: 'Nothing of the main working tree runs; its daemon is up and its events are live' };
-  if (stack.live) return { tone: 'ok', label: 'live', title: `Receiving live events from the ${current.value ? 'lane' : 'main working tree'}` };
+  if (current.value && current.value.active === false) return { tone: '', label: 'not started', title: `${laneLabel(current.value)} runs nothing now` };
+  if (stack.live) return { tone: 'ok', label: 'live', title: `Receiving live events from ${current.value ? laneLabel(current.value) : 'this lane'}` };
   if (stack.stream === 'error') return { tone: 'warn', label: 'reconnecting', title: 'The event stream dropped; reconnecting' };
   return { tone: '', label: 'connecting', title: 'Connecting to the event stream' };
 });
@@ -174,7 +180,12 @@ function openWith(o: Opener) {
 <template>
   <header class="stack-head" data-testid="stack-header">
     <div class="line1">
-      <h1 class="truncate">{{ view?.name ?? stack.entry?.name ?? 'Stack' }}</h1>
+      <h1 class="truncate">
+        <RouterLink v-if="stack.id && !stack.foreign" :to="stackPage(stack.id)" class="stack-link" title="The stack's page: its lanes, the main ports, start and stop" data-testid="stack-page-link">{{
+          view?.name ?? stack.entry?.name ?? 'Stack'
+        }}</RouterLink>
+        <template v-else>{{ view?.name ?? stack.entry?.name ?? 'Stack' }}</template>
+      </h1>
       <span v-if="hubAway" class="pill" title="The hub is not reachable"><span class="dot" />last seen {{ ago(stack.viewAt ?? hub.lastContact, now) }}</span>
       <span v-else class="pill" :class="liveState.tone" :title="liveState.title" data-testid="stack-live" role="status"><span class="dot" />{{ liveState.label }}</span>
       <span v-if="daemon" class="tag" title="daemon version">devstack {{ daemon.version }}</span>
@@ -212,21 +223,23 @@ function openWith(o: Opener) {
         <span v-if="connBusy" class="spinner" /><Icon v-else :name="sharedConn.connected ? 'x' : 'globe'" :size="13" />
         {{ sharedConn.connected ? 'Disconnect' : 'Connect' }}
       </button>
-      <template v-if="!hubAway && !stack.readOnly">
+      <template v-if="!hubAway && !stack.readOnly && stack.running">
         <button
-          v-if="current && !current.owns_main && current.active !== false && !view?.no_main_ports"
+          v-if="current && canServeMain"
           type="button"
           class="btn btn-sm"
           :disabled="busyMain"
-          title="This worktree's services, dev servers included, answer on the main ports; workers move with them"
+          :title="`${laneLabel(current)}'s services, dev servers included, answer on the main ports; workers move with them`"
           data-testid="lane-take-main"
           @click="stack.laneMain(current.name)"
         >
           <span v-if="busyMain" class="spinner" /><Icon v-else name="promote" :size="14" /> Serve main ports
         </button>
-        <button v-if="servedBy" type="button" class="btn btn-sm" :disabled="busyMain" :title="`${laneLabel(servedBy)} serves the main ports${servedSince(servedBy.name)}`" data-testid="lane-main-back" @click="stack.laneMain('main')">
-          <Icon name="rollback" :size="14" /> Main ports back
-        </button>
+        <!-- What has no meaning for the main working tree stays in its place, disabled, with the reason (ADR-0081). -->
+        <template v-if="isMain && pool.targets.length">
+          <button type="button" class="btn btn-sm" disabled :title="NOT_FOR_MAIN.share" data-testid="lane-share-main"><Icon name="globe" :size="13" /> Not shared</button>
+          <button type="button" class="btn btn-sm" disabled :title="NOT_FOR_MAIN.move" data-testid="lane-move-main"><Icon name="server" :size="14" /> Move</button>
+        </template>
         <div v-if="current && current.node" ref="shareRoot" class="picker" data-testid="lane-share">
           <button
             ref="shareTrigger"
@@ -256,7 +269,7 @@ function openWith(o: Opener) {
             <p class="faint small share-note" data-testid="lane-share-note">They see the lane read only (its state, logs and events) and open its services through its node; they do not control it.</p>
           </div>
         </div>
-        <div v-if="current && !current.owns_main && current.active !== false && (moveTargets.length || moving)" ref="moveRoot" class="picker">
+        <div v-if="current && !isMain && !current.owns_main && current.active !== false && (moveTargets.length || moving)" ref="moveRoot" class="picker">
           <button
             ref="moveTrigger"
             type="button"
@@ -292,14 +305,6 @@ function openWith(o: Opener) {
           @main="stack.laneAction(current!, laneMenu.main.key)"
           @pick="(k) => stack.laneAction(current!, k as LaneAction)"
         />
-        <template v-if="!current">
-          <button v-if="!stack.running || stack.mainIdle" type="button" class="btn btn-primary btn-sm" :disabled="starting || !stack.entry" data-testid="action-stack-start" @click="stack.startStack()">
-            <span v-if="starting" class="spinner" /><Icon v-else name="play" :size="14" /> Start stack
-          </button>
-          <button v-else type="button" class="btn btn-sm btn-stop" :disabled="!!stack.busy.stack" data-testid="action-stack-stop" @click="stack.stopStack()">
-            <span v-if="stack.busy.stack" class="spinner" /><Icon v-else name="power" :size="14" /> Stop stack
-          </button>
-        </template>
       </template>
     </div>
     <div class="line2">
@@ -347,7 +352,6 @@ function openWith(o: Opener) {
         <OpenersDialog :open="managing" :openers="hub.openers ?? []" @close="managing = false" />
       </div>
       <BranchPicker />
-      <span v-if="daemon && !current" class="muted small">daemon pid {{ daemon.pid }} · port {{ daemon.port }} · up {{ duration(now - daemon.started) }}</span>
       <span v-if="moving" class="muted small move-line" data-testid="lane-moving" :title="moving.what">
         <span class="bar"><span :style="{ width: `${(100 * moving.step) / moving.steps}%` }" /></span>
         {{ moving.what }}
@@ -376,6 +380,13 @@ function openWith(o: Opener) {
 </template>
 
 <style scoped>
+.stack-link {
+  color: inherit;
+  text-decoration: none;
+}
+.stack-link:hover {
+  text-decoration: underline;
+}
 .share-tags {
   display: flex;
   gap: 6px;

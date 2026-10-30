@@ -14,6 +14,7 @@ import AgentPrompt from './AgentPrompt.vue';
 import Modal from './Modal.vue';
 import Icon from './icons/Icon.vue';
 import ScanStacks from './ScanStacks.vue';
+import { stackPage } from '@/lib/stackRoutes';
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ close: [] }>();
@@ -97,7 +98,7 @@ const state = computed(() => {
 
 function openStack(id: string) {
   emit('close');
-  void router.push({ name: 'overview', params: { stack: id } });
+  void router.push(stackPage(id));
 }
 
 async function add() {

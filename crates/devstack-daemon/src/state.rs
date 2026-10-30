@@ -95,6 +95,10 @@ pub struct ServiceView {
     pub hot_reload: bool,
     /// The stack file gives it a hot-reload mode.
     pub hot_reload_available: bool,
+    /// It runs once per machine, in the main working tree only (`singleton
+    /// = true`, or the deprecated `lanes = false`, ADR-0080): the stack
+    /// page lists it as the stack's, not a lane's. Older daemons omit it.
+    pub singleton: bool,
     /// Where its last `prepare` outputs came from (ADR-0062): the store or
     /// a run. Since this daemon started; none before its first `prepare`.
     #[serde(skip_serializing_if = "Option::is_none")]

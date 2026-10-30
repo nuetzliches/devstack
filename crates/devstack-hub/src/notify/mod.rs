@@ -55,8 +55,8 @@ pub(crate) struct Target {
 }
 
 impl Target {
-    /// The dashboard's route for it (hash history). `lane=` (empty) shows
-    /// the main working tree, whichever lane was shown last.
+    /// The dashboard's route for it (hash history): the lane view
+    /// (ADR-0081), `main` for the main working tree.
     pub fn path(&self) -> String {
         if self.pool {
             return "/#/pool".into();
@@ -64,14 +64,11 @@ impl Target {
         let Some(stack) = &self.stack else {
             return "/#/".into();
         };
-        let mut p = format!("/#/s/{}", enc(stack));
+        let lane = self.lane.as_deref().filter(|l| !l.is_empty());
+        let mut p = format!("/#/s/{}/l/{}", enc(stack), enc(lane.unwrap_or("main")));
         if let Some(s) = &self.service {
             p.push_str(&format!("/services/{}", enc(s)));
         }
-        p.push_str(&format!(
-            "?lane={}",
-            enc(self.lane.as_deref().unwrap_or(""))
-        ));
         p
     }
 
@@ -609,7 +606,7 @@ mod tests {
         let shown = shown.lock().unwrap();
         assert_eq!(shown.len(), 4);
         assert_eq!(shown[3].context, "shop · lane feat-x");
-        assert_eq!(shown[3].route, "/#/s/ab12/services/api?lane=feat-x");
+        assert_eq!(shown[3].route, "/#/s/ab12/l/feat-x/services/api");
         assert_eq!(
             shown[3].link,
             "devstack://open?stack=ab12&lane=feat-x&service=api"
@@ -723,7 +720,7 @@ mod tests {
             service: Some("api".into()),
             pool: false,
         };
-        assert_eq!(t.path(), "/#/s/ab12/services/api?lane=feat%20x");
+        assert_eq!(t.path(), "/#/s/ab12/l/feat%20x/services/api");
         assert_eq!(
             t.link(),
             "devstack://open?stack=ab12&lane=feat%20x&service=api"
@@ -732,7 +729,7 @@ mod tests {
             stack: Some("ab12".into()),
             ..Target::default()
         };
-        assert_eq!(main.path(), "/#/s/ab12?lane=");
+        assert_eq!(main.path(), "/#/s/ab12/l/main");
         assert_eq!(main.link(), "devstack://open?stack=ab12");
         assert_eq!(Target::default().path(), "/#/");
         assert_eq!(Target::default().link(), "devstack://open");

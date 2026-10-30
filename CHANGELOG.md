@@ -15,6 +15,17 @@ and listed with their assets on the
   runs once per machine, in the main working tree only. `lanes = false`
   still works and means the same; `devstack check` reports it as
   deprecated.
+- **Every lane has the same view, `main` included** (ADR-0081): the main
+  working tree is the lane `main`, with the same header, actions and start
+  card as any lane; what has no meaning for it (Cold, Discard data, Remove
+  worktree, Move, Share, a start in the pool, another profile) is shown
+  disabled, with the reason. *Serve main ports* is the same button in
+  every lane that does not hold them. *Stop stack* now stops every lane and
+  the daemon; `main`'s own Stop stops the main working tree only.
+- **The lane is in the URL**: `#/s/<stack>/l/<lane>/...` (`main` for the
+  main working tree), in the links of `devstack status`, `up`, `ui
+  --link`, notifications and the tray too. Links of the form
+  `#/s/<stack>/services/api?lane=feat` still open that lane.
 
 ### Deprecated
 
@@ -30,6 +41,15 @@ and listed with their assets on the
 
 - **`/v1/lanes/main/v1/...`** answers as the main working tree's `/v1/...`
   (ADR-0080), so a client addresses every tree as a lane.
+- **A stack has a page of its own** (ADR-0081), above its lanes, at
+  `#/s/<stack>` (the sidebar's stack row): its daemon (pid, port, uptime)
+  and the restart banner, Start, Stop and Restart stack, who serves the
+  main ports and the control to give them to another lane or back to
+  main, its lanes with branch, place, state, port offset and what each
+  uses, and the services that run once per machine. A stopped stack's page
+  shows its start and its worktrees.
+- **`ServiceView.singleton`** (ADR-0080, ADR-0081): whether a service runs
+  once per machine, in the main working tree only.
 
 ## [0.32.0] - 2026-10-30
 

@@ -6,6 +6,7 @@ import { sharedId } from '@/api';
 import { connectedTo, usePool } from '@/stores/pool';
 import Icon from '@/components/icons/Icon.vue';
 import PoolLeases from './PoolLeases.vue';
+import { laneView } from '@/lib/stackRoutes';
 
 const pool = usePool();
 const leases = computed(() => pool.overview?.leases ?? []);
@@ -38,7 +39,7 @@ const sharedHere = computed(() => pool.shared.filter((l) => l.pool === pool.curr
         <tbody>
           <tr v-for="l in sharedHere" :key="l.lease">
             <td>
-              <RouterLink :to="{ name: 'overview', params: { stack: sharedId(l.pool, l.lease) } }" title="Its state, logs and events, read only" data-testid="pool-shared-view">
+              <RouterLink :to="laneView(sharedId(l.pool, l.lease), null)" title="Its state, logs and events, read only" data-testid="pool-shared-view">
                 <strong>{{ l.lane }}</strong>
               </RouterLink>
               <span class="faint repo">{{ l.repo }}</span>

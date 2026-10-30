@@ -163,3 +163,4 @@ stay.
 | [0078](0078-the-hub-follows-every-stacks-worktrees.md) | The hub follows every stack's worktrees; a stopped stack's lane can be started from the dashboard | Accepted (card in the pull request) |
 | [0079](0079-skills-local-to-a-working-tree.md) | Skills local to a working tree: a pool's project skills bound to their repository, devstack's own untracked | Accepted (card in the pull request) |
 | [0080](0080-the-main-tree-answers-as-a-lane-shared-is-deprecated.md) | The main working tree answers as the lane `main`; `singleton` replaces `lanes = false`; `shared` is deprecated | Accepted (card in the pull request) |
+| [0081](0081-a-stack-has-a-page-every-lane-the-same-view.md) | A stack has a page of its own; every lane, `main` included, has the same view | Accepted (card in the pull request) |

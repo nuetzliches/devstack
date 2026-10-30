@@ -63,8 +63,9 @@ export const paths = {
   agent: '/hub/agent',
   scanStacks: '/hub/stacks/scan',
   up: (stack: string) => `/hub/stacks/${enc(stack)}/up`,
-  /** `restart`: the daemon leaves its lanes to the next one (ADR-0052). */
-  down: (stack: string, infra = true, restart = false) => `/hub/stacks/${enc(stack)}/down?infra=${infra}${restart ? '&restart=true' : ''}`,
+  /** `restart`: the daemon leaves its lanes to the next one (ADR-0052); `all`: the lanes stop too, and the daemon exits. */
+  down: (stack: string, infra = true, restart = false, all = false) =>
+    `/hub/stacks/${enc(stack)}/down?infra=${infra}${restart ? '&restart=true' : ''}${all ? '&all=true' : ''}`,
   forget: (stack: string) => `/hub/stacks/${enc(stack)}`,
   branches: (stack: string) => `/hub/stacks/${enc(stack)}/branches`,
   worktrees: (stack: string) => `/hub/stacks/${enc(stack)}/worktrees`,
@@ -163,6 +164,10 @@ export const v1 = {
   storeEntry: (service: string, key: string) => `/v1/store/${enc(service)}/${enc(key)}`,
   up: '/v1/up',
   down: '/v1/down',
+  /** The tree's own stop: its services and containers; the daemon and the other lanes stay. */
+  downTree: '/v1/down?infra=true',
+  /** Without history: what a tree uses now. */
+  usageNow: '/v1/usage',
   logStream: (service: string, tail = 500, build?: string) =>
     `/v1/services/${enc(service)}/logs/stream?tail=${tail}${build ? `&build=${enc(build)}` : ''}`,
   buildLog: (service: string) => `/v1/services/${enc(service)}/build-log`,

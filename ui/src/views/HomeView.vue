@@ -7,6 +7,7 @@ import { useHub } from '@/stores/hub';
 import Icon from '@/components/icons/Icon.vue';
 import ScanStacks from '@/components/ScanStacks.vue';
 import AddStackDialog from '@/components/AddStackDialog.vue';
+import { stackPage } from '@/lib/stackRoutes';
 
 const hub = useHub();
 const router = useRouter();
@@ -19,7 +20,7 @@ const target = computed(() => {
 });
 
 watchEffect(() => {
-  if (target.value) void router.replace({ name: 'overview', params: { stack: target.value } });
+  if (target.value) void router.replace(stackPage(target.value));
 });
 </script>
 
