@@ -268,7 +268,7 @@ impl Supervisor {
     }
 
     /// Main tree, while lanes run: stop every service but those that serve
-    /// the lanes, a service with `lanes = false` and what it starts `after`
+    /// the lanes, a `singleton` service and what it starts `after`
     /// (ADR-0024 point 5: the main tree's instance serves every lane). With
     /// `infra` the containers go too (ADR-0068), but those a kept service
     /// comes `after` and, while `local_lanes`, the `shared` ones (a lane
@@ -284,7 +284,7 @@ impl Supervisor {
             .stack
             .services
             .iter()
-            .filter(|(_, s)| !s.lanes)
+            .filter(|(_, s)| s.singleton())
             .map(|(n, _)| n.clone())
             .collect();
         let mut containers: BTreeSet<(String, String)> = BTreeSet::new();
@@ -552,7 +552,7 @@ impl Supervisor {
         }
         if !self.runs_here(&svc) {
             return Err(format!(
-                "`{name}` runs in the main working tree only (`lanes = false`); its instance there serves this lane too"
+                "`{name}` runs in the main working tree only (`singleton`); its instance there serves this lane too"
             ));
         }
         if let Err(e) = self.ensure_after(&svc) {
@@ -990,7 +990,9 @@ impl Supervisor {
             // A lane without the main slot never runs workers (ADR-0012 interim rule).
             // What runs in the main tree only keeps its workers: no lane takes them over.
             is_main: is_main
-                && (self.owns_main() || !svc.lanes || self.lane_workers.load(Ordering::SeqCst)),
+                && (self.owns_main()
+                    || svc.singleton()
+                    || self.lane_workers.load(Ordering::SeqCst)),
             // The slot, not the workers: a lane's main instance is no candidate.
             candidate: !is_main,
             // `{lane}`, `{lane_suffix}`, `DEVSTACK_LANE`: on a node the lane's

@@ -2053,7 +2053,7 @@ fn a_worktree_runs_as_a_lane() {
         "\n[services.web]\nkind = \"devserver\"\nrun = '\"{BIN}\" serve-static src/Site --port {{port}}'\nport = {web_port}\nprepare = {{ run = \"mkdir deps && echo x>>prepared.count\", outputs = [\"deps\"] }}\n"
     ));
     toml.push_str(&format!(
-        "\n[services.tray]\nkind = \"tool\"\nlanes = false\nrun = '\"{BIN}\" serve-static src/Site --port {{port}}'\nport = {tray_port}\n"
+        "\n[services.tray]\nkind = \"tool\"\nsingleton = true\nrun = '\"{BIN}\" serve-static src/Site --port {{port}}'\nport = {tray_port}\n"
     ));
     toml.push_str(
         "\n[commands.tray-cycle]\ndescription = \"t\"\nsteps = [{ restart = \"tray\" }, { start = \"tray\" }]\n",
@@ -2253,7 +2253,7 @@ fn a_worktree_runs_as_a_lane() {
     );
 
     // The lane's API takes requests for one service (a path parameter of
-    // its own under /v1/lanes/<lane>/v1/...), and a `lanes = false` service
+    // its own under /v1/lanes/<lane>/v1/...), and a `singleton = true` service
     // runs in the main tree only: there it answers, in the lane it is refused.
     // `devstack env` in the worktree shows what the lane gets, not the main tree.
     let env = wt_cli(&["env", "api"]);
@@ -2291,6 +2291,21 @@ fn a_worktree_runs_as_a_lane() {
     assert!(
         tray.is_null() || tray["status"]["state"] == "stopped",
         "no tray in the lane: {tray}"
+    );
+    // The main working tree answers as the lane `main` too (ADR-0080).
+    let tray_of = |view: Value| {
+        view["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["name"] == "tray")
+            .map(|v| v["status"]["state"].clone())
+    };
+    let as_main = tray_of(s.daemon_get("/v1/lanes/main/v1/stack"));
+    assert_eq!(as_main, tray_of(s.daemon_get("/v1/stack")));
+    assert!(
+        as_main.is_some_and(|st| st != "stopped"),
+        "the tray runs in main"
     );
 
     // 3. An edit in the worktree reaches the lane only.
@@ -2416,7 +2431,7 @@ fn a_worktree_runs_as_a_lane() {
         s.ok(&["status"])
     );
     // `down` and `up` in the main tree leave a running lane alone, and what
-    // serves it from the main tree (`tray`, `lanes = false`) runs on.
+    // serves it from the main tree (`tray`, `singleton = true`) runs on.
     let out = s.ok(&["down"]);
     assert!(out.contains("lanes keep running"), "{out}");
     assert!(out.contains("tray that serve them"), "{out}");

@@ -80,7 +80,7 @@ impl Supervisor {
         self.stack
             .services
             .iter()
-            .filter(|(_, s)| s.proxied() && s.lanes && self.runs_here(s))
+            .filter(|(_, s)| s.proxied() && !s.singleton() && self.runs_here(s))
             .map(|(n, _)| n.clone())
             .collect()
     }
@@ -96,7 +96,7 @@ impl Supervisor {
                 s.port.is_some()
                     && !s.proxied()
                     && s.kind != Kind::Job
-                    && s.lanes
+                    && !s.singleton()
                     && self.runs_here(s)
             })
             .map(|(n, _)| n.clone())
@@ -160,9 +160,9 @@ impl Supervisor {
         self.stack
             .services
             .iter()
-            // `lanes = false` keeps its workers wherever the main slot is.
+            // A `singleton` keeps its workers wherever the main slot is.
             .filter(|(n, s)| {
-                s.workers.is_some() && s.lanes && slots[n.as_str()].view.status.is_active()
+                s.workers.is_some() && !s.singleton() && slots[n.as_str()].view.status.is_active()
             })
             .map(|(n, _)| n.clone())
             .collect()
@@ -229,7 +229,7 @@ impl Supervisor {
 /// such containers only has nothing to move (#184).
 pub(crate) fn moves_main_slot(stack: &devstack_config::Stack) -> bool {
     stack.services.values().any(|s| {
-        s.lanes
+        !s.singleton()
             && super::on_this_platform(s)
             && ((s.port.is_some() && s.kind != Kind::Job) || s.workers.is_some())
     }) || stack.compose.values().any(|g| !g.main_ports.is_empty())
@@ -258,7 +258,7 @@ name = \"s\"
             "[services.once]
 run = \"x\"
 port = 9001
-lanes = false
+singleton = true
 "
         )));
     }

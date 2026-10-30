@@ -941,12 +941,17 @@ pub struct Service {
     /// Restrict to these platforms; empty = all.
     #[serde(default)]
     pub platforms: Vec<Platform>,
-    /// `false`: runs in the main working tree only, never in a lane
-    /// (ADR-0024). For what may run once per machine (a tray app, something
-    /// that holds a global lock); the main tree's instance serves every lane
-    /// and keeps its workers while a lane holds the main slot.
-    #[serde(default = "yes")]
-    pub lanes: bool,
+    /// `true`: runs once per machine, in the main working tree only, never in
+    /// a lane (ADR-0024, ADR-0080). For a tray app or something that holds a
+    /// global lock; the main tree's instance serves every lane and keeps its
+    /// workers while a lane holds the main slot. Read through
+    /// [`Service::singleton`].
+    #[serde(default)]
+    pub singleton: bool,
+    /// `lanes = false`: the spelling of `singleton = true` before 0.33.0
+    /// (deprecated, `compat::DEPRECATED`).
+    #[serde(default = "yes", rename = "lanes")]
+    pub legacy_lanes: bool,
     /// Compose service whose environment is the base (ADR-0014).
     pub compose: Option<ComposeRef>,
     /// Compose services whose `name:port` is rewritten to the published host
@@ -1258,6 +1263,12 @@ fn opt_duration<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Duratio
 }
 
 impl Service {
+    /// Runs once per machine, in the main working tree only (`singleton =
+    /// true`, or the older `lanes = false`).
+    pub fn singleton(&self) -> bool {
+        self.singleton || !self.legacy_lanes
+    }
+
     /// `https` when the health check speaks TLS (a dev server with a
     /// certificate), otherwise `http`: how a browser or a command reaches the
     /// service on its fixed port.

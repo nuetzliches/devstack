@@ -1186,7 +1186,7 @@ pub fn start_and_wait(
                 && (s.platforms.is_empty()
                     || s.platforms
                         .contains(&devstack_config::model::Platform::current()))
-                && (c.lane().is_none() || s.lanes)
+                && (c.lane().is_none() || !s.singleton())
         })
         .map(|(n, _)| n.clone())
         .collect();
@@ -2412,7 +2412,7 @@ pub fn down(stack_file: &Path, infra: bool, all: bool) -> Result<()> {
                 .and_then(|v| serde_json::from_value(v[key].clone()).ok())
                 .unwrap_or_default()
         };
-        // What serves the lanes (`lanes = false`) runs on for them.
+        // What serves the lanes (`singleton`) runs on for them.
         let kept = list("kept");
         let containers = list("containers");
         let mut stays = vec!["the daemon".to_string()];

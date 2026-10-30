@@ -1005,7 +1005,7 @@ fn a_dev_server_with_a_package_json_and_no_prepare_is_a_warning() {
         "port = 5173\nprepare = { run = \"npm ci\" }\n",
     );
     assert!(warnings(&prepared).is_empty());
-    let main_only = text.replace("port = 5173\n", "port = 5173\nlanes = false\n");
+    let main_only = text.replace("port = 5173\n", "port = 5173\nsingleton = true\n");
     assert!(warnings(&main_only).is_empty());
     assert!(warnings(&text.replace("cwd = \"web\"", "cwd = \"api\"")).is_empty());
 }
@@ -1237,4 +1237,21 @@ fn a_services_stop_takes_the_placeholders_of_its_run() {
         all.contains("services.site.stop: kind `static` has no `stop`"),
         "{all}"
     );
+}
+
+#[test]
+fn singleton_and_the_older_lanes_false_mean_the_same() {
+    let svc = |extra: &str| {
+        let s = from_str(
+            &format!("{MINIMAL}[services.tray]\nrun = \"x\"\n{extra}"),
+            Path::new("t"),
+        )
+        .unwrap();
+        s.services["tray"].singleton()
+    };
+    assert!(!svc(""));
+    assert!(svc("singleton = true\n"));
+    assert!(svc("lanes = false\n"));
+    assert!(!svc("lanes = true\n"));
+    assert!(!svc("singleton = false\n"));
 }

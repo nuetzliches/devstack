@@ -1253,7 +1253,7 @@ pub fn warnings(stack: &Stack) -> Vec<Issue> {
 pub fn repo_warnings(stack: &Stack, repo: &std::path::Path) -> Vec<Issue> {
     let mut out = Vec::new();
     for (name, svc) in &stack.services {
-        if svc.kind != Kind::Devserver || !svc.lanes || svc.prepare.is_some() {
+        if svc.kind != Kind::Devserver || svc.singleton() || svc.prepare.is_some() {
             continue;
         }
         let cwd = svc.cwd.as_deref().unwrap_or(".");

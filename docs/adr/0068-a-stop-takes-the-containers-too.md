@@ -1,6 +1,6 @@
 # ADR-0068: A stop takes the stack's containers too, unless asked to keep them
 
-- **Status:** Accepted (2026-10-27)
+- **Status:** Accepted (2026-10-27); point 3's `shared` containers go with `shared`, deprecated by [ADR-0080](0080-the-main-tree-answers-as-a-lane-shared-is-deprecated.md) (2026-10-30)
 - **Date:** 2026-10-27
 - **Deciders:** project owner
 - **Related:** [ADR-0004](0004-infrastructure-is-delegated-to-compose.md), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (point 5), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md) (points 3 and 4), [ADR-0038](0038-a-lanes-data-outlives-its-lease.md), [ADR-0052](0052-a-restart-carries-the-lanes-over.md), [ADR-0058](0058-a-profile-can-leave-out-containers-and-services.md)
