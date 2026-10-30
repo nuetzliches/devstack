@@ -269,7 +269,7 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
             </tr>
           </thead>
           <tbody>
-            <tr v-for="l in lanes" :key="l.name" class="row" tabindex="0" :title="l.path" data-testid="stack-lane" :data-lane="l.name" @click="open(l)" @keydown.enter="open(l)">
+            <tr v-for="l in lanes" :key="l.name" class="lane-row" tabindex="0" :title="l.path" data-testid="stack-lane" :data-lane="l.name" @click="open(l)" @keydown.enter="open(l)">
               <td>
                 <RouterLink :to="laneView(stack.id ?? '', l.name, lastTab(route.name))" class="lane-name" @click.stop>{{ l.name === MAIN ? MAIN : l.name }}</RouterLink>
                 <span v-if="l.name === MAIN" class="faint small"> main working tree</span>
@@ -355,10 +355,10 @@ h1 {
   min-width: 200px;
   width: auto;
 }
-.lanes .row {
+.lanes .lane-row {
   cursor: pointer;
 }
-.lanes .row:focus-visible td {
+.lanes .lane-row:focus-visible td {
   box-shadow: inset var(--focus);
 }
 .lane-name {
