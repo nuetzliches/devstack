@@ -69,7 +69,8 @@ pub fn text(p: &Prompt) -> String {
     // existing file merged into.
     let mcp = "devstack's MCP server (`devstack mcp`, stdio) gives coding agents its tools (status, logs, restart, lanes). Register it in the project's configuration of the coding agents this repository is worked on with, next to the servers already there: `.mcp.json` (Claude Code) `{ \"mcpServers\": { \"devstack\": { \"command\": \"devstack\", \"args\": [\"mcp\"] } } }`; `.vscode/mcp.json` (VS Code) the same under `servers`, with `\"type\": \"stdio\"`; `.codex/config.toml` (Codex) `[mcp_servers.devstack]` with `command = \"devstack\"`, `args = [\"mcp\"]`. Keep the files' other entries and their formatting; an agent loads a new server when it starts again.";
     // Generated skills are local to the working tree since 0.32.0
-    // (ADR-0079): copies an earlier devstack had committed leave git.
+    // (ADR-0079): copies an earlier devstack had committed leave git. A
+    // migration aid, removed again once repositories have moved (#389).
     let untrack = "The generated skills are local to each working tree, not the repository's: each of their folders holds a `.gitignore` that ignores it, and the devstack hub keeps them current. Where git still tracks one (`git ls-files` lists a skill folder whose SKILL.md has the line `(devstack skills install)`, such as `.claude/skills/devstack`), take it out of git with `git rm -r --cached <folder>`: the files stay. A skill the project wrote itself stays tracked.";
     match *p {
         Prompt::Setup { repo, drafted } => format!(

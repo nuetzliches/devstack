@@ -105,7 +105,9 @@ What was built:
 8. **The prompts.** The upgrade and skills prompts have the agent take
    tracked generated skills out of git, whatever version the repository
    comes from: a repository may skip releases, and the step does nothing
-   without such copies.
+   without such copies. It is a migration aid and goes again once the
+   repositories have moved, with the hint of `devstack skills install`
+   ([#389](https://github.com/nuetzliches/devstack/issues/389)).
 9. **The dashboard.** The Skills page shows each agent's folder in a
    working tree beside its user folder, a bound skill's repositories as a
    pill and in its detail with the working trees it is in, and the state

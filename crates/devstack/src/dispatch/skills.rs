@@ -31,7 +31,8 @@ pub(crate) fn run(file: &Path, action: SkillsAction) -> Result<()> {
                 }
             }
             // Local to the working tree since ADR-0079: a copy an earlier
-            // devstack had committed is the user's to take out of git.
+            // devstack had committed is the user's to take out of git (a
+            // migration aid, #389).
             if !tracked.is_empty() {
                 println!(
                     "git still tracks these generated skills; they are local to the working tree now (each ignores itself). Take them out of git, the files stay:"

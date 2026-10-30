@@ -33,7 +33,8 @@ and listed with their assets on the
   page, in every stack and worktree, whenever devstack or the stack file
   changes. Commit them no more: `devstack skills install` lists the copies
   git still tracks with the `git rm -r --cached` that takes them out, and
-  the upgrade prompt does it. `[agents] skills` still names where
+  the upgrade prompt does it (a migration step that goes again in a later
+  release, #389). `[agents] skills` still names where
   `devstack skills install` writes.
 
 ### Fixed
