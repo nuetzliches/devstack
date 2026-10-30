@@ -391,6 +391,11 @@ fn a_lane_is_leased_admitted_and_synced() {
 
     let renewed = rt.block_on(client.renew(&lease.id)).unwrap();
     assert!(renewed.expires >= lease.expires);
+    // A dedicated node keeps a lease an hour without a renewal (#379).
+    assert!(
+        renewed.expires >= devstack_node::store::now() + 3500,
+        "{renewed:?}"
+    );
     let view = rt.block_on(client.node()).unwrap();
     assert_eq!(view.leases.len(), 1);
 

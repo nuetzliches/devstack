@@ -2844,41 +2844,31 @@ impl Lanes {
 
     /// The lanes on nodes a daemon before this one followed and neither
     /// stopped nor carried over (ADR-0052 point 6): it crashed, was killed,
-    /// or the machine went down. Their leases are over by now (or released
-    /// here, as a daemon that stops releases them, ADR-0025 point 7); each
-    /// is said in the log and with the lane, so the lane does not just show
-    /// as stopped.
+    /// or the machine went down. A node keeps a lease a while without its
+    /// renewals (#379): a lane whose lease still runs there is followed
+    /// again, as after a restart; one whose lease is over is said in the log
+    /// and with the lane, so the lane does not just show as stopped.
     fn unfollowed(&self) {
         let names: Vec<String> = self.known.lock().unwrap().keys().cloned().collect();
         for name in names {
-            let state = self.state_dir(&name);
-            let Some(c) = crate::remote::followed(&state) else {
+            let Some(c) = crate::remote::followed(&self.state_dir(&name)) else {
                 continue;
             };
             if self.remote(&name).is_some_and(|r| r.lease == c.lease) {
                 continue;
             }
-            crate::remote::forget_followed(&state, &c.lease);
-            if let Ok(client) = devstack_node::nodeclient::NodeClient::new(
-                &crate::remote::local_member(&c.pool),
-                c.node.clone(),
-            ) {
-                let _ = self.rt.block_on(client.release(&c.lease));
-            }
-            let node = c.node.name;
             crate::diag::warn(
                 "remote_lane_unfollowed",
-                serde_json::json!({ "lane": name, "node": node, "lease": c.lease }),
+                serde_json::json!({ "lane": name, "node": c.node.name, "lease": c.lease }),
             );
-            self.begin_move(&name, "start", &node, 1);
-            self.finish(
-                &name,
-                Some(&format!(
-                    "lane `{name}` ran on {node} until devstack here ended without stopping it \
-                     (a crash, a restart of this machine); its lease there is over. \
-                     `devstack up --on {node}` starts it again from its data kept there"
-                )),
-            );
+            // ponytail: the note has no profile nor workers; the lane runs
+            // on with what its node has, the main slot stays with the main tree.
+            self.take_up_remote(CarriedLane {
+                name,
+                profile: None,
+                workers: false,
+                node: Some(c),
+            });
         }
     }
 

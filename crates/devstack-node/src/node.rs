@@ -31,8 +31,10 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// How long a lease lives without a renewal.
-pub const TTL: Duration = Duration::from_secs(120);
+/// How long a lease lives without a renewal, unless the node's policy says
+/// (`lease_grace_minutes`): long enough for its requester to restart or wake.
+const GRACE_DEDICATED: Duration = Duration::from_secs(3600);
+const GRACE_OTHER: Duration = Duration::from_secs(15 * 60);
 /// How often the node measures, reaps and reports.
 const EVERY: Duration = Duration::from_secs(15);
 /// A lease admitted this recently is not in the measured usage yet, so its
@@ -634,6 +636,22 @@ impl Inner {
             ),
             gib.unwrap_or(KEEP_GIB) << 30,
         )
+    }
+
+    /// How long a lease lives here without a renewal.
+    fn grace(&self) -> Duration {
+        let policies = self.policies();
+        let all: Vec<&crate::policy::NodePolicy> = policies.iter().collect();
+        crate::policy::NodePolicy::strictest(&all)
+            .and_then(|p| p.lease_grace_minutes)
+            .map_or(
+                if self.dedicated {
+                    GRACE_DEDICATED
+                } else {
+                    GRACE_OTHER
+                },
+                |m| Duration::from_secs(m * 60),
+            )
     }
 
     /// Kept lanes past their time go, and the least recently used of a
@@ -1245,7 +1263,7 @@ impl Inner {
     /// of an older agent takes its directory along. Off the caller's
     /// thread, Docker takes its time; the slot is busy until it is done.
     /// `why`: `released` (its requester), `expired` (no renewal for
-    /// [`TTL`]: the requester's daemon or machine went away) or `ended` (an
+    /// its grace: the requester's daemon or machine went away) or `ended` (an
     /// admin of the pool).
     fn drop_lease(self: &Arc<Self>, l: NodeLease, why: &str) {
         crate::telemetry::node_log(
@@ -1671,7 +1689,7 @@ async fn admit(
         disk,
         images,
         warning: None,
-        expires: now + TTL.as_secs(),
+        expires: now + s.grace().as_secs(),
         admitted: now,
         stack_file: None,
         slot: Some(slot.clone()),
@@ -1770,6 +1788,7 @@ async fn renew(
 ) -> ApiResult<Json<NodeLease>> {
     let who = caller(&s, &peer).await?;
     lease_of(&s, &id, &who)?;
+    let grace = s.grace();
     let mut leases = s.leases.lock().unwrap();
     // It may have ended since it was looked up.
     let Some(l) = leases.get_mut(&id) else {
@@ -1778,7 +1797,7 @@ async fn renew(
             format!("no lease `{id}` of yours here"),
         ));
     };
-    l.expires = crate::store::now() + TTL.as_secs();
+    l.expires = crate::store::now() + grace.as_secs();
     let mut out = l.clone();
     s.save(&leases);
     drop(leases);

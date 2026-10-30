@@ -18,9 +18,10 @@ use std::time::{Duration, Instant, SystemTime};
 const SYNC_EVERY: Duration = Duration::from_secs(2);
 /// How often everything is compared regardless of the watcher.
 const FULL_SYNC_EVERY: Duration = Duration::from_secs(30);
-/// How often the lease is renewed (the node's TTL is two minutes).
+/// How often the lease is renewed.
 const RENEW_EVERY: Duration = Duration::from_secs(30);
-/// How long a lease lives without a renewal (the node's TTL), and a margin.
+/// How long a lease lives without a renewal at least (a node before 0.31.0:
+/// two minutes), and a margin; a node says how long with each renewal.
 const LEASE_LIVES: Duration = Duration::from_secs(150);
 /// How long a warm lease's `prepare` runs may take (ADR-0065 point 5).
 const WARM_WITHIN: Duration = Duration::from_secs(30 * 60);
@@ -1542,6 +1543,7 @@ impl RemoteLane {
     /// holds the main slot and the coordinator whom it is shared with.
     async fn follow_renew(self: Arc<Self>) {
         let mut renewed = Instant::now();
+        let mut lives = LEASE_LIVES;
         loop {
             if !self.tick(RENEW_EVERY).await {
                 return;
@@ -1549,6 +1551,10 @@ impl RemoteLane {
             match self.client.renew(&self.lease).await {
                 Ok(l) => {
                     renewed = Instant::now();
+                    // The node keeps the lane that long without us (#379).
+                    lives =
+                        Duration::from_secs(l.expires.saturating_sub(devstack_node::store::now()))
+                            .max(LEASE_LIVES);
                     self.trouble("renew", None);
                     // The node is short of disk (ADR-0049 point 8): shown
                     // with the lane while it is, logged when it begins.
@@ -1597,10 +1603,10 @@ impl RemoteLane {
                 }
                 Err(e) => {
                     self.trouble("renew", Some(format!("renewing the lease: {e}")));
-                    // Not renewed for longer than a lease lives: the node let
-                    // it go, or cannot be reached; either way the lane is
-                    // gone for this machine.
-                    if renewed.elapsed() > LEASE_LIVES {
+                    // Not renewed for longer than the node keeps a lease: the
+                    // node let it go, or cannot be reached; either way the
+                    // lane is gone for this machine.
+                    if renewed.elapsed() > lives {
                         return self.end(
                             format!(
                                 "{} has not answered for {} s: the lane counts as gone",

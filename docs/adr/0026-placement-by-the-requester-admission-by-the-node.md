@@ -1,6 +1,6 @@
 # ADR-0026: The requester places a lane; the node admits it, under a lease
 
-- **Status:** Accepted (2026-10-16); points 1 and 3 replaced by [ADR-0031](0031-a-coordinator-places-lanes.md) (a coordinator places), the rest stands
+- **Status:** Accepted (2026-10-16); points 1 and 3 replaced by [ADR-0031](0031-a-coordinator-places-lanes.md) (a coordinator places), the rest stands; point 5 amended 2026-10-30 (a grace, not two minutes)
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0016](0016-a-daemon-restart-is-a-clean-restart.md), [ADR-0028](0028-lane-images.md), plan §12, [ADR-0033](0033-a-node-decides-what-runs-on-it.md) (point 4 detailed there: what a node admits), [ADR-0049](0049-a-lanes-need-is-measured-disk-included.md) (point 3's expected need detailed there: measured, disk included)
@@ -93,6 +93,21 @@ The admission counts what lanes declare or are taken to need, not what they
 use, so "never over-commits" holds for declared needs. Not built: scoring by
 mirrors and image layers (point 3, `--on pool` takes the granted node with
 the most free memory) and reclaiming with a grace period (point 6).
+
+*Amended 2026-10-30 ([#379](https://github.com/nuetzliches/devstack/issues/379)).*
+Point 5's TTL, as built, was two minutes for every lease: a requester's
+machine that restarted lost every lane it had on nodes, with the matches,
+load tests and overnight runs in them. A lease now lives a grace without a
+renewal: an hour on a dedicated node, 15 minutes on another, or what the
+node's policy says (`lease_grace_minutes`, the smaller of the node's own and
+the coordinator's). The requester's daemon gives a lane up only once that
+grace, said with each renewal, is over, and one that starts after an
+unclean end follows its lanes again while their leases run (ADR-0052 point
+6). What it costs: a requester that never comes back holds what its lanes
+need on the node for up to the grace; an admin ending the lease frees it at
+once. `crates/devstack-node/src/node.rs` (`grace`),
+`crates/devstack-node/src/policy.rs`, `crates/devstack-daemon/src/remote.rs`
+(`follow_renew`).
 
 *Noted 2026-10-21.* Point 3 as built (by the coordinator, ADR-0031 point 4):
 "a mirror on the node" is a slot of the lane (ADR-0038), "image layers

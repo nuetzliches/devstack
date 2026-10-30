@@ -24,6 +24,12 @@ and listed with their assets on the
   the worktree that its daemon there never brought up to date, so hot
   reload showed the code of the lane's start; the file watcher took the
   lane's daemon on the node for a main tree, which runs in place.
+- **Lanes on nodes survive a restart of this machine** (#379): a node
+  ended a lane two minutes after its requester went quiet, so a reboot or a
+  sleep lost every lane on nodes and the work running in them. A lease now
+  lives an hour without renewals on a dedicated node, 15 minutes on another
+  (`lease_grace_minutes` in a node's policy), and the daemon follows its
+  lanes there again when it starts.
 
 ## [0.30.0] - 2026-10-29
 
