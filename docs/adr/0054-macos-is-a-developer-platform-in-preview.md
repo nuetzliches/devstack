@@ -1,6 +1,6 @@
 # ADR-0054: macOS is a developer platform in preview, installed by Homebrew, checked by CI and by its testers
 
-- **Status:** Accepted (2026-10-23)
+- **Status:** Accepted (2026-10-23); noted 2026-10-30: CI and release run on `macos-15` (GitHub retires `macos-14` on 2026-11-02); the build still targets macOS 11 (`MACOSX_DEPLOYMENT_TARGET`)
 - **Date:** 2026-10-22
 - **Deciders:** project owner
 - **Related:** [issue #66](https://github.com/nuetzliches/devstack/issues/66) (what macOS would take), [ADR-0011](0011-platform-windows-native-first.md) (Windows-native first), [ADR-0009](0009-the-daemon-owns-every-process-tree.md) (the daemon owns every process tree), [ADR-0023](0023-stack-file-compatibility.md) (migrations once devstack has outside users), [ADR-0021](0021-a-hub-serves-the-dashboard.md) (the hub), [ADR-0025](0025-a-lane-can-run-on-another-node.md) (lanes on nodes), [ADR-0045](0045-the-hub-notifies-the-desktop.md) (notifications), [ADR-0046](0046-the-hub-opens-a-worktree-in-the-users-programs.md) (opening a worktree)

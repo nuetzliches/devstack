@@ -87,10 +87,10 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             archive: devstack-aarch64-unknown-linux-musl.tar.gz
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             archive: devstack-aarch64-apple-darwin.tar.gz
-          - os: macos-14
+          - os: macos-15
             target: x86_64-apple-darwin         # built on Apple Silicon, not run there
             archive: devstack-x86_64-apple-darwin.tar.gz
             cross: true
@@ -235,7 +235,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, ubuntu-latest, ubuntu-24.04-arm]
+        os: [macos-15, ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     env:
       HOMEBREW_NO_AUTO_UPDATE: '1'
