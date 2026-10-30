@@ -3183,6 +3183,7 @@ pub fn ensure_running() -> Result<u16, String> {
         Listener::Foreign => return Err(foreign(port)),
         Listener::Nothing => {}
     }
+    end_hung_hub(port);
     let exe = devstack_exe().map_err(|e| e.to_string())?;
     // What the hub prints before its own log exists (a failed start) goes to
     // hub.out, like the daemon's daemon.out.
@@ -3226,6 +3227,48 @@ pub fn ensure_running() -> Result<u16, String> {
             format!(":\n{}", said.trim())
         }
     ))
+}
+
+/// How long a hub may take to answer after it started before one that holds
+/// the lock and does not answer counts as hung.
+const HUNG_AFTER: Duration = Duration::from_secs(60);
+
+/// A hub that runs, holds the state lock and does not answer on `port`
+/// (seen: its runtime stuck, every start after it refused by the lock) is
+/// ended, so the start that follows can take its place. One that just
+/// started, or a lock nobody holds, is left alone.
+fn end_hung_hub(port: u16) {
+    let Some(info) = read_info() else { return };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    if !is_hung(&info, port, now, devstack_proc::pid_alive(info.pid)) {
+        return;
+    }
+    // Nobody holds the lock: that pid is no hub (any more).
+    if devstack_proc::StateLock::acquire(&state_dir()).is_ok() {
+        return;
+    }
+    diag::warn(
+        "hub_hung",
+        serde_json::json!({ "pid": info.pid, "port": port, "version": info.version }),
+    );
+    if devstack_proc::end_pid(info.pid).is_err() {
+        return;
+    }
+    let t0 = Instant::now();
+    while devstack_proc::pid_alive(info.pid) && t0.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = std::fs::remove_file(state_dir().join("hub.json"));
+}
+
+/// Whether the hub `info` names counts as hung: it runs, it said it listens
+/// on `port`, and it started more than [`HUNG_AFTER`] before `now` (the
+/// caller found nothing answering there).
+fn is_hung(info: &HubInfo, port: u16, now: Duration, alive: bool) -> bool {
+    let started = Duration::from_millis(u64::try_from(info.started).unwrap_or(u64::MAX));
+    alive && info.port == port && now.saturating_sub(started) >= HUNG_AFTER
 }
 
 /// Is a hub (or anything) answering on `port`?
@@ -3846,5 +3889,27 @@ mod daemon_send_tests {
         // Left behind by a daemon that was killed: its port says nothing.
         write(u32::MAX - 1, false);
         assert_eq!(daemon_in(d.path()), DaemonNow::Absent { starting: false });
+    }
+}
+
+#[cfg(test)]
+mod hung_hub_tests {
+    use super::*;
+
+    #[test]
+    fn a_hub_is_hung_when_it_runs_listened_here_and_is_old_enough() {
+        let info = HubInfo {
+            pid: 42,
+            port: 4250,
+            version: "0.32.0".into(),
+            started: 1_000_000,
+        };
+        let at = |s: u64| Duration::from_millis(1_000_000) + Duration::from_secs(s);
+        assert!(is_hung(&info, 4250, at(61), true));
+        // Just started: it may still be coming up.
+        assert!(!is_hung(&info, 4250, at(10), true));
+        // Gone, or a hub of another port.
+        assert!(!is_hung(&info, 4250, at(61), false));
+        assert!(!is_hung(&info, 4251, at(61), true));
     }
 }

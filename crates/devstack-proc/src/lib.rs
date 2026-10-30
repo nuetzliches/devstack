@@ -92,6 +92,47 @@ pub fn pid_alive(pid: u32) -> bool {
     backend::pid_alive(pid)
 }
 
+/// End the process `pid`, one devstack did not start (a daemon or a hub
+/// that does not answer): Windows terminates it, which closes its job
+/// objects and with them every process tree it owns (ADR-0009); elsewhere
+/// `SIGTERM`, then `SIGKILL` after 5 s.
+pub fn end_pid(pid: u32) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_TERMINATE, TerminateProcess,
+        };
+        // SAFETY: plain Win32 calls on a handle we open and close here.
+        unsafe {
+            let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if h.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            let ok = TerminateProcess(h, 1) != 0;
+            let err = std::io::Error::last_os_error();
+            CloseHandle(h);
+            if ok { Ok(()) } else { Err(err) }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        // SAFETY: a signal to one process id.
+        if unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let t0 = std::time::Instant::now();
+        while pid_alive(pid) && t0.elapsed() < std::time::Duration::from_secs(5) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if pid_alive(pid) {
+            // SAFETY: as above.
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        }
+        Ok(())
+    }
+}
+
 /// What a process tree costs right now (plan §12). Callers derive CPU load
 /// from two samples of `cpu_us`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
