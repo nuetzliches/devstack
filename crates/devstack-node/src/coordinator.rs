@@ -4242,10 +4242,8 @@ async fn skill_archive(
         )
     };
     let skill = file.strip_suffix(".tar.gz").ok_or_else(not_found)?;
-    let given = crate::skills::load(&s.dir)
-        .into_iter()
-        .any(|x| x.name == set && x.given_to(&m.id, &m.tags));
-    if !given {
+    // The set, and the folder the skill is in (ADR-0079), given to it.
+    if !crate::skills::skill_given_to(&s.dir, &set, skill, &m.id, &m.tags) {
         return Err(not_found());
     }
     let bytes = crate::skills::archive(&s.dir, &set, skill).ok_or_else(not_found)?;
@@ -4332,12 +4330,26 @@ async fn admin_skill_put(
     Json(set): Json<crate::skills::SkillSet>,
 ) -> ApiResult<Json<crate::skills::AdminView>> {
     let (me, by) = admin(&s, &peer)?;
-    let detail = format!(
-        "{} {} to {}",
-        set.name,
-        set.source.label(),
-        set.to.join(",")
-    );
+    let detail = if set.folders.is_empty() {
+        format!(
+            "{} {} to {}",
+            set.name,
+            set.source.label(),
+            set.to.join(",")
+        )
+    } else {
+        let folders: Vec<String> = set
+            .folders
+            .iter()
+            .map(|f| format!("{} to {}", f.path, f.to.join(",")))
+            .collect();
+        format!(
+            "{} {} ({})",
+            set.name,
+            set.source.label(),
+            folders.join("; ")
+        )
+    };
     let name = set.name.clone();
     {
         let _one = s.upstreams.lock().unwrap();

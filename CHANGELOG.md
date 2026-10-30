@@ -9,6 +9,33 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **A pool's project skills stay in their repository** (ADR-0079): a skill
+  with `metadata.repos: [owner/name]` in its frontmatter goes into the
+  agents' skill folders of the working trees whose `origin` is that
+  repository (`.claude/skills`, `.agents/skills`, ...), not into the user
+  folders, so sessions in other repositories neither see it nor pay for
+  its description. Each such folder holds a `.gitignore` that ignores it:
+  git never sees it. The Skills page shows a skill's repositories and the
+  working trees it is in.
+- **A skill set of several folders, each for its own members**
+  (ADR-0079): `devstack pool skills add team --github org/skills --path
+  skills --to '*' --path projects/shop/skills --to shop --repos -
+  --repos org/shop`, or as rows in the pool area. A member reads and
+  downloads only the skills of its folders.
+
+### Changed
+
+- **devstack's generated skills are local to the working tree**
+  (ADR-0079): each of their folders ignores itself, and the hub writes
+  them into the skill folders of the agents switched on on its Skills
+  page, in every stack and worktree, whenever devstack or the stack file
+  changes. Commit them no more: `devstack skills install` lists the copies
+  git still tracks with the `git rm -r --cached` that takes them out, and
+  the upgrade prompt does it. `[agents] skills` still names where
+  `devstack skills install` writes.
+
 ### Fixed
 
 - **An MCP upstream's tools show right after its login**: for up to a minute

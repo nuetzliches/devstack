@@ -5,7 +5,7 @@
 use devstack_node::coordinator;
 use devstack_node::events::{self, Ended, Heard};
 use devstack_node::member::{Local, MemberError};
-use devstack_node::skills::{SkillSet, Source};
+use devstack_node::skills::{SkillFolder, SkillSet, Source};
 use devstack_node::store::{Role, SHELL, Store};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -79,6 +79,8 @@ fn a_set_goes_to_whom_it_is_given_and_its_change_is_told() {
             path: "core".into(),
         },
         to: vec!["team".into()],
+        repos: Vec::new(),
+        folders: Vec::new(),
     };
     assert!(matches!(
         dev.admin_skill_put(&set),
@@ -142,6 +144,80 @@ fn a_set_goes_to_whom_it_is_given_and_its_change_is_told() {
 
     admin.admin_skill_remove("core").unwrap();
     assert!(dev.skills().unwrap().is_empty());
+}
+
+#[test]
+fn each_folder_of_a_set_goes_to_its_own_members() {
+    let c = tempfile::tempdir().unwrap();
+    let (url, fp) = coordinator(c.path());
+    // `core/work-issue` for everyone, `core/projects/shop/shop-page` for
+    // the tag `shop` only, bound to its repository by the folder.
+    skill(c.path(), "work-issue", "Work on an issue");
+    let d = c.path().join("skill-sources/core/projects/shop/shop-page");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(
+        d.join("SKILL.md"),
+        "---\nname: shop-page\ndescription: A page of the shop\n---\n",
+    )
+    .unwrap();
+    let ad = tempfile::tempdir().unwrap();
+    let admin = member(c.path(), &url, &fp, ad.path(), "lead-pc", Role::Admin);
+    let md = tempfile::tempdir().unwrap();
+    let dev = member(c.path(), &url, &fp, md.path(), "dev-pc", Role::Member);
+    let od = tempfile::tempdir().unwrap();
+    let other = member(c.path(), &url, &fp, od.path(), "guest-pc", Role::Member);
+    let dev_id = dev.membership().unwrap().unwrap().id;
+    admin.admin_tags(&dev_id, &["shop".into()]).unwrap();
+
+    let set = SkillSet {
+        name: "core".into(),
+        source: Source::Folder {
+            path: "core".into(),
+        },
+        to: Vec::new(),
+        repos: Vec::new(),
+        folders: vec![
+            SkillFolder {
+                path: String::new(),
+                to: vec!["*".into()],
+                repos: Vec::new(),
+            },
+            SkillFolder {
+                path: "projects/shop".into(),
+                to: vec!["shop".into()],
+                repos: vec!["acme/shop".into()],
+            },
+        ],
+    };
+    admin.admin_skill_put(&set).unwrap();
+    let names = |l: &Local| -> Vec<String> {
+        l.skills()
+            .unwrap()
+            .iter()
+            .flat_map(|m| m.skills.iter().map(|k| k.name.clone()))
+            .collect()
+    };
+    until("the set is fetched", || {
+        (names(&dev).len() == 2).then_some(())
+    });
+    let mine = dev.skills().unwrap();
+    let shop = mine[0]
+        .skills
+        .iter()
+        .find(|k| k.name == "shop-page")
+        .unwrap();
+    assert_eq!(shop.repos, ["acme/shop"]);
+    assert_eq!(shop.folder.as_deref(), Some("projects/shop"));
+    assert_eq!(names(&other), ["work-issue"]);
+    assert!(other.skill_archive("core", "work-issue").is_ok());
+    assert!(
+        matches!(
+            other.skill_archive("core", "shop-page"),
+            Err(MemberError::Status(404, _))
+        ),
+        "a folder not given to it is not downloaded either"
+    );
+    assert!(dev.skill_archive("core", "shop-page").is_ok());
 }
 
 #[test]

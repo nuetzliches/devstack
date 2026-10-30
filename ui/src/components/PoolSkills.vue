@@ -37,8 +37,23 @@ watch(() => [pool.current, pool.isAdmin], load);
 // The coordinator tells when a fetch changed the sets (ADR-0073).
 watch(() => pool.feeds[pool.current]?.versions.skills, load);
 
-type Form = { name: string; kind: 'github' | 'folder'; repo: string; ref: string; path: string; to: string };
-const empty = (): Form => ({ name: '', kind: 'github', repo: '', ref: 'main', path: 'skills', to: '*' });
+// A set of one folder names `to` and `repos`; one of several folders
+// (ADR-0079) names them per folder, each below `path`.
+type FolderForm = { path: string; to: string; repos: string };
+type Form = { name: string; kind: 'github' | 'folder'; repo: string; ref: string; path: string; to: string; repos: string; folders: FolderForm[] };
+const empty = (): Form => ({ name: '', kind: 'github', repo: '', ref: 'main', path: 'skills', to: '*', repos: '', folders: [] });
+const list = (s: string) =>
+  s
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
+const folderForms = (s: PoolSkillSet): FolderForm[] => (s.folders ?? []).map((f) => ({ path: f.path, to: f.to.join(', '), repos: (f.repos ?? []).join(', ') }));
+function addFolder() {
+  const f = form.value;
+  // The first folder takes what the set named so far.
+  if (!f.folders.length) f.folders.push({ path: '', to: f.to, repos: f.repos });
+  f.folders.push({ path: '', to: '', repos: '' });
+}
 const form = ref<Form>(empty());
 const formOpen = ref(false);
 const busy = ref(false);
@@ -51,8 +66,8 @@ function startAdd() {
 function startEdit(s: PoolSkillSet) {
   form.value =
     s.source.kind === 'github'
-      ? { name: s.name, kind: 'github', repo: s.source.repo, ref: s.source.ref, path: s.source.path, to: s.to.join(', ') }
-      : { name: s.name, kind: 'folder', repo: '', ref: 'main', path: s.source.path, to: s.to.join(', ') };
+      ? { name: s.name, kind: 'github', repo: s.source.repo, ref: s.source.ref, path: s.source.path, to: s.to.join(', '), repos: (s.repos ?? []).join(', '), folders: folderForms(s) }
+      : { name: s.name, kind: 'folder', repo: '', ref: 'main', path: s.source.path, to: s.to.join(', '), repos: (s.repos ?? []).join(', '), folders: folderForms(s) };
   formOpen.value = true;
 }
 
@@ -61,10 +76,9 @@ async function save() {
   const body: PoolSkillSet = {
     name: f.name.trim(),
     source: f.kind === 'github' ? { kind: 'github', repo: f.repo.trim(), ref: f.ref.trim() || 'main', path: f.path.trim() } : { kind: 'folder', path: f.path.trim() },
-    to: f.to
-      .split(',')
-      .map((t) => t.trim())
-      .filter(Boolean),
+    to: f.folders.length ? [] : list(f.to),
+    repos: f.folders.length ? [] : list(f.repos),
+    folders: f.folders.map((x) => ({ path: x.path.trim().replace(/^\/+|\/+$/g, ''), to: list(x.to), repos: list(x.repos) })),
   };
   busy.value = true;
   const r = await act<PoolSkillsAdmin>({ label: `Hand out ${body.name}`, path: at(paths.poolSkills), body, success: `The pool hands out ${body.name}; the coordinator fetches it now` });
@@ -95,6 +109,7 @@ async function refresh(name?: string) {
   });
 }
 
+const bound = (repos?: string[]) => (repos?.length ? ` · only in ${repos.join(', ')}` : '');
 const sourceText = (s: PoolSkillSet) => (s.source.kind === 'github' ? `${s.source.repo}@${s.source.ref}${s.source.path ? `/${s.source.path}` : ''}` : `folder ${s.source.path}`);
 </script>
 
@@ -133,8 +148,26 @@ const sourceText = (s: PoolSkillSet) => (s.source.kind === 'github' ? `${s.sourc
           <label class="wide">Folder in it <input v-model="form.path" class="input" placeholder="skills; empty: the top" spellcheck="false" /></label>
         </template>
         <label v-else class="wide">Folder below skill-sources/ <input v-model="form.path" class="input" placeholder="core" spellcheck="false" /></label>
-        <label class="wide">Given to <input v-model="form.to" class="input" placeholder="*, or member ids and tags" spellcheck="false" /></label>
+        <template v-if="!form.folders.length">
+          <label class="wide">Given to <input v-model="form.to" class="input" placeholder="*, or member ids and tags" spellcheck="false" /></label>
+          <label class="wide"
+            >Only in the repositories
+            <input v-model="form.repos" class="input" placeholder="owner/name, comma-separated; empty: every one" spellcheck="false" data-testid="pool-skill-repos"
+          /></label>
+        </template>
+        <fieldset v-else class="wide folders" data-testid="pool-skill-folders">
+          <legend class="small">Folders below it, each with its own members</legend>
+          <div v-for="(f, i) in form.folders" :key="i" class="folder">
+            <input v-model="f.path" class="input" placeholder="folder; empty: the top" spellcheck="false" />
+            <input v-model="f.to" class="input" placeholder="given to: *, member ids, tags" spellcheck="false" />
+            <input v-model="f.repos" class="input" placeholder="only in: owner/name; empty: every one" spellcheck="false" />
+            <button type="button" class="btn btn-ghost btn-sm" title="Remove this folder" @click="form.folders.splice(i, 1)"><Icon name="x" :size="12" /></button>
+          </div>
+        </fieldset>
         <div class="row">
+          <button type="button" class="btn btn-ghost btn-sm" data-testid="pool-skill-add-folder" @click="addFolder">
+            <Icon name="plus" :size="12" /> {{ form.folders.length ? 'Another folder' : 'Folders with their own members' }}
+          </button>
           <button type="submit" class="btn btn-primary btn-sm" :disabled="!form.name.trim() || !(form.kind === 'github' ? form.repo.trim() : form.path.trim()) || busy">Save</button>
           <button type="button" class="btn btn-sm" @click="formOpen = false">Cancel</button>
         </div>
@@ -145,7 +178,13 @@ const sourceText = (s: PoolSkillSet) => (s.source.kind === 'github' ? `${s.sourc
         <li v-for="s in view.sets" :key="s.name" class="item" data-testid="pool-skill" :data-name="s.name">
           <div class="main">
             <strong>{{ s.name }}</strong>
-            <span class="faint small">{{ sourceText(s) }} · to {{ s.to.join(', ') || 'nobody' }}</span>
+            <span v-if="!s.folders?.length" class="faint small">{{ sourceText(s) }} · to {{ s.to.join(', ') || 'nobody' }}{{ bound(s.repos) }}</span>
+            <template v-else>
+              <span class="faint small">{{ sourceText(s) }}</span>
+              <span v-for="f in s.folders" :key="f.path" class="faint small" data-testid="pool-skill-folder"
+                >· {{ f.path || '(top)' }} to {{ f.to.join(', ') || 'nobody' }}{{ bound(f.repos) }}</span
+              >
+            </template>
             <span class="small">
               {{ s.manifest.skills.length }} skill(s)<template v-if="s.manifest.commit"> · {{ s.manifest.commit }}</template
               ><template v-if="s.manifest.fetched"> · fetched {{ ago(s.manifest.fetched * 1000, now) }}</template>
@@ -173,6 +212,18 @@ const sourceText = (s: PoolSkillSet) => (s.source.kind === 'github' ? `${s.sourc
   grid-template-columns: 1fr 1fr;
   gap: 12px 16px;
   margin: 16px 0 4px;
+}
+.folders {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  display: grid;
+  gap: 6px;
+}
+.folder {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr auto;
+  gap: 6px;
 }
 .form label {
   display: flex;

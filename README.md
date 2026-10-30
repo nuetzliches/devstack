@@ -200,7 +200,9 @@ per machine, a customer's beside the team's. Setup and everything else:
 folders, `.agents/skills` for Codex and most other agents):
 **`devstack`** (operating this stack, "is my change live", troubleshooting)
 and **`devstack-config`** (editing the stack file). They are filled in from
-the stack file; `devstack status` says when they are out of date. A command with a confirmation text in the stack file runs only
+the stack file; `devstack status` says when they are out of date. They are
+local to the working tree, not committed: each folder ignores itself, and
+the hub keeps them current for the agents switched on on its Skills page. A command with a confirmation text in the stack file runs only
 when the agent passes `confirm: true`, which it may only do after you agreed.
 
 ## Commands

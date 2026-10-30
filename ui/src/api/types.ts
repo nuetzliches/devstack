@@ -69,8 +69,8 @@ export type PoolFeed = {
 
 /** The pools' skill sets on this machine (ADR-0074), as `GET /hub/skills` and `skills` events give them. */
 export type PoolSkillsState = {
-  /** The coding agents found here (and those switched on), with their user skill folder. */
-  agents: { id: string; name: string; dir: string; enabled: boolean }[];
+  /** The coding agents found here (and those switched on), with their user skill folder and their folder in a working tree (ADR-0079). */
+  agents: { id: string; name: string; dir: string; project?: string; enabled: boolean }[];
   sets: SkillSetState[];
   conflicts: { dir: string; name: string; reason: string }[];
   errors?: string[];
@@ -110,6 +110,10 @@ export type SkillState = {
   updated?: number;
   /** The agents whose folder holds it. */
   agents?: string[];
+  /** The repositories it is bound to (`metadata.repos`, ADR-0079): it goes into their working trees only. */
+  repos?: string[];
+  /** The working trees it is in, a bound skill. */
+  trees?: string[];
 };
 
 /** A pool's skill set as an admin names it (`/hub/pool/skills`). */
@@ -117,12 +121,16 @@ export type PoolSkillSet = {
   name: string;
   source: { kind: 'github'; repo: string; ref: string; path: string } | { kind: 'folder'; path: string };
   to: string[];
+  /** The repositories its skills without `metadata.repos` are bound to (ADR-0079). */
+  repos?: string[];
+  /** Folders of the source, each given to its own members (ADR-0079); then `to` and `repos` are empty. */
+  folders?: { path: string; to: string[]; repos?: string[] }[];
 };
 
 /** `GET /hub/pool/skills` (admins): the sets with what the coordinator last fetched. */
 export type PoolSkillsAdmin = {
   sets: (PoolSkillSet & {
-    manifest: { source: string; fetched?: number; commit?: string; error?: string; skills: { name: string; description: string }[]; skipped?: string[] };
+    manifest: { source: string; fetched?: number; commit?: string; error?: string; skills: { name: string; description: string; repos?: string[]; folder?: string }[]; skipped?: string[] };
   })[];
   github_token: boolean;
   refresh_signed: boolean;

@@ -1,6 +1,6 @@
 # ADR-0074: A pool hands out skill sets; each member's hub installs them into the coding agents' user skill folders
 
-- **Status:** Accepted (2026-10-29)
+- **Status:** Accepted (2026-10-29), extended by [ADR-0079](0079-skills-local-to-a-working-tree.md)
 - **Date:** 2026-10-29
 - **Deciders:** project owner
 - **Related:** [ADR-0069](0069-devstack-mcp-can-carry-the-tools-of-upstream-mcp-servers.md) (the pool's MCP upstreams, the model for acceptance and precedence), [ADR-0071](0071-the-dashboard-writes-no-file-of-a-repository.md) (nothing goes into a repository), [ADR-0073](0073-a-pool-tells-its-members-what-changed-over-one-stream.md) (how a change reaches the members), [ADR-0046](0046-the-hub-opens-a-worktree-in-the-users-programs.md) ("Open with"), [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md)
@@ -108,7 +108,9 @@ What was built:
 - Every skill a member accepts reaches every agent switched on, in every
   repository: a project's skills are visible in sessions for other
   projects. The allocation keeps them to the project's members; a skill's
-  description says which repository it is for.
+  description says which repository it is for. Since ADR-0079 a skill
+  bound to repositories (`metadata.repos`) goes into their working trees
+  only, and a set's folders can go to different members.
 - A member removed from the pool loses its sets: its stream ends and its
   hub removes their skills (but ones it changed).
 - An agent picks up a skill's new content at its next use; a new or

@@ -1,6 +1,6 @@
 # ADR-0071: The dashboard writes no file of a repository; a change to one is a prompt for a coding agent
 
-- **Status:** Accepted (2026-10-27)
+- **Status:** Accepted (2026-10-27), amended by [ADR-0079](0079-skills-local-to-a-working-tree.md) (2026-10-30)
 - **Date:** 2026-10-27
 - **Deciders:** project owner
 - **Related:** [ADR-0046](0046-the-hub-opens-a-worktree-in-the-users-programs.md) (prompts for an agent; the `skills` prompt added here), [ADR-0047](0047-the-dashboard-makes-a-lane-from-a-branch.md) (worktrees, unchanged), [ADR-0055](0055-a-lane-without-a-stack-file-says-so-and-can-be-given-one.md) (point 4 replaced here), [ADR-0021](0021-a-hub-serves-the-dashboard.md)
@@ -51,6 +51,14 @@ And a button a click away is proposed again whenever a prompt seems slower.
 4. **The CLI and MCP stay as they are.** `devstack init`, `devstack skills
    install`, a copy by hand: the user or their agent runs them in the
    repository, which is the point of this decision.
+
+**Amendment 2026-10-30 ([ADR-0079](0079-skills-local-to-a-working-tree.md)).**
+The hub writes agent skills devstack owns into a working tree: devstack's
+generated skills and a pool's skills bound to the repository, each in a
+folder that ignores itself with a `.gitignore` of `*`. Git never sees
+them, so nothing unread gets committed, which is what point 1 guards
+against; a file git tracks stays off limits, and taking an earlier
+devstack's committed skills out of git is still a prompt.
 
 ## Alternatives considered
 

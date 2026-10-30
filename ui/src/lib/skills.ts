@@ -1,16 +1,17 @@
-// The pools' skills on this machine (ADR-0074, ADR-0077) as the Skills page
+// The pools' skills on this machine (ADR-0074, ADR-0077, ADR-0079) as the Skills page
 // lists them: one row per skill, with the set it comes from, filtered by
 // text, set, group and state. Pure, so the page and its tests share it.
 import type { PoolSkillsState, SkillSetState, SkillState } from '@/api/types';
 
 /** What a row shows of a skill's state, in the order the filter offers them. */
-export type SkillStatus = 'installed' | 'pending' | 'off' | 'conflict' | 'not-installed' | 'not-accepted';
+export type SkillStatus = 'installed' | 'pending' | 'off' | 'conflict' | 'elsewhere' | 'not-installed' | 'not-accepted';
 
 export const STATUS_LABEL: Record<SkillStatus, string> = {
   installed: 'installed',
   pending: 'update waits',
   off: 'off',
   conflict: 'conflict',
+  elsewhere: 'no working tree here',
   'not-installed': 'not installed',
   'not-accepted': 'set not accepted',
 };
@@ -28,6 +29,8 @@ export function statusOf(set: SkillSetState, k: SkillState, conflicts: Set<strin
   if (k.enabled === false) return 'off';
   if (conflicts.has(k.name)) return 'conflict';
   if (k.pending) return 'pending';
+  // Bound to repositories none of whose working trees this hub follows.
+  if (k.repos?.length && !k.trees?.length && !k.installed) return 'elsewhere';
   return k.installed ? 'installed' : 'not-installed';
 }
 
@@ -42,7 +45,7 @@ export type SkillFilter = { text: string; set: string; group: string | null; sta
 
 export const NO_FILTER: SkillFilter = { text: '', set: '', group: null, status: '' };
 
-/** The rows that pass `f`: text in the name, description or tags; set by key; group (`''`: none); status. */
+/** The rows that pass `f`: text in the name, description, tags or repositories; set by key; group (`''`: none); status. */
 export function filtered(all: SkillRow[], f: SkillFilter): SkillRow[] {
   const t = f.text.trim().toLowerCase();
   return all.filter(
@@ -50,7 +53,7 @@ export function filtered(all: SkillRow[], f: SkillFilter): SkillRow[] {
       (!f.set || setKey(r.set) === f.set) &&
       (f.group === null || groupOf(r.skill) === f.group) &&
       (!f.status || r.status === f.status) &&
-      (!t || r.skill.name.toLowerCase().includes(t) || r.skill.description.toLowerCase().includes(t) || (r.skill.tags ?? []).some((x) => x.toLowerCase().includes(t))),
+      (!t || r.skill.name.toLowerCase().includes(t) || r.skill.description.toLowerCase().includes(t) || [...(r.skill.tags ?? []), ...(r.skill.repos ?? [])].some((x) => x.toLowerCase().includes(t))),
   );
 }
 
