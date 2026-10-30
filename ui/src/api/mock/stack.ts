@@ -40,8 +40,7 @@ export class MockStack {
     this.laneOwnsMain = name !== 'main';
     this.view.main_served = this.laneOwnsMain ? { lane: name, via, at } : undefined;
   }
-  /** Mock lane `review-cart` was started from the dashboard. */
-  /** Mock lanes started from the dashboard (`agent-login-fix` runs from the start). */
+  /** Mock lanes started from the dashboard (`agent-login-fix` runs from the start; the shop's `review-cart` too, on a node). */
   startedLanes = new Set<string>();
   /** Worktrees without a stack file of their own (ADR-0055) until one is copied in. */
   noStackFile = new Set<string>(['C:\\work\\_wt\\1333']);

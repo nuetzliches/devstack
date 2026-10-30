@@ -4,14 +4,14 @@
 // (start, stop, restart: every lane), who serves the main ports and the
 // control to give them to another lane, its lanes (`main`, the main working
 // tree, first; a row opens the lane's views; no lane actions here), the
-// services that run once per machine (`singleton`, ADR-0080) and what each
-// lane uses. A stack that does not run shows its start and its worktrees as
+// services that run once per machine (`singleton`, ADR-0080), what each
+// lane uses, and its ports as a graph (ADR-0082). A stack that does not run shows its start and its worktrees as
 // the hub lists them (ADR-0078). It follows the main tree's stream, without
 // making `main` the lane an older link opens.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { api, paths, v1 } from '@/api';
-import type { LaneView, Load, UsageReport } from '@/api/types';
+import type { HubPorts, LaneView, Load, PortEntry, PortOverlap, UsageReport } from '@/api/types';
 import { ago, bytes, clock, duration, percent, useNow } from '@/lib/format';
 import { viaText } from '@/lib/journal';
 import { laneLabel, lastTab, MAIN, nodeLabel, restartLanesText, started } from '@/lib/lanes';
@@ -21,6 +21,7 @@ import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import AgentPrompt from '@/components/AgentPrompt.vue';
 import Icon from '@/components/icons/Icon.vue';
+import PortGraph from '@/components/PortGraph.vue';
 import StatusPill from '@/components/StatusPill.vue';
 
 const route = useRoute();
@@ -107,7 +108,10 @@ async function loadUsage() {
   );
   if (sid === stack.id) usage.value = out;
 }
-const timer = setInterval(() => void loadUsage(), 10_000);
+const timer = setInterval(() => {
+  void loadUsage();
+  void loadPorts();
+}, 10_000);
 onBeforeUnmount(() => clearInterval(timer));
 watch(() => [stack.id, stack.running, lanes.value.filter(started).map((l) => l.name).join()] as const, () => void loadUsage(), { immediate: true });
 /** What the stack's lanes use together, of those known. */
@@ -126,6 +130,58 @@ function laneState(l: LaneView): { dot: string; label: string } {
 }
 function open(l: LaneView) {
   if (stack.id) void router.push(laneView(stack.id, l.name, lastTab(route.name)));
+}
+
+// ------------------------------------------------------------ ports
+
+/**
+ * The stack's ports (ADR-0082): its daemon's `/v1/ports` (the main tree's,
+ * with every lane's), and `/hub/ports` for the overlaps with other stacks;
+ * a stack that does not run has what its stack file declares, from the hub.
+ * Read when the page opens, when its lanes or the main slot change, and
+ * every 10 s while it is shown.
+ */
+const ports = ref<{ of: string; entries: PortEntry[] | null; overlaps: PortOverlap[]; error: string | null } | null>(null);
+async function loadPorts() {
+  const sid = stack.id;
+  if (!sid || stack.foreign) return;
+  const running = stack.running;
+  const get = async <T,>(path: string): Promise<T | null> => {
+    try {
+      const res = await api().request<T>('GET', path);
+      return res.ok && res.body && typeof res.body === 'object' ? res.body : null;
+    } catch {
+      return null;
+    }
+  };
+  const [own, all] = await Promise.all([running ? get<{ ports: PortEntry[] }>(paths.api(sid, v1.ports)) : null, get<HubPorts>(paths.hubPorts)]);
+  if (sid !== stack.id) return;
+  const fromHub = Array.isArray(all?.stacks) ? all.stacks.find((x) => x.id === sid)?.ports : undefined;
+  const entries = Array.isArray(own?.ports) ? own.ports : Array.isArray(fromHub) ? fromHub : null;
+  const overlaps = Array.isArray(all?.overlaps) ? all.overlaps : [];
+  const before = ports.value?.of === sid ? ports.value : null;
+  ports.value = {
+    of: sid,
+    // A failed read keeps what was there.
+    entries: entries ?? before?.entries ?? null,
+    overlaps: all ? overlaps : (before?.overlaps ?? []),
+    error: entries ? null : 'Neither its daemon nor the hub says which ports it uses (an older devstack?).',
+  };
+}
+watch(
+  () =>
+    [
+      stack.id,
+      stack.running,
+      lanes.value.map((l) => `${l.name}:${started(l)}:${l.node ?? ''}:${l.owns_main}`).join(),
+      stack.mainView?.main_served?.lane ?? '',
+    ] as const,
+  () => void loadPorts(),
+  { immediate: true },
+);
+const portLanes = computed(() => lanes.value.map((l) => ({ name: l.name, node: l.node ? nodeLabel(l) : null })));
+function openLane(name: string) {
+  if (stack.id) void router.push(laneView(stack.id, name, lastTab(route.name)));
 }
 
 // ------------------------------------------------------------ main slot
@@ -301,6 +357,18 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
         </table>
       </div>
     </section>
+
+    <PortGraph
+      v-if="stack.id && !stack.foreign"
+      :stack="stack.id"
+      :entries="ports?.of === stack.id ? ports.entries : null"
+      :overlaps="ports?.of === stack.id ? ports.overlaps : []"
+      :error="ports?.of === stack.id ? ports.error : null"
+      :lanes="portLanes"
+      :served-by="stack.running ? (servedBy?.name ?? null) : null"
+      :running="stack.running"
+      @open="openLane"
+    />
 
     <section v-if="stack.mainView" class="card" data-testid="stack-singletons">
       <header class="card-header">

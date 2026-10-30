@@ -116,6 +116,8 @@ export const paths = {
   poolSkill: (name: string) => `/hub/pool/skills/${enc(name)}`,
   poolSkillsRefresh: '/hub/pool/skills/refresh',
   hubSkills: '/hub/skills',
+  /** Every registered stack's ports and their overlaps (ADR-0082). */
+  hubPorts: '/hub/ports',
   skillsSync: '/hub/skills/sync',
   skillsAgent: (id: string) => `/hub/skills/agents/${enc(id)}`,
   skillSet: (pool: string, set: string) => `/hub/skills/sets/${enc(pool)}/${enc(set)}`,
@@ -168,6 +170,8 @@ export const v1 = {
   downTree: '/v1/down?infra=true',
   /** Without history: what a tree uses now. */
   usageNow: '/v1/usage',
+  /** The ports the tree holds or uses; the main tree's include its lanes' (ADR-0082). */
+  ports: '/v1/ports',
   logStream: (service: string, tail = 500, build?: string) =>
     `/v1/services/${enc(service)}/logs/stream?tail=${tail}${build ? `&build=${enc(build)}` : ''}`,
   buildLog: (service: string) => `/v1/services/${enc(service)}/build-log`,

@@ -59,6 +59,12 @@ and listed with their assets on the
   /hub/ports` joins every registered stack's (a stopped stack's from what
   its stack file declares) and marks the ports two stacks share;
   `devstack doctor` lists them.
+- **The stack page draws its ports** (ADR-0082): a Ports card with the
+  machine's fixed ports of the stack, the lane each leads to (the one
+  serving the main ports marked, a lane on a node by its forwards) and
+  each lane's services and containers with their own ports. A port
+  another stack uses too is red and names that stack; instance ports show
+  on request; on a narrow window it is a grouped list.
 
 ### Fixed
 
