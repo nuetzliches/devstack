@@ -81,6 +81,7 @@ pub fn run(stack_file: &Path) -> Vec<Finding> {
             out.push(f(Level::Warn, n.trim_start_matches("note: ").to_string()));
         }
     }
+    out.extend(overlaps());
     out.push(hub());
     out.extend(preview());
     out.extend(release());
@@ -332,6 +333,86 @@ fn ports(stack: &devstack_config::Stack, stack_file: &Path) -> Vec<Finding> {
             ),
         )]
     }
+}
+
+/// Ports two stacks on this machine both use (ADR-0082): the hub's
+/// `/hub/ports` when it runs (it is not started for this), else the same
+/// read here, from each running daemon and each stopped stack's file.
+fn overlaps() -> Vec<Finding> {
+    use devstack_daemon::ports::{StackPorts, overlap_text, overlaps};
+    let from_hub = || -> Option<Vec<devstack_daemon::ports::Overlap>> {
+        let port = devstack_hub::port();
+        if devstack_hub::who_answers(port) != devstack_hub::Listener::Ours {
+            return None;
+        }
+        let v = get_json(port, "/hub/ports")?;
+        serde_json::from_value(v.get("overlaps")?.clone()).ok()
+    };
+    let here = || {
+        let stacks: Vec<StackPorts> = devstack_daemon::registry::list()
+            .into_iter()
+            .filter_map(|e| {
+                let daemon = devstack_daemon::read_info(&e.repo.join(".devstack"))
+                    .filter(|i| !i.stopping && devstack_proc::pid_alive(i.pid));
+                let asked = daemon
+                    .and_then(|d| get_json(d.port, "/v1/ports"))
+                    .and_then(|v| serde_json::from_value(v.get("ports")?.clone()).ok());
+                let running = asked.is_some();
+                let ports = match asked {
+                    Some(p) => p,
+                    None if e.file.is_file() => devstack_config::load(&e.file)
+                        .map(|st| devstack_daemon::ports::declared(&st))
+                        .unwrap_or_default(),
+                    None => return None,
+                };
+                Some(StackPorts {
+                    id: e.id,
+                    name: e.name,
+                    running,
+                    ports,
+                })
+            })
+            .collect();
+        overlaps(&stacks)
+    };
+    let found = from_hub().unwrap_or_else(here);
+    if found.is_empty() {
+        return vec![f(
+            Level::Ok,
+            "ports: no two stacks on this machine share one",
+        )];
+    }
+    found
+        .iter()
+        .map(|o| {
+            f(
+                Level::Warn,
+                format!(
+                    "ports: two stacks use {}; only one of them can hold it at a time",
+                    overlap_text(o)
+                ),
+            )
+        })
+        .collect()
+}
+
+/// `GET path` on `127.0.0.1:port` with this user's token, as JSON.
+fn get_json(port: u16, path: &str) -> Option<serde_json::Value> {
+    let token = devstack_daemon::token::load_or_create().ok()?;
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(5)))
+        .http_status_as_error(false)
+        .build()
+        .new_agent();
+    let mut r = agent
+        .get(&format!("http://127.0.0.1:{port}{path}"))
+        .header("Authorization", &format!("Bearer {token}"))
+        .call()
+        .ok()?;
+    if r.status() != 200 {
+        return None;
+    }
+    serde_json::from_str(&r.body_mut().read_to_string().ok()?).ok()
 }
 
 /// A newer release, if GitHub answers within a few seconds (skipped with

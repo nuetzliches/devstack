@@ -229,7 +229,8 @@ export function docsSeed(now: number): MockStackSeed {
   const repo = 'C:\\work\\docs';
   const last = now - 2 * 60 * MIN - 14 * MIN;
   const services: ServiceView[] = [
-    service({ name: 'site', kind: 'devserver', groups: ['docs'], port: 8080, since: last - 40 * MIN }, repo, now),
+    // 4200, as shop's `web`: the overlap `/hub/ports` shows (ADR-0082).
+    service({ name: 'site', kind: 'devserver', groups: ['docs'], port: 4200, since: last - 40 * MIN }, repo, now),
     service({ name: 'search-api', kind: 'service', groups: ['docs'], port: 8090, since: last - 40 * MIN }, repo, now),
   ];
   const infra: InfraView[] = [

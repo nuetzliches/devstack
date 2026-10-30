@@ -19,8 +19,27 @@ import { persist } from '@/lib/persist';
 import { crmSeed, docsSeed, failedReason, shopSeed, stamp } from './data';
 import { Abort, MockStack, sleep, type Listener } from './stack';
 import { MockPool } from './pool';
+import { daemonPorts, hubPorts, type MockLane } from './ports';
 
 type Route = { stop(): void } | null;
+
+/** The started lanes of a mock stack, with their offsets and nodes, for its ports (ADR-0082). */
+function portLanes(s: MockStack): MockLane[] {
+  if (s.view.name !== 'shop') return [...s.startedLanes].map((name, i) => ({ name, port_offset: 100 * (i + 1) }));
+  const numbered: [string, number][] = [
+    ['agent-login-fix', 100],
+    ['review-cart', 200],
+    ['1242', 300],
+    ['1333', 400],
+    ['bisect', 500],
+  ];
+  return numbered
+    .filter(([name]) => name === 'agent-login-fix' || s.startedLanes.has(name))
+    .map(([name, port_offset]) => {
+      const placed = laneNodes.get(name) ?? (name === 'review-cart' ? 'build-server' : 'local');
+      return placed === 'local' ? { name, port_offset } : { name, port_offset, node: placed };
+    });
+}
 
 /** Where a mock lane was moved to (`local` or a node). */
 const laneNodes = new Map<string, string>();
@@ -439,6 +458,7 @@ export class MockTransport implements Transport {
     if (p === '/hub/session') return hub.unpaired ? json(401, { error: 'not paired' }) : json(200, { version: MOCK_VERSION, link_unavailable: null });
     if (hub.unpaired) return json(401, { error: 'not paired' });
     if (p === '/hub/stacks' && method === 'GET') return json(200, hub.entries());
+    if (p === '/hub/ports' && method === 'GET') return json(200, hubPorts(hub.empty ? [] : hub.stacks, portLanes));
     if (p === '/hub/docker' && method === 'GET') return json(200, hub.docker);
     if (p === '/hub/pool/telemetry')
       return json(200, {
@@ -999,6 +1019,11 @@ export class MockTransport implements Transport {
     const fw = /^\/v1\/lanes\/([^/]+)(\/v1\/.*)$/.exec(p);
     const inLaneName = fw && fw[1] !== 'main' ? decodeURIComponent(fw[1]) : null;
     if (fw) p = fw[2];
+    if (p === '/v1/ports' && method === 'GET') {
+      // The main tree's answer has every lane's; a lane's only its own.
+      const all = daemonPorts(s, portLanes(s));
+      return json(200, { ports: inLaneName ? all.filter((e) => e.lane === inLaneName) : all });
+    }
     const view = () => json(200, s.view);
     if (p === '/v1/stack' && method === 'GET') return view();
     if (p === '/v1/usage' && method === 'GET') {

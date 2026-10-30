@@ -886,3 +886,48 @@ export type PoolUpstream = {
 
 /** `GET /hub/upstreams`. `file`: no keychain on this machine (Linux without a Secret Service). */
 export type McpUpstreams = { store: 'keychain' | 'file'; upstreams: McpUpstream[] };
+
+/**
+ * One port a stack holds or uses on this machine (ADR-0082): `GET /v1/ports`
+ * of a daemon (`{ports: PortEntry[]}`), and the entries of `GET /hub/ports`.
+ */
+export type PortEntry = {
+  port: number;
+  proto: 'tcp' | 'udp';
+  /** `main` for the main working tree, else the lane's name. */
+  lane: string;
+  /**
+   * `fixed`: a service's port (the main slot's in `main`, moved by the offset
+   * in a lane); `instance`: a running instance's port behind the proxy or a
+   * front; `published`: a container's host port; `held`: a `main_ports`
+   * container's fixed port devstack holds (ADR-0048); `node`: a port of a lane
+   * on a node, forwarded here; `declared`: named by the stack file of a stack
+   * whose daemon does not run.
+   */
+  kind: 'fixed' | 'instance' | 'published' | 'held' | 'node' | 'declared';
+  /** A service, or a container as `<group>.<service>`; absent: not known. */
+  holder?: string;
+  /** Who listens on it: devstack's HTTP proxy, a devstack forward, the process itself, Docker. */
+  via: 'proxy' | 'forward' | 'direct' | 'docker';
+  /** Where it leads: the instance's port, the lane's port, the container's port, the port on the node. */
+  target?: number;
+  /** The lane `target` belongs to when it is not this entry's (the lane serving the main slot). */
+  target_lane?: string;
+  /** The node of a lane on a node. */
+  node?: string;
+  /** Something listens on it now, as devstack knows it. */
+  listening: boolean;
+};
+
+/** One stack in `GET /hub/ports`: its daemon's entries, or its stack file's (`declared`) while it does not run. */
+export type StackPorts = { id: string; name: string; running: boolean; ports: PortEntry[] };
+
+/** A port and protocol more than one stack uses: each stack's use of it. */
+export type PortOverlap = {
+  port: number;
+  proto: 'tcp' | 'udp';
+  stacks: { id: string; name: string; lane: string; holder?: string; kind: PortEntry['kind'] }[];
+};
+
+/** `GET /hub/ports`: the ports of every registered stack on this machine, and their overlaps. */
+export type HubPorts = { stacks: StackPorts[]; overlaps: PortOverlap[] };

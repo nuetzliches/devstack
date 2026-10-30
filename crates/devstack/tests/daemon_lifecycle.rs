@@ -2307,6 +2307,38 @@ fn a_worktree_runs_as_a_lane() {
         as_main.is_some_and(|st| st != "stopped"),
         "the tray runs in main"
     );
+    // Every port the stack holds here, its lane's too (ADR-0082): the main
+    // tree's fixed ports and the lane's, moved by its offset, each with what
+    // listens on it (the HTTP proxy, a dev server's front).
+    let ports = s.daemon_get("/v1/ports");
+    let fixed = |ports: &Value, lane: &str, port: u16, holder: &str, via: &str| {
+        ports["ports"].as_array().is_some_and(|a| {
+            a.iter().any(|e| {
+                e["lane"] == lane
+                    && e["port"] == port
+                    && e["holder"] == holder
+                    && e["kind"] == "fixed"
+                    && e["via"] == via
+                    && e["listening"] == true
+            })
+        })
+    };
+    assert!(fixed(&ports, "main", s.port, "api", "proxy"), "{ports}");
+    assert!(fixed(&ports, "main", web_port, "web", "forward"), "{ports}");
+    assert!(fixed(&ports, &lane, lane_port, "api", "proxy"), "{ports}");
+    assert!(
+        fixed(&ports, &lane, web_port + offset, "web", "forward"),
+        "{ports}"
+    );
+    // A lane's own `/v1/ports` is its entries only.
+    let own = s.daemon_get(&format!("/v1/lanes/{lane}/v1/ports"));
+    assert!(fixed(&own, &lane, lane_port, "api", "proxy"), "{own}");
+    assert!(
+        own["ports"]
+            .as_array()
+            .is_some_and(|a| a.iter().all(|e| e["lane"] == lane.as_str())),
+        "{own}"
+    );
 
     // 3. An edit in the worktree reaches the lane only.
     let main_build = s.info()["build"].as_str().unwrap().to_string();

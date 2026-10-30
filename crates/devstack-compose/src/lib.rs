@@ -270,6 +270,9 @@ pub struct Publisher {
     pub target_port: u16,
     #[serde(default, deserialize_with = "nullable")]
     pub published_port: u16,
+    /// `tcp` or `udp`; empty when Compose does not say.
+    #[serde(default, deserialize_with = "nullable")]
+    pub protocol: String,
 }
 
 // What a published port does when this machine connects to it.

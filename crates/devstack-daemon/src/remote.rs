@@ -1686,6 +1686,17 @@ impl RemoteLane {
         }
     }
 
+    /// The ports it forwards (TCP) and relays (UDP) here, each `(on the
+    /// node, here)`, and whether this machine listens on them now
+    /// (ADR-0082).
+    pub fn forwarded(&self) -> (crate::ports::PortPairs, crate::ports::PortPairs, bool) {
+        (
+            self.ports.clone(),
+            self.udp_ports.clone(),
+            *self.listening.borrow(),
+        )
+    }
+
     /// Stop listening on the lane's ports here; open connections stay.
     /// Returns once the ports are free (or after two seconds).
     pub fn stop_forwarding(&self) {
