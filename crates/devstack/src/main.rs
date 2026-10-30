@@ -389,6 +389,14 @@ enum PoolUpstreamsAction {
         /// The OAuth client id, where the server registers no clients itself.
         #[arg(long)]
         client_id: Option<String>,
+        /// The client secret of that app, where the server wants one even
+        /// with PKCE (GitHub); members get it with the list. Left out on a
+        /// change: the one set stays; `""`: none.
+        #[arg(long)]
+        client_secret: Option<String>,
+        /// The OAuth scopes the login asks for, comma-separated.
+        #[arg(long = "scope", value_delimiter = ',')]
+        scopes: Vec<String>,
     },
     /// Take an upstream off the pool's list.
     Remove { name: String },
@@ -1072,6 +1080,11 @@ mod tests {
             parse(&["pool", "upstreams", "add", "wiki", "https://wiki.example.com/mcp", "--allow", "search,get"]).cmd,
             Cmd::Pool { action: Some(PoolAction::Upstreams { action: Some(PoolUpstreamsAction::Add { name, allow, login, .. }) }), .. }
                 if name == "wiki" && allow == ["search", "get"] && login == "oauth"
+        ));
+        assert!(matches!(
+            parse(&["pool", "upstreams", "add", "gh", "https://gh.example.com/mcp", "--client-id", "app", "--client-secret", "s", "--scope", "repo,read:org"]).cmd,
+            Cmd::Pool { action: Some(PoolAction::Upstreams { action: Some(PoolUpstreamsAction::Add { client_id: Some(c), client_secret: Some(s), scopes, .. }) }), .. }
+                if c == "app" && s == "s" && scopes == ["repo", "read:org"]
         ));
         assert!(matches!(
             parse(&["pool", "skills", "add", "core", "--github", "org/skills", "--path", "skills", "--to", "team,*"]).cmd,

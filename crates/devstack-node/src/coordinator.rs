@@ -3463,7 +3463,8 @@ async fn admin_role(
 }
 
 /// `GET /v1/upstreams`: the MCP upstreams this pool names for its members
-/// (ADR-0069 option B), never a secret.
+/// (ADR-0069 option B), with an OAuth app's client secret where one is set
+/// (the members' hubs log in with it; never a user's credential).
 async fn upstreams_list(
     AxState(s): AxState<Shared>,
     Extension(peer): Extension<Peer>,

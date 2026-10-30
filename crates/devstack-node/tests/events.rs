@@ -98,6 +98,7 @@ fn a_member_hears_every_part_first_then_what_changed_and_the_end_when_removed() 
             url: "https://wiki.example.com/mcp".into(),
             auth: PoolAuth::Oauth {
                 client_id: None,
+                client_secret: None,
                 scopes: Vec::new(),
             },
             ..Default::default()

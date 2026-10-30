@@ -14,11 +14,19 @@
 //!   upstream as `resource` (RFC 8707). The browser comes back to the hub's
 //!   own loopback port; a callback is taken only for a flow the hub started,
 //!   by its one-time `state`, within ten minutes. No route hands a token out.
+//! - **A client secret** (review card approved 2026-10-30): for an
+//!   authorization server that wants one even with PKCE (GitHub), an
+//!   upstream with a client id may have the secret of an app registered for
+//!   desktop clients (RFC 8252 §8.5: not confidential by nature). The hub
+//!   sends it only to the token endpoint. The user's own goes into the
+//!   secrets store, a pool's comes with its list; no route gives it out
+//!   ([`ClientSecret`] serialises as `true`).
 //! - **A pool's upstreams** (ADR-0069 option B; review card approved
 //!   2026-10-28): each pool this machine is an approved member of may name
-//!   upstreams (URL only, never a secret). The hub keeps the last list it got
-//!   in `pool-upstreams.json` and offers them in the dashboard; one is used,
-//!   as `<pool>:<name>`, only once the user accepted it at its URL. The
+//!   upstreams (URL only, no credential but an OAuth app's client secret).
+//!   The hub keeps the last list it got in `pool-upstreams.json` and offers
+//!   them in the dashboard; one is used, as `<pool>:<name>`, only once the
+//!   user accepted it at its URL. The
 //!   user's own configuration goes first: an entry with the name or prefix
 //!   of one of theirs is not taken, nor two entries of different pools with
 //!   one prefix until the user gives one another. An entry the pool drops,
@@ -90,13 +98,65 @@ pub enum Auth {
         env: Option<String>,
     },
     /// The hub's OAuth login. `client_id` where the authorization server
-    /// does not register clients itself.
+    /// does not register clients itself, `client_secret` with it where the
+    /// server wants one even with PKCE.
     Oauth {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         client_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        client_secret: Option<ClientSecret>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         scopes: Vec<String>,
     },
+}
+
+/// An OAuth app's client secret: taken as its value, never given out.
+/// Written (to the dashboard, to `upstreams.toml`) it is `true`: one is set.
+/// Read, `true` is [`ClientSecret::Set`], a string its value, and an empty
+/// string or `false` takes the one set away.
+#[derive(Clone, PartialEq, Eq)]
+pub enum ClientSecret {
+    /// One is set: for the user's own upstream, in the secrets store.
+    Set,
+    /// The value: as the user gave it (before the hub keeps it), or a pool's.
+    Value(String),
+}
+
+impl std::fmt::Debug for ClientSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ClientSecret(..)")
+    }
+}
+
+impl Serialize for ClientSecret {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_bool(true)
+    }
+}
+
+impl<'de> Deserialize<'de> for ClientSecret {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Flag(bool),
+            Value(String),
+        }
+        Ok(match Raw::deserialize(d)? {
+            Raw::Flag(true) => Self::Set,
+            Raw::Flag(false) => Self::Value(String::new()),
+            Raw::Value(v) => Self::Value(v),
+        })
+    }
+}
+
+/// At most this long, a client secret.
+const SECRET_MAX: usize = 1024;
+
+/// Where the secrets store keeps the client secret of the user's upstream
+/// `name`: beside its login, which logging out forgets.
+fn client_key(name: &str) -> String {
+    format!("{name}#client")
 }
 
 impl Upstream {
@@ -176,6 +236,23 @@ impl Upstream {
         {
             return Err(format!("`{e}`: not the name of an environment variable"));
         }
+        if let Auth::Oauth {
+            client_id,
+            client_secret: Some(c),
+            ..
+        } = &self.auth
+        {
+            if client_id.is_none() {
+                return Err("a client secret comes with its client id".into());
+            }
+            if let ClientSecret::Value(v) = c
+                && (v.len() > SECRET_MAX || v.chars().any(char::is_whitespace))
+            {
+                return Err(format!(
+                    "a client secret is up to {SECRET_MAX} characters without spaces"
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -246,6 +323,9 @@ enum Secret {
         #[serde(default)]
         expires_at: Option<u64>,
         client_id: String,
+        /// The client secret it logged in with, for its refresh.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        client_secret: Option<String>,
         token_endpoint: String,
         resource: String,
     },
@@ -259,6 +339,7 @@ struct Flow {
     upstream: String,
     verifier: String,
     client_id: String,
+    client_secret: Option<String>,
     token_endpoint: String,
     resource: String,
     redirect: String,
@@ -484,8 +565,13 @@ impl Upstreams {
                 let auth = match &e.auth {
                     PoolAuth::None => Auth::None,
                     PoolAuth::Token => Auth::Token { env: None },
-                    PoolAuth::Oauth { client_id, scopes } => Auth::Oauth {
+                    PoolAuth::Oauth {
+                        client_id,
+                        client_secret,
+                        scopes,
+                    } => Auth::Oauth {
                         client_id: client_id.clone(),
+                        client_secret: client_secret.clone().map(ClientSecret::Value),
                         scopes: scopes.clone(),
                     },
                 };
@@ -690,12 +776,54 @@ impl Upstreams {
     }
 
     /// Add `u`, or replace the one of its name. A change of its URL or of how
-    /// it logs in forgets its credential: it was for the other.
-    pub fn put(&self, u: Upstream) -> Result<(), String> {
-        u.check()?;
+    /// it logs in forgets its credential: it was for the other. A client
+    /// secret given goes into the secrets store; a change without one keeps
+    /// the one set, an empty one takes it away.
+    pub fn put(&self, mut u: Upstream) -> Result<(), String> {
         let name = u.name.clone();
         let _one = self.write.lock().unwrap();
         let mut all = self.own()?;
+        let had = all.iter().any(|o| {
+            o.name == name
+                && matches!(
+                    o.auth,
+                    Auth::Oauth {
+                        client_secret: Some(_),
+                        ..
+                    }
+                )
+        });
+        // The one to keep now, if one is given.
+        let mut given = None;
+        if let Auth::Oauth { client_secret, .. } = &mut u.auth {
+            *client_secret = match client_secret.take() {
+                Some(ClientSecret::Value(v)) if v.is_empty() => None,
+                Some(ClientSecret::Value(v)) => {
+                    given = Some(v.clone());
+                    Some(ClientSecret::Value(v))
+                }
+                Some(ClientSecret::Set) | None if had => Some(ClientSecret::Set),
+                Some(ClientSecret::Set) | None => None,
+            };
+        }
+        u.check()?;
+        let keeps = matches!(
+            u.auth,
+            Auth::Oauth {
+                client_secret: Some(_),
+                ..
+            }
+        );
+        match given {
+            Some(v) => {
+                self.secrets.set(&client_key(&name), &v)?;
+                if let Auth::Oauth { client_secret, .. } = &mut u.auth {
+                    *client_secret = Some(ClientSecret::Set);
+                }
+            }
+            None if !keeps => self.secrets.delete(&client_key(&name))?,
+            None => {}
+        }
         if all
             .iter()
             .any(|o| o.name != u.name && o.prefix() == u.prefix())
@@ -729,6 +857,7 @@ impl Upstreams {
         }
         self.procs.lock().unwrap().remove(name);
         self.secrets.delete(name)?;
+        self.secrets.delete(&client_key(name))?;
         self.save(&all)?;
         Ok(true)
     }
@@ -775,8 +904,22 @@ impl Upstreams {
     /// browser to; `redirect` is the hub's callback (`CALLBACK` on its port).
     pub fn begin(&self, http: &ureq::Agent, name: &str, redirect: &str) -> Result<String, String> {
         let u = self.get(name)?;
-        let Auth::Oauth { client_id, scopes } = &u.auth else {
+        let Auth::Oauth {
+            client_id,
+            client_secret,
+            scopes,
+        } = &u.auth
+        else {
             return Err(format!("`{name}` does not log in with OAuth"));
+        };
+        let client_secret = match client_secret {
+            Some(ClientSecret::Value(v)) => Some(v.clone()),
+            Some(ClientSecret::Set) => {
+                Some(self.secrets.get(&client_key(name))?.ok_or_else(|| {
+                    format!("the client secret of `{name}` is gone: give it again")
+                })?)
+            }
+            None => None,
         };
         let server = discover(http, &u.url)?;
         let client_id = match (client_id, &server.registration_endpoint) {
@@ -814,6 +957,7 @@ impl Upstreams {
                 upstream: name.to_string(),
                 verifier,
                 client_id,
+                client_secret,
                 token_endpoint: server.token_endpoint,
                 resource: server.resource,
                 redirect: redirect.to_string(),
@@ -833,18 +977,18 @@ impl Upstreams {
             flows.remove(state)
         }
         .ok_or("no login of this hub waits for that answer (started elsewhere, used, or older than ten minutes)")?;
-        let t = token_request(
-            http,
-            &flow.token_endpoint,
-            &[
-                ("grant_type", "authorization_code"),
-                ("code", code),
-                ("redirect_uri", &flow.redirect),
-                ("client_id", &flow.client_id),
-                ("code_verifier", &flow.verifier),
-                ("resource", &flow.resource),
-            ],
-        )?;
+        let mut form = vec![
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", flow.redirect.as_str()),
+            ("client_id", flow.client_id.as_str()),
+            ("code_verifier", flow.verifier.as_str()),
+            ("resource", flow.resource.as_str()),
+        ];
+        if let Some(c) = &flow.client_secret {
+            form.push(("client_secret", c));
+        }
+        let t = token_request(http, &flow.token_endpoint, &form)?;
         self.put_secret(
             &flow.upstream,
             &Secret::Oauth {
@@ -852,6 +996,7 @@ impl Upstreams {
                 refresh_token: t.refresh_token,
                 expires_at: t.expires_in.map(|s| now_s() + s),
                 client_id: flow.client_id,
+                client_secret: flow.client_secret,
                 token_endpoint: flow.token_endpoint,
                 resource: flow.resource,
             },
@@ -884,6 +1029,7 @@ impl Upstreams {
                         refresh_token,
                         expires_at,
                         client_id,
+                        client_secret,
                         token_endpoint,
                         resource,
                     } => {
@@ -891,16 +1037,16 @@ impl Upstreams {
                         let Some(refresh) = refresh_token.filter(|_| due || stale) else {
                             return Ok(Some(access_token));
                         };
-                        let t = token_request(
-                            http,
-                            &token_endpoint,
-                            &[
-                                ("grant_type", "refresh_token"),
-                                ("refresh_token", &refresh),
-                                ("client_id", &client_id),
-                                ("resource", &resource),
-                            ],
-                        )?;
+                        let mut form = vec![
+                            ("grant_type", "refresh_token"),
+                            ("refresh_token", refresh.as_str()),
+                            ("client_id", client_id.as_str()),
+                            ("resource", resource.as_str()),
+                        ];
+                        if let Some(c) = &client_secret {
+                            form.push(("client_secret", c));
+                        }
+                        let t = token_request(http, &token_endpoint, &form)?;
                         let access = t.access_token.clone();
                         self.put_secret(
                             name,
@@ -910,6 +1056,7 @@ impl Upstreams {
                                 refresh_token: t.refresh_token.or(Some(refresh)),
                                 expires_at: t.expires_in.map(|s| now_s() + s),
                                 client_id,
+                                client_secret,
                                 token_endpoint,
                                 resource,
                             },
@@ -1363,12 +1510,13 @@ fn token_request(
         .send(body.join("&"))
         .map_err(|e| format!("{endpoint}: {e}"))?;
     let text = r.body_mut().read_to_string().unwrap_or_default();
-    if r.status() != 200 {
-        // The server's error, never the request: it held the code.
-        let why = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| v["error"].as_str().map(str::to_string))
-            .unwrap_or_else(|| r.status().to_string());
+    // The server's error, never the request: it held the code. GitHub
+    // answers one with `200`.
+    let error = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| v["error"].as_str().map(str::to_string));
+    if r.status() != 200 || error.is_some() {
+        let why = error.unwrap_or_else(|| r.status().to_string());
         return Err(format!("{endpoint} refused: {why}"));
     }
     serde_json::from_str(&text).map_err(|e| format!("{endpoint}: {e}"))
@@ -1541,6 +1689,11 @@ mod tests {
                             serde_json::json!({ "access_token": "access-1", "refresh_token": "refresh-1", "expires_in": 30 }),
                         )
                     }
+                    // GitHub's way to refuse.
+                    "/auth/token" if body.contains("code=refused-with-200") => (
+                        200,
+                        serde_json::json!({ "error": "incorrect_client_credentials" }),
+                    ),
                     "/auth/token" if body.contains("grant_type=refresh_token") => (
                         200,
                         serde_json::json!({ "access_token": "access-2", "refresh_token": "refresh-2", "expires_in": 3600 }),
@@ -1572,6 +1725,7 @@ mod tests {
             allow: Vec::new(),
             auth: Auth::Oauth {
                 client_id: None,
+                client_secret: None,
                 scopes: Vec::new(),
             },
             ..Default::default()
@@ -1626,6 +1780,119 @@ mod tests {
         ups.logout(&name).unwrap();
         assert_eq!(ups.bearer(&http, &name, false).unwrap(), None);
         let _ = ups.remove(&name);
+    }
+
+    #[test]
+    fn a_client_secret_goes_to_the_token_endpoint_only_and_is_never_shown() {
+        let (base, seen) = fake_server();
+        let d = tempfile::tempdir().unwrap();
+        let ups = Upstreams::for_test(d.path().to_path_buf(), Vec::new);
+        let name = format!("s{}", std::process::id());
+        let mut u = Upstream {
+            name: name.clone(),
+            url: format!("{base}/mcp"),
+            auth: Auth::Oauth {
+                client_id: Some("the-app".into()),
+                client_secret: Some(ClientSecret::Value("app-secret".into())),
+                scopes: Vec::new(),
+            },
+            ..Default::default()
+        };
+        ups.put(u.clone()).unwrap();
+        let text = std::fs::read_to_string(d.path().join("upstreams.toml")).unwrap();
+        assert!(
+            text.contains("client_secret = true") && !text.contains("app-secret"),
+            "{text}"
+        );
+        let shown = serde_json::to_string(&ups.views().unwrap()).unwrap();
+        assert!(
+            shown.contains(r#""client_secret":true"#) && !shown.contains("app-secret"),
+            "{shown}"
+        );
+        assert!(!format!("{:?}", ups.list().unwrap()).contains("app-secret"));
+        // A change without it (as the dashboard sends one) keeps it.
+        if let Auth::Oauth { client_secret, .. } = &mut u.auth {
+            *client_secret = None;
+        }
+        u.allow = vec!["search".into()];
+        ups.put(u.clone()).unwrap();
+
+        let http = http();
+        let redirect = "http://127.0.0.1:4250/oauth/upstream/callback";
+        let url = ups.begin(&http, &name, redirect).unwrap();
+        assert!(
+            url.contains("client_id=the-app") && !url.contains("app-secret"),
+            "{url}"
+        );
+        let state_of = |url: &str| {
+            let s = url.split("state=").nth(1).unwrap();
+            s.split('&').next().unwrap().to_string()
+        };
+        // A refusal with `200` (GitHub's) is a refusal, with its reason.
+        let refused = ups.begin(&http, &name, redirect).unwrap();
+        let why = ups
+            .complete(&http, &state_of(&refused), "refused-with-200")
+            .unwrap_err();
+        assert!(why.contains("incorrect_client_credentials"), "{why}");
+        ups.complete(&http, &state_of(&url), "the-code").unwrap();
+        assert_eq!(
+            ups.bearer(&http, &name, false).unwrap().as_deref(),
+            Some("access-2")
+        );
+        let sent = seen.lock().unwrap().clone();
+        assert!(!sent.iter().any(|(p, _)| p == "/auth/register"));
+        let with: Vec<_> = sent
+            .iter()
+            .filter(|(_, b)| b.contains("client_secret=app-secret") && !b.contains("refused"))
+            .map(|(p, b)| (p.as_str(), b.split('&').next().unwrap()))
+            .collect();
+        assert_eq!(
+            with,
+            [
+                ("/auth/token", "grant_type=authorization_code"),
+                ("/auth/token", "grant_type=refresh_token")
+            ]
+        );
+        // Logging out keeps it; an empty one takes it away.
+        ups.logout(&name).unwrap();
+        assert!(ups.secrets.get(&client_key(&name)).unwrap().is_some());
+        if let Auth::Oauth { client_secret, .. } = &mut u.auth {
+            *client_secret = Some(ClientSecret::Value(String::new()));
+        }
+        ups.put(u).unwrap();
+        assert!(ups.secrets.get(&client_key(&name)).unwrap().is_none());
+        assert!(
+            !serde_json::to_string(&ups.views().unwrap())
+                .unwrap()
+                .contains("client_secret")
+        );
+        let _ = ups.remove(&name);
+    }
+
+    #[test]
+    fn a_pools_client_secret_is_used_and_shown_as_set() {
+        let mut e = entry("gh", "https://gh.example.com/mcp", None);
+        e.auth = PoolAuth::Oauth {
+            client_id: Some("the-app".into()),
+            client_secret: Some("pool-secret".into()),
+            scopes: vec!["repo".into()],
+        };
+        let d = tempfile::tempdir().unwrap();
+        let ups = Upstreams::for_test(d.path().to_path_buf(), move || {
+            vec![("team".into(), Some(vec![e.clone()]))]
+        });
+        ups.refresh_pools();
+        let shown = serde_json::to_string(&ups.views().unwrap()).unwrap();
+        assert!(
+            shown.contains(r#""client_secret":true"#) && !shown.contains("pool-secret"),
+            "{shown}"
+        );
+        ups.accept("team", "gh", None).unwrap();
+        let u = ups.get("team:gh").unwrap();
+        assert!(matches!(
+            u.auth,
+            Auth::Oauth { client_secret: Some(ClientSecret::Value(ref v)), .. } if v == "pool-secret"
+        ));
     }
 
     /// An MCP server over Streamable HTTP that wants `Bearer good`: a
@@ -1809,6 +2076,7 @@ mod tests {
         let mut bad = cmd.clone();
         bad.auth = Auth::Oauth {
             client_id: None,
+            client_secret: None,
             scopes: Vec::new(),
         };
         assert!(ups.put(bad).is_err());

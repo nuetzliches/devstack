@@ -606,19 +606,32 @@ the same mock (`devstack_node::provision::mock`).
 A pool can name the MCP servers its members work with
 ([ADR-0069](adr/0069-devstack-mcp-can-carry-the-tools-of-upstream-mcp-servers.md),
 option B): name, URL, prefix, tool allowlist and how each logs in. Never a
-secret, and never a command: an entry is a URL over `https://`, so an admin
-cannot run anything on a member's machine.
+user's credential, and never a command: an entry is a URL over `https://`, so
+an admin cannot run anything on a member's machine.
 
 ```sh
 devstack pool upstreams add tracker https://mcp.example.com/mcp      # OAuth by default
 devstack pool upstreams add wiki https://wiki.example.com/mcp --login token --allow search,get_page
+devstack pool upstreams add github https://api.githubcopilot.com/mcp/ \
+  --client-id <id> --client-secret <secret> --scope repo,read:org      # an OAuth app of the pool's
 devstack pool upstreams remove wiki
 devstack pool upstreams                                              # the list, for any member
 ```
 
 `--login` is `oauth` (each member's hub logs in, in the browser; `--client-id`
-where the server registers no clients itself), `token` (each member gives
-their hub one) or `none`. Only an admin changes the list; each change is in
+where the server registers no clients itself, `--scope` for what the login
+asks for), `token` (each member gives their hub one) or `none`.
+
+Some servers want a client secret even with PKCE: GitHub does, for its OAuth
+apps and GitHub apps alike. For those, register an app for desktop clients
+(GitHub: an OAuth app with the callback URL
+`http://127.0.0.1/oauth/upstream/callback`; GitHub takes any port on a
+loopback address) and give its id and secret. Such a secret is not
+confidential by nature (RFC 8252 §8.5; the `gh` CLI ships its own): members'
+hubs get it with the list and send it only to the token endpoint, while the
+dashboard, `devstack pool upstreams` and the audit log only say that one is
+set. A change without `--client-secret` keeps it; `--client-secret ""`
+takes it away. Only an admin changes the list; each change is in
 the audit log. The pool area of the dashboard shows the list to every member
 and lets an admin add, change and remove entries.
 

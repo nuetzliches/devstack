@@ -1203,14 +1203,22 @@ pub fn upstreams(pool: &str, action: Option<crate::PoolUpstreamsAction>) -> Resu
             allow,
             login,
             client_id,
+            client_secret,
+            scopes,
         } => {
             let auth = match login.as_str() {
                 "oauth" => PoolAuth::Oauth {
                     client_id,
-                    scopes: Vec::new(),
+                    client_secret,
+                    scopes: scopes
+                        .into_iter()
+                        .filter(|s| !s.trim().is_empty())
+                        .collect(),
                 },
-                "token" | "none" if client_id.is_some() => {
-                    bail!("`--client-id` is for `--login oauth`")
+                "token" | "none"
+                    if client_id.is_some() || client_secret.is_some() || !scopes.is_empty() =>
+                {
+                    bail!("`--client-id`, `--client-secret` and `--scope` are for `--login oauth`")
                 }
                 "token" => PoolAuth::Token,
                 "none" => PoolAuth::None,
@@ -1247,9 +1255,26 @@ pub fn upstreams(pool: &str, action: Option<crate::PoolUpstreamsAction>) -> Resu
             PoolAuth::None => "no login".to_string(),
             PoolAuth::Token => "a token each member gives".to_string(),
             PoolAuth::Oauth {
-                client_id: Some(c), ..
-            } => format!("OAuth (client id {c})"),
-            PoolAuth::Oauth { .. } => "OAuth".to_string(),
+                client_id,
+                client_secret,
+                scopes,
+            } => {
+                let mut about = Vec::new();
+                if let Some(c) = client_id {
+                    about.push(format!("client id {c}"));
+                }
+                if client_secret.is_some() {
+                    about.push("a client secret".to_string());
+                }
+                if !scopes.is_empty() {
+                    about.push(format!("scopes {}", scopes.join(" ")));
+                }
+                if about.is_empty() {
+                    "OAuth".to_string()
+                } else {
+                    format!("OAuth ({})", about.join(", "))
+                }
+            }
         };
         let tools = if u.allow.is_empty() {
             "all tools".to_string()

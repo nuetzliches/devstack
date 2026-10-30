@@ -1,6 +1,6 @@
 # ADR-0069: `devstack mcp` can carry the tools of upstream MCP servers, logged in once by the hub
 
-- **Status:** Accepted (2026-10-27, [card](https://github.com/nuetzliches/devstack/issues/316#issuecomment-6452598449)); amended 2026-10-27 (the keychain spike: `keyring`, a file on Linux without a Secret Service); addendum 2026-10-28 (option B: a pool names upstreams, card approved 2026-10-28)
+- **Status:** Accepted (2026-10-27, [card](https://github.com/nuetzliches/devstack/issues/316#issuecomment-6452598449)); amended 2026-10-27 (the keychain spike: `keyring`, a file on Linux without a Secret Service); addendum 2026-10-28 (option B: a pool names upstreams, card approved 2026-10-28); addendum 2026-10-30 (an OAuth app's client secret, card approved 2026-10-30)
 - **Date:** 2026-10-27
 - **Deciders:** project owner
 - **Related:** [#316](https://github.com/nuetzliches/devstack/issues/316), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md), [ADR-0054](0054-macos-is-a-developer-platform-in-preview.md), [ADR-0060](0060-the-tray-is-a-client-of-the-hub.md), [ADR-0067](0067-a-change-at-runtime-says-who-made-it.md)
@@ -192,6 +192,46 @@ prefix, allowlist or login kind by the pool needs no new acceptance; only
 its URL does. A pool names at most 64. Building it showed that the Windows
 Credential Manager loses writes and deletes made side by side from several
 threads: the hub now makes one keychain call at a time.
+
+## Addendum 2026-10-30: an OAuth app's client secret
+
+GitHub's MCP server (`api.githubcopilot.com/mcp`) names its authorization
+server (`github.com/login/oauth`, PKCE with S256), but GitHub registers no
+clients itself and wants a client secret at its token endpoint even with
+PKCE. Its review card was approved by the owner on 2026-10-30 (all four
+points) and is in the description of the pull request that built it.
+
+1. **An OAuth upstream may carry a client secret**, with its client id, for
+   an authorization server that wants one even with PKCE. It is the secret
+   of an app registered for desktop clients, not confidential by nature
+   (RFC 8252 §8.5, as with the `gh` CLI), and the hub sends it only to the
+   token endpoint the upstream's metadata names (code exchange and
+   refresh). A device flow would need no secret, but a second login path
+   and its own UI; a personal access token per member would need no change,
+   but is kept by hand and never refreshed.
+2. **On the user's own upstream it goes into the keychain**, never into
+   `upstreams.toml`; the API takes it and only ever answers whether one is
+   set.
+3. **A pool may name one** with its client id: the coordinator gives it to
+   approved members with the list (`GET /v1/upstreams`), their hubs keep it
+   with the pool's list (`pool-upstreams.json`), and the dashboard, the CLI
+   and the audit log show only that one is set. This is the one exception
+   to point 1 of the 2026-10-28 addendum ("never a secret").
+4. **API and CLI:** `auth: {kind: "oauth", client_id?, client_secret?,
+   scopes?}` on write; reads answer `client_secret: true` instead of the
+   value; an edit without a secret keeps the one set, an empty one takes it
+   away; `devstack pool upstreams add --client-secret … --scope …`.
+
+Decided while building: the login the hub keeps holds the secret it logged
+in with, for its refresh; logging out keeps the client secret, removing the
+upstream or giving up OAuth drops it (a keychain entry `<name>#client`
+beside the login). A secret is up to 1024 characters without spaces. The
+dashboard's forms gained the client secret and the scopes for both the
+user's and a pool's upstreams; until now an edit there dropped the scopes.
+GitHub refuses at its token endpoint with `200` and an `error`: the hub
+takes any answer with an `error` as a refusal, with that reason.
+An older coordinator drops the field on a change; an older member's hub
+ignores it, and its login fails as before.
 
 ## Enforced by
 

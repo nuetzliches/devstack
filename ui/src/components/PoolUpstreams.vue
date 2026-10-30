@@ -1,13 +1,16 @@
 <script setup lang="ts">
 // The MCP upstreams a pool names for its members (ADR-0069 option B): a list
-// of URLs, never a secret. Every member sees it; an admin adds and removes
-// entries (the coordinator checks the role and audits each change). Each
-// member's hub offers them on the MCP upstreams page and uses one only once
-// its user accepts it, with that user's own login.
+// of URLs, never a user's credential. Every member sees it; an admin adds and
+// removes entries (the coordinator checks the role and audits each change).
+// Each member's hub offers them on the MCP upstreams page and uses one only
+// once its user accepts it, with that user's own login. An OAuth app's client
+// secret goes to the members' hubs with the list, but is shown here only as
+// set.
 import { onMounted, ref, watch } from 'vue';
 import { api, paths } from '@/api';
 import type { PoolUpstream } from '@/api/types';
 import { act } from '@/lib/actions';
+import { oauthAuth } from '@/lib/oauthAuth';
 import { DEFAULT_POOL, usePool } from '@/stores/pool';
 import Icon from '@/components/icons/Icon.vue';
 
@@ -30,8 +33,21 @@ async function load() {
 onMounted(load);
 watch(() => pool.current, load);
 
-type Form = { name: string; url: string; prefix: string; allow: string; kind: 'oauth' | 'token' | 'none'; client_id: string };
-const empty = (): Form => ({ name: '', url: '', prefix: '', allow: '', kind: 'oauth', client_id: '' });
+type Form = {
+  name: string;
+  url: string;
+  prefix: string;
+  allow: string;
+  kind: 'oauth' | 'token' | 'none';
+  client_id: string;
+  /** A new client secret; empty keeps the one set. */
+  client_secret: string;
+  /** The entry has one (the hub never shows it). */
+  secret_set: boolean;
+  drop_secret: boolean;
+  scopes: string;
+};
+const empty = (): Form => ({ name: '', url: '', prefix: '', allow: '', kind: 'oauth', client_id: '', client_secret: '', secret_set: false, drop_secret: false, scopes: '' });
 const form = ref<Form>(empty());
 const formOpen = ref(false);
 const busy = ref(false);
@@ -49,13 +65,17 @@ function startEdit(u: PoolUpstream) {
     allow: (u.allow ?? []).join(', '),
     kind: u.auth.kind,
     client_id: u.auth.kind === 'oauth' ? (u.auth.client_id ?? '') : '',
+    client_secret: '',
+    secret_set: u.auth.kind === 'oauth' && !!u.auth.client_secret,
+    drop_secret: false,
+    scopes: u.auth.kind === 'oauth' ? (u.auth.scopes ?? []).join(' ') : '',
   };
   formOpen.value = true;
 }
 
 async function save() {
   const f = form.value;
-  const auth: PoolUpstream['auth'] = f.kind === 'oauth' ? { kind: 'oauth', ...(f.client_id.trim() ? { client_id: f.client_id.trim() } : {}) } : { kind: f.kind };
+  const auth: PoolUpstream['auth'] = f.kind === 'oauth' ? oauthAuth(f) : { kind: f.kind };
   const body: PoolUpstream = {
     name: f.name.trim(),
     url: f.url.trim(),
@@ -90,7 +110,7 @@ async function remove(u: PoolUpstream) {
 function how(u: PoolUpstream): string {
   if (u.auth.kind === 'none') return 'no login';
   if (u.auth.kind === 'token') return 'a token each member gives';
-  return 'OAuth';
+  return u.auth.client_secret ? 'OAuth, with a client secret' : 'OAuth';
 }
 </script>
 
@@ -126,6 +146,19 @@ function how(u: PoolUpstream): string {
         <label v-if="form.kind === 'oauth'" class="wide"
           >Client id <input v-model="form.client_id" class="input" placeholder="only where the server registers none itself" spellcheck="false"
         /></label>
+        <label v-if="form.kind === 'oauth' && form.client_id.trim()" class="wide"
+          >Client secret
+          <input
+            v-model="form.client_secret"
+            type="password"
+            autocomplete="off"
+            class="input"
+            :placeholder="form.secret_set ? 'set; empty keeps it' : 'only where the server wants one (GitHub); members get it'"
+            :disabled="form.drop_secret"
+            data-testid="pool-upstream-secret"
+        /></label>
+        <label v-if="form.kind === 'oauth' && form.secret_set" class="check"><input v-model="form.drop_secret" type="checkbox" /> Remove the client secret</label>
+        <label v-if="form.kind === 'oauth'" class="wide">Scopes <input v-model="form.scopes" class="input" placeholder="the server's default; or: repo read:org" spellcheck="false" /></label>
         <div class="row">
           <button type="submit" class="btn btn-primary btn-sm" :disabled="!form.name.trim() || !form.url.trim() || busy">Save</button>
           <button type="button" class="btn btn-sm" @click="formOpen = false">Cancel</button>
@@ -170,6 +203,12 @@ function how(u: PoolUpstream): string {
 }
 .form .wide {
   grid-column: 1 / -1;
+}
+.form label.check {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
 }
 .form .row {
   grid-column: 1 / -1;
