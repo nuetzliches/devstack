@@ -37,10 +37,14 @@ const path = computed(() => props.lane?.path ?? stack.entry?.repo ?? '');
 const busy = computed(() => (props.lane ? stack.busy['lane-start'] === props.lane.name : !!(stack.id && hub.starting[stack.id])));
 const m = computed(() => props.lane?.moving ?? null);
 const running = computed(() => !!m.value && !m.value.error && m.value.kind === 'start');
-/** Why no node of the pool can run it: its stack file names no lane image
- * (ADR-0028). Said before a start, not after a lease and a sync. */
+/** Why it does not start in the pool: it is the main working tree (ADR-0078
+ * point 4), or its stack file names no lane image (ADR-0028). Said before a
+ * start, not after a lease and a sync. */
 const MAIN_HERE = "the main working tree runs on this machine, on the stack's main ports; a worktree's lane runs in the pool";
 const notInPool = computed(() => (isMain.value ? MAIN_HERE : (props.lane?.not_in_pool ?? null)));
+/** A pool button's or a node's title when it cannot start there: short for
+ * the main working tree, whose why stands under the buttons. */
+const notInPoolTitle = computed(() => (isMain.value ? "Only a worktree's lane starts in the pool" : `No node can run it: ${notInPool.value}`));
 const failed = computed(() => (m.value?.error && m.value.kind === 'start' ? m.value : null));
 const placeName = (to: string) => (to === 'pool' ? 'the pool' : pool.pools.some((p) => p.name === to) ? `the pool ${to}` : to);
 const now = useNow();
@@ -130,6 +134,8 @@ function lit(n: LaneTarget | null) {
   const h = hl.value;
   if (!h) return null;
   if ('local' in h) return !n;
+  // A pool it cannot start in lights no machine.
+  if (notInPool.value) return null;
   if (!n || n.pool !== h.pool) return false;
   const pick = pickOf(h.pool);
   return pick ? pick.node === n.node.id : true;
@@ -246,7 +252,7 @@ function start(on?: string) {
           :disabled="busy || running || !!notInPool"
           :title="
             notInPool
-              ? `No node can run it: ${notInPool}`
+              ? notInPoolTitle
               : placement[p.pool]?.[0]?.eligible
                 ? `The coordinator would start it on ${placement[p.pool][0].name}: ${placement[p.pool][0].why}`
                 : 'The coordinator picks the node: warm first, then free capacity'
@@ -293,7 +299,7 @@ function start(on?: string) {
           <span class="tname">
             <Icon name="monitor" :size="14" />
             <RouterLink :to="{ name: 'pool-here' }" class="open" title="This machine: what it has, runs and reported">this machine</RouterLink>
-            <button type="button" class="btn btn-xs btn-primary go" :disabled="busy || running" title="Start the lane on this machine" data-testid="lane-start-local" @click="start()">
+            <button type="button" class="btn btn-xs btn-primary go" :disabled="busy || running" :title="isMain ? 'Start the stack on this machine' : 'Start the lane on this machine'" data-testid="lane-start-local" @click="start()">
               <Icon name="play" :size="12" /> Start
             </button>
           </span>
@@ -314,7 +320,7 @@ function start(on?: string) {
               class="btn btn-xs go"
               :class="{ 'pick-btn': placeOf(n.pool, n.node.id)?.pick }"
               :disabled="busy || running || !!notInPool"
-              :title="placeOf(n.pool, n.node.id)?.eligible === false ? `It cannot take it: ${placeOf(n.pool, n.node.id)?.why}` : `Start the lane on ${n.label}`"
+              :title="notInPool ? notInPoolTitle : placeOf(n.pool, n.node.id)?.eligible === false ? `It cannot take it: ${placeOf(n.pool, n.node.id)?.why}` : `Start the lane on ${n.label}`"
               data-testid="lane-start-node"
               @click="start(n.on)"
             >
