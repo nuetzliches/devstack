@@ -62,6 +62,12 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A hub that stopped answering no longer blocks every start** (#398): it
+  held its lock, so `devstack up`, `devstack ui`, `devstack hub start` and
+  the MCP server each failed with "another devstack instance owns …\hub\lock"
+  until it was ended by hand. A hub that runs, holds the lock, started more
+  than a minute ago and does not answer on its port is now ended by the
+  next start, which takes its place (`hub_hung` in the hub's log).
 - **A node no longer leaves a gone lane's containers running** (#394): a
   slot removed without its purge (one without `slot.json`, or by an agent
   of an earlier release) left its Compose projects and networks running

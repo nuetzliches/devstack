@@ -446,46 +446,6 @@ pub(crate) fn pid_alive(pid: u32) -> bool {
     }
 }
 
-/// End the process `pid` (a daemon that does not answer): Windows
-/// terminates it, which closes its job objects and with them every process
-/// tree it owns (ADR-0009); elsewhere `SIGTERM`, then `SIGKILL` after 5 s.
-fn end_process(pid: u32) -> std::io::Result<()> {
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::System::Threading::{
-            OpenProcess, PROCESS_TERMINATE, TerminateProcess,
-        };
-        // SAFETY: plain Win32 calls on a handle we open and close here.
-        unsafe {
-            let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
-            if h.is_null() {
-                return Err(std::io::Error::last_os_error());
-            }
-            let ok = TerminateProcess(h, 1) != 0;
-            let err = std::io::Error::last_os_error();
-            CloseHandle(h);
-            if ok { Ok(()) } else { Err(err) }
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        // SAFETY: a signal to one process id.
-        if unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let t0 = Instant::now();
-        while pid_alive(pid) && t0.elapsed() < Duration::from_secs(5) {
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        if pid_alive(pid) {
-            // SAFETY: as above.
-            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
-        }
-        Ok(())
-    }
-}
-
 /// Nothing listens (yet): the connection was refused, unlike a daemon that
 /// accepted and did not answer.
 fn is_refused(e: &anyhow::Error) -> bool {
@@ -2498,7 +2458,7 @@ fn end_unanswering_daemon(state_dir: &Path, why: anyhow::Error, all: bool) -> Re
     }
     eprintln!("{why:#}");
     println!("ending the daemon by its pid ({})", info.pid);
-    end_process(info.pid).with_context(|| format!("cannot end process {}", info.pid))?;
+    devstack_proc::end_pid(info.pid).with_context(|| format!("cannot end process {}", info.pid))?;
     let t0 = Instant::now();
     while pid_alive(info.pid) && t0.elapsed() < Duration::from_secs(15) {
         std::thread::sleep(Duration::from_millis(200));
