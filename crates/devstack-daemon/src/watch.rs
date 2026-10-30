@@ -286,7 +286,7 @@ fn watch(sup: Arc<Supervisor>) -> Result<Watcher, String> {
     let platform = devstack_config::model::Platform::current();
     let in_lane = !sup.lane.is_empty();
     let runs = |s: &devstack_config::model::Service| {
-        (s.platforms.is_empty() || s.platforms.contains(&platform)) && (!in_lane || s.lanes)
+        (s.platforms.is_empty() || s.platforms.contains(&platform)) && (!in_lane || !s.singleton())
     };
     let built: Vec<(String, GlobSet)> = sup
         .stack

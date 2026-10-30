@@ -9,6 +9,19 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **`singleton = true` replaces `lanes = false`** (ADR-0080): a service that
+  runs once per machine, in the main working tree only. `lanes = false`
+  still works and means the same; `devstack check` reports it as
+  deprecated.
+
+### Added
+
+- **`/v1/lanes/main/v1/...`** answers as the main working tree's `/v1/...`
+  (ADR-0080), the first step towards the main tree being a lane like any
+  other.
+
 ## [0.32.0] - 2026-10-30
 
 A pool's project skills stay in their repository: a skill bound with

@@ -472,7 +472,7 @@ server reloads itself).
 | Key | Meaning |
 | --- | --- |
 | `autostart = false` | started only on demand (`devstack start <service>`) |
-| `lanes = false` | runs in the main working tree only, never in a lane: for what may run once per machine (a tray app, something holding a global lock); see `[lanes]` |
+| `singleton = true` | runs once per machine, in the main working tree only, never in a lane: for a tray app or something holding a global lock; see `[lanes]`. Before 0.33.0 spelled `lanes = false`, which still works and is reported as deprecated ([ADR-0080](adr/0080-the-main-tree-is-a-lane.md)) |
 | `platforms = ["windows"]` | only on these platforms (`windows`, `linux`, `macos`); default `[]`: every platform |
 | `ensure_dirs = ["{repo}/data/files"]` | created before start |
 | `prepare = { run = "npm ci", inputs = ["web/package-lock.json"] }` | installs what a copy of the source lacks (see below) |
@@ -753,7 +753,7 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
   anyway).
 - `{lane}` and `{lane_suffix}` (empty in the main tree) are still there, e.g.
   for a name that shows up outside the stack; data needs them no longer.
-- `lanes = false` keeps a service in the main working tree: a lane neither
+- `singleton = true` (formerly `lanes = false`) keeps a service in the main working tree: a lane neither
   starts it nor waits for it (`after`), `devstack start` refuses it there, and
   the main tree's instance serves every lane. A command's `start`, `stop` or
   `restart` step on it is skipped in a lane, with a line in the run's log,
@@ -839,7 +839,7 @@ A file that uses `{compose.<group>.project}` should say `requires =
 group's `announced_ports` as the tree has them, so `docker compose -p
 {compose.app.project} up -d media` in a lane keeps the moved port, and the
 tree's `DEVSTACK_LANE` and `DEVSTACK_LANE_SUFFIX` (ADR-0064).
-In a lane, a `start`, `stop` or `restart` step on a `lanes = false` service
+In a lane, a `start`, `stop` or `restart` step on a `singleton` service
 is skipped (the main tree's instance serves the lane), with a line in the
 run's log.
 

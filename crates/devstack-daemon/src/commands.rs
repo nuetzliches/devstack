@@ -134,7 +134,7 @@ impl Resolve for CommandContext {
 }
 
 /// A `start`, `stop` or `restart` step on a service that runs in the main
-/// working tree only (`lanes = false`) has nothing to act on in a lane: the
+/// working tree only (`singleton`) has nothing to act on in a lane: the
 /// main tree's instance serves it. The step is skipped, and the run's log
 /// says why, as `after` skips such a service: a command written for both
 /// trees does not end as failed in a lane after everything it needed ran.
@@ -147,9 +147,9 @@ fn main_tree_only(
     else {
         return None;
     };
-    (!lane.is_empty() && stack.services.get(*name).is_some_and(|s| !s.lanes)).then(|| {
+    (!lane.is_empty() && stack.services.get(*name).is_some_and(|s| s.singleton())).then(|| {
         format!(
-            "`{name}` runs in the main working tree only (`lanes = false`); its instance there serves this lane"
+            "`{name}` runs in the main working tree only (`singleton`); its instance there serves this lane"
         )
     })
 }
@@ -433,7 +433,7 @@ services = ["db"]
 run = "x"
 [services.worker]
 run = "x"
-lanes = false
+singleton = true
 "#;
 
     fn stack() -> devstack_config::Stack {

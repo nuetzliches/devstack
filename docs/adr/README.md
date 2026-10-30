@@ -162,3 +162,4 @@ stay.
 | [0077](0077-a-sets-skills-are-grouped-and-switched-one-by-one.md) | A set's skills are grouped by their frontmatter and switched one by one | Accepted (card in the pull request; point 5 taken back) |
 | [0078](0078-the-hub-follows-every-stacks-worktrees.md) | The hub follows every stack's worktrees; a stopped stack's lane can be started from the dashboard | Accepted (card in the pull request) |
 | [0079](0079-skills-local-to-a-working-tree.md) | Skills local to a working tree: a pool's project skills bound to their repository, devstack's own untracked | Accepted (card in the pull request) |
+| [0080](0080-the-main-tree-is-a-lane.md) | The main working tree is a lane; the daemon, the main slot and what runs once per machine are the stack's | Accepted (card in the pull request); built in steps |

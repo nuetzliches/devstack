@@ -35,6 +35,42 @@ pub struct AppState {
 }
 
 pub fn router(state: AppState) -> axum::Router {
+    let main_tree = state.lanes.is_some();
+    let app = routes(state);
+    if !main_tree {
+        return app;
+    }
+    // The main working tree is the lane `main` too (ADR-0080):
+    // `/v1/lanes/main/v1/...` is its `/v1/...`, so a client can address
+    // every tree the same way.
+    let inner = app.clone();
+    app.route(
+        "/v1/lanes/main/v1/{*rest}",
+        axum::routing::any(move |req: Request| {
+            use tower::ServiceExt;
+            let inner = inner.clone();
+            async move {
+                let (mut parts, body) = req.into_parts();
+                let path = parts.uri.path().replacen("/v1/lanes/main", "", 1);
+                let query = parts
+                    .uri
+                    .query()
+                    .map(|q| format!("?{q}"))
+                    .unwrap_or_default();
+                let Ok(uri) = format!("{path}{query}").parse() else {
+                    return err(StatusCode::BAD_REQUEST, "bad path");
+                };
+                parts.uri = uri;
+                match inner.oneshot(Request::from_parts(parts, body)).await {
+                    Ok(r) => r,
+                    Err(e) => match e {},
+                }
+            }
+        }),
+    )
+}
+
+fn routes(state: AppState) -> axum::Router {
     axum::Router::new()
         .route("/v1/stack", get(stack))
         .route("/v1/journal", get(journal))
@@ -308,7 +344,7 @@ struct DownQuery {
 /// `204` once every service (and with `infra`, the default, every Compose
 /// group) stopped; `409` naming what did not. In the main tree, lanes that
 /// still run keep the daemon they live in (ADR-0024), what serves them
-/// (`lanes = false`, and the containers it comes `after`) and, a lane here,
+/// (`singleton`, and the containers it comes `after`) and, a lane here,
 /// the `shared` containers (ADR-0030): then `200` with `{"lanes": [...],
 /// "kept": [...], "containers": [...]}`; every other container goes
 /// (ADR-0068). With `all` the lanes stop first (`Lanes::stop_all`).
@@ -326,7 +362,7 @@ async fn down(State(s): State<AppState>, Query(q): Query<DownQuery>) -> Response
     let local = s.lanes.as_ref().is_some_and(|l| l.any_local());
     let infra = q.infra;
     let sup = s.sup.clone();
-    // Lanes that still run keep what serves them (`lanes = false`).
+    // Lanes that still run keep what serves them (`singleton`).
     let keeping = !lanes.is_empty() && s.lanes.is_some();
     let result = tokio::task::spawn_blocking(move || {
         if keeping {

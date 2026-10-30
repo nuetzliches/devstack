@@ -3473,7 +3473,7 @@ impl Lanes {
             .iter()
             .filter(|(_, s)| {
                 s.autostart
-                    && s.lanes
+                    && !s.singleton()
                     && (s.platforms.is_empty()
                         || s.platforms
                             .contains(&devstack_config::model::Platform::Linux))

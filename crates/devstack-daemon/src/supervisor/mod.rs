@@ -980,9 +980,9 @@ impl Supervisor {
     }
 
     /// `svc` runs in this supervisor: on this platform, and in a lane only
-    /// unless it says `lanes = false`.
+    /// unless it is a `singleton`.
     fn runs_here(&self, svc: &Service) -> bool {
-        on_this_platform(svc) && (self.lane.is_empty() || svc.lanes)
+        on_this_platform(svc) && (self.lane.is_empty() || !svc.singleton())
     }
 
     /// Run `action` once the changes for `key` have been quiet for a moment.

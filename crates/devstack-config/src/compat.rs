@@ -3,8 +3,7 @@
 //! A key that is renamed or removed stays readable for a while: the model keeps
 //! accepting it (`#[serde(alias = "...")]`, or an optional field that is no
 //! longer used), and it is listed in [`DEPRECATED`], so `devstack check` and
-//! `devstack doctor` say what replaces it. The table is empty until the first
-//! such change.
+//! `devstack doctor` say what replaces it.
 
 use crate::validate::Issue;
 
@@ -18,7 +17,11 @@ pub struct Deprecation {
     pub since: &'static str,
 }
 
-pub const DEPRECATED: &[Deprecation] = &[];
+pub const DEPRECATED: &[Deprecation] = &[Deprecation {
+    path: "services.*.lanes",
+    replacement: "`singleton = true` (ADR-0080)",
+    since: "0.33.0",
+}];
 
 /// Warnings for deprecated keys in a stack file's text (never errors).
 pub fn warnings(text: &str) -> Vec<Issue> {
@@ -91,7 +94,11 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_deprecated_yet() {
+    fn lanes_false_is_deprecated_for_singleton() {
         assert!(warnings("version = 1\n[stack]\nname = \"x\"\n").is_empty());
+        let w = warnings("version = 1\n[services.tray]\nrun = \"x\"\nlanes = false\n");
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].path, "services.tray.lanes");
+        assert!(w[0].message.contains("singleton"), "{}", w[0].message);
     }
 }
