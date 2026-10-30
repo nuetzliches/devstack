@@ -138,11 +138,16 @@ const servedNote = computed(() => {
   return `${m.at ? `since ${clock(m.at)}, ` : ''}set ${viaText(m.via)}`;
 });
 /** Where the main ports can go: the started lanes on this machine or a dedicated node, `main` whether it runs or not. */
-const takers = computed(() => lanes.value.filter((l) => !l.owns_main && (l.name === MAIN || (started(l) && !l.moving && !l.removing))));
+/** Started lanes that could take the main ports; `main` takes them back with its own button. */
+const takers = computed(() => lanes.value.filter((l) => l.name !== MAIN && !l.owns_main && started(l) && !l.moving && !l.removing));
 const giveTo = ref('');
-watch(takers, (t) => {
-  if (!t.some((l) => l.name === giveTo.value)) giveTo.value = t[0]?.name ?? '';
-});
+watch(
+  takers,
+  (t) => {
+    if (!t.some((l) => l.name === giveTo.value)) giveTo.value = t[0]?.name ?? '';
+  },
+  { immediate: true },
+);
 const busyMain = computed(() => !!stack.busy['lane-main']);
 const noMainPorts = computed(() => !!stack.mainView?.no_main_ports);
 
@@ -223,14 +228,16 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
             </template>
             <template v-else>Not known yet.</template>
           </p>
-          <form v-if="changes && takers.length" class="give" @submit.prevent="stack.laneMain(giveTo)">
-            <label class="muted small" for="give-to">Give them to</label>
-            <select id="give-to" v-model="giveTo" class="input" data-testid="stack-main-to">
-              <option v-for="l in takers" :key="l.name" :value="l.name">{{ laneLabel(l) }}{{ l.node ? ` · on ${nodeLabel(l)}` : '' }}</option>
-            </select>
-            <button type="submit" class="btn btn-sm" :disabled="busyMain || !giveTo" title="Its services, dev servers included, answer on the main ports; workers move with them" data-testid="stack-main-give">
-              <span v-if="busyMain" class="spinner" /><Icon v-else name="promote" :size="14" /> Give
-            </button>
+          <form v-if="changes && (takers.length || (servedBy && servedBy.name !== MAIN))" class="give" @submit.prevent="stack.laneMain(giveTo)">
+            <template v-if="takers.length">
+              <label class="muted small" for="give-to">Give them to</label>
+              <select id="give-to" v-model="giveTo" class="input" data-testid="stack-main-to">
+                <option v-for="l in takers" :key="l.name" :value="l.name">{{ laneLabel(l) }}{{ l.node ? ` · on ${nodeLabel(l)}` : '' }}</option>
+              </select>
+              <button type="submit" class="btn btn-sm" :disabled="busyMain || !giveTo" title="Its services, dev servers included, answer on the main ports; workers move with them" data-testid="stack-main-give">
+                <span v-if="busyMain" class="spinner" /><Icon v-else name="promote" :size="14" /> Give
+              </button>
+            </template>
             <button
               v-if="servedBy && servedBy.name !== MAIN"
               type="button"

@@ -388,7 +388,7 @@ async function copyPath(s: StackEntry) {
             >
               <span class="dot" :class="mainDot(s)" aria-hidden="true" />
               <span class="label truncate">main</span>
-              <span v-if="!servedBy(s)" class="pill sm ok" title="The main working tree serves the main ports" data-testid="sidebar-main-ports">main ports</span>
+              <span v-if="s.running && !servedBy(s)" class="pill sm ok" title="The main working tree serves the main ports" data-testid="sidebar-main-ports">main ports</span>
             </button>
           </li>
           <li v-for="l in lanesOf(s)" :key="l.name">
