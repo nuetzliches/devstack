@@ -51,6 +51,17 @@ and listed with their assets on the
 - **`ServiceView.singleton`** (ADR-0080, ADR-0081): whether a service runs
   once per machine, in the main working tree only.
 
+### Fixed
+
+- **A node no longer leaves a gone lane's containers running** (#394): a
+  slot removed without its purge (one without `slot.json`, or by an agent
+  of an earlier release) left its Compose projects and networks running
+  for good, until the engine had no network left. Every ten minutes the
+  agent now removes the Compose projects of its lanes whose slot is gone
+  (their volumes stay), only its own (they ran under its slots). A lane
+  that cannot get a network because Docker's address pools are used up
+  says so; `docs/pool.md` says how to give Docker more.
+
 ## [0.32.0] - 2026-10-30
 
 A pool's project skills stay in their repository: a skill bound with
