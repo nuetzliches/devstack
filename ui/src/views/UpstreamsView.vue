@@ -1,14 +1,16 @@
 <script setup lang="ts">
 // MCP upstreams (ADR-0069): MCP servers configured once for this user, logged
 // in once by the hub, whose tools `devstack mcp` offers in every coding
-// agent. Per user, nothing per stack. The page never sees a secret: a token
-// goes to the hub's keychain, an OAuth login runs in a browser tab and comes
-// back to the hub. A pool may name upstreams too (option B): they are listed
-// with their pool and used only once the user accepts them.
+// agent. Per user, nothing per stack. The page never gets a secret back: a
+// token or an OAuth app's client secret goes to the hub's keychain, an OAuth
+// login runs in a browser tab and comes back to the hub. A pool may name
+// upstreams too (option B): they are listed with their pool and used only
+// once the user accepts them.
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { api, paths } from '@/api';
 import type { McpUpstream, McpUpstreamAuth, McpUpstreams } from '@/api/types';
 import { act } from '@/lib/actions';
+import { oauthAuth } from '@/lib/oauthAuth';
 import { line, words } from '@/lib/commandLine';
 import { useUi } from '@/stores/ui';
 import Icon from '@/components/icons/Icon.vue';
@@ -45,10 +47,32 @@ type Form = {
   allow: string;
   kind: McpUpstreamAuth['kind'];
   client_id: string;
+  /** A new client secret; empty keeps the one set. */
+  client_secret: string;
+  /** The upstream has one (the hub never shows it). */
+  secret_set: boolean;
+  drop_secret: boolean;
+  scopes: string;
   env: string;
   token_var: string;
 };
-const empty = (): Form => ({ name: '', transport: 'url', url: '', command: '', vars: '', prefix: '', allow: '', kind: 'oauth', client_id: '', env: '', token_var: '' });
+const empty = (): Form => ({
+  name: '',
+  transport: 'url',
+  url: '',
+  command: '',
+  vars: '',
+  prefix: '',
+  allow: '',
+  kind: 'oauth',
+  client_id: '',
+  client_secret: '',
+  secret_set: false,
+  drop_secret: false,
+  scopes: '',
+  env: '',
+  token_var: '',
+});
 const form = ref<Form>(empty());
 const editing = ref<string | null>(null);
 const formOpen = ref(false);
@@ -74,6 +98,10 @@ function startEdit(u: McpUpstream) {
     allow: (u.allow ?? []).join(', '),
     kind: u.auth.kind,
     client_id: u.auth.kind === 'oauth' ? (u.auth.client_id ?? '') : '',
+    client_secret: '',
+    secret_set: u.auth.kind === 'oauth' && !!u.auth.client_secret,
+    drop_secret: false,
+    scopes: u.auth.kind === 'oauth' ? (u.auth.scopes ?? []).join(' ') : '',
     env: u.auth.kind === 'token' ? (u.auth.env ?? '') : '',
     token_var: u.token_var ?? '',
   };
@@ -83,7 +111,7 @@ function startEdit(u: McpUpstream) {
 
 const auth = computed<McpUpstreamAuth>(() => {
   const f = form.value;
-  if (f.kind === 'oauth') return { kind: 'oauth', ...(f.client_id.trim() ? { client_id: f.client_id.trim() } : {}) };
+  if (f.kind === 'oauth') return oauthAuth(f);
   if (f.kind === 'token') return { kind: 'token', ...(f.env.trim() ? { env: f.env.trim() } : {}) };
   return { kind: 'none' };
 });
@@ -230,7 +258,7 @@ const statusText: Record<string, string> = {
 function how(u: McpUpstream): string {
   if (u.auth.kind === 'none') return 'no login';
   if (u.auth.kind === 'token') return u.auth.env ? `token from $${u.auth.env}` : 'token';
-  return 'OAuth';
+  return u.auth.client_secret ? 'OAuth, with a client secret' : 'OAuth';
 }
 </script>
 
@@ -280,6 +308,19 @@ function how(u: McpUpstream): string {
             </select>
           </label>
           <label v-if="form.kind === 'oauth'">Client id <input v-model="form.client_id" class="input" placeholder="only where the server registers none itself" spellcheck="false" /></label>
+          <label v-if="form.kind === 'oauth' && form.client_id.trim()"
+            >Client secret
+            <input
+              v-model="form.client_secret"
+              type="password"
+              autocomplete="off"
+              class="input"
+              :placeholder="form.secret_set ? 'set; empty keeps it' : 'only where the server wants one (GitHub)'"
+              :disabled="form.drop_secret"
+              data-testid="upstream-secret"
+          /></label>
+          <label v-if="form.kind === 'oauth' && form.secret_set" class="check"><input v-model="form.drop_secret" type="checkbox" /> Remove the client secret</label>
+          <label v-if="form.kind === 'oauth'">Scopes <input v-model="form.scopes" class="input" placeholder="the server's default; or: repo read:org" spellcheck="false" /></label>
           <label v-if="form.kind === 'token'">From variable <input v-model="form.env" class="input" placeholder="empty: you give it the hub" spellcheck="false" /></label>
           <label v-if="form.kind === 'token' && form.transport === 'command' && !form.env.trim()"
             >Given to it as <input v-model="form.token_var" class="input" placeholder="API_TOKEN" spellcheck="false"
@@ -373,6 +414,12 @@ function how(u: McpUpstream): string {
 }
 .form .wide {
   grid-column: 1 / -1;
+}
+.form label.check {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
 }
 .form .row {
   grid-column: 1 / -1;

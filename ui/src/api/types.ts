@@ -821,8 +821,15 @@ export type NotifySettings = {
   muted: string[];
 };
 
+/**
+ * An OAuth app's client secret: the hub answers `true` (one is set), never
+ * the value; sent, a string sets it, `''` takes it away, and leaving it out
+ * keeps the one set.
+ */
+export type OauthClientSecret = true | string;
+
 /** How an MCP upstream logs in (ADR-0069). */
-export type McpUpstreamAuth = { kind: 'none' } | { kind: 'token'; env?: string } | { kind: 'oauth'; client_id?: string; scopes?: string[] };
+export type McpUpstreamAuth = { kind: 'none' } | { kind: 'token'; env?: string } | { kind: 'oauth'; client_id?: string; client_secret?: OauthClientSecret; scopes?: string[] };
 
 /** An MCP upstream as the hub lists it: never a secret. */
 export type McpUpstream = {
@@ -862,7 +869,7 @@ export type PoolUpstream = {
   url: string;
   prefix?: string;
   allow?: string[];
-  auth: { kind: 'none' } | { kind: 'token' } | { kind: 'oauth'; client_id?: string; scopes?: string[] };
+  auth: { kind: 'none' } | { kind: 'token' } | { kind: 'oauth'; client_id?: string; client_secret?: OauthClientSecret; scopes?: string[] };
 };
 
 /** `GET /hub/upstreams`. `file`: no keychain on this machine (Linux without a Secret Service). */

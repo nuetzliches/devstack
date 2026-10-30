@@ -42,6 +42,7 @@ fn wiki(url: &str) -> PoolUpstream {
         url: url.into(),
         auth: PoolAuth::Oauth {
             client_id: None,
+            client_secret: None,
             scopes: Vec::new(),
         },
         ..Default::default()

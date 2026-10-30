@@ -578,11 +578,17 @@ pub async fn role(
     }
 }
 
+/// The pool's upstreams as the dashboard shows them: a client secret only
+/// as `true`.
+fn redacted(v: &[devstack_node::upstreams::PoolUpstream]) -> Json<Vec<serde_json::Value>> {
+    Json(v.iter().map(|u| u.redacted()).collect())
+}
+
 /// `GET /hub/pool/upstreams`: the MCP upstreams the pool names for its
 /// members (ADR-0069 option B).
 pub async fn upstreams(Query(q): Query<PoolQuery>) -> Response {
     match blocking(&q, |l| l.upstreams()).await {
-        Ok(v) => Json(v).into_response(),
+        Ok(v) => redacted(&v).into_response(),
         Err(e) => error(&e),
     }
 }
@@ -603,7 +609,7 @@ pub async fn upstream_put(
     match blocking(&q, move |l| l.admin_upstream_put(&u)).await {
         Ok(v) => {
             refresh(&s);
-            Json(v).into_response()
+            redacted(&v).into_response()
         }
         Err(e) => error(&e),
     }
