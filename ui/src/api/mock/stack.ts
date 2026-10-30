@@ -33,8 +33,13 @@ export class MockStack {
   entry: StackEntry;
   view: StackView;
   previous: Record<string, string>;
-  /** Mock lane `agent-login-fix` serves the main ports. */
+  /** Mock lane `agent-login-fix` serves the main ports (the shop's from the start, set by an agent). */
   laneOwnsMain = false;
+  /** Serve the main ports by lane `name`, or give them back (`main`): the view says who and how (ADR-0067). */
+  serveMain(name: string, via: 'dashboard' | 'mcp' = 'dashboard', at = Date.now()): void {
+    this.laneOwnsMain = name !== 'main';
+    this.view.main_served = this.laneOwnsMain ? { lane: name, via, at } : undefined;
+  }
   /** Mock lane `review-cart` was started from the dashboard. */
   /** Mock lanes started from the dashboard (`agent-login-fix` runs from the start). */
   startedLanes = new Set<string>();

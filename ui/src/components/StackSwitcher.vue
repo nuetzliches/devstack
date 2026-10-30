@@ -5,7 +5,8 @@ import { ago, useNow } from '@/lib/format';
 import { usePopover } from '@/lib/popover';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
-import { laneLabel, lastTab, orderLanes } from '@/lib/lanes';
+import { laneLabel, lastTab, MAIN, orderLanes } from '@/lib/lanes';
+import { laneView, stackPage } from '@/lib/stackRoutes';
 import type { LaneView } from '@/api/types';
 import Icon from './icons/Icon.vue';
 import AddStackDialog from './AddStackDialog.vue';
@@ -36,18 +37,17 @@ const currentName = computed(() => current.value?.name ?? stack.view?.name ?? 'S
 // its own, named by its branch. Started ones first; the worktrees nobody
 // started (agents leave many) fold away.
 const lanes = computed(() => orderLanes(stack.lanes));
-const shownLane = computed(() => stack.shownLane);
+/** The lane whose views are shown; none on the stack's page (ADR-0081). */
+const shownLane = computed(() => (route.params.lane ? stack.shownLane : null));
+/** The `:lane` of the route: `main`, a lane's name, or none (the stack's page). */
+const routeLane = computed(() => (typeof route.params.lane === 'string' ? route.params.lane : null));
 const showIdle = ref(false);
 
+/** A lane's views (`null`: main); one not started shows its start options. */
 function chooseLane(l: LaneView | null) {
   close();
   trigger.value?.focus();
-  if (l && l.active === false) {
-    void stack.startLane(l.name);
-    return;
-  }
-  stack.selectLane(l?.name ?? null);
-  if (stack.id) void router.push({ name: lastTab(route.name), params: { stack: stack.id } });
+  if (stack.id) void router.push(laneView(stack.id, l?.name ?? null, lastTab(route.name)));
 }
 
 async function toggle() {
@@ -67,7 +67,7 @@ function focusActive() {
 function choose(id: string) {
   close();
   trigger.value?.focus();
-  void router.push({ name: lastTab(route.name), params: { stack: id } });
+  void router.push(stackPage(id));
 }
 
 function onKey(e: KeyboardEvent) {
@@ -150,14 +150,14 @@ function onKey(e: KeyboardEvent) {
           <div class="menu-head">Worktrees of {{ currentName }}</div>
           <ul class="lanes" aria-label="Worktrees" data-testid="lane-list">
             <li>
-              <button type="button" class="lane-opt" :class="{ current: !stack.lane }" data-testid="lane-option" data-lane="" @click="chooseLane(null)">
-                <span class="sdot on" aria-hidden="true" />
-                <span class="grow truncate">main working tree</span>
+              <button type="button" class="lane-opt" :class="{ current: routeLane === MAIN }" title="The main working tree" data-testid="lane-option" :data-lane="MAIN" @click="chooseLane(null)">
+                <span class="sdot" :class="stack.mainActive ? 'on' : 'off'" aria-hidden="true" />
+                <span class="grow truncate">main</span>
                 <span v-if="!lanes.running.some((l) => l.owns_main)" class="pill sm">main ports</span>
               </button>
             </li>
             <li v-for="l in lanes.running" :key="l.name">
-              <button type="button" class="lane-opt" :class="{ current: l.name === stack.lane }" :title="l.path" data-testid="lane-option" :data-lane="l.name" @click="chooseLane(l)">
+              <button type="button" class="lane-opt" :class="{ current: l.name === routeLane }" :title="l.path" data-testid="lane-option" :data-lane="l.name" @click="chooseLane(l)">
                 <span class="sdot" :class="l.running ? 'on' : 'off'" aria-hidden="true" />
                 <span class="grow truncate">{{ laneLabel(l) }}</span>
                 <span v-if="l.owns_main" class="pill sm ok">main ports</span>
@@ -175,14 +175,14 @@ function onKey(e: KeyboardEvent) {
                 <button
                   type="button"
                   class="lane-opt idle"
-                  :title="`${l.path} — click to start it (what devstack up in the worktree does)`"
+                  :title="`${l.path}: not started; shows where to start it`"
                   data-testid="lane-option"
                   :data-lane="l.name"
                   @click="chooseLane(l)"
                 >
                   <span class="sdot off" aria-hidden="true" />
                   <span class="grow truncate">{{ laneLabel(l) }}</span>
-                  <span class="opt-sub">start</span>
+                  <span class="opt-sub">not started</span>
                 </button>
               </li>
             </template>

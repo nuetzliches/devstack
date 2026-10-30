@@ -3,16 +3,18 @@
 // machine, on a node of the pool the developer picks, or in the pool with
 // the coordinator choosing (ADR-0031 point 4). A start on a node shows its
 // steps as the daemon reports them, so it survives navigating away and back.
-// The same page for every tree (ADR-0078): a lane of a running stack (its
-// daemon starts it), a lane of a stack that does not run (the hub starts it,
-// the daemon comes up), and the main working tree of a stack that does not
-// run (`lane` null: it runs on this machine only, on the main ports).
+// The same page for every lane (ADR-0078, ADR-0081): a lane of a running
+// stack (its daemon starts it), a lane of a stack that does not run (the hub
+// starts it, the daemon comes up), and the lane `main`, the main working
+// tree: it runs on this machine only, on its own ports, with the daemon's
+// profile; what does not apply to it is shown disabled, with the reason.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { api, paths } from '@/api';
 import type { LaneView, Placement } from '@/api/types';
 import type { LaneTarget } from '@/stores/pool';
 import { bytes, duration, useNow } from '@/lib/format';
-import { laneLabel } from '@/lib/lanes';
+import { NOT_FOR_MAIN } from '@/lib/laneActions';
+import { laneLabel, MAIN } from '@/lib/lanes';
 import { throttle } from '@/lib/throttle';
 import { usePool } from '@/stores/pool';
 import { useHub } from '@/stores/hub';
@@ -30,21 +32,20 @@ onBeforeUnmount(pool.watch());
 
 /** The nodes that can take a lane now, of every pool (ADR-0034). */
 const nodes = computed(() => pool.targets);
-/** The main working tree (of a stack that does not run), not a lane. */
-const isMain = computed(() => !props.lane);
-const title = computed(() => (props.lane ? laneLabel(props.lane) : (stack.view?.branch ?? 'main')));
+/** The lane `main`: the main working tree (ADR-0080). */
+const isMain = computed(() => !props.lane || props.lane.name === MAIN);
+const title = computed(() => (props.lane ? laneLabel(props.lane) : MAIN));
+const branch = computed(() => (isMain.value ? (props.lane?.branch ?? stack.view?.branch ?? null) : null));
 const path = computed(() => props.lane?.path ?? stack.entry?.repo ?? '');
-const busy = computed(() => (props.lane ? stack.busy['lane-start'] === props.lane.name : !!(stack.id && hub.starting[stack.id])));
+const busy = computed(() => stack.busy['lane-start'] === (props.lane?.name ?? MAIN) || (!stack.running && !!(stack.id && hub.starting[stack.id])));
 const m = computed(() => props.lane?.moving ?? null);
 const running = computed(() => !!m.value && !m.value.error && m.value.kind === 'start');
 /** Why it does not start in the pool: it is the main working tree (ADR-0078
  * point 4), or its stack file names no lane image (ADR-0028). Said before a
  * start, not after a lease and a sync. */
-const MAIN_HERE = "the main working tree runs on this machine, on the stack's main ports; a worktree's lane runs in the pool";
-const notInPool = computed(() => (isMain.value ? MAIN_HERE : (props.lane?.not_in_pool ?? null)));
-/** A pool button's or a node's title when it cannot start there: short for
- * the main working tree, whose why stands under the buttons. */
-const notInPoolTitle = computed(() => (isMain.value ? "Only a worktree's lane starts in the pool" : `No node can run it: ${notInPool.value}`));
+const notInPool = computed(() => (isMain.value ? NOT_FOR_MAIN.pool : (props.lane?.not_in_pool ?? null)));
+/** A pool button's or a node's title when it cannot start there. */
+const notInPoolTitle = computed(() => (isMain.value ? NOT_FOR_MAIN.pool : `No node can run it: ${notInPool.value}`));
 const failed = computed(() => (m.value?.error && m.value.kind === 'start' ? m.value : null));
 const placeName = (to: string) => (to === 'pool' ? 'the pool' : pool.pools.some((p) => p.name === to) ? `the pool ${to}` : to);
 const now = useNow();
@@ -60,6 +61,14 @@ const lanesOn = (poolName: string, node: string) => (pool.overviews[poolName]?.l
 /** The stack file's profiles (ADR-0041): how the lane runs for a purpose. */
 const profiles = computed(() => stack.view?.profiles ?? []);
 const profile = ref('');
+// The main working tree's is its daemon's: shown, not chosen.
+watch(
+  () => (isMain.value ? (stack.mainView?.profile ?? '') : null),
+  (p) => {
+    if (p !== null) profile.value = p;
+  },
+  { immediate: true },
+);
 const chosen = computed(() => profiles.value.find((p) => p.name === profile.value) ?? null);
 /** Where each pool's coordinator would start this lane, best first, with why
  * (ADR-0026 point 3): its own order, not one guessed here; by what the
@@ -67,7 +76,7 @@ const chosen = computed(() => profiles.value.find((p) => p.name === profile.valu
 const placement = ref<Record<string, Placement[]>>({});
 async function loadPlacement() {
   const repo = stack.view?.name;
-  if (!repo || !props.lane) return;
+  if (!repo || !props.lane || isMain.value) return;
   const out: Record<string, Placement[]> = {};
   for (const p of pool.placeable) {
     try {
@@ -142,7 +151,7 @@ function lit(n: LaneTarget | null) {
 }
 
 function start(on?: string) {
-  if (!props.lane) void stack.startStack();
+  if (!props.lane || isMain.value) void stack.startStack();
   else if (!stack.running) void stack.startOfflineLane(props.lane, on ?? null, profile.value || undefined);
   else void stack.startLane(props.lane.name, on, profile.value || undefined);
 }
@@ -153,10 +162,9 @@ function start(on?: string) {
   <div class="not-running" data-testid="tree-not-running">
     <Icon name="power" :size="26" class="nr-icon" />
     <div class="nr-text">
-      <strong>{{ isMain ? `${stack.entry?.name ?? 'The stack'} is not running` : `${title} is not running` }}</strong>
-      <span v-if="isMain">Nothing of it runs on this machine. Its main working tree starts here, on the stack's main ports.</span>
-      <span v-else-if="!stack.running">{{ stack.entry?.name }} does not run either: its daemon comes up with this lane, its main working tree stays stopped.</span>
-      <span v-else>{{ stack.entry?.name }} runs; this worktree's lane does not yet. Start it below, here or on a machine of the pool.</span>
+      <strong>{{ title }} is not running</strong>
+      <span v-if="!stack.running">{{ stack.entry?.name }} does not run either: its daemon comes up with this lane<template v-if="!isMain">, the lane main stays stopped</template>.</span>
+      <span v-else>{{ stack.entry?.name }} runs; this lane does not. Start it below<template v-if="!isMain">, here or on a machine of the pool</template>.</span>
     </div>
     <span class="pill sm outline">not started</span>
   </div>
@@ -164,21 +172,13 @@ function start(on?: string) {
     <header class="card-header">
       <Icon name="gitBranch" :size="18" />
       <h2>{{ title }}</h2>
-      <span class="faint small">{{ isMain ? 'main working tree' : 'worktree' }}</span>
+      <span class="faint small">{{ isMain ? `main working tree${branch ? ` · ${branch}` : ''}` : 'worktree' }}</span>
       <span class="pill sm outline">not started</span>
     </header>
     <div class="card-body">
-      <p v-if="isMain" class="muted">
-        {{ stack.entry?.name }} does not run. Its main working tree runs on this machine, on the stack's main ports; on another machine of the pool,
-        a worktree's lane runs.
-      </p>
-      <p v-else-if="!stack.running" class="muted">
-        {{ stack.entry?.name }} does not run. Starting this lane brings the stack's daemon up, the main working tree's services stay stopped; it runs
-        here, or on another machine of the pool: everything of the lane runs there, its ports are forwarded here.
-      </p>
-      <p v-else class="muted">
-        This worktree's lane runs nothing yet. Start it here, or on another machine of the pool: everything of the lane runs there (build,
-        services, its own infrastructure), its ports are forwarded here.
+      <p class="muted">
+        This lane runs nothing now<template v-if="!stack.running">; starting it brings the stack's daemon up</template>. Start it here<template v-if="!isMain">, or on another
+        machine of the pool: everything of the lane runs there (build, services, its own infrastructure), its ports are forwarded here</template><template v-else>: the main working tree runs on this machine, on its own ports</template>.
       </p>
       <p class="mono small faint">{{ path }}</p>
       <p v-if="lane?.main_stack_file" class="faint small">It has no stack file of its own: it runs with the main working tree's.</p>
@@ -211,9 +211,9 @@ function start(on?: string) {
       </ol>
       <p v-if="running" class="faint small">The lane's pages open once its daemon runs on the node; its containers and services show their own start there.</p>
 
-      <label v-if="profiles.length && !isMain" class="profile" data-testid="lane-start-profile">
+      <label v-if="profiles.length" class="profile" data-testid="lane-start-profile" :title="isMain ? NOT_FOR_MAIN.profile : undefined">
         <span>Profile</span>
-        <select v-model="profile" class="input">
+        <select v-model="profile" class="input" :disabled="isMain">
           <option value="">none: as the stack file says</option>
           <option v-for="p in profiles" :key="p.name" :value="p.name">{{ p.name }}{{ p.description ? ` · ${p.description}` : '' }}</option>
         </select>
@@ -269,7 +269,7 @@ function start(on?: string) {
         </button>
       </div>
       <p v-if="isMain && pool.joinedAny" class="small faint" data-testid="lane-start-main-here">
-        <Icon name="info" :size="13" /> It does not start in the pool: {{ MAIN_HERE }}. Pick or make one in the branch menu above, or in the sidebar.
+        <Icon name="info" :size="13" /> {{ NOT_FOR_MAIN.pool }}. Pick or make one in the branch menu above, or in the sidebar.
       </p>
       <div v-else-if="notInPool && pool.joinedAny" class="no-image small" data-testid="lane-start-no-image">
         <Icon name="info" :size="14" />
@@ -299,7 +299,7 @@ function start(on?: string) {
           <span class="tname">
             <Icon name="monitor" :size="14" />
             <RouterLink :to="{ name: 'pool-here' }" class="open" title="This machine: what it has, runs and reported">this machine</RouterLink>
-            <button type="button" class="btn btn-xs btn-primary go" :disabled="busy || running" :title="isMain ? 'Start the stack on this machine' : 'Start the lane on this machine'" data-testid="lane-start-local" @click="start()">
+            <button type="button" class="btn btn-xs btn-primary go" :disabled="busy || running" title="Start the lane on this machine" data-testid="lane-start-local" @click="start()">
               <Icon name="play" :size="12" /> Start
             </button>
           </span>

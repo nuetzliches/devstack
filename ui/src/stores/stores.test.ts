@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import type { StackEntry } from '@/api/types';
 import { FakeTransport, ok } from '@/test/fake';
+import { persist } from '@/lib/persist';
 
 const t = vi.hoisted(() => ({ current: null as FakeTransport | null }));
 
@@ -439,7 +440,7 @@ describe('stack store', () => {
     expect(stack.view?.services[0].pid).toBeNull();
   });
 
-  it('a stack stops its containers too, unless told to keep them', async () => {
+  it('a stack stops every lane and its containers too, unless told to keep them (ADR-0081)', async () => {
     const stack = await shownStack();
     const app = { group: 'app', project: 'shop', containers: [{ service: 'db', name: 'shop-db-1', state: 'running', health: '', ports: [] }], error: null };
     const view = (services: unknown[]) => ({ name: 'shop', repo: '/src/shop', version: '0.9.8', services, infra: [app], groups: [], commands: [] });
@@ -456,11 +457,71 @@ describe('stack store', () => {
       return { offered, path: fake.requests.at(-1)?.path };
     };
     events.handlers.onMessage({ type: 'snapshot', stack: view([]) } as never);
-    expect(await stopWith()).toEqual({ offered: false, path: '/hub/stacks/shop/down?infra=true' });
-    expect((await stopWith(true)).path).toBe('/hub/stacks/shop/down?infra=false');
+    expect(await stopWith()).toEqual({ offered: false, path: '/hub/stacks/shop/down?infra=true&all=true' });
+    expect((await stopWith(true)).path).toBe('/hub/stacks/shop/down?infra=false&all=true');
     // Services of its own: the containers go all the same (ADR-0068).
     events.handlers.onMessage({ type: 'snapshot', stack: view([{ name: 'api', status: { state: 'running' } }]) } as never);
-    expect(await stopWith()).toEqual({ offered: false, path: '/hub/stacks/shop/down?infra=true' });
+    expect(await stopWith()).toEqual({ offered: false, path: '/hub/stacks/shop/down?infra=true&all=true' });
+  });
+
+  describe('the main working tree as the lane main (ADR-0081)', () => {
+    const svc = (name: string, state: string, build_id: string | null = 'b1') => ({ name, status: { state }, build_id });
+    const view = (services: unknown[]) => ({ name: 'shop', repo: '/src/shop', version: '0.9.8', branch: 'trunk', services, infra: [], groups: [], commands: [] });
+    const feat = { name: 'feat', path: '/src/feat', branch: 'feat', number: 1, active: true, port_offset: 100, owns_main: false, running: 2, services: 3 };
+
+    it('is shown as a lane: at the repository, on offset 0, with its branch and the main ports', async () => {
+      const stack = await shownStack();
+      const events = fake.stream('/hub/stacks/shop/api/v1/events');
+      events.handlers.onMessage({ type: 'snapshot', stack: view([svc('api', 'healthy')]) } as never);
+      events.handlers.onMessage({ type: 'lanes', lanes: [feat] });
+      expect(stack.shownLane).toMatchObject({ name: 'main', path: '/src/shop', branch: 'trunk', port_offset: 0, owns_main: true, active: true });
+      events.handlers.onMessage({ type: 'lanes', lanes: [{ ...feat, owns_main: true }] });
+      expect(stack.mainLane?.owns_main).toBe(false);
+      // Nothing of it runs: not started, as a lane that is not.
+      events.handlers.onMessage({ type: 'snapshot', stack: view([svc('api', 'stopped')]) } as never);
+      expect(stack.shownLane?.active).toBe(false);
+    });
+
+    it('starts with its up and stops with its down, the daemon and the lanes kept', async () => {
+      const stack = await shownStack();
+      fake.on('/hub/stacks/shop/api/v1/up', { status: 202, ok: true, body: null });
+      fake.on('/hub/stacks/shop/api/v1/down?infra=true', { status: 204, ok: true, body: null });
+      await stack.laneAction(stack.mainLane!, 'start');
+      await stack.laneAction(stack.mainLane!, 'stop');
+      const posts = fake.requests.filter((r) => r.method === 'POST').map((r) => r.path);
+      expect(posts).toEqual(['/hub/stacks/shop/api/v1/up', '/hub/stacks/shop/api/v1/down?infra=true']);
+      expect(posts.some((p) => p.includes('/down?') && p.startsWith('/hub/stacks/shop/down'))).toBe(false);
+    });
+
+    it("restarts and rebuilds each of its running services, as a lane's restart does", async () => {
+      const stack = await shownStack();
+      fake.on('/hub/stacks/shop/api/v1/stack', ok(view([svc('api', 'healthy'), svc('web', 'starting'), svc('mailbox', 'stopped'), svc('docs', 'healthy', null)])));
+      fake.on(/\/api\/v1\/services\/[^/]+\/(restart|rebuild)$/, ok(view([])));
+      await stack.laneAction(stack.mainLane!, 'restart');
+      await stack.laneAction(stack.mainLane!, 'rebuild');
+      const posts = fake.requests.filter((r) => r.method === 'POST').map((r) => r.path.replace('/hub/stacks/shop/api', ''));
+      expect(posts).toEqual(['/v1/services/api/restart', '/v1/services/web/restart', '/v1/services/docs/restart', '/v1/services/api/rebuild', '/v1/services/web/rebuild']);
+    });
+
+    it('takes the main ports back as a lane takes them', async () => {
+      const stack = await shownStack();
+      fake.on('/hub/stacks/shop/api/v1/lanes/main/main', ok([]));
+      fake.on('/hub/stacks/shop/api/v1/lanes', ok([]));
+      await stack.laneMain('main');
+      expect(fake.requests.some((r) => r.method === 'POST' && r.path === '/hub/stacks/shop/api/v1/lanes/main/main')).toBe(true);
+    });
+
+    it('the stack page follows the main tree without making it the lane shown last', async () => {
+      const stack = await shownStack();
+      stack.selectLane('feat');
+      expect(persist.get('lane.shop')).toBe('feat');
+      stack.select('shop', { lane: null, remember: false });
+      expect(stack.lane).toBeNull();
+      expect(persist.get('lane.shop')).toBe('feat');
+      fake.stream('/hub/stacks/shop/api/v1/events');
+      stack.select('shop', { lane: 'feat' });
+      expect(stack.lane).toBe('feat');
+    });
   });
 
   it('a lane not started is shown from the main tree', async () => {

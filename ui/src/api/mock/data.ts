@@ -24,6 +24,7 @@ function service(p: Partial<ServiceView> & Pick<ServiceView, 'name' | 'kind'>, r
     candidate: null,
     port,
     url: port ? `${p.kind === 'devserver' ? 'https' : 'http'}://localhost:${port}` : null,
+    singleton: false,
     ...p,
     build_id: build,
     instance_port: proxied ? instance : null,
@@ -80,6 +81,8 @@ export function shopSeed(now: number): MockStackSeed {
         kind: 'tool',
         groups: [],
         port: 8025,
+        // One mail catcher per machine, in the lane main (ADR-0080).
+        singleton: true,
         autostart: false,
         status: { state: 'stopped' },
         pid: null,

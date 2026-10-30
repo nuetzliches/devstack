@@ -129,8 +129,9 @@ port tell within a second, and they are the evidence to quote.
 Whenever you started the stack or a lane, or created a worktree, give the user
 its dashboard page: one link to its services, logs, builds and events.
 `devstack status`, `devstack up` and `devstack lane start` end with it
-(`dashboard: http://127.0.0.1:<port>/#/s/<stack id>?lane=<lane>`, an empty
-`lane=` is the main working tree); for a worktree not started yet,
+(`dashboard: http://127.0.0.1:<port>/#/s/<stack id>/l/<lane>`, the lane
+`main` is the main working tree; `/#/s/<stack id>` alone is the stack's page,
+its lanes and who serves the main ports); for a worktree not started yet,
 `devstack ui --link` in it (or `--lane <name>` from the main tree) prints it.
 Quote it as printed, never build it yourself. The page opens in a browser that
 was paired before; `devstack ui --link` also prints a

@@ -115,14 +115,15 @@ fn plural(n: u64, one: &str) -> String {
     }
 }
 
-/// `/#/s/<id>?lane=`, and with a service its page.
+/// `/#/s/<id>/l/<lane>` (`main`: the main working tree, ADR-0081), and
+/// with a service its page.
 fn route(stack: &str, lane: Option<&str>, service: Option<&str>) -> String {
     let enc = crate::client::enc;
-    let mut r = format!("/#/s/{}", enc(stack));
+    let lane = lane.filter(|l| !l.is_empty()).unwrap_or("main");
+    let mut r = format!("/#/s/{}/l/{}", enc(stack), enc(lane));
     if let Some(s) = service {
         r.push_str(&format!("/services/{}", enc(s)));
     }
-    r.push_str(&format!("?lane={}", enc(lane.unwrap_or(""))));
     r
 }
 
@@ -463,7 +464,7 @@ mod tests {
         assert!(find(&m.entries, "stop:ab12").is_some());
         assert!(find(&m.entries, "start:ab12").is_none());
         assert!(find(&m.entries, "start:cd34").is_some());
-        assert!(find(&m.entries, "open:/#/s/ab12/services/api?lane=feat%20x").is_some());
+        assert!(find(&m.entries, "open:/#/s/ab12/l/feat%20x/services/api").is_some());
         assert!(find(&m.entries, "hub-start").is_none());
         assert!(find(&m.entries, QUIT).is_some());
     }

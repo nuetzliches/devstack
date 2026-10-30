@@ -1,5 +1,13 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
+import type { RouteLocation } from 'vue-router';
 import { persist } from './lib/persist';
+import { oldLaneLink } from './lib/stackRoutes';
+
+function oldLink(to: Pick<RouteLocation, 'params' | 'query'>) {
+  const stack = String(to.params.stack);
+  const rest = Array.isArray(to.params.rest) ? to.params.rest.join('/') : String(to.params.rest ?? '');
+  return oldLaneLink(stack, rest, to.query, persist.get<string | null>(`lane.${stack}`));
+}
 
 // Hash history: the hub serves the shell at `/` only, and the service worker's
 // navigation fallback stays trivial; deep links still work offline.
@@ -7,8 +15,18 @@ export const router = createRouter({
   history: createWebHashHistory('/'),
   routes: [
     { path: '/', name: 'home', component: () => import('./views/HomeView.vue') },
+    // A stack's page, above its lanes (ADR-0081). An older link with
+    // `?lane=` goes to that lane's view.
     {
       path: '/s/:stack',
+      name: 'stack',
+      component: () => import('./views/StackPage.vue'),
+      meta: { title: 'Stack' },
+      beforeEnter: (to) => oldLink(to) ?? true,
+    },
+    // A lane's views, the main working tree's as the lane `main` (ADR-0080).
+    {
+      path: '/s/:stack/l/:lane',
       component: () => import('./views/StackLayout.vue'),
       children: [
         // The overview is a list with a detail: picking a service or a
@@ -28,6 +46,9 @@ export const router = createRouter({
         { path: 'events', name: 'events', component: () => import('./views/EventsView.vue'), meta: { title: 'Activity' } },
       ],
     },
+    // Links from before ADR-0081 (`#/s/<stack>/services/api?lane=feat`): the
+    // same tab of that lane, else of the lane shown last, else of `main`.
+    { path: '/s/:stack/:rest(.*)+', redirect: (to) => oldLink(to) ?? { name: 'stack', params: { stack: to.params.stack } } },
     // The pool area: `#/pool` opens the pool shown last (notifications and
     // `devstack://open?page=pool` link there); the pool and the tab are in
     // the URL from then on. What holds for this machine in every pool has a

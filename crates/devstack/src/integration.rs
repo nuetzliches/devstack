@@ -168,11 +168,12 @@ fn dashboard_route(query: &str) -> Result<String> {
     if !stack.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(anyhow!("`{stack}` is no stack id"));
     }
-    let mut route = format!("/#/s/{stack}");
+    // The lane view (ADR-0081): no lane named is the main working tree, the
+    // lane `main`; no lane is ever named so (ADR-0080).
+    let mut route = format!("/#/s/{stack}/l/{}", lane.as_deref().unwrap_or("main"));
     if let Some(s) = service {
         route.push_str(&format!("/services/{s}"));
     }
-    route.push_str(&format!("?lane={}", lane.unwrap_or_default()));
     Ok(route)
 }
 
@@ -222,9 +223,9 @@ mod tests {
     fn an_open_link_names_a_dashboard_route_and_nothing_else() {
         assert_eq!(
             dashboard_route("stack=ab12&lane=feat-x&service=api").unwrap(),
-            "/#/s/ab12/services/api?lane=feat-x"
+            "/#/s/ab12/l/feat-x/services/api"
         );
-        assert_eq!(dashboard_route("stack=ab12").unwrap(), "/#/s/ab12?lane=");
+        assert_eq!(dashboard_route("stack=ab12").unwrap(), "/#/s/ab12/l/main");
         assert_eq!(dashboard_route("").unwrap(), "/#/");
         assert_eq!(dashboard_route("page=pool").unwrap(), "/#/pool");
         assert!(dashboard_route("page=settings").is_err());

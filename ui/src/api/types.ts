@@ -322,6 +322,8 @@ export type ServiceView = {
   prepare?: PrepareView;
   /** The last action a client took on it, and which (ADR-0067). Older daemons omit it. */
   last_action?: Change;
+  /** It runs once per machine, in the main working tree only (`singleton = true`, ADR-0080): the stack's, not a lane's. Older daemons omit it. */
+  singleton?: boolean;
 };
 
 /** Who changed something at runtime, and when (ADR-0067). */

@@ -12,7 +12,7 @@ pub struct Note {
     /// Whose: the stack, and the lane.
     pub context: String,
     pub body: String,
-    /// The dashboard's route a click shows (`/#/s/<id>?lane=`).
+    /// The dashboard's route a click shows (`/#/s/<id>/l/<lane>`).
     pub route: String,
     /// The `devstack://open` link that shows it (`devstack open-url`).
     pub link: String,

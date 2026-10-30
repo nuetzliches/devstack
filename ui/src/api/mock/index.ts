@@ -194,6 +194,7 @@ class MockHub {
   constructor() {
     const now = Date.now();
     const shop = new MockStack(shopSeed(now));
+    shop.serveMain('agent-login-fix', 'mcp', now - 12 * 60_000);
     const crm = new MockStack(crmSeed(now));
     const docs = new MockStack(docsSeed(now));
     this.stacks = [shop, crm, docs];
@@ -929,7 +930,7 @@ export class MockTransport implements Transport {
               return Date.now() - laneRemoval.at < 8000 ? { ...l, active: false, owns_main: false, running: 0, services: 5, removing: true } : null;
             }
             const active = l.name === 'agent-login-fix' || s.startedLanes.has(l.name);
-            const owns = l.name === 'agent-login-fix' && s.laneOwnsMain;
+            const owns = s.laneOwnsMain && s.view.main_served?.lane === l.name;
             // review-cart runs on a node of the pool once started (ADR-0025);
             // a lane moved goes where it was moved.
             const placed = laneNodes.get(l.name) ?? (l.name === 'review-cart' ? 'build-server' : 'local');
@@ -970,7 +971,8 @@ export class MockTransport implements Transport {
     const lm = /^\/v1\/lanes\/([^/]+)\/main$/.exec(p);
     if (lm && method === 'POST') {
       await sleep(1200);
-      s.laneOwnsMain = lm[1] !== 'main';
+      s.serveMain(decodeURIComponent(lm[1]));
+      s.emit({ type: 'snapshot', stack: s.view });
       return json(200, []);
     }
     const mv = /^\/v1\/lanes\/([^/]+)\/move$/.exec(p);
@@ -994,11 +996,19 @@ export class MockTransport implements Transport {
       await sleep(body?.mode === 'cold' ? 2500 : 1500);
       return json(200, lanes());
     }
-    const fw = /^\/v1\/lanes\/[^/]+(\/v1\/.*)$/.exec(p);
-    if (fw) p = fw[1];
+    const fw = /^\/v1\/lanes\/([^/]+)(\/v1\/.*)$/.exec(p);
+    const inLaneName = fw && fw[1] !== 'main' ? decodeURIComponent(fw[1]) : null;
+    if (fw) p = fw[2];
     const view = () => json(200, s.view);
     if (p === '/v1/stack' && method === 'GET') return view();
-    if (p === '/v1/usage' && method === 'GET') return json(200, s.usageWithHistory());
+    if (p === '/v1/usage' && method === 'GET') {
+      const r = s.usageWithHistory();
+      if (inLaneName) {
+        const f = inLaneName === 'agent-login-fix' ? 0.7 : 1.3;
+        r.lanes = r.lanes.map((l) => ({ ...l, name: inLaneName, cpu: l.cpu * f, memory: Math.round(l.memory * f) }));
+      }
+      return json(200, r);
+    }
     // The store of what `prepare` makes (ADR-0062).
     if (p === '/v1/store' && method === 'GET') {
       const entries = s.storeEntries();
@@ -1006,8 +1016,16 @@ export class MockTransport implements Transport {
     }
     const se = /^\/v1\/store\/([^/]+)\/([^/]+)$/.exec(p);
     if (se && method === 'DELETE') return s.removeStoreEntry(decodeURIComponent(se[1]), decodeURIComponent(se[2])) ? empty(204) : json(404, { error: 'no such entry in the store' });
-    if (p === '/v1/up' && method === 'POST') return empty(202);
-    if (p === '/v1/down' && method === 'POST') return empty(204);
+    if (p === '/v1/up' && method === 'POST') {
+      if (!fw)
+        for (const svc of s.view.services)
+          if (svc.autostart && ['stopped', 'exited', 'failed'].includes(svc.status.state)) s.startInstance(svc, svc.build_id ?? '0000000000000000');
+      return empty(202);
+    }
+    if (p === '/v1/down' && method === 'POST') {
+      if (!fw) for (const svc of s.view.services) if (!['stopped', 'completed'].includes(svc.status.state)) s.setStatus(svc.name, { state: 'stopped' });
+      return empty(204);
+    }
 
     if (/^\/v1\/infra\/[^/]+\/[^/]+\/logs$/.test(p)) {
       const t = new Date().toISOString();

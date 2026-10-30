@@ -817,7 +817,7 @@ fn from_own_page(h: &HeaderMap, method: &Method, path: &str, own: &[String]) -> 
 #[derive(Deserialize)]
 struct CodeQuery {
     code: String,
-    /// Where to go once paired: a dashboard route (`/#/s/<id>?lane=`), the
+    /// Where to go once paired: a dashboard route (`/#/s/<id>/l/<lane>`), the
     /// stack a notification is about (ADR-0045). Anything else goes home.
     next: Option<String>,
 }
