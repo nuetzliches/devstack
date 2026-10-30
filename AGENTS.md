@@ -28,7 +28,7 @@
    See [ADR-0011](docs/adr/0011-platform-windows-native-first.md).
    macOS is a preview ([ADR-0054](docs/adr/0054-macos-is-a-developer-platform-in-preview.md)):
    no maintainer has a Mac, so platform code gets a macOS module (or says
-   "not on macOS yet") and must keep the `macos-14` CI jobs green.
+   "not on macOS yet") and must keep the `macos-15` CI jobs green.
 
 ## Running the stack
 

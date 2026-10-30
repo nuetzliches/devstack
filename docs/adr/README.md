@@ -136,7 +136,7 @@ stay.
 | [0051](0051-a-pool-can-grow-by-nodes-a-provisioner-makes.md) | A pool can grow by nodes a provisioner makes, fills them before it makes another, and gives back the idle ones | Accepted (revised 2026-10-26, and 2026-10-27 on its card: enrolment bound to its machine, a second use alarmed, an admin's confirmation as an option, a member can stay off provisioned nodes); built, noted 2026-10-27 |
 | [0052](0052-a-restart-carries-the-lanes-over.md) | A restart of the stack carries its lanes over to the next daemon | Accepted; point 6 added 2026-10-26 (a lane on a node lost to an unclean end is said), amended 2026-10-30 (followed again while its lease runs) |
 | [0053](0053-whoever-a-lane-is-shared-with-connects-to-it.md) | Whoever a lane is shared with connects to it, and disconnects again | Accepted |
-| [0054](0054-macos-is-a-developer-platform-in-preview.md) | macOS is a developer platform in preview, installed by Homebrew, checked by CI and by its testers | Accepted |
+| [0054](0054-macos-is-a-developer-platform-in-preview.md) | macOS is a developer platform in preview, installed by Homebrew, checked by CI and by its testers | Accepted; noted 2026-10-30 (CI on `macos-15`) |
 | [0055](0055-a-lane-without-a-stack-file-says-so-and-can-be-given-one.md) | A lane whose branch has no stack file runs with the main tree's, says so, and can be given one | Accepted; point 4 replaced by ADR-0071 |
 | [0056](0056-a-lane-on-a-node-relays-its-udp-ports-through-a-tunnel-per-session.md) | A lane on a node relays its UDP ports, a tunnel per client, a datagram per frame | Accepted |
 | [0057](0057-a-port-a-container-announces-moves-inside-it-too.md) | A port a container announces moves inside the container too, and Compose is told its number | Accepted |
