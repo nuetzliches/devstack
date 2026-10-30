@@ -9,6 +9,30 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **Worktrees show at once, and a stopped stack's lanes too**
+  ([ADR-0078](docs/adr/0078-the-hub-follows-every-stacks-worktrees.md)):
+  the hub follows every stack's worktrees and tells the dashboard when one
+  is added, removed or switches branch, so the sidebar shows it without
+  opening its stack first. A stack that does not run lists its worktrees
+  as lanes not started; one opens a start card, and *Start here* or *Start
+  in the pool* brings its daemon up and starts the lane, the main working
+  tree's services left stopped. A lane the branch picker makes for a
+  stopped stack opens there.
+- **A stack's dot in the sidebar sums up its trees**: folded, it shows the
+  worst of its trees' dots (a failed start first); unfolded it has none, as
+  its trees show theirs. The main working tree's and a lane's dot are red
+  when one of their services fails (as last seen), yellow for trouble on a
+  lane's node. A stack whose daemon runs
+  but nothing of it says `idle`, as one without a daemon says `offline`.
+- **The sidebar keeps its order**: stacks by name, and a stack's trees
+  with the main working tree first, then by name; a start or a stop no
+  longer moves anything.
+- **The tab follows you**: opening another stack or lane keeps the tab
+  shown (Infrastructure, Commands, Usage, Activity), also coming back from
+  the pool area, instead of going back to Overview.
+
 ### Fixed
 
 - **`devstack up --on` moves a started lane**: a lane started on a node
@@ -83,6 +107,9 @@ since not showing, and dashboard details.
 - **A lane not started shows no tabs**: its start options stand in for its
   views, so Overview, Infrastructure and the others no longer all led to
   the same start page.
+- **A tree not started says so first**: a dashed box across the page
+  above its start options, which no running tree shows; the stack's
+  offline banner no longer repeats it.
 - **The pool's devstack column** no longer shows a stray "–" after a
   node's version when no update runs.
 - **A GitHub skill set names its commit**: the set showed

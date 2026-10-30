@@ -120,7 +120,8 @@ export class MockStack {
     this.onEntryChange();
   }
 
-  async goUp(): Promise<void> {
+  /** `main: false`: the daemon only, as a lane's start brings it up (ADR-0078). */
+  async goUp(opts: { main?: boolean } = {}): Promise<void> {
     const gen = this.generation;
     // A new daemon reads the stack file afresh.
     this.view.config_changed = false;
@@ -132,8 +133,10 @@ export class MockStack {
       daemon: { pid: 20000 + Math.floor(Math.random() * 9000), port: 50000 + Math.floor(Math.random() * 9000), started: Date.now(), version: '0.2.0' },
       last_seen: Date.now(),
     };
-    for (const s of this.view.services) {
-      if (s.autostart && s.kind !== 'job') s.status = { state: 'starting' };
+    if (opts.main !== false) {
+      for (const s of this.view.services) {
+        if (s.autostart && s.kind !== 'job') s.status = { state: 'starting' };
+      }
     }
     this.onEntryChange();
     this.start();

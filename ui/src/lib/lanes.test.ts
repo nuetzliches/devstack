@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { laneTab, notForwardedText, restartLanesText, restartPlan, runCounts, runsAnything } from './lanes';
+import { lastTab, laneTab, notForwardedText, rememberTab, restartLanesText, restartPlan, runCounts, runsAnything } from './lanes';
 
 describe('a started lane runs', () => {
   it('by its containers when the stack has no services', () => {
@@ -64,5 +64,16 @@ describe('a lane switch keeps the tab', () => {
     expect(laneTab('container')).toBe('overview');
     expect(laneTab('pool')).toBe('overview');
     expect(laneTab(undefined)).toBe('overview');
+  });
+});
+
+describe('the tab another stack opens on', () => {
+  it('is the one shown, kept across pages that are no stack', () => {
+    rememberTab('commands');
+    expect(lastTab('pool-overview')).toBe('commands');
+    expect(lastTab('usage')).toBe('usage');
+    // A service's detail is the overview's.
+    expect(lastTab('service')).toBe('overview');
+    expect(lastTab('pool-machines')).toBe('overview');
   });
 });

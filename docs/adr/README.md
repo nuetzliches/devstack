@@ -160,3 +160,4 @@ stay.
 | [0075](0075-a-lanes-steady-use-is-measured-and-shown-never-admitted-by.md) | A lane's steady use is measured and shown, never admitted by | Accepted (card in the pull request) |
 | [0076](0076-a-pool-machine-has-one-page-the-pool-area-has-tabs.md) | A machine of the pool has one page; the pool area has tabs, and the pool and the tab are in the URL | Accepted (card in the pull request) |
 | [0077](0077-a-sets-skills-are-grouped-and-switched-one-by-one.md) | A set's skills are grouped by their frontmatter and switched one by one | Accepted (card in the pull request; point 5 taken back) |
+| [0078](0078-the-hub-follows-every-stacks-worktrees.md) | The hub follows every stack's worktrees; a stopped stack's lane can be started from the dashboard | Accepted (card in the pull request) |

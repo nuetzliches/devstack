@@ -1,18 +1,21 @@
 <script setup lang="ts">
 // Stacks and their worktrees (lanes, ADR-0024) as a sidebar: every stack the
-// hub knows, and under each running one all of its trees, named by their
-// branch: the main working tree first, then the started lanes, then the
-// worktrees nobody started. A tree's state is its dot, as a stack's is. A
-// stack's worktrees fold only with its toggle, never by navigating. The shown
-// stack's lanes come live from its stream; the others' are read when the
-// hub's list of stacks changes (no polling, ADR-0021). A stack's menu (its
+// hub knows, by name, and under each all of its trees, named by their branch:
+// the main working tree first, then the others by name, started or not (of a
+// stack whose daemon does not run, the hub lists them, ADR-0078); nothing
+// moves when something starts or stops. A tree's state is its dot, as a
+// stack's is. A stack's worktrees
+// fold only with its toggle, never by navigating. The shown stack's lanes
+// come live from its stream; the others' are read when the hub's list of
+// stacks changes or it says a stack's worktrees did (no polling, ADR-0021,
+// ADR-0078). A stack's menu (its
 // "…" button, or a right click) starts, stops and removes it.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { api, paths, sharedId, v1 } from '@/api';
 import type { LaneView, StackEntry } from '@/api/types';
 import { act } from '@/lib/actions';
-import { laneLabel, laneTab, orderLanes, nodeLabel, runCounts, runsAnything, started } from '@/lib/lanes';
+import { laneLabel, lastTab, nodeLabel, runCounts, runsAnything, started } from '@/lib/lanes';
 import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
 import { useHub } from '@/stores/hub';
@@ -64,7 +67,8 @@ function toggle(id: string) {
   persist.set('sidebar.collapsed', collapsed.value);
 }
 
-const stacks = computed(() => [...hub.stacks].sort((a, b) => Number(b.running) - Number(a.running) || a.name.localeCompare(b.name)));
+// By name, never by state: a start or a stop moves nothing in the list.
+const stacks = computed(() => [...hub.stacks].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)));
 
 /**
  * The worktrees of every stack, kept across navigation: replaced when news
@@ -75,15 +79,28 @@ const known = ref<Record<string, LaneView[]>>({});
 watch(
   () => [stack.lanesOf, stack.lanes] as const,
   ([sid, list]) => {
-    if (sid) known.value[sid] = list;
+    // A daemon on its way out tells an empty list: a stopped stack's
+    // worktrees come from the hub instead (below, and `loadAll`).
+    if (sid && hub.entry(sid)?.running) known.value[sid] = list;
+  },
+  { immediate: true },
+);
+// The shown stack while it does not run: its worktrees as the hub lists them (ADR-0078).
+watch(
+  () => [stack.offlineLanesOf, stack.running, stack.offlineLanes] as const,
+  ([sid, running, list]) => {
+    // Only a list read for this stack: while a switch loads, the one before
+    // is another stack's (its group would fold for a moment).
+    if (sid && sid === stack.id && !running) known.value[sid] = list;
   },
   { immediate: true },
 );
 async function loadAll(list: StackEntry[]) {
   for (const s of list) {
-    if (!s.running) continue;
     try {
-      const res = await api().request<LaneView[]>('GET', paths.api(s.id, v1.lanes));
+      // A stack whose daemon runs knows its lanes; of one that does not, the
+      // hub lists the worktrees, as lanes not started (ADR-0078).
+      const res = await api().request<LaneView[]>('GET', s.running ? paths.api(s.id, v1.lanes) : paths.worktrees(s.id));
       // The shown stack's list comes from its stream: a read that started
       // before a change and answers after it must not overwrite it.
       if (res.ok && Array.isArray(res.body) && stack.lanesOf !== s.id) known.value[s.id] = res.body;
@@ -97,35 +114,62 @@ watch(
   () => void loadAll(hub.stacks),
   { immediate: true },
 );
+// A worktree added, removed or switched to another branch, in any stack
+// (the hub looks, ADR-0078): that stack's lanes again.
+watch(
+  () => ({ ...hub.worktrees }),
+  (now, before) => {
+    const changed = hub.stacks.filter((s) => before && now[s.id] !== before[s.id]);
+    if (changed.length) void loadAll(changed);
+  },
+);
 
-/** Every worktree of a running stack: started ones first, then the rest. */
+/** Every worktree of a stack, by name: a lane that starts or stops keeps its place. */
 function lanesOf(s: StackEntry): LaneView[] {
-  if (!s.running) return [];
-  const { running, idle } = orderLanes(known.value[s.id] ?? []);
-  return [...running, ...idle];
+  return [...(known.value[s.id] ?? [])].sort((a, b) => laneLabel(a).localeCompare(laneLabel(b)));
 }
-const hasLanes = (s: StackEntry) => s.running && (known.value[s.id]?.length ?? 0) > 0;
+const hasLanes = (s: StackEntry) => (known.value[s.id]?.length ?? 0) > 0;
 
 /**
  * Whether the main working tree runs something, as last seen while it was
  * shown; a stack not shown yet counts as running while its daemon does.
  */
 const mainActive = ref<Record<string, boolean>>({});
+/** Whether a service of the main working tree fails, as last seen while it was shown. */
+const mainFails = ref<Record<string, boolean>>({});
 watch(
   () => [stack.id, stack.lane, stack.live, stack.services] as const,
   ([id, lane, live, services]) => {
-    if (id && lane === null && live && services.length) mainActive.value[id] = services.some((x) => statusBucket(x.status) !== 'idle');
+    if (id && lane === null && live && services.length) {
+      mainActive.value[id] = services.some((x) => statusBucket(x.status) !== 'idle');
+      mainFails.value[id] = services.some((x) => statusBucket(x.status) === 'failed');
+    }
   },
   { immediate: true },
 );
 type Dot = 'on' | 'off' | 'warn' | 'err' | 'unknown';
 /** Its daemon runs but nothing else: the main tree idle, no lane started. */
 const stackIdle = (s: StackEntry) => s.running && mainActive.value[s.id] === false && !(known.value[s.id] ?? []).some(started);
+/**
+ * All of a stack's trees in one dot, for when they are not listed under it
+ * (folded, or none): a problem first (a failed start, a failing service of
+ * the shown tree, a lane that failed or has trouble on its node), then
+ * whether anything runs.
+ */
 function stackDot(s: StackEntry): Dot {
-  return !hub.reachable ? 'unknown' : s.running && !stackIdle(s) ? 'on' : 'off';
+  if (!hub.reachable) return 'unknown';
+  if (s.start_error) return 'err';
+  // The worst of its trees' dots, as they show unfolded.
+  const dots = [mainDot(s), ...(known.value[s.id] ?? []).map((l) => laneDot(s, l))];
+  return (['err', 'warn', 'on'] as Dot[]).find((d) => dots.includes(d)) ?? 'off';
 }
+/** Its trees are listed under it: their dots say it, the stack's own would repeat them. */
+const expanded = (s: StackEntry) => hasLanes(s) && !collapsed.value[s.id];
 function mainDot(s: StackEntry): Dot {
   if (!hub.reachable) return 'unknown';
+  // A stack that does not run runs nothing, whatever was seen last.
+  if (!s.running) return 'off';
+  if (mainFails.value[s.id]) return 'err';
   return mainActive.value[s.id] === false ? 'off' : 'on';
 }
 const servedBy = (s: StackEntry) => (known.value[s.id] ?? []).find((l) => l.owns_main) ?? null;
@@ -147,6 +191,10 @@ function laneContainers(s: StackEntry, l: LaneView): [number, number] {
 function laneDot(s: StackEntry, l: LaneView): Dot {
   if (!hub.reachable) return 'unknown';
   if (l.moving?.error) return 'err';
+  // The shown lane's own services, from its stream.
+  // (A lane not started has no stream: the one shown is the main tree's.)
+  if (started(l) && s.id === stack.id && stack.lane === l.name && stack.live && stack.services.some((x) => statusBucket(x.status) === 'failed')) return 'err';
+  if (started(l) && (l.node_error || l.notices?.length)) return 'warn';
   if (!started(l)) return 'off';
   const [cr, c] = laneContainers(s, l);
   return runsAnything({ running: laneRuns(s, l), services: l.services, containersRunning: cr, containers: c }) ? 'on' : 'warn';
@@ -169,7 +217,7 @@ function openStack(s: StackEntry) {
   ui.drawerOpen = false;
   if (s.id === stack.id && stack.lane) stack.selectLane(null);
   persist.set(`lane.${s.id}`, null);
-  void router.push({ name: isCurrent(s) ? laneTab(route.name) : 'overview', params: { stack: s.id } });
+  void router.push({ name: lastTab(route.name), params: { stack: s.id } });
 }
 
 // A lane not started is shown with its start options (here, a node, the
@@ -178,11 +226,11 @@ async function openLane(s: StackEntry, l: LaneView) {
   ui.drawerOpen = false;
   if (s.id === stack.id) {
     stack.selectLane(l.name);
-    void router.push({ name: laneTab(route.name), params: { stack: s.id } });
+    void router.push({ name: lastTab(route.name), params: { stack: s.id } });
     return;
   }
   persist.set(`lane.${s.id}`, l.name);
-  await router.push({ name: 'overview', params: { stack: s.id } });
+  await router.push({ name: lastTab(route.name), params: { stack: s.id } });
 }
 
 const isCurrent = (s: StackEntry) => s.id === stack.id;
@@ -310,9 +358,11 @@ async function copyPath(s: StackEntry) {
             @click="openStack(s)"
           >
             <span v-if="hub.starting[s.id]" class="spinner sm" aria-hidden="true" />
-            <span v-else class="dot" :class="stackDot(s)" aria-hidden="true" />
+            <span v-else-if="expanded(s)" class="dot-space" aria-hidden="true" />
+            <span v-else class="dot" :class="stackDot(s)" aria-hidden="true" data-testid="sidebar-stack-dot" />
             <span class="label truncate">{{ s.name }}</span>
             <span v-if="!s.running" class="faint small">offline</span>
+            <span v-else-if="stackIdle(s)" class="faint small" data-testid="sidebar-stack-idle">idle</span>
           </button>
           <button
             type="button"
@@ -623,6 +673,10 @@ ul {
 }
 .dot.unknown {
   background: var(--text-faint);
+}
+.dot-space {
+  width: 8px;
+  flex: none;
 }
 .dot.off {
   border: 1.5px solid var(--text-faint);

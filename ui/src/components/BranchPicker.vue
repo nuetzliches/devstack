@@ -52,7 +52,8 @@ const rows = computed<Row[]>(() => {
   const q = filter.value.trim().toLowerCase();
   return (stack.branches?.branches ?? [])
     .filter((b) => !q || b.name.toLowerCase().includes(q))
-    .map((b) => ({ b, lane: b.worktree && !b.main ? (stack.lanes.find((l) => samePath(l.path, b.worktree!)) ?? null) : null }))
+    // A stack that does not run has its worktrees from the hub (ADR-0078).
+    .map((b) => ({ b, lane: b.worktree && !b.main ? ([...stack.lanes, ...stack.offlineLanes].find((l) => samePath(l.path, b.worktree!)) ?? null) : null }))
     .sort((x, y) => Number(y.b.main) - Number(x.b.main) || x.b.name.localeCompare(y.b.name));
 });
 /** The branches with a worktree (the main tree's first), then the other local ones, then the remote ones; each by name. */

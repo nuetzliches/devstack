@@ -65,6 +65,51 @@ export const useStack = defineStore('stack', () => {
     return { id: id.value, name: `${l.repo} · ${l.lane}`, file: '', repo: l.repo, running: true, daemon: null, last_seen: null };
   });
   const running = computed(() => !!entry.value?.running);
+
+  /**
+   * The worktrees of a stack whose daemon does not run (ADR-0078), as lanes
+   * not started: read from the hub, again when its version of them changes.
+   */
+  const offlineLanes = ref<LaneView[]>([]);
+  /** Which stack `offlineLanes` belongs to: it lags behind `id` while a switch loads. */
+  const offlineLanesOf = ref<string | null>(null);
+  async function loadOfflineLanes() {
+    const sid = id.value;
+    if (!sid || running.value || foreign.value) {
+      offlineLanes.value = [];
+      offlineLanesOf.value = null;
+      return;
+    }
+    try {
+      const r = await api().request<LaneView[]>('GET', paths.worktrees(sid));
+      if (sid === id.value && r.ok && Array.isArray(r.body)) {
+        offlineLanes.value = r.body;
+        offlineLanesOf.value = sid;
+      }
+    } catch {
+      /* keep what is known */
+    }
+  }
+  watch(() => [id.value, running.value, id.value ? hub.worktrees[id.value] : undefined] as const, () => void loadOfflineLanes(), { immediate: true });
+  /** The lane shown while its stack does not run: its start page stands in. */
+  const offlineLane = computed(() => (!running.value && lane.value ? (offlineLanes.value.find((l) => l.name === lane.value) ?? null) : null));
+  /** Start a worktree's lane of a stack that does not run: its daemon comes up, the main tree's services stay stopped. */
+  async function startOfflineLane(l: LaneView, on: string | null, profile?: string) {
+    const sid = id.value;
+    if (!sid) return;
+    busy.value['lane-start'] = l.name;
+    const r = await act({
+      label: on ? `Start ${l.name} on ${on === 'pool' ? 'the pool' : on}` : `Start ${l.name}`,
+      path: paths.laneStart(sid),
+      body: { path: l.path, ...(on ? { on } : {}), ...(profile ? { profile } : {}) },
+      success: on ? `${l.name} starts on ${on === 'pool' ? 'the pool' : on}; its stack's daemon comes up first` : `${l.name} starts here; its stack's daemon comes up first`,
+    });
+    if (!r.ok) delete busy.value['lane-start'];
+  }
+  // The daemon is up: its own lane list and stream take over.
+  watch(running, (now) => {
+    if (now) delete busy.value['lane-start'];
+  });
   /** The view shown is not live: hub away, stack down, or not connected yet. */
   const stale = computed(() => !live.value);
   const services = computed(() => view.value?.services ?? []);
@@ -474,11 +519,18 @@ export const useStack = defineStore('stack', () => {
         label: create ? `New branch ${create}` : `New lane on ${branch}`,
         path: paths.worktrees(sid),
         body: create ? { branch, new: create } : { branch },
-        success: (b) => (running.value ? `Worktree made: ${b?.path}` : `Worktree made: ${b?.path}. It shows as a lane once the stack runs.`),
+        success: (b) => `Worktree made: ${b?.path}`,
       });
       if (!r.ok || !r.body?.path) return;
       const at = r.body.path;
       await loadBranches();
+      // A stack that does not run: its new worktree from the hub, shown with its start page.
+      if (!running.value) {
+        await loadOfflineLanes();
+        const l = offlineLanes.value.find((x) => samePath(x.path, at));
+        if (l && sid === id.value) selectLane(l.name);
+        return;
+      }
       for (let i = 0; i < 20 && sid === id.value && running.value; i++) {
         await loadLanes();
         const l = lanes.value.find((x) => samePath(x.path, at));
@@ -1062,6 +1114,10 @@ export const useStack = defineStore('stack', () => {
   }
 
   return {
+    offlineLanes,
+    offlineLanesOf,
+    offlineLane,
+    startOfflineLane,
     keepContainers,
     id,
     view,

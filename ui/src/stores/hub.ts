@@ -44,6 +44,8 @@ export const useHub = defineStore('hub', () => {
   const guests = ref<Guest[]>([]);
   /** The pools' skill sets on this machine (ADR-0074); `null` until the hub tells (older hubs never do). */
   const skills = ref<PoolSkillsState | null>(null);
+  /** A version of each stack's worktrees (ADR-0078); empty from an older hub. */
+  const worktrees = ref<Record<string, string>>({});
   /** What this machine opens a stack's folder with (ADR-0046); null until asked. */
   const openers = ref<Opener[] | null>(null);
   let sub: Subscription | null = null;
@@ -122,6 +124,10 @@ export const useHub = defineStore('hub', () => {
         }
         if (ev.type === 'guests') {
           guests.value = ev.guests;
+          return;
+        }
+        if (ev.type === 'worktrees') {
+          worktrees.value = ev.worktrees;
           return;
         }
         if (ev.type === 'skills') {
@@ -251,6 +257,7 @@ export const useHub = defineStore('hub', () => {
     releaseError,
     guests,
     skills,
+    worktrees,
     updating,
     lastCheck,
     checkingUpdate,

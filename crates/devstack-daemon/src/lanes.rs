@@ -749,7 +749,7 @@ pub fn worktree_of(repo: &Path, path: &Path) -> Option<PathBuf> {
 
 /// What changes in `<git common dir>/worktrees` when a worktree is added or
 /// removed or checks out another branch: its entries and their `HEAD`s.
-fn fingerprint(dir: &Path) -> Vec<(std::ffi::OsString, Option<std::time::SystemTime>)> {
+pub fn fingerprint(dir: &Path) -> Vec<(std::ffi::OsString, Option<std::time::SystemTime>)> {
     let mut out: Vec<_> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()

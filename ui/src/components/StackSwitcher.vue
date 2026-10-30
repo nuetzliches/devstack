@@ -5,7 +5,7 @@ import { ago, useNow } from '@/lib/format';
 import { usePopover } from '@/lib/popover';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
-import { laneLabel, laneTab, orderLanes } from '@/lib/lanes';
+import { laneLabel, lastTab, orderLanes } from '@/lib/lanes';
 import type { LaneView } from '@/api/types';
 import Icon from './icons/Icon.vue';
 import AddStackDialog from './AddStackDialog.vue';
@@ -47,7 +47,7 @@ function chooseLane(l: LaneView | null) {
     return;
   }
   stack.selectLane(l?.name ?? null);
-  if (stack.id) void router.push({ name: laneTab(route.name), params: { stack: stack.id } });
+  if (stack.id) void router.push({ name: lastTab(route.name), params: { stack: stack.id } });
 }
 
 async function toggle() {
@@ -67,7 +67,7 @@ function focusActive() {
 function choose(id: string) {
   close();
   trigger.value?.focus();
-  void router.push({ name: 'overview', params: { stack: id } });
+  void router.push({ name: lastTab(route.name), params: { stack: id } });
 }
 
 function onKey(e: KeyboardEvent) {
