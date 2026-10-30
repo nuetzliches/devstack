@@ -730,7 +730,18 @@ impl LaneRun {
         }
         Docker::clean()
             .ensure_network(&self.dir, name, &flags)
-            .map_err(RunError::from)
+            .map_err(|e| {
+                let text = e.to_string();
+                // Docker's address pools are used up (#394): the node's
+                // engine, not the lane, is the trouble.
+                if text.contains("address pools") {
+                    RunError::Docker(format!(
+                        "this node's Docker has no network address left (its address pools are used up), so the lane cannot get a network; its admin can give Docker more (`default-address-pools`, see docs/pool.md): {text}"
+                    ))
+                } else {
+                    RunError::from(e)
+                }
+            })
     }
 
     /// Start the lane: its infrastructure checked, its images and containers
@@ -1257,6 +1268,49 @@ fn own_user() -> Option<String> {
             .map(str::to_string)
     };
     Some(format!("{}:{}", field("Uid:")?, field("Gid:")?))
+}
+
+/// Take down Compose project `project` of a lane whose slot is gone (#394):
+/// its containers and networks, as `compose down` does; its volumes stay,
+/// as a kept lane's data does (ADR-0038). `agent`: the agent's own
+/// container, which leaves the project's networks first.
+pub(crate) fn remove_orphan_project(project: &str, agent: Option<&str>) {
+    if let Some(me) = agent {
+        for n in project_networks(project, &[]) {
+            let _ = docker(&["network", "disconnect", "-f", &n, me]);
+        }
+    }
+    let p = Project {
+        project: project.to_string(),
+        networks: Vec::new(),
+    };
+    remove_project(&p, false);
+}
+
+/// Remove the networks a lane of slot `slot` made with a fixed name of its
+/// group's, renamed `<name>-<slot>` (ADR-0030 point 2, `devstack.lane=1`),
+/// once its projects are gone: nothing else is on them.
+pub(crate) fn remove_slot_networks(slot: &str, agent: Option<&str>) {
+    let suffix = format!("-{slot}");
+    let names = docker(&[
+        "network",
+        "ls",
+        "--filter",
+        "label=devstack.lane=1",
+        "--format",
+        "{{.Name}}",
+    ])
+    .unwrap_or_default();
+    for n in names
+        .lines()
+        .map(str::trim)
+        .filter(|n| n.ends_with(&suffix))
+    {
+        if let Some(me) = agent {
+            let _ = docker(&["network", "disconnect", "-f", n, me]);
+        }
+        let _ = docker(&["network", "rm", n]);
+    }
 }
 
 /// The networks of a group's Compose project (by Compose's project label),

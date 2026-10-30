@@ -838,6 +838,43 @@ impl Inner {
         });
     }
 
+    /// The Compose projects of lanes whose slot is gone (#394): no lease
+    /// holds the slot, it has no directory and is not being purged. A slot
+    /// directory removed without its purge (one without `slot.json`, or an
+    /// agent of an earlier release) left them running for good. Only this
+    /// agent's, by where Compose ran them (under its slots): another pool's
+    /// agent on the same engine keeps its own (ADR-0034). Their volumes stay.
+    fn sweep_orphan_projects(&self) {
+        let slots = self.slots();
+        let known = |slot: &str| {
+            slots.join(slot).exists()
+                || self
+                    .leases
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .any(|l| l.slot.as_deref() == Some(slot))
+                || self.slot_busy.lock().unwrap().contains_key(slot)
+                || self.slot_purging.lock().unwrap().contains(slot)
+        };
+        let agent = self.container.as_deref();
+        let mut gone = HashSet::new();
+        for (project, slot) in orphan_projects(&compose_projects(), &slots, &known) {
+            // Asked again right before: a lane of the slot may start now.
+            if known(&slot) {
+                continue;
+            }
+            eprintln!(
+                "Compose project `{project}` of a lane that is gone: removed (its volumes stay)"
+            );
+            crate::lanerun::remove_orphan_project(&project, agent);
+            gone.insert(slot);
+        }
+        for slot in gone {
+            crate::lanerun::remove_slot_networks(&slot, agent);
+        }
+    }
+
     fn update_state(&self, at: u64, state: &str, target: Option<String>, error: Option<String>) {
         *self.update.lock().unwrap() = Some(crate::coordinator::UpdateReport {
             at,
@@ -3442,6 +3479,50 @@ fn remove_lane_images(owner: &str, gone: impl Fn(&str) -> bool) {
     remove_images(&ids);
 }
 
+/// Every Compose project on the engine with the directory Compose ran it
+/// in: `<project>\t<working_dir>` a line, once per container.
+fn compose_projects() -> String {
+    std::process::Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            "label=com.docker.compose.project",
+            "--format",
+            "{{.Label \"com.docker.compose.project\"}}\t{{.Label \"com.docker.compose.project.working_dir\"}}",
+        ])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+/// The projects in `listing` ([`compose_projects`]) of a lane of this
+/// agent's whose slot `known` does not know, each once with its slot: named
+/// `<project>-<slot>` and run from under `slots/<slot>`.
+fn orphan_projects(
+    listing: &str,
+    slots: &Path,
+    known: &dyn Fn(&str) -> bool,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in listing.lines() {
+        let Some((project, dir)) = line.trim_end_matches('\r').split_once('\t') else {
+            continue;
+        };
+        let Some(slot) = slot_of_project(project) else {
+            continue;
+        };
+        if !Path::new(dir).starts_with(slots.join(slot))
+            || known(slot)
+            || out.iter().any(|(p, _)| p == project)
+        {
+            continue;
+        }
+        out.push((project.to_string(), slot.to_string()));
+    }
+    out
+}
+
 /// A lane container on the engine, any agent's.
 struct LaneContainer {
     lease: String,
@@ -3601,6 +3682,7 @@ async fn background(s: Shared) {
                 }
                 s2.purge_gone_members();
                 s2.sweep_slots();
+                s2.sweep_orphan_projects();
             })
             .await;
         }
@@ -4120,6 +4202,29 @@ pub fn serve_blocking(config: NodeConfig, listen: std::net::SocketAddr) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gone_lanes_projects_are_found_by_slot_and_place() {
+        let gone = "d4713a1a05c412cb60a5755a";
+        let held = "591f02c55bcd63c909ffd5a3";
+        let slots = Path::new("/srv/node/slots");
+        let listing = format!(
+            "app-dev-{gone}\t/srv/node/slots/{gone}/src/deploy\n\
+             app-dev-{gone}\t/srv/node/slots/{gone}/src/deploy\r\n\
+             app-dev-search-{gone}\t/srv/node/slots/{gone}/src/deploy/es\n\
+             app-dev-{held}\t/srv/node/slots/{held}/src/deploy\n\
+             other-{gone}\t/srv/another-pool/slots/{gone}/src\n\
+             website\t/opt/website\n\n"
+        );
+        let found = orphan_projects(&listing, slots, &|s| s == held);
+        assert_eq!(
+            found,
+            [
+                (format!("app-dev-{gone}"), gone.to_string()),
+                (format!("app-dev-search-{gone}"), gone.to_string()),
+            ]
+        );
+    }
 
     #[test]
     fn lane_containers_tell_their_agent() {

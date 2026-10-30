@@ -129,6 +129,24 @@ why. A member that only shares from the dashboard is no node.
   again when it starts; for as long, a requester that never comes back
   holds the lane's CPU, memory and disk on the node. Ending the lease in
   the pool area frees them at once.
+- Docker's networks: each lane takes one or more (its own, one per Compose
+  project, and its groups' fixed-name ones). With Docker's default address
+  pools an engine has about 30 bridge networks in all, which a host that
+  runs other services too fills quickly; a lane then fails with "this
+  node's Docker has no network address left". Give the engine smaller
+  networks in `/etc/docker/daemon.json` and restart it (every container on
+  the host restarts with it):
+
+  ```json
+  { "default-address-pools": [{ "base": "10.200.0.0/16", "size": 24 }] }
+  ```
+
+  That is 256 networks of 254 addresses each; choose a `base` no network
+  of yours uses.
+- The agent removes what a lane left behind: lane containers no lease
+  holds when it starts, and every ten minutes the Compose projects of a
+  lane whose slot is gone (its volumes stay), only its own (they ran under
+  its slots).
 - It reads each lane's Compose model in a throwaway `docker:cli` container
   (`DEVSTACK_NODE_COMPOSE_IMAGE` names another image with `docker
   compose`), pulled once.
