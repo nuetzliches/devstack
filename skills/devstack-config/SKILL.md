@@ -51,9 +51,11 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   `env`.
 - **Lanes have their own containers.** A worktree runs as a lane with its
   ports moved (`[lanes] port_step`) and its own Compose project, so its
-  database is its own and needs no `{lane_suffix}`; services that hold nothing
-  per lane (a telemetry dashboard, a fake SMTP server) can stay shared:
-  `[compose.<group>] shared = ["mailbox"]`. A dev server needs `{port}`
+  database is its own and needs no `{lane_suffix}`. Every lane starts all of
+  its containers: `[compose.<group>] shared` is deprecated (0.33.0; drop it
+  when you touch the file), and a profile's `skip` leaves out what a lane
+  can do without. A service that may run once per machine only (a tray app)
+  says `singleton = true` (formerly `lanes = false`). A dev server needs `{port}`
   (in `run`, or in `env` for a config that reads it) to run in a lane. A
   command names a Compose project as `{compose.<group>.project}`, never
   literally (`docker compose -p {compose.app.project} exec -T db ...`): in a

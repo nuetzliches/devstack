@@ -17,11 +17,18 @@ pub struct Deprecation {
     pub since: &'static str,
 }
 
-pub const DEPRECATED: &[Deprecation] = &[Deprecation {
-    path: "services.*.lanes",
-    replacement: "`singleton = true` (ADR-0080)",
-    since: "0.33.0",
-}];
+pub const DEPRECATED: &[Deprecation] = &[
+    Deprecation {
+        path: "services.*.lanes",
+        replacement: "`singleton = true` (ADR-0080)",
+        since: "0.33.0",
+    },
+    Deprecation {
+        path: "compose.*.shared",
+        replacement: "each lane's own containers: drop the key; a profile's `skip` leaves containers out (ADR-0080)",
+        since: "0.33.0",
+    },
+];
 
 /// Warnings for deprecated keys in a stack file's text (never errors).
 pub fn warnings(text: &str) -> Vec<Issue> {
@@ -100,5 +107,15 @@ mod tests {
         assert_eq!(w.len(), 1);
         assert_eq!(w[0].path, "services.tray.lanes");
         assert!(w[0].message.contains("singleton"), "{}", w[0].message);
+    }
+
+    #[test]
+    fn shared_is_deprecated() {
+        let w = warnings(
+            "version = 1\n[compose.app]\nfiles = [\"c.yml\"]\nservices = [\"mail\"]\nshared = [\"mail\"]\n",
+        );
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].path, "compose.app.shared");
+        assert!(w[0].message.contains("own containers"), "{}", w[0].message);
     }
 }

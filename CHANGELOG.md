@@ -16,11 +16,20 @@ and listed with their assets on the
   still works and means the same; `devstack check` reports it as
   deprecated.
 
+### Deprecated
+
+- **`[compose.<group>] shared`** (ADR-0080): it works as before, and
+  `devstack check` and `devstack doctor` report it; it goes with
+  `version = 2`. It ties a lane to the main tree, reaches only native
+  services (a lane's containers do not find it by name), behaves
+  differently for a lane on a node, and mixes the lanes' telemetry. Drop
+  it: every lane starts its own containers; a profile's `skip` leaves out
+  what a lane can do without.
+
 ### Added
 
 - **`/v1/lanes/main/v1/...`** answers as the main working tree's `/v1/...`
-  (ADR-0080), the first step towards the main tree being a lane like any
-  other.
+  (ADR-0080), so a client addresses every tree as a lane.
 
 ## [0.32.0] - 2026-10-30
 

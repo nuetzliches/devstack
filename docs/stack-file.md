@@ -91,7 +91,7 @@ networks  = ["shop-shared"]                              # external networks cre
 after     = ["search"]                                   # other groups that must be healthy first
 restart_on = { db = ["deploy/dev/db/init/**"] }          # a change restarts that container
 urls      = { scheduler = "http://localhost:5100/ui", db = "" }   # dashboard links (below)
-shared    = ["mailbox"]                                  # lanes use the main tree's (see [lanes])
+shared    = ["mailbox"]                                  # deprecated: lanes use the main tree's (see [lanes])
 main_ports = ["web"]                                     # their fixed ports move with `promote --lane` (below)
 announced_ports = ["media:7881", "media:7882/udp"]       # ports the server tells its clients (below)
 ```
@@ -472,7 +472,7 @@ server reloads itself).
 | Key | Meaning |
 | --- | --- |
 | `autostart = false` | started only on demand (`devstack start <service>`) |
-| `singleton = true` | runs once per machine, in the main working tree only, never in a lane: for a tray app or something holding a global lock; see `[lanes]`. Before 0.33.0 spelled `lanes = false`, which still works and is reported as deprecated ([ADR-0080](adr/0080-the-main-tree-is-a-lane.md)) |
+| `singleton = true` | runs once per machine, in the main working tree only, never in a lane: for a tray app or something holding a global lock; see `[lanes]`. Before 0.33.0 spelled `lanes = false`, which still works and is reported as deprecated ([ADR-0080](adr/0080-the-main-tree-answers-as-a-lane-shared-is-deprecated.md)) |
 | `platforms = ["windows"]` | only on these platforms (`windows`, `linux`, `macos`); default `[]`: every platform |
 | `ensure_dirs = ["{repo}/data/files"]` | created before start |
 | `prepare = { run = "npm ci", inputs = ["web/package-lock.json"] }` | installs what a copy of the source lacks (see below) |
@@ -748,6 +748,13 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
 - `[compose.<group>] shared = ["mailbox"]`: services a lane uses from the main
   tree instead of starting its own, for what holds nothing per lane (a
   telemetry dashboard, a fake SMTP server); reached by their published ports.
+  **Deprecated since 0.33.0** ([ADR-0080](adr/0080-the-main-tree-answers-as-a-lane-shared-is-deprecated.md)):
+  it works as before and `devstack check` says so; it goes with `version = 2`.
+  It couples a lane to the main tree, reaches only native services (a lane's
+  containers do not find it by name), behaves differently for a lane on a
+  node (which runs its own), and lets the lanes' telemetry mix. Drop it: every
+  lane then starts its own containers. To save memory, a profile leaves
+  containers out (`skip`, see `[profiles.<name>]`).
 - Before a lane starts, devstack checks that the machine has about the memory
   the main tree takes now and refuses otherwise (`devstack up --force` starts it
   anyway).
