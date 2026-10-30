@@ -164,3 +164,4 @@ stay.
 | [0079](0079-skills-local-to-a-working-tree.md) | Skills local to a working tree: a pool's project skills bound to their repository, devstack's own untracked | Accepted (card in the pull request) |
 | [0080](0080-the-main-tree-answers-as-a-lane-shared-is-deprecated.md) | The main working tree answers as the lane `main`; `singleton` replaces `lanes = false`; `shared` is deprecated | Accepted (card in the pull request) |
 | [0081](0081-a-stack-has-a-page-every-lane-the-same-view.md) | A stack has a page of its own; every lane, `main` included, has the same view | Accepted (card in the pull request) |
+| [0082](0082-the-ports-of-a-machine.md) | The ports of a machine: every stack says what it holds, a stack can run shifted | Accepted (card in the pull request); built in steps: point 1 (`/v1/ports`, `/hub/ports`, `doctor`) in 0.33.0 |

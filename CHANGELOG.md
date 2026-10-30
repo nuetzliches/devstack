@@ -50,6 +50,15 @@ and listed with their assets on the
   shows its start and its worktrees.
 - **`ServiceView.singleton`** (ADR-0080, ADR-0081): whether a service runs
   once per machine, in the main working tree only.
+- **The ports of a machine** (ADR-0082): `GET /v1/ports` lists every port
+  a stack holds or uses on this machine, per lane: port, protocol, lane,
+  what it is (a service's fixed port, an instance's, a container's
+  published or held port, a lane on a node's forward), what holds it, how
+  (proxy, forward, the process itself, Docker), where it leads and whether
+  it listens. The main tree's daemon includes its lanes'. The hub's `GET
+  /hub/ports` joins every registered stack's (a stopped stack's from what
+  its stack file declares) and marks the ports two stacks share;
+  `devstack doctor` lists them.
 
 ### Fixed
 

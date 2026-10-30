@@ -11,6 +11,7 @@ pub mod health;
 pub mod journal;
 pub mod lanes;
 pub mod logfiles;
+pub mod ports;
 pub mod proxy;
 pub mod rebuild;
 pub mod registry;

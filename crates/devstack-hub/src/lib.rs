@@ -44,6 +44,7 @@ mod open;
 mod pool;
 mod poolfeed;
 mod poolskills;
+mod ports;
 mod prompts;
 pub mod release;
 pub mod secrets;
@@ -520,6 +521,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/ping", get(ping).options(ping_preflight))
         .route("/hub/stacks", get(stacks))
         .route("/hub/summary", get(summary::get))
+        .route("/hub/ports", get(ports::get))
         .route("/hub/docker", get(docker))
         .route("/hub/docker/start", post(docker_start))
         .route("/hub/events", get(events))

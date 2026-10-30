@@ -20,6 +20,9 @@ pub(crate) const NODE_DID_NOT_ACT: &str = "the node runs this lane's containers 
 /// is created or restarts (ADR-0048).
 const HELD_WAIT: Duration = Duration::from_secs(60);
 
+/// The held ports by container `(group, service)`.
+pub(crate) type HeldByContainer = BTreeMap<(String, String), crate::ports::HeldPorts>;
+
 /// A fixed port of a `main_ports` container that devstack holds (ADR-0048).
 pub(crate) struct HeldFront {
     fixed: u16,
@@ -168,6 +171,22 @@ impl Supervisor {
                 message,
             });
         }
+    }
+
+    /// The fixed ports devstack holds (ADR-0048) by container `(group,
+    /// service)`, each with where it forwards now.
+    pub(crate) fn held_now(&self) -> HeldByContainer {
+        let mut out = HeldByContainer::new();
+        for ((g, s, _), h) in self.held_ports.lock().unwrap().iter() {
+            let to = match h.front.state() {
+                crate::tcpfwd::FrontState::To(p) => Some(p),
+                _ => None,
+            };
+            out.entry((g.clone(), s.clone()))
+                .or_default()
+                .push((h.fixed, to));
+        }
+        out
     }
 
     /// The held ports forward to the lane `offset` names (`promote --lane`),
@@ -609,6 +628,7 @@ impl Supervisor {
             .map(|(_, h)| h.front.view())
             .collect();
         drop(fronts);
+        let bound = crate::ports::bound(&c.publishers);
         ContainerView {
             managed: self.starts(group, &c.service),
             service: c.service.clone(),
@@ -621,6 +641,7 @@ impl Supervisor {
             unreachable: Vec::new(),
             not_forwarded: Vec::new(),
             held,
+            bound,
         }
     }
 
@@ -1343,6 +1364,7 @@ impl Supervisor {
                                 unreachable: Vec::new(),
                                 not_forwarded: s.not_forwarded(ext.udp),
                                 held: Vec::new(),
+                                bound: Vec::new(),
                                 managed: true,
                             });
                         }
@@ -1730,6 +1752,7 @@ mod tests {
             unreachable: Vec::new(),
             not_forwarded: Vec::new(),
             held: Vec::new(),
+            bound: Vec::new(),
             managed,
         }
     }
@@ -1823,6 +1846,51 @@ mod tests {
         assert_eq!(g.env["DEVSTACK_PORT_MEDIA_7881"], "7881");
         assert_eq!(g.env["DEVSTACK_LANE"], "main");
         assert_eq!(g.env["DEVSTACK_LANE_SUFFIX"], "");
+    }
+
+    #[test]
+    fn a_lanes_ports_are_its_own_containers_by_their_moved_host_ports() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (_d, sup) = rtc("feat-x", &rt);
+        let c = devstack_compose::parse_ps(
+            r#"{"Service":"media","Name":"rtc-feat-x-media-1","State":"running","Publishers":[{"URL":"127.0.0.1","TargetPort":7981,"PublishedPort":7981,"Protocol":"tcp"},{"URL":"0.0.0.0","TargetPort":7882,"PublishedPort":7982,"Protocol":"udp"}]}"#,
+        )
+        .unwrap()
+        .remove(0);
+        let mut published = BTreeMap::new();
+        let view = sup.container_view("app", c, &mut published);
+        sup.infra.lock().unwrap().views = vec![InfraView {
+            group: "app".into(),
+            project: "rtc-feat-x".into(),
+            containers: vec![view],
+            error: None,
+        }];
+        let e = crate::ports::tree_entries(&sup.port_facts());
+        type Row<'a> = (u16, &'a str, &'a str, &'a str, Option<u16>, bool);
+        let got: Vec<Row> = e
+            .iter()
+            .map(|x| {
+                (
+                    x.port,
+                    x.proto.as_str(),
+                    x.lane.as_str(),
+                    x.holder.as_deref().unwrap_or(""),
+                    x.target,
+                    x.listening,
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (7981, "tcp", "feat-x", "app.media", Some(7981), true),
+                (7982, "udp", "feat-x", "app.media", Some(7882), true),
+            ]
+        );
+        assert!(e.iter().all(|x| x.kind == crate::ports::PUBLISHED));
     }
 
     #[test]

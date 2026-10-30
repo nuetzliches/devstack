@@ -52,6 +52,7 @@ and `Referrer-Policy: no-referrer`. The dashboard has no inline script.
 | `GET /hub/session` | cookie | `200 {"version": "<x.y.z>", "link_unavailable": string\|null}`, or `401` (not paired: show "run `devstack ui`"). `link_unavailable` says why this platform has no `devstack://` link (macOS: "not on macOS yet", ADR-0054): the page keeps it and offers `devstack hub start` instead of its "Start hub" link while the hub is down. Older hubs leave it out |
 | `GET /hub/stacks` | cookie | `[StackEntry]` |
 | `GET /hub/summary` | cookie or token | every registered stack at a glance, for the tray ([ADR-0060](adr/0060-the-tray-is-a-client-of-the-hub.md)): `{"state", "version", "stacks": [{id, name, repo, running, state, ready, total, lanes, attention: [{lane, service, text, detail}]}]}`. A stack's `state`: `stopped`, `starting`, `stopping` (a start or stop the hub runs), `ok` or `attention`; the whole `state` is the worst: `attention`, `starting`, `ok` (a stack runs) or `idle`. `ready` of `total`: the main tree's services running, healthy or done. `lanes`: started lanes. `attention`: what notifies (ADR-0045) and is still so, in the main tree and every started lane (`lane` names it): a failed service (not one the user stopped, not one held back by another's failure), a candidate `held` or whose build `failed`; and a failed start from the dashboard (`service` `null`). Containers are not in it. `version`: the hub's devstack |
+| `GET /hub/ports` | cookie or token | the ports of every registered stack on this machine and where two stacks meet ([ADR-0082](adr/0082-the-ports-of-a-machine.md)): `{"stacks": [{id, name, running, ports: [PortEntry]}], "overlaps": [{port, proto, stacks: [{id, name, lane, holder?, kind}]}]}`. A running stack's `ports` are its daemon's `GET /v1/ports` (see [Ports](#ports)); a stack whose daemon does not run, or does not answer it (an older devstack), has what its stack file declares for the main working tree, each `kind: "declared"`, `lane: "main"`: its services' `port`, its Compose groups' `announced_ports` and the ports on this machine their `urls` name (other published ports of the Compose files are not read). A stopped stack whose stack file is gone is left out; one whose file does not load has no ports. An overlap is one `port` and `proto` in more than one stack, each use listed once; an `instance` port does not count (the OS hands it out). Computed on request, nothing is polled |
 | `GET /hub/ws?path=<stream>` | cookie + Origin | WebSocket that carries the server-sent event stream at `<stream>` (`/hub/events`, `/hub/stacks/{id}/api/v1/...`, or `/hub/pool/shared/{lease}/api/v1/...[?pool=]` for a lane shared with this machine), one text message per event's `data`; how the dashboard reads every stream (a browser allows six HTTP/1.1 connections per host across all its tabs, WebSockets do not count; ADR-0021). The upstream is opened before the upgrade: `503` for a stack not running, `400` for another path. When the stream ends the socket closes |
 | `GET /hub/events` | cookie | SSE: `{"type":"stacks","stacks":[StackEntry]}` and `{"type":"docker","docker":DockerEngine}` and `{"type":"release","current","newer":string|null,"error":string|null}` (a newer devstack; checked at start, every 12 h by the clock and when a dashboard connects and the last answer is over an hour old, unless `DEVSTACK_NO_UPDATE_CHECK`; `error` why the last check failed, no network or GitHub's rate limit, tried again after an hour and `null` once one succeeds, while a `newer` found before stays; older hubs leave it out) and `{"type":"update","update":{"running":bool,"error":string|null,"installed":string|null,"finished":ms|null}}` (the dashboard's update; `finished` is when the last one ended, `installed` the version it installed, told by the hub it started) and `{"type":"guests","guests":[Guest]}` (lanes of other members on this machine, every pool: `{pool, lease, member, owner, repo, lane, state: "offered"\|"running", since: unix s, cpus, memory}`, the leases whose node is this machine; read when the pool's stream says its leases or nodes changed) and `{"type":"worktrees","worktrees":{"<stack id>":"<version>"}}` (a version of each registered stack's worktrees, running or not, ADR-0078: the hub looks at their folder once a second; a stack's lanes are read again when its version changes; older hubs never send it) and `{"type":"pools","pools":{"<pool>":{"live":"connecting"\|"live"\|"lost"\|"old","error"?,"versions":{"members","nodes","leases","upstreams","telemetry"}}}}` (the pools this machine follows over their coordinators' streams, ADR-0073: `old` for a coordinator without one, whose parts are read when the pool area opens; `versions` of each part, read again when one is not the one read last; older hubs never send it), each first and on every change |
 | `POST /hub/update` | cookie + Origin | `202`: `devstack update` in the background (output in `hub/update.log`); on success it restarts the hub on the new version, so the dashboard reconnects to it, and the new hub's `update` event names the installed version (the old hub leaves `hub/update.json` for it; a hub that starts on the old version while the updater runs waits for it and reports a failure); on failure the `update` event carries the end of its output. `409` while one runs (checked and claimed in one step). Running stacks switch at their next restart |
@@ -353,6 +354,52 @@ type UsageReport = {
   lanes: ({ name: string; disk?: { snapshot: number; artifacts: number; logs: number; volumes: number | null } } & Load)[];
   docker_error?: string;
 };
+```
+
+### Ports
+
+`GET /v1/ports` -> `{"ports": [PortEntry]}`: every port the tree holds or
+uses on this machine ([ADR-0082](adr/0082-the-ports-of-a-machine.md)). The
+main tree's daemon includes its lanes': a lane here from its supervisor, a
+lane on a node by the ports this machine forwards for it.
+`/v1/lanes/<lane>/v1/ports` is that lane's own (of a lane on a node: what
+its daemon there holds, on the node). `listening` is what devstack knows,
+not a probe.
+
+```ts
+type PortEntry = {
+  port: number;
+  proto: "tcp" | "udp";
+  lane: string;        // "main" for the main working tree, else the lane's name
+  kind:
+    | "fixed"          // a service's port: the main slot's in main, moved by the offset in a lane
+    | "instance"       // a running instance's port behind the proxy or a dev server's front
+    | "published"      // a container's host port, published by Docker
+    | "held"           // a `main_ports` container's fixed port devstack holds (ADR-0048)
+    | "node"           // a port of a lane on a node, forwarded (TCP) or relayed (UDP) here
+    | "declared";      // GET /hub/ports only: named by a stopped stack's stack file
+  holder?: string;     // a service, or a container as "<group>.<service>"; absent: not known
+  via: "proxy" | "forward" | "direct" | "docker";
+                       // devstack's HTTP proxy (ADR-0010); a devstack forward (a dev
+                       // server's front, a held port, the main slot's forward to a
+                       // lane, a lane on a node); the process itself; Docker
+  target?: number;     // where it leads: the instance's port, the lane's port, the
+                       // container's own port, the port on the node
+  target_lane?: string;// the lane `target` is in when another lane serves the main slot
+  node?: string;       // the node of a lane on a node
+  listening: boolean;  // something listens on it now
+};
+```
+
+One entry of each kind:
+
+```json
+{"port": 5000, "proto": "tcp", "lane": "main", "kind": "fixed", "holder": "api", "via": "proxy", "target": 49821, "listening": true}
+{"port": 4200, "proto": "tcp", "lane": "main", "kind": "fixed", "holder": "web", "via": "forward", "target": 4300, "target_lane": "feat", "listening": true}
+{"port": 49821, "proto": "tcp", "lane": "main", "kind": "instance", "holder": "api", "via": "direct", "listening": true}
+{"port": 15432, "proto": "tcp", "lane": "main", "kind": "published", "holder": "data.db", "via": "docker", "target": 5432, "listening": true}
+{"port": 8081, "proto": "tcp", "lane": "main", "kind": "held", "holder": "app.ui", "via": "forward", "target": 51234, "listening": true}
+{"port": 5200, "proto": "tcp", "lane": "review", "kind": "node", "holder": "api", "via": "forward", "target": 5200, "node": "build-server", "listening": true}
 ```
 
 ### The store of what `prepare` makes

@@ -1488,6 +1488,47 @@ impl Lanes {
         })
     }
 
+    /// Every port the stack holds on this machine (ADR-0082): the main
+    /// tree's, each started lane's here from its supervisor, and each lane
+    /// on a node's forwards here.
+    pub fn port_entries(&self) -> Vec<crate::ports::PortEntry> {
+        let mut out = crate::ports::tree_entries(&self.main.port_facts());
+        let local: Vec<Arc<Lane>> = self.map.lock().unwrap().values().cloned().collect();
+        for l in local {
+            out.extend(crate::ports::tree_entries(&l.sup.port_facts()));
+        }
+        let remote: Vec<Arc<RemoteLane>> = self.remote.lock().unwrap().values().cloned().collect();
+        if remote.is_empty() {
+            return out;
+        }
+        let step = self.main.stack.lanes.port_step;
+        let numbers: BTreeMap<String, u16> = self
+            .known
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(n, k)| (n.clone(), k.entry.number))
+            .collect();
+        let published = self.main.published_fixed();
+        for r in remote {
+            let (tcp, udp, listening) = r.forwarded();
+            let holders = numbers
+                .get(&r.name)
+                .and_then(|n| lane_offset(*n, step))
+                .map(|off| crate::ports::lane_holders(&self.main.stack, &published, off))
+                .unwrap_or_default();
+            out.extend(crate::ports::node_entries(&crate::ports::NodeFacts {
+                lane: r.name.clone(),
+                node: r.node.name.clone(),
+                tcp,
+                udp,
+                listening,
+                holders,
+            }));
+        }
+        out
+    }
+
     /// Stop a lane, if it runs, and drop it with its state. Not while it is
     /// being started (its supervisor is being set up from that state): the
     /// next sync forgets it, once the start is over.

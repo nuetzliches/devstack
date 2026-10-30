@@ -186,6 +186,10 @@ pub struct ContainerView {
     /// `ports` then names the fixed port.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub held: Vec<crate::proxy::ProxyView>,
+    /// Its published host ports with their protocol, as `compose ps`
+    /// reports them: what `GET /v1/ports` lists (ADR-0082). Not in the view.
+    #[serde(skip)]
+    pub bound: Vec<crate::ports::Published>,
     /// The Compose group starts it (its service is in the group's
     /// `services`). `false` for any other container of the project that
     /// `compose ps` reports (started by hand, a service of a profile, an

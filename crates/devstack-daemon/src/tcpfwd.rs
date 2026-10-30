@@ -14,9 +14,17 @@ use tokio::sync::watch;
 /// `close` before it returns (open connections end on their own).
 pub struct Forward {
     tasks: Vec<tokio::task::JoinHandle<()>>,
+    /// The port on this machine it forwards to (`None`: an address
+    /// elsewhere, [`start_to`]).
+    target: Option<u16>,
 }
 
 impl Forward {
+    /// The port on this machine it forwards to, if it forwards to one.
+    pub fn target(&self) -> Option<u16> {
+        self.target
+    }
+
     /// Stop listening and wait until the listeners are gone, so the port can
     /// be bound again right away (an aborted task drops its listener only
     /// when the runtime gets to it).
@@ -62,7 +70,10 @@ pub fn start(port: u16, target: u16, rt: &tokio::runtime::Handle) -> std::io::Re
     if let Some(l) = v6 {
         tasks.push(rt.spawn(accept(l, port, target)));
     }
-    Ok(Forward { tasks })
+    Ok(Forward {
+        tasks,
+        target: Some(target),
+    })
 }
 
 /// Listen on `port` (127.0.0.1) and forward every connection to `addr`
@@ -88,7 +99,10 @@ pub fn start_to(port: u16, addr: String, rt: &tokio::runtime::Handle) -> std::io
             });
         }
     });
-    Ok(Forward { tasks: vec![task] })
+    Ok(Forward {
+        tasks: vec![task],
+        target: None,
+    })
 }
 
 /// What a [`Front`] does with a new connection (ADR-0043).
