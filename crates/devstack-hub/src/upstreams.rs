@@ -886,12 +886,24 @@ impl Upstreams {
             &Secret::Token {
                 token: token.into(),
             },
-        )
+        )?;
+        self.logged_in_anew(name);
+        Ok(())
     }
 
     pub fn logout(&self, name: &str) -> Result<(), String> {
         self.get(name)?;
-        self.secrets.delete(name)
+        self.secrets.delete(name)?;
+        self.logged_in_anew(name);
+        Ok(())
+    }
+
+    /// The credential of `name` changed: what it was asked with the old one
+    /// (its tools, or that it wanted a login, kept for a minute) and its
+    /// session go, so an agent sees the change at once.
+    fn logged_in_anew(&self, name: &str) {
+        self.listed.lock().unwrap().remove(name);
+        self.sessions.lock().unwrap().remove(name);
     }
 
     fn put_secret(&self, name: &str, s: &Secret) -> Result<(), String> {
@@ -1001,6 +1013,7 @@ impl Upstreams {
                 resource: flow.resource,
             },
         )?;
+        self.logged_in_anew(&flow.upstream);
         Ok(flow.upstream)
     }
 
@@ -2001,8 +2014,8 @@ mod tests {
         assert_eq!(tools[0]["name"], "tr__login");
         assert!(ups.call(&http, "tr__login", json!({}))["isError"] == true);
 
+        // Logged in: its tools at once, not the answer kept from before.
         ups.set_token(&name, "good").unwrap();
-        ups.listed.lock().unwrap().clear();
         let tools = ups.tools(&http);
         let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
         assert_eq!(names, ["tr__search"], "the allowlist keeps `drop` out");
@@ -2036,8 +2049,6 @@ mod tests {
 
         // A refused token: its tools stay listed, a call says to log in again.
         ups.set_token(&name, "revoked").unwrap();
-        ups.sessions.lock().unwrap().clear();
-        ups.listed.lock().unwrap().clear();
         let tools = ups.tools(&http);
         assert_eq!(tools.len(), 1);
         assert!(
@@ -2092,7 +2103,6 @@ mod tests {
         let tools = ups.tools(&http);
         assert_eq!(tools[0]["name"], format!("{name}__login"), "{tools:?}");
         ups.set_token(&name, "tk-1").unwrap();
-        ups.listed.lock().unwrap().clear();
         let tools = ups.tools(&http);
         assert_eq!(tools[0]["name"], format!("{name}__env"), "{tools:?}");
         let r = ups.call(

@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **An MCP upstream's tools show right after its login**: for up to a minute
+  after logging in, giving a token or logging out, agents still got what the
+  hub had asked with the old credential (a `<prefix>__login` instead of the
+  tools); a change of the credential now forgets it.
+- **The pool's MCP upstreams card no longer says it keeps nothing secret**:
+  it can hold an OAuth app's client secret (never shown) since 0.31.0, and it
+  says where a member uses or logs in to an upstream.
+
 ## [0.31.0] - 2026-10-30
 
 The hub follows every stack's worktrees, so a new one shows in the
