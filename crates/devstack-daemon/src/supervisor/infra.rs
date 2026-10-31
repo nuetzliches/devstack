@@ -76,23 +76,25 @@ impl Supervisor {
             .join(format!("{group}.main.yml"))
     }
 
-    /// The main tree's overlay for `group`'s `main_ports` (ADR-0048), written
-    /// from its Compose files as they stand now: the ports it holds. Its
-    /// announced ports (ADR-0057) are checked on the same model.
+    /// The main tree's overlay for `group`'s `main_ports` (ADR-0048) and
+    /// its shift on this machine (ADR-0082), written from its Compose files
+    /// as they stand now: the ports it holds, every host port moved by the
+    /// shift. Its announced ports (ADR-0057) are checked on the same model.
     fn write_main_overlay(&self, group: &str) -> Result<Vec<devstack_compose::HeldPort>, String> {
         let file = self.main_overlay_file(group);
         let _ = std::fs::remove_file(&file);
         let cfg = &self.stack.compose[group];
         let names = &cfg.main_ports;
         let announced = cfg.announced();
-        if names.is_empty() && announced.is_empty() {
+        let shift = self.shift();
+        if names.is_empty() && announced.is_empty() && shift == 0 {
             return Ok(Vec::new());
         }
         let g = self.compose_group(group);
         let model = self.docker.config(&g).map_err(|e| e.to_string())?;
         devstack_compose::check_announced(&model, &announced)
             .map_err(|e| format!("compose group `{group}`: {e}"))?;
-        if names.is_empty() {
+        if names.is_empty() && shift == 0 {
             return Ok(Vec::new());
         }
         // The main slot moves TCP only (ADR-0048 point 6; a lane on a node
@@ -110,7 +112,7 @@ impl Supervisor {
                 }
             }
         }
-        let Some((text, held)) = devstack_compose::main_overlay(&model, names, &announced)
+        let Some((text, held)) = devstack_compose::main_overlay(&model, names, &announced, shift)
             .map_err(|e| format!("compose group `{group}`: {e}"))?
         else {
             return Ok(Vec::new());
@@ -251,7 +253,7 @@ impl Supervisor {
         g.env = self.group_variables(name);
         if self.lane.is_empty() {
             let overlay = self.main_overlay_file(name);
-            if !cfg.main_ports.is_empty() && overlay.is_file() {
+            if (!cfg.main_ports.is_empty() || self.shift() > 0) && overlay.is_file() {
                 g.files.push(overlay);
             }
             return g;
@@ -293,7 +295,21 @@ impl Supervisor {
         } else {
             &cfg.shared
         };
-        cfg.variables(&lane, self.port_offset, fixed)
+        let mut env = cfg.variables(&lane, self.files_offset(), fixed);
+        // A lane's `shared` containers are the main tree's: on its shifted
+        // ports when it runs shifted (ADR-0082).
+        if !fixed.is_empty() && self.shift() > 0 {
+            let announced = cfg.announced();
+            for (k, v) in cfg.port_variables(self.shift(), &[]) {
+                if announced
+                    .iter()
+                    .any(|a| a.variable() == k && fixed.contains(&a.service))
+                {
+                    env.insert(k, v);
+                }
+            }
+        }
+        env
     }
 
     /// What the `docker compose` calls of every group get as this tree
@@ -316,16 +332,17 @@ impl Supervisor {
     /// announced port is moved inside the container too, and is known by
     /// the files' number all the same. `None`: `target` is the files' own.
     fn files_port(&self, group: &str, service: &str, target: u16) -> Option<u16> {
-        if self.lane.is_empty() || self.port_offset == 0 {
+        let offset = self.files_offset();
+        if offset == 0 {
             return None;
         }
         let cfg = self.stack.compose.get(group)?;
-        if cfg.shared.iter().any(|s| s == service) {
+        if !self.lane.is_empty() && cfg.shared.iter().any(|s| s == service) {
             return None;
         }
         cfg.announced()
             .into_iter()
-            .find(|a| a.service == service && a.port.checked_add(self.port_offset) == Some(target))
+            .find(|a| a.service == service && a.port.checked_add(offset) == Some(target))
             .map(|a| a.port)
     }
 

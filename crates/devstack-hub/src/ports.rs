@@ -8,7 +8,7 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
-use devstack_daemon::ports::{PortEntry, StackPorts, declared, overlaps};
+use devstack_daemon::ports::{PortEntry, StackPorts, declared, overlaps, shifted};
 use http_body_util::BodyExt;
 use std::time::Duration;
 
@@ -54,9 +54,11 @@ async fn of(s: &AppState, e: StackEntry) -> Option<StackPorts> {
     if !e.running && !file.is_file() {
         return None;
     }
+    // On the ports its shift on this machine moves them to (ADR-0082).
+    let shift = e.shift;
     let ports = tokio::task::spawn_blocking(move || {
         devstack_config::load(&file)
-            .map(|st| declared(&st))
+            .map(|st| shifted(declared(&st), shift))
             .unwrap_or_default()
     })
     .await

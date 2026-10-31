@@ -1146,7 +1146,11 @@ export const useStack = defineStore('stack', () => {
     return containerAction(group, service, 'restart');
   }
 
-  async function startStack() {
+  /**
+   * Start the stack (`devstack up`); with `shift`, moved by a port shift on
+   * this machine (`--shift`, ADR-0082), which sticks to it until `none`.
+   */
+  async function startStack(shift?: 'auto' | 'none' | number) {
     if (refuseReadOnly()) return;
     if (!id.value) return;
     const stackId = id.value;
@@ -1161,7 +1165,12 @@ export const useStack = defineStore('stack', () => {
       return;
     }
     hub.starting[stackId] = true;
-    const res = await act({ label: `Start ${entry.value?.name ?? 'stack'}`, path: paths.up(stackId), success: 'Starting the stack…' });
+    const res = await act({
+      label: `Start ${entry.value?.name ?? 'stack'}`,
+      path: paths.up(stackId),
+      body: shift === undefined ? undefined : { shift },
+      success: shift === undefined ? 'Starting the stack…' : 'Starting the stack with a port shift…',
+    });
     if (!res.ok) delete hub.starting[stackId];
   }
 

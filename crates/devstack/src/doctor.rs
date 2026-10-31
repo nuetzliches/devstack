@@ -361,7 +361,12 @@ fn overlaps() -> Vec<Finding> {
                 let ports = match asked {
                     Some(p) => p,
                     None if e.file.is_file() => devstack_config::load(&e.file)
-                        .map(|st| devstack_daemon::ports::declared(&st))
+                        .map(|st| {
+                            devstack_daemon::ports::shifted(
+                                devstack_daemon::ports::declared(&st),
+                                e.shift,
+                            )
+                        })
                         .unwrap_or_default(),
                     None => return None,
                 };

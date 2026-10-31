@@ -22,6 +22,7 @@ import { useStack } from '@/stores/stack';
 import AgentPrompt from '@/components/AgentPrompt.vue';
 import Icon from '@/components/icons/Icon.vue';
 import PortGraph from '@/components/PortGraph.vue';
+import { refusedForPorts, runningHolders, shiftLabel } from '@/lib/shift';
 import StatusPill from '@/components/StatusPill.vue';
 
 const route = useRoute();
@@ -180,6 +181,20 @@ watch(
   { immediate: true },
 );
 const portLanes = computed(() => lanes.value.map((l) => ({ name: l.name, node: l.node ? nodeLabel(l) : null })));
+
+// ------------------------------------------------------------ port shift
+
+/** Its shift on this machine (ADR-0082): "shifted +1000". */
+const shifted = computed(() => shiftLabel(stack.entry?.shift ?? stack.mainView?.shift));
+/** Running stacks that hold its ports: `up` would refuse, naming them. */
+const holders = computed(() => (stack.id && ports.value?.of === stack.id ? runningHolders(stack.id, ports.value.overlaps) : []));
+/** A stopped stack that collides with a running one, or whose start was refused for it: offer the shift. */
+const collides = computed(() => !stack.running && (holders.value.length > 0 || refusedForPorts(stack.entry)));
+const collisionText = computed(() => {
+  const h = holders.value;
+  if (!h.length) return 'Another running stack holds its ports.';
+  return `${h.map((x) => `${x.name} holds ${x.ports.join(', ')}`).join('; ')}.`;
+});
 function openLane(name: string) {
   if (stack.id) void router.push(laneView(stack.id, name, lastTab(route.name)));
 }
@@ -228,12 +243,29 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
             <span class="tag" title="daemon version">devstack {{ daemon.version }}</span>
           </template>
           <span v-else-if="stack.entry?.last_seen" class="muted">last seen {{ ago(stack.entry.last_seen, now) }}</span>
+          <span
+            v-if="shifted"
+            class="tag"
+            title="Its ports, its containers' host ports and its links are moved by this on this machine (devstack up --shift); `devstack up --shift none` takes it back"
+            data-testid="stack-shift"
+            >{{ shifted }}</span
+          >
         </p>
       </div>
       <div v-if="changes" class="actions">
         <template v-if="!stack.running">
           <button type="button" class="btn btn-primary" :disabled="starting" title="Its daemon, and the lane main: its infrastructure and autostart services" data-testid="action-stack-start" @click="stack.startStack()">
             <span v-if="starting" class="spinner" /><Icon v-else name="play" :size="14" /> {{ starting ? 'Starting…' : 'Start stack' }}
+          </button>
+          <button
+            v-if="collides && !starting"
+            type="button"
+            class="btn"
+            :title="`${collisionText} Start it on its ports moved by the lowest free multiple of 1000 (devstack up --shift auto); the shift sticks on this machine`"
+            data-testid="action-stack-start-shifted"
+            @click="stack.startStack('auto')"
+          >
+            <Icon name="play" :size="14" /> Start with shift
           </button>
         </template>
         <template v-else>

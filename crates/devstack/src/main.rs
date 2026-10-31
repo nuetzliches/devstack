@@ -16,6 +16,7 @@ mod integration;
 mod mcp;
 mod poolcmd;
 mod selfcmd;
+mod shift;
 mod tray;
 mod upstream;
 use devstack_skills as skills;
@@ -72,6 +73,12 @@ enum Cmd {
         /// throws its data away) and what its command asks.
         #[arg(long)]
         yes: bool,
+        /// In the main working tree: run the stack on this machine with its
+        /// ports moved by a shift (ADR-0082): `auto` (the lowest free
+        /// multiple of 1000), a multiple of 1000, or `none` (the stack
+        /// file's ports). It sticks to the stack on this machine.
+        #[arg(long, value_name = "auto|N|none")]
+        shift: Option<String>,
     },
     /// Stop the services, remove the containers (volumes stay) and end the
     /// daemon. In the main working tree, lanes that still run keep the daemon,
@@ -986,6 +993,10 @@ mod tests {
         };
         assert!(workers && !force);
         assert_eq!(on.as_deref(), Some("pool"));
+        let Cmd::Up { shift, .. } = parse(&["up", "--shift", "auto"]).cmd else {
+            panic!("not up");
+        };
+        assert_eq!(shift.as_deref(), Some("auto"));
     }
 
     #[test]

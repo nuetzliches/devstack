@@ -259,9 +259,17 @@ pub enum NoticeLevel {
     Error,
 }
 
+fn is_zero(n: &u16) -> bool {
+    *n == 0
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StackView {
     pub name: String,
+    /// What the main tree's ports are moved by on this machine (ADR-0082);
+    /// 0: the stack file's ports.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub shift: u16,
     pub repo: PathBuf,
     /// Version of the daemon.
     pub version: String,

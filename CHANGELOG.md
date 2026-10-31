@@ -9,6 +9,23 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **Several stacks on one machine** (ADR-0082 points 3 to 7): a stack can
+  run on this machine with a port shift, `devstack up --shift auto` (the
+  lowest free multiple of 1000), `--shift <n>` or `--shift none`. Its
+  services, its containers' host ports, its announced ports, its `urls`
+  and its lanes move by it; its Compose project, volumes and data stay.
+  The shift is this machine's, in the stack's registry entry, never in
+  the stack file, and it sticks until `--shift none`. `up` starts nothing
+  when a running stack holds its ports, names that stack and offers the
+  shift; a stopped stack's ports only warn. Every daemon writes the ports
+  it claims (the main slot after the shift, each lane's range) into the
+  registry, and a lane's number avoids the other stacks' claims. The MCP
+  `up` tool takes `shift`; `POST /hub/stacks/{id}/up` takes `{shift}`; the
+  stack page shows "shifted +1000" and, for a stack that collides, a
+  *Start with shift* button.
+
 ## [0.33.0] - 2026-10-31
 
 A stack has a page of its own, above its lanes: its daemon, who serves the

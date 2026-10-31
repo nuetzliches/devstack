@@ -773,6 +773,12 @@ pub fn status_text(stack: &Value) -> String {
     if let Some(p) = stack["profile"].as_str() {
         let _ = writeln!(out, "profile: {p} (ADR-0041)\n");
     }
+    if let Some(n) = stack["shift"].as_u64().filter(|n| *n > 0) {
+        let _ = writeln!(
+            out,
+            "ports: shifted +{n} on this machine (ADR-0082; `devstack up --shift none` takes it back)\n"
+        );
+    }
     if stack["config_changed"].as_bool() == Some(true) {
         let _ = writeln!(
             out,
@@ -946,9 +952,11 @@ pub fn up(
     profile: Option<&str>,
     run: bool,
     yes: bool,
+    shift: Option<&str>,
 ) -> Result<()> {
     // Resolves whether this is a lane's worktree.
     let sd = state_dir(stack_file)?;
+    let shift = shift.map(crate::shift::parse).transpose()?;
     let wanted = profile_start(stack_file, profile, run)?;
     // In a worktree, no `--on`: where this machine starts lanes by default
     // (ADR-0025); `--on local` keeps it here. The main tree runs here.
@@ -988,6 +996,15 @@ pub fn up(
             "the profile `{}` starts the main working tree with fresh data: its containers' volumes go. Confirm with --yes, or run it in a lane",
             p.name
         );
+    }
+    // Several stacks on this machine (ADR-0082): the main tree's ports
+    // against the others' claims, at the shift it runs with.
+    for line in shift_before_up(stack_file, &sd, shift)? {
+        if line.starts_with("warning:") {
+            eprintln!("{line}");
+        } else {
+            println!("{line}");
+        }
     }
     let mut c = ensure_daemon_with(
         &daemon_file(stack_file),
@@ -1098,6 +1115,26 @@ no node of the pool can run this lane: name the Linux image it runs in there in 
         }
         UpOutcome::TimedOut(_) => unreachable!("no timeout given"),
     }
+}
+
+/// What `up` checks and sets of the main tree's port shift before its
+/// daemon starts (ADR-0082, [`crate::shift::before_up`]); in a worktree,
+/// whose lane follows the main tree's shift, `--shift` is refused.
+pub fn shift_before_up(
+    stack_file: &Path,
+    sd: &Path,
+    asked: Option<crate::shift::Asked>,
+) -> Result<Vec<String>> {
+    if worktree().is_some() {
+        if asked.is_some() {
+            bail!(
+                "--shift moves the main working tree's ports, and its lanes with them: run it in the main working tree"
+            );
+        }
+        return Ok(Vec::new());
+    }
+    let running = Client::probe(sd).ok().flatten().is_some();
+    crate::shift::before_up(stack_file, running, asked)
 }
 
 pub enum UpOutcome {

@@ -289,6 +289,7 @@ pub fn tools() -> Vec<Value> {
                 "profile": { "type": "string", "description": "A profile of the stack file (ADR-0041): how it runs for a purpose, e.g. an acceptance run. In the main tree only when the daemon starts; a profile with fresh data there needs `yes`" },
                 "run": { "type": "boolean", "description": "With `profile`: once ready, run the profile's command and return its result" },
                 "yes": { "type": "boolean", "description": "Confirm what the profile asks; ask the user first" },
+                "shift": { "type": ["string", "integer"], "description": "Main working tree only (ADR-0082): run the stack on this machine with its ports moved by a shift, which sticks to it here until `none`: `auto` (the lowest free multiple of 1000), a multiple of 1000, or `none` (the stack file's ports). Without it, `up` refuses to start when another running stack claims its ports and names that stack: ask the user before shifting (bookmarks and ports hard-coded outside devstack's placeholders do not move)" },
             }),
             &[],
             false,
@@ -592,6 +593,16 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                     notes.push('\n');
                 })
                 .map_err(|e| anyhow::anyhow!("{notes}{e:#}"))?;
+            }
+            // Several stacks on this machine (ADR-0082), as `devstack up`.
+            let shift = match &args["shift"] {
+                Value::String(t) if !t.trim().is_empty() => Some(crate::shift::parse(t)?),
+                Value::Number(n) => Some(crate::shift::parse(&n.to_string())?),
+                _ => None,
+            };
+            for line in client::shift_before_up(file, &sd, shift)? {
+                notes.push_str(&line);
+                notes.push('\n');
             }
             let mut c = client::ensure_daemon_with(
                 &client::daemon_file(file),

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { docsSeed, shopSeed } from './data';
-import { daemonPorts, hubPorts } from './ports';
+import { autoShift, daemonPorts, hubPorts, refusal } from './ports';
+import { runningHolders } from '@/lib/shift';
 import { MockStack } from './stack';
 
 describe('mock ports (ADR-0082)', () => {
@@ -22,5 +23,22 @@ describe('mock ports (ADR-0082)', () => {
     expect(h.overlaps).toHaveLength(1);
     expect(h.overlaps[0]).toMatchObject({ port: 4200, proto: 'tcp' });
     expect(h.overlaps[0].stacks.map((u) => u.name).sort()).toEqual(['docs', 'shop']);
+  });
+
+  it('starts a colliding stack moved by a shift (ADR-0082)', () => {
+    const other = new MockStack(docsSeed(now));
+    const h = hubPorts([shop, other], () => []);
+    const holders = runningHolders(other.entry.id, h.overlaps);
+    expect(holders).toEqual([{ name: 'shop', ports: [4200] }]);
+    expect(refusal(holders)).toContain('devstack up --shift auto');
+    const shift = autoShift(other, [shop, other]);
+    expect(shift).toBe(1000);
+    other.setShift(shift);
+    expect(other.entry.shift).toBe(1000);
+    expect(other.view.services.find((v) => v.name === 'site')?.port).toBe(5200);
+    expect(hubPorts([shop, other], () => []).overlaps).toHaveLength(0);
+    other.setShift(0);
+    expect(other.entry.shift).toBeUndefined();
+    expect(other.view.services.find((v) => v.name === 'site')?.port).toBe(4200);
   });
 });

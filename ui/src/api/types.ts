@@ -22,6 +22,8 @@ export type StackEntry = {
   last_seen: number | null;
   /** Why the last start from the dashboard failed, while the stack is down. Older hubs omit it. */
   start_error?: string;
+  /** What its main tree's ports are moved by on this machine (ADR-0082); 0: the stack file's ports. Older hubs omit it. */
+  shift?: number;
 };
 
 export type HubSession = {
@@ -452,6 +454,8 @@ export type StackView = {
   name: string;
   repo: string;
   version: string;
+  /** What the main tree's ports are moved by on this machine (ADR-0082); absent: none. */
+  shift?: number;
   services: ServiceView[];
   infra: InfraView[];
   groups: GroupView[];

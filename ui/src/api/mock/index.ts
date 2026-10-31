@@ -19,7 +19,8 @@ import { persist } from '@/lib/persist';
 import { crmSeed, docsSeed, failedReason, shopSeed, stamp } from './data';
 import { Abort, MockStack, sleep, type Listener } from './stack';
 import { MockPool } from './pool';
-import { daemonPorts, hubPorts, type MockLane } from './ports';
+import { autoShift, daemonPorts, hubPorts, refusal, type MockLane } from './ports';
+import { runningHolders } from '@/lib/shift';
 
 type Route = { stop(): void } | null;
 
@@ -846,7 +847,24 @@ export class MockTransport implements Transport {
       return json(200, { registered, files: registered ? [`${stack.entry.repo}\\.mcp.json`] : [] });
     }
     if (rest === '/up' && method === 'POST') {
-      if (!stack.running) void stack.goUp();
+      if (stack.running) return empty(202);
+      // `devstack up --shift` (ADR-0082): set it, then start.
+      const asked = body?.shift;
+      if (asked !== undefined && asked !== null) {
+        stack.setShift(asked === 'auto' ? autoShift(stack, hub.stacks) : asked === 'none' ? 0 : Number(asked));
+      } else {
+        // Nobody moves silently: a running stack on its ports refuses the start.
+        const holders = runningHolders(stack.entry.id, hubPorts(hub.stacks, portLanes).overlaps);
+        if (holders.length) {
+          setTimeout(() => {
+            stack.entry = { ...stack.entry, start_error: refusal(holders) };
+            hub.publish();
+          }, 600);
+          return empty(202);
+        }
+      }
+      stack.entry = { ...stack.entry, start_error: undefined };
+      void stack.goUp();
       return empty(202);
     }
     // A stopped stack's worktrees, from the hub (ADR-0078): one for each.

@@ -91,6 +91,36 @@ export function overlapsOf(stacks: StackPorts[]): PortOverlap[] {
   return [...by.values()].filter((o) => new Set(o.stacks.map((u) => u.id)).size > 1).sort((a, b) => a.port - b.port);
 }
 
+/** Every port the stack's main tree and its first three lanes would use, moved by `by`. */
+function footprint(s: MockStack, by: number): number[] {
+  const base = declared(s).map((e) => e.port);
+  return [0, 100, 200, 300].flatMap((lane) => base.map((p) => p + by + lane));
+}
+
+/** `--shift auto` (ADR-0082): the lowest multiple of 1000 above its current shift's ports free of every other stack's. */
+export function autoShift(s: MockStack, stacks: MockStack[]): number {
+  const taken = new Set(
+    stacks.filter((o) => o !== s).flatMap((o) => (o.running ? daemonPorts(o, []) : declared(o)).map((e) => e.port)),
+  );
+  const now = s.entry.shift ?? 0;
+  for (let shift = 1000; shift <= 60000; shift += 1000) {
+    if (footprint(s, shift - now).every((p) => p < 65536 && !taken.has(p))) return shift;
+  }
+  return 1000;
+}
+
+/** What `devstack up` says when a running stack holds the ports. */
+export function refusal(holders: { name: string; ports: number[] }[]): string {
+  const who = holders.map((h) => `the stack \`${h.name}\` runs on ${h.ports.join(', ')}`).join('; ');
+  return [
+    `this stack would start on its ports, and ${who}. Nothing started; whoever was first keeps its ports.`,
+    'Start this stack moved by a port shift on this machine (its services, containers and links move; its data stays):',
+    '  devstack up --shift auto',
+    '  devstack up --shift <n>    (a multiple of 1000)',
+    'The shift sticks to this stack on this machine until `devstack up --shift none`.',
+  ].join('\n');
+}
+
 /** `GET /hub/ports`. */
 export function hubPorts(stacks: MockStack[], lanesOf: (s: MockStack) => MockLane[]): HubPorts {
   const list: StackPorts[] = stacks.map((s) => ({

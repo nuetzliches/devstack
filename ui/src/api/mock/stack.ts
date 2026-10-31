@@ -124,6 +124,27 @@ export class MockStack {
     this.onEntryChange();
   }
 
+  /**
+   * Its ports moved by `shift` on this machine (ADR-0082): its services'
+   * ports and links and its containers' host ports, from where they are now.
+   */
+  setShift(shift: number): void {
+    const by = shift - (this.entry.shift ?? 0);
+    if (!by) return;
+    for (const s of this.view.services) {
+      if (s.port === null) continue;
+      s.port += by;
+      if (s.url) s.url = s.url.replace(/:(\d+)$/, `:${s.port}`);
+    }
+    for (const g of this.view.infra) {
+      for (const c of g.containers) {
+        c.ports = c.ports.map((p) => p.replace(/:(\d+)$/, (_, n: string) => `:${Number(n) + by}`));
+      }
+    }
+    this.entry = { ...this.entry, shift: shift || undefined };
+    this.view.shift = shift || undefined;
+  }
+
   /** `main: false`: the daemon only, as a lane's start brings it up (ADR-0078). */
   async goUp(opts: { main?: boolean } = {}): Promise<void> {
     const gen = this.generation;

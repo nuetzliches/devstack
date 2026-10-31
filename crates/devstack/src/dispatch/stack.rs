@@ -15,6 +15,7 @@ pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
             profile,
             run,
             yes,
+            shift,
         } => client::up(
             file,
             workers,
@@ -23,6 +24,7 @@ pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
             profile.as_deref(),
             run,
             yes,
+            shift.as_deref(),
         ),
         Cmd::Down {
             keep_infra, all, ..

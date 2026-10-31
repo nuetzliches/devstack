@@ -41,7 +41,9 @@ fn free_port() -> u16 {
 
 struct Stack {
     dir: tempfile::TempDir,
-    token_home: tempfile::TempDir,
+    /// Shared by the stacks of one test that run side by side
+    /// ([`Stack::beside`]): one user's registry of stacks.
+    token_home: std::sync::Arc<tempfile::TempDir>,
     port: u16,
     /// The `kind = "static"` site.
     site_port: u16,
@@ -50,6 +52,19 @@ struct Stack {
 
 impl Stack {
     fn new(with_compose: bool) -> Self {
+        Self::new_in(
+            with_compose,
+            std::sync::Arc::new(tempfile::tempdir().unwrap()),
+        )
+    }
+
+    /// Another stack of the same user (token, registry of stacks) beside
+    /// this one, in a folder of its own.
+    fn beside(&self) -> Self {
+        Self::new_in(false, self.token_home.clone())
+    }
+
+    fn new_in(with_compose: bool, token_home: std::sync::Arc<tempfile::TempDir>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/fixture-stack");
         let api = dir.path().join("src/Api");
@@ -157,7 +172,7 @@ members = [\"api\", \"command.ping\"]
         assert!(ok, "git init");
         Self {
             dir,
-            token_home: tempfile::tempdir().unwrap(),
+            token_home,
             port,
             site_port,
             project,
@@ -1498,6 +1513,118 @@ command = "check"
     assert!(!other.status.success(), "the daemon runs with `acc`");
     assert!(String::from_utf8_lossy(&other.stderr).contains("down"));
     s.ok(&["down", "--all"]);
+}
+
+/// Several stacks on one machine (ADR-0082): two copies of one stack, in
+/// two folders, on the same ports. The second's `up` starts nothing while
+/// the first runs and names it; `--shift auto` runs it on its ports + 1000,
+/// a restart keeps that, and `--shift none` takes it back (the first one
+/// stopped by then: its claim only warns). Needs no SDK.
+#[test]
+fn a_second_stack_on_the_same_ports_runs_shifted() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let first = Stack::new(false);
+    let second = first.beside();
+    let port = first.site_port;
+    let stack_file = |name: &str| {
+        format!(
+            r#"version = 1
+[stack]
+name = "{name}"
+[services.site]
+kind = "static"
+build = "git --version"
+output = "src/Site"
+watch = ["src/Site/**"]
+port = {port}
+"#
+        )
+    };
+    std::fs::write(first.file(), stack_file("first")).unwrap();
+    std::fs::write(second.file(), stack_file("second")).unwrap();
+    std::fs::write(
+        second.dir.path().join("src/Site/index.html"),
+        "<p>second site</p>",
+    )
+    .unwrap();
+    let text = |o: &Output| {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        )
+    };
+    let daemon_runs = |s: &Stack| s.dir.path().join(".devstack/daemon.json").is_file();
+
+    first.ok(&["up"]);
+    assert!(get_on(port, "/").unwrap().contains("static site"));
+
+    // Nobody moves silently: the second starts nothing and names the first.
+    let refused = second.cli(&["up"], None);
+    let said = text(&refused);
+    assert!(!refused.status.success(), "{said}");
+    assert!(
+        said.contains("`first`") && said.contains(&port.to_string()),
+        "{said}"
+    );
+    assert!(
+        said.contains("--shift auto") && said.contains("--shift <n>"),
+        "{said}"
+    );
+    assert!(!daemon_runs(&second), "no daemon started: {said}");
+    assert!(
+        get_on(port, "/").unwrap().contains("static site"),
+        "the first keeps its port"
+    );
+
+    // `--shift auto`: the lowest free multiple of 1000.
+    let up = second.ok(&["up", "--shift", "auto"]);
+    assert!(up.contains("shifted by 1000"), "{up}");
+    assert_eq!(second.stack_view()["shift"], 1000);
+    assert_eq!(second.service_view("site")["port"], port + 1000);
+    assert!(
+        get_on(port + 1000, "/").unwrap().contains("second site"),
+        "the second answers on its port + 1000"
+    );
+    assert!(get_on(port, "/").unwrap().contains("static site"));
+
+    // It sticks: a restart without `--shift` keeps it.
+    second.ok(&["down"]);
+    assert!(wait_for(|| !daemon_runs(&second), Duration::from_secs(30)));
+    second.ok(&["up"]);
+    assert_eq!(second.stack_view()["shift"], 1000);
+    assert!(get_on(port + 1000, "/").unwrap().contains("second site"));
+    // Another shift needs the daemon stopped first.
+    let busy = second.cli(&["up", "--shift", "none"], None);
+    assert!(
+        !busy.status.success() && text(&busy).contains("down"),
+        "{}",
+        text(&busy)
+    );
+
+    // `--shift none` takes it back; the first, stopped now, only warns.
+    second.ok(&["down"]);
+    first.ok(&["down"]);
+    assert!(wait_for(
+        || !daemon_runs(&first) && !daemon_runs(&second),
+        Duration::from_secs(30)
+    ));
+    let back = second.ok(&["up", "--shift", "none"]);
+    assert!(
+        back.contains("warning: the stopped stack `first`"),
+        "{back}"
+    );
+    assert!(second.stack_view().get("shift").is_none_or(|s| s == 0));
+    assert_eq!(second.service_view("site")["port"], port);
+    assert!(get_on(port, "/").unwrap().contains("second site"));
+    assert!(
+        get_on(port + 1000, "/").is_none(),
+        "nothing on the shifted port"
+    );
+    second.ok(&["down"]);
 }
 
 /// A long-running service that exits by itself, with any code, is started
@@ -3333,4 +3460,167 @@ skip = ["compose.heavy", "compose.app.scanner"]
         "{:?}",
         running(&app)
     );
+}
+
+/// ADR-0082: a stack shifted on this machine moves its containers' host
+/// ports by the shift, an announced port inside the container too, and
+/// keeps its Compose project and container names; `{compose.…port}` and
+/// `DEVSTACK_PORT_*` follow. `--shift none` takes it back. Docker only.
+#[test]
+#[ignore = "needs Docker: DEVSTACK_INTEGRATION_COMPOSE=1, --include-ignored"]
+fn a_shifted_stacks_containers_move_with_it() {
+    if !enabled("DEVSTACK_INTEGRATION_COMPOSE") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION_COMPOSE=1 (needs Docker)");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let p = free_port();
+    let q = free_port();
+    let project = format!("devstack-it-shift-{}-{p}", std::process::id());
+    let name = format!("{project}-media");
+    let var = format!("DEVSTACK_PORT_MEDIA_{p}");
+    // One announced port (1:1, the server says its number) and one plain
+    // published port, on a fixed container name.
+    std::fs::write(
+        dir.path().join("compose.yml"),
+        format!(
+            r#"services:
+  media:
+    image: busybox:1.36
+    container_name: {name}
+    environment:
+      PORT: ${{{var}:-{p}}}
+    command: ["sh", "-c", "mkdir -p /www && echo announces-$$PORT > /www/index.html && httpd -p 80 -h /www && exec httpd -f -p $$PORT -h /www"]
+    ports: ["127.0.0.1:{p}:{p}", "127.0.0.1:{q}:80"]
+"#
+        ),
+    )
+    .unwrap();
+    let echo = if cfg!(windows) {
+        format!(
+            "echo port={{compose.app.media.{p}.port}} web={{compose.app.media.80.port}} var=%{var}%"
+        )
+    } else {
+        format!(
+            "echo port={{compose.app.media.{p}.port}} web={{compose.app.media.80.port}} var=${var}"
+        )
+    };
+    std::fs::write(
+        dir.path().join("devstack.toml"),
+        format!(
+            r#"version = 1
+[stack]
+name = "shifted"
+[compose.app]
+project = "{project}"
+files = ["compose.yml"]
+services = ["media"]
+announced_ports = ["media:{p}"]
+[commands.port]
+description = "the ports"
+steps = [{{ exec = "{echo}" }}]
+"#
+        ),
+    )
+    .unwrap();
+    let file = dir.path().join("devstack.toml");
+    let cli = |args: &[&str]| {
+        let out = Command::new(BIN)
+            .args(args)
+            .arg("-f")
+            .arg(&file)
+            .env("LOCALAPPDATA", home.path())
+            .env("XDG_STATE_HOME", home.path())
+            .env("DEVSTACK_NO_HUB", "1")
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.success(), text)
+    };
+    let says = |port: u16| -> String {
+        use std::io::{Read, Write};
+        let Ok(mut s) = std::net::TcpStream::connect(("127.0.0.1", port)) else {
+            return String::new();
+        };
+        let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+        let _ = s.write_all(b"GET / HTTP/1.0\r\n\r\n");
+        let mut body = String::new();
+        let _ = s.read_to_string(&mut body);
+        body
+    };
+    struct Cleanup<'a>(&'a dyn Fn());
+    impl Drop for Cleanup<'_> {
+        fn drop(&mut self) {
+            (self.0)();
+        }
+    }
+    let clean = || {
+        let _ = cli(&["down", "--all"]);
+        let _ = Command::new("docker")
+            .args(["compose", "-p", &project, "down", "--volumes"])
+            .output();
+    };
+    let _cleanup = Cleanup(&clean);
+
+    let (ok, up) = cli(&["up", "--shift", "1000"]);
+    assert!(ok, "{up}");
+    assert!(up.contains("shifted by 1000"), "{up}");
+    let (sp, sq) = (p + 1000, q + 1000);
+    let moved = format!("announces-{sp}");
+    assert!(
+        wait_for(|| says(sp).contains(&moved), Duration::from_secs(30)),
+        "the announced port moves inside the container: {:?}\n{up}",
+        says(sp)
+    );
+    assert!(
+        says(sq).contains(&moved),
+        "the plain port moves: {:?}",
+        says(sq)
+    );
+    assert!(
+        says(p).is_empty() && says(q).is_empty(),
+        "nothing on the files' ports"
+    );
+    // Its project and container name stay the main tree's.
+    let ps = compose_ps(&project);
+    assert!(
+        ps.iter()
+            .any(|c| c.0 == "media" && c.1 == name && c.2.contains(&sp) && c.2.contains(&sq)),
+        "{ps:?}"
+    );
+    let shown = format!("{p}->127.0.0.1:{sp}");
+    assert!(
+        wait_for(
+            || cli(&["status"]).1.contains(&shown),
+            Duration::from_secs(30)
+        ),
+        "{}",
+        cli(&["status"]).1
+    );
+    assert!(cli(&["status"]).1.contains("shifted +1000"));
+    let (_, run) = cli(&["run", "port"]);
+    assert!(
+        run.lines()
+            .any(|l| l.trim_end() == format!("port={sp} web={sq} var={sp}")),
+        "{run}"
+    );
+
+    // Back on the files' ports.
+    let (ok, down) = cli(&["down"]);
+    assert!(ok, "{down}");
+    let (ok, up) = cli(&["up", "--shift", "none"]);
+    assert!(ok, "{up}");
+    let back = format!("announces-{p}");
+    assert!(
+        wait_for(|| says(p).contains(&back), Duration::from_secs(30)),
+        "{:?}\n{up}",
+        says(p)
+    );
+    assert!(says(q).contains(&back));
+    assert!(says(sp).is_empty(), "nothing on the shifted port");
 }

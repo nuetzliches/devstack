@@ -118,6 +118,9 @@ pub struct StackEntry {
     /// up`'s output), while the stack is not running (#11).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_error: Option<String>,
+    /// What its main tree's ports are moved by on this machine (ADR-0082);
+    /// 0: the stack file's ports.
+    pub shift: u16,
 }
 
 /// Start failures by stack id, from `stack_up` to `scan`.
@@ -214,6 +217,7 @@ fn scan(last_seen: &mut HashMap<String, u128>, errors: &StartErrors) -> Vec<Stac
                     carries_lanes: i.carries_lanes,
                 }),
                 last_seen: last_seen.get(&e.id).copied(),
+                shift: e.shift,
                 id: e.id,
                 name: e.name,
                 file: e.file,
@@ -1554,6 +1558,7 @@ fn entry(s: &AppState, id: &str) -> Option<StackEntry> {
                     daemon: None,
                     last_seen: None,
                     start_error: None,
+                    shift: e.shift,
                 })
         })
 }
@@ -2185,6 +2190,7 @@ fn register_folder(
         name: stack.stack.name.clone(),
         file: file.to_path_buf(),
         repo: repo.to_path_buf(),
+        ..registry::Entry::default()
     };
     registry::register(&entry).map_err(|e| e.to_string())?;
     diag::info(
@@ -2330,9 +2336,48 @@ async fn stack_scan(Json(q): Json<ScanQuery>) -> Response {
     }
 }
 
-async fn stack_up(State(s): State<AppState>, Path(id): Path<String>) -> Response {
+/// `POST /hub/stacks/{id}/up`, optionally with `{"shift": "auto" | N |
+/// "none"}`: `devstack up --shift` (ADR-0082), which sets the stack's shift
+/// on this machine before it starts.
+#[derive(Deserialize, Default)]
+struct UpBody {
+    #[serde(default)]
+    shift: Option<serde_json::Value>,
+}
+
+/// The `--shift` value of an [`UpBody`]: `auto`, `none` or a number.
+fn shift_arg(body: &[u8]) -> Result<Option<String>, String> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(None);
+    }
+    let b: UpBody = serde_json::from_slice(body).map_err(|e| e.to_string())?;
+    match b.shift {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::Number(n)) => n
+            .as_u64()
+            .filter(|n| *n <= u64::from(u16::MAX))
+            .map(|n| Some(n.to_string()))
+            .ok_or_else(|| format!("shift {n}: a multiple of 1000")),
+        Some(serde_json::Value::String(t))
+            if t == "auto" || t == "none" || t.parse::<u16>().is_ok() =>
+        {
+            Ok(Some(t))
+        }
+        Some(v) => Err(format!("shift {v}: `auto`, `none` or a multiple of 1000")),
+    }
+}
+
+async fn stack_up(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    body: axum::body::Bytes,
+) -> Response {
     let Some(e) = entry(&s, &id) else {
         return err(StatusCode::NOT_FOUND, format!("no stack {id}"));
+    };
+    let shift = match shift_arg(&body) {
+        Ok(v) => v,
+        Err(m) => return err(StatusCode::BAD_REQUEST, m),
     };
     let Ok(exe) = devstack_exe() else {
         return err(StatusCode::INTERNAL_SERVER_ERROR, "cannot find devstack");
@@ -2341,7 +2386,7 @@ async fn stack_up(State(s): State<AppState>, Path(id): Path<String>) -> Response
     let stopping = s.phases.lock().unwrap().get(&id) == Some(&Phase::Stopping);
     if !stopping {
         s.phases.lock().unwrap().insert(id.clone(), Phase::Starting);
-        return match start_up(&s, &id, &exe, &e) {
+        return match start_up(&s, &id, &exe, &e, shift.as_deref()) {
             Ok(()) => StatusCode::ACCEPTED.into_response(),
             Err(msg) => {
                 end_phase(&s.phases, &id, Phase::Starting);
@@ -2361,7 +2406,7 @@ async fn stack_up(State(s): State<AppState>, Path(id): Path<String>) -> Response
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         s.phases.lock().unwrap().insert(id.clone(), Phase::Starting);
-        if let Err(msg) = start_up(&s, &id, &exe, &e) {
+        if let Err(msg) = start_up(&s, &id, &exe, &e, shift.as_deref()) {
             end_phase(&s.phases, &id, Phase::Starting);
             s.start_errors.lock().unwrap().insert(id, msg);
         }
@@ -2381,9 +2426,15 @@ fn end_phase(phases: &Phases, id: &str, phase: Phase) {
     }
 }
 
-/// Run `devstack up` for stack `e` in the background; the stack is
-/// `Starting` until it ends.
-fn start_up(s: &AppState, id: &str, exe: &std::path::Path, e: &StackEntry) -> Result<(), String> {
+/// Run `devstack up` for stack `e` in the background, with `--shift` when
+/// one is asked (ADR-0082); the stack is `Starting` until it ends.
+fn start_up(
+    s: &AppState,
+    id: &str,
+    exe: &std::path::Path,
+    e: &StackEntry,
+    shift: Option<&str>,
+) -> Result<(), String> {
     // What `up` says goes to a file: when it fails before the daemon runs
     // (a stack file that needs a newer devstack, a port taken), its last
     // lines are what the dashboard shows instead of "Starting…" (#11).
@@ -2392,10 +2443,11 @@ fn start_up(s: &AppState, id: &str, exe: &std::path::Path, e: &StackEntry) -> Re
         .and_then(|f| Ok((f.try_clone()?, f)))
         .map_err(|e| e.to_string())?;
     let mut cmd = std::process::Command::new(exe);
-    cmd.arg("up")
-        .arg("-f")
-        .arg(&e.file)
-        .current_dir(&e.repo)
+    cmd.arg("up").arg("-f").arg(&e.file);
+    if let Some(shift) = shift {
+        cmd.arg("--shift").arg(shift);
+    }
+    cmd.current_dir(&e.repo)
         .env("NO_COLOR", "1")
         .stdin(std::process::Stdio::null())
         .stdout(out)
@@ -3911,5 +3963,26 @@ mod hung_hub_tests {
         // Gone, or a hub of another port.
         assert!(!is_hung(&info, 4250, at(61), false));
         assert!(!is_hung(&info, 4251, at(61), true));
+    }
+}
+
+#[cfg(test)]
+mod shift_tests {
+    use super::shift_arg;
+
+    #[test]
+    fn a_start_takes_a_shift_as_auto_none_or_a_number() {
+        assert_eq!(shift_arg(b""), Ok(None));
+        assert_eq!(shift_arg(b"{}"), Ok(None));
+        assert_eq!(shift_arg(br#"{"shift":null}"#), Ok(None));
+        assert_eq!(shift_arg(br#"{"shift":"auto"}"#), Ok(Some("auto".into())));
+        assert_eq!(shift_arg(br#"{"shift":"none"}"#), Ok(Some("none".into())));
+        assert_eq!(shift_arg(br#"{"shift":2000}"#), Ok(Some("2000".into())));
+        assert_eq!(shift_arg(br#"{"shift":"3000"}"#), Ok(Some("3000".into())));
+        // Nothing that could pass as another argument of `devstack up`.
+        assert!(shift_arg(br#"{"shift":"--yes"}"#).is_err());
+        assert!(shift_arg(br#"{"shift":-1}"#).is_err());
+        assert!(shift_arg(br#"{"shift":70000}"#).is_err());
+        assert!(shift_arg(b"nope").is_err());
     }
 }
