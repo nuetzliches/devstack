@@ -92,6 +92,46 @@ pub fn pid_alive(pid: u32) -> bool {
     backend::pid_alive(pid)
 }
 
+/// Write a minidump of this process to `path`: its threads' stacks and
+/// what they point at, for reading a hang afterwards with the build's PDB
+/// (#398). Windows only; elsewhere `Unsupported`.
+pub fn write_dump(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::Diagnostics::Debug::{
+            MiniDumpWithIndirectlyReferencedMemory, MiniDumpWithThreadInfo, MiniDumpWriteDump,
+        };
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentProcessId};
+        let file = std::fs::File::create(path)?;
+        // SAFETY: a pseudo handle to this process and a file handle we own
+        // for the duration of the call; no optional parameters.
+        let ok = unsafe {
+            MiniDumpWriteDump(
+                GetCurrentProcess(),
+                GetCurrentProcessId(),
+                file.as_raw_handle(),
+                MiniDumpWithThreadInfo | MiniDumpWithIndirectlyReferencedMemory,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "a minidump is written on Windows only",
+        ))
+    }
+}
+
 /// End the process `pid`, one devstack did not start (a daemon or a hub
 /// that does not answer): Windows terminates it, which closes its job
 /// objects and with them every process tree it owns (ADR-0009); elsewhere
