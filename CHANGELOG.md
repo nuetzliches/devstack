@@ -25,6 +25,13 @@ and listed with their assets on the
   `up` tool takes `shift`; `POST /hub/stacks/{id}/up` takes `{shift}`; the
   stack page shows "shifted +1000" and, for a stack that collides, a
   *Start with shift* button.
+- **The hub watches itself** (#398): a thread outside its async runtime
+  asks the hub's own port every 30 s. After two minutes without an answer
+  the hub writes a dump of itself next to its log (`hub-stuck-<ms>.dmp`,
+  Windows; the newest three are kept), logs `hub_stuck`, starts the next
+  hub and exits, so the dashboard comes back by itself. The release has
+  the Windows build's symbols as an asset
+  (`devstack-x86_64-pc-windows-msvc-pdb.zip`) to read such a dump.
 
 ## [0.33.0] - 2026-10-31
 

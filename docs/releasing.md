@@ -84,7 +84,9 @@ The release workflow checks that the tag matches `Cargo.toml` and
 
 - builds Windows (x86_64), Linux (x86_64, arm64; static) and macOS (Apple
   Silicon, Intel);
-- publishes the GitHub release: the five archives, `install.sh`,
+- publishes the GitHub release: the five archives, the Windows build's
+  symbols (`devstack-x86_64-pc-windows-msvc-pdb.zip`, for reading a hung
+  hub's dump, #398), `install.sh`,
   `install.ps1` and `SHA256SUMS`, each with a build provenance
   attestation, and notes generated from the merged pull requests;
 - submits the Windows build to winget (no second pull request while the

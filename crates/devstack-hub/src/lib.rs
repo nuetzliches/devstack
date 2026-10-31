@@ -54,6 +54,7 @@ mod stdio;
 mod summary;
 pub mod tray;
 pub mod upstreams;
+mod watchdog;
 mod worktrees;
 mod ws;
 
@@ -472,6 +473,7 @@ pub fn serve() -> Result<(), String> {
                     .await;
             });
         }
+        watchdog::start(port, dir.clone());
         let hub_json = dir.join("hub.json");
         diag::info(
             "hub_start",
