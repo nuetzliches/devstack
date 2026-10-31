@@ -280,6 +280,33 @@ fn lane_offset(number: u16, step: u16) -> Option<u16> {
     number.checked_mul(step)
 }
 
+/// The first lane number not in `numbers` whose range (`base` moved by
+/// number x `step`) meets none of `base`, the ranges of `numbers`, the
+/// `foreign` claims of other stacks (ADR-0082) and no port `in_use` says.
+fn free_number_in(
+    base: &[u16],
+    numbers: &[u16],
+    step: u16,
+    foreign: &BTreeSet<u16>,
+    in_use: impl Fn(u16) -> bool,
+) -> Option<u16> {
+    let mut taken: BTreeSet<u16> = base.iter().copied().collect();
+    taken.extend(foreign);
+    for n in numbers {
+        if let Some(off) = lane_offset(*n, step) {
+            taken.extend(base.iter().filter_map(|p| p.checked_add(off)));
+        }
+    }
+    (1..200u16).filter(|n| !numbers.contains(n)).find(|n| {
+        lane_offset(*n, step).is_some_and(|off| {
+            base.iter().all(|p| {
+                p.checked_add(off)
+                    .is_some_and(|q| !taken.contains(&q) && !in_use(q))
+            })
+        })
+    })
+}
+
 /// Whom each lane is shared with, from `.devstack/lane-shares.json`. The
 /// separate viewers devstack 0.11 kept (`lane-views.json`, ADR-0040 before
 /// its amendment of 2026-10-20) could use the lane as well: they are added
@@ -1463,29 +1490,101 @@ impl Lanes {
     }
 
     /// The first lane number whose port range collides with nothing: the main
-    /// lane, another lane and, with `probe`, a port in use on this machine.
+    /// lane, another lane, what the other stacks registered on this machine
+    /// claim (ADR-0082 point 5) and, with `probe`, a port in use on this
+    /// machine.
     fn free_number(&self, known: &BTreeMap<String, Known>, probe: bool) -> Option<u16> {
-        let step = self.main.stack.lanes.port_step;
-        // A lane's containers publish the main tree's ports moved by the same
-        // step (ADR-0030): those must be free as well.
+        let numbers: Vec<u16> = known.values().map(|k| k.entry.number).collect();
+        let foreign = crate::registry::foreign_claims(&self.own_id());
+        free_number_in(
+            &self.lane_base(),
+            &numbers,
+            self.main.stack.lanes.port_step,
+            &foreign,
+            |q| probe && crate::supervisor::port_in_use(q),
+        )
+    }
+
+    /// This stack's id in the registry of stacks.
+    fn own_id(&self) -> String {
+        crate::registry::id_for(self.main.stack_file())
+    }
+
+    /// The main tree's ports a lane moves by its offset: its services'
+    /// fixed ports and its containers' host ports, which a lane's
+    /// containers publish moved by the same step (ADR-0030).
+    fn lane_base(&self) -> Vec<u16> {
         let mut base = ports(&self.main.stack);
         base.extend(self.main.infra_host_ports());
-        let used: BTreeSet<u16> = known.values().map(|k| k.entry.number).collect();
-        let mut taken: BTreeSet<u16> = base.iter().copied().collect();
-        for k in known.values() {
-            if let Some(off) = lane_offset(k.entry.number, step) {
-                taken.extend(base.iter().filter_map(|p| p.checked_add(off)));
-            }
+        base
+    }
+
+    /// What a lane numbered `number` moves its stack file's ports by: its
+    /// offset and the main tree's shift on this machine (ADR-0082), as its
+    /// own stack file, its containers and a node running it start from the
+    /// files' ports. The main tree's ports are shifted already.
+    fn files_offset(&self, number: u16) -> Option<u16> {
+        lane_offset(number, self.main.stack.lanes.port_step)?.checked_add(self.main.shift())
+    }
+
+    /// What the stack claims on this machine (ADR-0082 point 5): the main
+    /// slot's ports after the shift (its services', its containers' host
+    /// ports, its announced ports and the ports its `urls` name), and the
+    /// range of each lane it numbered, started or not.
+    pub fn claims(&self) -> crate::registry::Claims {
+        let mut main: BTreeSet<u16> = self.lane_base().into_iter().collect();
+        let shift = self.main.shift();
+        for g in self.main.stack.compose.values() {
+            main.extend(
+                g.announced()
+                    .iter()
+                    .filter_map(|a| a.port.checked_add(shift)),
+            );
+            // `urls` are moved already.
+            main.extend(g.urls.values().filter_map(|u| url_port(u).map(|(_, p)| p)));
         }
-        (1..200u16).filter(|n| !used.contains(n)).find(|n| {
-            lane_offset(*n, step).is_some_and(|off| {
-                base.iter().all(|p| {
-                    p.checked_add(off).is_some_and(|q| {
-                        !taken.contains(&q) && !(probe && crate::supervisor::port_in_use(q))
-                    })
-                })
+        let step = self.main.stack.lanes.port_step;
+        let lanes = self
+            .known
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(name, k)| {
+                let off = lane_offset(k.entry.number, step)?;
+                let range: BTreeSet<u16> = main.iter().filter_map(|p| p.checked_add(off)).collect();
+                Some((name.clone(), range.into_iter().collect()))
             })
-        })
+            .collect();
+        crate::registry::Claims {
+            main: main.into_iter().collect(),
+            lanes,
+        }
+    }
+
+    /// Write what the stack claims into its registry entry `id` now, and
+    /// again whenever it changes (a lane numbered, a container published)
+    /// while the daemon runs. Kept when the daemon stops: whoever was first
+    /// keeps its ports. Not while it stops, when its containers go.
+    pub fn follow_claims(self: &Arc<Self>, id: String) {
+        let _ = crate::registry::set_claims(&id, &self.claims());
+        let weak = Arc::downgrade(self);
+        let _ = std::thread::Builder::new()
+            .name("claims".into())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    let Some(me) = weak.upgrade() else { return };
+                    if me.closing.load(std::sync::atomic::Ordering::SeqCst) {
+                        return;
+                    }
+                    if let Err(e) = crate::registry::set_claims(&id, &me.claims()) {
+                        crate::diag::warn(
+                            "claims_not_written",
+                            serde_json::json!({ "error": e.to_string() }),
+                        );
+                    }
+                }
+            });
     }
 
     /// Every port the stack holds on this machine (ADR-0082): the main
@@ -1948,8 +2047,10 @@ impl Lanes {
             })?,
             None => stack,
         };
-        // The main stack's step: the free ranges were chosen with it.
-        let offset = lane_offset(entry.number, self.main.stack.lanes.port_step)
+        // The main stack's step: the free ranges were chosen with it. Moved
+        // from the files' ports: the main tree's shift too (ADR-0082).
+        let offset = self
+            .files_offset(entry.number)
             .ok_or_else(|| format!("lane number {} is beyond the port range", entry.number))?;
         let stack = lane_stack(&stack, offset)?;
         let state = self.state_dir(&entry.name);
@@ -1968,6 +2069,7 @@ impl Lanes {
             // build server along that the main tree's build uses.
             Some(self.main.build_job()),
         )?;
+        sup.set_shift(self.main.shift());
         sup.refresh_infra();
         let usage = crate::usage::Sampler::start(sup.clone());
         let router = api::router(AppState {
@@ -3476,6 +3578,10 @@ impl Lanes {
         let worktree = devstack_proc::long_path(&entry.path);
         let offset = lane_offset(entry.number, self.main.stack.lanes.port_step)
             .ok_or_else(|| format!("lane `{}`: its ports are beyond 65535", entry.name))?;
+        // The node starts from the files' ports: the shift too (ADR-0082).
+        let node_offset = self
+            .files_offset(entry.number)
+            .ok_or_else(|| format!("lane `{}`: its ports are beyond 65535", entry.name))?;
         f(crate::remote::RemoteSpec {
             name: &entry.name,
             repo: &self.main.stack.stack.name,
@@ -3495,7 +3601,7 @@ impl Lanes {
                 .filter_map(|p| p.checked_add(offset))
                 .map(|p| (p, p))
                 .collect(),
-            port_offset: offset,
+            port_offset: node_offset,
             forward,
             step,
             profile: profile.as_deref(),
@@ -3920,6 +4026,29 @@ port = 8080
         assert_eq!(w[1].branch.as_deref(), Some("feature/a"));
         assert_eq!(w[2].branch, None);
         assert!(!w[2].prunable && w[3].prunable, "{w:?}");
+    }
+
+    #[test]
+    fn a_lane_number_avoids_what_other_stacks_claim() {
+        let none = BTreeSet::new();
+        let free = |_| false;
+        assert_eq!(
+            free_number_in(&[5000, 5432], &[], 100, &none, free),
+            Some(1)
+        );
+        // Lane 1 is taken; another stack claims lane 2's 5200 and 3's 5732.
+        let foreign = BTreeSet::from([5200, 5732]);
+        assert_eq!(
+            free_number_in(&[5000, 5432], &[1], 100, &foreign, free),
+            Some(4)
+        );
+        // And what the OS says is in use.
+        assert_eq!(
+            free_number_in(&[5000, 5432], &[1], 100, &foreign, |p| p == 5400),
+            Some(5)
+        );
+        // Nothing fits below 65536.
+        assert_eq!(free_number_in(&[65000], &[], 1000, &none, free), None);
     }
 
     #[test]

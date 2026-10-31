@@ -805,6 +805,48 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
   (ADR-0038); with `--older-than`, also entries of the store of `prepare`
   that no copy used for as long (ADR-0062).
 
+## Several stacks on one machine
+
+Stacks of different repositories often give the same ports (5000, 4200,
+5432). Nothing in the stack file is about that: a stack can run on one
+machine moved by a **port shift**, which is that machine's own
+([ADR-0082](adr/0082-the-ports-of-a-machine.md)).
+
+- **Claims.** Every daemon writes the ports it claims into its stack's
+  entry in the user's registry of stacks: the main slot's (its services'
+  ports, its containers' host ports, its announced ports and the ports its
+  `urls` name, after its shift) and the range of each lane it numbered.
+  They stay when the stack stops: whoever was first keeps its ports. A new
+  lane number avoids every other stack's claims too. A stack whose folder
+  or stack file is gone claims nothing.
+- **`devstack up` checks them** in the main working tree before the daemon
+  starts. When a running stack claims one of its ports, it starts nothing,
+  names that stack and its ports, and offers a shift; when only a stopped
+  stack does, it warns and starts. `devstack doctor` lists every port two
+  stacks share.
+- **`devstack up --shift auto`** runs the stack moved by the lowest
+  multiple of 1000 whose ports, and three lanes' above them, are free of
+  every claim and of what runs on this machine; `--shift <n>` (a multiple
+  of 1000) by that one; `--shift none` on the stack file's ports again.
+  The shift sticks to the stack on this machine until `--shift none`, and
+  `devstack status` and the stack's page show it (`shifted +1000`). A
+  daemon that runs keeps its shift: `devstack down` first. The dashboard's
+  *Start with shift* and the MCP `up` tool's `shift` do the same.
+- **What moves:** everything a lane's offset moves. Each service's `port`
+  (its proxy, a dev server's front, `{service.<name>.port}` and
+  `{service.<name>.url}`), every host port the Compose files publish (a
+  `main_ports` container's held port too), each announced port, inside the
+  container as well (its `DEVSTACK_PORT_*` variable follows), the ports on
+  this machine a group's `urls` name, and the lanes, whose offset is added
+  to the shifted ports.
+- **What stays:** the Compose project, container names, networks, volumes
+  and their data: a shifted stack is the same stack on other ports. The
+  stack file is not changed.
+- **What does not follow:** a port written outside devstack's placeholders,
+  in an app's own configuration file or a hard-coded URL, and bookmarks.
+  Use `{service.<name>.port}`, `{service.<name>.url}` and
+  `{compose.<group>.<service>.<port>.port}` where a port matters.
+
 ## `[commands.<name>]`: operations
 
 ```toml

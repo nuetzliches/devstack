@@ -174,6 +174,11 @@ pub struct Supervisor {
     /// What a lane's ports are moved by (0 in the main tree): its own
     /// services' and its own containers' (ADR-0030).
     port_offset: u16,
+    /// What the main tree's ports are moved by on this machine (ADR-0082),
+    /// from the stack's registry entry: the main tree's own in the main
+    /// tree, the main tree's in a lane (its `shared` containers have
+    /// them). Set once, before anything starts ([`Self::set_shift`]).
+    shift: std::sync::atomic::AtomicU16,
     /// `devstack up --workers` in a lane: its main instances run their
     /// background workers although the lane does not own the main slot; its
     /// coordinators are its own (ADR-0030).
@@ -513,6 +518,7 @@ impl Supervisor {
             preparing: Mutex::new(()),
             branch: Mutex::new(None),
             port_offset,
+            shift: std::sync::atomic::AtomicU16::new(0),
             lane_workers: std::sync::atomic::AtomicBool::new(false),
             force_build: Mutex::new(BTreeSet::new()),
             stack_file_hash: stack_file_hash(&stack_file),
@@ -565,6 +571,30 @@ impl Supervisor {
 
     pub fn stack_file(&self) -> &Path {
         &self.stack_file
+    }
+
+    /// The main tree's port shift on this machine (ADR-0082): its stack
+    /// was moved by it when the daemon read it.
+    pub fn shift(&self) -> u16 {
+        self.shift.load(Ordering::SeqCst)
+    }
+
+    /// Tell the tree the main tree's shift, before anything of it starts:
+    /// its Compose calls and overlays move by it (a lane's `shared`
+    /// containers, the main tree's own).
+    pub fn set_shift(&self, shift: u16) {
+        self.shift.store(shift, Ordering::SeqCst);
+    }
+
+    /// What this tree's Compose ports are moved by against its Compose
+    /// files: a lane's offset (the shift included), the shift in the main
+    /// tree.
+    pub(crate) fn files_offset(&self) -> u16 {
+        if self.lane.is_empty() {
+            self.shift()
+        } else {
+            self.port_offset
+        }
     }
 
     /// The lane this tree presents to the stack (ADR-0064 and its addendum
@@ -743,6 +773,7 @@ impl Supervisor {
             })
             .collect();
         StackView {
+            shift: self.shift(),
             profile: self.stack.profile.as_ref().map(|p| p.name.clone()),
             profiles,
             name: self.stack.stack.name.clone(),

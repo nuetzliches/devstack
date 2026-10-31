@@ -260,12 +260,27 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     // A lane on a node runs on the ports it has on its developer's machine
     // (`DEVSTACK_PORT_OFFSET`): links, `{service.x.port}` and the forwarded
     // ports there are the same (ADR-0029 point 4).
-    let stack = match std::env::var("DEVSTACK_PORT_OFFSET")
+    let node_offset = std::env::var("DEVSTACK_PORT_OFFSET")
         .ok()
         .and_then(|v| v.trim().parse::<u16>().ok())
-        .filter(|o| *o > 0)
-    {
-        Some(offset) => lanes::lane_stack(&stack, offset)?,
+        .filter(|o| *o > 0);
+    // The main tree on this machine runs moved by the shift its registry
+    // entry holds (`devstack up --shift`, ADR-0082), the same way.
+    let id = registry::id_for(&abs_file);
+    let shift = match node_offset {
+        None if !remote_lane() => registry::read(&id).map_or(0, |e| e.shift),
+        _ => 0,
+    };
+    let stack = match node_offset.or((shift > 0).then_some(shift)) {
+        Some(offset) => match lanes::lane_stack(&stack, offset) {
+            Ok(s) => s,
+            Err(e) => {
+                let e =
+                    format!("the shift {offset}: {e}; `devstack up --shift none` or another one");
+                diag::warn("daemon_start_failed", serde_json::json!({ "error": e }));
+                return Err(e);
+            }
+        },
         None => stack,
     };
     telemetry::set_repository(&stack.stack.name);
@@ -273,10 +288,11 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     let token = token::load_or_create().map_err(|e| format!("token: {e}"))?;
     // Known to the hub from now on (ADR-0021); a failure costs only the listing.
     let _ = registry::register(&registry::Entry {
-        id: registry::id_for(&abs_file),
+        id: id.clone(),
         name: stack.stack.name.clone(),
         file: abs_file.clone(),
         repo: repo.clone(),
+        ..registry::Entry::default()
     });
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let proc_opts = devstack_proc::Options {
@@ -292,6 +308,10 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
         proc_opts.clone(),
         rt.handle().clone(),
     )?;
+    sup.set_shift(shift);
+    if shift > 0 {
+        diag::info("stack_shifted", serde_json::json!({ "shift": shift }));
+    }
     sup.refresh_infra();
     // A lane on a node runs its background workers as its requester asked
     // (`--workers`, `DEVSTACK_LANE_WORKERS`), or as its profile says, as a
@@ -352,6 +372,11 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
             token.clone(),
             port,
         );
+        // What it claims on this machine (ADR-0082 point 5), now and
+        // whenever that changes.
+        if !remote_lane() {
+            lanes.follow_claims(id.clone());
+        }
         // What the pool's collector gets every minute, if this machine
         // agreed (ADR-0037): lanes and services running.
         {

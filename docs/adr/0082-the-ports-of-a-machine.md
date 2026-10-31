@@ -1,6 +1,6 @@
 # ADR-0082: The ports of a machine: every stack says what it holds, a stack can run shifted
 
-- **Status:** Accepted (card in the pull request); built in steps
+- **Status:** Accepted (card in the pull request); built
 - **Date:** 2026-10-30
 - **Deciders:** project owner
 - **Related:** [ADR-0010](0010-promotion-mechanism.md) (the proxy on a service's fixed port), [ADR-0021](0021-a-hub-serves-the-dashboard.md) (the registry of stacks), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (a lane's ports moved by its offset), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) and [ADR-0056](0056-a-lane-on-a-node-relays-its-udp-ports-through-a-tunnel-per-session.md) (a lane on a node, its ports forwarded here), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md) (a lane's containers on moved host ports), [ADR-0043](0043-a-dev-servers-fixed-port-is-devstacks.md) (a dev server's front), [ADR-0048](0048-a-containers-main-port-can-move-with-the-main-slot.md) (`main_ports`), [ADR-0057](0057-a-port-a-container-announces-moves-inside-it-too.md) (announced ports), [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md), [ADR-0080](0080-the-main-tree-answers-as-a-lane-shared-is-deprecated.md) (the main tree answers as the lane `main`), [ADR-0081](0081-a-stack-has-a-page-every-lane-the-same-view.md) (the stack's page), [#387](https://github.com/nuetzliches/devstack/issues/387) (several stacks on one machine)
@@ -35,16 +35,26 @@ The owner approved the points in the conversation on **2026-10-30**:
 Decided by the agent alone (not asked):
 
 - The shift is a multiple of 1000. `auto` takes the lowest one whose
-  ports, lanes 1–3 included, are free of every claim.
+  ports, lanes 1–3 included, are free of every claim and of what the OS
+  reports in use.
 - `devstack doctor` lists overlaps between stacks.
 - A shifted stack's lanes take their offset from the shifted ports.
 - Ports hard-coded outside placeholders do not follow; this is documented.
 - Registry entries whose folder or stack file is gone are no claim.
 - The stack file does not change.
+- Decided while building points 3 to 7: `auto` never answers 0 (a
+  shift asked for moves the stack), and `--shift <n>` takes multiples of
+  1000 only. While the main tree's daemon runs, `up` with another shift
+  is refused (`devstack down` first), as `up` with another profile is: a
+  restart would also move its started lanes. `--shift` in a worktree is
+  refused: a lane follows the main tree. The claims are written at the
+  daemon's start and every 5 s when they changed, not while it stops (its
+  containers go then), and stay after it. A lane keeps the number it has
+  across starts; only a new number avoids the other stacks' claims.
 
 ## Built
 
-Points 1 (0.33.0) and 2 are built:
+All seven points are built: 1 and 2 in 0.33.0, 3 to 7 after it.
 
 1. **`GET /v1/ports`** answers `{ports: [PortEntry]}`, one entry per port
    and protocol a tree holds or uses: `port`, `proto` (`tcp`, `udp`),
@@ -100,8 +110,60 @@ Points 1 (0.33.0) and 2 are built:
    the same. The mock's instance ports are stable, and its shop has a lane
    on a node (`review-cart` on `build-server`) from the start.
 
-What follows: the shift with the claims in the registry, `up --shift`, the
-stack page's button and the start check (points 3 to 7).
+6. **The registry entry** (`<user state>/devstack/stacks/<id>.json`)
+   grows two fields, both absent when empty, so an entry of an older
+   devstack reads as unshifted without claims: `shift` (a multiple of
+   1000) and `claims: {main: [port], lanes: {<lane>: [port]}}`. Every
+   write keeps what it does not set, a field of a newer devstack too (a
+   registration at the daemon's start keeps the shift and the claims).
+   An entry whose folder or stack file is gone claims nothing.
+7. **The shift** (points 3, 4, 7): the main tree's daemon reads it from
+   the entry when it starts and moves the stack by it the way a lane on a
+   node is moved (`lanes::lane_stack`): every service's `port`, so its
+   proxy, a dev server's front, `{service.x.port}` and `{service.x.url}`,
+   and the ports on this machine its `urls` name. The main tree's Compose
+   overlay (`<group>.main.yml`, `devstack_compose::main_overlay`) moves
+   every published host port of every service by it, an announced port
+   inside the container too (as a lane's does), holds a `main_ports`
+   container's fixed port on its shifted number, and keeps the project,
+   the container names, the networks and the volumes; the
+   `DEVSTACK_PORT_*` variables and `{compose.g.s.port}` follow. A lane
+   takes its offset from the shifted ports: its own stack file, its
+   containers and a node running it start from the files' ports moved by
+   shift + number × `port_step`; a lane's `shared` containers are the main
+   tree's, on the shifted ports. `/v1/stack` and the hub's stack list
+   carry `shift`; `/hub/ports` and `doctor` move a stopped stack's
+   declared ports by it. Ports written outside devstack's placeholders
+   (an app's config file) do not follow.
+8. **The claims** (point 5): the main tree's daemon writes them when it
+   starts and every 5 s while they change (a lane numbered, a container
+   published), not while it stops: the main slot's ports (services,
+   containers' host ports, held ports, announced ports and `urls`, after
+   the shift) and, for each lane it numbered, started or not, those moved
+   by its offset. They stay when the daemon stops. A new lane number
+   avoids the other stacks' claims as well as its own stack's ranges and
+   what the OS reports in use.
+9. **`devstack up` in the main tree** (point 6), before the daemon starts:
+   the stack's ports at shift 0 (what its stack file declares and what
+   its daemon claimed for the main slot last time, moved back by the
+   shift it had) moved by the shift it will run with, against every other
+   stack's claims. A running stack's (its daemon lives) refuses the start
+   with that stack's name, folder and ports and offers `devstack up
+   --shift auto` (with the shift it would take) and `--shift <n>`; a
+   stopped stack's is a warning, and the start goes on. `--shift
+   auto|<n>|none` sets the entry's shift, checked the same way, then
+   starts. While the daemon runs, a shift other than the one it runs
+   with is refused (`devstack down` first), as another profile is;
+   `auto` while it runs shifted already keeps that shift. In a worktree
+   `--shift` is refused: a lane follows the main tree. The MCP `up` tool
+   takes `shift` the same way.
+10. **The hub and the dashboard**: `POST /hub/stacks/{id}/up` takes
+    `{"shift"}` and passes it on as `--shift`; the stack page shows
+    "shifted +N" beside the daemon line, and a *Start with shift* button
+    (`auto`) beside *Start stack* while the stack is stopped and a running
+    stack holds one of its ports (from `/hub/ports`), or its last start
+    was refused for that. The mock hub refuses a start of `docs` while
+    `shop` holds 4200 and starts it shifted with the button.
 
 ## Consequences
 

@@ -350,6 +350,19 @@ pub fn declared(stack: &devstack_config::Stack) -> Vec<PortEntry> {
     out
 }
 
+/// `entries` (what a stack file declares) as a stack shifted by `shift` on
+/// this machine has them (ADR-0082): every one moves; one beyond 65535 is
+/// left out (such a stack does not start).
+pub fn shifted(entries: Vec<PortEntry>, shift: u16) -> Vec<PortEntry> {
+    entries
+        .into_iter()
+        .filter_map(|mut e| {
+            e.port = e.port.checked_add(shift)?;
+            Some(e)
+        })
+        .collect()
+}
+
 /// The port of a link on this machine (`http://localhost:8025/ui`).
 fn local_port(url: &str) -> Option<u16> {
     let (_, rest) = url.split_once("://")?;

@@ -968,28 +968,38 @@ pub struct HeldPort {
     pub host_ip: Option<String>,
 }
 
-/// The main tree's overlay for a group's `main_ports` (ADR-0048): each TCP
-/// port of those services that the Compose files publish on a fixed host
-/// port is published on a loopback port Docker assigns instead, which
-/// devstack forwards the fixed one to. Their UDP ports, port ranges, ports
-/// Docker assigns and `announced` ports (ADR-0057: a client learns those
-/// from the server it signalled with) stay as they are. `None` when
-/// nothing is held.
+/// The main tree's overlay (ADR-0048, ADR-0082): for a group's
+/// `main_ports`, each TCP port of those services that the Compose files
+/// publish on a fixed host port is published on a loopback port Docker
+/// assigns instead, which devstack forwards the fixed one to. Their UDP
+/// ports, port ranges, ports Docker assigns and `announced` ports (ADR-0057:
+/// a client learns those from the server it signalled with) stay as they
+/// are. With a `shift` (the stack runs shifted on this machine), every
+/// published host port of every service moves by it, a held one too, and
+/// an announced one inside the container as well, as a lane's do
+/// ([`lane_overlay`]), but the project, the container names, the networks
+/// and the volumes stay the main tree's. `None` when nothing is held and
+/// nothing moves.
 pub fn main_overlay(
     model: &Model,
     services: &[String],
     announced: &[AnnouncedPort],
+    shift: u16,
 ) -> std::result::Result<Option<(String, Vec<HeldPort>)>, String> {
     let mut o = Overlay::default();
     let mut held = Vec::new();
-    for name in services {
-        let Some(svc) = model.services.get(name) else {
-            return Err(format!(
-                "`main_ports` names `{name}`, which the Compose files do not have"
-            ));
-        };
+    if let Some(name) = services.iter().find(|n| !model.services.contains_key(*n)) {
+        return Err(format!(
+            "`main_ports` names `{name}`, which the Compose files do not have"
+        ));
+    }
+    for (name, svc) in &model.services {
+        let holds = services.contains(name);
+        if svc.ports.is_empty() || (!holds && shift == 0) {
+            continue;
+        }
         let mut body = vec!["    ports: !override".to_string()];
-        let mut moved = false;
+        let mut moved = shift > 0;
         for port in &svc.ports {
             let tcp = port.protocol.as_deref().is_none_or(|p| p == "tcp");
             let fixed = port
@@ -997,16 +1007,19 @@ pub fn main_overlay(
                 .as_deref()
                 .and_then(|p| p.trim().parse::<u16>().ok());
             let spec = match fixed {
-                Some(fixed) if tcp && !is_announced(announced, name, port) => {
+                Some(fixed) if holds && tcp && !is_announced(announced, name, port) => {
                     moved = true;
                     held.push(HeldPort {
                         service: name.clone(),
                         target: port.target,
-                        fixed,
+                        fixed: fixed
+                            .checked_add(shift)
+                            .ok_or_else(|| format!("port {fixed} + {shift} is beyond 65535"))?,
                         host_ip: port.host_ip.clone().filter(|ip| !ip.is_empty()),
                     });
                     format!("127.0.0.1::{}", port.target)
                 }
+                _ if shift > 0 => moved_spec(name, svc, port, shift, announced, "on this machine")?,
                 _ => port_spec(port),
             };
             body.push(format!("      - {}", quote(&spec)));
@@ -1015,14 +1028,94 @@ pub fn main_overlay(
             o.services.insert(name.clone(), body);
         }
     }
-    if held.is_empty() {
+    if o.services.is_empty() {
         return Ok(None);
     }
-    let text = o.render_with(
+    let header = if shift > 0 {
+        format!(
+            "# Written by devstack for the main working tree, shifted by {shift} on this\n# machine (ADR-0082){}. Do not edit; it is written again at every start.\n",
+            if held.is_empty() {
+                ""
+            } else {
+                ", and the fixed ports devstack holds (ADR-0048)"
+            }
+        )
+    } else {
         "# Written by devstack for the main working tree (ADR-0048): devstack holds\n# these services' fixed ports. Do not edit; it is written again at every start.\n"
-            .to_string(),
-    );
-    Ok(Some((text, held)))
+            .to_string()
+    };
+    Ok(Some((o.render_with(header), held)))
+}
+
+/// A published port of `service` (`svc`) moved by `by` (ADR-0030,
+/// ADR-0082), in Compose's short syntax: its host port, a range moved as a
+/// whole; an `announced` one (ADR-0057) 1:1 and moved on both sides, so the
+/// server listens on, and announces, the moved number, which nothing else
+/// of it may have inside (`where_` says where it moves, for that error). A
+/// port Docker assigns stays so.
+fn moved_spec(
+    name: &str,
+    svc: &ServiceModel,
+    port: &PortModel,
+    by: u16,
+    announced: &[AnnouncedPort],
+    where_: &str,
+) -> std::result::Result<String, String> {
+    let shift = |p: &str| -> std::result::Result<String, String> {
+        let one = |n: &str| -> std::result::Result<String, String> {
+            let n: u16 = n
+                .trim()
+                .parse()
+                .map_err(|_| format!("port `{p}` is not a number"))?;
+            n.checked_add(by)
+                .map(|m| m.to_string())
+                .ok_or_else(|| format!("port {n} + {by} is beyond 65535"))
+        };
+        match p.split_once('-') {
+            Some((a, b)) => Ok(format!("{}-{}", one(a)?, one(b)?)),
+            None => one(p),
+        }
+    };
+    let mut spec = String::new();
+    let mut target = port.target;
+    if is_announced(announced, name, port) {
+        let moved = port
+            .target
+            .checked_add(by)
+            .ok_or_else(|| format!("port {} + {by} is beyond 65535", port.target))?;
+        let proto = |p: &PortModel| p.protocol.as_deref().unwrap_or("tcp").to_ascii_lowercase();
+        if by != 0
+            && let Some(other) = svc
+                .ports
+                .iter()
+                .find(|p| p.target == moved && proto(p) == proto(port))
+        {
+            return Err(format!(
+                "`{name}` announces {}, which moves to {moved} {where_}, and has \"{}\" inside already",
+                port.target,
+                port_spec(other)
+            ));
+        }
+        if let Some(ip) = port.host_ip.as_deref().filter(|ip| !ip.is_empty()) {
+            spec.push_str(ip);
+            spec.push(':');
+        }
+        spec.push_str(&format!("{moved}:"));
+        target = moved;
+    } else if let Some(published) = &port.published {
+        if let Some(ip) = port.host_ip.as_deref().filter(|ip| !ip.is_empty()) {
+            spec.push_str(ip);
+            spec.push(':');
+        }
+        spec.push_str(&shift(published)?);
+        spec.push(':');
+    }
+    spec.push_str(&target.to_string());
+    if let Some(proto) = port.protocol.as_deref().filter(|p| *p != "tcp") {
+        spec.push('/');
+        spec.push_str(proto);
+    }
+    Ok(spec)
 }
 
 /// A published port in Compose's short syntax, as the files have it.
@@ -1189,21 +1282,6 @@ fn overlay(
     announced: &[AnnouncedPort],
 ) -> std::result::Result<Overlay, String> {
     let by = offset.unwrap_or(0);
-    let shift = |p: &str| -> std::result::Result<String, String> {
-        let one = |n: &str| -> std::result::Result<String, String> {
-            let n: u16 = n
-                .trim()
-                .parse()
-                .map_err(|_| format!("port `{p}` is not a number"))?;
-            n.checked_add(by)
-                .map(|m| m.to_string())
-                .ok_or_else(|| format!("port {n} + {by} is beyond 65535"))
-        };
-        match p.split_once('-') {
-            Some((a, b)) => Ok(format!("{}-{}", one(a)?, one(b)?)),
-            None => one(p),
-        }
-    };
     let mut o = Overlay::default();
     for (name, svc) in model.services.iter().filter(|(n, _)| !keep.contains(n)) {
         let mut body = Vec::new();
@@ -1212,48 +1290,7 @@ fn overlay(
         } else if !svc.ports.is_empty() {
             body.push("    ports: !override".to_string());
             for port in &svc.ports {
-                let mut spec = String::new();
-                let mut target = port.target;
-                if is_announced(announced, name, port) {
-                    // 1:1, moved on both sides (ADR-0057): the server listens
-                    // on the lane's number, which nothing else of it may have.
-                    let moved = port
-                        .target
-                        .checked_add(by)
-                        .ok_or_else(|| format!("port {} + {by} is beyond 65535", port.target))?;
-                    let proto =
-                        |p: &PortModel| p.protocol.as_deref().unwrap_or("tcp").to_ascii_lowercase();
-                    if by != 0
-                        && let Some(other) = svc
-                            .ports
-                            .iter()
-                            .find(|p| p.target == moved && proto(p) == proto(port))
-                    {
-                        return Err(format!(
-                            "`{name}` announces {}, which moves to {moved} in this lane, and has \"{}\" inside already",
-                            port.target,
-                            port_spec(other)
-                        ));
-                    }
-                    if let Some(ip) = port.host_ip.as_deref().filter(|ip| !ip.is_empty()) {
-                        spec.push_str(ip);
-                        spec.push(':');
-                    }
-                    spec.push_str(&format!("{moved}:"));
-                    target = moved;
-                } else if let Some(published) = &port.published {
-                    if let Some(ip) = port.host_ip.as_deref().filter(|ip| !ip.is_empty()) {
-                        spec.push_str(ip);
-                        spec.push(':');
-                    }
-                    spec.push_str(&shift(published)?);
-                    spec.push(':');
-                }
-                spec.push_str(&target.to_string());
-                if let Some(proto) = port.protocol.as_deref().filter(|p| *p != "tcp") {
-                    spec.push('/');
-                    spec.push_str(proto);
-                }
+                let spec = moved_spec(name, svc, port, by, announced, "in this lane")?;
                 body.push(format!("      - {}", quote(&spec)));
             }
         }
@@ -1718,7 +1755,7 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let (y, held) = main_overlay(&model, &["web".to_string(), "worker".to_string()], &[])
+        let (y, held) = main_overlay(&model, &["web".to_string(), "worker".to_string()], &[], 0)
             .unwrap()
             .unwrap();
         assert!(
@@ -1746,10 +1783,10 @@ mod tests {
         );
         // Nothing to hold: no overlay.
         assert_eq!(
-            main_overlay(&model, &["worker".to_string()], &[]).unwrap(),
+            main_overlay(&model, &["worker".to_string()], &[], 0).unwrap(),
             None
         );
-        assert!(main_overlay(&model, &["nope".to_string()], &[]).is_err());
+        assert!(main_overlay(&model, &["nope".to_string()], &[], 0).is_err());
     }
 
     #[test]
@@ -1862,6 +1899,7 @@ mod tests {
             &model,
             &["media".to_string()],
             &announced(&["media:7881", "media:7882/udp"]),
+            0,
         )
         .unwrap()
         .unwrap();
@@ -1879,8 +1917,85 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            main_overlay(&only, &["media".to_string()], &announced(&["media:7881"])).unwrap(),
+            main_overlay(
+                &only,
+                &["media".to_string()],
+                &announced(&["media:7881"]),
+                0
+            )
+            .unwrap(),
             None
+        );
+    }
+
+    #[test]
+    fn a_shifted_main_tree_moves_host_and_announced_ports_and_keeps_its_names() {
+        let model = parse_config(
+            r#"{
+              "services": {
+                "db": {"container_name": "shop-db",
+                       "ports": [{"target": 5432, "published": "5432", "host_ip": "127.0.0.1"}]},
+                "web": {"ports": [{"target": 80, "published": "8290"},
+                                  {"target": 9000},
+                                  {"target": 53, "published": "5353", "protocol": "udp"},
+                                  {"target": 7000, "published": "7000-7002"}]},
+                "media": {"ports": [{"target": 7881, "published": "7881"}]},
+                "worker": {}
+              },
+              "networks": {"edge": {"name": "edge"}},
+              "volumes": {"data": {"name": "shop-data"}}
+            }"#,
+        )
+        .unwrap();
+        let (y, held) = main_overlay(
+            &model,
+            &["web".to_string()],
+            &announced(&["media:7881"]),
+            1000,
+        )
+        .unwrap()
+        .unwrap();
+        // Host ports move; the container's own stay, but an announced one.
+        assert!(
+            y.contains("\"db\":\n    ports: !override\n      - \"127.0.0.1:6432:5432\""),
+            "{y}"
+        );
+        assert!(
+            y.contains("\"media\":\n    ports: !override\n      - \"8881:8881\""),
+            "{y}"
+        );
+        // A held port is held on its shifted number; the rest moves.
+        assert!(
+            y.contains("- \"127.0.0.1::80\"\n      - \"9000\"\n      - \"6353:53/udp\"\n      - \"8000-8002:7000\""),
+            "{y}"
+        );
+        assert_eq!(
+            held,
+            vec![HeldPort {
+                service: "web".into(),
+                target: 80,
+                fixed: 9290,
+                host_ip: None
+            }]
+        );
+        // The main tree's names stay: no rename, no container name reset.
+        assert!(!y.contains("container_name") && !y.contains("name:"), "{y}");
+        assert!(!y.contains("worker") && !y.contains("networks"), "{y}");
+        assert!(y.contains("shifted by 1000"), "{y}");
+        // Without `main_ports`, a shift alone writes it as well.
+        let (y, held) = main_overlay(&model, &[], &[], 2000).unwrap().unwrap();
+        assert!(held.is_empty());
+        assert!(y.contains("- \"10290:80\""), "{y}");
+        // An announced port that would move onto another port inside it.
+        let clash = parse_config(
+            r#"{"services":{"media":{"ports":[{"target":7881,"published":"7881"},{"target":8881}]}}}"#,
+        )
+        .unwrap();
+        let e = main_overlay(&clash, &[], &announced(&["media:7881"]), 1000).unwrap_err();
+        assert!(e.contains("on this machine"), "{e}");
+        assert!(
+            main_overlay(&model, &[], &[], 60000).is_err(),
+            "beyond 65535"
         );
     }
 

@@ -220,6 +220,7 @@ mod tests {
             daemon: None,
             last_seen: None,
             start_error: None,
+            shift: 0,
         }
     }
 
