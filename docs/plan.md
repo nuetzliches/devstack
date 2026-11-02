@@ -669,8 +669,10 @@ sends a `lanes` event, and the dashboard shows each lane under its stack,
 named by its branch, the ones not started folded away. A lane's dev servers,
 tools and hot-reload mode run from its snapshot, which follows the worktree
 within 150 ms; `prepare` installs what the snapshot lacks (`npm ci`), so
-`git worktree remove` works while the lane runs. `devstack lane stop` stops a
-lane. `promote --lane` moves the ports
+`git worktree remove` works while the lane runs, unless the lane links
+directories into its worktree (`prepare.link`, ADR-0044): then
+`devstack lane stop` comes first, which removes the links. `devstack lane stop`
+stops a lane. `promote --lane` moves the ports
 first and the main slot only when all of them moved; `--lane main` restarts
 only what the main tree ran before; a dev server listening on `::1` only is
 reached through the forward. Pruning keeps every build a started lane runs or

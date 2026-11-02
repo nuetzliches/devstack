@@ -75,6 +75,15 @@ no longer blocks every start.
   it: every lane starts its own containers; a profile's `skip` leaves out
   what a lane can do without.
 
+### Fixed
+
+- **The `devstack` skill and the plan no longer say `git worktree remove`
+  works while a lane runs.** With `prepare.link` it does not on Windows: Git
+  2.43 follows the junction and empties the lane's copy (measured again),
+  a newer Git leaves the worktree behind with the junction in it (ADR-0044).
+  Both now say what `docs/stack-file.md` already said: stop the lane first
+  when it links directories; without `link` the remove works while it runs.
+
 ### Added
 
 - **`/v1/lanes/main/v1/...`** answers as the main working tree's `/v1/...`
