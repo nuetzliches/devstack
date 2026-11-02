@@ -5,7 +5,7 @@ import { useSort } from '@/lib/sort';
 import { useStack } from '@/stores/stack';
 import Sparkline from '@/components/Sparkline.vue';
 import LaneUsage from '@/components/LaneUsage.vue';
-import StoreLine from '@/components/StoreLine.vue';
+import StoreCard from '@/components/StoreCard.vue';
 import SortTh from '@/components/SortTh.vue';
 import Icon from '@/components/icons/Icon.vue';
 
@@ -80,51 +80,52 @@ const filters: { v: 'all' | Kind; label: string }[] = [
     </div>
 
     <template v-if="u">
-      <div class="lanes stale-dim">
-        <LaneUsage v-for="l in u.lanes" :key="l.name" :lane="l" />
-      </div>
-
-      <StoreLine class="stale-dim" />
-
-      <section class="card">
-        <header class="card-header wrap-head">
-          <h2>Processes and containers</h2>
-          <span class="grow" />
-          <div class="btn-group" role="group" aria-label="Filter rows">
-            <button v-for="f in filters" :key="f.v" type="button" class="chip-toggle" :aria-pressed="filter === f.v" @click="filter = f.v">{{ f.label }}</button>
-          </div>
-        </header>
-        <div class="table-wrap">
-          <table class="table" data-testid="usage-table">
-            <thead>
-              <tr>
-                <SortTh label="Name" :dir="sort.dirOf('name')" @toggle="sort.toggle('name')" />
-                <SortTh label="Type" class="hide-sm" :dir="sort.dirOf('kind')" @toggle="sort.toggle('kind')" />
-                <SortTh label="CPU" class="num" :dir="sort.dirOf('cpu')" @toggle="sort.toggle('cpu')" />
-                <SortTh label="Last 10 min" class="hide-md" :dir="sort.dirOf('cpuPeak')" @toggle="sort.toggle('cpuPeak')" />
-                <SortTh label="Memory" class="num" :dir="sort.dirOf('memory')" @toggle="sort.toggle('memory')" />
-                <SortTh label="Last 10 min" class="hide-md" :dir="sort.dirOf('memoryPeak')" @toggle="sort.toggle('memoryPeak')" />
-                <SortTh label="Procs" class="num hide-sm" :dir="sort.dirOf('processes')" @toggle="sort.toggle('processes')" />
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="r in shown" :key="r.key" :data-row="r.key">
-                <td>
-                  <RouterLink v-if="r.to" :to="r.to" class="rname">{{ r.name }}</RouterLink>
-                  <span v-else class="rname">{{ r.name }}</span>
-                  <span v-if="r.sub" class="faint rsub">{{ r.sub }}</span>
-                </td>
-                <td class="hide-sm"><span class="pill sm" :class="{ accent: r.kind === 'service', info: r.kind === 'container', warn: r.kind === 'builds' }">{{ kindLabel[r.kind] }}</span></td>
-                <td class="num">{{ percent(r.cpu) }}</td>
-                <td class="hide-md spark-cell"><Sparkline :values="cpuSeries(r.key)" :width="120" :height="24" :min-max="r.kind === 'builds' ? 50 : 5" /></td>
-                <td class="num">{{ bytes(r.memory) }}</td>
-                <td class="hide-md spark-cell"><Sparkline :values="memSeries(r.key)" :width="120" :height="24" :min-max="4 * 1024 * 1024" :zero-based="false" color="var(--ok)" /></td>
-                <td class="num hide-sm">{{ r.processes ?? '—' }}</td>
-              </tr>
-            </tbody>
-          </table>
+      <div class="cols">
+        <div class="lanes stale-dim">
+          <LaneUsage v-for="l in u.lanes" :key="l.name" :lane="l" />
         </div>
-      </section>
+        <section class="card procs">
+          <header class="card-header wrap-head">
+            <h2>Processes and containers</h2>
+            <span class="grow" />
+            <div class="btn-group" role="group" aria-label="Filter rows">
+              <button v-for="f in filters" :key="f.v" type="button" class="chip-toggle" :aria-pressed="filter === f.v" @click="filter = f.v">{{ f.label }}</button>
+            </div>
+          </header>
+          <div class="table-wrap">
+            <table class="table" data-testid="usage-table">
+              <thead>
+                <tr>
+                  <SortTh label="Name" :dir="sort.dirOf('name')" @toggle="sort.toggle('name')" />
+                  <SortTh label="Type" class="hide-sm" :dir="sort.dirOf('kind')" @toggle="sort.toggle('kind')" />
+                  <SortTh label="CPU" class="num" :dir="sort.dirOf('cpu')" @toggle="sort.toggle('cpu')" />
+                  <SortTh label="Last 10 min" class="hide-md" :dir="sort.dirOf('cpuPeak')" @toggle="sort.toggle('cpuPeak')" />
+                  <SortTh label="Memory" class="num" :dir="sort.dirOf('memory')" @toggle="sort.toggle('memory')" />
+                  <SortTh label="Last 10 min" class="hide-md" :dir="sort.dirOf('memoryPeak')" @toggle="sort.toggle('memoryPeak')" />
+                  <SortTh label="Procs" class="num hide-sm" :dir="sort.dirOf('processes')" @toggle="sort.toggle('processes')" />
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in shown" :key="r.key" :data-row="r.key">
+                  <td>
+                    <RouterLink v-if="r.to" :to="r.to" class="rname">{{ r.name }}</RouterLink>
+                    <span v-else class="rname">{{ r.name }}</span>
+                    <span v-if="r.sub" class="faint rsub">{{ r.sub }}</span>
+                  </td>
+                  <td class="hide-sm"><span class="pill sm" :class="{ accent: r.kind === 'service', info: r.kind === 'container', warn: r.kind === 'builds' }">{{ kindLabel[r.kind] }}</span></td>
+                  <td class="num">{{ percent(r.cpu) }}</td>
+                  <td class="hide-md spark-cell"><Sparkline :values="cpuSeries(r.key)" :width="120" :height="24" :min-max="r.kind === 'builds' ? 50 : 5" /></td>
+                  <td class="num">{{ bytes(r.memory) }}</td>
+                  <td class="hide-md spark-cell"><Sparkline :values="memSeries(r.key)" :width="120" :height="24" :min-max="4 * 1024 * 1024" :zero-based="false" color="var(--ok)" /></td>
+                  <td class="num hide-sm">{{ r.processes ?? '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <StoreCard class="store stale-dim" />
+      </div>
     </template>
     <div v-else class="card">
       <div class="empty">
@@ -138,9 +139,37 @@ const filters: { v: 'all' | Kind; label: string }[] = [
 </template>
 
 <style scoped>
+/* Two columns: the lanes and the processes on the left, the store on the
+   right beside both. One column, in the page's order, where the store is
+   not there or no longer fits beside them. */
+.cols {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
 .lanes {
   display: grid;
   gap: 16px;
+}
+@media (min-width: 1401px) {
+  .cols:has(> .store) {
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+    grid-template-areas:
+      'lanes store'
+      'procs store';
+    grid-template-rows: auto 1fr;
+    align-items: start;
+  }
+  .lanes {
+    grid-area: lanes;
+  }
+  .procs {
+    grid-area: procs;
+  }
+  .store {
+    grid-area: store;
+  }
 }
 .wrap-head {
   flex-wrap: wrap;
