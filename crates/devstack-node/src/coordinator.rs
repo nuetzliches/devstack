@@ -2627,7 +2627,22 @@ async fn lease_share(
     let mut leases = s.leases.lock().unwrap();
     match leases.get_mut(&id) {
         Some((l, _, _)) if l.member == me.id => {
-            l.shared = sharing.filter(|x| !x.with.is_empty() && !x.services.is_empty());
+            // Shared with someone, but nothing to open: refused, not taken
+            // for "shared with nobody" while its owner sees it shared
+            // (ADR-0085 point 5).
+            if sharing
+                .as_ref()
+                .is_some_and(|x| !x.with.is_empty() && x.services.is_empty())
+            {
+                return Err((
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    format!(
+                        "lane `{}` shares no service: nothing would be reachable for whom it is shared with",
+                        l.lane
+                    ),
+                ));
+            }
+            l.shared = sharing.filter(|x| !x.with.is_empty());
             Ok(StatusCode::NO_CONTENT)
         }
         _ => Err((StatusCode::NOT_FOUND, format!("no lease `{id}` of yours"))),

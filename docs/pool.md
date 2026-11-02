@@ -440,8 +440,17 @@ port its owner has it on if that is free here (so a front end that calls its
 API on `localhost` works), else on another one, which the header names.
 *Disconnect* closes them, connections in flight too, and the ports are free
 for your own stack again. In the sidebar a shared lane you are not connected
-to is dimmed. A connection ends with the hub, and when the lane is no longer
-shared with you.
+to is dimmed. A connection is to the lane, not to one run of it
+([ADR-0085](adr/0085-a-connection-to-a-shared-lane-outlasts-its-restarts.md)):
+its owner starting it again, the coordinator restarting, or your hub
+updating, it is connected again by itself, on the same ports where they are
+free. A lane missing from the pool's list keeps its ports for two minutes;
+past that they close, and come back when the lane does. It ends when you
+disconnect, or when its owner stops sharing it with you while it runs.
+
+Its owner sharing a lane that has no service to open gets an error, not a
+lane that looks shared and is not: the stack declares no service with an
+`http` or `https` port, and the main tree's Compose files publish none.
 
 Its services are those with a `port` and the Compose containers the dashboard
 links as a web page (a `urls` entry with `http`/`https`, or a published port

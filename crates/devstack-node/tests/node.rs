@@ -435,6 +435,14 @@ fn a_lane_is_leased_admitted_and_synced() {
         other.share_lease(&lease.id, Some(&sharing)).is_err(),
         "only its owner shares a lane"
     );
+    // Shared with someone, nothing to open: refused, not stored as nobody
+    // (ADR-0085 point 5).
+    let empty = Sharing::new(vec!["*".into()], Vec::new());
+    let refused = requester.share_lease(&lease.id, Some(&empty)).unwrap_err();
+    assert!(
+        refused.to_string().contains("shares no service"),
+        "{refused}"
+    );
     requester.share_lease(&lease.id, Some(&sharing)).unwrap();
     // Listed once the node reported the lease running.
     let mut seen = Vec::new();

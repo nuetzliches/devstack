@@ -462,6 +462,9 @@ pub fn serve() -> Result<(), String> {
         // and the skills local to them (ADR-0079).
         worktrees::start();
         poolskills::follow(state.skills.clone());
+        // The lanes connected to, connected again when they or this hub
+        // start again (ADR-0085).
+        shared::follow();
         tray::start_quietly();
         let app = router(state);
         if let Some(v6) = v6 {

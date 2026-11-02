@@ -1,6 +1,6 @@
 # ADR-0053: Whoever a lane is shared with connects to it, and disconnects again
 
-- **Status:** Accepted (2026-10-22)
+- **Status:** Accepted (2026-10-22); point 3 amended by [ADR-0085](0085-a-connection-to-a-shared-lane-outlasts-its-restarts.md) (2026-11-02): a connection is to the lane, and ends only with a disconnect or the sharing taken back
 - **Date:** 2026-10-22
 - **Deciders:** project owner
 - **Related:** [ADR-0035](0035-lanes-can-be-shared-with-the-pool.md) (point 3 amended here), [ADR-0040](0040-a-shared-lane-can-be-watched-like-ones-own.md) (point 5: the sidebar row), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md) (the tunnel), [ADR-0021](0021-a-hub-serves-the-dashboard.md) (the hub)
