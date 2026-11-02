@@ -21,7 +21,12 @@ and listed with their assets on the
   (15 s) without adding a point to its history; a stopped one is idle at
   once. The node's agent logs a failed `docker stats` instead of
   swallowing it.
-
+- **The header names the main working tree's branch after a checkout
+  there.** The daemon followed only the linked worktrees' `HEAD`s, so a
+  branch checked out in the main working tree (with any git client) never
+  reached a dashboard already open: its header kept the old branch while
+  the branch picker listed the new one. It now watches the main tree's
+  `HEAD` too and sends the clients a fresh view when a tree's branch changes.
 - **A stack whose setup was broken off says so.** A registered stack whose
   `devstack.toml` is missing (the setup stopped after the stack was
   registered, or the file was removed since) or does not load was only

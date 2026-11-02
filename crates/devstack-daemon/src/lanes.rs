@@ -792,6 +792,23 @@ pub fn fingerprint(dir: &Path) -> Vec<(std::ffi::OsString, Option<std::time::Sys
     out
 }
 
+/// What changes when a tree of the repository checks out another branch or
+/// a worktree comes or goes: [`fingerprint`] of `<git common dir>/worktrees`,
+/// and the main working tree's `HEAD`, which is not under `worktrees` (a
+/// branch checked out there, with any git client, shows only by it).
+#[allow(clippy::type_complexity)]
+fn trees_print(
+    common: &Path,
+) -> (
+    Vec<(std::ffi::OsString, Option<std::time::SystemTime>)>,
+    Option<std::time::SystemTime>,
+) {
+    let main = std::fs::metadata(common.join("HEAD"))
+        .and_then(|m| m.modified())
+        .ok();
+    (fingerprint(&common.join("worktrees")), main)
+}
+
 /// Remove a forgotten lane's state directory (its snapshot, its logs). On
 /// Windows a file still open (a sampler walking it, a virus scanner, a
 /// process of the lane that is just going) fails the delete: it is said, and
@@ -974,28 +991,39 @@ impl Lanes {
     pub fn sync(&self) {
         // Forgetting a lane stops it (and may give the main slot back, which
         // starts services): not while others wait to read the lanes.
-        let Some((gone, changed)) = self.sync_known() else {
+        let Some((gone, changed, switched)) = self.sync_known() else {
             return;
         };
         for name in &gone {
             self.forget(name, "its worktree is gone");
         }
-        if changed {
+        // A tree that checked out another branch (the main one with any git
+        // client): its view says which, the header shows it.
+        for sup in &switched {
+            sup.emit_snapshot();
+        }
+        if changed || !switched.is_empty() {
             self.announce();
         }
     }
 
-    /// Ask git and apply its answer to `known`: the lanes to forget, and
-    /// whether the clients must hear of a change.
-    fn sync_known(&self) -> Option<(Vec<String>, bool)> {
+    /// Ask git and apply its answer to `known`: the lanes to forget, whether
+    /// the clients must hear of a change, and the trees whose branch changed.
+    #[allow(clippy::type_complexity)]
+    fn sync_known(&self) -> Option<(Vec<String>, bool, Vec<Arc<Supervisor>>)> {
         let _one = self.syncing.lock().unwrap();
         let (trees, missing) = worktrees(&self.main.repo)?;
-        if let Some(main) = trees.iter().find(|w| same_tree(&w.path, &self.main.repo)) {
-            self.main.set_branch(main.branch.clone());
+        let mut switched = Vec::new();
+        if let Some(main) = trees.iter().find(|w| same_tree(&w.path, &self.main.repo))
+            && self.main.set_branch(main.branch.clone())
+        {
+            switched.push(self.main.clone());
         }
         for l in self.map.lock().unwrap().values() {
-            if let Some(w) = trees.iter().find(|w| same_tree(&w.path, &l.entry.path)) {
-                l.sup.set_branch(w.branch.clone());
+            if let Some(w) = trees.iter().find(|w| same_tree(&w.path, &l.entry.path))
+                && l.sup.set_branch(w.branch.clone())
+            {
+                switched.push(l.sup.clone());
             }
         }
         let trees: Vec<Worktree> = trees
@@ -1107,7 +1135,7 @@ impl Lanes {
                 None => l.sup.clear_notice("worktree_missing"),
             }
         }
-        Some((gone, changed))
+        Some((gone, changed, switched))
     }
 
     /// The worktrees that got no lane for want of a port range, as notices
@@ -1143,8 +1171,9 @@ impl Lanes {
 
     /// Follow the repository's worktrees while the daemon runs: git keeps one
     /// directory per linked worktree under `<git common dir>/worktrees`, with
-    /// its `HEAD`. A change there (a worktree added or removed, a branch
-    /// checked out) is a [`Self::sync`] within a second; reading the
+    /// its `HEAD`; the main working tree's is `<git common dir>/HEAD`. A
+    /// change there (a worktree added or removed, a branch checked out) is a
+    /// [`Self::sync`] within a second; reading the
     /// directory is all devstack does. A full sync every half minute catches
     /// a worktree deleted without git.
     pub fn follow(self: &Arc<Self>) {
@@ -1152,12 +1181,12 @@ impl Lanes {
             return;
         };
         let common = self.main.repo.join(common.trim());
-        let dir = common.join("worktrees");
+        let print = move || trees_print(&common);
         let weak = Arc::downgrade(self);
         let _ = std::thread::Builder::new()
             .name("lanes-follow".into())
             .spawn(move || {
-                let mut last = fingerprint(&dir);
+                let mut last = print();
                 let mut since = std::time::Instant::now();
                 let mut shown = Vec::new();
                 loop {
@@ -1175,7 +1204,7 @@ impl Lanes {
                         shown = now;
                         me.announce();
                     }
-                    let now = fingerprint(&dir);
+                    let now = print();
                     if now != last || since.elapsed() >= std::time::Duration::from_secs(30) {
                         last = now;
                         since = std::time::Instant::now();
@@ -3842,6 +3871,35 @@ mod tests {
         assert!(worktree_of(&repo, &wt).is_some_and(|p| same_tree(&p, &wt)));
         assert!(worktree_of(&repo, &repo.join(".git")).is_none());
         assert!(worktree_of(&repo, d.path()).is_none());
+    }
+
+    #[test]
+    fn a_branch_checked_out_in_the_main_tree_changes_the_print() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let g = |args: &[&str]| git(&repo, args).unwrap();
+        g(&["init", "-q", "-b", "main"]);
+        g(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "x",
+        ]);
+        g(&["branch", "release"]);
+        let common = repo.join(".git");
+        let before = trees_print(&common);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        g(&["checkout", "-q", "release"]);
+        assert_ne!(trees_print(&common), before, "a checkout in the main tree");
+        let (trees, _) = worktrees(&repo).unwrap();
+        let main = trees.iter().find(|w| same_tree(&w.path, &repo)).unwrap();
+        assert_eq!(main.branch.as_deref(), Some("release"));
     }
 
     #[test]
