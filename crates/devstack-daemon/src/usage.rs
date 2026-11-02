@@ -22,6 +22,10 @@ pub const CONTAINER_EVERY: Duration = Duration::from_secs(5);
 const DISK_EVERY: Duration = Duration::from_secs(60);
 const VOLUMES_EVERY: Duration = Duration::from_secs(300);
 const KEEP: Duration = Duration::from_secs(600);
+/// Rounds a running container may go without a number before it reads as
+/// idle: one `docker stats` that failed, or a node's file that was not fresh
+/// at the moment it was read, is no measurement, not a container at 0 B.
+const MISS_GRACE: u32 = 3;
 
 /// Load at one moment: CPU in percent of one core (may exceed 100), memory in bytes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
@@ -116,11 +120,14 @@ struct Series {
     cpu_time_us: Option<u64>,
     processes: Option<u32>,
     history: VecDeque<Point>,
+    /// Rounds in a row without a number while running (see [`MISS_GRACE`]).
+    missed: u32,
 }
 
 impl Series {
     fn push(&mut self, load: Load) {
         self.current = Some(load);
+        self.missed = 0;
         let at = now_ms();
         self.history.push_back(Point {
             at,
@@ -163,6 +170,17 @@ impl Series {
         self.current = None;
         self.cpu_time_us = None;
         self.processes = None;
+        self.missed = 0;
+    }
+
+    /// Running, but no number this round: the last one stands for a few
+    /// rounds (no point in the history), then it is idle.
+    fn missed(&mut self) {
+        if self.current.is_some() && self.missed < MISS_GRACE {
+            self.missed += 1;
+        } else {
+            self.idle();
+        }
     }
 
     fn load(&self) -> Load {
@@ -311,8 +329,12 @@ impl Sampler {
                 }
             }
         }
+        let running_keys: Vec<String> = running
+            .values()
+            .map(|(group, service)| container_key(group, service))
+            .collect();
         if let Some(file) = sup.external_infra() {
-            return self.sample_external(&file);
+            return self.sample_external(&file, &running_keys);
         }
         let names: Vec<String> = running.keys().cloned().collect();
         if names.is_empty() {
@@ -337,17 +359,13 @@ impl Sampler {
             }
             Err(e) => inner.docker_error = Some(e.to_string()),
         }
-        for (key, s) in inner.series.iter_mut() {
-            if key.starts_with("container:") && !seen.contains(key) {
-                s.idle();
-            }
-        }
+        unmeasured(&mut inner, &seen, &running_keys);
     }
 
     /// A lane on a node has no Docker: the node's agent measures its
     /// containers and writes what each uses into the file that describes
     /// them (#101). A measurement older than a few of its rounds is none.
-    fn sample_external(&self, file: &std::path::Path) {
+    fn sample_external(&self, file: &std::path::Path, running: &[String]) {
         const FRESH_MS: u64 = 20_000;
         let ext = crate::external::read(file).unwrap_or_default();
         let now = crate::state::now_ms() as u64;
@@ -370,11 +388,7 @@ impl Sampler {
                 }
             }
         }
-        for (key, s) in inner.series.iter_mut() {
-            if key.starts_with("container:") && !seen.contains(key) {
-                s.idle();
-            }
-        }
+        unmeasured(&mut inner, &seen, running);
     }
 
     fn sample_volumes(&self, sup: &Supervisor) {
@@ -535,6 +549,21 @@ impl Sampler {
     }
 }
 
+/// The containers this round measured no number for: a running one keeps its
+/// last for a few rounds ([`MISS_GRACE`]), any other is idle.
+fn unmeasured(inner: &mut Inner, seen: &[String], running: &[String]) {
+    for (key, s) in inner.series.iter_mut() {
+        if !key.starts_with("container:") || seen.contains(key) {
+            continue;
+        }
+        if running.contains(key) {
+            s.missed();
+        } else {
+            s.idle();
+        }
+    }
+}
+
 fn spawn(name: &str, f: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
         .name(name.into())
@@ -613,6 +642,36 @@ mod tests {
         s.idle();
         assert_eq!(s.load(), Load::default());
         assert_eq!(s.history.len(), 3, "history survives a stop");
+    }
+
+    #[test]
+    fn a_running_container_without_a_number_keeps_its_last_for_a_few_rounds() {
+        let mut inner = Inner::default();
+        let key = container_key("app", "db");
+        let load = Load {
+            cpu: 1.0,
+            memory: 1 << 30,
+        };
+        inner.series.entry(key.clone()).or_default().push(load);
+        let running = [key.clone()];
+        for round in 1..=MISS_GRACE {
+            unmeasured(&mut inner, &[], &running);
+            assert_eq!(inner.series[&key].load(), load, "round {round}");
+        }
+        assert_eq!(inner.series[&key].history.len(), 1, "no invented point");
+        unmeasured(&mut inner, &[], &running);
+        assert_eq!(inner.series[&key].load(), Load::default(), "then idle");
+
+        // A number again resets the count; a stopped one is idle at once.
+        inner.series.get_mut(&key).unwrap().push(load);
+        unmeasured(&mut inner, &[], &running);
+        inner.series.get_mut(&key).unwrap().push(load);
+        for _ in 0..MISS_GRACE {
+            unmeasured(&mut inner, &[], &running);
+        }
+        assert_eq!(inner.series[&key].load(), load);
+        unmeasured(&mut inner, &[], &[]);
+        assert_eq!(inner.series[&key].load(), Load::default());
     }
 
     #[test]
