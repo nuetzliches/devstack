@@ -609,6 +609,17 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
+  /**
+   * The stack file is missing (a setup broken off after the stack was
+   * registered, or the file removed since) or does not load: nothing of the
+   * main tree starts, and there is no version to hold against this devstack.
+   */
+  const fileProblem = computed<'missing' | 'invalid' | null>(() => {
+    if (entry.value?.no_file) return 'missing';
+    const f = upgrade.value?.file;
+    return f === 'missing' || f === 'invalid' ? f : null;
+  });
+
   /** Whether an agent configuration registers `devstack mcp` for the repository (`GET /hub/stacks/{id}/mcp`). */
   const mcp = shallowRef<McpState | null>(null);
 
@@ -1303,6 +1314,7 @@ export const useStack = defineStore('stack', () => {
     loadSkills,
     upgrade,
     loadUpgrade,
+    fileProblem,
     mcp,
     loadMcp,
     branches,

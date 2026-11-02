@@ -122,6 +122,10 @@ pub struct StackEntry {
     /// What its main tree's ports are moved by on this machine (ADR-0082);
     /// 0: the stack file's ports.
     pub shift: u16,
+    /// Its stack file is gone: the setup was broken off after it was
+    /// registered, or the file was removed since.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub no_file: bool,
 }
 
 /// Start failures by stack id, from `stack_up` to `scan`.
@@ -219,6 +223,7 @@ fn scan(last_seen: &mut HashMap<String, u128>, errors: &StartErrors) -> Vec<Stac
                 }),
                 last_seen: last_seen.get(&e.id).copied(),
                 shift: e.shift,
+                no_file: !e.file.is_file(),
                 id: e.id,
                 name: e.name,
                 file: e.file,
@@ -1555,6 +1560,7 @@ fn entry(s: &AppState, id: &str) -> Option<StackEntry> {
                 .into_iter()
                 .find(|e| e.id == id)
                 .map(|e| StackEntry {
+                    no_file: !e.file.is_file(),
                     id: e.id,
                     name: e.name,
                     file: e.file,
@@ -1790,9 +1796,21 @@ struct Upgrade {
     behind: bool,
 }
 
-/// [`Upgrade`] for a stack file; `None` when it does not load.
-fn upgrade_of(file: &std::path::Path) -> Option<Upgrade> {
-    let stack = devstack_config::load(file).ok()?;
+/// Why a registered stack's file gives no [`Upgrade`]: the setup was broken
+/// off, or the file was removed or broken since it was registered.
+#[derive(Debug)]
+enum FileProblem {
+    Missing,
+    /// It does not load: why.
+    Invalid(String),
+}
+
+/// [`Upgrade`] for a stack file, or why there is none.
+fn upgrade_of(file: &std::path::Path) -> Result<Upgrade, FileProblem> {
+    if !file.is_file() {
+        return Err(FileProblem::Missing);
+    }
+    let stack = devstack_config::load(file).map_err(|e| FileProblem::Invalid(e.to_string()))?;
     let current = devstack_config::version_order(devstack_config::VERSION);
     let older = |v: &str| devstack_config::version_order(v) < current;
     let reviewed = stack.stack.reviewed;
@@ -1803,25 +1821,34 @@ fn upgrade_of(file: &std::path::Path) -> Option<Upgrade> {
             true,
         ),
     };
-    Some(Upgrade {
+    Ok(Upgrade {
         reviewed,
         from,
         behind,
     })
 }
 
-/// `GET /hub/stacks/{id}/upgrade`.
+/// `GET /hub/stacks/{id}/upgrade`; `file` says whether there is a stack
+/// file to hold against this devstack at all.
 async fn stack_upgrade(State(s): State<AppState>, Path(id): Path<String>) -> Response {
     let Some(e) = entry(&s, &id) else {
         return err(StatusCode::NOT_FOUND, "no such stack");
     };
     let view = tokio::task::spawn_blocking(move || {
         let u = upgrade_of(&e.file);
+        let (file, error) = match &u {
+            Ok(_) => ("ok", None),
+            Err(FileProblem::Missing) => ("missing", None),
+            Err(FileProblem::Invalid(why)) => ("invalid", Some(why.clone())),
+        };
+        let u = u.ok();
         serde_json::json!({
             "reviewed": u.as_ref().and_then(|u| u.reviewed.clone()),
             "from": u.as_ref().and_then(|u| u.from.clone()),
             "current": devstack_config::VERSION,
             "behind": u.is_some_and(|u| u.behind),
+            "file": file,
+            "error": error,
         })
     })
     .await;
@@ -1998,7 +2025,7 @@ fn write_prompt(s: &AppState, q: &PromptQuery) -> Result<Written, Refusal> {
         }
         "upgrade" => {
             let e = stack()?;
-            let u = upgrade_of(&e.file);
+            let u = upgrade_of(&e.file).ok();
             let text = prompts::text(&Prompt::Upgrade {
                 repo: &e.repo,
                 file: &e.file,
@@ -3654,7 +3681,16 @@ mod guard_tests {
         );
 
         write("reviewed = \"soon\"\n");
-        assert!(upgrade_of(&file).is_none(), "a file that does not load");
+        assert!(
+            matches!(upgrade_of(&file), Err(FileProblem::Invalid(_))),
+            "a file that does not load"
+        );
+
+        std::fs::remove_file(&file).unwrap();
+        assert!(
+            matches!(upgrade_of(&file), Err(FileProblem::Missing)),
+            "a setup broken off"
+        );
     }
 }
 

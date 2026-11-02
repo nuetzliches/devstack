@@ -2,7 +2,7 @@
 import { computed, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ago, useNow } from '@/lib/format';
-import { laneTab } from '@/lib/lanes';
+import { laneTab, MAIN } from '@/lib/lanes';
 import { laneOfParam, laneParam, laneView, stackPage } from '@/lib/stackRoutes';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
@@ -11,6 +11,7 @@ import StackHeader from '@/components/StackHeader.vue';
 import LaneStart from '@/components/LaneStart.vue';
 import { rememberTab } from '@/lib/lanes';
 import SkillsBanner from '@/components/SkillsBanner.vue';
+import StackFileBanner from '@/components/StackFileBanner.vue';
 import UpgradeBanner from '@/components/UpgradeBanner.vue';
 import AgentPrompt from '@/components/AgentPrompt.vue';
 import type { IconName } from '@/components/icons/icons';
@@ -58,6 +59,8 @@ const idleLane = computed(() => {
   return l;
 });
 const offlineStart = computed(() => !stack.running && !!idleLane.value);
+/** The main tree cannot start without a stack file that loads: StackFileBanner says why, no start button that would only fail. */
+const cannotStart = computed(() => offlineStart.value && !!stack.fileProblem && idleLane.value?.name === MAIN);
 /** The shown lane's worktree is gone: made again on its branch, if the branch is still there. */
 const restorable = computed(() => {
   const l = stack.ending;
@@ -170,6 +173,7 @@ function isActive(name: string) {
         </span>
         <AgentPrompt v-if="stack.id && hub.reachable" compact label="Give it its own" kind="lane-file" :target="{ stack: stack.id, path: borrowedFile.path }" />
       </div>
+      <StackFileBanner v-if="!hubDown && stack.entry && !stack.foreign" />
       <UpgradeBanner v-if="!hubDown && stack.entry && !stack.foreign" />
       <SkillsBanner v-if="!hubDown && stack.entry && !stack.foreign" />
       <div v-if="unknown" class="banner neutral">
@@ -231,7 +235,7 @@ function isActive(name: string) {
     </div>
 
     <div v-if="idleLane" class="idle-lane">
-      <LaneStart :lane="idleLane" />
+      <LaneStart v-if="!cannotStart" :lane="idleLane" />
     </div>
     <div v-else :data-stale="stack.stale && !!stack.view ? 'true' : 'false'">
       <RouterView v-slot="{ Component }">

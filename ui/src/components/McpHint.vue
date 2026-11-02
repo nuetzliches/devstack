@@ -27,7 +27,8 @@ const hidden = computed(() => {
   if (!id) return true;
   return dismissed.value[id] ?? persist.get<boolean>(key(id)) ?? false;
 });
-const shown = computed(() => stack.mcp?.registered === false && !hidden.value && !stack.readOnly && !stack.sharedLane);
+// Without a stack file the setup comes first; its prompt asks about MCP too.
+const shown = computed(() => stack.mcp?.registered === false && !hidden.value && !stack.readOnly && !stack.sharedLane && !stack.fileProblem);
 
 const root = ref<HTMLElement | null>(null);
 const trigger = ref<HTMLButtonElement | null>(null);

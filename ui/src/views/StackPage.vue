@@ -22,6 +22,7 @@ import { useStack } from '@/stores/stack';
 import AgentPrompt from '@/components/AgentPrompt.vue';
 import Icon from '@/components/icons/Icon.vue';
 import PortGraph from '@/components/PortGraph.vue';
+import StackFileBanner from '@/components/StackFileBanner.vue';
 import { refusedForPorts, runningHolders, shiftLabel } from '@/lib/shift';
 import StatusPill from '@/components/StatusPill.vue';
 
@@ -60,6 +61,8 @@ watch(
 /** The daemon's state: running (pid, port, uptime), idle (nothing runs, it stays for nothing), or offline. */
 const state = computed(() => {
   if (hubDown.value) return { tone: '', label: 'unknown', title: 'The hub is not reachable' };
+  if (!stack.running && stack.fileProblem === 'missing') return { tone: 'warn', label: 'not set up', title: 'Its devstack.toml does not exist' };
+  if (!stack.running && stack.fileProblem === 'invalid') return { tone: 'warn', label: 'file does not load', title: 'Its devstack.toml does not load' };
   if (!stack.running) return { tone: '', label: 'offline', title: 'Its daemon does not run' };
   if (!stack.mainActive && !stack.runningLanes.length) return { tone: '', label: 'idle', title: 'Its daemon runs; nothing of its lanes does' };
   return { tone: 'ok', label: 'running', title: 'Its daemon runs' };
@@ -253,7 +256,7 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
         </p>
       </div>
       <div v-if="changes" class="actions">
-        <template v-if="!stack.running">
+        <template v-if="!stack.running && !stack.fileProblem">
           <button type="button" class="btn btn-primary" :disabled="starting" title="Its daemon, and the lane main: its infrastructure and autostart services" data-testid="action-stack-start" @click="stack.startStack()">
             <span v-if="starting" class="spinner" /><Icon v-else name="play" :size="14" /> {{ starting ? 'Starting…' : 'Start stack' }}
           </button>
@@ -268,7 +271,7 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
             <Icon name="play" :size="14" /> Start with shift
           </button>
         </template>
-        <template v-else>
+        <template v-else-if="stack.running">
           <button type="button" class="btn" :disabled="!!stack.busy.stack" title="Stop every lane, then start the stack again with the installed devstack and the current stack file" data-testid="action-restart-stack" @click="stack.restartStack()">
             <span v-if="stack.busy.stack === 'restart'" class="spinner" /><Icon v-else name="restart" :size="14" /> Restart stack
           </button>
@@ -292,6 +295,7 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
         {{ stack.busy.stack === 'restart' ? 'Restarting…' : 'Restart stack' }}
       </button>
     </div>
+    <StackFileBanner v-if="!hubDown && changes" />
     <div v-if="!hubDown && stack.entry?.start_error && !stack.running" class="banner warn" data-testid="stack-start-error">
       <Icon name="alert" :size="18" />
       <span class="grow">

@@ -289,6 +289,23 @@ describe('stack store', () => {
     const stack = await shownStack();
     await vi.waitFor(() => expect(stack.upgrade?.behind).toBe(true));
     expect(stack.upgrade).toMatchObject({ behind: true, from: '0.9.1' });
+    expect(stack.fileProblem).toBeNull();
+  });
+
+  it('says when the stack file is missing or does not load, from the list or the upgrade check', async () => {
+    let file = 'invalid';
+    fake.on('/hub/stacks/shop/upgrade', () => ok({ reviewed: null, from: null, current: '0.9.8', behind: false, file, error: file === 'invalid' ? 'unknown field' : null }));
+    const stack = await shownStack();
+    await vi.waitFor(() => expect(stack.fileProblem).toBe('invalid'));
+
+    // The list says so before the stack is opened: a setup broken off after it was registered.
+    file = 'ok';
+    fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [{ ...entry('shop'), no_file: true }] });
+    expect(stack.fileProblem).toBe('missing');
+
+    fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [entry('shop')] });
+    await stack.loadUpgrade();
+    expect(stack.fileProblem).toBeNull();
   });
 
   it('asks whether an agent configuration registers devstack mcp', async () => {
