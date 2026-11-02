@@ -3516,6 +3516,23 @@ impl Lanes {
             .map(|w| w.trim().to_string())
             .filter(|w| !w.is_empty())
             .collect();
+        // On a node, a sharing with nothing to open is refused here, not
+        // reported as shared (ADR-0085 point 5).
+        let remote = self.remote(name);
+        if remote.is_some() && !with.is_empty() {
+            let offset = lane_offset(entry.number, self.main.stack.lanes.port_step).unwrap_or(0);
+            let services = shared_services(
+                &self.main.stack,
+                offset,
+                &entry.name,
+                &self.main.published_fixed(),
+            );
+            if services.is_empty() {
+                return Err(format!(
+                    "lane `{name}` shares no service: the stack declares no service with an http                      or https port, and the main tree's Compose files publish none right now                      (`devstack status` in the main tree)"
+                ));
+            }
+        }
         {
             let mut shares = self.shares.lock().unwrap();
             shares.insert(name.to_string(), with);
@@ -3526,7 +3543,7 @@ impl Lanes {
                 serde_json::to_vec_pretty(&*shares).expect("shares serialise"),
             );
         }
-        let r = if let Some(remote) = self.remote(name) {
+        let r = if let Some(remote) = remote {
             remote.share(self.sharing_of(&entry))
         } else {
             Ok(())

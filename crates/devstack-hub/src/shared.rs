@@ -7,14 +7,20 @@
 //! each service it shares has a forward, on the port its owner has it on if
 //! that is free here, else another one; nothing is forwarded before.
 //!
+//! A connection is to the lane, not to a lease of it (ADR-0085): its owner,
+//! repository and lane name, kept in `connected.json` in the pool's
+//! directory. The lane started again under a new lease is connected again
+//! by itself; one missing from the coordinator's list keeps its ports for
+//! [`GRACE`]; after a restart of the hub its lanes are connected again.
+//!
 //! - `GET /hub/pool/shared`: the lanes shared with this machine, each
 //!   service with `forwarded`, its port here, while the lane is connected
 //! - `POST /hub/pool/shared/{lease}/connect`: connect to the lane:
 //!   `{services: [{name, port, url}], warning?}`. It stays connected until
-//!   it is disconnected, the hub stops, or it is no longer shared with this
-//!   machine.
+//!   it is disconnected, or its owner stops sharing it with this machine
+//!   while it runs (ADR-0085).
 //! - `POST /hub/pool/shared/{lease}/disconnect`: its forwards close, the
-//!   connections through them too: `{closed}`.
+//!   connections through them too, and it is no longer connected: `{closed}`.
 //! - `POST /hub/pool/shared/{lease}/open` `{service}`: connect the lane if it
 //!   is not, `{url, port, warning?}` of that service. `warning`: the node,
 //!   or the lane's owner, runs another devstack than this machine, or does
@@ -67,12 +73,21 @@ impl PoolQuery {
                 format!("pool `{p}`"),
             )));
         }
-        let state = devstack_daemon::token::token_path()
-            .parent()
-            .expect("token path has a parent")
-            .to_path_buf();
-        Ok(Local::new(&devstack_node::member::pool_dir(&state, p)))
+        Ok(Local::new(&pool_path(p)))
     }
+}
+
+/// This machine's state directory.
+fn state_dir() -> std::path::PathBuf {
+    devstack_daemon::token::token_path()
+        .parent()
+        .expect("token path has a parent")
+        .to_path_buf()
+}
+
+/// The directory of pool `pool` on this machine.
+fn pool_path(pool: &str) -> std::path::PathBuf {
+    devstack_node::member::pool_dir(&state_dir(), pool)
 }
 
 fn error(status: StatusCode, msg: String) -> Response {
@@ -116,14 +131,275 @@ fn close(pool: &str, lease: &str) -> usize {
     before - f.len()
 }
 
-/// Close the forwards of pool `pool` that `lanes` no longer share: a lane
-/// gone or no longer shared with this machine, a service no longer shared.
-fn prune(pool: &str, lanes: &[SharedLane]) {
-    forwards().lock().unwrap().retain(|(p, l, port), _| {
-        p != pool
-            || lanes
-                .iter()
-                .any(|x| &x.lease == l && x.services.iter().any(|s| s.port == *port))
+/// How long a connected lane missing from the coordinator's list keeps its
+/// ports here (ADR-0085 point 2): the coordinator restarting, or its owner's
+/// daemon telling it the sharing again, takes about half a minute.
+const GRACE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// How long a connected lane may be gone before it is forgotten: one
+/// stopped for good is not connected to the next lane of its name.
+const FORGET: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+/// A lane connected to (ADR-0085 point 1): the lane, whatever its lease.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, Deserialize)]
+struct LaneId {
+    owner: String,
+    repo: String,
+    lane: String,
+}
+
+impl LaneId {
+    fn of(l: &SharedLane) -> Self {
+        Self {
+            owner: l.owner.clone(),
+            repo: l.repo.clone(),
+            lane: l.lane.clone(),
+        }
+    }
+}
+
+/// A connection: the lease its forwards are to (empty before the hub saw
+/// the lane after a restart), and since when the lane is missing.
+#[derive(Debug, Clone, Default)]
+struct Conn {
+    lease: String,
+    missing: Option<std::time::Instant>,
+    /// Its forwards closed after [`GRACE`]; it connects again once listed.
+    closed: bool,
+}
+
+type Conns = Mutex<HashMap<String, HashMap<LaneId, Conn>>>;
+
+/// The connections, per pool; a pool's read from its `connected.json` the
+/// first time it is needed.
+fn conns() -> &'static Conns {
+    static C: OnceLock<Conns> = OnceLock::new();
+    C.get_or_init(Default::default)
+}
+
+fn conns_file(pool: &str) -> std::path::PathBuf {
+    pool_path(pool).join("connected.json")
+}
+
+/// Pool `pool`'s connections, loaded from its file if they are not yet.
+fn with_conns<T>(pool: &str, f: impl FnOnce(&mut HashMap<LaneId, Conn>) -> T) -> T {
+    let mut all = conns().lock().unwrap();
+    let c = all.entry(pool.to_string()).or_insert_with(|| {
+        let ids: Vec<LaneId> = std::fs::read(conns_file(pool))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        ids.into_iter().map(|id| (id, Conn::default())).collect()
+    });
+    f(c)
+}
+
+/// Write pool `pool`'s connections: what a restarted hub connects again.
+fn save_conns(pool: &str) {
+    let mut ids: Vec<LaneId> = with_conns(pool, |c| c.keys().cloned().collect());
+    ids.sort_by(|a, b| (&a.owner, &a.repo, &a.lane).cmp(&(&b.owner, &b.repo, &b.lane)));
+    let file = conns_file(pool);
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(
+        &file,
+        serde_json::to_vec_pretty(&ids).expect("lane ids serialise"),
+    );
+}
+
+/// Remember `lane` as connected (ADR-0085 point 1).
+fn remember(pool: &str, lane: &SharedLane) {
+    let added = with_conns(pool, |c| {
+        let fresh = !c.contains_key(&LaneId::of(lane));
+        c.insert(
+            LaneId::of(lane),
+            Conn {
+                lease: lane.lease.clone(),
+                ..Conn::default()
+            },
+        );
+        fresh
+    });
+    if added {
+        save_conns(pool);
+    }
+}
+
+/// Forget the lane of lease `lease` as connected: disconnected.
+fn forget(pool: &str, lease: &str) {
+    let removed = with_conns(pool, |c| {
+        let before = c.len();
+        c.retain(|_, x| x.lease != lease);
+        before != c.len()
+    });
+    if removed {
+        save_conns(pool);
+    }
+}
+
+/// What to do about one connection, `lanes` listed now.
+#[derive(Debug, PartialEq)]
+enum Step {
+    /// Listed: (re)connect it; the forwards of the lease it had close first
+    /// when it has a new one.
+    Connect { old: Option<String> },
+    /// Missing, within [`GRACE`]: its ports stay.
+    Wait,
+    /// Missing for longer: its forwards close, it stays connected.
+    Close,
+    /// Gone for longer than [`FORGET`]: no longer connected.
+    Forget,
+    /// Missing, its forwards closed already.
+    Nothing,
+}
+
+fn step(
+    id: &LaneId,
+    c: &mut Conn,
+    lanes: &[SharedLane],
+    now: std::time::Instant,
+) -> (Step, Option<SharedLane>) {
+    if let Some(l) = lanes.iter().find(|l| &LaneId::of(l) == id) {
+        let old = (!c.lease.is_empty() && c.lease != l.lease).then(|| c.lease.clone());
+        c.lease = l.lease.clone();
+        c.missing = None;
+        c.closed = false;
+        return (Step::Connect { old }, Some(l.clone()));
+    }
+    let since = *c.missing.get_or_insert(now);
+    let gone = now.saturating_duration_since(since);
+    let s = if gone > FORGET {
+        Step::Forget
+    } else if c.closed {
+        Step::Nothing
+    } else if gone > GRACE {
+        c.closed = true;
+        Step::Close
+    } else {
+        Step::Wait
+    };
+    (s, None)
+}
+
+/// Bring pool `pool`'s forwards in line with `lanes`, the lanes shared with
+/// this machine as the coordinator listed them just now (ADR-0085): a
+/// connected lane listed is connected, under its new lease if it has one,
+/// a service it no longer shares closed; one missing keeps its ports for
+/// [`GRACE`]. Past that, its forwards close, and a lane that runs but is no
+/// longer shared with this machine is no longer connected.
+async fn reconcile(pool: &str, local: &Local, lanes: &[SharedLane]) {
+    let now = std::time::Instant::now();
+    let steps: Vec<(LaneId, Step, Option<SharedLane>, String)> = with_conns(pool, |c| {
+        c.iter_mut()
+            .map(|(id, conn)| {
+                let lease = conn.lease.clone();
+                let (s, l) = step(id, conn, lanes, now);
+                (id.clone(), s, l, lease)
+            })
+            .collect()
+    });
+    // The forwards of a lease no connection holds, and of a service no
+    // longer shared, close.
+    {
+        let held: Vec<&str> = steps
+            .iter()
+            .filter(|(_, s, _, _)| *s == Step::Wait)
+            .map(|(_, _, _, lease)| lease.as_str())
+            .collect();
+        let listed: Vec<&SharedLane> = steps.iter().filter_map(|(_, _, l, _)| l.as_ref()).collect();
+        forwards().lock().unwrap().retain(|(p, l, port), _| {
+            p != pool
+                || held.contains(&l.as_str())
+                || listed
+                    .iter()
+                    .any(|x| &x.lease == l && x.services.iter().any(|s| s.port == *port))
+        });
+    }
+    let mut changed = false;
+    let mut withdrawn: Vec<LaneId> = Vec::new();
+    for (id, s, lane, lease) in steps {
+        match s {
+            Step::Connect { old } => {
+                let lane = lane.expect("listed");
+                if let Some(old) = &old {
+                    close(pool, old);
+                    devstack_daemon::diag::info(
+                        "shared_lane_reconnected",
+                        json!({ "lane": lane.lane, "owner": lane.owner_name, "lease": lane.lease, "was": old }),
+                    );
+                }
+                if let Err(r) = connect_lane(pool, local, &lane) {
+                    devstack_daemon::diag::warn(
+                        "shared_lane_reconnect_failed",
+                        json!({ "lane": lane.lane, "owner": lane.owner_name, "status": r.status().as_u16() }),
+                    );
+                }
+            }
+            Step::Close => {
+                close(pool, &lease);
+                withdrawn.push(id);
+            }
+            Step::Forget => {
+                close(pool, &lease);
+                with_conns(pool, |c| c.remove(&id));
+                changed = true;
+            }
+            Step::Wait | Step::Nothing => {}
+        }
+    }
+    // Past the grace: a lane that runs but is not listed was taken back
+    // by its owner (ADR-0085 point 4); one that does not run may come back.
+    if !withdrawn.is_empty() {
+        let dir = pool_path(pool);
+        if let Ok(Ok(leases)) = tokio::task::spawn_blocking(move || Local::new(&dir).leases()).await
+        {
+            for id in withdrawn {
+                let runs = leases.iter().any(|x| {
+                    x.member == id.owner
+                        && x.repo == id.repo
+                        && x.lane == id.lane
+                        && x.state == "running"
+                });
+                if runs {
+                    with_conns(pool, |c| c.remove(&id));
+                    changed = true;
+                    devstack_daemon::diag::info(
+                        "shared_lane_unshared",
+                        json!({ "lane": id.lane, "repo": id.repo }),
+                    );
+                }
+            }
+        }
+    }
+    if changed {
+        save_conns(pool);
+    }
+}
+
+/// Every [`FOLLOW_EVERY`], the connections of every pool brought in line
+/// with what the coordinator lists: a lane started again, or a hub started
+/// again, is connected without a dashboard open (ADR-0085 point 3).
+const FOLLOW_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+
+pub fn follow() {
+    tokio::spawn(async move {
+        loop {
+            for (pool, dir) in devstack_node::member::pools(&state_dir()) {
+                if with_conns(&pool, |c| c.is_empty()) {
+                    continue;
+                }
+                let d2 = dir.clone();
+                // The coordinator not reached: nothing is known missing.
+                let Ok(Ok(lanes)) =
+                    tokio::task::spawn_blocking(move || Local::new(&d2).shared()).await
+                else {
+                    continue;
+                };
+                reconcile(&pool, &Local::new(&dir), &lanes).await;
+            }
+            tokio::time::sleep(FOLLOW_EVERY).await;
+        }
     });
 }
 
@@ -299,7 +575,9 @@ pub async fn list(Query(q): Query<PoolQuery>) -> Response {
     match lanes {
         Ok(Ok(v)) => {
             let pool = q.name();
-            prune(pool, &v);
+            if let Ok(local) = q.local() {
+                reconcile(pool, &local, &v).await;
+            }
             Json(with_forwarded(pool, &v)).into_response()
         }
         Ok(Err(e)) => error(StatusCode::BAD_GATEWAY, e.to_string()),
@@ -329,7 +607,7 @@ async fn shared_now(q: &PoolQuery, lease: &str) -> Result<(Local, SharedLane), R
         Err(e) => return Err(error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     };
     let pool = q.name();
-    prune(pool, &lanes);
+    reconcile(pool, &local, &lanes).await;
     listed()
         .lock()
         .unwrap()
@@ -474,6 +752,7 @@ pub async fn connect(Path(lease): Path<String>, Query(q): Query<PoolQuery>) -> R
         Ok(x) => x,
         Err(r) => return r,
     };
+    remember(q.name(), &lane);
     let ports = match connect_lane(q.name(), &local, &lane) {
         Ok(p) => p,
         Err(r) => return r,
@@ -499,6 +778,7 @@ pub async fn disconnect(Path(lease): Path<String>, Query(q): Query<PoolQuery>) -
     if let Err(r) = q.local() {
         return *r;
     }
+    forget(q.name(), &lease);
     let closed = close(q.name(), &lease);
     if closed > 0 {
         devstack_daemon::diag::info(
@@ -535,6 +815,7 @@ pub async fn open(
             ),
         );
     };
+    remember(q.name(), &lane);
     let ports = match connect_lane(q.name(), &local, &lane) {
         Ok(p) => p,
         Err(r) => return r,
@@ -713,9 +994,20 @@ mod tests {
         let mut kept = lane(None, None);
         kept.lease = "kept".into();
         kept.services = vec![service("web", 3000), service("db", 5432)];
-        prune(pool, &[kept.clone()]);
+        conns().lock().unwrap().insert(
+            pool.into(),
+            HashMap::from([(
+                LaneId::of(&kept),
+                Conn {
+                    lease: "kept".into(),
+                    ..Conn::default()
+                },
+            )]),
+        );
+        let local = Local::new(&std::env::temp_dir().join("devstack-prune-test"));
+        reconcile(pool, &local, std::slice::from_ref(&kept)).await;
         assert!(forwarded(pool, "kept", 3000).is_some());
-        // A service no longer shared, a lane no longer shared: closed.
+        // A service no longer shared, a lane no connection holds: closed.
         assert_eq!(forwarded(pool, "kept", 3001), None);
         assert_eq!(forwarded(pool, "gone", 3000), None);
         // Another pool's are not this listing's to close.
@@ -726,6 +1018,70 @@ mod tests {
         assert!(v[0]["services"][1].get("forwarded").is_none(), "{v}");
         close(pool, "kept");
         close("prune-other", "gone");
+        conns().lock().unwrap().remove(pool);
+    }
+
+    #[test]
+    fn a_connection_is_to_the_lane_not_its_lease() {
+        let t0 = std::time::Instant::now();
+        let mut first = lane(None, None);
+        first.lease = "a".into();
+        let id = LaneId::of(&first);
+        let mut c = Conn {
+            lease: "a".into(),
+            ..Conn::default()
+        };
+        // Listed: connected.
+        let (s, l) = step(&id, &mut c, std::slice::from_ref(&first), t0);
+        assert_eq!(s, Step::Connect { old: None });
+        assert_eq!(l.unwrap().lease, "a");
+        // Missing a while (the coordinator restarted): its ports stay.
+        let later = t0 + std::time::Duration::from_secs(30);
+        assert_eq!(step(&id, &mut c, &[], later).0, Step::Wait);
+        assert_eq!(
+            step(&id, &mut c, &[], later + std::time::Duration::from_secs(60)).0,
+            Step::Wait
+        );
+        // Back under a new lease (started again): the old one's forwards go.
+        let mut again = first.clone();
+        again.lease = "b".into();
+        let (s, _) = step(&id, &mut c, std::slice::from_ref(&again), later);
+        assert_eq!(
+            s,
+            Step::Connect {
+                old: Some("a".into())
+            }
+        );
+        assert_eq!(c.lease, "b");
+        assert_eq!(c.missing, None);
+        // Another owner's lane of the same name is another lane.
+        let mut other = again.clone();
+        other.owner = "someone-else".into();
+        let t1 = t0 + std::time::Duration::from_secs(100);
+        assert_eq!(
+            step(&id, &mut c, std::slice::from_ref(&other), t1).0,
+            Step::Wait
+        );
+        // Missing past the grace: closed once, then kept until forgotten.
+        let past = t1 + GRACE + std::time::Duration::from_secs(1);
+        assert_eq!(step(&id, &mut c, &[], past).0, Step::Close);
+        assert_eq!(step(&id, &mut c, &[], past).0, Step::Nothing);
+        assert_eq!(
+            step(
+                &id,
+                &mut c,
+                &[],
+                t1 + FORGET + std::time::Duration::from_secs(1)
+            )
+            .0,
+            Step::Forget
+        );
+        // A hub started again knows no lease: listed, it connects, nothing to close.
+        let mut fresh = Conn::default();
+        assert_eq!(
+            step(&id, &mut fresh, std::slice::from_ref(&again), t0).0,
+            Step::Connect { old: None }
+        );
     }
 
     #[test]
