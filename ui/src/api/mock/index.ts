@@ -208,7 +208,9 @@ class MockHub {
   skills: Record<string, { from: string; outdated: boolean }> = {};
   /** `[stack] reviewed` of each stack's file (`null`: not set; not listed: this devstack). */
   reviewed: Record<string, string | null> = {};
-  pool = new MockPool(new URLSearchParams(location.search).get('mock') ?? '');
+  /** `?mock=badfile`: the stack whose file does not load. */
+  brokenFile: MockStack | null = null;
+  pool =new MockPool(new URLSearchParams(location.search).get('mock') ?? '');
   private streams = new Set<{ reconnect(): void }>();
 
   constructor() {
@@ -241,6 +243,9 @@ class MockHub {
       notify.trouble = "devstack's name could not be registered with Windows (error 5), so notifications may show without it, or not at all.";
     }
     if (q.includes('configchanged')) shop.view.config_changed = true;
+    // `?mock=nofile`: docs was registered, then its setup broken off and its stack file removed; `?mock=badfile`: it does not load.
+    if (q.includes('nofile')) docs.entry.no_file = true;
+    if (q.includes('badfile')) this.brokenFile = docs;
     if (q.includes('startfailed')) docs.entry.start_error = 'Error: port 4000 (site) is taken by another process (node.exe, pid 4242)\n  devstack doctor names it; stop it or change the port in devstack.toml';
     // `?mock=skills`: shop was set up with an older devstack, crm's stack file changed since.
     // `?mock=worktrees`: a worktree appears in docs (not running) after 4 s, as one made by `git worktree add` elsewhere.
@@ -840,7 +845,11 @@ export class MockTransport implements Transport {
       const reviewed = r === undefined ? MOCK_VERSION : r;
       const k = hub.skills[stack.entry.id];
       const from = reviewed ?? (k && k.from !== MOCK_VERSION ? k.from : null);
-      return json(200, { reviewed, from, current: MOCK_VERSION, behind: reviewed !== MOCK_VERSION });
+      if (stack.entry.no_file) return json(200, { reviewed: null, from: null, current: MOCK_VERSION, behind: false, file: 'missing', error: null });
+      if (hub.brokenFile === stack) {
+        return json(200, { reviewed: null, from: null, current: MOCK_VERSION, behind: false, file: 'invalid', error: `${stack.entry.file}: unknown field \`servise\` in [services.site], expected one of \`command\`, \`watch\`, \`port\`` });
+      }
+      return json(200, { reviewed, from, current: MOCK_VERSION, behind: reviewed !== MOCK_VERSION, file: 'ok', error: null });
     }
     // The first stack registers devstack's MCP server, the others do not.
     if (rest === '/mcp' && method === 'GET') {

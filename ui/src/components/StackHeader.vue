@@ -53,6 +53,8 @@ const canServeMain = computed(() => !!current.value && !current.value.owns_main 
 const liveState = computed(() => {
   if (stack.ending?.removing) return { tone: 'warn', label: 'removing', title: 'Its worktree is gone: the lane stops and its data is removed' };
   if (stack.ending) return { tone: '', label: 'removed', title: 'Its worktree is gone, and the lane with it' };
+  if (!stack.running && stack.fileProblem === 'missing') return { tone: 'warn', label: 'not set up', title: 'Its devstack.toml does not exist' };
+  if (!stack.running && stack.fileProblem === 'invalid') return { tone: 'warn', label: 'file does not load', title: 'Its devstack.toml does not load' };
   if (!stack.running) return { tone: '', label: 'offline', title: 'The stack daemon is not running' };
   if (current.value && current.value.active === false) return { tone: '', label: 'not started', title: `${laneLabel(current.value)} runs nothing now` };
   if (stack.live) return { tone: 'ok', label: 'live', title: `Receiving live events from ${current.value ? laneLabel(current.value) : 'this lane'}` };

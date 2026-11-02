@@ -416,7 +416,7 @@ async function copyPath(s: StackEntry) {
             class="item"
             :class="{ active: pageShown(s) }"
             :aria-current="pageShown(s) ? 'page' : undefined"
-            :title="`${s.repo}\n${stackIdle(s) ? 'nothing runs, its daemon is up' : s.running ? 'running' : 'offline'} · right click for more`"
+            :title="`${s.repo}\n${stackIdle(s) ? 'nothing runs, its daemon is up' : s.running ? 'running' : s.no_file ? 'not set up: its devstack.toml does not exist' : 'offline'} · right click for more`"
             data-testid="sidebar-stack"
             @click="openStack(s)"
           >
@@ -424,7 +424,8 @@ async function copyPath(s: StackEntry) {
             <span v-else-if="expanded(s)" class="dot-space" aria-hidden="true" />
             <span v-else class="dot" :class="stackDot(s)" aria-hidden="true" data-testid="sidebar-stack-dot" />
             <span class="label truncate">{{ s.name }}</span>
-            <span v-if="!s.running" class="faint small">offline</span>
+            <span v-if="!s.running && s.no_file" class="small not-set-up" data-testid="sidebar-stack-no-file">not set up</span>
+            <span v-else-if="!s.running" class="faint small">offline</span>
             <span v-else-if="stackIdle(s)" class="faint small" data-testid="sidebar-stack-idle">idle</span>
           </button>
           <button
@@ -742,6 +743,9 @@ ul {
 }
 .small {
   font-size: 11px;
+}
+.not-set-up {
+  color: var(--warn-text);
 }
 .branch {
   color: var(--text-muted);

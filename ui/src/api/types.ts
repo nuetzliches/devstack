@@ -24,6 +24,8 @@ export type StackEntry = {
   start_error?: string;
   /** What its main tree's ports are moved by on this machine (ADR-0082); 0: the stack file's ports. Older hubs omit it. */
   shift?: number;
+  /** Its stack file is gone: a setup broken off after it was registered, or the file removed since. */
+  no_file?: boolean;
 };
 
 export type HubSession = {
@@ -440,6 +442,10 @@ export type UpgradeState = {
   current: string;
   /** `reviewed` is older than this devstack, or not set; `false` for a file that does not load. */
   behind: boolean;
+  /** Whether there is a stack file to hold against this devstack at all. Older hubs omit it. */
+  file?: 'ok' | 'missing' | 'invalid';
+  /** Why it does not load (`file: 'invalid'`). */
+  error?: string | null;
 };
 
 /**

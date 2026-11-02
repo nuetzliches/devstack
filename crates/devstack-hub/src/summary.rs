@@ -221,6 +221,7 @@ mod tests {
             last_seen: None,
             start_error: None,
             shift: 0,
+            no_file: false,
         }
     }
 

@@ -9,6 +9,20 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **A stack whose setup was broken off says so.** A registered stack whose
+  `devstack.toml` is missing (the setup stopped after the stack was
+  registered, or the file was removed since) or does not load was only
+  "offline", offered starts that could only fail, and showed no version
+  check, since that check reads the stack file. Its pages now show a banner
+  that cannot be dismissed, with the setup prompt (or the repair prompt, or
+  the update when the file needs a newer devstack). The header, the stack
+  page and the sidebar say "not set up" or "file does not load", and the
+  main tree's start buttons and the MCP hint are hidden until the file
+  loads. `GET /hub/stacks/{id}/upgrade` gains `file` and `error`, and
+  `StackEntry` gains `no_file`.
+
 ## [0.34.0] - 2026-11-02
 
 Several stacks on one machine: a stack whose ports another stack holds
