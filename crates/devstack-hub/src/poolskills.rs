@@ -187,6 +187,8 @@ type Download = Box<dyn Fn(&str, &str, &str) -> Result<Vec<u8>, String> + Send +
 type Trees = Box<dyn Fn() -> Vec<Tree> + Send + Sync>;
 /// Whether git tracks a file at or below a path (relative) of a tree.
 type Tracked = Box<dyn Fn(&Path, &Path) -> bool + Send + Sync>;
+/// The stacks registered here (`registry::list`; tests: their own).
+type Stacks = Box<dyn Fn() -> Vec<devstack_daemon::registry::Entry> + Send + Sync>;
 
 /// What a skill name should be.
 struct Want {
@@ -213,6 +215,10 @@ pub struct PoolSkills {
     trees: Trees,
     seen: Mutex<Vec<Tree>>,
     tracked: Tracked,
+    /// The user's home: emptied folders above a user folder go up to it.
+    home: Option<PathBuf>,
+    /// The stacks whose working trees get the generated skills.
+    stacks: Stacks,
 }
 
 fn now_ms() -> u128 {
@@ -271,6 +277,8 @@ impl PoolSkills {
         );
         s.trees = Box::new(registered_trees);
         s.tracked = Box::new(crate::branches::tracked);
+        s.home = devstack_skills::agents::home();
+        s.stacks = Box::new(devstack_daemon::registry::list);
         s
     }
 
@@ -286,6 +294,8 @@ impl PoolSkills {
             trees: Box::new(Vec::new),
             seen: Mutex::new(Vec::new()),
             tracked: Box::new(|_, _| false),
+            home: None,
+            stacks: Box::new(Vec::new),
         };
         s.publish();
         s
@@ -381,20 +391,24 @@ impl PoolSkills {
     /// The generated devstack skills (`devstack skills install`) in every
     /// working tree of the stacks registered here (ADR-0079): into the
     /// folders there of the agents switched on, and refreshed where an
-    /// earlier one is; each folder ignores itself. A skill git tracks is
-    /// left to the upgrade prompt.
+    /// earlier one is; each folder ignores itself. Out of the folders of the
+    /// agents switched off that no agent switched on reads (ADR-0083). A
+    /// skill git tracks is left to the upgrade prompt.
     pub fn local(&self) {
         let s = self.settings();
-        let mut rels: Vec<&str> = Vec::new();
+        let (mut rels, mut off): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
         for a in devstack_skills::agents::all() {
-            if s.agents.get(&a.id) == Some(&true)
-                && let Some(p) = a.project.as_deref()
-                && !rels.contains(&p)
-            {
-                rels.push(p);
+            let Some(p) = a.project.as_deref() else {
+                continue;
+            };
+            match s.agents.get(&a.id) {
+                Some(true) if !rels.contains(&p) => rels.push(p),
+                Some(false) if !off.contains(&p) => off.push(p),
+                _ => {}
             }
         }
-        for e in devstack_daemon::registry::list() {
+        off.retain(|p| !rels.contains(p));
+        for e in (self.stacks)() {
             let rel = e
                 .file
                 .strip_prefix(&e.repo)
@@ -417,20 +431,24 @@ impl PoolSkills {
                     continue;
                 };
                 let base = file.parent().unwrap_or(&root).to_path_buf();
-                let dirs: Vec<PathBuf> = rels
-                    .iter()
-                    .map(|r| {
-                        let mut d = base.clone();
-                        d.extend(r.split('/').filter(|p| !p.is_empty()));
-                        d
-                    })
-                    .collect();
+                let at = |rels: &[&str]| -> Vec<PathBuf> {
+                    rels.iter()
+                        .map(|r| {
+                            let mut d = base.clone();
+                            d.extend(r.split('/').filter(|p| !p.is_empty()));
+                            d
+                        })
+                        .collect()
+                };
+                let (dirs, retire) = (at(&rels), at(&off));
                 let skip = |folder: &Path| {
                     folder
                         .strip_prefix(&root)
                         .is_ok_and(|rel| (self.tracked)(&root, rel))
                 };
-                if let Err(err) = devstack_skills::install_into(&stack, &file, &dirs, &skip) {
+                if let Err(err) =
+                    devstack_skills::install_into(&stack, &file, &dirs, &retire, &skip)
+                {
                     devstack_daemon::diag::warn(
                         "local_skills",
                         serde_json::json!({ "tree": root, "error": format!("{err:#}") }),
@@ -691,12 +709,17 @@ impl PoolSkills {
             }
             let path = i.dir.join(&i.name);
             match tree(&path) {
-                Some(t) if t == i.tree => {
-                    if let Err(e) = std::fs::remove_dir_all(&path) {
+                Some(t) if t == i.tree => match std::fs::remove_dir_all(&path) {
+                    Ok(()) => {
+                        if let Some(stop) = self.stop(&i.dir, &trees) {
+                            devstack_skills::prune_empty(&i.dir, &stop);
+                        }
+                    }
+                    Err(e) => {
                         errors.push(format!("{}: {e}", path.display()));
                         keep.push(i);
                     }
-                }
+                },
                 Some(_) => conflicts.push(Conflict {
                     dir: i.dir.to_string_lossy().into_owned(),
                     name: i.name.clone(),
@@ -820,6 +843,19 @@ impl PoolSkills {
             }
         }
         out
+    }
+
+    /// How far up the folders a skill leaves empty in `dir` go (ADR-0083):
+    /// to its working tree's root, or, an agent's user folder, to the home;
+    /// else none.
+    fn stop(&self, dir: &Path, trees: &[Tree]) -> Option<PathBuf> {
+        if let Some(t) = trees.iter().find(|t| dir.starts_with(&t.root)) {
+            return Some(t.root.clone());
+        }
+        let user = devstack_skills::agents::all()
+            .iter()
+            .any(|a| (self.folder)(a).as_deref() == Some(dir));
+        self.home.clone().filter(|h| user && dir.starts_with(h))
     }
 
     /// Archives no set names any more go from the store.
@@ -1324,7 +1360,8 @@ mod tests {
         let a = archives.clone();
         let home = home.to_path_buf();
         let h2 = home.clone();
-        let s = PoolSkills::with(
+        let h3 = home.clone();
+        let mut s = PoolSkills::with(
             state.to_path_buf(),
             Box::new(move |a| match a.id.as_str() {
                 "claude-code" => Some(home.join(".claude").join("skills")),
@@ -1345,6 +1382,7 @@ mod tests {
                     .ok_or_else(|| "gone".into())
             }),
         );
+        s.home = Some(h3);
         (s, Pool { archives })
     }
 
@@ -1383,16 +1421,51 @@ mod tests {
         );
         assert!(hub.view().sets[0].skills[0].installed);
 
-        // An update comes at once; switched off, the folder is cleared.
+        // An update comes at once; switched off, the folder is cleared, and
+        // the folders it leaves empty go too (ADR-0083), up to the home.
         let b = pool.put("work-issue", "v2");
         hub.set_pool("default", Some(set(vec![b])));
         assert!(std::fs::read_to_string(&claude).unwrap().ends_with("v2"));
         hub.set_agent("codex", false).unwrap();
-        assert!(!home.path().join(".agents/skills/work-issue").exists());
+        assert!(!home.path().join(".agents").exists());
 
-        // The set gone from the pool: its skill goes.
+        // The set gone from the pool: its skill goes; a folder with a skill
+        // of the user's own in it stays.
+        std::fs::create_dir_all(home.path().join(".claude/skills/own")).unwrap();
         hub.set_pool("default", Some(Vec::new()));
         assert!(!claude.exists());
+        assert!(home.path().join(".claude/skills/own").is_dir());
+        assert!(home.path().is_dir());
+    }
+
+    #[test]
+    fn the_generated_skills_leave_the_folders_of_an_agent_switched_off() {
+        let (st, home, wt) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        let (mut hub, _pool) = hub(st.path(), home.path());
+        let file = wt.path().join("devstack.toml");
+        std::fs::write(
+            &file,
+            "version = 1\n[stack]\nname = \"shop\"\n[services.api]\nrun = \"x\"\n",
+        )
+        .unwrap();
+        let (f, r) = (file.clone(), wt.path().to_path_buf());
+        hub.stacks = Box::new(move || {
+            vec![devstack_daemon::registry::Entry {
+                file: f.clone(),
+                repo: r.clone(),
+                ..Default::default()
+            }]
+        });
+        let agents = wt.path().join(".agents/skills/devstack/SKILL.md");
+        hub.set_agent("codex", true).unwrap();
+        assert!(agents.is_file());
+        hub.set_agent("codex", false).unwrap();
+        assert!(!wt.path().join(".agents").exists());
+        assert!(file.is_file(), "the tree stays");
     }
 
     #[test]
