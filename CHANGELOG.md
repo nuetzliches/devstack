@@ -9,6 +9,20 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-11-02
+
+Several stacks on one machine: a stack whose ports another stack holds
+runs with a port shift (`devstack up --shift auto`), kept on this machine
+and never in the stack file; every daemon writes the ports it claims and
+new lanes avoid them (ADR-0082). The sidebar orders stacks by name or by
+last opened (ADR-0084), and adding a stack has tabs, one folder field and
+a choice of what a scan adds. The hub watches itself and leaves a dump
+when it hangs, with the Windows build's symbols in the release to read
+it. Fixed: asking Windows about notifications can no longer stop the hub
+(#398), an agent switched off loses devstack's generated skills and no
+empty folder stays (ADR-0083), and an upstream whose refresh was refused
+is logged out.
+
 ### Added
 
 - **Several stacks on one machine** (ADR-0082 points 3 to 7): a stack can
@@ -32,9 +46,33 @@ and listed with their assets on the
   hub and exits, so the dashboard comes back by itself. The release has
   the Windows build's symbols as an asset
   (`devstack-x86_64-pc-windows-msvc-pdb.zip`) to read such a dump.
+- **The sidebar orders the stacks by name or by last opened** (#377,
+  ADR-0084): a button (↕) beside the "Stacks" heading chooses; by name is
+  the default. Last opened is taken when the page loads or the choice is
+  made, so nothing moves while the page is open; a start or a stop moves
+  nothing either. The choice and the times live in the browser's
+  `localStorage`, as the fold state does. Trees within a stack and
+  "Shared with you" stay by name.
+- **The add-a-stack dialog** has tabs for one repository and for a scan of
+  a folder, one folder field with a "Browse…" button (where the hub has a
+  folder dialog), checks a typed path once typing pauses, and a scan lets
+  you choose which of the repositories it found to add.
 
 ### Fixed
 
+- **An agent switched off loses devstack's skills, and no empty folder
+  stays** (ADR-0083): switching Codex, GitHub Copilot or OpenCode off on
+  the Skills page left `devstack` and `devstack-config` in its folder and
+  refreshed them every minute, and `.agents/skills` stayed behind empty.
+  The hub now removes a generated skill, unchanged and untracked, from a
+  folder of an agent switched off that `[agents] skills` does not name,
+  and the folders a removed skill emptied above it, up to the working
+  tree's root or the home.
+- **An upstream whose refresh the server refused is logged out**: the
+  dashboard showed *logged in* for an OAuth upstream whose refresh token
+  was revoked while every call failed. A final refusal (`invalid_grant`,
+  `invalid_client`, `unauthorized_client`) drops the login; an endpoint
+  that cannot be reached keeps it.
 - **Asking Windows about notifications can no longer stop the hub** (#398).
   Before each notification, and for `GET /hub/notify`, the hub asked
   Windows' notification platform whether it takes devstack's toasts. The
@@ -2491,7 +2529,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.33.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.34.0...HEAD
+[0.34.0]: https://github.com/nuetzliches/devstack/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/nuetzliches/devstack/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/nuetzliches/devstack/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/nuetzliches/devstack/compare/v0.30.0...v0.31.0
