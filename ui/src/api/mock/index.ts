@@ -750,6 +750,7 @@ export class MockTransport implements Transport {
       return json(200, [
         { repo: `${root}\\shop`, id: 'shop-3f9a1c', name: 'shop', error: null, registered: true, added: false },
         { repo: `${root}\\billing`, id: 'b111', name: 'billing', error: null, registered: add, added: add },
+        { repo: `${root}\\worker`, id: 'w333', name: 'worker', error: null, registered: add, added: add },
         { repo: `${root}\\legacy`, id: 'l222', name: null, error: 'devstack.toml: unknown field `biuld`', registered: false, added: false },
       ]);
     }
