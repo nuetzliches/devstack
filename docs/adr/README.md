@@ -166,3 +166,4 @@ stay.
 | [0081](0081-a-stack-has-a-page-every-lane-the-same-view.md) | A stack has a page of its own; every lane, `main` included, has the same view | Accepted (card in the pull request) |
 | [0082](0082-the-ports-of-a-machine.md) | The ports of a machine: every stack says what it holds, a stack can run shifted | Accepted (card in the pull request); built: points 1 (`/v1/ports`, `/hub/ports`, `doctor`) and 2 (the graph) in 0.33.0, points 3 to 7 (the shift, the claims, `up --shift`) after it |
 | [0083](0083-the-hub-takes-out-what-an-agent-switched-off-leaves.md) | The hub takes out what an agent switched off leaves: devstack's generated skills, and the folders a removed skill empties | Accepted (card in the pull request); built |
+| [0084](0084-the-sidebar-orders-stacks-by-name-or-last-opened.md) | The sidebar orders the stacks by name or by last opened, a choice kept in the browser | Accepted (card in the pull request); built |
