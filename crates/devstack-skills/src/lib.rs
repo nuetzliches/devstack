@@ -380,18 +380,38 @@ pub fn install(
 
 /// What the hub writes (ADR-0079): the skills into `dirs` (the agents' skill
 /// folders in the working tree of `stack_file`), and a generated copy found
-/// in another agent's folder refreshed. A path `skip` says no to (one git
-/// tracks) is left alone; a skill the project wrote itself too.
+/// in another agent's folder refreshed. In `retire` (the folders of agents
+/// the user switched off, ADR-0083) a generated copy goes instead, with the
+/// folders it leaves empty, unless `dirs` or `[agents] skills` names the
+/// folder or it holds files devstack did not write. A path `skip` says no
+/// to (one git tracks) is left alone; a skill the project wrote itself too.
 pub fn install_into(
     stack: &Stack,
     stack_file: &Path,
     dirs: &[PathBuf],
+    retire: &[PathBuf],
     skip: &dyn Fn(&Path) -> bool,
 ) -> Result<Vec<Outcome>> {
     let rendered = render_all(stack, stack_file);
+    let named = skill_dirs(stack, stack_file)?;
+    let retired: Vec<&PathBuf> = retire
+        .iter()
+        .filter(|d| !dirs.contains(d) && !named.contains(d))
+        .collect();
+    let root = repo(stack_file)?;
+    for dir in &retired {
+        for (name, _) in &rendered {
+            let folder = dir.join(name);
+            if generated(&folder) && only_ours(&folder) && !skip(&folder) {
+                std::fs::remove_dir_all(&folder)
+                    .with_context(|| format!("remove {}", folder.display()))?;
+                prune_empty(dir, &root);
+            }
+        }
+    }
     let mut targets: Vec<(PathBuf, bool)> = dirs.iter().map(|d| (d.clone(), true)).collect();
     for d in search_dirs(stack, stack_file)? {
-        if !targets.iter().any(|(t, _)| *t == d) {
+        if !targets.iter().any(|(t, _)| *t == d) && !retired.contains(&&d) {
             targets.push((d, false));
         }
     }
@@ -424,6 +444,27 @@ pub fn install_into(
 /// A generated skill in `skill_dir` (its own folder, `…/skills/devstack`).
 fn generated(skill_dir: &Path) -> bool {
     std::fs::read_to_string(skill_dir.join("SKILL.md")).is_ok_and(|e| e.contains(MARKER_TAG))
+}
+
+/// A generated skill's folder holds only what devstack writes there.
+fn only_ours(skill_dir: &Path) -> bool {
+    std::fs::read_dir(skill_dir).is_ok_and(|rd| {
+        rd.flatten()
+            .all(|e| e.file_name() == "SKILL.md" || e.file_name() == ".gitignore")
+    })
+}
+
+/// Remove `dir` and the folders above it while they are empty, below
+/// `stop` (which stays): what removing a skill left behind (ADR-0083). A
+/// folder with anything in it ends the walk.
+pub fn prune_empty(dir: &Path, stop: &Path) {
+    let mut d = dir;
+    while d != stop && d.starts_with(stop) && std::fs::remove_dir(d).is_ok() {
+        match d.parent() {
+            Some(p) => d = p,
+            None => break,
+        }
+    }
 }
 
 fn write_one(path: &Path, content: &str, force: bool) -> Result<Outcome> {
@@ -817,14 +858,63 @@ ours"
         age(&claude.join("SKILL.md"), true);
         let old = std::fs::read_to_string(claude.join("SKILL.md")).unwrap();
         let tracked = |f: &Path| f.ends_with(".claude/skills/devstack");
-        install_into(&stack, &file, std::slice::from_ref(&agents), &tracked).unwrap();
+        install_into(&stack, &file, std::slice::from_ref(&agents), &[], &tracked).unwrap();
         assert!(agents.join("devstack/SKILL.md").is_file());
         assert!(agents.join("devstack/.gitignore").is_file());
         assert_eq!(
             std::fs::read_to_string(claude.join("SKILL.md")).unwrap(),
             old
         );
-        install_into(&stack, &file, &[], &|_| false).unwrap();
+        install_into(&stack, &file, &[], &[], &|_| false).unwrap();
         assert!(outdated(&file).is_empty(), "{:?}", outdated(&file));
+    }
+
+    #[test]
+    fn the_hub_takes_a_copy_out_of_a_folder_switched_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("devstack.toml");
+        std::fs::write(&file, STACK).unwrap();
+        let stack = devstack_config::load(&file).unwrap();
+        let (claude, agents, github) = (
+            dir.path().join(".claude/skills"),
+            dir.path().join(".agents/skills"),
+            dir.path().join(".github/skills"),
+        );
+        let both = [claude.clone(), agents.clone(), github.clone()];
+        install_into(&stack, &file, &both, &[], &|_| false).unwrap();
+        // The project's own file beside a generated copy keeps that one.
+        std::fs::write(github.join("devstack/notes.md"), "ours").unwrap();
+
+        // Every agent switched off: the copies go, and the folders they
+        // leave empty; `.claude/skills` is what `[agents] skills` names by
+        // default, so it stays; one git tracks stays too.
+        let tracked = |f: &Path| f.ends_with(".github/skills/devstack-config");
+        install_into(&stack, &file, &[], &both, &tracked).unwrap();
+        assert!(claude.join("devstack/SKILL.md").is_file());
+        assert!(!dir.path().join(".agents").exists());
+        assert!(github.join("devstack/notes.md").is_file());
+        assert!(github.join("devstack-config/SKILL.md").is_file());
+
+        // A folder still on is written, not taken out.
+        install_into(&stack, &file, std::slice::from_ref(&agents), &both, &|_| {
+            false
+        })
+        .unwrap();
+        assert!(agents.join("devstack/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn pruning_stops_at_a_folder_with_something_in_it_and_at_the_root() {
+        let root = tempfile::tempdir().unwrap();
+        let deep = root.path().join("a/b/c");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(root.path().join("a/keep"), "").unwrap();
+        prune_empty(&deep, root.path());
+        assert!(!root.path().join("a/b").exists());
+        assert!(root.path().join("a").is_dir());
+        std::fs::remove_file(root.path().join("a/keep")).unwrap();
+        prune_empty(&root.path().join("a"), root.path());
+        assert!(!root.path().join("a").exists());
+        assert!(root.path().is_dir(), "the root stays");
     }
 }

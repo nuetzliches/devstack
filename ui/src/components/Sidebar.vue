@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // Stacks and their worktrees (lanes, ADR-0024) as a sidebar: every stack the
-// hub knows, by name (a click opens the stack's page, ADR-0081), and under
+// hub knows, by name or by when this browser last opened each, as the user
+// chooses (#377; a click opens the stack's page, ADR-0081), and under
 // each all of its trees, named by their branch: the lane `main` (the main
 // working tree) first, then the others by name, started or not (of a stack
 // whose daemon does not run, the hub lists them, ADR-0078); a click opens
@@ -21,6 +22,7 @@ import { laneLabel, lastTab, MAIN, nodeLabel, runCounts, runsAnything, started }
 import { laneView, stackPage } from '@/lib/stackRoutes';
 import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
+import { forgetOpened, noteOpened, openedTimes, orderStacks, savedOrder, saveOrder, type StackOrder } from '@/lib/stackOrder';
 import { useHub } from '@/stores/hub';
 import { connectedTo, usePool } from '@/stores/pool';
 import { useStack } from '@/stores/stack';
@@ -70,8 +72,57 @@ function toggle(id: string) {
   persist.set('sidebar.collapsed', collapsed.value);
 }
 
-// By name, never by state: a start or a stop moves nothing in the list.
-const stacks = computed(() => [...hub.stacks].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)));
+// By name or by last opened, never by state: a start or a stop moves nothing
+// in the list. Last opened is the snapshot taken when the page loaded or the
+// choice was made, so opening a stack does not move it under the pointer.
+const order = ref<StackOrder>(savedOrder());
+const openedSnapshot = ref(openedTimes());
+const stacks = computed(() => orderStacks(hub.stacks, order.value, openedSnapshot.value));
+// A stack shown is opened; the hub's list may arrive after the route.
+watch(
+  () => [route.params.stack, hub.stacks.length] as const,
+  ([id]) => {
+    if (typeof id === 'string' && hub.entry(id)) noteOpened(id);
+  },
+  { immediate: true },
+);
+const orderMenu = ref(false);
+const orderEl = ref<HTMLElement | null>(null);
+const orderBtn = ref<HTMLElement | null>(null);
+const orderPos = ref({ x: 0, y: 0 });
+function openOrderMenu() {
+  const r = orderBtn.value!.getBoundingClientRect();
+  orderPos.value = { x: Math.max(4, r.right - 180), y: r.bottom + 2 };
+  orderMenu.value = true;
+  void nextTick(() => orderEl.value?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus());
+}
+function closeOrderMenu() {
+  orderMenu.value = false;
+}
+function chooseOrder(o: StackOrder) {
+  order.value = o;
+  saveOrder(o);
+  openedSnapshot.value = openedTimes();
+  closeOrderMenu();
+}
+function onOrderDown(e: PointerEvent) {
+  if (orderEl.value?.contains(e.target as Node) || orderBtn.value?.contains(e.target as Node)) return;
+  closeOrderMenu();
+}
+function onOrderKey(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeOrderMenu();
+    orderBtn.value?.focus();
+  }
+}
+watch(orderMenu, (open) => {
+  const add = open ? 'addEventListener' : 'removeEventListener';
+  document[add]('pointerdown', onOrderDown as EventListener, true);
+  document[add]('keydown', onOrderKey as EventListener);
+  window[add]('blur', closeOrderMenu);
+});
+onBeforeUnmount(closeOrderMenu);
 
 /**
  * The worktrees of every stack, kept across navigation: replaced when news
@@ -309,6 +360,7 @@ async function removeStack(s: StackEntry) {
   const res = await act({ label: `Remove ${s.name}`, method: 'DELETE', path: paths.forget(s.id), success: `${s.name} removed from the dashboard` });
   if (!res.ok) return;
   persist.forgetStack(s.id);
+  forgetOpened(s.id);
   delete known.value[s.id];
   if (isCurrent(s)) void router.push('/');
 }
@@ -326,7 +378,21 @@ async function copyPath(s: StackEntry) {
 <template>
   <aside class="sidebar" aria-label="Stacks and worktrees" data-testid="sidebar">
     <div class="head head-row">
-      <span>Stacks</span>
+      <span class="head-label">Stacks</span>
+      <button
+        ref="orderBtn"
+        type="button"
+        class="head-btn"
+        :class="{ open: orderMenu }"
+        :title="`Order: ${order === 'name' ? 'by name' : 'last opened first'}`"
+        aria-label="Order of the stacks"
+        aria-haspopup="menu"
+        :aria-expanded="orderMenu"
+        data-testid="sidebar-order"
+        @click="orderMenu ? closeOrderMenu() : openOrderMenu()"
+      >
+        <Icon name="arrowUpDown" :size="14" />
+      </button>
       <button type="button" class="head-btn" title="Add a stack…" aria-label="Add a stack" data-testid="sidebar-add-stack" @click="adding = true">
         <Icon name="plus" :size="14" />
       </button>
@@ -489,6 +555,35 @@ async function copyPath(s: StackEntry) {
     <AddStackDialog :open="adding" @close="adding = false" />
     <Teleport to="body">
       <div
+        v-if="orderMenu"
+        ref="orderEl"
+        class="ctx-menu order-menu"
+        role="menu"
+        aria-label="Order of the stacks"
+        :style="{ left: `${orderPos.x}px`, top: `${orderPos.y}px` }"
+        data-testid="sidebar-order-menu"
+      >
+        <button
+          v-for="o in [
+            { value: 'name', label: 'By name' },
+            { value: 'opened', label: 'Last opened first' },
+          ] as const"
+          :key="o.value"
+          type="button"
+          class="opt"
+          role="menuitemradio"
+          :aria-checked="order === o.value"
+          :data-order="o.value"
+          @click="chooseOrder(o.value)"
+        >
+          <Icon v-if="order === o.value" name="check" :size="14" />
+          <span v-else class="check-space" aria-hidden="true" />
+          {{ o.label }}
+        </button>
+      </div>
+    </Teleport>
+    <Teleport to="body">
+      <div
         v-if="menu"
         ref="menuEl"
         class="ctx-menu"
@@ -542,8 +637,11 @@ async function copyPath(s: StackEntry) {
 .head-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 2px;
   padding-right: 2px;
+}
+.head-label {
+  flex: 1;
 }
 .head-btn,
 .more-btn {
@@ -559,6 +657,7 @@ async function copyPath(s: StackEntry) {
   cursor: pointer;
 }
 .head-btn:hover,
+.head-btn.open,
 .more-btn:hover,
 .more-btn.open {
   background: var(--surface-hover);
@@ -762,6 +861,13 @@ ul {
 }
 .ctx-menu .opt.danger:not(:disabled) {
   color: var(--danger);
+}
+.order-menu {
+  min-width: 180px;
+}
+.check-space {
+  width: 14px;
+  flex: none;
 }
 .ctx-menu .sep {
   height: 1px;
