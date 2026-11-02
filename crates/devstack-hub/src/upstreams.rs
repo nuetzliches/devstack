@@ -1020,7 +1020,7 @@ impl Upstreams {
     /// The bearer token for a call to `name` now: a static one, or the
     /// login's access token, refreshed when it is about to expire (or when
     /// `stale`, after the upstream refused it). `None`: it needs none, or it
-    /// is logged out.
+    /// is logged out, which a refresh the server refuses for good makes it.
     pub fn bearer(
         &self,
         http: &ureq::Agent,
@@ -1059,7 +1059,17 @@ impl Upstreams {
                         if let Some(c) = &client_secret {
                             form.push(("client_secret", c));
                         }
-                        let t = token_request(http, &token_endpoint, &form)?;
+                        let t = match token_request(http, &token_endpoint, &form) {
+                            Ok(t) => t,
+                            // The login is dead: dropped, so the dashboard
+                            // says logged out and the agent is sent there.
+                            Err(Refused { gone: true, .. }) => {
+                                self.secrets.delete(name)?;
+                                self.logged_in_anew(name);
+                                return Ok(None);
+                            }
+                            Err(r) => return Err(r.into()),
+                        };
                         let access = t.access_token.clone();
                         self.put_secret(
                             name,
@@ -1507,11 +1517,25 @@ struct Tokens {
     expires_in: Option<u64>,
 }
 
+/// A token endpoint's answer that held no tokens.
+struct Refused {
+    /// The grant or the client is gone for good (RFC 6749, 5.2): only a new
+    /// login helps.
+    gone: bool,
+    why: String,
+}
+
+impl From<Refused> for String {
+    fn from(r: Refused) -> String {
+        r.why
+    }
+}
+
 fn token_request(
     http: &ureq::Agent,
     endpoint: &str,
     form: &[(&str, &str)],
-) -> Result<Tokens, String> {
+) -> Result<Tokens, Refused> {
     let body: Vec<String> = form
         .iter()
         .map(|(k, v)| format!("{k}={}", encode(v)))
@@ -1521,7 +1545,10 @@ fn token_request(
         .header("Content-Type", "application/x-www-form-urlencoded")
         .header("Accept", "application/json")
         .send(body.join("&"))
-        .map_err(|e| format!("{endpoint}: {e}"))?;
+        .map_err(|e| Refused {
+            gone: false,
+            why: format!("{endpoint}: {e}"),
+        })?;
     let text = r.body_mut().read_to_string().unwrap_or_default();
     // The server's error, never the request: it held the code. GitHub
     // answers one with `200`.
@@ -1529,10 +1556,22 @@ fn token_request(
         .ok()
         .and_then(|v| v["error"].as_str().map(str::to_string));
     if r.status() != 200 || error.is_some() {
+        let gone = error.as_deref().is_some_and(|e| {
+            matches!(
+                e,
+                "invalid_grant" | "invalid_client" | "unauthorized_client"
+            )
+        });
         let why = error.unwrap_or_else(|| r.status().to_string());
-        return Err(format!("{endpoint} refused: {why}"));
+        return Err(Refused {
+            gone,
+            why: format!("{endpoint} refused: {why}"),
+        });
     }
-    serde_json::from_str(&text).map_err(|e| format!("{endpoint}: {e}"))
+    serde_json::from_str(&text).map_err(|e| Refused {
+        gone: false,
+        why: format!("{endpoint}: {e}"),
+    })
 }
 
 /// The agent a tool call goes out with: a tool may work for minutes.
@@ -1707,6 +1746,9 @@ mod tests {
                         200,
                         serde_json::json!({ "error": "incorrect_client_credentials" }),
                     ),
+                    "/auth/token" if body.contains("refresh_token=revoked") => {
+                        (400, serde_json::json!({ "error": "invalid_grant" }))
+                    }
                     "/auth/token" if body.contains("grant_type=refresh_token") => (
                         200,
                         serde_json::json!({ "access_token": "access-2", "refresh_token": "refresh-2", "expires_in": 3600 }),
@@ -1792,6 +1834,50 @@ mod tests {
         assert!(ups.views().unwrap()[0].logged_in);
         ups.logout(&name).unwrap();
         assert_eq!(ups.bearer(&http, &name, false).unwrap(), None);
+        let _ = ups.remove(&name);
+    }
+
+    #[test]
+    fn a_refused_refresh_logs_out() {
+        let (base, _) = fake_server();
+        let d = tempfile::tempdir().unwrap();
+        let ups = Upstreams::for_test(d.path().to_path_buf(), Vec::new);
+        let name = format!("r{}", std::process::id());
+        ups.put(Upstream {
+            name: name.clone(),
+            url: format!("{base}/mcp"),
+            auth: Auth::Oauth {
+                client_id: None,
+                client_secret: None,
+                scopes: Vec::new(),
+            },
+            ..Default::default()
+        })
+        .unwrap();
+        let login = |refresh: &str| Secret::Oauth {
+            access_token: "old".into(),
+            refresh_token: Some(refresh.into()),
+            expires_at: Some(0),
+            client_id: "hub-client".into(),
+            client_secret: None,
+            token_endpoint: format!("{base}/auth/token"),
+            resource: format!("{base}/mcp"),
+        };
+        let http = http();
+
+        // The token endpoint is away: the login stays, the call fails.
+        let mut away = login("revoked");
+        if let Secret::Oauth { token_endpoint, .. } = &mut away {
+            *token_endpoint = "http://127.0.0.1:1/auth/token".into();
+        }
+        ups.put_secret(&name, &away).unwrap();
+        assert!(ups.bearer(&http, &name, false).is_err());
+        assert!(ups.views().unwrap()[0].logged_in);
+
+        // The refresh token is revoked: logged out, and shown so.
+        ups.put_secret(&name, &login("revoked")).unwrap();
+        assert_eq!(ups.bearer(&http, &name, false).unwrap(), None);
+        assert!(!ups.views().unwrap()[0].logged_in);
         let _ = ups.remove(&name);
     }
 
