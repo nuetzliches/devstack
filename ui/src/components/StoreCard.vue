@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // The store of what `prepare` makes (ADR-0062): one per repository and
-// machine, the main tree's. A line with its entries and size, opening the
-// list with a remove action per entry. The next `prepare` of an entry's
-// inputs runs and makes it again.
+// machine, the main tree's. A card beside the lane with its entries and a
+// remove action per entry. The next `prepare` of an entry's inputs runs and
+// makes it again.
 import { computed, onMounted, ref, watch } from 'vue';
 import { api, paths, v1, Unreachable } from '@/api';
 import type { StoreEntry, StoreView } from '@/api/types';
@@ -10,7 +10,6 @@ import { act } from '@/lib/actions';
 import { ago, bytes, dateTime, useNow } from '@/lib/format';
 import { shortTime, storeLine, treeLabel } from '@/lib/store';
 import { useStack } from '@/stores/stack';
-import Modal from './Modal.vue';
 import Icon from './icons/Icon.vue';
 
 const stack = useStack();
@@ -18,7 +17,6 @@ const now = useNow();
 const view = ref<StoreView | null>(null);
 const error = ref<string | null>(null);
 const loading = ref(false);
-const open = ref(false);
 const removing = ref<string | null>(null);
 
 /** The main tree's daemon owns the store: asked there, whichever lane is shown. */
@@ -72,89 +70,92 @@ watch(
   () => stack.id,
   () => void load(),
 );
-watch(open, (o) => {
-  if (o) void load();
-});
 const entries = computed(() => view.value?.entries ?? []);
 const canRemove = computed(() => !!view.value?.owned && !stack.readOnly);
 </script>
 
 <template>
-  <section v-if="view" class="card store-line" data-testid="store-line">
-    <div class="card-body line">
+  <section v-if="view" class="card" data-testid="store-card">
+    <header class="card-header">
       <Icon name="hardDrive" :size="16" class="muted" />
-      <span><strong>Store</strong> of what <code>prepare</code> makes: <span class="tabular" data-testid="store-summary">{{ storeLine(view) }}</span></span>
+      <h2>Store</h2>
+      <span class="count tabular" data-testid="store-summary">{{ storeLine(view) }}</span>
       <span class="grow" />
-      <button type="button" class="btn btn-sm" :disabled="!entries.length" data-testid="store-open" @click="open = true"><Icon name="search" :size="14" /> Entries</button>
-    </div>
-  </section>
-  <p v-else-if="error" class="faint small">Store: {{ error }}</p>
-
-  <Modal :open="open" :title="`Store · ${storeLine(view ?? { entries: [], bytes: 0 })}`" size="xl" testid="store-modal" @close="open = false">
-    <template #icon><Icon name="hardDrive" :size="18" /></template>
-    <p class="muted small">
+      <button type="button" class="btn btn-ghost btn-sm btn-icon" :disabled="loading" title="Reload" aria-label="Reload the store" @click="load"><Icon name="restart" /></button>
+    </header>
+    <p class="card-body hint muted small">
       What <code>prepare</code> made (its <code>outputs</code>), by its inputs, this machine's platform and its <code>version</code>: a lane or a build with the same
       inputs copies it instead of running <code>prepare</code>. An entry not used for 14 days goes by itself.
     </p>
-    <div v-if="!entries.length" class="banner neutral"><Icon name="info" /> The store is empty.</div>
+    <div v-if="!entries.length" class="card-body faint small">The store is empty.</div>
     <div v-else class="table-wrap">
       <table class="table" data-testid="store-table">
         <thead>
           <tr>
             <th>Service</th>
-            <th>Key</th>
             <th>Outputs</th>
             <th class="num">Size</th>
-            <th class="hide-sm">Made</th>
             <th>Last used</th>
-            <th class="hide-sm">Used by</th>
             <th v-if="canRemove" />
           </tr>
         </thead>
         <tbody>
           <tr v-for="e in entries" :key="id(e)" :data-entry="id(e)">
-            <td class="strong">{{ e.service }}</td>
-            <td class="mono" :title="e.key">{{ e.key.slice(0, 8) }}</td>
-            <td class="mono small">{{ e.outputs.join(', ') }}</td>
-            <td class="num tabular" :title="`${e.files.toLocaleString()} files`">{{ bytes(e.bytes) }}</td>
-            <td class="hide-sm small" :title="dateTime(e.created)">
-              {{ ago(e.created, now) }} · prepare {{ shortTime(e.prepare_ms) }}<template v-if="e.copy_ms !== undefined">, copy {{ shortTime(e.copy_ms) }}</template>
+            <td>
+              <span class="strong">{{ e.service }}</span>
+              <span class="mono faint key" :title="e.key">{{ e.key.slice(0, 8) }}</span>
             </td>
-            <td class="small" :title="dateTime(e.last_used)">{{ ago(e.last_used, now) }}</td>
-            <td class="hide-sm small">{{ e.used_by.length ? e.used_by.map(treeLabel).join(', ') : '—' }}</td>
+            <td class="mono small outputs">{{ e.outputs.join(', ') }}</td>
+            <td class="num tabular" :title="`${e.files.toLocaleString()} files`">{{ bytes(e.bytes) }}</td>
+            <td class="small">
+              <span :title="dateTime(e.last_used)">{{ ago(e.last_used, now) }}</span>
+              <span class="faint sub" :title="dateTime(e.created)">
+                made {{ ago(e.created, now) }} · prepare {{ shortTime(e.prepare_ms) }}<template v-if="e.copy_ms !== undefined">, copy {{ shortTime(e.copy_ms) }}</template>
+              </span>
+              <span v-if="e.used_by.length" class="faint sub">used by {{ e.used_by.map(treeLabel).join(', ') }}</span>
+            </td>
             <td v-if="canRemove" class="num">
-              <button type="button" class="btn btn-sm" :disabled="removing === id(e)" :data-testid="`store-remove-${id(e)}`" title="Remove this entry" @click="remove(e)">
-                <span v-if="removing === id(e)" class="spinner" /><Icon v-else name="trash" :size="14" /> Remove
+              <button
+                type="button"
+                class="btn btn-ghost btn-sm btn-icon"
+                :disabled="removing === id(e)"
+                :data-testid="`store-remove-${id(e)}`"
+                title="Remove this entry"
+                :aria-label="`Remove ${e.service} ${e.key.slice(0, 8)} from the store`"
+                @click="remove(e)"
+              >
+                <span v-if="removing === id(e)" class="spinner" /><Icon v-else name="trash" :size="14" />
               </button>
             </td>
           </tr>
         </tbody>
       </table>
     </div>
-    <p v-if="view && !view.owned" class="faint small">This is the store of the node the lane runs on, read only here: the node removes its entries.</p>
-    <template #footer>
-      <button type="button" class="btn" :disabled="loading" @click="load"><Icon name="restart" /> Reload</button>
-      <button type="button" class="btn btn-primary" @click="open = false">Close</button>
-    </template>
-  </Modal>
+    <p v-if="!view.owned" class="card-body faint small">This is the store of the node the lane runs on, read only here: the node removes its entries.</p>
+  </section>
+  <p v-else-if="error" class="faint small">Store: {{ error }}</p>
 </template>
 
 <style scoped>
-.line {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
+.hint {
+  margin: 0;
+  border-bottom: 1px solid var(--border);
 }
 .strong {
   font-weight: 600;
 }
+.key {
+  margin-left: 6px;
+  font-size: 11.5px;
+}
+.outputs {
+  word-break: break-all;
+}
+.sub {
+  display: block;
+  font-size: 11.5px;
+}
 .small {
   font-size: 12px;
-}
-@media (max-width: 520px) {
-  .hide-sm {
-    display: none;
-  }
 }
 </style>
