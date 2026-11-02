@@ -112,4 +112,37 @@ describe('the sidebar', () => {
     expect(router.currentRoute.value.fullPath).toBe('/s/ab12/l/feat/events');
     unmount();
   });
+
+  it('orders the stacks by name, or by last opened as a snapshot that opening does not move (#377)', async () => {
+    const zoo: StackEntry = { ...entry, id: 'cd34', name: 'zoo', repo: '/src/zoo', running: false, daemon: null };
+    fake.on('/hub/stacks/cd34/worktrees', ok([]));
+    persist.set('sidebar.opened', { cd34: 10 });
+    await router.push('/pool');
+    const hub = useHub();
+    await hub.init();
+    fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [zoo, entry] });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const app = createApp(Sidebar);
+    app.use(router);
+    app.mount(el);
+    await settle();
+    const names = () => [...el.querySelectorAll('[data-testid="sidebar-stack"] .label')].map((x) => x.textContent?.trim());
+    expect(names()).toEqual(['shop', 'zoo']);
+
+    q(el, '[data-testid="sidebar-order"]').click();
+    await settle();
+    document.querySelector<HTMLElement>('[data-testid="sidebar-order-menu"] [data-order="opened"]')!.click();
+    await settle();
+    // zoo was opened here, shop never.
+    expect(names()).toEqual(['zoo', 'shop']);
+    expect(persist.get('sidebar.order')).toBe('opened');
+
+    // Opening shop notes it, and moves nothing until the page loads again.
+    await router.push('/s/ab12');
+    await settle();
+    expect(names()).toEqual(['zoo', 'shop']);
+    expect((persist.get<Record<string, number>>('sidebar.opened') ?? {}).ab12).toBeGreaterThan(10);
+    app.unmount();
+  });
 });

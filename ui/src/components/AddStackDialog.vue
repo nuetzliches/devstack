@@ -9,8 +9,8 @@ import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { api, paths } from '@/api';
 import { act } from '@/lib/actions';
-import { useUi } from '@/stores/ui';
 import AgentPrompt from './AgentPrompt.vue';
+import FolderField from './FolderField.vue';
 import Modal from './Modal.vue';
 import Icon from './icons/Icon.vue';
 import ScanStacks from './ScanStacks.vue';
@@ -18,7 +18,6 @@ import { stackPage } from '@/lib/stackRoutes';
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ close: [] }>();
-const ui = useUi();
 const router = useRouter();
 
 type Inspect = { repo: string; is_dir: boolean; has_stack_file: boolean; valid: { Ok?: null; Err?: string } | null; registered: string | null; id: string };
@@ -41,35 +40,23 @@ watch(
   },
 );
 
-// The hub shows the operating system's folder dialog (a page cannot learn a
-// folder's path). Where it cannot (no desktop), the text field stays.
-const canPick = ref(true);
-const picking = ref(false);
-async function pick() {
-  picking.value = true;
-  problem.value = null;
-  try {
-    const res = await api().request<{ path: string | null } | { error: string }>('POST', paths.pickFolder);
-    const b = typeof res.body === 'object' ? res.body : null;
-    if (res.status === 501) {
-      canPick.value = false;
-      ui.toast('info', 'No folder dialog on this machine', 'Paste the folder path instead.');
-    } else if (res.ok && b && 'path' in b) {
-      if (b.path) {
-        path.value = b.path;
-        await check();
-      }
-    } else {
-      problem.value = b && 'error' in b ? b.error : `HTTP ${res.status}`;
-    }
-  } catch {
-    problem.value = 'The hub does not answer.';
-  } finally {
-    picking.value = false;
-  }
-}
+// A typed or pasted path is checked once typing pauses; a picked one, Enter
+// or a click at once. An answer for a path the field no longer holds is
+// dropped.
+let timer: ReturnType<typeof setTimeout> | undefined;
+watch(
+  path,
+  () => {
+    clearTimeout(timer);
+    info.value = null;
+    problem.value = null;
+    if (path.value.trim()) timer = setTimeout(check, 450);
+  },
+  { flush: 'sync' },
+);
 
 async function check() {
+  clearTimeout(timer);
   const p = path.value.trim();
   if (!p) return;
   checking.value = true;
@@ -77,6 +64,7 @@ async function check() {
   info.value = null;
   try {
     const res = await api().request<Inspect | { error: string }>('GET', paths.inspect(p));
+    if (p !== path.value.trim()) return;
     const b = typeof res.body === 'object' ? res.body : null;
     if (res.ok && b && 'repo' in b) info.value = b;
     else problem.value = b && 'error' in b ? b.error : `HTTP ${res.status}`;
@@ -112,11 +100,11 @@ async function add() {
 
 <template>
   <Modal :open="open" title="Add a stack" size="lg" testid="add-stack" @close="emit('close')">
-    <div class="modes" role="tablist" aria-label="How to add">
-      <button type="button" role="tab" class="btn btn-sm" :aria-selected="mode === 'one'" :class="{ active: mode === 'one' }" data-testid="add-mode-one" @click="mode = 'one'">
+    <div class="tabs" role="tablist" aria-label="How to add">
+      <button type="button" role="tab" class="tab" :aria-selected="mode === 'one'" :class="{ active: mode === 'one' }" data-testid="add-mode-one" @click="mode = 'one'">
         <Icon name="folder" :size="14" /> One repository
       </button>
-      <button type="button" role="tab" class="btn btn-sm" :aria-selected="mode === 'scan'" :class="{ active: mode === 'scan' }" data-testid="add-mode-scan" @click="mode = 'scan'">
+      <button type="button" role="tab" class="tab" :aria-selected="mode === 'scan'" :class="{ active: mode === 'scan' }" data-testid="add-mode-scan" @click="mode = 'scan'">
         <Icon name="search" :size="14" /> Scan a folder of repositories
       </button>
     </div>
@@ -125,16 +113,8 @@ async function add() {
       <ScanStacks @added="emit('close')" />
     </template>
     <template v-else>
-    <p class="muted">The folder of a repository. Choose it, or paste its path. devstack looks for its <code>devstack.toml</code>.</p>
-    <form class="pathrow" @submit.prevent="check">
-      <button v-if="canPick" type="button" class="btn" :disabled="picking" data-testid="add-stack-pick" @click="pick">
-        <span v-if="picking" class="spinner" /><Icon v-else name="folder" :size="14" /> Choose folder…
-      </button>
-      <input v-model="path" class="input grow" type="text" placeholder="C:\src\shop  or  /home/me/src/shop" spellcheck="false" autocomplete="off" data-testid="add-stack-path" />
-      <button type="submit" class="btn btn-primary" :disabled="!path.trim() || checking" data-testid="add-stack-check">
-        <span v-if="checking" class="spinner" /><Icon v-else name="search" :size="14" /> Check
-      </button>
-    </form>
+    <p class="muted">The folder of a repository: browse to it, or paste its path. devstack looks for its <code>devstack.toml</code>.</p>
+    <FolderField v-model="path" placeholder="C:\src\shop  or  /home/me/src/shop" :busy="checking" testid="add-stack" @submit="check" @picked="check" @problem="problem = $event" />
 
     <p v-if="problem" class="note danger">{{ problem }}</p>
 
@@ -168,28 +148,37 @@ async function add() {
 </template>
 
 <style scoped>
-.modes {
+.tabs {
   display: flex;
-  gap: 6px;
-  margin-bottom: 4px;
+  gap: 2px;
+  margin: 0 0 12px;
+  border-bottom: 1px solid var(--border);
 }
-.modes .active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 38px;
+  padding: 0 12px;
+  margin-bottom: -1px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-muted);
+  font-weight: 550;
+  font-size: 13px;
+  cursor: pointer;
 }
-.pathrow {
-  display: flex;
-  gap: 8px;
-  margin: 12px 0;
+.tab:hover {
+  color: var(--text);
 }
-.input {
-  font: 13px/1.4 var(--font-mono, ui-monospace, Consolas, monospace);
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface, transparent);
-  color: inherit;
-  min-width: 0;
+.tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.tab:focus-visible {
+  outline: none;
+  box-shadow: inset var(--focus);
 }
 .note {
   border: 1px solid var(--border);

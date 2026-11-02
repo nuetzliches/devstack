@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // Find every project with a devstack.toml below one folder (the one all
-// repositories live in, e.g. D:\Sources) and add them at once. Repositories
-// are looked at at their root only; linked worktrees are skipped (they run as
-// lanes of their main tree).
+// repositories live in, e.g. D:\Sources) and add the ones chosen (all new ones
+// are, at first). Repositories are looked at at their root only; linked
+// worktrees are skipped (they run as lanes of their main tree).
 import { computed, ref } from 'vue';
 import { api, paths } from '@/api';
 import { useUi } from '@/stores/ui';
+import FolderField from './FolderField.vue';
 import Icon from './icons/Icon.vue';
 
 const emit = defineEmits<{ added: [ids: string[]] }>();
@@ -18,79 +19,100 @@ const scanning = ref(false);
 const adding = ref(false);
 const found = ref<Found[] | null>(null);
 const problem = ref<string | null>(null);
-const canPick = ref(true);
 
 const fresh = computed(() => (found.value ?? []).filter((f) => !f.registered && !f.error));
+/** The new repositories to add, by id: every new one after a scan. */
+const chosen = ref(new Set<string>());
+const all = computed(() => fresh.value.length > 0 && fresh.value.every((f) => chosen.value.has(f.id)));
+const some = computed(() => fresh.value.some((f) => chosen.value.has(f.id)));
+const count = computed(() => fresh.value.filter((f) => chosen.value.has(f.id)).length);
 
-async function scan(add = false) {
+function toggle(id: string) {
+  const next = new Set(chosen.value);
+  if (!next.delete(id)) next.add(id);
+  chosen.value = next;
+}
+
+function toggleAll() {
+  chosen.value = new Set(all.value ? [] : fresh.value.map((f) => f.id));
+}
+
+async function scan() {
   const p = path.value.trim();
   if (!p) return;
-  if (add) adding.value = true;
-  else scanning.value = true;
+  scanning.value = true;
   problem.value = null;
   try {
-    const res = await api().request<Found[] | { error: string }>('POST', paths.scanStacks, { path: p, add });
+    const res = await api().request<Found[] | { error: string }>('POST', paths.scanStacks, { path: p });
     const b = res.body;
     if (res.ok && Array.isArray(b)) {
       found.value = b;
-      if (add) {
-        const ids = b.filter((f) => f.added).map((f) => f.id);
-        ui.toast('success', `${ids.length} stack${ids.length === 1 ? '' : 's'} added`, 'Start them from the list.');
-        emit('added', ids);
-      }
+      chosen.value = new Set(fresh.value.map((f) => f.id));
     } else problem.value = b && typeof b === 'object' && 'error' in b ? b.error : `HTTP ${res.status}`;
   } catch {
     problem.value = 'The hub does not answer.';
   } finally {
     scanning.value = false;
-    adding.value = false;
   }
 }
 
-async function pick() {
-  try {
-    const res = await api().request<{ path: string | null }>('POST', paths.pickFolder);
-    if (res.status === 501) {
-      canPick.value = false;
-      return;
+// One registration each, as a single repository is added; what fails stays in
+// the list with its reason, the rest are added.
+async function add() {
+  adding.value = true;
+  problem.value = null;
+  const ids: string[] = [];
+  for (const f of fresh.value.filter((f) => chosen.value.has(f.id))) {
+    try {
+      const res = await api().request<{ id: string } | { error: string }>('POST', paths.stackAdd, { path: f.repo });
+      const b = typeof res.body === 'object' ? res.body : null;
+      if (res.ok && b && 'id' in b) {
+        f.registered = true;
+        f.added = true;
+        ids.push(b.id);
+      } else f.error = b && 'error' in b ? b.error : `HTTP ${res.status}`;
+    } catch {
+      f.error = 'The hub does not answer.';
+      break;
     }
-    if (res.ok && res.body && typeof res.body === 'object' && res.body.path) {
-      path.value = res.body.path;
-      await scan();
-    }
-  } catch {
-    problem.value = 'The hub does not answer.';
   }
+  adding.value = false;
+  if (!ids.length) return;
+  ui.toast('success', `${ids.length} stack${ids.length === 1 ? '' : 's'} added`, 'Start them from the list.');
+  if (!found.value?.some((f) => f.error && chosen.value.has(f.id))) emit('added', ids);
 }
 </script>
 
 <template>
   <div class="scan" data-testid="scan-stacks">
-    <form class="pathrow" @submit.prevent="scan()">
-      <button v-if="canPick" type="button" class="btn" data-testid="scan-pick" @click="pick"><Icon name="folder" :size="14" /> Choose folder…</button>
-      <input v-model="path" class="input grow" type="text" placeholder="D:\Sources  or  ~/src" spellcheck="false" autocomplete="off" data-testid="scan-path" />
+    <FolderField v-model="path" placeholder="D:\Sources  or  ~/src" testid="scan" @submit="scan()" @picked="scan()" @problem="problem = $event">
       <button type="submit" class="btn btn-primary" :disabled="!path.trim() || scanning" data-testid="scan-run">
         <span v-if="scanning" class="spinner" /><Icon v-else name="search" :size="14" /> Scan
       </button>
-    </form>
+    </FolderField>
     <p v-if="problem" class="note danger">{{ problem }}</p>
 
     <template v-if="found">
       <p v-if="!found.length" class="muted">No repository with a <code>devstack.toml</code> below this folder (three levels deep).</p>
-      <ul v-else class="list">
-        <li v-for="f in found" :key="f.id" class="item" :data-testid="`scan-found-${f.id}`">
-          <Icon :name="f.error ? 'alert' : f.registered ? 'checkCircle' : 'plus'" :size="15" :class="f.error ? 'err' : f.registered ? 'ok' : 'muted'" />
+      <div v-else class="list">
+        <label v-if="fresh.length > 1" class="item head">
+          <input type="checkbox" :checked="all" :indeterminate="some && !all" data-testid="scan-all" @change="toggleAll" />
+          <span class="grow">{{ count }} of {{ fresh.length }} new chosen</span>
+        </label>
+        <component :is="fresh.includes(f) ? 'label' : 'div'" v-for="f in found" :key="f.id" class="item" :class="{ off: !fresh.includes(f) }" :data-testid="`scan-found-${f.id}`">
+          <input v-if="fresh.includes(f)" type="checkbox" :checked="chosen.has(f.id)" @change="toggle(f.id)" />
+          <Icon v-else :name="f.error ? 'alert' : 'checkCircle'" :size="15" :class="f.error ? 'err' : 'ok'" />
           <div class="grow">
             <div class="name">{{ f.name ?? f.repo.split(/[\\/]/).pop() }}</div>
             <div class="repo mono faint">{{ f.repo }}</div>
             <div v-if="f.error" class="err small">{{ f.error.split('\n')[0] }}</div>
           </div>
           <span class="tag">{{ f.error ? 'does not load' : f.added ? 'added' : f.registered ? 'in the list' : 'new' }}</span>
-        </li>
-      </ul>
+        </component>
+      </div>
       <div v-if="fresh.length" class="row">
-        <button type="button" class="btn btn-primary" :disabled="adding" data-testid="scan-add" @click="scan(true)">
-          <span v-if="adding" class="spinner" /><Icon v-else name="plus" :size="14" /> Add {{ fresh.length }} new stack{{ fresh.length === 1 ? '' : 's' }}
+        <button type="button" class="btn btn-primary" :disabled="adding || !count" data-testid="scan-add" @click="add">
+          <span v-if="adding" class="spinner" /><Icon v-else name="plus" :size="14" /> Add {{ count }} stack{{ count === 1 ? '' : 's' }}
         </button>
       </div>
     </template>
@@ -98,20 +120,6 @@ async function pick() {
 </template>
 
 <style scoped>
-.pathrow {
-  display: flex;
-  gap: 8px;
-  margin: 12px 0;
-}
-.input {
-  font: 13px/1.4 var(--font-mono, ui-monospace, Consolas, monospace);
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface, transparent);
-  color: inherit;
-  min-width: 0;
-}
 .list {
   list-style: none;
   margin: 0 0 12px;
@@ -130,6 +138,30 @@ async function pick() {
 }
 .item:last-child {
   border-bottom: 0;
+}
+label.item {
+  cursor: pointer;
+}
+label.item:hover {
+  background: var(--surface-hover);
+}
+.item input {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.off .name {
+  color: var(--text-muted);
 }
 .name {
   font-weight: 600;

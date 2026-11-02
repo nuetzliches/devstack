@@ -33,6 +33,19 @@ and listed with their assets on the
   the Windows build's symbols as an asset
   (`devstack-x86_64-pc-windows-msvc-pdb.zip`) to read such a dump.
 
+### Fixed
+
+- **Asking Windows about notifications can no longer stop the hub** (#398).
+  Before each notification, and for `GET /hub/notify`, the hub asked
+  Windows' notification platform whether it takes devstack's toasts. The
+  call ran on a thread that also serves the dashboard's requests, and a
+  call that did not return would leave the hub holding its port and lock
+  without answering: the likeliest cause of the hang in #398. Toasts and that question now run on a thread of their own:
+  the hub answers with the setting as asked last. A call that has waited
+  30 s makes notifications count as unavailable, logged once as
+  `notify_failed`, and toasts beyond 16 waiting are dropped until Windows
+  answers again.
+
 ## [0.33.0] - 2026-10-31
 
 A stack has a page of its own, above its lanes: its daemon, who serves the
@@ -74,6 +87,15 @@ no longer blocks every start.
   differently for a lane on a node, and mixes the lanes' telemetry. Drop
   it: every lane starts its own containers; a profile's `skip` leaves out
   what a lane can do without.
+
+### Fixed
+
+- **The `devstack` skill and the plan no longer say `git worktree remove`
+  works while a lane runs.** With `prepare.link` it does not on Windows: Git
+  2.43 follows the junction and empties the lane's copy (measured again),
+  a newer Git leaves the worktree behind with the junction in it (ADR-0044).
+  Both now say what `docs/stack-file.md` already said: stop the lane first
+  when it links directories; without `link` the remove works while it runs.
 
 ### Added
 

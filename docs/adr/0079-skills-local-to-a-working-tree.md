@@ -1,6 +1,6 @@
 # ADR-0079: Skills local to a working tree: a pool's project skills bound to their repository, devstack's own untracked
 
-- **Status:** Accepted (2026-10-30)
+- **Status:** Accepted (2026-10-30); point 5 amended by [ADR-0083](0083-the-hub-takes-out-what-an-agent-switched-off-leaves.md) (a copy in a folder switched off goes)
 - **Date:** 2026-10-30
 - **Deciders:** project owner
 - **Related:** [ADR-0074](0074-a-pool-hands-out-skill-sets-the-hub-installs-them-for-the-agents.md) (skill sets, the agent table; its "per-repository installation" alternative taken up here), [ADR-0077](0077-a-sets-skills-are-grouped-and-switched-one-by-one.md) (`metadata` of a skill), [ADR-0071](0071-the-dashboard-writes-no-file-of-a-repository.md) (amended here), [ADR-0078](0078-the-hub-follows-every-stacks-worktrees.md) (the working trees the hub follows), [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md)
@@ -92,7 +92,8 @@ What was built:
    renders the generated skills from the stack file the tree runs with
    (its own, else the main tree's) and writes them into the folders of the
    agents switched on, next to the stack file, refreshing a generated copy
-   found in another agent's folder. A copy git tracks is left alone; the
+   found in another agent's folder (one in the folder of an agent switched
+   off goes instead, ADR-0083). A copy git tracks is left alone; the
    banner offers the prompt that untracks it. Nothing is written for a tree
    whose stack file does not load.
 6. **When.** A thread of the hub looks every three seconds at the
