@@ -1091,9 +1091,23 @@ impl Supervisor {
             .is_some_and(|s| s.main.is_some())
     }
 
-    /// The branch of this working tree changed (or is first known).
-    pub fn set_branch(&self, branch: Option<String>) {
-        *self.branch.lock().unwrap() = branch;
+    /// The branch of this working tree as git lists it now; `true` when it
+    /// differs from the one known (or is first known).
+    pub fn set_branch(&self, branch: Option<String>) -> bool {
+        let mut known = self.branch.lock().unwrap();
+        if *known == branch {
+            return false;
+        }
+        *known = branch;
+        true
+    }
+
+    /// The branch changed: the view carries it, and no other event does, so
+    /// the clients get the whole view again (as after falling behind).
+    pub(crate) fn emit_snapshot(&self) {
+        self.emit_quiet(EventBody::Snapshot {
+            stack: Box::new(self.view()),
+        });
     }
 }
 
