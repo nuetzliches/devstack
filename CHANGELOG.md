@@ -11,6 +11,17 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A container's load no longer drops to 0 B when one measurement is
+  missing.** A running container without a number in a round (a
+  `docker stats` that failed, or for a lane on a node, its file not fresh
+  at the moment it was read) counted as idle at once: its memory and CPU,
+  and with them its group's and the lane's, fell to zero for a sample and
+  came back, so the sparklines of a lane on a node showed a saw tooth. A
+  running container now keeps its last numbers for up to three rounds
+  (15 s) without adding a point to its history; a stopped one is idle at
+  once. The node's agent logs a failed `docker stats` instead of
+  swallowing it.
+
 - **A stack whose setup was broken off says so.** A registered stack whose
   `devstack.toml` is missing (the setup stopped after the stack was
   registered, or the file was removed since) or does not load was only

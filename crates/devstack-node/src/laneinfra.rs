@@ -422,9 +422,14 @@ pub fn refresh(dir: &Path, src: &Path) -> Result<(), String> {
         .filter(|c| c.state == "running")
         .map(|c| c.name.clone())
         .collect();
+    // Without numbers the file still carries the states; the lane's daemon
+    // keeps the last numbers for a few rounds. Said here, not swallowed.
     let load: BTreeMap<String, Load> = devstack_compose::Docker::default()
         .stats(&running)
-        .unwrap_or_default()
+        .unwrap_or_else(|e| {
+            eprintln!("{}: docker stats: {e}", dir.display());
+            Vec::new()
+        })
         .into_iter()
         .map(|s| {
             (
