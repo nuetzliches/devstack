@@ -11,7 +11,6 @@ import StackHeader from '@/components/StackHeader.vue';
 import LaneStart from '@/components/LaneStart.vue';
 import { rememberTab } from '@/lib/lanes';
 import RestartBanner from '@/components/RestartBanner.vue';
-import SkillsBanner from '@/components/SkillsBanner.vue';
 import StackFileBanner from '@/components/StackFileBanner.vue';
 import UpgradeBanner from '@/components/UpgradeBanner.vue';
 import AgentPrompt from '@/components/AgentPrompt.vue';
@@ -177,7 +176,6 @@ function isActive(name: string) {
       </div>
       <StackFileBanner v-if="!hubDown && stack.entry && !stack.foreign" />
       <UpgradeBanner v-if="!hubDown && stack.entry && !stack.foreign" />
-      <SkillsBanner v-if="!hubDown && stack.entry && !stack.foreign" />
       <div v-if="unknown" class="banner neutral">
         <Icon name="info" :size="18" />
         <span class="grow">This stack is not registered with the hub. It appears once its daemon starts.</span>

@@ -30,30 +30,39 @@ pub(crate) fn run(file: &Path, action: SkillsAction) -> Result<()> {
                     ),
                 }
             }
-            // Local to the working tree since ADR-0079: a copy an earlier
-            // devstack had committed is the user's to take out of git (a
-            // migration aid, #389).
-            if !tracked.is_empty() {
-                println!(
-                    "git still tracks these generated skills; they are local to the working tree now (each ignores itself). Take them out of git, the files stay:"
-                );
-                for f in tracked {
-                    println!("  git rm -r --cached \"{}\"", f.display());
-                }
-            }
+            untrack_note(&tracked);
             Ok(())
         }
+        // The hub keeps the generated skills current (ADR-0079); what it
+        // leaves is a copy git still tracks (ADR-0087). Such a copy is a
+        // failure, so a script or CI can check it.
         SkillsAction::Check => {
-            match skills::outdated_note(file) {
-                // Outdated is a failure, so a script or CI can check it.
-                Some(n) => {
-                    println!("{n}");
-                    std::process::exit(1);
-                }
-                None => println!("skills: up to date (or none installed)"),
+            let tracked: Vec<_> = skills::installed(file)
+                .folders
+                .into_iter()
+                .filter(|f| git_tracks(f))
+                .collect();
+            if tracked.is_empty() {
+                println!("skills: none tracked by git");
+                return Ok(());
             }
-            Ok(())
+            untrack_note(&tracked);
+            std::process::exit(1);
         }
+    }
+}
+
+/// Local to the working tree since ADR-0079: a copy an earlier devstack had
+/// committed is the user's to take out of git (a migration aid, #389).
+fn untrack_note(tracked: &[std::path::PathBuf]) {
+    if tracked.is_empty() {
+        return;
+    }
+    println!(
+        "git still tracks these generated skills; they are local to the working tree now (each ignores itself) and the hub does not refresh them. Take them out of git, the files stay:"
+    );
+    for f in tracked {
+        println!("  git rm -r --cached \"{}\"", f.display());
     }
 }
 

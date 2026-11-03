@@ -77,9 +77,6 @@ pub fn run(stack_file: &Path) -> Vec<Finding> {
     if let Some(s) = &stack {
         out.push(tools(s));
         out.extend(ports(s, stack_file));
-        if let Some(n) = crate::skills::outdated_note(stack_file) {
-            out.push(f(Level::Warn, n.trim_start_matches("note: ").to_string()));
-        }
     }
     out.extend(overlaps());
     out.push(hub());

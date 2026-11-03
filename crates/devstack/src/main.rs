@@ -877,8 +877,8 @@ enum SkillsAction {
         #[arg(long)]
         force: bool,
     },
-    /// Do the installed skills match this devstack and this stack file?
-    /// Exits 1 when they do not.
+    /// Does git still track a generated skill? The hub keeps the others
+    /// current; such a copy it leaves. Exits 1 when there is one.
     Check,
 }
 

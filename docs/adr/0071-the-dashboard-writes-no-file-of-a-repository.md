@@ -1,6 +1,6 @@
 # ADR-0071: The dashboard writes no file of a repository; a change to one is a prompt for a coding agent
 
-- **Status:** Accepted (2026-10-27), amended by [ADR-0079](0079-skills-local-to-a-working-tree.md) (2026-10-30)
+- **Status:** Accepted (2026-10-27), amended by [ADR-0079](0079-skills-local-to-a-working-tree.md) (2026-10-30) and [ADR-0087](0087-the-generated-skills-are-the-hubs-no-tool-reports-them-outdated.md) (2026-11-03: the `skills` prompt and `SkillsBanner.vue` removed; the hub keeps the skills current)
 - **Date:** 2026-10-27
 - **Deciders:** project owner
 - **Related:** [ADR-0046](0046-the-hub-opens-a-worktree-in-the-users-programs.md) (prompts for an agent; the `skills` prompt added here), [ADR-0047](0047-the-dashboard-makes-a-lane-from-a-branch.md) (worktrees, unchanged), [ADR-0055](0055-a-lane-without-a-stack-file-says-so-and-can-be-given-one.md) (point 4 replaced here), [ADR-0021](0021-a-hub-serves-the-dashboard.md)

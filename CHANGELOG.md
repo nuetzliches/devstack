@@ -9,7 +9,23 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Removed
+
+- **No more "agent skills no longer match" notice** (ADR-0087). The hub
+  writes devstack's generated skills again within seconds of a change to
+  the stack file, the branch or the version (ADR-0079), so the dashboard's
+  banner, its "Refresh skills" prompt, `GET /hub/stacks/{id}/skills` and
+  the prompt kind `skills` are gone, and `devstack status`, the MCP
+  `status` and `devstack doctor` no longer print the note. The banner
+  caught the moment between an edit of the stack file and the hub's write
+  and kept showing it until the page was reloaded.
+
 ### Changed
+
+- **`devstack skills check` looks for generated skills git still tracks**
+  (ADR-0087): the hub leaves such a copy alone. It exits 1 and prints the
+  `git rm -r --cached` that takes each out of git, the files stay; it no
+  longer compares the skills with what this devstack would write.
 
 - **A lane's Activity shows its own changes** (#426, ADR-0067 addendum).
   The lane `main` no longer lists every lane's changes, and the lane

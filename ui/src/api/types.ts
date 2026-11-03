@@ -416,22 +416,6 @@ export type InfraView = { group: string; project: string; containers: ContainerV
 export type GroupView = { name: string; label: string; order: number | null; members: string[] };
 
 /**
- * `GET /hub/stacks/{id}/skills`: the agent skills `devstack skills install`
- * wrote into the repository, held against what this devstack would write.
- */
-export type SkillsState = {
-  found: string[];
-  outdated: string[];
-  /** The devstack that wrote them (the oldest, when they differ). */
-  from: string | null;
-  current: string;
-  /** Written by a newer devstack than this one: refreshing would go back. */
-  ahead: boolean;
-  /** After `POST`: skills of the same name the project wrote itself, left alone. */
-  kept?: string[];
-};
-
-/**
  * `GET /hub/stacks/{id}/upgrade`: the devstack the stack file was last brought
  * up to date with (`[stack] reviewed`), apart from the agent skills.
  */
@@ -824,7 +808,7 @@ export type Opener = {
 };
 
 /** The prompts the hub writes for a coding agent (`GET /hub/prompt`, ADR-0046 amendment 2026-10-22). */
-export type PromptKind = 'setup' | 'fix-file' | 'upgrade' | 'start-failed' | 'lane-file' | 'lane-image' | 'mcp' | 'skills';
+export type PromptKind = 'setup' | 'fix-file' | 'upgrade' | 'start-failed' | 'lane-file' | 'lane-image' | 'mcp';
 /** What a prompt is about: a registered stack, a folder before it is one, or a worktree of a stack (`lane-file`, `lane-image`). */
 export type PromptTarget = { stack: string } | { path: string } | { stack: string; path: string };
 

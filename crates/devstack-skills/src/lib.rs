@@ -500,17 +500,16 @@ fn normalize(s: &str) -> String {
 }
 
 /// The generated skills installed in the repository (in the folders
-/// `[agents] skills` names and in the other agents' ones), held against what
-/// this devstack would write for this stack file.
+/// `[agents] skills` names and in the other agents' ones), and the devstack
+/// that wrote them. Whether they match this devstack is no question: the hub
+/// writes them again on every change (ADR-0079, ADR-0087).
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Installed {
     /// Generated skills found, by folder: `.claude/skills/devstack` (one the
     /// project wrote itself is not one).
     pub found: Vec<String>,
-    /// Of those, the ones that differ from what `install` would write now,
-    /// apart from the devstack version: a release whose skills read the same
-    /// leaves them be.
-    pub outdated: Vec<String>,
+    /// The same folders, as paths.
+    pub folders: Vec<PathBuf>,
     /// The oldest devstack their marker lines name: the version the
     /// repository was last set up with. `None` when no marker names one.
     pub from: Option<String>,
@@ -526,27 +525,16 @@ pub fn installed(stack_file: &Path) -> Installed {
     };
     let mut out = Installed::default();
     for dir in &dirs {
-        for (name, tpl) in TEMPLATES {
+        for (name, _) in TEMPLATES {
             let Ok(e) = std::fs::read_to_string(dir.join(name).join("SKILL.md")) else {
                 continue;
             };
             if !e.contains(MARKER_TAG) {
                 continue;
             }
-            let at = shown(stack_file, dir, name);
-            // Held against this devstack's text as the version that wrote it.
-            let version = marker_version(&e);
-            let content = render(
-                tpl,
-                &stack,
-                stack_file,
-                version.as_deref().unwrap_or(VERSION),
-            );
-            if normalize(&e) != normalize(&content) {
-                out.outdated.push(at.clone());
-            }
-            out.found.push(at);
-            if let Some(v) = version {
+            out.found.push(shown(stack_file, dir, name));
+            out.folders.push(dir.join(name));
+            if let Some(v) = marker_version(&e) {
                 let older = out.from.as_deref().is_none_or(|f| {
                     devstack_config::version_order(&v) < devstack_config::version_order(f)
                 });
@@ -568,23 +556,6 @@ fn marker_version(skill: &str) -> Option<String> {
         .split_whitespace()
         .next()?;
     devstack_config::version_order(v).map(|_| v.to_string())
-}
-
-/// Installed generated skills that differ from what this devstack would
-/// write for this stack file.
-pub fn outdated(stack_file: &Path) -> Vec<String> {
-    installed(stack_file).outdated
-}
-
-/// One line for `devstack status` and the MCP status, if anything is outdated.
-pub fn outdated_note(stack_file: &Path) -> Option<String> {
-    let names = outdated(stack_file);
-    (!names.is_empty()).then(|| {
-        format!(
-            "note: the agent skill(s) {} no longer match this devstack or stack file; `devstack skills install` refreshes them",
-            names.join(", ")
-        )
-    })
 }
 
 #[cfg(test)]
@@ -763,24 +734,27 @@ ours"
             now.found,
             [".claude/skills/devstack", ".claude/skills/devstack-config"]
         );
-        assert!(now.outdated.is_empty());
+        assert_eq!(
+            now.folders,
+            [
+                dir.path().join(".claude/skills/devstack"),
+                dir.path().join(".claude/skills/devstack-config")
+            ]
+        );
         assert_eq!(now.from.as_deref(), Some(VERSION));
 
-        // One of them written by an older devstack whose skill read the same:
-        // nothing to refresh, but it still says how far back.
+        // One of them written by an older devstack: it says how far back.
         let skill = dir.path().join(".claude/skills/devstack/SKILL.md");
         age(&skill, false);
-        let same = installed(&file);
-        assert!(same.outdated.is_empty(), "{:?}", same.outdated);
-        assert_eq!(same.from.as_deref(), Some("0.1.0"));
-
-        // One whose text has changed since.
-        install(&stack, &file, None, false).unwrap();
-        age(&skill, true);
-        let then = installed(&file);
-        assert_eq!(then.outdated, [".claude/skills/devstack"]);
-        assert_eq!(then.from.as_deref(), Some("0.1.0"));
+        assert_eq!(installed(&file).from.as_deref(), Some("0.1.0"));
     }
+
+    /// The text of the generated skill `name` in `folder`.
+    fn skill_text(folder: &Path, name: &str) -> String {
+        std::fs::read_to_string(folder.join(name).join("SKILL.md")).unwrap()
+    }
+
+    const OLD_PARAGRAPH: &str = "A paragraph this devstack no longer writes.";
 
     const STACK: &str = "version = 1\n[stack]\nname = \"shop\"\n[services.api]\nrun = \"x\"\n";
 
@@ -792,7 +766,7 @@ ours"
             .replace(&format!("devstack {VERSION} "), "devstack 0.1.0 ")
             .replace(&format!("/blob/v{VERSION}/"), "/blob/v0.1.0/");
         if changed {
-            text.push_str("\nA paragraph this devstack no longer writes.\n");
+            text.push_str(&format!("\n{OLD_PARAGRAPH}\n"));
         }
         std::fs::write(skill, text).unwrap();
     }
@@ -825,9 +799,8 @@ ours"
         install(&stack, &file, Some(&github), false).unwrap();
         age(&github.join("devstack/SKILL.md"), true);
         std::fs::write(github.join("devstack-config/SKILL.md"), "ours").unwrap();
-        assert_eq!(outdated(&file), [".github/skills/devstack"]);
         install(&stack, &file, None, false).unwrap();
-        assert!(outdated(&file).is_empty());
+        assert!(!skill_text(&github, "devstack").contains(OLD_PARAGRAPH));
         assert_eq!(
             std::fs::read_to_string(github.join("devstack-config/SKILL.md")).unwrap(),
             "ours"
@@ -866,7 +839,7 @@ ours"
             old
         );
         install_into(&stack, &file, &[], &[], &|_| false).unwrap();
-        assert!(outdated(&file).is_empty(), "{:?}", outdated(&file));
+        assert!(!skill_text(claude.parent().unwrap(), "devstack").contains(OLD_PARAGRAPH));
     }
 
     #[test]
