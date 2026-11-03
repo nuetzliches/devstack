@@ -869,10 +869,7 @@ async fn tcp_tunnel(s: &AppState, port: u16, mut req: Request) -> Response {
     let connected = match &container {
         Some(addr) => tokio::net::TcpStream::connect(addr.as_str()).await,
         // Dev servers bound to `localhost` may hold only `::1`.
-        None => match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
-            Ok(t) => Ok(t),
-            Err(_) => tokio::net::TcpStream::connect(("::1", port)).await,
-        },
+        None => crate::loopback::connect(port).await,
     };
     let tcp = match connected {
         Ok(t) => t,
