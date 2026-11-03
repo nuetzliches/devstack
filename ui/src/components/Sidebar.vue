@@ -8,7 +8,8 @@
 // the lane's views. The highlight follows the route. Nothing moves when
 // something starts or stops. A tree's state is its dot, as a
 // stack's is. A stack's worktrees
-// fold only with its toggle, never by navigating. The shown stack's lanes
+// fold only with its toggle (or the header's fold all), never by navigating.
+// The header also stops every running stack at once. The shown stack's lanes
 // come live from its stream; the others' are read when the hub's list of
 // stacks changes or it says a stack's worktrees did (no polling, ADR-0021,
 // ADR-0078). A stack's menu (its
@@ -82,6 +83,13 @@ function toggle(id: string) {
   collapsed.value[id] = !collapsed.value[id];
   persist.set('sidebar.collapsed', collapsed.value);
 }
+/** Every stack's worktrees folded at once. */
+function collapseAll() {
+  for (const s of hub.stacks) collapsed.value[s.id] = true;
+  persist.set('sidebar.collapsed', collapsed.value);
+}
+const allFolded = computed(() => hub.stacks.every((s) => collapsed.value[s.id]));
+const runningStacks = computed(() => hub.stacks.filter((s) => s.running));
 
 // By name or by last opened, never by state: a start or a stop moves nothing
 // in the list. Last opened is the snapshot taken when the page loaded or the
@@ -361,6 +369,21 @@ async function stopStack(s: StackEntry) {
   });
   if (ok) await act({ label: `Stop ${s.name}`, path: paths.down(s.id, !option.checked, false, true), success: 'Stopping the stack…' });
 }
+/** Every stack that runs, after one question; the shown one is no exception. */
+async function stopAll() {
+  const list = runningStacks.value;
+  if (!list.length) return;
+  const option = stack.keepContainers();
+  const ok = await ui.confirm({
+    title: 'Stop all stacks',
+    text: `${list.map((s) => s.name).join(', ')}: all services and containers of ${list.length === 1 ? 'this stack' : 'these stacks'} stop, their lanes’ too, and their daemons exit. Their volumes stay.`,
+    confirmLabel: 'Stop all',
+    danger: true,
+    option,
+  });
+  if (!ok) return;
+  for (const s of list) await act({ label: `Stop ${s.name}`, path: paths.down(s.id, !option.checked, false, true), success: `Stopping ${s.name}…` });
+}
 async function removeStack(s: StackEntry) {
   closeMenu();
   const ok = await ui.confirm({
@@ -410,6 +433,28 @@ function toggleFavourite(s: StackEntry) {
         @click="orderMenu ? closeOrderMenu() : openOrderMenu()"
       >
         <Icon name="arrowUpDown" :size="14" />
+      </button>
+      <button
+        type="button"
+        class="head-btn"
+        title="Fold all stacks"
+        aria-label="Fold all stacks"
+        :disabled="allFolded"
+        data-testid="sidebar-fold-all"
+        @click="collapseAll()"
+      >
+        <Icon name="chevronsUp" :size="14" />
+      </button>
+      <button
+        type="button"
+        class="head-btn"
+        title="Stop all stacks…"
+        aria-label="Stop all stacks"
+        :disabled="!runningStacks.length"
+        data-testid="sidebar-stop-all"
+        @click="stopAll()"
+      >
+        <Icon name="power" :size="14" />
       </button>
       <button type="button" class="head-btn" title="Add a stack…" aria-label="Add a stack" data-testid="sidebar-add-stack" @click="adding = true">
         <Icon name="plus" :size="14" />
@@ -691,7 +736,11 @@ function toggleFavourite(s: StackEntry) {
   color: var(--text-muted);
   cursor: pointer;
 }
-.head-btn:hover,
+.head-btn:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+.head-btn:hover:not(:disabled),
 .head-btn.open,
 .fav-btn:hover,
 .more-btn:hover,

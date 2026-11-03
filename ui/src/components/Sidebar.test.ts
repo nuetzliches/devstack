@@ -23,6 +23,7 @@ vi.mock('@/api', async (importOriginal) => {
 const { router } = await import('@/router');
 const { useHub } = await import('@/stores/hub');
 const { persist } = await import('@/lib/persist');
+const { useUi } = await import('@/stores/ui');
 const Sidebar = (await import('./Sidebar.vue')).default;
 
 const entry: StackEntry = { id: 'ab12', name: 'shop', file: '/src/shop/devstack.toml', repo: '/src/shop', running: true, daemon: { pid: 1, port: 7000, started: 0, version: '0.9.8' }, last_seen: null };
@@ -143,6 +144,62 @@ describe('the sidebar', () => {
     await settle();
     expect(names()).toEqual(['zoo', 'shop']);
     expect((persist.get<Record<string, number>>('sidebar.opened') ?? {}).ab12).toBeGreaterThan(10);
+    app.unmount();
+  });
+
+  it('folds every stack at once, and keeps it folded', async () => {
+    await router.push('/pool');
+    const { el, unmount } = await mounted();
+    const fold = () => q(el, '[data-testid="sidebar-fold-all"]') as HTMLButtonElement;
+    expect(el.querySelectorAll('[data-testid="sidebar-lane-main"]').length).toBe(1);
+    expect(fold().disabled).toBe(false);
+    fold().click();
+    await settle();
+    expect(el.querySelectorAll('[data-testid="sidebar-lane-main"]').length).toBe(0);
+    expect(fold().disabled).toBe(true);
+    expect(persist.get('sidebar.collapsed')).toEqual({ ab12: true });
+    unmount();
+  });
+
+  it('stops every running stack after one question', async () => {
+    const zoo: StackEntry = { ...entry, id: 'cd34', name: 'zoo', repo: '/src/zoo' };
+    const idle: StackEntry = { ...entry, id: 'ef56', name: 'idle', repo: '/src/idle', running: false, daemon: null };
+    fake.on('/hub/stacks/cd34/api/v1/lanes', ok([]));
+    fake.on('/hub/stacks/ef56/worktrees', ok([]));
+    fake.on(/\/down\?/, ok({}));
+    await router.push('/pool');
+    const hub = useHub();
+    await hub.init();
+    fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [entry, zoo, idle] });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const app = createApp(Sidebar);
+    app.use(router);
+    app.mount(el);
+    await settle();
+    const ui = useUi();
+    const stopAll = q(el, '[data-testid="sidebar-stop-all"]') as HTMLButtonElement;
+    expect(stopAll.disabled).toBe(false);
+
+    stopAll.click();
+    await settle();
+    expect(ui.confirmRequest?.title).toBe('Stop all stacks');
+    ui.confirmRequest!.resolve(false);
+    await settle();
+    expect(fake.requests.some((r) => r.path.includes('/down?'))).toBe(false);
+
+    stopAll.click();
+    await settle();
+    ui.confirmRequest!.resolve(true);
+    await settle();
+    expect(fake.requests.filter((r) => r.path.includes('/down?')).map((r) => r.path)).toEqual([
+      '/hub/stacks/ab12/down?infra=true&all=true',
+      '/hub/stacks/cd34/down?infra=true&all=true',
+    ]);
+
+    fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [{ ...entry, running: false }, { ...zoo, running: false }, idle] });
+    await settle();
+    expect(stopAll.disabled).toBe(true);
     app.unmount();
   });
 
