@@ -79,12 +79,7 @@ impl Supervisor {
                 Err(e) => {
                     // Back to what is actually running; the error goes to the caller.
                     self.set_status(name, before);
-                    if svc.proxied() && self.slots.lock().unwrap()[name].main.is_some() {
-                        self.set_candidate(
-                            name,
-                            Some(Candidate::new("failed", None, Some(first_lines(&e, 5)))),
-                        );
-                    }
+                    self.restart_failed(name, epoch, &e);
                     return Err(format!(
                         "{e}
 The running instance was left as it was."
@@ -92,9 +87,13 @@ The running instance was left as it was."
                 }
             }
         }
-        self.rerun_after_jobs(&svc, requested)?;
+        if let Err(e) = self.rerun_after_jobs(&svc, requested) {
+            self.restart_failed(name, epoch, &e);
+            return Err(e);
+        }
         // A stop came in while the jobs ran: it wins over this restart.
         if self.stopped_since(name, epoch) {
+            self.restart_failed(name, epoch, STOPPED);
             return Err(STOPPED.into());
         }
         let running = self.slots.lock().unwrap()[name].main.is_some();
@@ -113,6 +112,25 @@ The running instance was left as it was."
         // A build of the tree as it is now is main: a held candidate is older.
         self.release_held(name, None);
         Ok(())
+    }
+
+    /// A restart that did not take over leaves no candidate that waits for
+    /// nothing (the build marked one while main served): a failure shows as
+    /// `failed` while main still serves; a stop since `epoch` ends the
+    /// candidate with the service, as a watcher's candidate does.
+    fn restart_failed(&self, name: &str, epoch: u64, e: &str) {
+        let serving = self.slots.lock().unwrap()[name].main.is_some();
+        if serving && !self.stopped_since(name, epoch) {
+            self.set_candidate(
+                name,
+                Some(Candidate::new("failed", None, Some(first_lines(e, 5)))),
+            );
+        } else {
+            self.set_candidate(name, None);
+            if let Some(p) = self.proxy(name) {
+                p.set_pending(None);
+            }
+        }
     }
 
     /// Jobs `svc` comes after run again first (a schema migrator for a
