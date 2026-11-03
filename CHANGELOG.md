@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **A lane's Activity shows its own changes** (#426, ADR-0067 addendum).
+  The lane `main` no longer lists every lane's changes, and the lane
+  filter, which offered every lane the journal ever named, is gone. What
+  belongs to the stack (the stopped lanes removed, the daemon stopped, the
+  main slot set) shows in an Activity on the stack's page. A lane's start
+  is recorded with the lane it started. The filters are two groups,
+  *Changes* and *Live*, and what a row acted on is a column of its own:
+  the service filter finds a removed store entry, a group, a container
+  and a command too.
+
 ### Added
 
 - **Favourite stacks** (#377, ADR-0086): a star in a stack's sidebar row,
