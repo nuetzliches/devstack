@@ -589,6 +589,11 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/stacks/{id}/mcp", get(stack_mcp))
         .route("/hub/stacks/{id}/api/{*rest}", any(forward))
         .route("/hub/public-links", get(publiclinks::get))
+        .route("/hub/public-links/pools", get(publiclinks::pools))
+        .route(
+            "/hub/public-links/pool",
+            axum::routing::put(publiclinks::use_pool),
+        )
         .route(
             "/hub/public-links/tunnel",
             axum::routing::put(publiclinks::put).delete(publiclinks::delete),
@@ -639,6 +644,14 @@ fn router(state: AppState) -> axum::Router {
         )
         .route("/hub/pool/upstreams/{name}", delete(pool::upstream_remove))
         .route("/hub/pool/join", post(pool::join))
+        .route(
+            "/hub/pool/public-links",
+            get(pool::public_links).post(pool::public_links_set),
+        )
+        .route(
+            "/hub/pool/public-links/close",
+            post(pool::public_link_close),
+        )
         .route("/hub/pool/skills", get(pool::skills).post(pool::skill_put))
         .route("/hub/pool/skills/refresh", post(pool::skills_refresh))
         .route("/hub/pool/skills/{name}", delete(pool::skill_remove))

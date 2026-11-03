@@ -121,8 +121,7 @@ impl Supervisor {
             }
         };
         if let Some(tunnel) = crate::namedtunnel::read() {
-            let host =
-                crate::namedtunnel::host(&tunnel.domain, &self.stack.stack.name, &self.lane, name);
+            let host = tunnel.host(&self.stack.stack.name, &self.lane, name);
             let view = PublicLinkView {
                 state: PublicLinkState::Starting,
                 url: Some(format!("https://{host}")),
@@ -316,6 +315,11 @@ fn watch_named(sup: Weak<Supervisor>, service: String, generation: u64, host: St
     loop {
         std::thread::sleep(Duration::from_millis(500));
         let outcome = match crate::namedtunnel::hub_links() {
+            // The pool refused the address (ADR-0092): said as it said it.
+            Ok(v) if v["refused"][host.as_str()].is_string() => Some(Err(format!(
+                "the pool gives {host} no record: {}",
+                v["refused"][host.as_str()].as_str().unwrap_or_default()
+            ))),
             Ok(v) => {
                 unreachable_since = None;
                 let routed = v["hosts"]

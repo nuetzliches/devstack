@@ -111,6 +111,14 @@ export const paths = {
   poolProvisioning: '/hub/pool/provisioning',
   poolProvisioned: '/hub/pool/provisioned',
   poolUpstreams: '/hub/pool/upstreams',
+  /** The pool's public links as an admin sees and sets them (ADR-0092). */
+  poolPublicLinks: '/hub/pool/public-links',
+  poolPublicLinkClose: '/hub/pool/public-links/close',
+  /** This machine's named tunnel (ADR-0091), and what the pools offer (ADR-0092). */
+  publicLinks: '/hub/public-links',
+  publicLinksPools: '/hub/public-links/pools',
+  publicLinksPool: '/hub/public-links/pool',
+  publicLinksTunnel: '/hub/public-links/tunnel',
   poolSkills: '/hub/pool/skills',
   poolSkill: (name: string) => `/hub/pool/skills/${enc(name)}`,
   poolSkillsRefresh: '/hub/pool/skills/refresh',

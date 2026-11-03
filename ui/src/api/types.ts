@@ -946,3 +946,30 @@ export type PortOverlap = {
 
 /** `GET /hub/ports`: the ports of every registered stack on this machine, and their overlaps. */
 export type HubPorts = { stacks: StackPorts[]; overlaps: PortOverlap[] };
+
+/** What a pool offers this machine of public links (ADR-0092). */
+export type PublicLinksOffer = { domain: string | null; mode: 'off' | 'access' | 'open'; allowed: boolean; why?: string; suffix?: string };
+/** `GET /hub/public-links/pools`: per pool, its offer or why it was not reached. */
+export type PublicLinksPoolOffer = { pool: string; offer?: PublicLinksOffer; error?: string };
+/** `GET /hub/public-links`: the named tunnel this machine uses (ADR-0091, ADR-0092), never its credentials. */
+export type PublicLinksState = {
+  configured: boolean;
+  domain: string | null;
+  tunnel_id: string | null;
+  /** The pool whose tunnel it is; null: the user's own. */
+  pool: string | null;
+  suffix: string | null;
+  connector: { state: 'off' | 'starting' | 'running' | 'failed'; error?: string; since: number };
+  hosts: string[];
+  refused: Record<string, string>;
+};
+/** `GET /hub/pool/public-links`: what an admin sees (ADR-0092). */
+export type PoolPublicLinksAdmin = {
+  settings: { domain?: string | null; mode: 'off' | 'access' | 'open'; tag?: string | null; zone_id?: string; account_id?: string };
+  /** The coordinator has a Cloudflare token (never what it is). */
+  token: boolean;
+  /** In the mode `access`: whether an Access application covers the domain. */
+  access?: { Ok: boolean; Err?: undefined } | { Ok?: undefined; Err: string };
+  links: { host: string; member: string; name: string; since: number }[];
+  blocked: string[];
+};

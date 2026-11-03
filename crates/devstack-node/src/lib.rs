@@ -14,6 +14,7 @@ pub mod nodeclient;
 pub mod pki;
 pub mod policy;
 pub mod provision;
+pub mod publiclinks;
 pub mod runs;
 pub mod safefs;
 pub mod share;

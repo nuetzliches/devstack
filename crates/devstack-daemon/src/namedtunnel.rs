@@ -6,6 +6,8 @@
 //!
 //! The hub writes [`Config`] when the tunnel is set up; a daemon reads it
 //! when a link opens or a service starts (`{service.<name>.public_url}`).
+//! A tunnel the pool gave (ADR-0092) has the member's suffix in its hosts
+//! (`{service}-{lane}-{stack}--{member}.{domain}`) and names the pool.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -17,6 +19,19 @@ pub struct Config {
     pub domain: String,
     /// The tunnel's id (`cloudflared tunnel create` printed it).
     pub tunnel_id: String,
+    /// The member's part of its hosts, with a tunnel the pool gave.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suffix: Option<String>,
+    /// The pool that gave it; none: the user's own (ADR-0091).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool: Option<String>,
+}
+
+impl Config {
+    /// The host of a service's link through this tunnel.
+    pub fn host(&self, stack: &str, lane: &str, service: &str) -> String {
+        host_with(&self.domain, self.suffix.as_deref(), stack, lane, service)
+    }
 }
 
 pub fn path() -> PathBuf {
@@ -97,6 +112,19 @@ pub fn valid_domain(d: &str) -> bool {
 /// label over 63 characters is cut and ended with a hash of the whole, so
 /// that two long names stay apart.
 pub fn host(domain: &str, stack: &str, lane: &str, service: &str) -> String {
+    host_with(domain, None, stack, lane, service)
+}
+
+/// [`host`], ended by `--{suffix}` (a pool's tunnel, ADR-0092), which the
+/// cut leaves whole. The parts never hold two hyphens in a row, so the
+/// suffix is told apart.
+pub fn host_with(
+    domain: &str,
+    suffix: Option<&str>,
+    stack: &str,
+    lane: &str,
+    service: &str,
+) -> String {
     let lane = if lane == "main" { "" } else { lane };
     let full = [service, lane, stack]
         .iter()
@@ -104,13 +132,15 @@ pub fn host(domain: &str, stack: &str, lane: &str, service: &str) -> String {
         .filter(|p| !p.is_empty())
         .collect::<Vec<_>>()
         .join("-");
-    let label = if full.len() <= 63 {
+    let tail = suffix.map(|s| format!("--{s}")).unwrap_or_default();
+    let room = 63 - tail.len().min(40);
+    let base = if full.len() <= room {
         full
     } else {
         let hash = blake3::hash(full.as_bytes()).to_hex();
-        format!("{}-{}", full[..54].trim_end_matches('-'), &hash[..8])
+        format!("{}-{}", full[..room - 9].trim_end_matches('-'), &hash[..8])
     };
-    format!("{label}.{domain}")
+    format!("{base}{tail}.{domain}")
 }
 
 /// `{service.<name>.public_url}` of a tree (`lane` empty for the main
@@ -130,7 +160,7 @@ pub fn public_urls(
         .map(|(n, _)| {
             (
                 n.clone(),
-                format!("https://{}", host(&c.domain, &stack.stack.name, lane, n)),
+                format!("https://{}", c.host(&stack.stack.name, lane, n)),
             )
         })
         .collect()
@@ -222,6 +252,17 @@ mod tests {
         let label = long.strip_suffix(".dev.io").unwrap();
         assert_eq!(label.len(), 63, "{label}");
         assert_ne!(long, host("dev.io", "shop", &"a".repeat(81), "web"));
+    }
+
+    #[test]
+    fn a_pools_host_ends_in_the_members_suffix() {
+        assert_eq!(
+            host_with("dev.io", Some("anna"), "shop", "", "web"),
+            "web-shop--anna.dev.io"
+        );
+        let long = host_with("dev.io", Some("anna"), "shop", &"a".repeat(80), "web");
+        let label = long.strip_suffix(".dev.io").unwrap();
+        assert!(label.len() <= 63 && label.ends_with("--anna"), "{label}");
     }
 
     #[test]
