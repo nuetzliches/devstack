@@ -17,6 +17,11 @@ and listed with their assets on the
   the chosen order. Marking moves the stack at once. Favourites live in
   the browser's `localStorage`, as the order does.
 
+### Changed
+
+- **Stop is a button of its own** in a lane's header: red, beside Restart,
+  no longer in Restart's menu (ADR-0072 point 5, amended).
+
 ### Fixed
 
 - **The restart banner shows in a lane's views again** (ADR-0081). "The
