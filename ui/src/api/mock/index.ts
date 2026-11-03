@@ -750,13 +750,25 @@ export class MockTransport implements Transport {
     if (p === '/hub/stacks/scan' && method === 'POST') {
       await sleep(600);
       const root = String((body as { path?: string } | undefined)?.path ?? 'C:\\src');
-      const add = !!(body as { add?: boolean } | undefined)?.add;
-      return json(200, [
-        { repo: `${root}\\shop`, id: 'shop-3f9a1c', name: 'shop', error: null, registered: true, added: false },
-        { repo: `${root}\\billing`, id: 'b111', name: 'billing', error: null, registered: add, added: add },
-        { repo: `${root}\\worker`, id: 'w333', name: 'worker', error: null, registered: add, added: add },
-        { repo: `${root}\\legacy`, id: 'l222', name: null, error: 'devstack.toml: unknown field `biuld`', registered: false, added: false },
-      ]);
+      const q = (body ?? {}) as { add?: boolean; git_only?: boolean; configured_only?: boolean; depth?: number };
+      const add = !!q.add;
+      const gitOnly = q.git_only ?? true;
+      const configuredOnly = q.configured_only ?? true;
+      if (!gitOnly && !configuredOnly) return json(400, { error: '`git_only` or `configured_only`: without either, every folder is one' });
+      // A repository without a stack file ("crm"), a plain folder with one
+      // ("fixture"), one two levels down ("acme\worker").
+      const all = [
+        { repo: `${root}\\shop`, id: 'shop-3f9a1c', name: 'shop', error: null, configured: true, registered: true, added: false, git: true, depth: 1 },
+        { repo: `${root}\\billing`, id: 'b111', name: 'billing', error: null, configured: true, registered: add, added: add, git: true, depth: 1 },
+        { repo: `${root}\\acme\\worker`, id: 'w333', name: 'worker', error: null, configured: true, registered: add, added: add, git: true, depth: 2 },
+        { repo: `${root}\\legacy`, id: 'l222', name: null, error: 'devstack.toml: unknown field `biuld`', configured: true, registered: false, added: false, git: true, depth: 1 },
+        { repo: `${root}\\crm`, id: 'c444', name: 'crm', error: null, configured: false, registered: add, added: add, git: true, depth: 1 },
+        { repo: `${root}\\fixture`, id: 'f555', name: 'fixture', error: null, configured: true, registered: add, added: add, git: false, depth: 1 },
+      ];
+      return json(
+        200,
+        all.filter((f) => f.depth <= (q.depth ?? 1) && (f.git || !gitOnly) && (f.configured || !configuredOnly)).map(({ git: _g, depth: _d, ...f }) => f),
+      );
     }
     if (p === '/hub/update/check' && method === 'POST') return json(200, { current: '0.2.0', newer: hub.newer });
     if (p === '/hub/notify' && method === 'GET') return json(200, notify);

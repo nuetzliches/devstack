@@ -22,6 +22,12 @@ and listed with their assets on the
 
 ### Changed
 
+- **The folder scan looks one level deep and at git repositories only by
+  default** (ADR-0089): a plain folder with a `devstack.toml` (a fixture, a
+  test stack) is no longer listed unless "Only git repositories" is off,
+  and repositories grouped in sub-folders need "Search subfolders" (three
+  levels, as before). The API's `depth` defaults to 1.
+
 - **`devstack skills check` looks for generated skills git still tracks**
   (ADR-0087): the hub leaves such a copy alone. It exits 1 and prints the
   `git rm -r --cached` that takes each out of git, the files stay; it no
@@ -38,6 +44,16 @@ and listed with their assets on the
   and a command too.
 
 ### Added
+
+- **The folder scan adds repositories without a stack file** (ADR-0089).
+  "Scan a folder of repositories" has three checkboxes above the list:
+  "Only git repositories" (on), "Only configured" (on) and "Search
+  subfolders" (off). With "Only configured" off, a repository without a
+  `devstack.toml` is listed, tagged "not set up", and added as such; its
+  page offers the coding agent's setup, and once the file exists the stack
+  takes the name it gives. `POST /hub/stacks/scan` gets `git_only` and
+  `configured_only`, each result `configured`; `POST /hub/stacks/add`
+  registers a folder without a stack file.
 
 - **How far a lane's branch is ahead and behind** (ADR-0088): beside the
   branch in the lane's header, `↑2 ↓5` when it differs from its upstream,
