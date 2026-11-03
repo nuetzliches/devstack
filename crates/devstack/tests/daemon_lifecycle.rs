@@ -2044,6 +2044,53 @@ fn a_stop_while_the_migrator_runs_holds() {
     s.ok(&["down"]);
 }
 
+/// A `stop` while a restart's migrator runs: the restart fails and leaves
+/// no candidate behind ("not live yet" for a stopped service that waits for
+/// nothing).
+#[test]
+fn a_stop_while_a_restart_migrates_leaves_no_candidate() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    std::fs::write(
+        s.file(),
+        format!(
+            "version = 1\n[stack]\nname = \"migrating\"\n[services.migrate]\nkind = \"job\"\nrun = \"{}\"\n[services.app]\n{SITE_BUILD}run = \"{}\"\nafter = [\"migrate\"]\n",
+            runs_for(8),
+            runs_for(600)
+        ),
+    )
+    .unwrap();
+    s.ok(&["up"]);
+    assert_eq!(s.state("app"), "running", "{}", s.diag());
+    let file = s.file();
+    let home = s.token_home.path().to_path_buf();
+    let restart = std::thread::spawn(move || {
+        Command::new(BIN)
+            .args(["restart", "app", "-f"])
+            .arg(&file)
+            .env("LOCALAPPDATA", &home)
+            .env("XDG_STATE_HOME", &home)
+            .env("DEVSTACK_NO_HUB", "1")
+            .output()
+            .unwrap()
+    });
+    assert!(
+        wait_for(|| s.state("migrate") == "starting", Duration::from_secs(60)),
+        "the restart runs the migrator\n{}",
+        s.diag()
+    );
+    s.ok(&["stop", "app"]);
+    let out = restart.join().unwrap();
+    assert!(!out.status.success(), "the stop ended the restart");
+    assert_eq!(s.state("app"), "stopped", "{}", s.diag());
+    let candidate = &s.service_view("app")["candidate"];
+    assert!(candidate.is_null(), "no candidate is left: {candidate}");
+    s.ok(&["down"]);
+}
+
 /// Two services after the same job, one change: the job runs once for it,
 /// not once per candidate (a seed job is not idempotent).
 #[test]
