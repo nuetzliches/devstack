@@ -328,6 +328,17 @@ describe('stack store', () => {
     expect(stack.lane).toBeNull();
   });
 
+  it('reads the branches again when the worktrees or their refs move (ADR-0088)', async () => {
+    let behind = 0;
+    fake.on('/hub/stacks/shop/branches', () => ok({ branches: [{ name: 'main', main: true, upstream: 'origin/main', ahead: 0, behind, date: 1 }] }));
+    const stack = await shownStack();
+    fake.stream('/hub/events').handlers.onMessage({ type: 'worktrees', worktrees: { shop: 'a' } });
+    await vi.waitFor(() => expect(stack.branches?.branches[0].behind).toBe(0));
+    behind = 3;
+    fake.stream('/hub/events').handlers.onMessage({ type: 'worktrees', worktrees: { shop: 'b' } });
+    await vi.waitFor(() => expect(stack.branches?.branches[0].behind).toBe(3));
+  });
+
   it("someone else's lane gets no branches and makes none", async () => {
     fake.on('/hub/session', ok({ version: '0.9.8' }));
     fake.on('/hub/pools', ok([{ name: 'default', joined: true, state: 'approved', coordinator: 'https://c' }]));

@@ -476,6 +476,9 @@ export type BranchView = {
   remote?: string;
   /** What a local branch tracks. */
   upstream?: string;
+  /** Commits it has that its upstream has not, and the other way round, as of the last fetch (ADR-0088); absent without an upstream, when it is gone, or from an older hub. */
+  ahead?: number;
+  behind?: number;
   /** The worktree that has it checked out. */
   worktree?: string;
   /** That worktree is the main working tree. */

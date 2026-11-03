@@ -6,7 +6,12 @@
 //!   their `HEAD`s, a local folder) and tells dashboards on `/hub/events`
 //!   (`worktrees`: a version per stack) when one was added, removed or
 //!   checked out another branch; the dashboard reads that stack's lanes
-//!   again then.
+//!   again then. The same version moves when a checked-out branch or its
+//!   upstream moves (a commit, a fetch, a push by any git client: the ref
+//!   files, `packed-refs`, `FETCH_HEAD`), so the dashboard reads how far
+//!   ahead and behind they are again (ADR-0088). Only files are looked at;
+//!   git runs when the trees or the repository's `config` changed, to learn
+//!   which ref files to look at.
 //! - `GET /hub/stacks/{id}/worktrees`: a stack's worktrees as lanes not
 //!   started, for a stack whose daemon does not run.
 //! - `POST /hub/stacks/{id}/lanes/start {path, on?}`: start a worktree's
@@ -49,6 +54,9 @@ pub fn start() {
         .spawn(|| {
             // A stack's git directory, asked of git once.
             let mut dirs: HashMap<String, Option<PathBuf>> = HashMap::new();
+            // A stack's ref files to look at, and the trees' print they
+            // were asked for.
+            let mut refs: HashMap<String, (String, Vec<PathBuf>)> = HashMap::new();
             loop {
                 let stacks = devstack_daemon::registry::list();
                 let mut now = BTreeMap::new();
@@ -58,10 +66,21 @@ pub fn start() {
                         .or_insert_with(|| crate::branches::common_dir(&e.repo).ok())
                         .clone();
                     let Some(dir) = dir else { continue };
-                    let print = devstack_daemon::lanes::fingerprint(&dir.join("worktrees"));
-                    now.insert(e.id.clone(), version(&print));
+                    let trees = version(&(
+                        devstack_daemon::lanes::fingerprint(&dir.join("worktrees")),
+                        modified(&dir.join("HEAD")),
+                        modified(&dir.join("config")),
+                    ));
+                    if refs.get(&e.id).is_none_or(|(t, _)| *t != trees) {
+                        refs.insert(e.id.clone(), (trees.clone(), ref_files(&e.repo, &dir)));
+                    }
+                    let files = &refs[&e.id].1;
+                    let shared = ["FETCH_HEAD", "packed-refs"].map(|f| modified(&dir.join(f)));
+                    let moved: Vec<_> = files.iter().map(|f| modified(f)).collect();
+                    now.insert(e.id.clone(), version(&(trees, shared, moved)));
                 }
                 dirs.retain(|id, _| stacks.iter().any(|e| &e.id == id));
+                refs.retain(|id, _| stacks.iter().any(|e| &e.id == id));
                 sender().send_if_modified(|v| {
                     if *v == now {
                         false
@@ -75,11 +94,44 @@ pub fn start() {
         });
 }
 
-fn version(print: &[(std::ffi::OsString, Option<std::time::SystemTime>)]) -> String {
-    use std::hash::{Hash, Hasher};
+fn version(print: &impl std::hash::Hash) -> String {
+    use std::hash::Hasher;
     let mut h = std::collections::hash_map::DefaultHasher::new();
     print.hash(&mut h);
     format!("{:016x}", h.finish())
+}
+
+fn modified(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+/// The loose ref files of the branches checked out in the repository's
+/// trees and of their upstreams, under the git directory `common`: what a
+/// commit, a fetch or a push rewrites (a packed ref moves `packed-refs`
+/// instead). A file not there yet is looked at all the same.
+fn ref_files(repo: &Path, common: &Path) -> Vec<PathBuf> {
+    let out = crate::branches::upstreams(repo).unwrap_or_default();
+    let checked_out: Vec<String> = devstack_daemon::lanes::worktree_branches(repo)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(_, b)| b)
+        .collect();
+    let mut files = Vec::new();
+    for branch in &checked_out {
+        let local = format!("refs/heads/{branch}");
+        files.push(ref_file(common, &local));
+        if let Some(up) = out.iter().find(|(r, _)| *r == local).map(|(_, u)| u) {
+            files.push(ref_file(common, up));
+        }
+    }
+    files
+}
+
+/// `refs/heads/feat/x` as a file under `common`, a folder per segment.
+fn ref_file(common: &Path, refname: &str) -> PathBuf {
+    let mut p = common.to_path_buf();
+    p.extend(refname.split('/').filter(|s| !s.is_empty()));
+    p
 }
 
 /// A worktree as the dashboard's lane list has it, not started.
@@ -330,6 +382,64 @@ mod tests {
         assert!(
             list[0].not_in_pool.is_some(),
             "no `[lanes] image`: not in the pool"
+        );
+    }
+
+    #[test]
+    fn the_ref_files_are_the_checked_out_branches_and_their_upstreams() {
+        let d = tempfile::tempdir().unwrap();
+        let origin = d.path().join("origin");
+        std::fs::create_dir_all(&origin).unwrap();
+        git(&origin, &["init", "-q", "-b", "main"]);
+        git(
+            &origin,
+            &[
+                "-c",
+                "user.email=t@example.com",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "x",
+            ],
+        );
+        git(&origin, &["branch", "feat/x"]);
+        let repo = d.path().join("clone");
+        git(
+            d.path(),
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                repo.to_str().unwrap(),
+            ],
+        );
+        let wt = d.path().join("clone.worktrees").join("feat-x");
+        git(
+            &repo,
+            &["worktree", "add", "-q", wt.to_str().unwrap(), "feat/x"],
+        );
+        let common = crate::branches::common_dir(&repo).unwrap();
+        let files = ref_files(&repo, &common);
+        let rel: Vec<String> = files
+            .iter()
+            .map(|f| {
+                f.strip_prefix(&common)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        assert_eq!(
+            rel,
+            [
+                "refs/heads/main",
+                "refs/remotes/origin/main",
+                "refs/heads/feat/x",
+                "refs/remotes/origin/feat/x",
+            ]
         );
     }
 }
