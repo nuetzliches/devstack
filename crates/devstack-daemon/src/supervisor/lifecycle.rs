@@ -346,6 +346,7 @@ impl Supervisor {
             if keep.contains(&name) {
                 continue;
             }
+            self.close_public_link(&name);
             if let Err(e) = self.stop(&name) {
                 failed.push(format!("{name}: {e}"));
             }

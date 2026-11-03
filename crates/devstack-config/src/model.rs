@@ -988,6 +988,11 @@ pub struct Service {
     #[schemars(with = "Option<String>")]
     #[serde(default, deserialize_with = "opt_duration")]
     pub timeout: Option<Duration>,
+    /// `false`: the dashboard and `devstack tunnel` offer no public link to
+    /// it (a Cloudflare Quick Tunnel to its fixed port). Default: offered
+    /// for every service with a `port`; a link is only ever opened by
+    /// hand, never by the stack file.
+    pub tunnel: Option<bool>,
 }
 
 /// `prepare` of a service: a command run in a copy of the source.

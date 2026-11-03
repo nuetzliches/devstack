@@ -1240,6 +1240,41 @@ fn a_services_stop_takes_the_placeholders_of_its_run() {
 }
 
 #[test]
+fn tunnel_false_keeps_a_service_from_a_public_link() {
+    use devstack_config::{TUNNEL_SINCE, validate::warnings};
+    let text = MINIMAL.replace(
+        "port = 5000
+",
+        "port = 5000
+tunnel = false
+",
+    );
+    let mut s = from_str(&text, Path::new("t")).unwrap();
+    assert_eq!(s.services["api"].tunnel, Some(false));
+    let w = warnings(&s);
+    assert!(
+        w.iter()
+            .any(|i| i.path == "services.api.tunnel" && i.message.contains(TUNNEL_SINCE)),
+        "{w:?}"
+    );
+    s.stack.requires = Some(TUNNEL_SINCE.into());
+    assert!(warnings(&s).is_empty());
+
+    // Without a port there is nothing to keep it from.
+    let all = invalid(&format!(
+        "{MINIMAL}[services.worker]
+run = \"x\"
+tunnel = false
+"
+    ))
+    .join(
+        "
+",
+    );
+    assert!(all.contains("services.worker.tunnel"), "{all}");
+}
+
+#[test]
 fn singleton_and_the_older_lanes_false_mean_the_same() {
     let svc = |extra: &str| {
         let s = from_str(

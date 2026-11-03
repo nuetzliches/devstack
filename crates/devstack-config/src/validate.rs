@@ -774,6 +774,12 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         if svc.health.is_some() && svc.port.is_none() {
             c.err(format!("{p}.health"), "an HTTP health check needs `port`");
         }
+        if svc.tunnel.is_some() && svc.port.is_none() {
+            c.err(
+                format!("{p}.tunnel"),
+                "a public link goes to the service's `port`: without one there is nothing to offer",
+            );
+        }
         if svc.health.as_ref().is_some_and(|h| h.timeout.is_zero()) {
             c.err(format!("{p}.health.timeout"), "must be more than 0");
         }
@@ -1077,8 +1083,8 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
 const FIRST_LANES: u32 = 3;
 
 /// What a valid stack file may want changed (`devstack check` prints them):
-/// a newer key (`[stack] reviewed`, `announced_ports`, a service's `stop`,
-/// `prepare.outputs` and `prepare.version`)
+/// a newer key (`[stack] reviewed`, `announced_ports`, a service's `stop`
+/// and `tunnel`, `prepare.outputs` and `prepare.version`)
 /// without the `requires` that keeps an older devstack from failing on it;
 /// two services whose ports differ by one of the first
 /// few multiples of `[lanes] port_step`, so that one of the first lanes
@@ -1214,6 +1220,28 @@ pub fn warnings(stack: &Stack) -> Vec<Issue> {
                     ),
                 });
             }
+        }
+    }
+    let tunnel = crate::version_order(crate::TUNNEL_SINCE);
+    if stack
+        .stack
+        .requires
+        .as_deref()
+        .is_none_or(|r| crate::version_order(r) < tunnel)
+    {
+        for name in stack
+            .services
+            .iter()
+            .filter(|(_, s)| s.tunnel.is_some())
+            .map(|(n, _)| n)
+        {
+            out.push(Issue {
+                path: format!("services.{name}.tunnel"),
+                message: format!(
+                    "a devstack before {v} does not know this key and fails on it with \"unknown field\": `requires = \"{v}\"` makes it ask to be updated instead",
+                    v = crate::TUNNEL_SINCE
+                ),
+            });
         }
     }
     if step == 0 {

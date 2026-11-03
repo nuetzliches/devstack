@@ -76,6 +76,7 @@ pub fn run(stack_file: &Path) -> Vec<Finding> {
     out.extend(docker(stack.as_ref().map(|s| !s.compose.is_empty())));
     if let Some(s) = &stack {
         out.push(tools(s));
+        out.extend(cloudflared(s));
         out.extend(ports(s, stack_file));
     }
     out.extend(overlaps());
@@ -249,6 +250,29 @@ fn tools(stack: &devstack_config::Stack) -> Finding {
             ),
         )
     }
+}
+
+/// `cloudflared`, which a public link runs (`devstack tunnel`): optional, so
+/// its absence is said, not a failure. Nothing for a stack without a service
+/// to open one to.
+fn cloudflared(stack: &devstack_config::Stack) -> Option<Finding> {
+    if !stack
+        .services
+        .values()
+        .any(|s| s.port.is_some() && s.tunnel != Some(false))
+    {
+        return None;
+    }
+    Some(match find_on_path("cloudflared") {
+        Some(p) => f(
+            Level::Ok,
+            format!("cloudflared for public links: {}", p.display()),
+        ),
+        None => f(
+            Level::Info,
+            "no cloudflared on PATH: public links (`devstack tunnel`, the dashboard) need it (`winget install Cloudflare.cloudflared`, `brew install cloudflared`)",
+        ),
+    })
 }
 
 /// `dotnet build x.csproj` -> `dotnet`; placeholders and paths are skipped

@@ -328,6 +328,21 @@ export type ServiceView = {
   last_action?: Change;
   /** It runs once per machine, in the main working tree only (`singleton = true`, ADR-0080): the stack's, not a lane's. Older daemons omit it. */
   singleton?: boolean;
+  /** Its public link (a Cloudflare Quick Tunnel to its port), while one is open or failed; absent otherwise. */
+  public_link?: PublicLink;
+  /** A public link may be opened to it (a `port`, no `tunnel = false`). Older daemons omit it. */
+  public_link_available?: boolean;
+};
+
+/** A service's public link: reachable from the internet by anyone with `url`. */
+export type PublicLink = {
+  state: 'starting' | 'open' | 'failed';
+  /** `https://<words>.trycloudflare.com`, once cloudflared named it. */
+  url?: string;
+  /** Unix ms: when it was asked for. */
+  since: number;
+  /** Why it failed, or ended on its own. */
+  error?: string;
 };
 
 /** Who changed something at runtime, and when (ADR-0067). */
@@ -525,6 +540,7 @@ export type StackEventBody =
   | { type: 'service'; service: string; status: Status; build_id: string | null }
   | { type: 'candidate'; service: string; candidate: Candidate | null }
   | { type: 'devserver_rebuild'; service: string; rebuild: Rebuild | null }
+  | { type: 'public_link'; service: string; link: PublicLink | null }
   | { type: 'infra'; group: string; message: string }
   | { type: 'command'; command: string; run: number; status: RunStatus }
   | { type: 'config'; changed: boolean }

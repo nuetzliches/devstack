@@ -45,6 +45,20 @@ and listed with their assets on the
 
 ### Added
 
+- **Public links: a service on the internet, by a click** (ADR-0090). The globe button
+  on a service's row, or `devstack tunnel <service>`, opens a Cloudflare
+  Quick Tunnel (`cloudflared`, no account) to the service's fixed port and
+  shows its `trycloudflare.com` address, after the dashboard said that
+  anyone with it gets in. It outlasts restarts and rebuilds, and ends when
+  it is closed (`--stop`), with a stop of the service by hand, `devstack
+  down` or the daemon. Only the stack's owner opens one: not the stack
+  file (`tunnel = false` keeps a service from it), not a member a lane is
+  shared with. `devstack status` and the journal say which are open;
+  `devstack doctor` whether `cloudflared` is installed. Not yet for a lane
+  on a node, nor for Compose containers. `POST`/`DELETE
+  /v1/services/{name}/public-link`, `ServiceView.public_link`, the
+  `public_link` event.
+
 - **The folder scan adds repositories without a stack file** (ADR-0089).
   "Scan a folder of repositories" has three checkboxes above the list:
   "Only git repositories" (on), "Only configured" (on) and "Search

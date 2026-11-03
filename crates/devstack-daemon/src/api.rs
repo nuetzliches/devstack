@@ -80,6 +80,10 @@ fn routes(state: AppState) -> axum::Router {
         .route("/v1/up", post(up))
         .route("/v1/down", post(down))
         .route("/v1/shutdown", post(shutdown))
+        .route(
+            "/v1/services/{name}/public-link",
+            post(public_link_open).delete(public_link_close),
+        )
         .route("/v1/services/{name}/{action}", post(service_action))
         .route("/v1/groups/{name}/{action}", post(group_action))
         .route("/v1/logs", get(logs_all))
@@ -498,7 +502,15 @@ async fn service_action(
     let sup = s.sup.clone();
     let result = match action.as_str() {
         "start" => tokio::task::spawn_blocking(move || sup.start(&name)).await,
-        "stop" => tokio::task::spawn_blocking(move || sup.stop(&name)).await,
+        // A stop by hand ends the public link too; the restarts and
+        // rebuilds below keep it (it goes to the fixed port).
+        "stop" => {
+            tokio::task::spawn_blocking(move || {
+                sup.close_public_link(&name);
+                sup.stop(&name)
+            })
+            .await
+        }
         "restart" => tokio::task::spawn_blocking(move || sup.restart(&name)).await,
         "rebuild" => tokio::task::spawn_blocking(move || sup.rebuild(&name)).await,
         "promote" => tokio::task::spawn_blocking(move || sup.promote(&name)).await,
@@ -512,6 +524,41 @@ async fn service_action(
         Ok(Err(e)) => err(StatusCode::CONFLICT, e),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
+}
+
+/// `POST /v1/services/{name}/public-link`: open a public link to the
+/// service's fixed port (a Cloudflare Quick Tunnel); the view answers, its
+/// `public_link` `starting` until the tunnel is registered.
+async fn public_link_open(State(s): State<AppState>, Path(name): Path<String>) -> Response {
+    let sup = s.sup.clone();
+    let own = [s.port, hub_port()];
+    match tokio::task::spawn_blocking(move || sup.open_public_link(&name, &own)).await {
+        Ok(Ok(())) => Json(s.sup.view()).into_response(),
+        Ok(Err(e)) if e.starts_with("no service") => err(StatusCode::NOT_FOUND, e),
+        Ok(Err(e)) => err(StatusCode::CONFLICT, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `DELETE /v1/services/{name}/public-link`: close it (a failed one is
+/// cleared); a service without one answers the same.
+async fn public_link_close(State(s): State<AppState>, Path(name): Path<String>) -> Response {
+    if !s.sup.stack.services.contains_key(&name) {
+        return err(StatusCode::NOT_FOUND, format!("no service `{name}`"));
+    }
+    let sup = s.sup.clone();
+    match tokio::task::spawn_blocking(move || sup.close_public_link(&name)).await {
+        Ok(()) => Json(s.sup.view()).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// The hub's port, as the hub reads it (`DEVSTACK_HUB_PORT`, else 4250).
+fn hub_port() -> u16 {
+    std::env::var("DEVSTACK_HUB_PORT")
+        .ok()
+        .and_then(|p| p.trim().parse().ok())
+        .unwrap_or(4250)
 }
 
 #[allow(clippy::result_large_err)] // the error is the answer itself
