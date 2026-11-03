@@ -12,7 +12,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { DockerEngine, Guest, HubEvent, PoolFeed, PoolNode, PoolSkillsAdmin, PoolSkillsState, LaneView, McpUpstream, NotifySettings, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry } from '../types';
+import type { DockerEngine, Guest, HubEvent, PoolFeed, PoolNode, PoolSkillsAdmin, PoolSkillsState, LaneView, McpUpstream, NotifySettings, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry, StackView } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -1138,6 +1138,20 @@ export class MockTransport implements Transport {
       }
       return view();
     }
+    if (p === '/v1/public-link') {
+      const all = s.view.services.filter((x) => x.public_link_available && x.status.state !== 'stopped');
+      for (const svc of all) {
+        if (method === 'DELETE') {
+          if (!svc.public_link) continue;
+          delete svc.public_link;
+          s.emit({ type: 'public_link', service: svc.name, link: null });
+        } else if (!svc.public_link || svc.public_link.state === 'failed') {
+          svc.public_link = { state: 'open', since: Date.now(), url: mockLinkUrl(s.view, svc.name) };
+          s.emit({ type: 'public_link', service: svc.name, link: svc.public_link });
+        }
+      }
+      return view();
+    }
     const pl = /^\/v1\/services\/([^/]+)\/public-link$/.exec(p);
     if (pl) {
       const name = decodeURIComponent(pl[1]);
@@ -1156,7 +1170,7 @@ export class MockTransport implements Transport {
       s.emit({ type: 'public_link', service: name, link: svc.public_link });
       setTimeout(() => {
         if (svc.public_link?.since !== since) return;
-        svc.public_link = { state: 'open', since, url: `https://${name}-quiet-river-stone.trycloudflare.com` };
+        svc.public_link = { state: 'open', since, url: mockLinkUrl(s.view, name) };
         s.emit({ type: 'public_link', service: name, link: svc.public_link });
       }, 2500);
       return view();
@@ -1413,4 +1427,9 @@ function commandPlan(name: string): { lines: string[]; fail?: string; stepMs?: n
     default:
       return { lines: [`running ${name}`, 'working...', 'done'] };
   }
+}
+
+/** A public link's address in the mock: below the named tunnel's domain when the stack has one (ADR-0090), else a Quick Tunnel's. */
+function mockLinkUrl(view: StackView, service: string): string {
+  return view.public_link_domain ? `https://${service}-${view.name}.${view.public_link_domain}` : `https://${service}-quiet-river-stone.trycloudflare.com`;
 }

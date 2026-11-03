@@ -1813,6 +1813,70 @@ tunnel = false
     s.ok(&["down"]);
 }
 
+/// With a named tunnel set up (ADR-0090, step 2), a link's address is the
+/// stable host below its domain, `{service.<name>.public_url}` says it
+/// before any link is open, and the link waits for the hub's connector: a
+/// hub that does not answer fails it, saying so.
+#[test]
+fn a_named_tunnel_gives_stable_addresses_and_needs_the_hub() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    let dev = free_port();
+    let long = runs_for(600);
+    std::fs::write(
+        s.file(),
+        format!(
+            r#"version = 1
+[stack]
+name = "public"
+[services.dev]
+kind = "devserver"
+run = "{long}"
+port = {dev}
+env = {{ PUBLIC_ORIGIN = "{{service.dev.public_url}}" }}
+"#
+        ),
+    )
+    .unwrap();
+    let state = s.token_home.path().join("devstack");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(
+        state.join("named-tunnel.json"),
+        r#"{"domain":"e2e.test","tunnel_id":"t"}"#,
+    )
+    .unwrap();
+    // No hub listens there.
+    let hub = free_port();
+    let hub_port = hub.to_string();
+    let env = [("DEVSTACK_HUB_PORT", Path::new(&hub_port))];
+    let run = |args: &[&str]| {
+        let out = s.cli_with(args, None, &env);
+        (
+            out.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+    let (ok, text) = run(&["up"]);
+    assert!(ok, "{text}");
+    let (_, text) = run(&["env", "dev"]);
+    assert!(text.contains("https://dev-public.e2e.test"), "{text}");
+    assert_eq!(s.stack_view()["public_link_domain"], "e2e.test");
+
+    let (ok, text) = run(&["tunnel", "dev"]);
+    assert!(!ok && text.contains("does not answer"), "{text}");
+    let link = s.service_view("dev")["public_link"].clone();
+    assert_eq!(link["state"], "failed", "{link}");
+    assert_eq!(link["url"], "https://dev-public.e2e.test");
+    s.ok(&["down"]);
+}
+
 /// A service's `stop` (ADR-0059) runs when devstack stops an instance, with
 /// that instance's port, into its log; after the daemon died, the next start
 /// runs the one it recorded.

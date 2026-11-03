@@ -5,23 +5,27 @@
 //! which the proxy or the dev server's forward holds, so it outlasts the
 //! service's restarts, rebuilds and `promote --lane`; it ends when it is
 //! closed, with the service's `stop`, the tree's `down` and the daemon.
+//!
+//! With the user's named tunnel set up (ADR-0090, step 2: `devstack tunnel
+//! --setup`), no Quick Tunnel runs: the link's address is the stable
+//! `https://{service}-{lane}-{stack}.{domain}`, and the hub, which follows
+//! this tree's events, routes it through its one connector; the link is
+//! open once the hub says that connector runs and has the host.
 
 use super::Supervisor;
 use crate::state::{EventBody, PublicLinkState, PublicLinkView, Status, now_ms};
 use devstack_proc::{Owned, Spec};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 /// How long `cloudflared` gets to register its tunnel.
 const OPEN_TIMEOUT: Duration = Duration::from_secs(45);
 
-/// `cloudflared`, if not on the `PATH` (a test's fake, an install elsewhere).
-const PROGRAM_VARIABLE: &str = "DEVSTACK_CLOUDFLARED";
-
 pub(crate) struct Link {
     view: PublicLinkView,
-    /// `None` once it failed: nothing runs, the view says why.
+    /// The Quick Tunnel's `cloudflared`; `None` once it failed, and for a
+    /// link through the named tunnel (the hub runs that one).
     tree: Option<Owned>,
     record: String,
     /// Tells a watcher thread of an earlier link of the service to end.
@@ -29,6 +33,43 @@ pub(crate) struct Link {
 }
 
 impl Supervisor {
+    /// `{service.<name>.public_url}` of this tree (ADR-0090).
+    pub(crate) fn public_urls(&self) -> std::collections::BTreeMap<String, String> {
+        crate::namedtunnel::public_urls(&self.stack, &self.lane)
+    }
+
+    /// Open a public link to every service of this tree that may have one
+    /// and runs, those already open kept ("make the lane public"). The
+    /// services it opened, and why the others were not.
+    pub fn open_public_links(self: &Arc<Self>, own_ports: &[u16]) -> (Vec<String>, Vec<String>) {
+        let names: Vec<String> = {
+            let slots = self.slots.lock().unwrap();
+            slots
+                .values()
+                .filter(|s| {
+                    s.view.public_link_available && !matches!(s.view.status, Status::Stopped)
+                })
+                .map(|s| s.view.name.clone())
+                .collect()
+        };
+        let (mut opened, mut failed) = (Vec::new(), Vec::new());
+        for n in names {
+            match self.open_public_link(&n, own_ports) {
+                Ok(()) => opened.push(n),
+                Err(e) => failed.push(format!("{n}: {e}")),
+            }
+        }
+        (opened, failed)
+    }
+
+    /// Close every public link of this tree.
+    pub fn close_public_links(&self) {
+        let names: Vec<String> = self.public_links.lock().unwrap().keys().cloned().collect();
+        for n in names {
+            self.close_public_link(&n);
+        }
+    }
+
     pub(crate) fn public_link_view(&self, name: &str) -> Option<PublicLinkView> {
         self.public_links
             .lock()
@@ -74,12 +115,42 @@ impl Supervisor {
         let generation = {
             let links = self.public_links.lock().unwrap();
             match links.get(name) {
-                Some(l) if l.tree.is_some() => return Ok(()),
+                Some(l) if l.view.state != PublicLinkState::Failed => return Ok(()),
                 Some(l) => l.generation + 1,
                 None => 0,
             }
         };
-        let program = program()?;
+        if let Some(tunnel) = crate::namedtunnel::read() {
+            let host =
+                crate::namedtunnel::host(&tunnel.domain, &self.stack.stack.name, &self.lane, name);
+            let view = PublicLinkView {
+                state: PublicLinkState::Starting,
+                url: Some(format!("https://{host}")),
+                since: now_ms(),
+                error: None,
+            };
+            self.public_links.lock().unwrap().insert(
+                name.to_string(),
+                Link {
+                    view: view.clone(),
+                    tree: None,
+                    record: String::new(),
+                    generation,
+                },
+            );
+            self.emit(EventBody::PublicLink {
+                service: name.into(),
+                link: Some(view),
+            });
+            let me = Arc::downgrade(self);
+            let service = name.to_string();
+            std::thread::Builder::new()
+                .name(format!("public-link-{name}"))
+                .spawn(move || watch_named(me, service, generation, host))
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+        let program = crate::namedtunnel::cloudflared()?;
         let scheme = svc.scheme();
         // `localhost`, not 127.0.0.1: a service without the proxy may bind
         // IPv6 loopback only (a dev server), and cloudflared tries both. The
@@ -87,7 +158,7 @@ impl Supervisor {
         // host check (Vite's `allowedHosts`, `ng serve`'s) lets it through.
         let mut command = format!(
             "{} tunnel --no-autoupdate --url {scheme}://localhost:{port} --http-host-header localhost:{port}",
-            quoted(&program)
+            crate::namedtunnel::quoted(&program)
         );
         if scheme == "https" {
             // Its certificate is a development one (`insecure_tls`).
@@ -190,22 +261,26 @@ fn watch(sup: Weak<Supervisor>, service: String, generation: u64, log: PathBuf) 
                 link.view.state = PublicLinkState::Open;
             }
             let failed = match ended {
-                Some(code) => Some(last_error(&output).unwrap_or_else(|| {
-                    format!(
-                        "cloudflared ended (exit code {code}); see {}",
-                        log.display()
-                    )
-                })),
+                Some(code) => Some(
+                    crate::namedtunnel::cloudflared_error(&output).unwrap_or_else(|| {
+                        format!(
+                            "cloudflared ended (exit code {code}); see {}",
+                            log.display()
+                        )
+                    }),
+                ),
                 None if link.view.state == PublicLinkState::Starting
                     && started.elapsed() > OPEN_TIMEOUT =>
                 {
-                    Some(last_error(&output).unwrap_or_else(|| {
-                        format!(
-                            "no tunnel after {} s; see {}",
-                            OPEN_TIMEOUT.as_secs(),
-                            log.display()
-                        )
-                    }))
+                    Some(
+                        crate::namedtunnel::cloudflared_error(&output).unwrap_or_else(|| {
+                            format!(
+                                "no tunnel after {} s; see {}",
+                                OPEN_TIMEOUT.as_secs(),
+                                log.display()
+                            )
+                        }),
+                    )
                 }
                 None => None,
             };
@@ -232,6 +307,73 @@ fn watch(sup: Weak<Supervisor>, service: String, generation: u64, log: PathBuf) 
     }
 }
 
+/// Wait for the hub's connector to carry a link through the named tunnel:
+/// `open` once it runs and routes `host`, `failed` when it failed, the hub
+/// is not there, or neither came within [`OPEN_TIMEOUT`].
+fn watch_named(sup: Weak<Supervisor>, service: String, generation: u64, host: String) {
+    let started = Instant::now();
+    let mut unreachable_since: Option<Instant> = None;
+    loop {
+        std::thread::sleep(Duration::from_millis(500));
+        let outcome = match crate::namedtunnel::hub_links() {
+            Ok(v) => {
+                unreachable_since = None;
+                let routed = v["hosts"]
+                    .as_array()
+                    .is_some_and(|h| h.iter().any(|x| x == host.as_str()));
+                match v["connector"]["state"].as_str() {
+                    Some("running") if routed => Some(Ok(())),
+                    Some("failed") => Some(Err(v["connector"]["error"]
+                        .as_str()
+                        .unwrap_or("the hub's cloudflared failed")
+                        .to_string())),
+                    _ => None,
+                }
+            }
+            Err(e) => {
+                let since = *unreachable_since.get_or_insert_with(Instant::now);
+                (since.elapsed() > Duration::from_secs(5)).then(|| {
+                    Err(format!(
+                        "the hub runs the named tunnel, and does not answer ({e}): `devstack ui` starts it"
+                    ))
+                })
+            }
+        };
+        let outcome = outcome.or_else(|| {
+            (started.elapsed() > OPEN_TIMEOUT).then(|| {
+                Err(format!(
+                    "the hub's connector did not carry {host} within {} s (`devstack tunnel` shows its state)",
+                    OPEN_TIMEOUT.as_secs()
+                ))
+            })
+        });
+        let Some(outcome) = outcome else { continue };
+        let Some(sup) = sup.upgrade() else { return };
+        let view = {
+            let mut links = sup.public_links.lock().unwrap();
+            let Some(link) = links
+                .get_mut(&service)
+                .filter(|l| l.generation == generation)
+            else {
+                return;
+            };
+            match outcome {
+                Ok(()) => link.view.state = PublicLinkState::Open,
+                Err(e) => {
+                    link.view.state = PublicLinkState::Failed;
+                    link.view.error = Some(e);
+                }
+            }
+            link.view.clone()
+        };
+        sup.emit(EventBody::PublicLink {
+            service,
+            link: Some(view),
+        });
+        return;
+    }
+}
+
 /// The address `cloudflared` prints for a Quick Tunnel.
 fn quick_tunnel_url(output: &str) -> Option<String> {
     output.split_whitespace().find_map(|w| {
@@ -242,61 +384,6 @@ fn quick_tunnel_url(output: &str) -> Option<String> {
         (!host.is_empty() && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
             .then(|| w.to_string())
     })
-}
-
-/// `cloudflared`'s last error line, without its timestamp and level.
-fn last_error(output: &str) -> Option<String> {
-    output
-        .lines()
-        .rev()
-        .find_map(|l| {
-            l.split_once(" ERR ")
-                .map(|(_, rest)| rest.trim().to_string())
-        })
-        .filter(|e| !e.is_empty())
-}
-
-fn program() -> Result<PathBuf, String> {
-    if let Some(p) = std::env::var_os(PROGRAM_VARIABLE).filter(|p| !p.is_empty()) {
-        let p = PathBuf::from(p);
-        return if p.is_file() {
-            Ok(p)
-        } else {
-            Err(format!(
-                "{PROGRAM_VARIABLE} names {}, which is not a file",
-                p.display()
-            ))
-        };
-    }
-    find_on_path("cloudflared").ok_or_else(|| {
-        "cloudflared is not installed, or not on the PATH of devstack's daemon: \
-         `winget install Cloudflare.cloudflared` (Windows), `brew install cloudflared` (macOS), \
-         https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/ (Linux); \
-         then `devstack restart` so the daemon sees it"
-            .into()
-    })
-}
-
-/// `name` in the directories of `PATH`, as the shell would find it.
-fn find_on_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    let names: Vec<String> = if cfg!(windows) {
-        vec![format!("{name}.exe"), name.to_string()]
-    } else {
-        vec![name.to_string()]
-    };
-    std::env::split_paths(&path)
-        .flat_map(|dir| names.iter().map(move |n| dir.join(n)))
-        .find(|p| p.is_file())
-}
-
-fn quoted(p: &Path) -> String {
-    let s = p.to_string_lossy();
-    if s.contains(' ') {
-        format!("\"{s}\"")
-    } else {
-        s.into_owned()
-    }
 }
 
 #[cfg(test)]
@@ -327,16 +414,5 @@ mod tests {
             quick_tunnel_url("https://evil.example.com/.trycloudflare.com"),
             None
         );
-    }
-
-    #[test]
-    fn the_last_error_line_is_the_reason() {
-        let out = "2026-11-03T10:00:00Z INF Starting\n\
-                   2026-11-03T10:00:01Z ERR failed to request quick Tunnel: 429 Too Many Requests\n";
-        assert_eq!(
-            last_error(out).as_deref(),
-            Some("failed to request quick Tunnel: 429 Too Many Requests")
-        );
-        assert_eq!(last_error(BANNER), None);
     }
 }

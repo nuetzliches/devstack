@@ -43,6 +43,8 @@ pub fn context_for(
         }
     }
 
+    ctx.public_urls = devstack_daemon::namedtunnel::public_urls(stack, "");
+
     // Groups whose data is needed: the service's own and every rewritten host's.
     let mut groups: BTreeSet<String> = BTreeSet::new();
     if let Some(r) = &svc.compose {

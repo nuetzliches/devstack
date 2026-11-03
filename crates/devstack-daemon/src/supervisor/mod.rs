@@ -781,6 +781,7 @@ impl Supervisor {
             })
             .collect();
         StackView {
+            public_link_domain: crate::namedtunnel::read().map(|c| c.domain),
             shift: self.shift(),
             profile: self.stack.profile.as_ref().map(|p| p.name.clone()),
             profiles,

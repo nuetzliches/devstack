@@ -444,6 +444,7 @@ async fn follow_stack(s: AppState, id: String, name: String) {
         let mut scope = Scope::default();
         let mut followed: HashMap<String, Task> = HashMap::new();
         let held = s.board.hold(&id, None);
+        let following = crate::publiclinks::Following::new(&s.links, &id, "");
         if let Some(mut events) = open(&s, &id, "/v1/events").await {
             if let Some(v) = get_json(&s, &id, "/v1/lanes").await {
                 lanes.baseline(&v);
@@ -454,6 +455,7 @@ async fn follow_stack(s: AppState, id: String, name: String) {
                 let Ok(ev) = serde_json::from_str::<Value>(&text) else {
                     continue;
                 };
+                s.links.apply(&id, "", &ev);
                 let notices = match ev["type"].as_str() {
                     Some("usage") => continue,
                     Some("lanes") => {
@@ -469,6 +471,7 @@ async fn follow_stack(s: AppState, id: String, name: String) {
             }
         }
         drop(followed);
+        drop(following);
         drop(held);
         tokio::time::sleep(wait).await;
         wait = (wait * 2).min(RETRY_MAX);
@@ -505,6 +508,7 @@ async fn follow_lane(s: AppState, id: String, name: String, lane: String) {
     loop {
         let mut scope = Scope::default();
         let held = s.board.hold(&id, Some(&lane));
+        let following = crate::publiclinks::Following::new(&s.links, &id, &lane);
         if let Some(mut events) = open(&s, &id, &path).await {
             while let Some(text) = events.next().await {
                 wait = RETRY_MIN;
@@ -514,6 +518,7 @@ async fn follow_lane(s: AppState, id: String, name: String, lane: String) {
                 if ev["type"] == "usage" {
                     continue;
                 }
+                s.links.apply(&id, &lane, &ev);
                 let notices = scope.apply(&ev);
                 s.board.set(&id, Some(&lane), scope.glance());
                 for n in notices {
@@ -521,6 +526,7 @@ async fn follow_lane(s: AppState, id: String, name: String, lane: String) {
                 }
             }
         }
+        drop(following);
         drop(held);
         tokio::time::sleep(wait).await;
         wait = (wait * 2).min(RETRY_MAX);

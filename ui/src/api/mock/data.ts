@@ -143,6 +143,7 @@ export function shopSeed(now: number): MockStackSeed {
     },
     view: {
       name: 'shop',
+      public_link_domain: 'dev-example.com',
       repo,
       branch: 'main',
       version: '0.2.0',

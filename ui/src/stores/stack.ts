@@ -1134,7 +1134,7 @@ export const useStack = defineStore('stack', () => {
       const res = await act<StackView>({
         label: `Public link to ${name}`,
         path: daemonPath(id.value, v1.publicLink(name)),
-        confirmText: `Anyone with the link reaches ${name} from the internet, without a login, through Cloudflare (a Quick Tunnel to its port). It stays open until you close it, stop ${name} or stop the stack.`,
+        confirmText: `Anyone with the link reaches ${name} from the internet, ${publicWhere()}. It stays open until you close it, stop ${name} or stop the stack.`,
         confirmLabel: 'Open public link',
         success: false,
       });
@@ -1142,6 +1142,37 @@ export const useStack = defineStore('stack', () => {
     } finally {
       delete busy.value[key];
     }
+  }
+
+  /** How a link is reached, for the confirmation: the named tunnel's domain (ADR-0090), or a Quick Tunnel. */
+  function publicWhere(): string {
+    const d = view.value?.public_link_domain;
+    return d
+      ? `at a stable address below ${d}, through your Cloudflare tunnel (without a login, unless a Cloudflare Access policy covers *.${d})`
+      : 'without a login, through Cloudflare (a Quick Tunnel to its port, at a random address)';
+  }
+
+  /** Open a public link to every service of the lane that may have one ("make the lane public"). */
+  async function openLanePublic() {
+    if (refuseReadOnly()) return;
+    if (!id.value) return;
+    const names = (view.value?.services ?? []).filter((s) => s.public_link_available && s.status.state !== 'stopped').map((s) => s.name);
+    const res = await act<StackView>({
+      label: 'Make the lane public',
+      path: daemonPath(id.value, v1.publicLinks),
+      confirmText: `Anyone with a link reaches ${names.join(', ') || 'its services'} from the internet, ${publicWhere()}. They stay open until you close them, stop a service or stop the stack.`,
+      confirmLabel: 'Make public',
+      success: false,
+    });
+    if (res.ok && res.body && 'services' in res.body) applyView(res.body);
+  }
+
+  /** Close every public link of the lane. */
+  async function closeLanePublic() {
+    if (refuseReadOnly()) return;
+    if (!id.value) return;
+    const res = await act<StackView>({ label: 'Close the public links', method: 'DELETE', path: daemonPath(id.value, v1.publicLinks), success: 'The lane is no longer public' });
+    if (res.ok && res.body && 'services' in res.body) applyView(res.body);
   }
 
   /** Close a service's public link (a failed one is cleared). */
@@ -1392,6 +1423,8 @@ export const useStack = defineStore('stack', () => {
     serviceAction,
     openPublicLink,
     closePublicLink,
+    openLanePublic,
+    closeLanePublic,
     groupAction,
     restartContainer,
     containerAction,

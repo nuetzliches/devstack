@@ -45,6 +45,17 @@ and listed with their assets on the
 
 ### Added
 
+- **Public links at stable addresses, through your own Cloudflare tunnel**
+  (ADR-0091). `devstack tunnel --setup <credentials.json> --domain
+  dev-example.com` once (the file `cloudflared tunnel create` writes; it
+  goes into the keychain), and links answer at
+  `https://{service}-{lane}-{stack}.dev-example.com` instead of a random
+  address. The hub runs the tunnel's one connector while a link is open
+  and lets only the hosts of open links through. `{service.<name>.public_url}`
+  gives the address to a service's environment; *Make public* in a lane's
+  header (`devstack tunnel --all`) opens every service of the lane at
+  once. `devstack tunnel` shows the tunnel and its links,
+  `--remove-setup` forgets it.
 - **Public links: a service on the internet, by a click** (ADR-0090). The globe button
   on a service's row, or `devstack tunnel <service>`, opens a Cloudflare
   Quick Tunnel (`cloudflared`, no account) to the service's fixed port and
