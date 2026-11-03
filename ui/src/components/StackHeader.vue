@@ -41,11 +41,14 @@ function servedSince(name: string): string {
   return `${m.at ? ` since ${clock(m.at)}` : ''}, set ${viaText(m.via)}`;
 }
 const busyMain = computed(() => !!stack.busy['lane-main']);
-/** The shown lane's actions (Restart or Start, and the rest in the menu). */
-const laneMenu = computed(() => (current.value ? laneActions(current.value) : null));
-const laneBusy = computed(
-  () => !!current.value && [stack.busy['lane-restart'], stack.busy['lane-start'], stack.busy['lane-stop']].includes(current.value.name),
-);
+/** The shown lane's actions (Restart or Start, and the rest in the menu); Stop has a button of its own. */
+const laneMenu = computed(() => {
+  if (!current.value) return null;
+  const a = laneActions(current.value);
+  return { ...a, stop: a.items.find((i) => i.key === 'stop') ?? null, items: a.items.filter((i) => i.key !== 'stop') };
+});
+const laneBusy = computed(() => !!current.value && [stack.busy['lane-restart'], stack.busy['lane-start']].includes(current.value.name));
+const stopBusy = computed(() => !!current.value && stack.busy['lane-stop'] === current.value.name);
 /** "Serve main ports": the same button for every lane that does not hold them; `main` takes them back whether it runs or not. */
 const canServeMain = computed(() => !!current.value && !current.value.owns_main && (current.value.active !== false || isMain.value) && !view.value?.no_main_ports);
 
@@ -293,7 +296,19 @@ function openWith(o: Opener) {
             </button>
           </div>
         </div>
-        <!-- Every action of the lane in one place: Restart (or Start), and the rest in its menu. -->
+        <!-- Stop beside the restarts, not among them: it ends the lane, they keep it running. -->
+        <button
+          v-if="current && laneMenu?.stop"
+          type="button"
+          class="btn btn-sm btn-danger"
+          :disabled="!!laneMenu.stop.disabled || stopBusy"
+          :title="laneMenu.stop.title"
+          data-testid="lane-stop"
+          @click="stack.laneAction(current!, 'stop')"
+        >
+          <span v-if="stopBusy" class="spinner" /><Icon v-else name="stop" :size="14" /> Stop
+        </button>
+        <!-- The lane's other actions: Restart (or Start), and the rest in its menu. -->
         <SplitButton
           v-if="current && laneMenu"
           :label="laneMenu.main.label"

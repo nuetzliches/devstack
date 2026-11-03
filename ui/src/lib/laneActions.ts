@@ -29,7 +29,8 @@ export const NOT_FOR_MAIN = {
  * three restarts: Restart (warm: from the artifacts there are, its data
  * kept), Rebuild (built again, its data kept), Cold (built again, its data
  * seeded again; asks). Discard data and Remove worktree only for a stopped
- * lane. Start runs it on this machine; the card below the header starts
+ * lane. The header shows Stop as a button of its own, beside Restart's
+ * menu; the branch picker and the palette list it with the rest. Start runs it on this machine; the card below the header starts
  * it on the pool too. The main working tree has the same items; what has no
  * meaning for it is disabled with the reason (ADR-0081).
  */

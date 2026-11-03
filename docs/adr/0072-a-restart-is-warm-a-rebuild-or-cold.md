@@ -1,6 +1,6 @@
 # ADR-0072: A restart is warm, a rebuild or cold; a group acts on its containers too
 
-- **Status:** Accepted (2026-10-28)
+- **Status:** Accepted (2026-10-28); point 5 amended 2026-11-03 (Stop is a button of its own in the header)
 - **Date:** 2026-10-28
 - **Deciders:** project owner
 - **Related:** [ADR-0038](0038-a-lanes-data-outlives-its-lease.md) ("cold": no artifacts, no data), [ADR-0025](0025-a-lane-can-run-on-another-node.md) (a lane on a node; a move is a cold start), [ADR-0030](0030-each-lane-has-its-own-infrastructure.md) (`shared` containers), [ADR-0062](0062-what-prepare-makes-is-kept-in-a-store-per-machine-and-repository-keyed-by-its-inputs.md) (what is kept for the same inputs), [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md)
@@ -59,6 +59,11 @@ saying so.
    right click on its row in the branch picker. The separate "Stop
    worktree" and "Discard data" buttons are gone; Remove worktree stays in
    the branch picker too.
+
+*Amended 2026-11-03.* Point 5: in the header, Stop is a red button of its own beside
+Restart, no longer in its menu: it ends the lane, the menu's items keep it
+running. The branch picker's menu and the command palette still list Stop
+with the rest. Asked for by the owner in the conversation that built it.
 
 The [card](https://github.com/nuetzliches/devstack/pull/351) and its approval (2026-10-28, points 1–5) are in the pull request that built this.
 
