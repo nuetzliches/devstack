@@ -9,6 +9,19 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-11-03
+
+A lane shows how far its branch is ahead of and behind its upstream,
+counted from the local refs only (ADR-0088). The generated skills are the
+hub's to keep current, so no tool reports them outdated any more and
+`devstack skills check` looks for copies git still tracks (ADR-0087). The
+folder scan looks one level deep and at git repositories by default, and
+adds a repository without a stack file as not set up (ADR-0089).
+Favourite stacks list first (ADR-0086), a lane's Activity shows its own
+changes, and Stop is a button of its own. Fixed: the restart banner shows
+in a lane's views again, stopping the last lane that runs offers the
+stack's stop, and an Activity row names its subject once.
+
 ### Removed
 
 - **No more "agent skills no longer match" notice** (ADR-0087). The hub
@@ -22,6 +35,8 @@ and listed with their assets on the
 
 ### Changed
 
+- **Stop is a button of its own** in a lane's header: red, beside Restart,
+  no longer in Restart's menu (ADR-0072 point 5, amended).
 - **The folder scan looks one level deep and at git repositories only by
   default** (ADR-0089): a plain folder with a `devstack.toml` (a fixture, a
   test stack) is no longer listed unless "Only git repositories" is off,
@@ -68,13 +83,15 @@ and listed with their assets on the
   the chosen order. Marking moves the stack at once. Favourites live in
   the browser's `localStorage`, as the order does.
 
-### Changed
-
-- **Stop is a button of its own** in a lane's header: red, beside Restart,
-  no longer in Restart's menu (ADR-0072 point 5, amended).
-
 ### Fixed
 
+- **Stopping the last lane that runs offers to stop the stack** (#432):
+  a confirm asks first, with "Stop the stack too" checked, since the
+  daemon would only idle on. While anything else runs, the stop asks
+  nothing, as before.
+- **An Activity row names its subject once** (#430): beside the subject
+  column the label leaves out what the column names (`stop` beside
+  `worker`); a subject that is a service is underlined as a link.
 - **The restart banner shows in a lane's views again** (ADR-0081). "The
   stack file changed since the stack started" and "another devstack is
   installed", each with its Restart stack button, moved to the stack's page
@@ -2682,7 +2699,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.35.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.36.0...HEAD
+[0.36.0]: https://github.com/nuetzliches/devstack/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/nuetzliches/devstack/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/nuetzliches/devstack/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/nuetzliches/devstack/compare/v0.32.0...v0.33.0
