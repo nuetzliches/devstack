@@ -477,7 +477,7 @@ server reloads itself).
 | `ensure_dirs = ["{repo}/data/files"]` | created before start |
 | `prepare = { run = "npm ci", inputs = ["web/package-lock.json"] }` | installs what a copy of the source lacks (see below) |
 | `timeout = "10m"` | `kind = "job"` only: how long it may run before it counts as failed and is stopped; default 30 minutes. `devstack stop <job>` ends it at once |
-| `tunnel = false` | offers no public link to it (below); for a service with a `port` only. A file with it should say `requires = "0.36.0"` |
+| `tunnel = false` | offers no public link to it (below); for a service with a `port` only. A file with it should say `requires = "0.37.0"` |
 | `stop = "docker rm -f api{lane_suffix}-{port}"` | ends what `run` started outside its process tree, a container ([ADR-0059](adr/0059-a-services-stop-command-ends-what-its-run-started.md), below); not for `kind = "static"` |
 
 ### Public links (`devstack tunnel`)
@@ -540,7 +540,7 @@ devstack tunnel --setup ~/.cloudflared/<id>.json --domain dev-example.com
   calls its API at `{service.api.public_url}` works from outside once the
   lane is public. The environment is read at a service's start: a tunnel
   set up later applies after a restart. A file that uses it should say
-  `requires = "0.36.0"`.
+  `requires = "0.37.0"`.
 - devstack sets up no login in front: a Cloudflare Access application for
   `*.<domain>` in Cloudflare's dashboard puts one before every link.
 
