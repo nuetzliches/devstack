@@ -298,7 +298,7 @@ async fn aborted(rx: &mut watch::Receiver<bool>) {
 /// Remove the hop-by-hop headers (RFC 9110 §7.6.1): those `Connection`
 /// names and the fixed ones. An upgrade keeps `Connection` and `Upgrade`,
 /// which carry it to the next hop.
-fn strip_hop_by_hop(h: &mut hyper::HeaderMap, upgrade: bool) {
+pub fn strip_hop_by_hop(h: &mut hyper::HeaderMap, upgrade: bool) {
     let named: Vec<hyper::header::HeaderName> = h
         .get_all(hyper::header::CONNECTION)
         .iter()

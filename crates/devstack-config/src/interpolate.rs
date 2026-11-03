@@ -25,6 +25,10 @@ pub enum Placeholder {
     ServiceUrl(String),
     /// `{service.<name>.port}`: the port of that service's main slot.
     ServicePort(String),
+    /// `{service.<name>.public_url}`: where its public link answers with
+    /// the user's named tunnel (`https://<host>`, ADR-0090), whether a link
+    /// is open or not; without one, `{service.<name>.url}`.
+    ServicePublicUrl(String),
     /// `{compose.<group>.<service>.<port>[.host|.port|.address]}`: where a
     /// container port is published on this machine: a URL by default, or its
     /// host, its port, or `host:port` (connection strings want them apart:
@@ -79,6 +83,7 @@ impl fmt::Display for Placeholder {
             Placeholder::LaneSuffix => write!(f, "{{lane_suffix}}"),
             Placeholder::ServiceUrl(s) => write!(f, "{{service.{s}.url}}"),
             Placeholder::ServicePort(s) => write!(f, "{{service.{s}.port}}"),
+            Placeholder::ServicePublicUrl(s) => write!(f, "{{service.{s}.public_url}}"),
             Placeholder::ComposePort {
                 group,
                 service,
@@ -230,6 +235,9 @@ fn placeholder(body: &str) -> Result<Placeholder, InterpError> {
         ["service", name, "port"] if !name.is_empty() => {
             Ok(Placeholder::ServicePort(name.to_string()))
         }
+        ["service", name, "public_url"] if !name.is_empty() => {
+            Ok(Placeholder::ServicePublicUrl(name.to_string()))
+        }
         ["compose", group, "project"] if !group.is_empty() => {
             Ok(Placeholder::ComposeProject(group.to_string()))
         }
@@ -323,6 +331,7 @@ mod tests {
                 Placeholder::LaneSuffix => "_feat-x".into(),
                 Placeholder::ServiceUrl(s) => format!("http://127.0.0.1:1/{s}"),
                 Placeholder::ServicePort(_) => "1".into(),
+                Placeholder::ServicePublicUrl(s) => format!("https://{s}-shop.dev.io"),
                 Placeholder::ComposeProject(g) => format!("shop-{g}-feat-x"),
                 Placeholder::ComposePort {
                     service,
@@ -341,6 +350,19 @@ mod tests {
     }
     fn x(s: &str) -> Result<String, InterpError> {
         expand(s, &R, &env)
+    }
+
+    #[test]
+    fn a_public_url_is_a_placeholder_of_its_own() {
+        let segs = parse("{service.web.public_url}/callback").unwrap();
+        assert_eq!(
+            placeholders(&segs),
+            vec![&Placeholder::ServicePublicUrl("web".into())]
+        );
+        assert_eq!(
+            expand("{service.web.public_url}/callback", &R, &|_| None).unwrap(),
+            "https://web-shop.dev.io/callback"
+        );
     }
 
     #[test]

@@ -46,6 +46,7 @@ mod poolfeed;
 mod poolskills;
 mod ports;
 mod prompts;
+mod publiclinks;
 pub mod release;
 pub mod secrets;
 mod share;
@@ -175,6 +176,8 @@ struct AppState {
     upstreams: Arc<upstreams::Upstreams>,
     /// The pools' skill sets in the agents' folders (ADR-0074).
     skills: Arc<poolskills::PoolSkills>,
+    /// Public links through the user's named tunnel (ADR-0090).
+    links: Arc<publiclinks::PublicLinks>,
 }
 
 fn now_ms() -> u128 {
@@ -456,6 +459,7 @@ pub fn serve() -> Result<(), String> {
             board: Arc::default(),
             upstreams: Arc::new(upstreams::Upstreams::open(dir.clone())),
             skills: Arc::new(poolskills::PoolSkills::open(dir.clone())),
+            links: publiclinks::PublicLinks::start(dir.clone()).await?,
         };
         // The port last: what accepts a connection answers it. Bound before
         // the setup above (a first `docker version` alone may take 5 s), the
@@ -584,6 +588,11 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/stacks/{id}/upgrade", get(stack_upgrade))
         .route("/hub/stacks/{id}/mcp", get(stack_mcp))
         .route("/hub/stacks/{id}/api/{*rest}", any(forward))
+        .route("/hub/public-links", get(publiclinks::get))
+        .route(
+            "/hub/public-links/tunnel",
+            axum::routing::put(publiclinks::put).delete(publiclinks::delete),
+        )
         .route("/hub/pool", get(pool::overview))
         .route("/hub/pool/share", get(share::get))
         .route("/hub/pool/shared", get(shared::list))

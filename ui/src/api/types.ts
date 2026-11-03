@@ -457,6 +457,8 @@ export type CommandView = { name: string; description: string; confirm: string |
 
 export type StackView = {
   name: string;
+  /** The domain of the user's named tunnel (ADR-0090): public links answer below it, at stable addresses. Absent: Quick Tunnels. */
+  public_link_domain?: string;
   repo: string;
   version: string;
   /** What the main tree's ports are moved by on this machine (ADR-0082); absent: none. */

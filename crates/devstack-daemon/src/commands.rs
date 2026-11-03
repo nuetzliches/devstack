@@ -91,6 +91,8 @@ impl Runs {
 struct CommandContext {
     repo: PathBuf,
     urls: BTreeMap<String, String>,
+    /// `{service.<name>.public_url}` with a named tunnel (ADR-0090).
+    public_urls: BTreeMap<String, String>,
     published: BTreeMap<(String, String, u16), String>,
     projects: BTreeMap<String, String>,
     lane: String,
@@ -113,6 +115,12 @@ impl Resolve for CommandContext {
                 .and_then(|u| u.rsplit(':').next())
                 .map(str::to_string)
                 .ok_or_else(|| format!("service `{s}` has no port")),
+            Placeholder::ServicePublicUrl(s) => self
+                .public_urls
+                .get(s)
+                .or_else(|| self.urls.get(s))
+                .cloned()
+                .ok_or_else(|| format!("service `{s}` has no URL")),
             Placeholder::ComposePort {
                 group,
                 service,
@@ -290,6 +298,7 @@ fn execute(
     }
     let ctx = CommandContext {
         repo: root.clone(),
+        public_urls: sup.public_urls(),
         urls,
         published: sup.published_ports(),
         projects: sup.compose_projects(),
@@ -509,6 +518,7 @@ singleton = true
             let ctx = CommandContext {
                 repo: d.path().to_path_buf(),
                 urls: BTreeMap::new(),
+                public_urls: BTreeMap::new(),
                 published: BTreeMap::new(),
                 projects: sup.compose_projects(),
                 lane: lane.into(),
@@ -573,6 +583,7 @@ singleton = true
             let ctx = CommandContext {
                 repo: d.path().to_path_buf(),
                 urls: BTreeMap::new(),
+                public_urls: BTreeMap::new(),
                 published: BTreeMap::new(),
                 projects: sup.compose_projects(),
                 lane: lane.into(),

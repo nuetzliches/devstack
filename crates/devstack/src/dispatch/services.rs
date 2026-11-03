@@ -16,7 +16,26 @@ pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
         Cmd::HotReload { service, state } => {
             client::service_action(file, &service, &format!("hot-reload-{state}"))
         }
-        Cmd::Tunnel { service, stop } => client::public_link(file, &service, stop),
+        Cmd::Tunnel {
+            service,
+            stop,
+            all,
+            setup,
+            domain,
+            remove_setup,
+        } => {
+            if let Some(credentials) = setup {
+                crate::hubcmd::tunnel_setup(&credentials, &domain.unwrap_or_default())
+            } else if remove_setup {
+                crate::hubcmd::tunnel_remove()
+            } else if all {
+                client::public_links_all(file, stop)
+            } else if let Some(service) = service {
+                client::public_link(file, &service, stop)
+            } else {
+                crate::hubcmd::tunnel_show()
+            }
+        }
         Cmd::Promote { service, lane } => match lane {
             Some(l) => client::promote_lane(file, &l),
             None => client::service_action(file, &service.unwrap_or_default(), "promote"),

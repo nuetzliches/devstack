@@ -506,6 +506,43 @@ false` keeps a service from it (an admin UI, something that is no HTTP).
   Cloudflare.cloudflared`, `brew install cloudflared`; `devstack doctor`
   says whether it is there), or its path in `DEVSTACK_CLOUDFLARED`. Its
   output is kept in the service's log folder (`public-link.log`).
+- **The whole lane at once:** the dashboard's *Make public* in the lane's
+  header, or `devstack tunnel --all` (`--all --stop` closes them), opens
+  a link to every service of the lane that may have one and runs.
+
+#### Stable addresses: your own named tunnel
+
+With a domain on Cloudflare, set up a tunnel of your own once, and public
+links answer at stable addresses below it,
+`https://{service}-{lane}-{stack}.<domain>` (without the lane for the main
+tree; one DNS label, as the wildcard's certificate covers one level):
+
+```
+cloudflared tunnel login                                   # once, in the browser
+cloudflared tunnel create devstack                         # writes ~/.cloudflared/<id>.json
+cloudflared tunnel route dns devstack "*.dev-example.com"  # the wildcard to the tunnel
+devstack tunnel --setup ~/.cloudflared/<id>.json --domain dev-example.com
+```
+
+- devstack takes the tunnel's credentials only (the `<id>.json`), never
+  `cert.pem` or an API token: they can run this tunnel, not change your
+  zone. The hub keeps them in the keychain (a file only you may read on a
+  Linux without a Secret Service); the `.json` may be deleted then.
+  `devstack tunnel --remove-setup` forgets them.
+- The hub runs the one `cloudflared` of the tunnel while a link is open
+  (two connectors of one tunnel would share its requests at random), and
+  sends every host to a router of its own: only the hosts of open links
+  reach a service, every other one is answered 404. `devstack tunnel`
+  shows the connector and the links it carries. Links need the hub
+  running (`devstack ui` starts it).
+- `{service.<name>.public_url}` is that address, whether a link is open or
+  not (without a tunnel set up, `{service.<name>.url}`): a front end that
+  calls its API at `{service.api.public_url}` works from outside once the
+  lane is public. The environment is read at a service's start: a tunnel
+  set up later applies after a restart. A file that uses it should say
+  `requires = "0.36.0"`.
+- devstack sets up no login in front: a Cloudflare Access application for
+  `*.<domain>` in Cloudflare's dashboard puts one before every link.
 
 ### A container as a service (`docker run`)
 
@@ -1063,6 +1100,7 @@ A skill the project wrote itself is never touched.
 | `{lane_suffix}` | empty in the main working tree, `_<lane>` in a lane (on a node too): `app{lane_suffix}` keeps the main tree's name |
 | `{service.<name>.url}` | URL of that service's main slot (`http(s)://127.0.0.1:<port>`) |
 | `{service.<name>.port}` | that service's port |
+| `{service.<name>.public_url}` | its public link's stable address with a named tunnel (`https://{service}-{lane}-{stack}.<domain>`, see "Public links"), else as `{service.<name>.url}` |
 | `{compose.<group>.project}` | the group's Compose project as this tree runs it: `project` in the main working tree, `<project>-<lane>` in a lane, on a node the project the node runs for the lane (for `docker compose -p` in a command; a `shared` service stays in the main tree's) |
 | `{compose.<group>.<service>.<port>}` | where a container port is published, as a URL (`http://127.0.0.1:15432`) |
 | `{compose.<group>.<service>.<port>.host}`, `.port`, `.address` | its host (`127.0.0.1`), its port (`15432`), or both (`127.0.0.1:15432`), for connection strings: `Server={compose.app.sql.1433.host},{compose.app.sql.1433.port}`, `Host=…host;Port=…port`. In a lane: the lane's own container, or the main tree's for a `shared` one |

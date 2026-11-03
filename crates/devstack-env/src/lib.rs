@@ -106,6 +106,9 @@ pub struct Context {
     pub lane: String,
     /// Main-slot URL of every service with a port.
     pub service_urls: BTreeMap<String, String>,
+    /// `{service.<name>.public_url}` with a named tunnel (ADR-0090); a
+    /// service without one gives its `service_urls` entry.
+    pub public_urls: BTreeMap<String, String>,
     /// `(group, service, container port)` -> `127.0.0.1:<published>`.
     pub published: BTreeMap<(String, String, u16), String>,
     /// Compose group -> its project as this tree runs it
@@ -145,6 +148,12 @@ impl Resolve for Context {
                 .and_then(|u| u.rsplit(':').next())
                 .map(str::to_string)
                 .ok_or_else(|| format!("`{p}`: service `{s}` has no port")),
+            Placeholder::ServicePublicUrl(s) => self
+                .public_urls
+                .get(s)
+                .or_else(|| self.service_urls.get(s))
+                .cloned()
+                .ok_or_else(|| format!("`{p}`: service `{s}` has no URL")),
             Placeholder::ComposePort {
                 group,
                 service,
@@ -741,6 +750,17 @@ mod tests {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
         s
+    }
+
+    #[test]
+    fn a_public_url_is_the_named_tunnels_or_the_local_one() {
+        let mut c = ctx();
+        let url =
+            |c: &Context| interpolate::expand("{service.mock.public_url}", c, &|_| None).unwrap();
+        assert_eq!(url(&c), "http://127.0.0.1:5310");
+        c.public_urls
+            .insert("mock".into(), "https://mock-shop.dev.io".into());
+        assert_eq!(url(&c), "https://mock-shop.dev.io");
     }
 
     fn ctx() -> Context {
