@@ -180,7 +180,8 @@ jobs:
           command: check advisories
 
   integration:
-    # The name stays `integration (<os>)`: the branch ruleset requires it.
+    # The name stays `integration (<os>)` while the branch ruleset requires it
+    # by name; `gate` below is the one name meant to replace that.
     name: integration (${{ matrix.os }})
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -310,3 +311,23 @@ jobs:
           $found = @('install.ps1', 'packaging/winget/render.ps1', 'packaging/winget/submit.ps1') | ForEach-Object { Invoke-ScriptAnalyzer -Path $_ -Severity Error }
           $found | Format-Table -AutoSize
           if ($found) { exit 1 }
+
+  gate:
+    # The one check a pull request needs to be mergeable. The jobs above run
+    # only for what a change touches, and a skipped matrix job reports no
+    # `check (<os>)` at all, so the branch ruleset cannot name them: a change to
+    # the dashboard or the docs alone could never meet it. This job reports
+    # always, and fails when any job above failed or was cancelled; a job that
+    # was skipped is not a failure.
+    needs: [changes, ui, check, msrv, deny, integration, remote-lane, scripts, scripts-windows]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: no job failed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          case " $RESULTS " in
+            *" failure "* | *" cancelled "*) exit 1 ;;
+          esac
