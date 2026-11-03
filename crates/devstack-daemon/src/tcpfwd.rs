@@ -3,7 +3,6 @@
 //! proxy (dev servers, `proxy = false`). Bytes only, so TLS and WebSockets of a
 //! dev server pass unchanged (ADR-0024).
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -339,12 +338,7 @@ async fn accept(listener: TcpListener, port: u16, target: u16) {
 }
 
 async fn connect(port: u16) -> Option<TcpStream> {
-    let v4: SocketAddr = ([127, 0, 0, 1], port).into();
-    let v6: SocketAddr = (std::net::Ipv6Addr::LOCALHOST, port).into();
-    let s = match TcpStream::connect(v4).await {
-        Ok(s) => s,
-        Err(_) => TcpStream::connect(v6).await.ok()?,
-    };
+    let s = crate::loopback::connect(port).await.ok()?;
     let _ = s.set_nodelay(true);
     Some(s)
 }

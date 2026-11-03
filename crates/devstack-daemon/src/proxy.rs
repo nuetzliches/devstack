@@ -365,10 +365,7 @@ async fn give_back(sh: &Shared, port: u16, mut sender: Sender) {
 }
 
 async fn connect(port: u16) -> std::io::Result<TcpStream> {
-    let s = match TcpStream::connect(("127.0.0.1", port)).await {
-        Ok(s) => s,
-        Err(e) => TcpStream::connect(("::1", port)).await.map_err(|_| e)?,
-    };
+    let s = crate::loopback::connect(port).await?;
     // Small writes go out at once: without, every request after the first on
     // a kept-alive connection waits for a delayed ACK (about 40 ms on Linux).
     let _ = s.set_nodelay(true);

@@ -11,6 +11,13 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A dev server that listens on `::1` only is as fast behind its proxy
+  as one on `127.0.0.1`** (#418). The proxy, the TCP forwarder and the
+  pool's tunnel dialled `127.0.0.1` first and `::1` only after that
+  failed; on Windows a refused loopback connect takes about 2 s (the SYN
+  is retried), so with Vite's default host (Node resolves `localhost` to
+  `::1`) every new connection cost 2 s and a page load crawled. They now
+  dial both loopback addresses at once and keep the first that answers.
 - **A container's load no longer drops to 0 B when one measurement is
   missing.** A running container without a number in a round (a
   `docker stats` that failed, or for a lane on a node, its file not fresh
