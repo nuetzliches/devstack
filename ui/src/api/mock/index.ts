@@ -937,7 +937,9 @@ export class MockTransport implements Transport {
     }
     const res = await this.daemonApi(s, method, p, q, body);
     if (method !== 'GET' && method !== 'HEAD') {
-      const lane = /^\/v1\/lanes\/([^/]+)\//.exec(p)?.[1];
+      // A lane's start names its lane in the answer, as the daemon's `JournalLane` does.
+      const started = p === '/v1/lanes' && method === 'POST' && res.status < 300 && res.body && typeof res.body === 'object' && 'name' in res.body ? String((res.body as { name: unknown }).name) : undefined;
+      const lane = /^\/v1\/lanes\/([^/]+)\//.exec(p)?.[1] ?? started;
       const error = res.status >= 400 && res.body && typeof res.body === 'object' && 'error' in res.body ? String((res.body as { error: unknown }).error) : undefined;
       s.journalize({ at: Date.now(), via: 'dashboard', ...(lane ? { lane: decodeURIComponent(lane) } : {}), method, path: p, status: res.status, ...(error ? { error } : {}) });
     }
