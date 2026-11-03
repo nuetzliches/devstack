@@ -864,6 +864,18 @@ export const useStack = defineStore('stack', () => {
         save();
         break;
       }
+      case 'public_link': {
+        const s = svc(ev.service);
+        if (s) {
+          const before = s.public_link;
+          if (ev.link) s.public_link = ev.link;
+          else delete s.public_link;
+          if (ev.link?.state === 'open' && before?.state !== 'open') ui.toast('warning', `${ev.service} is public`, ev.link.url, 7000);
+          if (ev.link?.state === 'failed' && before?.state !== 'failed') ui.toast('error', `${ev.service}: no public link`, ev.link.error);
+        } else scheduleRefetch();
+        save();
+        break;
+      }
       case 'infra':
         scheduleRefetch();
         break;
@@ -1137,6 +1149,41 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
+  /** Open a public link to a service (a Cloudflare Quick Tunnel), after
+   *  saying what that means; its state arrives as `public_link` events. */
+  async function openPublicLink(name: string) {
+    if (refuseReadOnly()) return;
+    if (!id.value) return;
+    const key = `svc:${name}`;
+    if (busy.value[key]) return;
+    busy.value[key] = 'public-link';
+    try {
+      const res = await act<StackView>({
+        label: `Public link to ${name}`,
+        path: daemonPath(id.value, v1.publicLink(name)),
+        confirmText: `Anyone with the link reaches ${name} from the internet, without a login, through Cloudflare (a Quick Tunnel to its port). It stays open until you close it, stop ${name} or stop the stack.`,
+        confirmLabel: 'Open public link',
+        success: false,
+      });
+      if (res.ok && res.body && 'services' in res.body) applyView(res.body);
+    } finally {
+      delete busy.value[key];
+    }
+  }
+
+  /** Close a service's public link (a failed one is cleared). */
+  async function closePublicLink(name: string) {
+    if (refuseReadOnly()) return;
+    if (!id.value) return;
+    const res = await act<StackView>({
+      label: `Close the public link to ${name}`,
+      method: 'DELETE',
+      path: daemonPath(id.value, v1.publicLink(name)),
+      success: false,
+    });
+    if (res.ok && res.body && 'services' in res.body) applyView(res.body);
+  }
+
   /** start / stop / restart every member of a group (plan §6). */
   async function groupAction(group: string, label: string, action: GroupAction) {
     if (refuseReadOnly()) return;
@@ -1370,6 +1417,8 @@ export const useStack = defineStore('stack', () => {
     resetLane,
     moveLane,
     serviceAction,
+    openPublicLink,
+    closePublicLink,
     groupAction,
     restartContainer,
     containerAction,

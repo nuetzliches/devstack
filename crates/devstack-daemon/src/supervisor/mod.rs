@@ -34,6 +34,7 @@ mod infra;
 pub use infra::ContainerTarget;
 mod lifecycle;
 mod ports;
+mod publiclink;
 mod rebuilds;
 mod replace;
 
@@ -233,6 +234,9 @@ pub struct Supervisor {
     /// Per Compose service: since when it is ready, whether its forwards
     /// were probed since, when it was last restarted for a lost one (#98).
     forward_checks: Mutex<BTreeMap<(String, String), infra::ForwardCheck>>,
+    /// Public links (Cloudflare Quick Tunnels) by service, opened by hand;
+    /// a failed one stays until it is closed or opened again.
+    public_links: Mutex<BTreeMap<String, publiclink::Link>>,
 }
 
 /// The artifact ids of a service the lanes run or may go back to.
@@ -422,6 +426,8 @@ impl Supervisor {
                         singleton: svc.singleton(),
                         prepare: None,
                         last_action: None,
+                        public_link: None,
+                        public_link_available: svc.port.is_some() && svc.tunnel != Some(false),
                     },
                     main: None,
                     previous: None,
@@ -537,6 +543,7 @@ impl Supervisor {
             closed: std::sync::atomic::AtomicBool::new(false),
             fresh_done: std::sync::atomic::AtomicBool::new(false),
             forward_checks: Mutex::new(BTreeMap::new()),
+            public_links: Mutex::new(BTreeMap::new()),
             lane,
         });
         sup.follow_journal();
@@ -735,6 +742,7 @@ impl Supervisor {
                         .map(crate::tcpfwd::Front::view)
                 });
                 v.last_action = journal.last_under(&format!("{services_at}{}/", v.name));
+                v.public_link = self.public_link_view(&v.name);
                 v
             })
             .collect();

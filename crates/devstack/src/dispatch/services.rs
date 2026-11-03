@@ -16,6 +16,7 @@ pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
         Cmd::HotReload { service, state } => {
             client::service_action(file, &service, &format!("hot-reload-{state}"))
         }
+        Cmd::Tunnel { service, stop } => client::public_link(file, &service, stop),
         Cmd::Promote { service, lane } => match lane {
             Some(l) => client::promote_lane(file, &l),
             None => client::service_action(file, &service.unwrap_or_default(), "promote"),

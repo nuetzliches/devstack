@@ -107,6 +107,38 @@ pub struct ServiceView {
     /// journal, so also from before this daemon started.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_action: Option<crate::journal::Change>,
+    /// Its public link, while one is open or failed to open: a Cloudflare
+    /// Quick Tunnel to its fixed port, opened by hand.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_link: Option<PublicLinkView>,
+    /// A public link may be opened to it: it has a `port`, and the stack
+    /// file does not say `tunnel = false`. Older daemons omit it.
+    pub public_link_available: bool,
+}
+
+/// A service's public link (`POST /v1/services/{name}/public-link`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PublicLinkView {
+    pub state: PublicLinkState,
+    /// `https://<words>.trycloudflare.com`, once `cloudflared` named it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Unix ms: when it was asked for.
+    pub since: u128,
+    /// Why it failed, or ended on its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublicLinkState {
+    /// `cloudflared` runs, its tunnel is not registered yet.
+    Starting,
+    /// Reachable from the internet at `url`.
+    Open,
+    /// It did not come up, or `cloudflared` ended; nothing runs.
+    Failed,
 }
 
 /// Where a service's last `prepare` outputs came from (ADR-0062).
@@ -406,6 +438,11 @@ pub enum EventBody {
     /// lane started or stopped, the main slot moved (ADR-0024).
     Lanes {
         lanes: Vec<crate::lanes::LaneView>,
+    },
+    /// A service's public link opened, changed state or closed (`None`).
+    PublicLink {
+        service: String,
+        link: Option<PublicLinkView>,
     },
     /// A change recorded in the journal (ADR-0067): the main tree's stream
     /// carries every entry, a lane's those of its lane.

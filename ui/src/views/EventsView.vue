@@ -15,6 +15,7 @@ const live: { v: Live; label: string }[] = [
   { v: 'service', label: 'Service' },
   { v: 'candidate', label: 'Candidate' },
   { v: 'devserver_rebuild', label: 'Rebuild' },
+  { v: 'public_link', label: 'Public link' },
   { v: 'infra', label: 'Infra' },
   { v: 'command', label: 'Command' },
   { v: 'config', label: 'Stack file' },
@@ -23,7 +24,7 @@ const live: { v: Live; label: string }[] = [
 ];
 /** The journal's changes (who changed the lane, through which client). */
 const changes = ref(true);
-const enabled = ref<Record<Live, boolean>>({ service: true, candidate: true, devserver_rebuild: true, infra: true, command: true, config: true, watcher: true, notice: true });
+const enabled = ref<Record<Live, boolean>>({ service: true, candidate: true, devserver_rebuild: true, public_link: true, infra: true, command: true, config: true, watcher: true, notice: true });
 const subject = ref('');
 /** Changes through this client only; events stay. */
 const client = ref<Client | ''>('');
@@ -39,6 +40,7 @@ function subjectOf(r: Row): string {
     case 'service':
     case 'candidate':
     case 'devserver_rebuild':
+    case 'public_link':
       return e.service;
     case 'infra':
       return e.group === '*' ? '' : e.group;
@@ -115,6 +117,12 @@ function describe(r: Row): Desc {
       if (!e.rebuild) return { icon: 'checkCircle', tone: 'neutral', title: 'Rebuild', text: 'shown no longer' };
       const l = rebuildLook(e.rebuild);
       return { icon: l.icon, tone: l.tone, title: rebuildSummary(e.rebuild), text: e.rebuild.tool, detail: e.rebuild.errors?.join('\n') ?? null };
+    }
+    case 'public_link': {
+      if (!e.link) return { icon: 'globe', tone: 'neutral', title: 'Public link closed', text: '' };
+      if (e.link.state === 'open') return { icon: 'globe', tone: 'warn', title: 'Public link open', text: e.link.url ?? '' };
+      if (e.link.state === 'failed') return { icon: 'globe', tone: 'danger', title: 'Public link failed', text: '', detail: e.link.error ?? null };
+      return { icon: 'globe', tone: 'accent', title: 'Public link starting', text: '' };
     }
     case 'infra':
       return { icon: 'box', tone: 'info', title: e.message, text: '' };

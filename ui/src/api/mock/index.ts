@@ -1138,6 +1138,29 @@ export class MockTransport implements Transport {
       }
       return view();
     }
+    const pl = /^\/v1\/services\/([^/]+)\/public-link$/.exec(p);
+    if (pl) {
+      const name = decodeURIComponent(pl[1]);
+      const svc = s.view.services.find((x) => x.name === name);
+      if (!svc) return json(404, { error: `no service ${name}` });
+      if (method === 'DELETE') {
+        delete svc.public_link;
+        s.emit({ type: 'public_link', service: name, link: null });
+        return view();
+      }
+      if (!svc.public_link_available) return json(409, { error: `\`${name}\` has no port to open a public link to` });
+      if (svc.status.state === 'stopped') return json(409, { error: `\`${name}\` is stopped: start it first (devstack start ${name})` });
+      if (svc.public_link && svc.public_link.state !== 'failed') return view();
+      const since = Date.now();
+      svc.public_link = { state: 'starting', since };
+      s.emit({ type: 'public_link', service: name, link: svc.public_link });
+      setTimeout(() => {
+        if (svc.public_link?.since !== since) return;
+        svc.public_link = { state: 'open', since, url: `https://${name}-quiet-river-stone.trycloudflare.com` };
+        s.emit({ type: 'public_link', service: name, link: svc.public_link });
+      }, 2500);
+      return view();
+    }
     let m = /^\/v1\/services\/([^/]+)\/(start|stop|restart|rebuild|promote|rollback|build-log|logs|hot-reload-on|hot-reload-off)$/.exec(p);
     if (m) {
       const name = decodeURIComponent(m[1]);
@@ -1167,6 +1190,10 @@ export class MockTransport implements Transport {
             s.startInstance(svc, svc.build_id ?? '0000000000000000');
             return view();
           case 'stop':
+            if (svc.public_link) {
+              delete svc.public_link;
+              s.emit({ type: 'public_link', service: name, link: null });
+            }
             svc.pid = null;
             if (svc.proxy) svc.proxy = { ...svc.proxy, upstream: null, active: 0 };
             s.setStatus(name, { state: 'stopped' });

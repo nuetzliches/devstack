@@ -165,6 +165,22 @@ describe('stack store', () => {
     expect(lane.closed).toBe(true);
   });
 
+  it("follows a service's public link from its events, and says when it opens", async () => {
+    const stack = await shownStack();
+    const events = fake.stream('/hub/stacks/shop/api/v1/events');
+    const web = { name: 'web', kind: 'devserver', groups: [], port: 4200, autostart: true, status: { state: 'healthy' }, build_id: null, pid: 1, since: 0, log: null, instance_port: null, proxy: null, candidate: null, public_link_available: true };
+    events.handlers.onMessage({ type: 'snapshot', seq: 0, at: 0, stack: { services: [web], infra: [], groups: [], commands: [] } });
+    const shown = () => stack.view?.services.find((s) => s.name === 'web')?.public_link;
+    events.handlers.onMessage({ type: 'public_link', seq: 1, at: 1, service: 'web', link: { state: 'starting', since: 1 } });
+    expect(shown()?.state).toBe('starting');
+    const url = 'https://quiet-river.trycloudflare.com';
+    events.handlers.onMessage({ type: 'public_link', seq: 2, at: 2, service: 'web', link: { state: 'open', since: 1, url } });
+    expect(shown()?.url).toBe(url);
+    expect(useUi().toasts.some((x) => x.title === 'web is public')).toBe(true);
+    events.handlers.onMessage({ type: 'public_link', seq: 3, at: 3, service: 'web', link: null });
+    expect(shown()).toBeUndefined();
+  });
+
   it("a pool's machines are its approved members with their node side (ADR-0076)", async () => {
     fake.on('/hub/pools', ok([{ name: 'default', joined: true, state: 'approved', coordinator: 'https://c' }]));
     fake.on(
@@ -212,6 +228,9 @@ describe('stack store', () => {
     expect(s.closed).toBe(false);
     await stack.serviceAction('api', 'restart');
     expect(fake.requests.some((r) => r.path.includes('/restart'))).toBe(false);
+    // Nor does a guest open a public link to it: only its owner does.
+    await stack.openPublicLink('api');
+    expect(fake.requests.some((r) => r.path.includes('/public-link'))).toBe(false);
     expect(useUi().toasts.some((x) => x.title === 'Read only')).toBe(true);
   });
 

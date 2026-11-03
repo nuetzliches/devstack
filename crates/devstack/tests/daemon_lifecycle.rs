@@ -185,9 +185,15 @@ members = [\"api\", \"command.ping\"]
 
     /// Run the CLI with an isolated token location.
     fn cli(&self, args: &[&str], stdin: Option<&str>) -> Output {
+        self.cli_with(args, stdin, &[])
+    }
+
+    /// [`Self::cli`] with more variables, which a daemon it starts inherits.
+    fn cli_with(&self, args: &[&str], stdin: Option<&str>, env: &[(&str, &Path)]) -> Output {
         let mut cmd = Command::new(BIN);
         cmd.args(args).arg("-f").arg(self.file());
-        cmd.env("LOCALAPPDATA", self.token_home.path())
+        cmd.envs(env.iter().copied())
+            .env("LOCALAPPDATA", self.token_home.path())
             .env("XDG_STATE_HOME", self.token_home.path())
             .env("DEVSTACK_NO_HUB", "1");
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -1688,6 +1694,122 @@ run = "{brief}"
     );
     let reason = s.service_view("dev")["status"]["reason"].to_string();
     assert!(reason.contains("5 times in a row"), "{reason}");
+    s.ok(&["down"]);
+}
+
+/// A public link: `devstack tunnel` runs cloudflared (a fake here, which
+/// prints what a Quick Tunnel prints) to the service's fixed port, says its
+/// address once registered, keeps it across a restart and ends it with the
+/// service's stop; `tunnel = false` keeps a service from one.
+#[test]
+fn a_public_link_goes_to_the_fixed_port_and_ends_with_a_stop() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    let (dev, admin) = (free_port(), free_port());
+    let url = "https://quiet-river-stone.trycloudflare.com";
+    let fake = if cfg!(windows) {
+        let f = s.dir.path().join("cloudflared.cmd");
+        std::fs::write(
+            &f,
+            format!(
+                "@echo off
+echo %* > \"%~dp0args.txt\"
+                 echo 2026-11-03T10:00:01Z INF  {url}
+                 echo 2026-11-03T10:00:02Z INF Registered tunnel connection connIndex=0
+                 ping -n 600 127.0.0.1 >NUL
+"
+            ),
+        )
+        .unwrap();
+        f
+    } else {
+        let f = s.dir.path().join("cloudflared");
+        std::fs::write(
+            &f,
+            format!(
+                "#!/bin/sh
+echo \"$@\" > \"$(dirname \"$0\")/args.txt\"
+                 echo \"2026-11-03T10:00:01Z INF  {url}\"
+                 echo \"2026-11-03T10:00:02Z INF Registered tunnel connection connIndex=0\"
+                 exec sleep 600
+"
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        f
+    };
+    let long = runs_for(600);
+    std::fs::write(
+        s.file(),
+        format!(
+            r#"version = 1
+[stack]
+name = "public"
+[services.dev]
+kind = "devserver"
+run = "{long}"
+port = {dev}
+[services.admin]
+kind = "devserver"
+run = "{long}"
+port = {admin}
+tunnel = false
+"#
+        ),
+    )
+    .unwrap();
+    let env = [("DEVSTACK_CLOUDFLARED", fake.as_path())];
+    let run = |args: &[&str]| {
+        let out = s.cli_with(args, None, &env);
+        (
+            out.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+    let (ok, text) = run(&["up"]);
+    assert!(ok, "{text}");
+    let (ok, text) = run(&["tunnel", "dev"]);
+    assert!(
+        ok && text.contains(url),
+        "{text}
+{}",
+        s.daemon_log()
+    );
+    let args = std::fs::read_to_string(s.dir.path().join("args.txt")).unwrap();
+    assert!(
+        args.contains(&format!("--url http://localhost:{dev}"))
+            && args.contains(&format!("--http-host-header localhost:{dev}")),
+        "{args}"
+    );
+    let link = || s.service_view("dev")["public_link"].clone();
+    assert_eq!(link()["state"], "open");
+    assert!(
+        s.ok(&["status"])
+            .contains(&format!("dev is public at {url}"))
+    );
+
+    let (ok, text) = run(&["tunnel", "admin"]);
+    assert!(!ok && text.contains("tunnel = false"), "{text}");
+    assert_eq!(s.service_view("admin")["public_link_available"], false);
+
+    // A restart keeps it: it goes to the fixed port.
+    s.ok(&["restart", "dev"]);
+    assert_eq!(link()["url"], url);
+    // A stop by hand ends it.
+    s.ok(&["stop", "dev"]);
+    assert!(link().is_null(), "{}", link());
     s.ok(&["down"]);
 }
 

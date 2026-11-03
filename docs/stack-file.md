@@ -477,7 +477,35 @@ server reloads itself).
 | `ensure_dirs = ["{repo}/data/files"]` | created before start |
 | `prepare = { run = "npm ci", inputs = ["web/package-lock.json"] }` | installs what a copy of the source lacks (see below) |
 | `timeout = "10m"` | `kind = "job"` only: how long it may run before it counts as failed and is stopped; default 30 minutes. `devstack stop <job>` ends it at once |
+| `tunnel = false` | offers no public link to it (below); for a service with a `port` only. A file with it should say `requires = "0.36.0"` |
 | `stop = "docker rm -f api{lane_suffix}-{port}"` | ends what `run` started outside its process tree, a container ([ADR-0059](adr/0059-a-services-stop-command-ends-what-its-run-started.md), below); not for `kind = "static"` |
+
+### Public links (`devstack tunnel`)
+
+A service with a `port` can be opened to the internet by hand: the
+dashboard's globe button on its row, or `devstack tunnel <service>`, runs a
+[Cloudflare Quick Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/)
+(`cloudflared tunnel --url`, no account) to its fixed port and shows the
+`https://<words>.trycloudflare.com` address. Anyone with the address reaches
+the service, without a login. The stack file never opens one; `tunnel =
+false` keeps a service from it (an admin UI, something that is no HTTP).
+
+- It goes to the fixed port (`localhost`, with the `Host` header a browser
+  here sends, so a dev server's host check lets it through), so a restart,
+  a rebuild and `promote --lane` keep it. It ends when it is closed
+  (`devstack tunnel <service> --stop`, the dashboard), with a stop of the
+  service by hand, `devstack down`, and the daemon; the address is new
+  every time.
+- A lane's link goes to the lane's port. A lane on a node has none yet, and
+  a lane shared with you (ADR-0035) none for you: only its owner opens one.
+- One service per link: a front end that calls its API on
+  `localhost:<port>` only works from outside when it proxies the API
+  itself (Vite's `server.proxy`, `ng serve --proxy-config`). Quick Tunnels
+  carry no server-sent events and at most 200 requests at once.
+- Needs `cloudflared` on the daemon's `PATH` (`winget install
+  Cloudflare.cloudflared`, `brew install cloudflared`; `devstack doctor`
+  says whether it is there), or its path in `DEVSTACK_CLOUDFLARED`. Its
+  output is kept in the service's log folder (`public-link.log`).
 
 ### A container as a service (`docker run`)
 

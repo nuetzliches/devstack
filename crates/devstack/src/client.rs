@@ -261,7 +261,12 @@ impl Client {
         )
     }
 
-    fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<(u16, String)> {
+    pub(crate) fn call(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<(u16, String)> {
         self.call_raw(method, &self.route(path)?, body)
     }
 
@@ -784,6 +789,38 @@ pub fn status_text(stack: &Value) -> String {
     }
     if let Some(e) = stack["watcher_error"].as_str() {
         let _ = writeln!(out, "! {e}\n");
+    }
+    // Reachable from the internet: said before anything else of a service.
+    for svc in stack["services"].as_array().into_iter().flatten() {
+        let link = &svc["public_link"];
+        let name = svc["name"].as_str().unwrap_or("?");
+        match link["state"].as_str() {
+            Some("open") => {
+                let _ = writeln!(
+                    out,
+                    "! {name} is public at {}, since {} (`devstack tunnel {name} --stop`)
+",
+                    link["url"].as_str().unwrap_or("?"),
+                    since(link["since"].as_u64().unwrap_or(0))
+                );
+            }
+            Some("starting") => {
+                let _ = writeln!(
+                    out,
+                    "! {name}: a public link is starting
+"
+                );
+            }
+            Some("failed") => {
+                let _ = writeln!(
+                    out,
+                    "! {name}: the public link failed: {}
+",
+                    link["error"].as_str().unwrap_or("?")
+                );
+            }
+            _ => {}
+        }
     }
     // What no request reports (ADR-0050).
     for n in stack["notices"].as_array().into_iter().flatten() {
@@ -1384,6 +1421,60 @@ pub fn service_action(stack_file: &Path, name: &str, action: &str) -> Result<()>
     }
     print_status(&serde_json::from_str(&body)?);
     Ok(())
+}
+
+/// `devstack tunnel <service> [--stop]`: open a public link and wait until
+/// it is registered (or failed), or close it.
+pub fn public_link(stack_file: &Path, name: &str, stop: bool) -> Result<()> {
+    let c = need(&state_dir(stack_file)?)?;
+    let path = format!("/v1/services/{name}/public-link");
+    if stop {
+        let (status, body) = c.call("DELETE", &path, None)?;
+        if status >= 400 {
+            bail!("{}", error_text(&body));
+        }
+        println!("{name}: no public link");
+        return Ok(());
+    }
+    let (status, body) = c.post(&path, None)?;
+    if status >= 400 {
+        bail!("{}", error_text(&body));
+    }
+    let t0 = std::time::Instant::now();
+    let mut said = false;
+    loop {
+        let stack = c.stack()?;
+        let link = stack["services"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|s| s["name"] == name)
+            .map(|s| s["public_link"].clone())
+            .unwrap_or(Value::Null);
+        match link["state"].as_str() {
+            Some("open") => {
+                println!("{}", link["url"].as_str().unwrap_or_default());
+                eprintln!(
+                    "{name} is public: anyone with the link reaches it, until `devstack tunnel {name} --stop`, a stop of {name} or of the stack"
+                );
+                return Ok(());
+            }
+            Some("failed") => bail!(
+                "{name}: no public link: {}",
+                link["error"].as_str().unwrap_or("cloudflared failed")
+            ),
+            None => bail!("{name}: the public link was closed meanwhile"),
+            _ => {}
+        }
+        if !said && t0.elapsed() > Duration::from_secs(2) {
+            eprintln!("waiting for cloudflared to register the tunnel...");
+            said = true;
+        }
+        if t0.elapsed() > Duration::from_secs(60) {
+            bail!("{name}: the public link is still starting; see `devstack status`");
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
 }
 
 /// `devstack logs --daemon` / `--hub`: the diagnostic log, readable or raw.

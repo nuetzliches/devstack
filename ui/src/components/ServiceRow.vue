@@ -5,6 +5,7 @@ import type { ServiceView } from '@/api/types';
 import { ago, serviceUrl, shortBuild, useNow } from '@/lib/format';
 import { candidateLook, candidateSummary, kindIcon, kindLabel, rebuildLook, rebuildSummary, statusLook } from '@/lib/status';
 import { useStack } from '@/stores/stack';
+import { useUi } from '@/stores/ui';
 import StatusPill from './StatusPill.vue';
 import ErrorLine from './ErrorLine.vue';
 import RowUsage from './RowUsage.vue';
@@ -15,6 +16,7 @@ import Icon from './icons/Icon.vue';
 
 const props = defineProps<{ service: ServiceView }>();
 const stack = useStack();
+const ui = useUi();
 const pins = usePins();
 const pinned = computed(() => pins.has(stack.id, props.service.name));
 const load = computed(() => stack.usage?.services.find((u) => u.name === props.service.name) ?? null);
@@ -38,6 +40,17 @@ const restartItems = computed<MenuItem[]>(() => [
     title: props.service.build_id ? `Build ${props.service.name} again, even for inputs built before, and restart it` : `${props.service.name} runs no build`,
   },
 ]);
+const link = computed(() => props.service.public_link ?? null);
+const linkTone = computed(() => (link.value?.state === 'failed' ? 'danger' : link.value?.state === 'open' ? 'warn' : 'info'));
+async function copyLink() {
+  if (!link.value?.url) return;
+  try {
+    await navigator.clipboard.writeText(link.value.url);
+    ui.toast('success', 'Link copied', link.value.url);
+  } catch {
+    ui.toast('error', 'Could not copy the link');
+  }
+}
 const isStopped = computed(() => ['stopped', 'completed', 'exited', 'failed'].includes(props.service.status.state));
 const to = computed(() => ({ name: 'service', params: { stack: stack.id ?? '', name: props.service.name } }));
 const route = useRoute();
@@ -106,6 +119,18 @@ function open(e: MouseEvent) {
           @pick="stack.serviceAction(service.name, 'rebuild')"
         />
         <button
+          v-if="!isStopped && service.public_link_available && !link"
+          type="button"
+          class="btn btn-ghost btn-sm btn-icon"
+          :aria-label="`Open a public link to ${service.name}`"
+          title="Public link: reachable from the internet through a Cloudflare Quick Tunnel"
+          :disabled="!!busy || stack.stale"
+          data-testid="action-public-link"
+          @click="stack.openPublicLink(service.name)"
+        >
+          <Icon name="globe" />
+        </button>
+        <button
           v-if="!isStopped"
           type="button"
           class="btn btn-ghost btn-sm btn-icon btn-stop"
@@ -118,6 +143,28 @@ function open(e: MouseEvent) {
           <Icon name="stop" />
         </button>
       </div>
+    </div>
+    <div v-if="link" class="cand-line link-line" :class="`tone-${linkTone}`" data-testid="public-link-line" :data-state="link.state">
+      <span v-if="link.state === 'starting'" class="spinner sm" aria-hidden="true" />
+      <Icon v-else name="globe" :size="14" />
+      <span class="cl-label">Public:</span>
+      <a v-if="link.state === 'open' && link.url" class="cl-state link-url" :href="link.url" target="_blank" rel="noopener" data-testid="public-link-url">{{ link.url }}</a>
+      <span v-else-if="link.state === 'starting'" class="cl-state">starting the tunnel…</span>
+      <span v-else class="cl-err" :title="link.error">{{ link.error ?? 'failed' }}</span>
+      <span class="grow" />
+      <span class="cl-ago">{{ ago(link.since, now) }}</span>
+      <button v-if="link.state === 'open'" type="button" class="btn btn-ghost btn-sm btn-icon" aria-label="Copy the public link" title="Copy the link" @click="copyLink"><Icon name="copy" :size="13" /></button>
+      <button
+        v-if="!stack.readOnly"
+        type="button"
+        class="btn btn-ghost btn-sm btn-icon"
+        :aria-label="link.state === 'failed' ? 'Dismiss' : `Close the public link to ${service.name}`"
+        :title="link.state === 'failed' ? 'Dismiss' : 'Close the public link'"
+        data-testid="action-public-link-close"
+        @click="stack.closePublicLink(service.name)"
+      >
+        <Icon name="x" :size="13" />
+      </button>
     </div>
     <ErrorLine v-if="look.detail && !cand" class="detail" :text="look.detail" :tone="look.tone === 'danger' ? 'danger' : 'warn'" />
     <RouterLink v-if="cand && candLook" :to="to" class="cand-line" :class="`tone-${candLook.tone}`" data-testid="candidate-line" :data-state="cand.state">
@@ -274,6 +321,18 @@ function open(e: MouseEvent) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.link-line {
+  margin-top: 4px;
+}
+.link-line .btn {
+  color: inherit;
+}
+.link-url {
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-width: 0;
 }
 .cl-ago {
   font-size: 11.5px;

@@ -25,6 +25,7 @@ function service(p: Partial<ServiceView> & Pick<ServiceView, 'name' | 'kind'>, r
     port,
     url: port ? `${p.kind === 'devserver' ? 'https' : 'http'}://localhost:${port}` : null,
     singleton: false,
+    public_link_available: port !== null,
     ...p,
     build_id: build,
     instance_port: proxied ? instance : null,

@@ -178,6 +178,8 @@ export const v1 = {
   builds: (service: string, limit = 50) => `/v1/services/${enc(service)}/builds?limit=${limit}`,
   keptLog: (service: string, file: string, tail = 2000) => `/v1/services/${enc(service)}/logs?file=${enc(file)}&tail=${tail}`,
   serviceAction: (service: string, action: ServiceAction) => `/v1/services/${enc(service)}/${action}`,
+  /** POST opens a service's public link, DELETE closes it. */
+  publicLink: (service: string) => `/v1/services/${enc(service)}/public-link`,
   groupAction: (group: string, action: GroupAction) => `/v1/groups/${enc(group)}/${action}`,
   infraAction: (group: string, service: string, action: 'start' | 'stop' | 'restart') => `/v1/infra/${enc(group)}/${enc(service)}/${action}`,
   infraLogs: (group: string, service: string, tail = 1000) => `/v1/infra/${enc(group)}/${enc(service)}/logs?tail=${tail}`,

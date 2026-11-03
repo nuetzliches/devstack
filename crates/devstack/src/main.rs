@@ -136,6 +136,15 @@ enum Cmd {
         #[arg(value_parser = ["on", "off"])]
         state: String,
     },
+    /// Open a public link to a service: a Cloudflare Quick Tunnel to its
+    /// port, reachable from the internet by anyone with the link, until it
+    /// is closed, the service stopped or the stack. Needs `cloudflared`.
+    Tunnel {
+        service: String,
+        /// Close the link instead.
+        #[arg(long)]
+        stop: bool,
+    },
     /// Take over a candidate that waits for promotion (a schema change, ADR-0013).
     Promote {
         /// The service whose held candidate takes over.
@@ -925,6 +934,7 @@ fn main() -> Result<()> {
         | Cmd::Stop { .. }
         | Cmd::Restart { .. }
         | Cmd::HotReload { .. }
+        | Cmd::Tunnel { .. }
         | Cmd::Promote { .. }
         | Cmd::Rollback { .. }
         | Cmd::Logs { .. }
@@ -1035,6 +1045,18 @@ mod tests {
             refused(&["promote", "api", "--lane", "x"]),
             ErrorKind::ArgumentConflict
         );
+    }
+
+    #[test]
+    fn tunnel_opens_or_stops() {
+        assert!(matches!(
+            parse(&["tunnel", "web"]).cmd,
+            Cmd::Tunnel { service, stop: false } if service == "web"
+        ));
+        assert!(matches!(
+            parse(&["tunnel", "web", "--stop"]).cmd,
+            Cmd::Tunnel { service, stop: true } if service == "web"
+        ));
     }
 
     #[test]
