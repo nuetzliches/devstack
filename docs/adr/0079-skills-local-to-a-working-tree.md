@@ -1,6 +1,6 @@
 # ADR-0079: Skills local to a working tree: a pool's project skills bound to their repository, devstack's own untracked
 
-- **Status:** Accepted (2026-10-30); point 5 amended by [ADR-0083](0083-the-hub-takes-out-what-an-agent-switched-off-leaves.md) (a copy in a folder switched off goes)
+- **Status:** Accepted (2026-10-30); point 5 amended by [ADR-0083](0083-the-hub-takes-out-what-an-agent-switched-off-leaves.md) (a copy in a folder switched off goes); point 2 amended 2026-11-03 (an identical copy is taken over)
 - **Date:** 2026-10-30
 - **Deciders:** project owner
 - **Related:** [ADR-0074](0074-a-pool-hands-out-skill-sets-the-hub-installs-them-for-the-agents.md) (skill sets, the agent table; its "per-repository installation" alternative taken up here), [ADR-0077](0077-a-sets-skills-are-grouped-and-switched-one-by-one.md) (`metadata` of a skill), [ADR-0071](0071-the-dashboard-writes-no-file-of-a-repository.md) (amended here), [ADR-0078](0078-the-hub-follows-every-stacks-worktrees.md) (the working trees the hub follows), [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md)
@@ -168,3 +168,24 @@ stays as it is: no stack file changes meaning.
 `crates/devstack/src/dispatch/skills.rs`, `crates/devstack-hub/src/prompts.rs`,
 `ui/src/views/SkillsView.vue`, `ui/src/components/PoolSkills.vue`,
 `ui/src/lib/skills.ts`, `crates/devstack-node/tests/skills.rs`.
+
+## Addendum 2026-11-03: an identical copy is taken over
+
+The owner approved the review card in the conversation on **2026-11-03**,
+all three points. It amends trust point 2 (and the same sentence of
+ADR-0074): a worktree tool that copies the main tree's ignored files into a
+new worktree copied the hub's skills along, and every one of them showed as
+a conflict there.
+
+| Category | Point | Beats | Reversing costs |
+|---|---|---|---|
+| trust | A folder of a skill's name the hub did not write is taken into its lock when its files are byte for byte what the hub would write there (the archive, in a working tree with the `.gitignore` of `*`); from then on the hub updates and removes it as its own. | A conflict the user clears by hand. | Copies already taken over stay in the lock; a later removal deletes a copy the user had put there, with nothing of its content lost. |
+| trust | A copy that differs in a byte or a file, or one of which git tracks a file, stays a conflict. | Taking over by name, or by `SKILL.md` alone, which writes over changes made here. | None; it is only stricter. |
+| concept | This holds wherever the hub writes: the agents' user folders and their folders in working trees alike. | Working trees only, where worktree tools make such copies. | Small: the condition is narrowed to working trees. |
+
+What was built: `sync` asks git first, as before; for a folder not in its
+lock it unpacks the archive into a hidden folder beside it, compares the
+hashes of both, and takes the hidden folder away again (`would_write`). On
+a match the folder is recorded with the time of the takeover as "updated
+here"; otherwise the conflict reads as before. No field of the protocol or
+of `skills.json` changes.

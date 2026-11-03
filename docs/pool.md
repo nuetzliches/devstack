@@ -718,7 +718,10 @@ and the sets offered. A set is installed once accepted; its updates come at
 once, or wait for "Take the updates", as chosen per set. A set whose source
 changes is offered again. The hub writes only the skills it installed and
 nobody changed since: a skill of the user's own of the same name, or one
-changed by hand, is left and shown as a conflict. `devstack pool skills
+changed by hand, is left and shown as a conflict. A folder of that name
+whose files are exactly what the hub would write (a copy a worktree tool
+made of the main tree's ignored files), and of which git tracks nothing,
+is taken over instead ([ADR-0079](adr/0079-skills-local-to-a-working-tree.md#addendum-2026-11-03-an-identical-copy-is-taken-over)). `devstack pool skills
 status` and `sync` do the same from a terminal.
 
 Each skill of an accepted set can be switched off, and a group of them at
