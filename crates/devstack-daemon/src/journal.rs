@@ -37,10 +37,14 @@ pub struct Entry {
 }
 
 impl Entry {
-    /// Whether the stream of `tree` carries it: the main tree's (`""`)
-    /// every entry, a lane's those of its lane.
+    /// Whether the stream of `tree` carries it: a lane's those of its lane,
+    /// the main tree's (`""`) those without one (its own and the stack's,
+    /// which the dashboard tells apart by the path) and the lane `main`'s.
     pub fn for_tree(&self, tree: &str) -> bool {
-        tree.is_empty() || self.lane.as_deref() == Some(tree)
+        match self.lane.as_deref() {
+            None | Some("main") => tree.is_empty(),
+            Some(lane) => lane == tree,
+        }
     }
 }
 
@@ -281,10 +285,15 @@ mod tests {
         );
         assert!(e.for_tree(""));
         assert!(!e.for_tree("feat"));
+        let main = Entry {
+            lane: Some("main".into()),
+            ..e.clone()
+        };
+        assert!(main.for_tree("") && !main.for_tree("feat"));
         let lane = Entry {
             lane: Some("feat".into()),
             ..e
         };
-        assert!(lane.for_tree("") && lane.for_tree("feat") && !lane.for_tree("other"));
+        assert!(!lane.for_tree("") && lane.for_tree("feat") && !lane.for_tree("other"));
     }
 }

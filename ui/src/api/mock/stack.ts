@@ -54,7 +54,9 @@ export class MockStack {
   journal: JournalEntry[] = (() => {
     const t = Date.now();
     return [
+      { at: t - 52 * 60_000, via: 'cli', method: 'POST', path: '/v1/lanes/prune', status: 200 },
       { at: t - 41 * 60_000, via: 'cli', method: 'POST', path: '/v1/up', status: 202 },
+      { at: t - 30 * 60_000, via: 'dashboard', method: 'DELETE', path: '/v1/store/web/1cb852a0a8ab4f', status: 200 },
       { at: t - 23 * 60_000, via: 'mcp', lane: 'agent-login-fix', method: 'POST', path: '/v1/lanes/agent-login-fix/v1/services/api/restart', status: 200 },
       { at: t - 17 * 60_000, via: 'mcp', method: 'POST', path: '/v1/services/api/promote', status: 409, error: 'no candidate to promote' },
       { at: t - 9 * 60_000, via: 'dashboard', method: 'POST', path: '/v1/services/worker/stop', status: 200 },

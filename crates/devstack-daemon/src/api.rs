@@ -166,6 +166,9 @@ async fn audit(State(s): State<AppState>, req: Request, next: Next) -> Response 
         .map(|(l, _)| l)
     {
         fields["lane"] = lane.into();
+    } else if let Some(JournalLane(lane)) = res.extensions().get::<JournalLane>() {
+        // A lane started: its name is in the answer, not in the path.
+        fields["lane"] = lane.as_str().into();
     }
     // Who changed it, kept for whoever looks later (ADR-0067).
     crate::journal::get().record(crate::journal::Entry {
@@ -190,6 +193,11 @@ async fn audit(State(s): State<AppState>, req: Request, next: Next) -> Response 
 /// lines (#287): it comes every 30 seconds and would push the lane's real
 /// changes out of the journal within hours, and its own log line would be
 /// the next take's telemetry.
+/// The lane a change was for, where its path does not say it (`POST
+/// /v1/lanes`): the handler puts it on its answer for the `audit` layer.
+#[derive(Clone)]
+struct JournalLane(String);
+
 fn audited(method: &axum::http::Method, path: &str) -> bool {
     method != axum::http::Method::GET
         && method != axum::http::Method::HEAD
@@ -205,7 +213,8 @@ struct JournalQuery {
 
 /// `GET /v1/journal?since=`: what clients and devstack changed at runtime,
 /// oldest first, the last 500 (ADR-0067). A lane's API answers the same:
-/// it is the stack's journal, each entry with its lane.
+/// it is the stack's journal, each entry with its lane; a view keeps those
+/// of its tree.
 async fn journal(Query(q): Query<JournalQuery>) -> Response {
     Json(crate::journal::get().since(q.since)).into_response()
 }
@@ -612,7 +621,12 @@ async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> 
     })
     .await;
     match res {
-        Ok(Ok((status, view))) => (status, Json(view)).into_response(),
+        Ok(Ok((status, view))) => {
+            let lane = JournalLane(view.name.clone());
+            let mut res = (status, Json(view)).into_response();
+            res.extensions_mut().insert(lane);
+            res
+        }
         Ok(Err(e)) => err(StatusCode::CONFLICT, e),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }

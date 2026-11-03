@@ -130,3 +130,38 @@ events; `viewable` in `crates/devstack-node/src/node.rs`. In the dashboard
 *Last action*. A lane on a node, and a shared one, read the journal of
 their daemon there, which runs as a main tree: its every entry, without
 `lane`.
+
+## Addendum 2026-11-03: a lane's Activity is its own
+
+Approved as a review card in
+[#426](https://github.com/nuetzliches/devstack/pull/426) (ADR-0070). Since
+ADR-0080 `main` is a lane like the others; its Activity mixing every
+lane's changes, with a filter of the lanes the journal ever named, was
+what was left of the main tree as the stack.
+
+1. Each entry belongs to a lane (`main` included) or to the stack. An
+   entry with `lane` is that lane's (`lane: "main"` the main tree's); one
+   without is the main tree's, unless its path is the stack's: `POST
+   /v1/lanes` (from a daemon before 0.36.0), `/v1/lanes/prune`,
+   `/v1/shutdown`, `/v1/main-slot`, `/v1/telemetry/take`. The journal's
+   format stays, so older entries sort the same.
+2. Point 1 of the addendum above changes: the main tree's stream carries
+   the entries without lane (its own and the stack's) and those of the lane
+   `main`, no longer every lane's; a lane's stream those of its lane.
+   `GET /v1/journal` and `devstack journal` stay the whole journal.
+3. A lane's Activity shows its own entries and has no lane filter; the
+   stack's page shows the stack's in an Activity of its own.
+4. `POST /v1/lanes` records the lane it started, from its answer.
+5. The Activity's filters are two groups: *Changes* (the journal, with its
+   client filter) and *Live* (the events since the page connected); the
+   "Connected" row stays as where the live events begin. What a row acted
+   on (a service, its store entry, a Compose group or container, a
+   command) is a column of its own, and what the filter matches.
+
+*Paths as built.* `Entry::for_tree` in
+`crates/devstack-daemon/src/journal.rs`; `JournalLane`, set by
+`lanes_start` and read by `audit`, in `crates/devstack-daemon/src/api.rs`.
+In the dashboard `stackWide`, `forTree` and `journalSubject` in
+`ui/src/lib/journal.ts`; the store's `received`, `journal` and
+`stackJournal` (`ui/src/stores/stack.ts`); `ui/src/views/EventsView.vue`
+and the Activity card of `ui/src/views/StackPage.vue`.

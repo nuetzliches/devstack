@@ -67,20 +67,38 @@ export function journalLabel(e: JournalEntry): string {
   return `${e.method} ${e.path}`;
 }
 
-/** The service a journal entry acted on, if any. */
-export function journalService(e: JournalEntry): string | null {
-  const m = /^\/v1\/services\/([^/]+)\//.exec(treePath(e.path));
-  return m ? dec(m[1]) : null;
+/**
+ * What a journal entry acted on, if one thing: a service (its store entry
+ * too), a Compose group (a container of it too) or a command. The same
+ * names the events carry, so one filter takes both.
+ */
+export function journalSubject(e: JournalEntry): string | null {
+  const m = /^\/v1\/(?:services|store|groups|infra|commands)\/([^/]+)\//.exec(treePath(e.path) + '/');
+  return m && m[1] !== 'check' ? dec(m[1]) : null;
 }
 
 /**
- * Whether a tree's view shows an entry of `GET /v1/journal`, as its stream
- * would (ADR-0067): the main tree (`lane` null) every entry, a lane here
- * those of its lane. A lane on a node, or one shared with this machine,
- * reads the journal of its own daemon there, which runs as a main tree: all of it.
+ * The stack's own changes rather than a tree's: a lane started (by an
+ * older daemon, which did not name it), the stopped lanes removed, the
+ * daemon stopped, the main slot set. They have no lane, as the main tree's
+ * own have none; the path tells them apart.
+ */
+const stackRoutes = [/^\/v1\/lanes$/, /^\/v1\/lanes\/prune$/, /^\/v1\/shutdown$/, /^\/v1\/main-slot$/, /^\/v1\/telemetry\/take$/];
+export function stackWide(e: JournalEntry): boolean {
+  return !e.lane && stackRoutes.some((re) => re.test(e.path));
+}
+
+/**
+ * Whether a lane's Activity shows an entry (ADR-0067): a lane those of its
+ * lane, the main tree (`lane` null) those without one or of the lane
+ * `main`, not the stack's (the stack's page shows those). A lane on a node,
+ * or one shared with this machine, reads the journal of its own daemon
+ * there, which is all its own.
  */
 export function forTree(e: JournalEntry, lane: string | null, ownDaemon: boolean): boolean {
-  return !lane || ownDaemon || e.lane === lane;
+  if (ownDaemon) return true;
+  if (lane && lane !== 'main') return e.lane === lane;
+  return (!e.lane || e.lane === 'main') && !stackWide(e);
 }
 
 /** The same change, from the fetch and from the stream. */

@@ -5,7 +5,7 @@ import type { Branches, JournalEntry, LaneView, Point, Pruned, Run, ServiceView,
 import { laneLabel, MAIN, restartLanesText, restartPlan, samePath } from '@/lib/lanes';
 import type { LaneAction } from '@/lib/laneActions';
 import { act } from '@/lib/actions';
-import { forTree, sameEntry } from '@/lib/journal';
+import { forTree, sameEntry, stackWide } from '@/lib/journal';
 import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
 import { useHub } from './hub';
@@ -34,8 +34,8 @@ export const useStack = defineStore('stack', () => {
   /** A snapshot arrived on the current stream connection. */
   const live = ref(false);
   const events = shallowRef<TimelineEvent[]>([]);
-  /** What the journal recorded for the tree shown (ADR-0067), newest first: fetched on each snapshot, then live. */
-  const journal = shallowRef<JournalEntry[]>([]);
+  /** What the journal recorded (ADR-0067), newest first, as the daemon gave it: fetched on each snapshot, then live. */
+  const received = shallowRef<JournalEntry[]>([]);
   const usage = shallowRef<UsageReport | null>(null);
   const history = shallowRef<Map<SeriesKey, Point[]>>(new Map());
   const runs = ref<Record<string, Run[]>>({});
@@ -326,7 +326,7 @@ export const useStack = defineStore('stack', () => {
     view.value = cached?.view ?? null;
     viewAt.value = cached?.at ?? null;
     events.value = [];
-    journal.value = [];
+    received.value = [];
     usage.value = null;
     history.value = new Map();
     runs.value = {};
@@ -901,27 +901,36 @@ export const useStack = defineStore('stack', () => {
   async function fetchJournal() {
     const stackId = id.value;
     if (!stackId) return;
-    const since = Math.max(0, (journal.value[0]?.at ?? 0) - 1);
+    const since = Math.max(0, (received.value[0]?.at ?? 0) - 1);
     const lane = apiLane.value;
-    // A lane here reads the stack's journal; one on a node, or shared, its own daemon's.
-    const ownDaemon = foreign.value || !!lanes.value.find((l) => l.name === lane)?.node;
     try {
       const res = await api().request<JournalEntry[]>('GET', daemonPath(stackId, v1.journal(since)));
       if (!res.ok || !Array.isArray(res.body) || id.value !== stackId || apiLane.value !== lane) return;
-      addJournal(res.body.filter((e) => forTree(e, lane, ownDaemon)));
+      addJournal(res.body);
     } catch {
       /* the stream will tell us */
     }
   }
 
-  /** Entries into `journal`, newest first, each once (the fetch and the stream overlap). */
+  /** Entries into `received`, newest first, each once (the fetch and the stream overlap). */
   function addJournal(entries: JournalEntry[]) {
-    const fresh = entries.filter((e) => !journal.value.some((k) => sameEntry(k, e)));
+    const fresh = entries.filter((e) => !received.value.some((k) => sameEntry(k, e)));
     if (!fresh.length) return;
-    const list = [...fresh, ...journal.value].sort((a, b) => b.at - a.at);
+    const list = [...fresh, ...received.value].sort((a, b) => b.at - a.at);
     if (list.length > MAX_EVENTS) list.length = MAX_EVENTS;
-    journal.value = list;
+    received.value = list;
   }
+
+  /**
+   * The journal's daemon is the lane's own (a lane on a node, or one shared
+   * with this machine): what it gave is all the lane's. A lane here reads
+   * the stack's journal.
+   */
+  const ownJournal = computed(() => foreign.value || !!lanes.value.find((l) => l.name === apiLane.value)?.node);
+  /** What the journal recorded for the lane shown (its Activity), newest first. */
+  const journal = computed(() => received.value.filter((e) => forTree(e, lane.value, ownJournal.value)));
+  /** The stack's own changes (its page), newest first: from the main tree's journal. */
+  const stackJournal = computed(() => (lane.value === null && !ownJournal.value ? received.value.filter(stackWide) : []));
 
   /** One fetch of /v1/stack in reaction to events, debounced (fields that events do not carry). */
   function scheduleRefetch() {
@@ -1329,6 +1338,7 @@ export const useStack = defineStore('stack', () => {
     mainIdle,
     events,
     journal,
+    stackJournal,
     usage,
     history,
     runs,
