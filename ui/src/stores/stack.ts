@@ -444,8 +444,35 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
+  /**
+   * The last lane that runs (main included) stops: ask, and offer the whole
+   * stack's stop, on by default; the daemon would only idle on. `true`: go on
+   * with the lane's own stop; `false`: cancelled, or the stack stops instead.
+   */
+  async function lastLaneStop(name: string): Promise<boolean> {
+    const others = runningLanes.value.filter((l) => l !== name);
+    if (others.length || (name !== MAIN && mainActive.value) || !id.value) return true;
+    const option: ConfirmOption = { label: 'Stop the stack too', hint: 'Its daemon exits and its containers go; their volumes stay.', checked: true };
+    const ok = await ui.confirm({
+      title: `Stop ${name}`,
+      text: `${name} is the last lane that runs: nothing of the stack runs once it stops.`,
+      confirmLabel: 'Stop',
+      option,
+    });
+    if (!ok) return false;
+    if (!option.checked) return true;
+    const stackName = entry.value?.name ?? 'stack';
+    busy.value['stack'] = 'stop';
+    try {
+      await act({ label: `Stop ${stackName}`, path: paths.down(id.value, true, false, true), success: 'Stopping the stack…' });
+    } finally {
+      delete busy.value['stack'];
+    }
+    return false;
+  }
+
   async function stopLane(name: string) {
-    if (!id.value) return;
+    if (!id.value || !(await lastLaneStop(name))) return;
     const res = await act({
       label: `Stop lane ${name}`,
       path: daemonPath(id.value, v1.laneStop(name)),
@@ -510,7 +537,7 @@ export const useStack = defineStore('stack', () => {
 
   /** Stop the main working tree only: its services and containers; the daemon and every lane keep running. */
   async function stopMain() {
-    if (refuseReadOnly() || !id.value) return;
+    if (refuseReadOnly() || !id.value || !(await lastLaneStop(MAIN))) return;
     busy.value['lane-stop'] = MAIN;
     try {
       await act({ label: 'Stop main', path: paths.api(id.value, v1.downTree), success: 'main stopped' });
