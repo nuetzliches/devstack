@@ -33,19 +33,21 @@ const verb = (action: string) => action.replace(/-/g, ' ');
 
 /**
  * The mutating routes of the daemon's API (`crates/devstack-daemon/src/api.rs`),
- * each with what a journal row says of it. A route not listed shows as
- * `METHOD path`: a new route is visible before it is named here.
+ * each with what a journal row says of it, and, for a route that acts on
+ * one thing (`journalSubject`), what it says beside a column naming that
+ * thing (`action`). A route not listed shows as `METHOD path`: a new route
+ * is visible before it is named here.
  */
-const routes: { method: string; re: RegExp; label: (m: string[]) => string }[] = [
+const routes: { method: string; re: RegExp; label: (m: string[]) => string; action?: (m: string[]) => string }[] = [
   { method: 'POST', re: /^\/v1\/up$/, label: () => 'up' },
   { method: 'POST', re: /^\/v1\/down$/, label: () => 'down' },
   { method: 'POST', re: /^\/v1\/shutdown$/, label: () => 'stop the daemon' },
-  { method: 'POST', re: /^\/v1\/services\/([^/]+)\/([^/]+)$/, label: (m) => `${verb(m[2])} ${m[1]}` },
-  { method: 'POST', re: /^\/v1\/groups\/([^/]+)\/([^/]+)$/, label: (m) => `${verb(m[2])} group ${m[1]}` },
+  { method: 'POST', re: /^\/v1\/services\/([^/]+)\/([^/]+)$/, label: (m) => `${verb(m[2])} ${m[1]}`, action: (m) => verb(m[2]) },
+  { method: 'POST', re: /^\/v1\/groups\/([^/]+)\/([^/]+)$/, label: (m) => `${verb(m[2])} group ${m[1]}`, action: (m) => `${verb(m[2])} group` },
   { method: 'POST', re: /^\/v1\/infra\/check$/, label: () => 'check the containers' },
-  { method: 'POST', re: /^\/v1\/infra\/([^/]+)\/([^/]+)\/([^/]+)$/, label: (m) => `${m[3]} container ${m[1]}.${m[2]}` },
-  { method: 'DELETE', re: /^\/v1\/store\/([^/]+)\/([^/]+)$/, label: (m) => `remove ${m[1]}'s store entry ${m[2].slice(0, 12)}` },
-  { method: 'POST', re: /^\/v1\/commands\/([^/]+)$/, label: (m) => `run ${m[1]}` },
+  { method: 'POST', re: /^\/v1\/infra\/([^/]+)\/([^/]+)\/([^/]+)$/, label: (m) => `${m[3]} container ${m[1]}.${m[2]}`, action: (m) => `${m[3]} container ${m[2]}` },
+  { method: 'DELETE', re: /^\/v1\/store\/([^/]+)\/([^/]+)$/, label: (m) => `remove ${m[1]}'s store entry ${m[2].slice(0, 12)}`, action: (m) => `remove store entry ${m[2].slice(0, 12)}` },
+  { method: 'POST', re: /^\/v1\/commands\/([^/]+)$/, label: (m) => `run ${m[1]}`, action: () => 'run' },
   { method: 'POST', re: /^\/v1\/runs\/(\d+)\/cancel$/, label: (m) => `cancel run #${m[1]}` },
   { method: 'POST', re: /^\/v1\/lanes$/, label: () => 'start a lane' },
   { method: 'POST', re: /^\/v1\/lanes\/prune$/, label: () => 'remove the stopped lanes' },
@@ -56,13 +58,13 @@ const routes: { method: string; re: RegExp; label: (m: string[]) => string }[] =
   { method: 'POST', re: /^\/v1\/telemetry\/take$/, label: () => 'take the telemetry lines' },
 ];
 
-/** What a journal row says the change was. */
-export function journalLabel(e: JournalEntry): string {
+/** What a journal row says the change was; `bySubject`: beside a column naming what it acted on. */
+export function journalLabel(e: JournalEntry, bySubject = false): string {
   const path = treePath(e.path);
   for (const r of routes) {
     if (r.method !== e.method) continue;
     const m = r.re.exec(path);
-    if (m) return r.label(m.map(dec));
+    if (m) return ((bySubject && r.action) || r.label)(m.map(dec));
   }
   return `${e.method} ${e.path}`;
 }
