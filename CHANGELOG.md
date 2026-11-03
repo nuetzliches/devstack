@@ -62,6 +62,11 @@ stack's stop, and an Activity row names its subject once.
 
 ### Changed
 
+- **A pool's skill copied along with a worktree is no longer a conflict**
+  (ADR-0079, amended). A folder of a skill's name the hub did not write,
+  but whose files are exactly what it would write there, and of which git
+  tracks nothing, is taken into the hub's lock: updated and removed as its
+  own from then on. A copy that differs in any file stays a conflict.
 - **Stop is a button of its own** in a lane's header: red, beside Restart,
   no longer in Restart's menu (ADR-0072 point 5, amended).
 - **The folder scan looks one level deep and at git repositories only by

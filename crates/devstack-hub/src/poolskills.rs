@@ -12,8 +12,10 @@
 //!   may share a folder (`~/.agents/skills`): it is written once.
 //! - The hub writes only folders its lock names, with the content it wrote:
 //!   a skill of the user's own of the same name, or one the user changed,
-//!   stays as it is and is shown as a conflict. A skill no accepted set
-//!   names any more goes.
+//!   stays as it is and is shown as a conflict. A folder of the same name
+//!   that is, file for file, what the hub would write (a copy made along
+//!   with a worktree) and of which git tracks nothing, it takes into its
+//!   lock. A skill no accepted set names any more goes.
 //! - What changed is read when the pool's stream says so (`poolfeed`); the
 //!   dashboard hears the state on `/hub/events` (`skills`).
 //!
@@ -738,15 +740,9 @@ impl PoolSkills {
                     .installed
                     .iter()
                     .position(|i| &i.dir == dir && &i.name == name);
+                let foreign = mine.is_none() && path.exists();
                 match mine {
-                    None if path.exists() => {
-                        conflicts.push(Conflict {
-                            dir: dir.to_string_lossy().into_owned(),
-                            name: name.clone(),
-                            reason: "a skill of this name is there already, not installed by devstack: left as it is".into(),
-                        });
-                        continue;
-                    }
+                    None => {}
                     Some(i) => {
                         let now = tree(&path);
                         if now.as_deref() != Some(s.installed[i].tree.as_str()) {
@@ -763,7 +759,6 @@ impl PoolSkills {
                             continue;
                         }
                     }
-                    None => {}
                 }
                 // A file git tracks there is the repository's (ADR-0071).
                 if let Some(root) = &place.tree
@@ -777,11 +772,26 @@ impl PoolSkills {
                     });
                     continue;
                 }
-                let result = self
-                    .archive(pool, set, name, sha)
-                    .and_then(|bytes| install(dir, name, &bytes, place.tree.is_some()));
+                let ignored = place.tree.is_some();
+                let result = self.archive(pool, set, name, sha).and_then(|bytes| {
+                    if !foreign {
+                        return install(dir, name, &bytes, ignored).map(Some);
+                    }
+                    // A skill not written by the hub is taken over only when
+                    // it is, file for file, what the hub would write there
+                    // (a copy made along with the working tree, say).
+                    let have = tree(&path);
+                    let same =
+                        have.is_some() && have == Some(would_write(dir, name, &bytes, ignored)?);
+                    Ok(have.filter(|_| same))
+                });
                 match result {
-                    Ok(t) => {
+                    Ok(None) => conflicts.push(Conflict {
+                        dir: dir.to_string_lossy().into_owned(),
+                        name: name.clone(),
+                        reason: "a skill of this name is there already, not installed by devstack: left as it is".into(),
+                    }),
+                    Ok(Some(t)) => {
                         s.installed.retain(|i| !(&i.dir == dir && &i.name == name));
                         s.installed.push(Installed {
                             dir: dir.clone(),
@@ -1013,22 +1023,10 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// swapped in; in a working tree (`ignored`) with a `.gitignore` that
 /// ignores the folder. The hash of what was written.
 fn install(dir: &Path, name: &str, bytes: &[u8], ignored: bool) -> Result<String, String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let n = rand::random::<u32>();
     let fresh = dir.join(format!(".{name}.devstack-new-{n:08x}"));
     let old = dir.join(format!(".{name}.devstack-old-{n:08x}"));
-    let unpacked = devstack_node::skills::unpack(bytes, &fresh).and_then(|()| {
-        if ignored {
-            std::fs::write(fresh.join(".gitignore"), devstack_skills::IGNORE_ALL)
-                .map_err(|e| e.to_string())
-        } else {
-            Ok(())
-        }
-    });
-    if let Err(e) = unpacked {
-        let _ = std::fs::remove_dir_all(&fresh);
-        return Err(e);
-    }
+    unpack(dir, &fresh, bytes, ignored)?;
     let target = dir.join(name);
     if target.exists() {
         std::fs::rename(&target, &old).map_err(|e| {
@@ -1043,6 +1041,35 @@ fn install(dir: &Path, name: &str, bytes: &[u8], ignored: bool) -> Result<String
     }
     let _ = std::fs::remove_dir_all(&old);
     tree(&target).ok_or_else(|| format!("{}: not readable after writing", target.display()))
+}
+
+/// Unpack a skill into `into`, a new folder in `dir`, as `install` writes
+/// it; nothing of it is left on an error.
+fn unpack(dir: &Path, into: &Path, bytes: &[u8], ignored: bool) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let unpacked = devstack_node::skills::unpack(bytes, into).and_then(|()| {
+        if ignored {
+            std::fs::write(into.join(".gitignore"), devstack_skills::IGNORE_ALL)
+                .map_err(|e| e.to_string())
+        } else {
+            Ok(())
+        }
+    });
+    if unpacked.is_err() {
+        let _ = std::fs::remove_dir_all(into);
+    }
+    unpacked
+}
+
+/// The hash `install` would leave in `dir/name`, found by unpacking the
+/// skill beside it and taking that away again.
+fn would_write(dir: &Path, name: &str, bytes: &[u8], ignored: bool) -> Result<String, String> {
+    let n = rand::random::<u32>();
+    let probe = dir.join(format!(".{name}.devstack-probe-{n:08x}"));
+    unpack(dir, &probe, bytes, ignored)?;
+    let t = tree(&probe);
+    let _ = std::fs::remove_dir_all(&probe);
+    t.ok_or_else(|| format!("{}: not readable after writing", probe.display()))
 }
 
 /// Keep the skills of the working trees in step (ADR-0079): when a stack is
@@ -1351,6 +1378,86 @@ mod tests {
         hub.set_pool("default", Some(set(vec![bound, b])));
         assert!(!home.path().join(".claude/skills/work-issue").exists());
         assert!(other.join(".claude/skills/work-issue/SKILL.md").exists());
+    }
+
+    #[test]
+    fn a_copy_of_what_the_hub_would_write_is_taken_over() {
+        let (st, home, wt) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        let (mut hub, pool) = hub(st.path(), home.path());
+        let (shop, lane, copy) = (
+            wt.path().join("shop"),
+            wt.path().join("shop-lane"),
+            wt.path().join("shop-copy"),
+        );
+        let tree = |root: &Path| Tree {
+            root: root.to_path_buf(),
+            origin: Some("git@github.com:acme/shop.git".into()),
+        };
+        let trees = Arc::new(Mutex::new(vec![tree(&shop)]));
+        let t = trees.clone();
+        hub.trees = Box::new(move || t.lock().unwrap().clone());
+        let a = pool.put("shop-page", "v1");
+        hub.set_pool("default", Some(set(vec![a])));
+        hub.set_agent("claude-code", true).unwrap();
+        hub.accept("default", "core", true).unwrap();
+        let skill = |root: &Path| root.join(".claude/skills/shop-page");
+        assert!(skill(&shop).join("SKILL.md").is_file());
+
+        // Worktrees made with the copies of the main tree's ignored files:
+        // one unchanged, one changed, one whose copy git tracks.
+        let copy_to = |root: &Path| {
+            std::fs::create_dir_all(skill(root)).unwrap();
+            for f in ["SKILL.md", ".gitignore"] {
+                std::fs::copy(skill(&shop).join(f), skill(root).join(f)).unwrap();
+            }
+        };
+        copy_to(&lane);
+        copy_to(&copy);
+        let changed = wt.path().join("shop-changed");
+        copy_to(&changed);
+        std::fs::write(skill(&changed).join("notes.md"), "mine").unwrap();
+        trees
+            .lock()
+            .unwrap()
+            .extend([tree(&lane), tree(&copy), tree(&changed)]);
+        let c = copy.clone();
+        hub.tracked = Box::new(move |root, _| root == c);
+        hub.sync();
+        let v = hub.view();
+        let conflict = |root: &Path| {
+            v.conflicts
+                .iter()
+                .find(|c| Path::new(&c.dir).starts_with(root))
+                .map(|c| c.reason.clone())
+        };
+        assert_eq!(conflict(&lane), None, "{:?}", v.conflicts);
+        assert!(conflict(&changed).unwrap().contains("there already"));
+        assert!(conflict(&copy).unwrap().contains("git tracks"));
+        assert_eq!(v.sets[0].skills[0].trees.len(), 2);
+        // Leftovers of the comparison are gone.
+        let names: Vec<_> = std::fs::read_dir(lane.join(".claude/skills"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["shop-page"]);
+
+        // Taken over, the copy is updated and removed as the hub's own; the
+        // changed one stays.
+        let b = pool.put("shop-page", "v2");
+        hub.set_pool("default", Some(set(vec![b])));
+        assert!(
+            std::fs::read_to_string(skill(&lane).join("SKILL.md"))
+                .unwrap()
+                .ends_with("v2")
+        );
+        hub.set_pool("default", Some(Vec::new()));
+        assert!(!skill(&lane).exists());
+        assert!(skill(&changed).join("notes.md").is_file());
+        assert!(skill(&copy).join("SKILL.md").is_file());
     }
 
     /// A hub whose agents `claude-code` and `codex` are found, with their
