@@ -12,7 +12,8 @@
 // come live from its stream; the others' are read when the hub's list of
 // stacks changes or it says a stack's worktrees did (no polling, ADR-0021,
 // ADR-0078). A stack's menu (its
-// "…" button, or a right click) starts, stops and removes it.
+// "…" button, or a right click) starts, stops and removes it. A star marks a
+// favourite: favourites list first (ADR-0086).
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { api, paths, sharedId, v1 } from '@/api';
@@ -22,7 +23,17 @@ import { laneLabel, lastTab, MAIN, nodeLabel, runCounts, runsAnything, started }
 import { laneView, stackPage } from '@/lib/stackRoutes';
 import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
-import { forgetOpened, noteOpened, openedTimes, orderStacks, savedOrder, saveOrder, type StackOrder } from '@/lib/stackOrder';
+import {
+  forgetFavourite,
+  forgetOpened,
+  noteOpened,
+  openedTimes,
+  orderStacks,
+  savedOrder,
+  saveOrder,
+  useFavourites,
+  type StackOrder,
+} from '@/lib/stackOrder';
 import { useHub } from '@/stores/hub';
 import { connectedTo, usePool } from '@/stores/pool';
 import { useStack } from '@/stores/stack';
@@ -75,9 +86,11 @@ function toggle(id: string) {
 // By name or by last opened, never by state: a start or a stop moves nothing
 // in the list. Last opened is the snapshot taken when the page loaded or the
 // choice was made, so opening a stack does not move it under the pointer.
+// Favourites come first, and a star moves its stack at once.
 const order = ref<StackOrder>(savedOrder());
 const openedSnapshot = ref(openedTimes());
-const stacks = computed(() => orderStacks(hub.stacks, order.value, openedSnapshot.value));
+const favourites = useFavourites();
+const stacks = computed(() => orderStacks(hub.stacks, order.value, openedSnapshot.value, favourites.list()));
 // A stack shown is opened; the hub's list may arrive after the route.
 watch(
   () => [route.params.stack, hub.stacks.length] as const,
@@ -361,6 +374,7 @@ async function removeStack(s: StackEntry) {
   if (!res.ok) return;
   persist.forgetStack(s.id);
   forgetOpened(s.id);
+  forgetFavourite(s.id);
   delete known.value[s.id];
   if (isCurrent(s)) void router.push('/');
 }
@@ -372,6 +386,10 @@ async function copyPath(s: StackEntry) {
   } catch {
     ui.toast('info', s.repo, 'Copying is not allowed here.');
   }
+}
+function toggleFavourite(s: StackEntry) {
+  closeMenu();
+  favourites.toggle(s.id);
 }
 </script>
 
@@ -427,6 +445,18 @@ async function copyPath(s: StackEntry) {
             <span v-if="!s.running && s.no_file" class="small not-set-up" data-testid="sidebar-stack-no-file">not set up</span>
             <span v-else-if="!s.running" class="faint small">offline</span>
             <span v-else-if="stackIdle(s)" class="faint small" data-testid="sidebar-stack-idle">idle</span>
+          </button>
+          <button
+            type="button"
+            class="fav-btn"
+            :class="{ on: favourites.has(s.id) }"
+            :aria-pressed="favourites.has(s.id)"
+            :aria-label="favourites.has(s.id) ? `Remove ${s.name} from favourites` : `Add ${s.name} to favourites`"
+            :title="favourites.has(s.id) ? 'Remove from favourites' : 'Add to favourites: listed first (this browser only)'"
+            data-testid="sidebar-stack-fav"
+            @click.stop="favourites.toggle(s.id)"
+          >
+            <Icon name="star" :size="14" />
           </button>
           <button
             type="button"
@@ -599,6 +629,9 @@ async function copyPath(s: StackEntry) {
         </button>
         <button v-else type="button" class="opt" role="menuitem" data-testid="sidebar-menu-stop" @click="stopStack(menu!.s)"><Icon name="power" :size="14" /> Stop…</button>
         <button type="button" class="opt" role="menuitem" @click="copyPath(menu!.s)"><Icon name="copy" :size="14" /> Copy path</button>
+        <button type="button" class="opt" role="menuitem" data-testid="sidebar-menu-fav" @click="toggleFavourite(menu!.s)">
+          <Icon name="star" :size="14" /> {{ favourites.has(menu.s.id) ? 'Remove from favourites' : 'Add to favourites' }}
+        </button>
         <div class="sep" role="separator" />
         <button
           type="button"
@@ -645,6 +678,7 @@ async function copyPath(s: StackEntry) {
   flex: 1;
 }
 .head-btn,
+.fav-btn,
 .more-btn {
   display: grid;
   place-items: center;
@@ -659,21 +693,37 @@ async function copyPath(s: StackEntry) {
 }
 .head-btn:hover,
 .head-btn.open,
+.fav-btn:hover,
 .more-btn:hover,
 .more-btn.open {
   background: var(--surface-hover);
   color: var(--text);
 }
-/* The "…" shows on hover and focus; a right click opens the same menu. */
+/* The "…" and the star show on hover and focus; a right click opens the
+   same menu. A favourite's star always shows, filled. */
+.fav-btn,
 .more-btn {
   opacity: 0;
 }
+.fav-btn {
+  width: 20px;
+}
+.stack-row:hover .fav-btn,
 .stack-row:hover .more-btn,
+.fav-btn:focus-visible,
+.fav-btn.on,
 .more-btn:focus-visible,
 .more-btn.open {
   opacity: 1;
 }
+.fav-btn.on {
+  color: var(--warn);
+}
+.fav-btn.on :deep(svg) {
+  fill: currentColor;
+}
 @media (hover: none) {
+  .fav-btn,
   .more-btn {
     opacity: 1;
   }

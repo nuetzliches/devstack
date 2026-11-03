@@ -9,6 +9,14 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **Favourite stacks** (#377, ADR-0086): a star in a stack's sidebar row,
+  or "Add to favourites" in its menu, marks it; favourites list first in
+  the sidebar and in the stack switcher, the others below, each part in
+  the chosen order. Marking moves the stack at once. Favourites live in
+  the browser's `localStorage`, as the order does.
+
 ## [0.35.0] - 2026-11-03
 
 A connection to a shared lane is to the lane, not to its lease: it

@@ -145,4 +145,40 @@ describe('the sidebar', () => {
     expect((persist.get<Record<string, number>>('sidebar.opened') ?? {}).ab12).toBeGreaterThan(10);
     app.unmount();
   });
+
+  it('lists a favourite first at once, marked by its star or its menu (ADR-0086)', async () => {
+    const zoo: StackEntry = { ...entry, id: 'cd34', name: 'zoo', repo: '/src/zoo', running: false, daemon: null };
+    fake.on('/hub/stacks/cd34/worktrees', ok([]));
+    await router.push('/pool');
+    const hub = useHub();
+    await hub.init();
+    fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [zoo, entry] });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const app = createApp(Sidebar);
+    app.use(router);
+    app.mount(el);
+    await settle();
+    const names = () => [...el.querySelectorAll('[data-testid="sidebar-stack"] .label')].map((x) => x.textContent?.trim());
+    const star = (id: string) => q(el, `[data-stack="${id}"] [data-testid="sidebar-stack-fav"]`);
+    expect(names()).toEqual(['shop', 'zoo']);
+
+    star('cd34').click();
+    await settle();
+    expect(names()).toEqual(['zoo', 'shop']);
+    expect(star('cd34').getAttribute('aria-pressed')).toBe('true');
+    expect(persist.get('sidebar.favourites')).toEqual(['cd34']);
+
+    // The menu says what the star does.
+    q(el, '[data-stack="cd34"] [data-testid="sidebar-stack-menu"]').click();
+    await settle();
+    const entryFav = document.querySelector<HTMLElement>('[data-testid="sidebar-menu-fav"]')!;
+    expect(entryFav.textContent?.trim()).toBe('Remove from favourites');
+    entryFav.click();
+    await settle();
+    expect(names()).toEqual(['shop', 'zoo']);
+    expect(star('cd34').getAttribute('aria-pressed')).toBe('false');
+    expect(persist.get('sidebar.favourites')).toEqual([]);
+    app.unmount();
+  });
 });

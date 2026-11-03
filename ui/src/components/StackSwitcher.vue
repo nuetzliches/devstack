@@ -7,6 +7,7 @@ import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import { laneLabel, lastTab, MAIN, orderLanes } from '@/lib/lanes';
 import { laneView, stackPage } from '@/lib/stackRoutes';
+import { useFavourites } from '@/lib/stackOrder';
 import type { LaneView } from '@/api/types';
 import Icon from './icons/Icon.vue';
 import AddStackDialog from './AddStackDialog.vue';
@@ -29,7 +30,12 @@ function addStack() {
   adding.value = true;
 }
 
-const stacks = computed(() => [...hub.stacks].sort((a, b) => Number(b.running) - Number(a.running) || a.name.localeCompare(b.name)));
+// The favourites first, as in the sidebar (ADR-0086); then the running ones.
+const favourites = useFavourites();
+const fav = (id: string) => (favourites.has(id) ? 0 : 1);
+const stacks = computed(() =>
+  [...hub.stacks].sort((a, b) => fav(a.id) - fav(b.id) || Number(b.running) - Number(a.running) || a.name.localeCompare(b.name)),
+);
 const current = computed(() => hub.entry(stack.id));
 const currentName = computed(() => current.value?.name ?? stack.view?.name ?? 'Select a stack');
 
@@ -136,6 +142,7 @@ function onKey(e: KeyboardEvent) {
             <span class="sdot" :class="!hub.reachable ? 'unknown' : s.running ? 'on' : 'off'" aria-hidden="true" />
             <div class="grow">
               <div class="row">
+                <Icon v-if="favourites.has(s.id)" name="star" :size="12" class="fav" label="Favourite" data-testid="stack-option-fav" />
                 <span class="opt-name">{{ s.name }}</span>
                 <span v-if="hub.reachable" class="pill sm" :class="s.running ? 'ok' : ''">{{ s.running ? 'running' : 'offline' }}</span>
               </div>
@@ -284,6 +291,10 @@ ul {
 }
 .opt.current {
   background: var(--accent-soft);
+}
+.fav {
+  color: var(--warn);
+  fill: currentColor;
 }
 .opt-name {
   font-weight: 600;
