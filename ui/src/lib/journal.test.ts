@@ -18,6 +18,14 @@ describe('journal', () => {
     expect(journalLabel(e('/v1/groups/backend/rebuild'))).toBe('rebuild group backend');
   });
 
+  it('leaves out what a column beside it names', () => {
+    expect(journalLabel(e('/v1/lanes/feat/v1/services/api/restart', { lane: 'feat' }), true)).toBe('restart');
+    expect(journalLabel(e('/v1/store/web/1cb852a0a8ab4f', { method: 'DELETE' }), true)).toBe('remove store entry 1cb852a0a8ab');
+    expect(journalLabel(e('/v1/infra/db/postgres/restart'), true)).toBe('restart container postgres');
+    expect(journalLabel(e('/v1/commands/seed'), true)).toBe('run');
+    expect(journalLabel(e('/v1/up'), true)).toBe('up');
+  });
+
   it('shows a route it does not know as it came', () => {
     expect(journalLabel(e('/v1/something/new'))).toBe('POST /v1/something/new');
     expect(journalLabel(e('/v1/up', { method: 'DELETE' }))).toBe('DELETE /v1/up');

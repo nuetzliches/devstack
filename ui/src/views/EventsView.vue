@@ -88,8 +88,8 @@ type Desc = { icon: IconName; tone: Tone; title: string; text: string; detail?: 
 
 function describeJournal(j: JournalEntry): Desc {
   const by = viaText(j.via);
-  if (j.status >= 400) return { icon: 'xCircle', tone: 'danger', title: journalLabel(j), text: `refused (${j.status}) · ${by}`, detail: j.error ?? null };
-  return { icon: j.via === 'auto' ? 'zap' : 'history', tone: 'accent', title: journalLabel(j), text: by };
+  if (j.status >= 400) return { icon: 'xCircle', tone: 'danger', title: journalLabel(j, true), text: `refused (${j.status}) · ${by}`, detail: j.error ?? null };
+  return { icon: j.via === 'auto' ? 'zap' : 'history', tone: 'accent', title: journalLabel(j, true), text: by };
 }
 
 function describe(r: Row): Desc {
@@ -315,6 +315,13 @@ function describe(r: Row): Desc {
 }
 .who-link {
   color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+.who-link:hover {
+  color: var(--accent-text);
+  text-decoration-color: currentColor;
 }
 .subj {
   font-weight: 600;
