@@ -564,7 +564,6 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/stacks/{id}/worktrees/remove", post(worktree_remove))
         .route("/hub/stacks/{id}/fetch", post(stack_fetch))
         // No route writes a file of a repository (ADR-0071).
-        .route("/hub/stacks/{id}/skills", get(stack_skills))
         .route("/hub/stacks/{id}/upgrade", get(stack_upgrade))
         .route("/hub/stacks/{id}/mcp", get(stack_mcp))
         .route("/hub/stacks/{id}/api/{*rest}", any(forward))
@@ -1765,27 +1764,8 @@ async fn stack_fetch(State(s): State<AppState>, Path(id): Path<String>) -> Respo
     .await
 }
 
-/// The agent skills `devstack skills install` wrote into the stack's
-/// repository, held against what this devstack would write, and the
-/// devstack that wrote them.
-fn skills_view(e: &StackEntry) -> serde_json::Value {
-    let i = devstack_skills::installed(&e.file);
-    let current = devstack_config::VERSION;
-    // Written by a newer devstack (a teammate's): installing would go back.
-    let ahead = i.from.as_deref().is_some_and(|f| {
-        devstack_config::version_order(f) > devstack_config::version_order(current)
-    });
-    serde_json::json!({
-        "found": i.found,
-        "outdated": i.outdated,
-        "from": i.from,
-        "current": current,
-        "ahead": ahead,
-    })
-}
-
 /// How far the stack file is behind this devstack (ADR-0046): apart from the
-/// agent skills, which a refresh brings up to date without the file.
+/// agent skills, which the hub keeps current without the file (ADR-0079).
 struct Upgrade {
     /// `[stack] reviewed`.
     reviewed: Option<String>,
@@ -1870,17 +1850,6 @@ async fn stack_mcp(State(s): State<AppState>, Path(id): Path<String>) -> Respons
             "files": files,
         }))
         .into_response(),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    }
-}
-
-/// `GET /hub/stacks/{id}/skills`.
-async fn stack_skills(State(s): State<AppState>, Path(id): Path<String>) -> Response {
-    let Some(e) = entry(&s, &id) else {
-        return err(StatusCode::NOT_FOUND, "no such stack");
-    };
-    match tokio::task::spawn_blocking(move || skills_view(&e)).await {
-        Ok(v) => Json(v).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -2038,11 +2007,6 @@ fn write_prompt(s: &AppState, q: &PromptQuery) -> Result<Written, Refusal> {
         "mcp" => {
             let e = stack()?;
             let text = prompts::text(&Prompt::Mcp { repo: &e.repo });
-            (text, e.repo, e.file)
-        }
-        "skills" => {
-            let e = stack()?;
-            let text = prompts::text(&Prompt::Skills { repo: &e.repo });
             (text, e.repo, e.file)
         }
         "start-failed" => {

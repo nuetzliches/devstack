@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref, shallowRef, triggerRef, watch } from 'vue';
 import { api, paths, sharedRef, v1, type GroupAction, type RestartMode, type ServiceAction, type StreamState, type Subscription } from '@/api';
-import type { Branches, JournalEntry, LaneView, Point, Pruned, Run, ServiceView, SkillsState, StackEvent, StackView, UpgradeState, UsageReport, McpState } from '@/api/types';
+import type { Branches, JournalEntry, LaneView, Point, Pruned, Run, ServiceView, StackEvent, StackView, UpgradeState, UsageReport, McpState } from '@/api/types';
 import { laneLabel, MAIN, restartLanesText, restartPlan, samePath } from '@/lib/lanes';
 import type { LaneAction } from '@/lib/laneActions';
 import { act } from '@/lib/actions';
@@ -305,10 +305,8 @@ export const useStack = defineStore('stack', () => {
     lanesOf.value = null;
     goneLane.value = null;
     branches.value = null;
-    skills.value = null;
     upgrade.value = null;
     mcp.value = null;
-    void loadSkills();
     void loadUpgrade();
     void loadMcp();
     persist.saveLastStack(next);
@@ -575,23 +573,6 @@ export const useStack = defineStore('stack', () => {
   }
 
   /** Throw a stopped lane's data away, here and on its nodes (ADR-0038): its next start is fresh. */
-  // ------------------------------------------------------------ agent skills
-
-  /** The agent skills in the stack's repository, against this devstack (`GET /hub/stacks/{id}/skills`). */
-  const skills = shallowRef<SkillsState | null>(null);
-
-  async function loadSkills() {
-    const sid = id.value;
-    if (!sid || foreign.value) return;
-    try {
-      const res = await api().request<SkillsState>('GET', paths.skills(sid));
-      const b = res.body;
-      if (sid === id.value && res.ok && b && typeof b === 'object' && Array.isArray(b.outdated)) skills.value = b;
-    } catch {
-      // nothing shown; the next visit asks again
-    }
-  }
-
 
 
   /** How far the stack file is behind this devstack (`GET /hub/stacks/{id}/upgrade`): `[stack] reviewed`, not the skills. */
@@ -1319,8 +1300,6 @@ export const useStack = defineStore('stack', () => {
     loadMain,
     ending,
     sharedLane,
-    skills,
-    loadSkills,
     upgrade,
     loadUpgrade,
     fileProblem,

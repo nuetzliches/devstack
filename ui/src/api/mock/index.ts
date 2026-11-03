@@ -6,7 +6,7 @@
 //   ?mock=configchanged  the shop stack's file changed since it started
 //   ?mock=newer      a newer release (0.5.0) is out
 //   ?mock=hubtrouble the hub's last release check failed, and devstack's name is not registered for notifications
-//   ?mock=skills     shop's stack file and agent skills are from an older devstack, crm's skills miss a stack file change
+//   ?mock=skills     shop's stack file has no `reviewed`; its agent skills name an older devstack
 //   ?mock=startfailed  the docs stack's last start from the dashboard failed
 //   Add a stack with a path containing "broken": a stack file that does not load
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
@@ -204,8 +204,8 @@ class MockHub {
   releaseError: string | null = null;
   /** `?mock=notices`: a lane whose worktree is missing (ADR-0050). */
   laneNotices = false;
-  /** The agent skills in each stack's repository: the devstack that wrote them, and whether they differ from what it would write now. */
-  skills: Record<string, { from: string; outdated: boolean }> = {};
+  /** The devstack the agent skills in each stack's repository name: the upgrade's `from` without `reviewed`. */
+  skills: Record<string, { from: string }> = {};
   /** `[stack] reviewed` of each stack's file (`null`: not set; not listed: this devstack). */
   reviewed: Record<string, string | null> = {};
   /** `?mock=badfile`: the stack whose file does not load. */
@@ -247,12 +247,11 @@ class MockHub {
     if (q.includes('nofile')) docs.entry.no_file = true;
     if (q.includes('badfile')) this.brokenFile = docs;
     if (q.includes('startfailed')) docs.entry.start_error = 'Error: port 4000 (site) is taken by another process (node.exe, pid 4242)\n  devstack doctor names it; stop it or change the port in devstack.toml';
-    // `?mock=skills`: shop was set up with an older devstack, crm's stack file changed since.
+    // `?mock=skills`: shop was set up with an older devstack.
     // `?mock=worktrees`: a worktree appears in docs (not running) after 4 s, as one made by `git worktree add` elsewhere.
     if (q.includes('worktrees')) setTimeout(() => this.addWorktree(docs.entry.id, docs.entry.repo, 'hotfix', 'hotfix/footer'), 4000);
     if (q.includes('skills')) this.reviewed[shop.entry.id] = null;
-    this.skills[shop.entry.id] = q.includes('skills') ? { from: '0.1.4', outdated: true } : { from: MOCK_VERSION, outdated: false };
-    this.skills[crm.entry.id] = { from: MOCK_VERSION, outdated: q.includes('skills') };
+    this.skills[shop.entry.id] = { from: q.includes('skills') ? '0.1.4' : MOCK_VERSION };
     if (q.includes('notices')) {
       this.laneNotices = true;
       shop.view.notices = [
@@ -808,7 +807,6 @@ export class MockTransport implements Transport {
         'lane-file': `The git worktree ${url.searchParams.get('path')} has no devstack stack file of its own.`,
         'lane-image': `The devstack lane of the git worktree ${url.searchParams.get('path')} cannot start on another machine of the devstack pool: its stack file names no lane image.`,
         mcp: `Register devstack's MCP server for the coding agents of ${target}.`,
-        skills: `Refresh the devstack agent skills of the repository at ${target}.`,
       };
       if (!kind || !what[kind]) return json(400, { error: `no prompt \`${kind}\`` });
       return json(200, { text: `${what[kind]}
@@ -834,12 +832,6 @@ export class MockTransport implements Transport {
     if (!stack) return json(404, { error: 'unknown stack' });
     const rest = m[2] ?? '';
 
-    // The hub writes no file of a repository (ADR-0071): the skills are read only.
-    if (rest === '/skills' && method === 'GET') {
-      const k = hub.skills[stack.entry.id];
-      const names = ['devstack', 'devstack-config'];
-      return json(200, { found: k ? names : [], outdated: k?.outdated ? names : [], from: k?.from ?? null, current: MOCK_VERSION, ahead: false });
-    }
     if (rest === '/upgrade' && method === 'GET') {
       const r = hub.reviewed[stack.entry.id];
       const reviewed = r === undefined ? MOCK_VERSION : r;

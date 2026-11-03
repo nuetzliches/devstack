@@ -72,7 +72,6 @@ export const paths = {
   worktreeRemove: (stack: string) => `/hub/stacks/${enc(stack)}/worktrees/remove`,
   laneStart: (stack: string) => `/hub/stacks/${enc(stack)}/lanes/start`,
   fetch: (stack: string) => `/hub/stacks/${enc(stack)}/fetch`,
-  skills: (stack: string) => `/hub/stacks/${enc(stack)}/skills`,
   upgrade: (stack: string) => `/hub/stacks/${enc(stack)}/upgrade`,
   mcp: (stack: string) => `/hub/stacks/${enc(stack)}/mcp`,
   pool: '/hub/pool',

@@ -696,9 +696,6 @@ pub fn print_status_for(stack: &Value, stack_file: &Path) {
     if let Some(n) = c.as_ref().and_then(links_note) {
         println!("\n{n}");
     }
-    if let Some(n) = crate::skills::outdated_note(stack_file) {
-        println!("\n{n}");
-    }
     let lane = c.as_ref().and_then(Client::lane).filter(|l| *l != "-");
     println!(
         "\n{}",

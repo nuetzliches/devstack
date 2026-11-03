@@ -185,7 +185,7 @@ shows *no MCP* in the stack's head while neither has it):
 | `devstack status`: another `!` line (a lane's worktree missing, a worktree without a lane, a lane's copy behind, `prepare` not linked, the file watcher) | a condition that holds until it is fixed; the line says what follows from it. Tell the user; `devstack logs --daemon --grep <lane>` has the details |
 | a service exits right after start | `devstack logs <service> -n 200`; every start has its own log in `.devstack/logs/<service>/run-*.log` |
 | dashboard: "hub not reachable" | `devstack ui` (or the "Start hub" button once `devstack hub install` ran; macOS has none yet: `devstack hub start`) |
-| this skill says it is outdated | `devstack skills install` refreshes it from the installed devstack and this stack file |
+| this skill names services or commands the stack file no longer has | the devstack hub writes it again within seconds of a change; without a running hub, `devstack skills install` refreshes it. `devstack skills check` fails when git still tracks it: the hub leaves such a copy alone, and the `git rm -r --cached` it prints takes it out of git |
 | dashboard: "runs devstack X, Y is installed" | the stack still runs the old daemon: "Restart stack" there, or `devstack down` + `devstack up` |
 | a job `failed` after a long wait | jobs end after 30 minutes unless the stack file sets `timeout`; read its log, then ask the user before raising it (skill `devstack-config`) |
 | `devstack down` names services that did not stop | they still run: `devstack status`, then `devstack stop <service>`; ask before ending a process yourself |

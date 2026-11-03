@@ -47,9 +47,6 @@ pub enum Prompt<'a> {
     },
     /// No agent configuration registers `devstack mcp` for the repository.
     Mcp { repo: &'a Path },
-    /// The generated agent skills differ from what this devstack writes
-    /// for the stack file (ADR-0071: the dashboard does not write them).
-    Skills { repo: &'a Path },
     /// The last `devstack up` the hub ran failed.
     StartFailed {
         name: &'a str,
@@ -196,18 +193,6 @@ pub fn text(p: &Prompt) -> String {
 4. {careful}",
             repo = display(repo),
         ),
-        Prompt::Skills { repo } => format!(
-            "Refresh the devstack agent skills of the repository at {repo}: they no longer match devstack {v} or its stack file.
-
-{about}
-
-1. `devstack --version` must say {v}; if it says another, run `devstack update` first and tell me.
-2. Run `devstack skills install` in the repository. It rewrites the generated skills only (their marker line says so); a skill the project wrote itself stays.
-3. {untrack}
-4. Check the project's own skills, CLAUDE.md and AGENTS.md for anything that now contradicts the generated ones, and tell me what you would change there.
-5. {careful}",
-            repo = display(repo),
-        ),
         Prompt::StartFailed {
             name,
             repo,
@@ -311,7 +296,6 @@ mod tests {
                 file: Path::new("/src/shop.worktrees/feat-x/devstack.toml"),
             }),
             text(&Prompt::Mcp { repo }),
-            text(&Prompt::Skills { repo }),
             text(&Prompt::LaneImage {
                 tree: Path::new("/src/shop.worktrees/feat-x"),
                 branch: Some("feat/x"),
@@ -395,11 +379,10 @@ mod tests {
             "every one about the stack file links the reference"
         );
         assert!(p[8].contains("/skills/devstack/SKILL.md"), "the tools");
-        assert!(p[10].contains("feat-x (branch feat/x) cannot start on another machine"));
-        assert!(p[10].contains("devstack.toml names no lane image"));
+        assert!(p[9].contains("feat-x (branch feat/x) cannot start on another machine"));
+        assert!(p[9].contains("devstack.toml names no lane image"));
         assert!(
-            p[10].contains(&reference)
-                && p[10].contains("Ask me before starting the lane on a node")
+            p[9].contains(&reference) && p[9].contains("Ask me before starting the lane on a node")
         );
     }
 }

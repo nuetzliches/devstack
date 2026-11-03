@@ -276,14 +276,6 @@ describe('stack store', () => {
     expect(fake.requests.filter((r) => r.path === '/hub/stacks/shop/worktrees').at(-1)?.body).toEqual({ branch: 'feat/login', new: 'feat/next' });
   });
 
-  it('asks for the agent skills of the stack shown, and writes none (ADR-0071)', async () => {
-    const old = { found: ['devstack'], outdated: ['devstack'], from: '0.9.1', current: '0.9.8', ahead: false };
-    fake.on('/hub/stacks/shop/skills', () => ok(old));
-    const stack = await shownStack();
-    await vi.waitFor(() => expect(stack.skills?.from).toBe('0.9.1'));
-    expect(fake.requests.filter((r) => r.path === '/hub/stacks/shop/skills').map((r) => r.method)).toEqual(['GET']);
-  });
-
   it('asks how far the stack file is behind, apart from the skills', async () => {
     fake.on('/hub/stacks/shop/upgrade', () => ok({ reviewed: null, from: '0.9.1', current: '0.9.8', behind: true }));
     const stack = await shownStack();

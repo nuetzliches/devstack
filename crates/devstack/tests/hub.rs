@@ -611,21 +611,14 @@ fn a_stack_is_added_or_drafted_from_the_dashboard() {
         std::thread::sleep(Duration::from_millis(200));
     }
 
-    // Its agent skills: none yet. The dashboard does not write them
-    // (ADR-0071): the hub has no route that does.
+    // Its agent skills: the dashboard neither writes them (ADR-0071) nor
+    // reports them (ADR-0087): the hub keeps them current itself.
     let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
         .as_str()
         .unwrap()
         .to_string();
-    let skills = format!("/hub/stacks/{id}/skills");
-    let (s, _, body) = get(p, &skills, &with);
-    assert_eq!(s, 200, "{body}");
-    assert!(
-        body.contains("\"found\":[]") && body.contains("\"from\":null"),
-        "{body}"
-    );
-    let (s, _, _) = post(&skills, "", true);
-    assert_eq!(s, 405, "no route writes the skills");
+    let (s, _, _) = post(&format!("/hub/stacks/{id}/skills"), "", true);
+    assert!(s == 404 || s == 405, "no route writes the skills: {s}");
     assert!(!shop.join(".claude/skills").exists());
 
     // An empty folder: no draft is written either; the setup prompt has an
@@ -649,10 +642,9 @@ fn a_stack_is_added_or_drafted_from_the_dashboard() {
     );
     assert_eq!(s, 200, "{body}");
     assert!(body.contains("devstack init"), "{body}");
-    // The skills' own prompt, for when only they are behind.
+    // No prompt refreshes the skills: the hub does (ADR-0087).
     let (s, _, body) = get(p, &format!("/hub/prompt?kind=skills&stack={id}"), &with);
-    assert_eq!(s, 200, "{body}");
-    assert!(body.contains("devstack skills install"), "{body}");
+    assert_eq!(s, 400, "{body}");
 
     // MCP upstreams (ADR-0069): per user, kept without a secret; the page
     // needs its session and Origin for them.

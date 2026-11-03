@@ -541,9 +541,6 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             if let Some(n) = client::lanes_note(&c) {
                 text.push_str(&format!("\n{n}\n"));
             }
-            if let Some(n) = crate::skills::outdated_note(file) {
-                text.push_str(&format!("\n{n}\n"));
-            }
             let lane = c.lane().filter(|l| *l != "-");
             text.push_str(&format!("\n{}\n", dashboard_line(file, lane)));
             Ok(text)
