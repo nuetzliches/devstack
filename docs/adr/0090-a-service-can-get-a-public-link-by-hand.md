@@ -1,6 +1,6 @@
 # ADR-0090: A service can get a public link, by its owner's hand: a Cloudflare Quick Tunnel to its fixed port
 
-- **Status:** Accepted (card in the pull request); built
+- **Status:** Accepted (card in the pull request); built; extended by [ADR-0091](0091-public-links-through-the-users-own-named-tunnel.md) (stable addresses through the user's own named tunnel)
 - **Date:** 2026-11-03
 - **Deciders:** project owner
 - **Related:** [ADR-0035](0035-lanes-can-be-shared-with-the-pool.md) (sharing with the pool, which rejected links with a secret for *pool members*; a public link is not a share), [ADR-0043](0043-a-dev-servers-fixed-port-is-devstacks.md) and [ADR-0010](0010-promotion-mechanism.md) (the fixed port it goes to), [ADR-0009](0009-the-daemon-owns-every-process-tree.md) (the daemon owns `cloudflared`), [ADR-0019](0019-control-api-security.md), [ADR-0067](0067-a-change-at-runtime-says-who-made-it.md) (the journal), [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md)
@@ -70,7 +70,7 @@ As built:
   dashboard says so before.
 - A front end that calls its API on `localhost:<port>` works from outside
   only when it proxies the API itself; several origins behind one address
-  need a named tunnel (an account, step 2 of the proposal), not built.
+  need a named tunnel (an account), built by ADR-0091.
 - A lane on a node gets no link yet: its daemon runs on the node, and the
   link would leave from there (step 3, the node's policy, ADR-0033).
 

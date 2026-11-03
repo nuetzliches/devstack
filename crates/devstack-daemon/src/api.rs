@@ -81,6 +81,10 @@ fn routes(state: AppState) -> axum::Router {
         .route("/v1/down", post(down))
         .route("/v1/shutdown", post(shutdown))
         .route(
+            "/v1/public-link",
+            post(public_links_open).delete(public_links_close),
+        )
+        .route(
             "/v1/services/{name}/public-link",
             post(public_link_open).delete(public_link_close),
         )
@@ -531,7 +535,7 @@ async fn service_action(
 /// `public_link` `starting` until the tunnel is registered.
 async fn public_link_open(State(s): State<AppState>, Path(name): Path<String>) -> Response {
     let sup = s.sup.clone();
-    let own = [s.port, hub_port()];
+    let own = [s.port, crate::namedtunnel::hub_port()];
     match tokio::task::spawn_blocking(move || sup.open_public_link(&name, &own)).await {
         Ok(Ok(())) => Json(s.sup.view()).into_response(),
         Ok(Err(e)) if e.starts_with("no service") => err(StatusCode::NOT_FOUND, e),
@@ -553,12 +557,28 @@ async fn public_link_close(State(s): State<AppState>, Path(name): Path<String>) 
     }
 }
 
-/// The hub's port, as the hub reads it (`DEVSTACK_HUB_PORT`, else 4250).
-fn hub_port() -> u16 {
-    std::env::var("DEVSTACK_HUB_PORT")
-        .ok()
-        .and_then(|p| p.trim().parse().ok())
-        .unwrap_or(4250)
+/// `POST /v1/public-link`: open a public link to every service of the tree
+/// that may have one and runs ("make the lane public"); `409` with the
+/// reasons when none opened.
+async fn public_links_open(State(s): State<AppState>) -> Response {
+    let sup = s.sup.clone();
+    let own = [s.port, crate::namedtunnel::hub_port()];
+    match tokio::task::spawn_blocking(move || sup.open_public_links(&own)).await {
+        Ok((opened, failed)) if opened.is_empty() && !failed.is_empty() => {
+            err(StatusCode::CONFLICT, failed.join("\n"))
+        }
+        Ok(_) => Json(s.sup.view()).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `DELETE /v1/public-link`: close every public link of the tree.
+async fn public_links_close(State(s): State<AppState>) -> Response {
+    let sup = s.sup.clone();
+    match tokio::task::spawn_blocking(move || sup.close_public_links()).await {
+        Ok(()) => Json(s.sup.view()).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 #[allow(clippy::result_large_err)] // the error is the answer itself

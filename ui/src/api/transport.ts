@@ -178,6 +178,8 @@ export const v1 = {
   builds: (service: string, limit = 50) => `/v1/services/${enc(service)}/builds?limit=${limit}`,
   keptLog: (service: string, file: string, tail = 2000) => `/v1/services/${enc(service)}/logs?file=${enc(file)}&tail=${tail}`,
   serviceAction: (service: string, action: ServiceAction) => `/v1/services/${enc(service)}/${action}`,
+  /** POST opens a public link to every service of the tree that may have one, DELETE closes them. */
+  publicLinks: '/v1/public-link',
   /** POST opens a service's public link, DELETE closes it. */
   publicLink: (service: string) => `/v1/services/${enc(service)}/public-link`,
   groupAction: (group: string, action: GroupAction) => `/v1/groups/${enc(group)}/${action}`,

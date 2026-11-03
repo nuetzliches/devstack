@@ -73,6 +73,7 @@ fn hub_send(method: &str, path: &str, body: Option<Value>) -> Result<Value> {
             .header("Content-Type", "application/json")
             .send(b.to_string())?,
         ("POST", _) => a.post(&url).header("Authorization", &auth).send_empty()?,
+        ("DELETE", _) => a.delete(&url).header("Authorization", &auth).call()?,
         _ => bail!("unsupported request {method} {path}"),
     };
     let text = r.body_mut().read_to_string()?;
@@ -81,6 +82,83 @@ fn hub_send(method: &str, path: &str, body: Option<Value>) -> Result<Value> {
         bail!("{}", v["error"].as_str().unwrap_or(&text));
     }
     Ok(v)
+}
+
+/// `devstack tunnel --setup <file> --domain <d>`: hand the named tunnel's
+/// credentials to the hub, which keeps them in the keychain (ADR-0090).
+pub fn tunnel_setup(credentials: &Path, domain: &str) -> Result<()> {
+    let text = std::fs::read_to_string(credentials)
+        .map_err(|e| anyhow!("{}: {e}", credentials.display()))?;
+    let v = hub_send(
+        "PUT",
+        "/hub/public-links/tunnel",
+        Some(serde_json::json!({ "credentials": text, "domain": domain })),
+    )?;
+    print_tunnel(&v);
+    println!(
+        "\nThe credentials are in the hub's {} now; {} may be deleted.",
+        v["credentials_in"].as_str().unwrap_or("keychain"),
+        credentials.display()
+    );
+    println!(
+        "Public links opened from now on answer at https://<service>-<lane>-<stack>.{}",
+        v["domain"].as_str().unwrap_or(domain)
+    );
+    Ok(())
+}
+
+/// `devstack tunnel --remove-setup`.
+pub fn tunnel_remove() -> Result<()> {
+    hub_send("DELETE", "/hub/public-links/tunnel", None)?;
+    println!(
+        "no named tunnel: public links are Quick Tunnels again (links open now keep their address until closed)"
+    );
+    Ok(())
+}
+
+/// `devstack tunnel`: the named tunnel and what it carries.
+pub fn tunnel_show() -> Result<()> {
+    print_tunnel(&hub_get("/hub/public-links")?);
+    Ok(())
+}
+
+fn print_tunnel(v: &Value) {
+    if v["configured"] != true {
+        println!(
+            "no named tunnel set up: public links are Cloudflare Quick Tunnels (random addresses)"
+        );
+        println!(
+            "set one up with `devstack tunnel --setup <credentials.json> --domain <domain>` (see docs/stack-file.md, \"Public links\")"
+        );
+        return;
+    }
+    let c = &v["connector"];
+    println!(
+        "named tunnel {} for *.{}",
+        v["tunnel_id"].as_str().unwrap_or("?"),
+        v["domain"].as_str().unwrap_or("?")
+    );
+    match c["state"].as_str() {
+        Some("failed") => println!("connector: failed: {}", c["error"].as_str().unwrap_or("?")),
+        Some(s) => println!("connector: {s}"),
+        None => {}
+    }
+    let links = v["links"].as_array().cloned().unwrap_or_default();
+    if links.is_empty() {
+        println!("no public link open");
+    }
+    for l in links {
+        println!(
+            "  https://{}  ({} {} {})",
+            l["host"].as_str().unwrap_or("?"),
+            l["stack_name"]
+                .as_str()
+                .or(l["stack"].as_str())
+                .unwrap_or("?"),
+            l["lane"].as_str().unwrap_or("main"),
+            l["service"].as_str().unwrap_or("?")
+        );
+    }
 }
 
 /// `devstack hub notify`: what notifies, and whether the desktop shows it.

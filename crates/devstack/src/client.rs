@@ -1477,6 +1477,57 @@ pub fn public_link(stack_file: &Path, name: &str, stop: bool) -> Result<()> {
     }
 }
 
+/// `devstack tunnel --all [--stop]`: a public link to every service of the
+/// tree that may have one and runs, or every link closed.
+pub fn public_links_all(stack_file: &Path, stop: bool) -> Result<()> {
+    let c = need(&state_dir(stack_file)?)?;
+    if stop {
+        let (status, body) = c.call("DELETE", "/v1/public-link", None)?;
+        if status >= 400 {
+            bail!("{}", error_text(&body));
+        }
+        println!("no public links");
+        return Ok(());
+    }
+    let (status, body) = c.post("/v1/public-link", None)?;
+    if status >= 400 {
+        bail!("{}", error_text(&body));
+    }
+    let t0 = std::time::Instant::now();
+    loop {
+        let stack = c.stack()?;
+        let links: Vec<(String, Value)> = stack["services"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|s| s["public_link"].is_object())
+            .map(|s| {
+                (
+                    s["name"].as_str().unwrap_or("?").to_string(),
+                    s["public_link"].clone(),
+                )
+            })
+            .collect();
+        let starting = links.iter().any(|(_, l)| l["state"] == "starting");
+        if !starting || t0.elapsed() > Duration::from_secs(60) {
+            for (name, l) in &links {
+                match l["state"].as_str() {
+                    Some("open") => println!("{name}  {}", l["url"].as_str().unwrap_or("?")),
+                    Some("failed") => {
+                        println!("{name}  failed: {}", l["error"].as_str().unwrap_or("?"))
+                    }
+                    _ => println!("{name}  still starting"),
+                }
+            }
+            eprintln!(
+                "these are public: anyone with a link reaches its service, until `devstack tunnel --all --stop`"
+            );
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
 /// `devstack logs --daemon` / `--hub`: the diagnostic log, readable or raw.
 /// Reads the file directly, so it works after the daemon is gone too.
 pub fn diag_log(

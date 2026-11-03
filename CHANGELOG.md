@@ -9,6 +9,33 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **Public links at stable addresses, through your own Cloudflare tunnel**
+  (ADR-0091). `devstack tunnel --setup <credentials.json> --domain
+  dev-example.com` once (the file `cloudflared tunnel create` writes; it
+  goes into the keychain), and links answer at
+  `https://{service}-{lane}-{stack}.dev-example.com` instead of a random
+  address. The hub runs the tunnel's one connector while a link is open
+  and lets only the hosts of open links through. `{service.<name>.public_url}`
+  gives the address to a service's environment; *Make public* in a lane's
+  header (`devstack tunnel --all`) opens every service of the lane at
+  once. `devstack tunnel` shows the tunnel and its links,
+  `--remove-setup` forgets it.
+- **Public links: a service on the internet, by a click** (ADR-0090). The globe button
+  on a service's row, or `devstack tunnel <service>`, opens a Cloudflare
+  Quick Tunnel (`cloudflared`, no account) to the service's fixed port and
+  shows its `trycloudflare.com` address, after the dashboard said that
+  anyone with it gets in. It outlasts restarts and rebuilds, and ends when
+  it is closed (`--stop`), with a stop of the service by hand, `devstack
+  down` or the daemon. Only the stack's owner opens one: not the stack
+  file (`tunnel = false` keeps a service from it), not a member a lane is
+  shared with. `devstack status` and the journal say which are open;
+  `devstack doctor` whether `cloudflared` is installed. Not yet for a lane
+  on a node, nor for Compose containers. `POST`/`DELETE
+  /v1/services/{name}/public-link`, `ServiceView.public_link`, the
+  `public_link` event.
+
 ## [0.36.0] - 2026-11-03
 
 A lane shows how far its branch is ahead of and behind its upstream,
@@ -59,20 +86,6 @@ stack's stop, and an Activity row names its subject once.
   and a command too.
 
 ### Added
-
-- **Public links: a service on the internet, by a click** (ADR-0090). The globe button
-  on a service's row, or `devstack tunnel <service>`, opens a Cloudflare
-  Quick Tunnel (`cloudflared`, no account) to the service's fixed port and
-  shows its `trycloudflare.com` address, after the dashboard said that
-  anyone with it gets in. It outlasts restarts and rebuilds, and ends when
-  it is closed (`--stop`), with a stop of the service by hand, `devstack
-  down` or the daemon. Only the stack's owner opens one: not the stack
-  file (`tunnel = false` keeps a service from it), not a member a lane is
-  shared with. `devstack status` and the journal say which are open;
-  `devstack doctor` whether `cloudflared` is installed. Not yet for a lane
-  on a node, nor for Compose containers. `POST`/`DELETE
-  /v1/services/{name}/public-link`, `ServiceView.public_link`, the
-  `public_link` event.
 
 - **The folder scan adds repositories without a stack file** (ADR-0089).
   "Scan a folder of repositories" has three checkboxes above the list:

@@ -1015,6 +1015,7 @@ impl Supervisor {
                 );
             }
         }
+        ctx.public_urls = self.public_urls();
         ctx.vars
             .extend(devstack_env::variables(&self.stack, Some(svc), &self.repo));
         ctx

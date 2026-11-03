@@ -136,14 +136,32 @@ enum Cmd {
         #[arg(value_parser = ["on", "off"])]
         state: String,
     },
-    /// Open a public link to a service: a Cloudflare Quick Tunnel to its
-    /// port, reachable from the internet by anyone with the link, until it
-    /// is closed, the service stopped or the stack. Needs `cloudflared`.
+    /// Open a public link to a service: reachable from the internet by
+    /// anyone with the link, until it is closed, the service stopped or the
+    /// stack (ADR-0090). A Cloudflare Quick Tunnel, or with `--setup` once,
+    /// a stable address below your own domain. Needs `cloudflared`. Without
+    /// a service: the named tunnel's state and the links it carries.
     Tunnel {
-        service: String,
-        /// Close the link instead.
+        service: Option<String>,
+        /// Close the link instead (with `--all`: every link of this tree).
         #[arg(long)]
         stop: bool,
+        /// Every service of this tree (the lane) that may have a link.
+        #[arg(long, conflicts_with = "service")]
+        all: bool,
+        /// Set up your named tunnel: the credentials file `cloudflared
+        /// tunnel create <name>` wrote (`~/.cloudflared/<id>.json`), with
+        /// `--domain`. It goes into the hub's keychain.
+        #[arg(long, value_name = "FILE", requires = "domain", conflicts_with_all = ["service", "all", "stop"])]
+        setup: Option<PathBuf>,
+        /// The domain whose wildcard routes to the tunnel (`dev-example.com`
+        /// for `cloudflared tunnel route dns <name> "*.dev-example.com"`).
+        #[arg(long, requires = "setup")]
+        domain: Option<String>,
+        /// Forget the named tunnel (its credentials too); links are Quick
+        /// Tunnels again.
+        #[arg(long, conflicts_with_all = ["service", "all", "stop", "setup"])]
+        remove_setup: bool,
     },
     /// Take over a candidate that waits for promotion (a schema change, ADR-0013).
     Promote {
@@ -1051,12 +1069,26 @@ mod tests {
     fn tunnel_opens_or_stops() {
         assert!(matches!(
             parse(&["tunnel", "web"]).cmd,
-            Cmd::Tunnel { service, stop: false } if service == "web"
+            Cmd::Tunnel { service: Some(s), stop: false, .. } if s == "web"
         ));
         assert!(matches!(
             parse(&["tunnel", "web", "--stop"]).cmd,
-            Cmd::Tunnel { service, stop: true } if service == "web"
+            Cmd::Tunnel { service: Some(s), stop: true, .. } if s == "web"
         ));
+        assert!(matches!(
+            parse(&["tunnel", "--all"]).cmd,
+            Cmd::Tunnel {
+                service: None,
+                all: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse(&["tunnel", "--setup", "t.json", "--domain", "dev.io"]).cmd,
+            Cmd::Tunnel { setup: Some(_), domain: Some(d), .. } if d == "dev.io"
+        ));
+        refused(&["tunnel", "--setup", "t.json"]);
+        refused(&["tunnel", "web", "--all"]);
     }
 
     #[test]

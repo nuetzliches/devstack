@@ -298,6 +298,10 @@ fn is_zero(n: &u16) -> bool {
 #[derive(Debug, Clone, Serialize)]
 pub struct StackView {
     pub name: String,
+    /// The domain of the user's named tunnel (ADR-0090), when it is set up:
+    /// public links then answer below it, at stable addresses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_link_domain: Option<String>,
     /// What the main tree's ports are moved by on this machine (ADR-0082);
     /// 0: the stack file's ports.
     #[serde(skip_serializing_if = "is_zero")]

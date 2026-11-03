@@ -128,6 +128,9 @@ const shareTrigger = ref<HTMLButtonElement | null>(null);
 const { open: shareOpen, close: shareClose } = usePopover(shareRoot, shareTrigger);
 const shareText = ref('');
 const sharedWith = computed(() => current.value?.shared_with ?? []);
+/** Services of the lane a public link may go to, and those with one open (ADR-0090). */
+const publicAvailable = computed(() => (stack.view?.services ?? []).some((s) => s.public_link_available));
+const publicCount = computed(() => (stack.view?.services ?? []).filter((s) => s.public_link && s.public_link.state !== 'failed').length);
 const shareLabel = computed(() =>
   !sharedWith.value.length ? 'Not shared' : sharedWith.value.includes('*') ? 'Shared with the pool' : `Shared with ${sharedWith.value.join(', ')}`,
 );
@@ -268,6 +271,18 @@ function manageFromSync() {
           @click="stack.laneMain(current.name)"
         >
           <span v-if="busyMain" class="spinner" /><Icon v-else name="promote" :size="14" /> Serve main ports
+        </button>
+        <!-- Public links of the whole lane (ADR-0090): reachable from the internet. -->
+        <button
+          v-if="current && current.active !== false && !current.node && !stack.readOnly && publicAvailable"
+          type="button"
+          class="btn btn-sm"
+          :class="{ 'btn-warn': publicCount }"
+          :title="publicCount ? `${publicCount} of its services are reachable from the internet: close every link` : 'Open a public link to every service of the lane: reachable from the internet'"
+          data-testid="lane-public"
+          @click="publicCount ? stack.closeLanePublic() : stack.openLanePublic()"
+        >
+          <Icon name="link" :size="13" /> {{ publicCount ? `Public (${publicCount})` : 'Make public' }}
         </button>
         <!-- What has no meaning for the main working tree stays in its place, disabled, with the reason (ADR-0081). -->
         <template v-if="isMain && pool.targets.length">
