@@ -103,3 +103,14 @@ sidebar listing `main` under every stack, also one without worktrees.
   `main`'s Stop.
 - The stack's page is where a port graph and a port shift for several
   stacks on one machine (#387) go.
+
+## Addendum 2026-11-03: the restart banner stands above the lanes' views too
+
+Point 3 put the restart banner (another devstack installed, a changed stack
+file) on the stack's page, and a lane's view lost it, although a stack file
+is edited in a lane's worktree and the banner is where its Restart stack
+button was found. The banner (`RestartBanner`) stands above the stack's page
+and above every lane's views, `main` included, with its Restart stack
+button: the page says it of the main tree's stack file, a lane's view of the
+shown lane's own. The stack-level actions in the page's header stay on the
+page; the banner is the one stack-level control a lane's view shows.

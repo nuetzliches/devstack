@@ -14,7 +14,7 @@ import { api, paths, v1 } from '@/api';
 import type { HubPorts, LaneView, Load, PortEntry, PortOverlap, UsageReport } from '@/api/types';
 import { ago, bytes, clock, duration, percent, useNow } from '@/lib/format';
 import { viaText } from '@/lib/journal';
-import { laneLabel, lastTab, MAIN, nodeLabel, restartLanesText, started } from '@/lib/lanes';
+import { laneLabel, lastTab, MAIN, nodeLabel, started } from '@/lib/lanes';
 import { laneView } from '@/lib/stackRoutes';
 import { statusLook } from '@/lib/status';
 import { useHub } from '@/stores/hub';
@@ -22,6 +22,7 @@ import { useStack } from '@/stores/stack';
 import AgentPrompt from '@/components/AgentPrompt.vue';
 import Icon from '@/components/icons/Icon.vue';
 import PortGraph from '@/components/PortGraph.vue';
+import RestartBanner from '@/components/RestartBanner.vue';
 import StackFileBanner from '@/components/StackFileBanner.vue';
 import { refusedForPorts, runningHolders, shiftLabel } from '@/lib/shift';
 import StatusPill from '@/components/StatusPill.vue';
@@ -66,19 +67,6 @@ const state = computed(() => {
   if (!stack.running) return { tone: '', label: 'offline', title: 'Its daemon does not run' };
   if (!stack.mainActive && !stack.runningLanes.length) return { tone: '', label: 'idle', title: 'Its daemon runs; nothing of its lanes does' };
   return { tone: 'ok', label: 'running', title: 'Its daemon runs' };
-});
-
-// The restart banner (version, changed stack file), from the lane view to here.
-const daemonOutdated = computed(() => {
-  const d = stack.entry?.daemon?.version;
-  const h = hub.version;
-  return d && h && d !== h ? { daemon: d, hub: h } : null;
-});
-const restartReason = computed(() => {
-  if (!stack.running || hubDown.value) return null;
-  if (daemonOutdated.value) return 'version';
-  if (stack.mainView?.config_changed) return 'config';
-  return null;
 });
 
 // ------------------------------------------------------------ lanes
@@ -282,19 +270,7 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
       </div>
     </header>
 
-    <div v-if="restartReason" class="banner warn" :data-testid="restartReason === 'version' ? 'daemon-outdated' : 'config-changed'">
-      <Icon :name="restartReason === 'version' ? 'alert' : 'file'" :size="18" />
-      <span v-if="restartReason === 'version'" class="grow">
-        <strong>{{ name }} runs devstack {{ daemonOutdated?.daemon }}, devstack {{ daemonOutdated?.hub }} is installed.</strong>
-        {{ ' ' }}A restart of the stack switches it over<template v-if="stack.mainView?.config_changed"> and applies the changed stack file</template>.
-        <template v-if="restartLanesText(stack.restartLanes)">{{ ' ' }}{{ restartLanesText(stack.restartLanes) }}</template>
-      </span>
-      <span v-else class="grow"><strong>The stack file changed since {{ name }} started.</strong> It applies after a restart.</span>
-      <button v-if="changes" type="button" class="btn btn-primary btn-sm" :disabled="!!stack.busy.stack" data-testid="banner-restart-stack" @click="stack.restartStack()">
-        <span v-if="stack.busy.stack === 'restart'" class="spinner" /><Icon v-else name="restart" :size="14" />
-        {{ stack.busy.stack === 'restart' ? 'Restarting…' : 'Restart stack' }}
-      </button>
-    </div>
+    <RestartBanner :config-changed="!!stack.mainView?.config_changed" />
     <StackFileBanner v-if="!hubDown && changes" />
     <div v-if="!hubDown && stack.entry?.start_error && !stack.running" class="banner warn" data-testid="stack-start-error">
       <Icon name="alert" :size="18" />
