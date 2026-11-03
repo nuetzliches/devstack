@@ -109,7 +109,7 @@ async function add() {
       </button>
     </div>
     <template v-if="mode === 'scan'">
-      <p class="muted">The folder your repositories live in, e.g. <code>D:\Sources</code>. Every repository with a <code>devstack.toml</code> at its root is found (three levels deep); worktrees run as lanes of their main tree.</p>
+      <p class="muted">The folder your repositories live in, e.g. <code>D:\Sources</code>. Each repository in it is found, by default those with a <code>devstack.toml</code> at their root; one without is added as not set up, and a coding agent sets it up. Worktrees run as lanes of their main tree.</p>
       <ScanStacks @added="emit('close')" />
     </template>
     <template v-else>

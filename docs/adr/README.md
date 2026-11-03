@@ -171,3 +171,4 @@ stay.
 | [0086](0086-favourite-stacks-list-first.md) | Favourite stacks list first, marked by a star kept in the browser | Accepted (card in the pull request); built |
 | [0087](0087-the-generated-skills-are-the-hubs-no-tool-reports-them-outdated.md) | The generated skills are the hub's to keep current; no tool reports them outdated, `skills check` finds tracked copies | Accepted (card in the pull request); built |
 | [0088](0088-a-lane-shows-how-far-its-branch-is-ahead-and-behind.md) | A lane shows how far its branch is ahead of and behind its upstream, from the local refs only | Accepted (card in the pull request); built |
+| [0089](0089-a-folder-scan-filters-and-adds-repositories-not-set-up.md) | A folder scan filters by git and stack file, one level deep by default, and adds a repository without a stack file as not set up | Accepted (card in the pull request); built |

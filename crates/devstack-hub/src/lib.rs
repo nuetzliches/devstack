@@ -190,11 +190,27 @@ fn random_hex() -> String {
 
 /// Which registered stacks run: their daemon's info file exists and its port
 /// answers. Checked by the hub every second; the dashboard only hears changes.
-fn scan(last_seen: &mut HashMap<String, u128>, errors: &StartErrors) -> Vec<StackEntry> {
+/// `unset`: the stacks last seen without a stack file; once it appears, the
+/// name it gives replaces the folder's (ADR-0089).
+fn scan(
+    last_seen: &mut HashMap<String, u128>,
+    errors: &StartErrors,
+    unset: &mut std::collections::HashSet<String>,
+) -> Vec<StackEntry> {
     let mut errors = errors.lock().unwrap();
     registry::list()
         .into_iter()
-        .map(|e| {
+        .map(|mut e| {
+            let no_file = !e.file.is_file();
+            if no_file {
+                unset.insert(e.id.clone());
+            } else if unset.remove(&e.id)
+                && let Ok(s) = devstack_config::load(&e.file)
+                && s.stack.name != e.name
+            {
+                e.name = s.stack.name;
+                let _ = registry::register(&e);
+            }
             let state = e.repo.join(".devstack");
             // A `daemon.json` left by a killed daemon names a port another
             // process may have now; one that is stopping takes no requests.
@@ -223,7 +239,7 @@ fn scan(last_seen: &mut HashMap<String, u128>, errors: &StartErrors) -> Vec<Stac
                 }),
                 last_seen: last_seen.get(&e.id).copied(),
                 shift: e.shift,
-                no_file: !e.file.is_file(),
+                no_file,
                 id: e.id,
                 name: e.name,
                 file: e.file,
@@ -385,8 +401,9 @@ pub fn serve() -> Result<(), String> {
         let errors = start_errors.clone();
         tokio::task::spawn_blocking(move || {
             let (mut seen, mut outdated) = (HashMap::new(), HashMap::new());
+            let mut unset = std::collections::HashSet::new();
             loop {
-                let next = scan(&mut seen, &errors);
+                let next = scan(&mut seen, &errors, &mut unset);
                 note_outdated(&next, &mut outdated);
                 tx.send_if_modified(|cur| {
                     if *cur == next {
@@ -2180,10 +2197,19 @@ fn register_folder(
     repo: &std::path::Path,
     file: &std::path::Path,
 ) -> Result<registry::Entry, String> {
-    let stack = devstack_config::load(file).map_err(|e| e.to_string())?;
+    // Without a stack file it is "not set up" (ADR-0089): named after its
+    // folder until the file names it (`scan`).
+    let name = if file.is_file() {
+        devstack_config::load(file)
+            .map_err(|e| e.to_string())?
+            .stack
+            .name
+    } else {
+        folder_name(repo)
+    };
     let entry = registry::Entry {
         id: registry::id_for(file),
-        name: stack.stack.name.clone(),
+        name,
         file: file.to_path_buf(),
         repo: repo.to_path_buf(),
         ..registry::Entry::default()
@@ -2196,16 +2222,25 @@ fn register_folder(
     Ok(entry)
 }
 
-/// `POST /hub/stacks/add {"path"}`: register a folder that has a stack file.
+/// The last part of a folder's path, or the whole path (a drive's root).
+fn folder_name(repo: &std::path::Path) -> String {
+    repo.file_name().map_or_else(
+        || repo.to_string_lossy().into_owned(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
+/// `POST /hub/stacks/add {"path"}`: register a folder; one without a stack
+/// file is "not set up" until a coding agent writes it (ADR-0089).
 async fn stack_add(Json(q): Json<PathQuery>) -> Response {
     let (repo, file) = match stack_paths(&q.path) {
         Ok(p) => p,
         Err(e) => return err(StatusCode::BAD_REQUEST, e),
     };
-    if !file.is_file() {
+    if !repo.is_dir() {
         return err(
-            StatusCode::CONFLICT,
-            format!("no devstack.toml in {}", repo.display()),
+            StatusCode::BAD_REQUEST,
+            format!("{} is not a folder", repo.display()),
         );
     }
     match tokio::task::spawn_blocking(move || register_folder(&repo, &file)).await {
@@ -2232,12 +2267,25 @@ const SCAN_SKIP: &[&str] = &[
     "$RECYCLE.BIN",
 ];
 
-/// Repositories with a stack file below `root`, at most `depth` levels down.
-/// A repository (a `.git` directory) is looked at only at its root and not
-/// entered: its sub-folders (examples, fixtures) are no stacks of their own.
-/// A linked worktree (a `.git` file) is skipped: it runs as a lane of its
-/// main working tree (plan §3.5).
-pub fn scan_for_stacks(root: &std::path::Path, depth: usize) -> Vec<std::path::PathBuf> {
+/// What a scan lists (ADR-0089); at least one of the two is set.
+#[derive(Debug, Clone, Copy)]
+pub struct ScanFilter {
+    /// Only git repositories (a `.git` directory), not plain folders.
+    pub git_only: bool,
+    /// Only folders with a devstack.toml.
+    pub configured_only: bool,
+}
+
+/// Folders below `root`, at most `depth` levels down, that `filter` lets
+/// through. A repository (a `.git` directory) is looked at only at its root
+/// and not entered: its sub-folders (examples, fixtures) are no stacks of
+/// their own. A linked worktree (a `.git` file) is skipped: it runs as a
+/// lane of its main working tree (plan §3.5).
+pub fn scan_for_stacks(
+    root: &std::path::Path,
+    depth: usize,
+    filter: ScanFilter,
+) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![(root.to_path_buf(), 0usize)];
     while let Some((dir, d)) = stack.pop() {
@@ -2245,13 +2293,13 @@ pub fn scan_for_stacks(root: &std::path::Path, depth: usize) -> Vec<std::path::P
         if git.is_file() {
             continue;
         }
-        if git.is_dir() || dir.join("devstack.toml").is_file() {
-            if dir.join("devstack.toml").is_file() {
-                out.push(dir.clone());
-            }
-            if git.is_dir() {
-                continue;
-            }
+        let repo = git.is_dir();
+        let configured = dir.join("devstack.toml").is_file();
+        if (repo || !filter.git_only) && (configured || !filter.configured_only) {
+            out.push(dir.clone());
+        }
+        if repo {
+            continue;
         }
         if d >= depth {
             continue;
@@ -2281,16 +2329,33 @@ struct ScanQuery {
     add: bool,
     #[serde(default = "scan_depth")]
     depth: usize,
+    #[serde(default = "yes")]
+    git_only: bool,
+    #[serde(default = "yes")]
+    configured_only: bool,
 }
 
+/// The folder itself and its sub-folders: where repositories usually live
+/// (`D:\Sources\shop`); a deeper layout asks for more (ADR-0089).
 fn scan_depth() -> usize {
-    3
+    1
 }
 
-/// `POST /hub/stacks/scan {"path", "add"?, "depth"?}`: every repository with
-/// a devstack.toml below a folder (e.g. the one all projects live in), with
-/// whether it loads and is registered; with `add` the new ones are registered.
+/// `POST /hub/stacks/scan {"path", "add"?, "depth"?, "git_only"?,
+/// "configured_only"?}`: the repositories below a folder (e.g. the one all
+/// projects live in), with whether their devstack.toml exists and loads and
+/// whether they are registered; with `add` the new ones are registered.
 async fn stack_scan(Json(q): Json<ScanQuery>) -> Response {
+    if !q.git_only && !q.configured_only {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "`git_only` or `configured_only`: without either, every folder is one".to_string(),
+        );
+    }
+    let filter = ScanFilter {
+        git_only: q.git_only,
+        configured_only: q.configured_only,
+    };
     let root = match stack_paths(&q.path) {
         Ok((r, _)) => r,
         Err(e) => return err(StatusCode::BAD_REQUEST, e),
@@ -2304,15 +2369,23 @@ async fn stack_scan(Json(q): Json<ScanQuery>) -> Response {
     let depth = q.depth.clamp(1, 6);
     let found = tokio::task::spawn_blocking(move || {
         let known: Vec<String> = registry::list().into_iter().map(|e| e.id).collect();
-        scan_for_stacks(&root, depth)
+        scan_for_stacks(&root, depth, filter)
             .into_iter()
             .map(|repo| {
                 let (repo, file) = stack_paths(&repo.to_string_lossy())
                     .unwrap_or((repo.clone(), repo.join("devstack.toml")));
                 let id = registry::id_for(&file);
-                let loaded = devstack_config::load(&file);
-                let name = loaded.as_ref().map(|s| s.stack.name.clone()).ok();
-                let error = loaded.as_ref().err().map(|e| e.to_string());
+                let configured = file.is_file();
+                let loaded = configured.then(|| devstack_config::load(&file));
+                let name = match &loaded {
+                    Some(Ok(s)) => Some(s.stack.name.clone()),
+                    Some(Err(_)) => None,
+                    None => Some(folder_name(&repo)),
+                };
+                let error = match &loaded {
+                    Some(Err(e)) => Some(e.to_string()),
+                    _ => None,
+                };
                 let registered = known.contains(&id);
                 let added = q.add
                     && !registered
@@ -2320,6 +2393,7 @@ async fn stack_scan(Json(q): Json<ScanQuery>) -> Response {
                     && register_folder(&repo, &file).is_ok();
                 serde_json::json!({
                     "repo": repo, "id": id, "name": name, "error": error,
+                    "configured": configured,
                     "registered": registered || added, "added": added,
                 })
             })
@@ -3413,7 +3487,7 @@ fn hub_lock_held() -> bool {
 
 #[cfg(test)]
 mod scan_tests {
-    use super::scan_for_stacks;
+    use super::{ScanFilter, scan_for_stacks};
 
     #[test]
     fn finds_repositories_with_a_stack_file_not_their_subfolders_or_worktrees() {
@@ -3433,16 +3507,27 @@ mod scan_tests {
         touch("shop-wt/devstack.toml", ""); // a worktree: a lane
         mk("node_modules/pkg/.git");
         touch("node_modules/pkg/devstack.toml", "");
-        let found: Vec<String> = scan_for_stacks(r, 3)
-            .into_iter()
-            .map(|p| {
-                p.strip_prefix(r)
-                    .unwrap()
-                    .to_string_lossy()
-                    .replace('\\', "/")
-            })
-            .collect();
-        assert_eq!(found, ["group/crm", "shop"]);
+        mk("fixture"); // a stack file, no repository
+        touch("fixture/devstack.toml", "");
+        let found = |depth, git_only, configured_only| -> Vec<String> {
+            let filter = ScanFilter {
+                git_only,
+                configured_only,
+            };
+            scan_for_stacks(r, depth, filter)
+                .into_iter()
+                .map(|p| {
+                    p.strip_prefix(r)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/")
+                })
+                .collect()
+        };
+        assert_eq!(found(3, true, true), ["group/crm", "shop"]);
+        assert_eq!(found(1, true, true), ["shop"]);
+        assert_eq!(found(3, false, true), ["fixture", "group/crm", "shop"]);
+        assert_eq!(found(3, true, false), ["group/crm", "plain", "shop"]);
     }
 }
 

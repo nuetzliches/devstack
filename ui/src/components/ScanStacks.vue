@@ -1,9 +1,11 @@
 <script setup lang="ts">
-// Find every project with a devstack.toml below one folder (the one all
-// repositories live in, e.g. D:\Sources) and add the ones chosen (all new ones
-// are, at first). Repositories are looked at at their root only; linked
-// worktrees are skipped (they run as lanes of their main tree).
-import { computed, ref } from 'vue';
+// Find the projects below one folder (the one all repositories live in, e.g.
+// D:\Sources) and add the ones chosen (all new ones are, at first). By default
+// the git repositories with a devstack.toml one level down; one without the
+// file is added "not set up", and a coding agent sets it up (ADR-0089).
+// Repositories are looked at at their root only; linked worktrees are skipped
+// (they run as lanes of their main tree).
+import { computed, ref, watch } from 'vue';
 import { api, paths } from '@/api';
 import { useUi } from '@/stores/ui';
 import FolderField from './FolderField.vue';
@@ -12,13 +14,17 @@ import Icon from './icons/Icon.vue';
 const emit = defineEmits<{ added: [ids: string[]] }>();
 const ui = useUi();
 
-type Found = { repo: string; id: string; name: string | null; error: string | null; registered: boolean; added: boolean };
+type Found = { repo: string; id: string; name: string | null; error: string | null; configured: boolean; registered: boolean; added: boolean };
 
 const path = ref('');
 const scanning = ref(false);
 const adding = ref(false);
 const found = ref<Found[] | null>(null);
 const problem = ref<string | null>(null);
+/** What the scan lists: one of the first two is always on. */
+const gitOnly = ref(true);
+const configuredOnly = ref(true);
+const deep = ref(false);
 
 const fresh = computed(() => (found.value ?? []).filter((f) => !f.registered && !f.error));
 /** The new repositories to add, by id: every new one after a scan. */
@@ -43,7 +49,12 @@ async function scan() {
   scanning.value = true;
   problem.value = null;
   try {
-    const res = await api().request<Found[] | { error: string }>('POST', paths.scanStacks, { path: p });
+    const res = await api().request<Found[] | { error: string }>('POST', paths.scanStacks, {
+      path: p,
+      git_only: gitOnly.value,
+      configured_only: configuredOnly.value,
+      depth: deep.value ? 3 : 1,
+    });
     const b = res.body;
     if (res.ok && Array.isArray(b)) {
       found.value = b;
@@ -55,6 +66,11 @@ async function scan() {
     scanning.value = false;
   }
 }
+
+// A changed filter scans again what was scanned.
+watch([gitOnly, configuredOnly, deep], () => {
+  if (found.value) void scan();
+});
 
 // One registration each, as a single repository is added; what fails stays in
 // the list with its reason, the rest are added.
@@ -90,10 +106,23 @@ async function add() {
         <span v-if="scanning" class="spinner" /><Icon v-else name="search" :size="14" /> Scan
       </button>
     </FolderField>
+    <div class="filters" data-testid="scan-filters">
+      <label title="A plain folder with a devstack.toml is listed too when this is off">
+        <input v-model="gitOnly" type="checkbox" :disabled="!configuredOnly" data-testid="scan-git-only" /> Only git repositories
+      </label>
+      <label title="A repository without one is added as not set up; a coding agent sets it up">
+        <input v-model="configuredOnly" type="checkbox" :disabled="!gitOnly" data-testid="scan-configured-only" /> Only configured (<code>devstack.toml</code> exists)
+      </label>
+      <label title="For folders grouped by customer or organisation, e.g. ~/src/github.com/org/repo">
+        <input v-model="deep" type="checkbox" data-testid="scan-deep" /> Search subfolders (three levels)
+      </label>
+    </div>
     <p v-if="problem" class="note danger">{{ problem }}</p>
 
     <template v-if="found">
-      <p v-if="!found.length" class="muted">No repository with a <code>devstack.toml</code> below this folder (three levels deep).</p>
+      <p v-if="!found.length" class="muted">
+        No {{ gitOnly ? 'repository' : 'folder' }}{{ configuredOnly ? ' with a devstack.toml' : '' }} {{ deep ? 'below this folder (three levels deep)' : 'in this folder' }}.
+      </p>
       <div v-else class="list">
         <label v-if="fresh.length > 1" class="item head">
           <input type="checkbox" :checked="all" :indeterminate="some && !all" data-testid="scan-all" @change="toggleAll" />
@@ -107,7 +136,7 @@ async function add() {
             <div class="repo mono faint">{{ f.repo }}</div>
             <div v-if="f.error" class="err small">{{ f.error.split('\n')[0] }}</div>
           </div>
-          <span class="tag">{{ f.error ? 'does not load' : f.added ? 'added' : f.registered ? 'in the list' : 'new' }}</span>
+          <span class="tag" :class="{ unset: !f.configured && !f.registered }">{{ f.error ? 'does not load' : f.added ? 'added' : f.registered ? 'in the list' : f.configured ? 'new' : 'not set up' }}</span>
         </component>
       </div>
       <div v-if="fresh.length" class="row">
@@ -120,6 +149,26 @@ async function add() {
 </template>
 
 <style scoped>
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 10px 0;
+  font-size: 13px;
+}
+.filters label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.filters input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+.tag.unset {
+  color: var(--warn);
+}
 .list {
   list-style: none;
   margin: 0 0 12px;
