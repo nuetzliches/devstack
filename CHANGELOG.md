@@ -9,7 +9,50 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-11-03
+
+A connection to a shared lane is to the lane, not to its lease: it
+outlasts the lane's restarts, the coordinator's and the hub's own, and a
+sharing with nothing to open is refused instead of stored as shared with
+nobody (ADR-0085). The store of what `prepare` makes is a card of its own
+on the usage page. Fixed: a dev server on `::1` only no longer costs 2 s
+per connection behind its proxy on Windows, a restart that does not take
+over leaves no candidate, a container's load no longer drops to 0 B for
+one missing measurement, the header follows a branch checked out in the
+main working tree, and a stack whose setup was broken off says so.
+
+### Changed
+
+- **A connection to a shared lane is to the lane, and outlasts its
+  restarts** (ADR-0085, ADR-0053 point 3 amended). The hub connected to a
+  lease, so a member lost the forwarded ports whenever the owner started
+  the lane again, the pool's coordinator restarted (a deploy) or their own
+  hub updated itself. A connection is now to the lane (pool, owner,
+  repository, lane name): listed again under a new lease, it is connected
+  again by itself; a connected lane missing from the coordinator's list
+  keeps its ports for two minutes; the hub keeps its connections in
+  `connected.json` in the pool's directory and connects them again after
+  its own restart. Only *Disconnect*, or the sharing taken back, ends a
+  connection; a lane gone for more than a day is forgotten.
+- **The store is a card beside the lane and the processes** (#413): the
+  usage page shows what `prepare` made (ADR-0062) as a card with its
+  entries inline (service, outputs, size, last used, a remove button)
+  instead of a line with a dialog; on a wide window it stands beside the
+  lanes and the processes.
+
 ### Fixed
+
+- **A sharing with nothing to open is refused** (ADR-0085): the
+  coordinator stored a sharing without a service as "shared with nobody"
+  and answered with success, so the owner's dashboard said shared while
+  the pool knew nothing. It now answers `422`, the daemon checks the same
+  before asking, and the dashboard shows the error.
+- **A restart that does not take over leaves no candidate** (#419). When
+  a job the service comes after failed, or a stop came in while the
+  restart built or ran its jobs, the `building` candidate stayed, and the
+  dashboard showed "1 not live yet" until the daemon restarted. While the
+  old instance serves, the candidate now shows `failed` with the reason;
+  otherwise it goes with the service.
 
 - **A dev server that listens on `::1` only is as fast behind its proxy
   as one on `127.0.0.1`** (#418). The proxy, the TCP forwarder and the
@@ -2566,7 +2609,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.34.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.35.0...HEAD
+[0.35.0]: https://github.com/nuetzliches/devstack/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/nuetzliches/devstack/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/nuetzliches/devstack/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/nuetzliches/devstack/compare/v0.31.0...v0.32.0
