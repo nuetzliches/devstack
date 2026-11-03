@@ -17,7 +17,7 @@ import { connectedTo, usePool } from '@/stores/pool';
 import { useUi } from '@/stores/ui';
 import { useOpenerPrefs } from '@/lib/openers';
 import { laneActions, NOT_FOR_MAIN, type LaneAction } from '@/lib/laneActions';
-import { MAIN } from '@/lib/lanes';
+import { MAIN, samePath } from '@/lib/lanes';
 import { stackPage } from '@/lib/stackRoutes';
 import BranchPicker from './BranchPicker.vue';
 import SplitButton from './SplitButton.vue';
@@ -178,7 +178,36 @@ async function copyPath() {
 }
 function openWith(o: Opener) {
   pathClose();
+  syncClose();
   if (stack.id) void hub.openWith(stack.id, path.value, o);
+}
+
+// How far the shown tree's branch is ahead of and behind its upstream, as
+// the local refs say (ADR-0088): devstack asks no remote, a git client's
+// fetch moves it. Shown only when they differ; its menu has the git clients.
+const sync = computed(() => {
+  if (stack.foreign || stack.sharedLane) return null;
+  const b = stack.branches?.branches.find((x) => (isMain.value ? x.main : !!x.worktree && samePath(x.worktree, path.value)));
+  if (!b?.upstream || (!b.ahead && !b.behind)) return null;
+  return { ahead: b.ahead ?? 0, behind: b.behind ?? 0, upstream: b.upstream };
+});
+const syncTitle = computed(() => {
+  const s = sync.value;
+  if (!s) return '';
+  const parts = [s.ahead && `${s.ahead} commit${s.ahead === 1 ? '' : 's'} not on ${s.upstream}`, s.behind && `${s.behind} on ${s.upstream} not here`].filter(Boolean);
+  return `${parts.join(', ')}, as of the last fetch. Open it in a git client`;
+});
+const syncRoot = ref<HTMLElement | null>(null);
+const syncTrigger = ref<HTMLButtonElement | null>(null);
+const { open: syncOpen, close: syncClose } = usePopover(syncRoot, syncTrigger);
+const gitOpeners = computed(() => openers.value.filter((o) => o.kind === 'git'));
+function toggleSync() {
+  syncOpen.value = !syncOpen.value;
+  if (syncOpen.value && canOpen.value) void hub.loadOpeners();
+}
+function manageFromSync() {
+  syncClose();
+  managing.value = true;
 }
 </script>
 
@@ -369,6 +398,23 @@ function openWith(o: Opener) {
         <OpenersDialog :open="managing" :openers="hub.openers ?? []" @close="managing = false" />
       </div>
       <BranchPicker />
+      <div v-if="sync" ref="syncRoot" class="picker">
+        <button ref="syncTrigger" type="button" class="sync-btn mono" :aria-expanded="syncOpen" aria-haspopup="menu" :title="syncTitle" data-testid="branch-sync" @click="toggleSync">
+          <span v-if="sync.ahead" data-testid="branch-ahead">↑{{ sync.ahead }}</span>
+          <span v-if="sync.behind" data-testid="branch-behind">↓{{ sync.behind }}</span>
+        </button>
+        <div v-if="syncOpen" class="menu sync-menu" role="menu" aria-label="Open in a git client" data-testid="branch-sync-menu">
+          <span v-if="!canOpen" class="faint small menu-note">No program can be opened from here.</span>
+          <span v-else-if="!hub.openers" class="faint small menu-note"><span class="spinner" /> Looking for programs…</span>
+          <span v-else-if="!gitOpeners.length" class="faint small menu-note">No git client found on this machine.</span>
+          <button v-for="o in gitOpeners" :key="o.id" type="button" class="opt" role="menuitem" data-testid="branch-sync-open" @click="openWith(o)">
+            <Icon name="gitBranch" :size="14" class="muted" /><span class="grow">{{ o.label }}</span>
+          </button>
+          <div v-if="canOpen && hub.openers?.length" class="menu-foot">
+            <button type="button" class="link-btn" role="menuitem" data-testid="branch-sync-manage" @click="manageFromSync">Manage programs…</button>
+          </div>
+        </div>
+      </div>
       <span v-if="moving" class="muted small move-line" data-testid="lane-moving" :title="moving.what">
         <span class="bar"><span :style="{ width: `${(100 * moving.step) / moving.steps}%` }" /></span>
         {{ moving.what }}
@@ -486,6 +532,26 @@ h1 {
   font-weight: 600;
 }
 .path-picker .menu {
+  min-width: 220px;
+}
+.sync-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.sync-btn:hover,
+.sync-btn[aria-expanded='true'] {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.sync-menu {
   min-width: 220px;
 }
 .sep {

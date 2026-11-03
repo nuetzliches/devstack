@@ -129,7 +129,7 @@ stay.
 | [0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) | A lane's prepared directories can be linked into its worktree | Accepted; point 5 replaced for lanes on a node by ADR-0063; `link` ⊆ `outputs` by ADR-0062 |
 | [0045](0045-the-hub-notifies-the-desktop.md) | The hub notifies the desktop of what needs attention, without a tray | Accepted, amended 2026-10-21 (`guest_lane`) |
 | [0046](0046-the-hub-opens-a-worktree-in-the-users-programs.md) | The hub opens a stack's worktree in the user's own programs, from a fixed list | Accepted, amended 2026-10-21 (the program opens in front on Windows; GitHub Desktop), 2026-10-22 (an agent started with a prompt the hub writes) |
-| [0047](0047-the-dashboard-makes-a-lane-from-a-branch.md) | The dashboard makes a lane from a branch; the main tree's checkout stays the user's | Accepted; a branch without a stack file by ADR-0055 |
+| [0047](0047-the-dashboard-makes-a-lane-from-a-branch.md) | The dashboard makes a lane from a branch; the main tree's checkout stays the user's | Accepted; a branch without a stack file by ADR-0055; ahead and behind by ADR-0088 |
 | [0048](0048-a-containers-main-port-can-move-with-the-main-slot.md) | A container's main port can be devstack's, and then moves with the main slot | Accepted; point 2 detailed by ADR-0057 (an announced port is not held) |
 | [0049](0049-a-lanes-need-is-measured-disk-included.md) | A lane's need is measured where it ran, disk included; the stack file sets a floor | Accepted, amended 2026-10-21 (point 9: what a lane here checks) |
 | [0050](0050-what-no-request-reports-reaches-the-dashboard-as-a-notice.md) | What no request reports reaches the dashboard as a notice, not as a log view | Accepted |
@@ -160,7 +160,7 @@ stay.
 | [0075](0075-a-lanes-steady-use-is-measured-and-shown-never-admitted-by.md) | A lane's steady use is measured and shown, never admitted by | Accepted (card in the pull request) |
 | [0076](0076-a-pool-machine-has-one-page-the-pool-area-has-tabs.md) | A machine of the pool has one page; the pool area has tabs, and the pool and the tab are in the URL | Accepted (card in the pull request) |
 | [0077](0077-a-sets-skills-are-grouped-and-switched-one-by-one.md) | A set's skills are grouped by their frontmatter and switched one by one | Accepted (card in the pull request; point 5 taken back) |
-| [0078](0078-the-hub-follows-every-stacks-worktrees.md) | The hub follows every stack's worktrees; a stopped stack's lane can be started from the dashboard | Accepted (card in the pull request) |
+| [0078](0078-the-hub-follows-every-stacks-worktrees.md) | The hub follows every stack's worktrees; a stopped stack's lane can be started from the dashboard | Accepted (card in the pull request); extended by ADR-0088 (the refs of the checked-out branches) |
 | [0079](0079-skills-local-to-a-working-tree.md) | Skills local to a working tree: a pool's project skills bound to their repository, devstack's own untracked | Accepted (card in the pull request); point 5 amended by ADR-0083; extended by ADR-0087 (no tool reports devstack's own skills outdated) |
 | [0080](0080-the-main-tree-answers-as-a-lane-shared-is-deprecated.md) | The main working tree answers as the lane `main`; `singleton` replaces `lanes = false`; `shared` is deprecated | Accepted (card in the pull request) |
 | [0081](0081-a-stack-has-a-page-every-lane-the-same-view.md) | A stack has a page of its own; every lane, `main` included, has the same view | Accepted (card in the pull request) |
@@ -170,3 +170,4 @@ stay.
 | [0085](0085-a-connection-to-a-shared-lane-outlasts-its-restarts.md) | A connection to a shared lane is to the lane: it outlasts the lane's restarts and the hub's; a sharing with nothing to open is refused | Accepted (card in the pull request); built |
 | [0086](0086-favourite-stacks-list-first.md) | Favourite stacks list first, marked by a star kept in the browser | Accepted (card in the pull request); built |
 | [0087](0087-the-generated-skills-are-the-hubs-no-tool-reports-them-outdated.md) | The generated skills are the hub's to keep current; no tool reports them outdated, `skills check` finds tracked copies | Accepted (card in the pull request); built |
+| [0088](0088-a-lane-shows-how-far-its-branch-is-ahead-and-behind.md) | A lane shows how far its branch is ahead of and behind its upstream, from the local refs only | Accepted (card in the pull request); built |

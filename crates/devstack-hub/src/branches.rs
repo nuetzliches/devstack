@@ -2,7 +2,9 @@
 //!
 //! - `GET /hub/stacks/{id}/branches`: its local branches and the
 //!   remote-tracking ones no local branch has, each with the worktree that
-//!   has it checked out; `fetched`: when it last fetched.
+//!   has it checked out and how far it is ahead of and behind its upstream
+//!   as the local refs say (ADR-0088: devstack asks no remote for it);
+//!   `fetched`: when it last fetched.
 //! - `POST /hub/stacks/{id}/worktrees {branch, new?}`: a worktree (a lane)
 //!   on `branch`, or on a new branch `new` from it: `{path}`.
 //! - `POST /hub/stacks/{id}/worktrees/remove {path}`: `git worktree remove`,
@@ -36,6 +38,13 @@ pub struct Branch {
     /// What a local branch tracks (`origin/feat/login`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream: Option<String>,
+    /// Commits it has that its upstream has not, and the other way round,
+    /// as of the last fetch (ADR-0088); absent without an upstream or when
+    /// the upstream is gone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ahead: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behind: Option<u32>,
     /// The worktree that has it checked out.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<PathBuf>,
@@ -161,6 +170,27 @@ pub(crate) fn tracked(tree: &Path, rel: &Path) -> bool {
         .is_ok_and(|o| !o.trim().is_empty())
 }
 
+/// Each local branch's full ref name and its upstream's
+/// (`refs/heads/main`, `refs/remotes/origin/main`); a branch without one
+/// is left out.
+pub(crate) fn upstreams(repo: &Path) -> Result<Vec<(String, String)>, String> {
+    let out = git(
+        repo,
+        &[
+            "for-each-ref",
+            "--format=%(refname)%00%(upstream)",
+            "refs/heads",
+        ],
+        LOCAL,
+    )?;
+    Ok(out
+        .lines()
+        .filter_map(|l| l.split_once('\0'))
+        .filter(|(_, up)| !up.is_empty())
+        .map(|(r, up)| (r.to_string(), up.to_string()))
+        .collect())
+}
+
 pub(crate) fn common_dir(repo: &Path) -> Result<PathBuf, String> {
     let d = git(repo, &["rev-parse", "--git-common-dir"], LOCAL)?;
     Ok(repo.join(d.trim()))
@@ -174,7 +204,7 @@ pub fn list(repo: &Path, stack_file: &Path) -> Result<Branches, Error> {
         repo,
         &[
             "for-each-ref",
-            "--format=%(refname)%00%(upstream:short)%00%(committerdate:unix)",
+            "--format=%(refname)%00%(upstream:short)%00%(committerdate:unix)%00%(upstream:track)",
             "refs/heads",
             "refs/remotes",
         ],
@@ -208,6 +238,11 @@ fn parse(refs: &str, trees: &[(PathBuf, Option<String>)], repo: &Path) -> Vec<Br
             continue;
         };
         let date = date.trim().parse().unwrap_or(0);
+        let (ahead, behind) = if up.is_empty() {
+            (None, None)
+        } else {
+            track(f.next().unwrap_or(""))
+        };
         if let Some(name) = r.strip_prefix("refs/heads/") {
             let tree = trees
                 .iter()
@@ -217,6 +252,8 @@ fn parse(refs: &str, trees: &[(PathBuf, Option<String>)], repo: &Path) -> Vec<Br
                 name: name.to_string(),
                 remote: None,
                 upstream: (!up.is_empty()).then(|| up.to_string()),
+                ahead,
+                behind,
                 main: tree
                     .as_deref()
                     .is_some_and(|t| devstack_daemon::lanes::same_tree(t, repo)),
@@ -235,6 +272,8 @@ fn parse(refs: &str, trees: &[(PathBuf, Option<String>)], repo: &Path) -> Vec<Br
                 name: name.to_string(),
                 remote: Some(rem.to_string()),
                 upstream: None,
+                ahead: None,
+                behind: None,
                 worktree: None,
                 main: false,
                 date,
@@ -250,6 +289,28 @@ fn parse(refs: &str, trees: &[(PathBuf, Option<String>)], repo: &Path) -> Vec<Br
     });
     local.extend(remote);
     local
+}
+
+/// `%(upstream:track)` as ahead and behind: `[ahead 2, behind 5]`, one of
+/// them, or empty (in step) give both, zeros included; `[gone]` (the
+/// upstream was deleted) or anything else neither.
+fn track(t: &str) -> (Option<u32>, Option<u32>) {
+    let t = t.trim();
+    if t.is_empty() {
+        return (Some(0), Some(0));
+    }
+    let Some(inner) = t.strip_prefix('[').and_then(|t| t.strip_suffix(']')) else {
+        return (None, None);
+    };
+    let (mut ahead, mut behind) = (Some(0), Some(0));
+    for part in inner.split(',') {
+        match part.trim().split_once(' ') {
+            Some(("ahead", n)) => ahead = n.parse().ok(),
+            Some(("behind", n)) => behind = n.parse().ok(),
+            _ => return (None, None),
+        }
+    }
+    (ahead, behind)
 }
 
 /// Which of `branches` have a stack file at `rel` (ADR-0055 point 3): one
@@ -459,6 +520,59 @@ mod tests {
         assert_eq!(names, ["main", "fix", "origin/feat/x"]);
         assert!(b[0].main && b[0].worktree.is_some());
         assert_eq!(b[2].remote.as_deref(), Some("origin"));
+    }
+
+    #[test]
+    fn the_track_says_how_far_ahead_and_behind() {
+        assert_eq!(track(""), (Some(0), Some(0)));
+        assert_eq!(track("[ahead 2]"), (Some(2), Some(0)));
+        assert_eq!(track("[behind 5]"), (Some(0), Some(5)));
+        assert_eq!(track("[ahead 2, behind 5]"), (Some(2), Some(5)));
+        assert_eq!(track("[gone]"), (None, None));
+        assert_eq!(track("nonsense"), (None, None));
+        // Without an upstream there is no track to read.
+        let b = parse("refs/heads/fix\0\x0020\0\n", &[], Path::new("/r"));
+        assert_eq!((b[0].ahead, b[0].behind), (None, None));
+    }
+
+    #[test]
+    fn a_branch_counts_against_its_upstream_as_last_fetched() {
+        let (tmp, origin) = repo();
+        let clone = tmp.path().join("clone");
+        git_ok(
+            tmp.path(),
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        );
+        let main = |dir: &Path| {
+            list(dir, Path::new("devstack.toml"))
+                .unwrap()
+                .branches
+                .into_iter()
+                .find(|b| b.name == "main")
+                .unwrap()
+        };
+        let m = main(&clone);
+        assert_eq!((m.ahead, m.behind), (Some(0), Some(0)));
+
+        std::fs::write(clone.join("b.txt"), "b").unwrap();
+        git_ok(&clone, &["add", "."]);
+        git_ok(&clone, &["commit", "-q", "-m", "b"]);
+        for n in ["c", "d"] {
+            std::fs::write(origin.join(n), n).unwrap();
+            git_ok(&origin, &["add", "."]);
+            git_ok(&origin, &["commit", "-q", "-m", n]);
+        }
+        // Not fetched yet: the clone knows nothing of the two.
+        let m = main(&clone);
+        assert_eq!((m.ahead, m.behind), (Some(1), Some(0)));
+        fetch(&clone).unwrap();
+        let m = main(&clone);
+        assert_eq!((m.ahead, m.behind), (Some(1), Some(2)));
     }
 
     #[test]

@@ -894,13 +894,14 @@ export class MockTransport implements Transport {
     // mock makes and removes no worktree; it answers as the hub would.
     if (rest === '/branches' && method === 'GET') {
       const day = Math.floor(Date.now() / 1000) - 86_400;
-      const tree = (b: string, path: string) => ({ name: b, main: false, worktree: path, upstream: `origin/${b}`, stack_file: !stack.noStackFile.has(path) });
+      // How far ahead and behind (ADR-0088): `main` behind, one lane both.
+      const tree = (b: string, path: string) => ({ name: b, main: false, worktree: path, upstream: `origin/${b}`, ahead: 0, behind: 0, stack_file: !stack.noStackFile.has(path) });
       return json(200, {
         fetched: day + 80_000,
         branches: [
-          { name: 'main', main: true, worktree: stack.view.repo, upstream: 'origin/main', date: day + 70_000 },
-          { name: 'feat/coupons', main: false, upstream: 'origin/feat/coupons', date: day + 65_000 },
-          { ...tree('agent/login-fix', 'C:\\work\\shop-agent-login-fix'), date: day + 60_000 },
+          { name: 'main', main: true, worktree: stack.view.repo, upstream: 'origin/main', ahead: 0, behind: 3, date: day + 70_000 },
+          { name: 'feat/coupons', main: false, upstream: 'origin/feat/coupons', ahead: 0, behind: 0, date: day + 65_000 },
+          { ...tree('agent/login-fix', 'C:\\work\\shop-agent-login-fix'), ahead: 2, behind: 1, date: day + 60_000 },
           { ...tree('review-cart', 'C:\\work\\shop-review-cart'), date: day + 50_000 },
           { ...tree('agent/checkout-totals', 'C:\\work\\_wt\\1242'), date: day + 40_000 },
           { ...tree('agent/i18n-de', 'C:\\work\\_wt\\1333'), date: day + 30_000 },

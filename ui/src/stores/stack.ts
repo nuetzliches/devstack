@@ -618,8 +618,9 @@ export const useStack = defineStore('stack', () => {
 
   // ------------------------------------------------------------ branches
 
-  /** The repository's branches (ADR-0047), loaded when the picker opens. */
+  /** The repository's branches (ADR-0047), loaded when the picker opens, and when the worktrees or their refs move (ADR-0088). */
   const branches = shallowRef<Branches | null>(null);
+  watch(() => [id.value, id.value ? hub.worktrees[id.value] : undefined] as const, () => void loadBranches());
 
   async function loadBranches() {
     const sid = id.value;

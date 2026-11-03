@@ -39,6 +39,13 @@ and listed with their assets on the
 
 ### Added
 
+- **How far a lane's branch is ahead and behind** (ADR-0088): beside the
+  branch in the lane's header, `↑2 ↓5` when it differs from its upstream,
+  counted from the local refs as of the last fetch. devstack asks no remote
+  for it: whoever fetches (a git client, the IDE, the command line, the
+  branch picker's Fetch) moves it, and the dashboard sees it within a
+  second. A click lists the git clients the hub found, to open the tree in
+  one. The branches API gives `ahead` and `behind` for each local branch.
 - **Favourite stacks** (#377, ADR-0086): a star in a stack's sidebar row,
   or "Add to favourites" in its menu, marks it; favourites list first in
   the sidebar and in the stack switcher, the others below, each part in
