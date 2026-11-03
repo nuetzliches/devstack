@@ -10,6 +10,7 @@ import Icon from '@/components/icons/Icon.vue';
 import StackHeader from '@/components/StackHeader.vue';
 import LaneStart from '@/components/LaneStart.vue';
 import { rememberTab } from '@/lib/lanes';
+import RestartBanner from '@/components/RestartBanner.vue';
 import SkillsBanner from '@/components/SkillsBanner.vue';
 import StackFileBanner from '@/components/StackFileBanner.vue';
 import UpgradeBanner from '@/components/UpgradeBanner.vue';
@@ -157,6 +158,7 @@ function isActive(name: string) {
           {{ hub.dockerStarting ? 'Starting…' : `Start ${dockerDown.starter}` }}
         </button>
       </div>
+      <RestartBanner v-if="!stack.foreign" :config-changed="!!stack.view?.config_changed && !stack.ending" />
       <div v-if="!hubDown && stack.running && stack.view?.watcher_error" class="banner warn" data-testid="watcher-error">
         <Icon name="alert" :size="18" />
         <span class="grow"><strong>The file watcher does not see every edit.</strong> {{ stack.view.watcher_error }}</span>

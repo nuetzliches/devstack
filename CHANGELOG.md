@@ -17,6 +17,15 @@ and listed with their assets on the
   the chosen order. Marking moves the stack at once. Favourites live in
   the browser's `localStorage`, as the order does.
 
+### Fixed
+
+- **The restart banner shows in a lane's views again** (ADR-0081). "The
+  stack file changed since the stack started" and "another devstack is
+  installed", each with its Restart stack button, moved to the stack's page
+  and were gone from every lane's view, where the stack file gets edited.
+  Both pages show the same banner now; a lane's says it of the lane's own
+  stack file.
+
 ## [0.35.0] - 2026-11-03
 
 A connection to a shared lane is to the lane, not to its lease: it
