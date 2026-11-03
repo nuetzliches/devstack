@@ -2,16 +2,16 @@
 import { computed, ref } from 'vue';
 import type { Client, JournalEntry } from '@/api/types';
 import { clock, shortBuild } from '@/lib/format';
-import { clientLabel, journalLabel, journalService, viaText } from '@/lib/journal';
+import { clientLabel, journalLabel, journalSubject, viaText } from '@/lib/journal';
 import { candidateLook, candidateSummary, rebuildLook, rebuildSummary, statusLook, type Tone } from '@/lib/status';
 import { useStack, type TimelineEvent } from '@/stores/stack';
 import Icon from '@/components/icons/Icon.vue';
 import type { IconName } from '@/components/icons/icons';
 
-type Type = TimelineEvent['type'] | 'journal';
+type Live = Exclude<TimelineEvent['type'], 'snapshot'>;
 const stack = useStack();
-const types: { v: Type; label: string }[] = [
-  { v: 'journal', label: 'Changed by' },
+/** What the daemon did, live since this page connected. */
+const live: { v: Live; label: string }[] = [
   { v: 'service', label: 'Service' },
   { v: 'candidate', label: 'Candidate' },
   { v: 'devserver_rebuild', label: 'Rebuild' },
@@ -20,20 +20,20 @@ const types: { v: Type; label: string }[] = [
   { v: 'config', label: 'Stack file' },
   { v: 'watcher', label: 'Watcher' },
   { v: 'notice', label: 'Notice' },
-  { v: 'snapshot', label: 'Connect' },
 ];
-const enabled = ref<Record<Type, boolean>>({ journal: true, service: true, candidate: true, devserver_rebuild: true, infra: true, command: true, config: true, watcher: true, notice: true, snapshot: true });
+/** The journal's changes (who changed the lane, through which client). */
+const changes = ref(true);
+const enabled = ref<Record<Live, boolean>>({ service: true, candidate: true, devserver_rebuild: true, infra: true, command: true, config: true, watcher: true, notice: true });
 const subject = ref('');
 /** Changes through this client only; events stay. */
 const client = ref<Client | ''>('');
-/** Changes of this lane only (`main`: the main tree's); events stay. */
-const laneOf = ref('');
 
 /** A row of the timeline: an event of the stream, or a change the journal recorded (ADR-0067). */
 type Row = { kind: 'event'; at: number; key: string; e: TimelineEvent } | { kind: 'journal'; at: number; key: string; j: JournalEntry };
 
+/** What a row is about: a service, a Compose group, a command; none for the lane as a whole. */
 function subjectOf(r: Row): string {
-  if (r.kind === 'journal') return journalService(r.j) ?? '';
+  if (r.kind === 'journal') return journalSubject(r.j) ?? '';
   const e = r.e;
   switch (e.type) {
     case 'service':
@@ -41,7 +41,7 @@ function subjectOf(r: Row): string {
     case 'devserver_rebuild':
       return e.service;
     case 'infra':
-      return e.group;
+      return e.group === '*' ? '' : e.group;
     case 'command':
       return e.command;
     case 'config':
@@ -71,15 +71,15 @@ const subjects = computed(() => {
   return [...set].sort();
 });
 const clients = computed(() => [...new Set(stack.journal.map((j) => j.via))].sort());
-const lanes = computed(() => [...new Set(stack.journal.map((j) => j.lane).filter((l): l is string => !!l))].sort());
 
 const shown = computed(() =>
   rows.value.filter((r) => {
+    // Where the live events begin: it stays.
+    if (r.kind === 'event' && r.e.type === 'snapshot') return true;
     if (subject.value && subjectOf(r) !== subject.value) return false;
-    if (r.kind === 'event') return enabled.value[r.e.type];
-    if (!enabled.value.journal) return false;
+    if (r.kind === 'event') return enabled.value[r.e.type as Live];
+    if (!changes.value) return false;
     if (client.value && r.j.via !== client.value) return false;
-    if (laneOf.value && (r.j.lane ?? 'main') !== laneOf.value) return false;
     return true;
   }),
 );
@@ -88,9 +88,8 @@ type Desc = { icon: IconName; tone: Tone; title: string; text: string; detail?: 
 
 function describeJournal(j: JournalEntry): Desc {
   const by = viaText(j.via);
-  const where = j.lane ? ` · lane ${j.lane}` : '';
-  if (j.status >= 400) return { icon: 'xCircle', tone: 'danger', title: journalLabel(j), text: `refused (${j.status}) · ${by}${where}`, detail: j.error ?? null };
-  return { icon: j.via === 'auto' ? 'zap' : 'history', tone: 'accent', title: journalLabel(j), text: `${by}${where}` };
+  if (j.status >= 400) return { icon: 'xCircle', tone: 'danger', title: journalLabel(j), text: `refused (${j.status}) · ${by}`, detail: j.error ?? null };
+  return { icon: j.via === 'auto' ? 'zap' : 'history', tone: 'accent', title: journalLabel(j), text: by };
 }
 
 function describe(r: Row): Desc {
@@ -99,28 +98,28 @@ function describe(r: Row): Desc {
   switch (e.type) {
     case 'service': {
       const l = statusLook(e.status);
-      return { icon: 'server', tone: l.tone, title: e.service, text: `${l.label}${e.build_id ? ` · build ${shortBuild(e.build_id)}` : ''}`, detail: l.detail };
+      return { icon: 'server', tone: l.tone, title: l.label, text: e.build_id ? `build ${shortBuild(e.build_id)}` : '', detail: l.detail };
     }
     case 'candidate': {
-      if (!e.candidate) return { icon: 'checkCircle', tone: 'ok', title: e.service, text: 'Candidate done; the running build is current' };
+      if (!e.candidate) return { icon: 'checkCircle', tone: 'ok', title: 'Candidate done', text: 'the running build is current' };
       const l = candidateLook(e.candidate);
       return {
         icon: l.icon,
         tone: l.tone,
-        title: e.service,
-        text: `${candidateSummary(e.candidate)}${e.candidate.build_id ? ` · ${shortBuild(e.candidate.build_id)}` : ''}`,
+        title: candidateSummary(e.candidate),
+        text: e.candidate.build_id ? shortBuild(e.candidate.build_id) : '',
         detail: e.candidate.reason,
       };
     }
     case 'devserver_rebuild': {
-      if (!e.rebuild) return { icon: 'checkCircle', tone: 'neutral', title: e.service, text: 'Rebuild shown no longer' };
+      if (!e.rebuild) return { icon: 'checkCircle', tone: 'neutral', title: 'Rebuild', text: 'shown no longer' };
       const l = rebuildLook(e.rebuild);
-      return { icon: l.icon, tone: l.tone, title: e.service, text: `${rebuildSummary(e.rebuild)} · ${e.rebuild.tool}`, detail: e.rebuild.errors?.join('\n') ?? null };
+      return { icon: l.icon, tone: l.tone, title: rebuildSummary(e.rebuild), text: e.rebuild.tool, detail: e.rebuild.errors?.join('\n') ?? null };
     }
     case 'infra':
-      return { icon: 'box', tone: 'info', title: e.group, text: e.message };
+      return { icon: 'box', tone: 'info', title: e.message, text: '' };
     case 'command':
-      return { icon: 'terminal', tone: e.status === 'failed' ? 'danger' : e.status === 'succeeded' ? 'ok' : 'accent', title: e.command, text: `run #${e.run} ${e.status}` };
+      return { icon: 'terminal', tone: e.status === 'failed' ? 'danger' : e.status === 'succeeded' ? 'ok' : 'accent', title: `run #${e.run}`, text: e.status };
     case 'config':
       return e.changed
         ? { icon: 'file', tone: 'warn', title: 'Stack file', text: 'Changed since the daemon started; applies with the next start' }
@@ -132,7 +131,7 @@ function describe(r: Row): Desc {
     case 'notice':
       return { icon: 'alert', tone: e.level === 'error' ? 'danger' : 'warn', title: 'Notice', text: e.text };
     case 'snapshot':
-      return { icon: 'activity', tone: 'neutral', title: 'Connected', text: `snapshot of ${e.stack.services.length} services` };
+      return { icon: 'activity', tone: 'neutral', title: 'Connected', text: `live events from here on · snapshot of ${e.stack.services.length} services` };
   }
 }
 </script>
@@ -142,33 +141,30 @@ function describe(r: Row): Desc {
     <header class="page-header">
       <div>
         <h1>Activity</h1>
-        <p class="subtitle">What changed the stack and through which client (its journal, kept across restarts), and the live events since this page connected; newest first.</p>
+        <p class="subtitle">What changed this lane and through which client (its journal, kept across restarts), and what the daemon did since this page connected; newest first.</p>
       </div>
     </header>
 
     <section class="card">
       <header class="card-header filters">
-        <div class="btn-group" role="group" aria-label="Event types">
-          <button v-for="t in types" :key="t.v" type="button" class="chip-toggle" :aria-pressed="enabled[t.v]" :data-testid="`events-filter-${t.v}`" @click="enabled[t.v] = !enabled[t.v]">
-            {{ t.label }}
-          </button>
+        <div class="btn-group" role="group" aria-label="Changes">
+          <button type="button" class="chip-toggle" :aria-pressed="changes" data-testid="events-filter-journal" title="Who changed the lane, through which client; kept across restarts" @click="changes = !changes">Changes</button>
         </div>
-        <span class="grow" />
         <template v-if="clients.length">
           <label class="sr-only" for="ev-client">Filter changes by client</label>
-          <select id="ev-client" v-model="client" class="input input-sm" data-testid="events-client">
+          <select id="ev-client" v-model="client" class="input input-sm" data-testid="events-client" :disabled="!changes">
             <option value="">All clients</option>
             <option v-for="c in clients" :key="c" :value="c">{{ clientLabel[c] ?? c }}</option>
           </select>
         </template>
-        <template v-if="lanes.length">
-          <label class="sr-only" for="ev-lane">Filter changes by lane</label>
-          <select id="ev-lane" v-model="laneOf" class="input input-sm" data-testid="events-lane">
-            <option value="">All lanes</option>
-            <option value="main">Main tree</option>
-            <option v-for="l in lanes" :key="l" :value="l">{{ l }}</option>
-          </select>
-        </template>
+        <span class="sep" aria-hidden="true" />
+        <span class="group-label" title="What the daemon did since this page connected">Live</span>
+        <div class="btn-group" role="group" aria-label="Live events">
+          <button v-for="t in live" :key="t.v" type="button" class="chip-toggle" :aria-pressed="enabled[t.v]" :data-testid="`events-filter-${t.v}`" @click="enabled[t.v] = !enabled[t.v]">
+            {{ t.label }}
+          </button>
+        </div>
+        <span class="grow" />
         <label class="sr-only" for="ev-subject">Filter by service</label>
         <select id="ev-subject" v-model="subject" class="input input-sm" data-testid="events-subject">
           <option value="">All services</option>
@@ -179,11 +175,14 @@ function describe(r: Row): Desc {
         <li v-for="r in shown" :key="r.key" class="ev" :class="`tone-${describe(r).tone}`" :data-type="r.kind === 'journal' ? 'journal' : r.e.type">
           <time class="t tabular" :datetime="new Date(r.at).toISOString()">{{ clock(r.at) }}</time>
           <span class="ic"><Icon :name="describe(r).icon" :size="14" /></span>
+          <span class="ty">{{ r.kind === 'journal' ? 'changed' : r.e.type === 'devserver_rebuild' ? 'rebuild' : r.e.type }}</span>
+          <span class="who" data-testid="events-subject-cell">
+            <RouterLink v-if="subjectOf(r) && stack.svc(subjectOf(r))" :to="{ name: 'service', params: { stack: stack.id ?? '', name: subjectOf(r) } }" class="who-link" :title="subjectOf(r)">{{ subjectOf(r) }}</RouterLink>
+            <span v-else :title="subjectOf(r)">{{ subjectOf(r) }}</span>
+          </span>
           <div class="grow body">
             <div class="line1">
-              <span class="ty">{{ r.kind === 'journal' ? 'changed' : r.e.type }}</span>
-              <RouterLink v-if="r.kind === 'event' && (r.e.type === 'service' || r.e.type === 'candidate') && stack.svc(r.e.service)" :to="{ name: 'service', params: { stack: stack.id ?? '', name: r.e.service } }" class="subj">{{ describe(r).title }}</RouterLink>
-              <span v-else class="subj">{{ describe(r).title }}</span>
+              <span class="subj">{{ describe(r).title }}</span>
               <span class="txt">{{ describe(r).text }}</span>
             </div>
             <pre v-if="describe(r).detail" class="detail">{{ describe(r).detail }}</pre>
@@ -205,6 +204,19 @@ function describe(r: Row): Desc {
 .filters {
   flex-wrap: wrap;
   gap: 8px;
+}
+.sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 0 4px;
+}
+.group-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  color: var(--text-faint);
 }
 .input-sm {
   height: 28px;
@@ -287,7 +299,22 @@ function describe(r: Row): Desc {
   letter-spacing: 0.06em;
   font-weight: 700;
   color: var(--text-faint);
-  min-width: 64px;
+  width: 72px;
+  flex: none;
+  padding-top: 4px;
+}
+.who {
+  width: 160px;
+  flex: none;
+  padding-top: 1px;
+  font-weight: 600;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.who-link {
+  color: var(--text);
 }
 .subj {
   font-weight: 600;
@@ -311,13 +338,16 @@ function describe(r: Row): Desc {
   font-size: 11px;
   padding-top: 3px;
 }
+@media (max-width: 720px) {
+  .who {
+    width: 96px;
+  }
+}
 @media (max-width: 520px) {
   .t {
     width: auto;
   }
-  .ty {
-    min-width: 0;
-  }
+  .ty,
   .seq {
     display: none;
   }

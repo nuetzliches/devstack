@@ -7,13 +7,14 @@
 // services that run once per machine (`singleton`, ADR-0080), what each
 // lane uses, and its ports as a graph (ADR-0082). A stack that does not run shows its start and its worktrees as
 // the hub lists them (ADR-0078). It follows the main tree's stream, without
-// making `main` the lane an older link opens.
+// making `main` the lane an older link opens. Its Activity: the changes of
+// the stack itself (ADR-0067), which no lane shows.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { api, paths, v1 } from '@/api';
 import type { HubPorts, LaneView, Load, PortEntry, PortOverlap, UsageReport } from '@/api/types';
 import { ago, bytes, clock, duration, percent, useNow } from '@/lib/format';
-import { viaText } from '@/lib/journal';
+import { journalLabel, viaText } from '@/lib/journal';
 import { laneLabel, lastTab, MAIN, nodeLabel, started } from '@/lib/lanes';
 import { laneView } from '@/lib/stackRoutes';
 import { statusLook } from '@/lib/status';
@@ -400,6 +401,27 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
         </li>
       </ul>
     </section>
+
+    <section v-if="stack.running" class="card" data-testid="stack-activity">
+      <header class="card-header">
+        <Icon name="history" :size="16" />
+        <h2>Activity</h2>
+        <span class="count">{{ stack.stackJournal.length }}</span>
+        <span class="faint small">the stack's own changes; a lane's are in its Activity</span>
+      </header>
+      <div v-if="!stack.stackJournal.length" class="card-body muted small">No change to the stack in its journal.</div>
+      <ol v-else class="changes">
+        <li v-for="(j, i) in stack.stackJournal" :key="`${j.at}-${i}`" data-testid="stack-change">
+          <div class="line1">
+            <time class="t tabular" :datetime="new Date(j.at).toISOString()">{{ clock(j.at) }}</time>
+            <span class="what">{{ journalLabel(j) }}</span>
+            <span v-if="j.status >= 400" class="refused small">refused ({{ j.status }}) · {{ viaText(j.via) }}</span>
+            <span v-else class="muted small">{{ viaText(j.via) }}</span>
+          </div>
+          <pre v-if="j.status >= 400 && j.error" class="detail">{{ j.error }}</pre>
+        </li>
+      </ol>
+    </section>
   </div>
 </template>
 
@@ -491,8 +513,43 @@ h1 {
   gap: 8px;
   padding: 8px var(--space-4);
 }
-.singletons li + li {
+.singletons li + li,
+.changes li + li {
   border-top: 1px solid var(--border);
+}
+.changes {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+}
+.changes li {
+  padding: 8px var(--space-4);
+}
+.changes .line1 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.changes .t {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  width: 64px;
+  flex: none;
+}
+.changes .what {
+  font-weight: 600;
+}
+.changes .refused {
+  color: var(--danger-text);
+}
+.changes .detail {
+  margin: 4px 0 0 72px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-2);
 }
 .grow {
   flex: 1;
