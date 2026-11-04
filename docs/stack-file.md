@@ -472,7 +472,7 @@ server reloads itself).
 | Key | Meaning |
 | --- | --- |
 | `autostart = false` | started only on demand (`devstack start <service>`) |
-| `singleton = true` | runs once per machine, in the main working tree only, never in a lane: for a tray app or something holding a global lock; see `[lanes]`. Before 0.33.0 spelled `lanes = false`, which still works and is reported as deprecated ([ADR-0080](adr/0080-the-main-tree-answers-as-a-lane-shared-is-deprecated.md)) |
+| `singleton = true` | runs once per machine, in the main working tree only, never in a lane: for a tray app or something holding a global lock; see `[lanes]`. Before 0.33.0 spelled `lanes = false`, which still works and is reported as deprecated ([ADR-0080](adr/0080-the-main-tree-answers-as-a-lane-shared-is-deprecated.md)). A file with it should say `requires = "0.33.0"` |
 | `platforms = ["windows"]` | only on these platforms (`windows`, `linux`, `macos`); default `[]`: every platform |
 | `ensure_dirs = ["{repo}/data/files"]` | created before start |
 | `prepare = { run = "npm ci", inputs = ["web/package-lock.json"] }` | installs what a copy of the source lacks (see below) |

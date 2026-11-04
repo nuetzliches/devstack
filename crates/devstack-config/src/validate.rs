@@ -1083,8 +1083,8 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
 const FIRST_LANES: u32 = 3;
 
 /// What a valid stack file may want changed (`devstack check` prints them):
-/// a newer key (`[stack] reviewed`, `announced_ports`, a service's `stop`
-/// and `tunnel`, `prepare.outputs` and `prepare.version`)
+/// a newer key (`[stack] reviewed`, `announced_ports`, a service's `stop`,
+/// `singleton` and `tunnel`, `prepare.outputs` and `prepare.version`)
 /// without the `requires` that keeps an older devstack from failing on it;
 /// two services whose ports differ by one of the first
 /// few multiples of `[lanes] port_step`, so that one of the first lanes
@@ -1220,6 +1220,28 @@ pub fn warnings(stack: &Stack) -> Vec<Issue> {
                     ),
                 });
             }
+        }
+    }
+    let singleton = crate::version_order(crate::SINGLETON_SINCE);
+    if stack
+        .stack
+        .requires
+        .as_deref()
+        .is_none_or(|r| crate::version_order(r) < singleton)
+    {
+        for name in stack
+            .services
+            .iter()
+            .filter(|(_, s)| s.singleton)
+            .map(|(n, _)| n)
+        {
+            out.push(Issue {
+                path: format!("services.{name}.singleton"),
+                message: format!(
+                    "a devstack before {v} does not know this key and fails on it with \"unknown field\": `requires = \"{v}\"` makes it ask to be updated instead",
+                    v = crate::SINGLETON_SINCE
+                ),
+            });
         }
     }
     let tunnel = crate::version_order(crate::TUNNEL_SINCE);

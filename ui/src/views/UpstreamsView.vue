@@ -10,6 +10,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { api, paths } from '@/api';
 import type { McpUpstream, McpUpstreamAuth, McpUpstreams } from '@/api/types';
 import { act } from '@/lib/actions';
+import { webUrl } from '@/lib/format';
 import { oauthAuth } from '@/lib/oauthAuth';
 import { line, words } from '@/lib/commandLine';
 import { useUi } from '@/stores/ui';
@@ -160,13 +161,16 @@ async function remove(u: McpUpstream) {
 async function login(u: McpUpstream) {
   // Opened before the request, as a click: a tab opened after an await is
   // blocked as a pop-up.
+  // The tab shares this origin until it leaves: it gets no way back here.
   const tab = window.open('', '_blank');
+  if (tab) tab.opener = null;
   busy.value[u.name] = 'login';
   const r = await act<{ url: string }>({ label: `Log in to ${u.name}`, path: paths.upstreamLogin(u.name), success: false });
   delete busy.value[u.name];
-  if (r.ok && r.body?.url) {
-    if (tab) tab.location.href = r.body.url;
-    else window.open(r.body.url, '_blank');
+  const url = webUrl(r.body?.url);
+  if (r.ok && url) {
+    if (tab) tab.location.href = url;
+    else window.open(url, '_blank', 'noopener');
     ui.toast('info', `Log in to ${u.name} in the new tab`, 'This list follows once the login is done.');
     watchLogin(u.name);
   } else tab?.close();

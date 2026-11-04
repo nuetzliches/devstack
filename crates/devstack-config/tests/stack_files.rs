@@ -1240,6 +1240,27 @@ fn a_services_stop_takes_the_placeholders_of_its_run() {
 }
 
 #[test]
+fn singleton_without_its_requires_is_warned_about() {
+    use devstack_config::{SINGLETON_SINCE, validate::warnings};
+    let text = MINIMAL.replace(
+        "port = 5000
+",
+        "port = 5000
+singleton = true
+",
+    );
+    let mut s = from_str(&text, Path::new("t")).unwrap();
+    let w = warnings(&s);
+    assert!(
+        w.iter()
+            .any(|i| i.path == "services.api.singleton" && i.message.contains(SINGLETON_SINCE)),
+        "{w:?}"
+    );
+    s.stack.requires = Some(SINGLETON_SINCE.into());
+    assert!(warnings(&s).is_empty());
+}
+
+#[test]
 fn tunnel_false_keeps_a_service_from_a_public_link() {
     use devstack_config::{TUNNEL_SINCE, validate::warnings};
     let text = MINIMAL.replace(

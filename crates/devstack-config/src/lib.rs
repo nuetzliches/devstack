@@ -63,6 +63,10 @@ pub const OUTPUTS_SINCE: &str = "0.23.0";
 /// sets it wants `requires` at least this.
 pub const WARM_SINCE: &str = "0.24.0";
 
+/// The first devstack that knows `[services.<name>] singleton` (ADR-0080):
+/// a file that sets it wants `requires` at least this.
+pub const SINGLETON_SINCE: &str = "0.33.0";
+
 /// The first devstack that knows `[services.<name>] tunnel`: a file that
 /// sets it wants `requires` at least this.
 pub const TUNNEL_SINCE: &str = "0.37.0";
