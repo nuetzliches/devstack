@@ -27,8 +27,8 @@ const what = (l: PoolLease) => `lane ${l.repo}/${l.lane} on ${pool.nameOf(l.node
         </td>
         <td><span class="pill sm" :class="l.state === 'running' ? 'ok' : 'outline'">{{ l.state }}</span></td>
         <td v-if="pool.isAdmin" class="actions">
-          <button type="button" class="btn btn-xs" title="Stop this lane on its node" data-testid="pool-end" @click="pool.endLease(l.id, what(l))">
-            <Icon name="stop" :size="13" /> End
+          <button type="button" class="btn btn-xs" title="Stop this lane on its node" :disabled="!!pool.busy[l.id]" data-testid="pool-end" @click="pool.endLease(l.id, what(l))">
+            <span v-if="pool.busy[l.id]" class="spinner" /><Icon v-else name="stop" :size="13" /> End
           </button>
         </td>
       </tr>

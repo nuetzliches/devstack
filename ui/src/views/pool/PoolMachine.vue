@@ -173,7 +173,7 @@ async function savePolicy(clear = false) {
                 <dd>
                   <form v-if="editTags" class="stack-form" @submit.prevent="saveTags">
                     <input v-model="tagsText" class="input" placeholder="team:backend, customer:acme" data-testid="pool-tags-input" />
-                    <button type="submit" class="btn btn-xs btn-primary">Save</button>
+                    <button type="submit" class="btn btn-xs btn-primary" :disabled="!!pool.busy[m.id]"><span v-if="pool.busy[m.id] === 'tags'" class="spinner" /> Save</button>
                     <button type="button" class="btn btn-xs btn-ghost" @click="editTags = false">Cancel</button>
                   </form>
                   <template v-else>
@@ -226,12 +226,13 @@ async function savePolicy(clear = false) {
                 v-if="node.provisioned.unconfirmed"
                 type="button"
                 class="btn btn-sm btn-primary"
+                :disabled="!!pool.busy[node.id]"
                 data-testid="pool-confirm"
                 @click="pool.confirmNode(node.id, node.name, node.provisioned.machine, node.provisioned.address, node.provisioned.key)"
               >
                 <Icon name="check" :size="14" /> Confirm
               </button>
-              <button type="button" class="btn btn-sm btn-danger" title="Delete the machine at its provider now" data-testid="pool-give-back" @click="pool.giveBack(node.id, node.name)">
+              <button type="button" class="btn btn-sm btn-danger" title="Delete the machine at its provider now" :disabled="!!pool.busy[node.id]" data-testid="pool-give-back" @click="pool.giveBack(node.id, node.name)">
                 <Icon name="trash" :size="14" /> Give back
               </button>
             </div>
@@ -246,18 +247,18 @@ async function savePolicy(clear = false) {
           </header>
           <div class="card-body manage">
             <label class="consent" :title="member.node ? 'The coordinator places no new lanes on it once off' : 'Let it run the pool\'s lanes as a node'">
-              <input type="checkbox" :checked="!!member.node" data-testid="pool-node" @change="pool.setNode(m.id, m.name, !member.node)" />
+              <input type="checkbox" :checked="!!member.node" :disabled="!!pool.busy[m.id]" data-testid="pool-node" @change="pool.setNode(m.id, m.name, !member.node)" />
               <span>Runs the pool's lanes</span>
             </label>
             <label v-if="provisioner || member.provision" class="consent" title="Its lanes have the pool make a node when none has room (ADR-0051)">
-              <input type="checkbox" :checked="!!member.provision" data-testid="pool-provision" @change="pool.setProvision(m.id, m.name, !member.provision)" />
+              <input type="checkbox" :checked="!!member.provision" :disabled="!!pool.busy[m.id]" data-testid="pool-provision" @change="pool.setProvision(m.id, m.name, !member.provision)" />
               <span>Its lanes may have the pool make a node</span>
             </label>
             <label class="consent" :title="lastAdmin ? lastAdminTitle : 'An admin approves, removes and manages members and nodes'">
               <input
                 type="checkbox"
                 :checked="member.role === 'admin'"
-                :disabled="lastAdmin"
+                :disabled="lastAdmin || !!pool.busy[m.id]"
                 :data-testid="member.role === 'admin' ? 'pool-make-member' : 'pool-make-admin'"
                 @change="pool.setRole(m.id, m.name, member.role === 'admin' ? 'member' : 'admin')"
               />
@@ -270,28 +271,30 @@ async function savePolicy(clear = false) {
                 type="button"
                 class="btn btn-sm"
                 :title="node?.paused ? 'Let it take lanes again' : 'No new lanes on it; running ones stay'"
+                :disabled="!!pool.busy[m.id]"
                 data-testid="pool-pause"
                 @click="pool.setPaused(m.id, m.name, !node?.paused)"
               >
-                <Icon :name="node?.paused ? 'play' : 'pause'" :size="14" /> {{ node?.paused ? 'Resume' : 'Pause' }}
+                <span v-if="pool.busy[m.id] === 'pause'" class="spinner" /><Icon v-else :name="node?.paused ? 'play' : 'pause'" :size="14" /> {{ node?.paused ? 'Resume' : 'Pause' }}
               </button>
               <button
                 v-if="node?.kind === 'server' && node.online"
                 type="button"
                 class="btn btn-sm"
                 :class="{ 'btn-primary': !report?.no_update && (hub.newer || releaseClass(report?.devstack, true, hub.version) === 'warn') }"
-                :disabled="!!report?.no_update"
+                :disabled="!!report?.no_update || !!pool.busy[m.id]"
                 :title="report?.no_update ? `It does not update itself: ${report.no_update}` : 'Have this server install the latest devstack once its lanes have ended (ADR-0039)'"
                 data-testid="pool-update"
                 @click="pool.updateNode(m.id, m.name)"
               >
-                <Icon name="download" :size="14" /> Update devstack
+                <span v-if="pool.busy[m.id] === 'update'" class="spinner" /><Icon v-else name="download" :size="14" /> Update devstack
               </button>
               <button
                 v-if="report?.update?.state === 'draining'"
                 type="button"
                 class="btn btn-sm"
                 title="Withdraw the update: it stops waiting for its lanes and takes new ones again"
+                :disabled="!!pool.busy[m.id]"
                 data-testid="pool-update-cancel"
                 @click="pool.cancelUpdate(m.id, m.name)"
               >
@@ -302,10 +305,11 @@ async function savePolicy(clear = false) {
                 type="button"
                 class="btn btn-sm"
                 :title="`Remove the ${report.kept.lanes} stopped lane(s) it keeps (${bytes(report.kept.bytes)})`"
+                :disabled="!!pool.busy[m.id]"
                 data-testid="pool-prune"
                 @click="pool.pruneNode(m.id, m.name)"
               >
-                <Icon name="trash" :size="14" /> Prune kept lanes
+                <span v-if="pool.busy[m.id] === 'prune'" class="spinner" /><Icon v-else name="trash" :size="14" /> Prune kept lanes
               </button>
             </div>
 
@@ -313,7 +317,7 @@ async function savePolicy(clear = false) {
               <button
                 type="button"
                 class="btn btn-sm btn-danger"
-                :disabled="lastAdmin"
+                :disabled="lastAdmin || !!pool.busy[m.id]"
                 :title="lastAdmin ? lastAdminTitle : 'Its certificate is refused from now on; it can only join again with a new key'"
                 data-testid="pool-remove"
                 @click="pool.remove(m.id, m.name, false)"
@@ -373,8 +377,8 @@ async function savePolicy(clear = false) {
                   <option value="none">only the lane's own containers</option>
                 </select>
               </label>
-              <button type="submit" class="btn btn-sm btn-primary">Save</button>
-              <button type="button" class="btn btn-sm" @click="savePolicy(true)">Lift</button>
+              <button type="submit" class="btn btn-sm btn-primary" :disabled="!!m && !!pool.busy[m.id]">Save</button>
+              <button type="button" class="btn btn-sm" :disabled="!!m && !!pool.busy[m.id]" @click="savePolicy(true)">Lift</button>
               <button type="button" class="btn btn-sm btn-ghost" @click="editPolicy = false">Cancel</button>
               <span class="faint small">A repository is named by the requester: a guard against mistakes, not against someone who lies.</span>
             </form>

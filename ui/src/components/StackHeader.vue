@@ -47,8 +47,10 @@ const laneMenu = computed(() => {
   const a = laneActions(current.value);
   return { ...a, stop: a.items.find((i) => i.key === 'stop') ?? null, items: a.items.filter((i) => i.key !== 'stop') };
 });
-const laneBusy = computed(() => !!current.value && [stack.busy['lane-restart'], stack.busy['lane-start']].includes(current.value.name));
-const stopBusy = computed(() => !!current.value && stack.busy['lane-stop'] === current.value.name);
+/** What the shown lane is busy with (a start, stop, restart…): its actions wait, the one under way spins. */
+const busyWith = computed(() => (current.value ? stack.laneBusy(current.value.name) : null));
+const laneBusy = computed(() => !!busyWith.value && busyWith.value !== 'stop');
+const stopBusy = computed(() => busyWith.value === 'stop');
 /** "Serve main ports": the same button for every lane that does not hold them; `main` takes them back whether it runs or not. */
 const canServeMain = computed(() => !!current.value && !current.value.owns_main && (current.value.active !== false || isMain.value) && !view.value?.no_main_ports);
 
@@ -279,10 +281,11 @@ function manageFromSync() {
           class="btn btn-sm"
           :class="{ 'btn-warn': publicCount }"
           :title="publicCount ? `${publicCount} of its services are reachable from the internet: close every link` : 'Open a public link to every service of the lane: reachable from the internet'"
+          :disabled="!!stack.busy['lane-public']"
           data-testid="lane-public"
           @click="publicCount ? stack.closeLanePublic() : stack.openLanePublic()"
         >
-          <Icon name="link" :size="13" /> {{ publicCount ? `Public (${publicCount})` : 'Make public' }}
+          <span v-if="stack.busy['lane-public']" class="spinner" /><Icon v-else name="link" :size="13" /> {{ publicCount ? `Public (${publicCount})` : 'Make public' }}
         </button>
         <!-- What has no meaning for the main working tree stays in its place, disabled, with the reason (ADR-0081). -->
         <template v-if="isMain && pool.targets.length">
@@ -323,14 +326,14 @@ function manageFromSync() {
             ref="moveTrigger"
             type="button"
             class="btn btn-sm"
-            :disabled="!!moving"
+            :disabled="!!moving || !!stack.busy['lane-move']"
             :aria-expanded="moveOpen"
             aria-haspopup="menu"
             title="Run this worktree's lane elsewhere: a cold start there that takes over once it is ready"
             data-testid="lane-move"
             @click="moveOpen = !moveOpen"
           >
-            <span v-if="moving" class="spinner" /><Icon v-else name="server" :size="14" />
+            <span v-if="moving || stack.busy['lane-move']" class="spinner" /><Icon v-else name="server" :size="14" />
             {{ moving ? `Moving to ${placeName(moving.to)}… ${moving.step}/${moving.steps}` : 'Move' }}
           </button>
           <div v-if="moveOpen" class="menu menu-right" role="menu">
@@ -345,7 +348,7 @@ function manageFromSync() {
           v-if="current && laneMenu?.stop"
           type="button"
           class="btn btn-sm btn-danger"
-          :disabled="!!laneMenu.stop.disabled || stopBusy"
+          :disabled="!!laneMenu.stop.disabled || (!!busyWith && busyWith !== 'starting')"
           :title="laneMenu.stop.title"
           data-testid="lane-stop"
           @click="stack.laneAction(current!, 'stop')"
@@ -359,7 +362,8 @@ function manageFromSync() {
           :icon="laneMenu.main.icon"
           :title="laneMenu.main.title ?? laneMenu.main.label"
           :items="laneMenu.items"
-          :main-disabled="!!laneMenu.main.disabled"
+          :main-disabled="!!laneMenu.main.disabled || !!busyWith"
+          :disabled="!!busyWith"
           :busy="laneBusy"
           menu-label="Lane actions"
           testid="lane-actions"

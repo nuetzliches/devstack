@@ -616,7 +616,14 @@ describe('stack store', () => {
       const stack = await shownStack();
       const events = fake.stream('/hub/stacks/shop/api/v1/events');
       events.handlers.onMessage({ type: 'lanes', lanes: [{ ...lane, active: false }] });
-      fake.on('/hub/stacks/shop/api/v1/lanes', (method) => (method === 'POST' ? { status: 202, ok: true, body: starting } : ok([starting])));
+      // What the daemon lists, as the lanes events said last.
+      let listed: unknown[] = [starting];
+      const send = events.handlers.onMessage;
+      events.handlers.onMessage = (ev) => {
+        if ((ev as { type: string }).type === 'lanes') listed = (ev as { lanes: unknown[] }).lanes;
+        send(ev);
+      };
+      fake.on('/hub/stacks/shop/api/v1/lanes', (method) => (method === 'POST' ? { status: 202, ok: true, body: starting } : ok(listed)));
       fake.on('/hub/stacks/shop/api/v1/lanes/feat/v1/up', { status: 202, ok: true, body: null });
       const done = stack.startLane('feat', 'build');
       await vi.waitFor(() => expect(stack.lanes[0]?.moving?.step).toBe(2));
@@ -630,6 +637,36 @@ describe('stack store', () => {
       events.handlers.onMessage({ type: 'lanes', lanes: [{ ...lane, active: true, node: 'build' }] });
       await done;
       expect(ups()).toHaveLength(1);
+    });
+
+    it('starts once: a second start, here or on another node, sends nothing while the first goes on', async () => {
+      const { stack, events, done } = await startOnNode();
+      const posts = () => fake.requests.filter((r) => r.method === 'POST').length;
+      const before = posts();
+      await stack.startLane('feat');
+      await stack.startLane('feat', 'other');
+      await stack.laneAction(stack.lanes[0]!, 'start');
+      expect(posts()).toBe(before);
+      expect(stack.startOf('feat')?.on).toBe('build');
+      events.handlers.onMessage({ type: 'lanes', lanes: [{ ...lane, active: true, node: 'build' }] });
+      await done;
+      expect(posts()).toBe(before + 1);
+    });
+
+    it('holds its start page until its own daemon reports it, also across a lane switch', async () => {
+      const { stack, events, done } = await startOnNode();
+      stack.selectLane('feat');
+      stack.selectLane(null);
+      stack.selectLane('feat');
+      await new Promise((r) => setTimeout(r, 0));
+      expect(stack.startOf('feat')).not.toBeNull();
+      events.handlers.onMessage({ type: 'lanes', lanes: [{ ...lane, active: true, node: 'build' }] });
+      await done;
+      // It runs, but its own stream has not reported yet.
+      expect(stack.apiLane).toBe('feat');
+      expect(stack.startOf('feat')).not.toBeNull();
+      fake.stream('/hub/stacks/shop/api/v1/lanes/feat/v1/events').handlers.onMessage({ type: 'snapshot', stack: { services: [], infra: [], groups: [], commands: [] } } as never);
+      await vi.waitFor(() => expect(stack.startOf('feat')).toBeNull());
     });
 
     it('says why its start failed, and starts nothing', async () => {

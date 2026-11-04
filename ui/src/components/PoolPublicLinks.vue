@@ -8,7 +8,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { api, paths } from '@/api';
 import type { PoolPublicLinksAdmin, PublicLinksPoolOffer, PublicLinksState } from '@/api/types';
-import { act } from '@/lib/actions';
+import { act, useBusy } from '@/lib/actions';
 import { ago, useNow } from '@/lib/format';
 import { DEFAULT_POOL, usePool } from '@/stores/pool';
 import Icon from '@/components/icons/Icon.vue';
@@ -23,6 +23,8 @@ const admin = ref<PoolPublicLinksAdmin | null>(null);
 const offer = computed(() => offers.value.find((o) => o.pool === pool.current) ?? null);
 const usesThis = computed(() => mine.value?.pool === pool.current);
 const ownTunnel = computed(() => mine.value?.configured && !mine.value.pool);
+/** The request under way: `take`, `leave`, `save` or the host being closed. */
+const { busy, run } = useBusy();
 
 async function load() {
   try {
@@ -43,7 +45,7 @@ async function load() {
 onMounted(load);
 watch(() => [pool.current, pool.isAdmin], load);
 
-async function take() {
+const take = () => run('take', async () => {
   const o = offer.value?.offer;
   const res = await act<PublicLinksState>({
     label: `Public links through pool ${pool.current}`,
@@ -56,19 +58,20 @@ async function take() {
     success: 'Public links go through the pool now',
   });
   if (res.ok && res.body) mine.value = res.body;
-}
+});
 
-async function leave() {
-  const res = await act<PublicLinksState>({ label: 'Stop using the pool for public links', method: 'DELETE', path: paths.publicLinksTunnel, success: 'Public links are Quick Tunnels again' });
-  if (res.ok && res.body) mine.value = res.body;
-}
+const leave = () =>
+  run('leave', async () => {
+    const res = await act<PublicLinksState>({ label: 'Stop using the pool for public links', method: 'DELETE', path: paths.publicLinksTunnel, success: 'Public links are Quick Tunnels again' });
+    if (res.ok && res.body) mine.value = res.body;
+  });
 
 // The admin's form.
 const form = ref({ domain: '', mode: 'access', tag: '' });
 watch(admin, (a) => {
   if (a) form.value = { domain: a.settings.domain ?? '', mode: a.settings.mode, tag: a.settings.tag ?? '' };
 });
-async function save() {
+const save = () => run('save', async () => {
   const f = form.value;
   const res = await act<PoolPublicLinksAdmin>({
     label: 'Public links of the pool',
@@ -77,8 +80,8 @@ async function save() {
     success: 'Saved',
   });
   if (res.ok && res.body) admin.value = res.body;
-}
-async function close(host: string) {
+});
+const close = (host: string) => run(host, async () => {
   const res = await act<PoolPublicLinksAdmin>({
     label: `Close ${host}`,
     path: at(paths.poolPublicLinkClose),
@@ -88,7 +91,7 @@ async function close(host: string) {
     success: `${host} closed`,
   });
   if (res.ok && res.body) admin.value = res.body;
-}
+});
 </script>
 
 <template>
@@ -106,9 +109,9 @@ async function close(host: string) {
         </p>
         <p v-if="!offer.offer.allowed" class="muted small" data-testid="pool-public-links-why">{{ offer.offer.why }}</p>
         <template v-else>
-          <button v-if="usesThis" type="button" class="btn btn-sm" data-testid="pool-public-links-leave" @click="leave">Stop using it</button>
-          <button v-else type="button" class="btn btn-sm btn-primary" :disabled="ownTunnel" :title="ownTunnel ? 'Your own named tunnel goes first: remove it with devstack tunnel --remove-setup' : ''" data-testid="pool-public-links-use" @click="take">
-            Use for my public links
+          <button v-if="usesThis" type="button" class="btn btn-sm" :disabled="!!busy" data-testid="pool-public-links-leave" @click="leave"><span v-if="busy === 'leave'" class="spinner" /> Stop using it</button>
+          <button v-else type="button" class="btn btn-sm btn-primary" :disabled="ownTunnel || !!busy" :title="ownTunnel ? 'Your own named tunnel goes first: remove it with devstack tunnel --remove-setup' : ''" data-testid="pool-public-links-use" @click="take">
+            <span v-if="busy === 'take'" class="spinner" /> Use for my public links
           </button>
           <p v-if="usesThis" class="muted small">In use: your links answer below this domain.</p>
         </template>
@@ -127,7 +130,7 @@ async function close(host: string) {
             </select>
           </label>
           <label>Members tagged <input v-model="form.tag" class="input" placeholder="every member" /></label>
-          <button type="submit" class="btn btn-sm btn-primary">Save</button>
+          <button type="submit" class="btn btn-sm btn-primary" :disabled="!!busy"><span v-if="busy === 'save'" class="spinner" /> Save</button>
         </form>
         <p v-if="!admin.token" class="muted small" data-testid="pool-public-links-no-token">
           The coordinator has no Cloudflare token: put one (Tunnel: Edit, DNS: Edit for the zone, Access: Read) into <span class="mono">cloudflare.token</span> in its directory, or <span class="mono">DEVSTACK_CLOUDFLARE_TOKEN</span>.
@@ -145,7 +148,7 @@ async function close(host: string) {
                 <td class="mono">{{ l.host }}</td>
                 <td>{{ l.name || l.member }}</td>
                 <td>{{ ago(l.since * 1000, now) }}</td>
-                <td class="actions"><button type="button" class="btn btn-sm btn-danger" @click="close(l.host)"><Icon name="x" :size="14" /> Close</button></td>
+                <td class="actions"><button type="button" class="btn btn-sm btn-danger" :disabled="!!busy" @click="close(l.host)"><span v-if="busy === l.host" class="spinner" /><Icon v-else name="x" :size="14" /> Close</button></td>
               </tr>
             </tbody>
           </table>
