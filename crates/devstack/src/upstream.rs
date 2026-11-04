@@ -66,6 +66,42 @@ pub fn tools() -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// How long `initialize` waits for the upstreams' instructions, the hub's
+/// start included: an agent waits for that answer before anything else.
+const INSTRUCTIONS_WAIT: Duration = Duration::from_secs(5);
+
+/// The `instructions` the upstreams gave (`{name, prefix, instructions,
+/// cut}` each), for `initialize`; empty when none are configured, and when
+/// the hub (or, without one, the upstreams) do not answer within
+/// [`INSTRUCTIONS_WAIT`]. The asking goes on in the background then, and
+/// warms the tools for the `tools/list` that follows.
+pub fn instructions() -> Vec<Value> {
+    if !configured() {
+        return Vec::new();
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let asked = std::thread::Builder::new()
+        .name("mcp-upstream-instructions".into())
+        .spawn(move || {
+            let i = if std::env::var_os("DEVSTACK_NO_HUB").is_some() {
+                // Without a hub, the session that `tools` opens is this
+                // process's; it is gone when the thread ends, so ask here.
+                let d = direct();
+                let _ = d.tools(&devstack_hub::upstreams::http());
+                d.instructions()
+            } else {
+                hub("/hub/upstreams/instructions", None, INSTRUCTIONS_WAIT)
+                    .and_then(|v| v["instructions"].as_array().cloned())
+                    .unwrap_or_default()
+            };
+            let _ = tx.send(i);
+        });
+    if asked.is_err() {
+        return Vec::new();
+    }
+    rx.recv_timeout(INSTRUCTIONS_WAIT).unwrap_or_default()
+}
+
 /// Call the upstream tool `name`: its `CallToolResult`.
 pub fn call(name: &str, arguments: Value) -> Value {
     if std::env::var_os("DEVSTACK_NO_HUB").is_some() {

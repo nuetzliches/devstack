@@ -9,6 +9,22 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **`devstack mcp` passes on the upstreams' instructions** (ADR-0069,
+  addendum 2026-11-04). Its `initialize` answer carries, after devstack's
+  own text, the `instructions` each MCP upstream gave when its session
+  opened, under a heading with the prefix of its tools
+  (`## \`tracker__\` (MCP server \`tracker\`)`) and quoted line by line.
+  The hub asks the upstreams side by side for at most 3 seconds (new route
+  `GET /hub/upstreams/instructions`), `devstack mcp` waits at most 5 in
+  all; one that is slow, down or logged out is left out unless a session
+  of it gave some before (kept in `upstream-instructions.json`, for the
+  same URL or command only). At most 4000 characters per upstream and
+  16 000 in all; control characters other than line ends and tabs are
+  taken out. Instructions are fixed for a session: an upstream that
+  changes them, or comes later, is seen in the next one.
+
 ## [0.38.0] - 2026-11-04
 
 The main working tree takes its profile when it starts, not with its

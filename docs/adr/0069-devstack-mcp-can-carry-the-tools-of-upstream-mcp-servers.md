@@ -1,6 +1,6 @@
 # ADR-0069: `devstack mcp` can carry the tools of upstream MCP servers, logged in once by the hub
 
-- **Status:** Accepted (2026-10-27, [card](https://github.com/nuetzliches/devstack/issues/316#issuecomment-6452598449)); amended 2026-10-27 (the keychain spike: `keyring`, a file on Linux without a Secret Service); addendum 2026-10-28 (option B: a pool names upstreams, card approved 2026-10-28); addendum 2026-10-30 (an OAuth app's client secret, card approved 2026-10-30)
+- **Status:** Accepted (2026-10-27, [card](https://github.com/nuetzliches/devstack/issues/316#issuecomment-6452598449)); amended 2026-10-27 (the keychain spike: `keyring`, a file on Linux without a Secret Service); addendum 2026-10-28 (option B: a pool names upstreams, card approved 2026-10-28); addendum 2026-10-30 (an OAuth app's client secret, card approved 2026-10-30); addendum 2026-11-04 (the upstreams' instructions in `initialize`, card approved 2026-11-04)
 - **Date:** 2026-10-27
 - **Deciders:** project owner
 - **Related:** [#316](https://github.com/nuetzliches/devstack/issues/316), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md), [ADR-0054](0054-macos-is-a-developer-platform-in-preview.md), [ADR-0060](0060-the-tray-is-a-client-of-the-hub.md), [ADR-0067](0067-a-change-at-runtime-says-who-made-it.md)
@@ -233,6 +233,52 @@ takes any answer with an `error` as a refusal, with that reason.
 An older coordinator drops the field on a change; an older member's hub
 ignores it, and its login fails as before.
 
+## Addendum 2026-11-04: the upstreams' instructions go to the agent
+
+Its review card was approved by the owner on 2026-11-04 (all four points)
+and is in the description of the pull request that built it.
+
+An MCP server's `instructions` (its `initialize` answer) are in an agent's
+context for the whole session, unlike a skill's description, which a
+harness may cut when its listing overflows. `devstack mcp` answered
+`initialize` with its own text only, so whatever an upstream asked of
+agents was lost on the way.
+
+1. **`devstack mcp` adds each upstream's `instructions` to its own**, in
+   its `initialize` answer: under a heading with the prefix of the
+   upstream's tools (`## \`tracker__\` (MCP server \`tracker\`)`), each line
+   quoted, after a sentence saying that what follows is those servers' and
+   not devstack's. An upstream's text cannot then pass for devstack's or
+   for another upstream's heading. They come from the session the hub
+   opens anyway (`mcpclient.rs`, `stdio.rs`); there is no second client.
+2. **`initialize` does not wait on an upstream.** The hub asks upstreams
+   whose session is not open side by side for at most 3 s, `devstack mcp`
+   waits for the hub at most 5 s in all (its start included). An upstream
+   that is slow, down, refuses the login or has none is left out without a
+   note (a note could carry its URL); the asking goes on and warms the
+   tools for the `tools/list` that follows.
+3. **What an upstream said is kept like its tools** (point 4 above): the
+   last session's `instructions` stay in `upstream-instructions.json` and
+   are used while the upstream's URL or command is the same, so a
+   logged-out upstream keeps its guidance beside its listed tools; a new
+   URL or command, or removing it, forgets them.
+4. **They are fixed for a session.** MCP has no notification for changed
+   instructions; tools that change later are announced with
+   `list_changed` as before, but an upstream that changes its
+   instructions, or comes or is accepted during a session, is seen in the
+   next one.
+5. **Bounded, and nothing of the hub's**: at most 4000 characters per
+   upstream (marked as cut), 16 000 in all (an upstream past that is only
+   named), control characters other than line ends and tabs taken out.
+   Only the upstream's own text and its name and prefix go out, never a
+   URL, a command or a credential.
+
+An upstream's allowlist does not narrow its instructions: they are the
+server's, not a tool's. An upstream whose instructions the user does not
+want in every session is removed or declined; there is no switch per
+upstream. A pool's upstream reaches an agent only after the member
+accepted it (addendum 2026-10-28, point 3), as its tool descriptions do.
+
 ## Enforced by
 
 `crates/devstack-hub/src/secrets.rs` (the store, with its test against
@@ -268,3 +314,12 @@ and `/v1/admin/upstreams` (`coordinator.rs`), `member.rs`;
 (`devstack pool upstreams`); `ui/src/views/UpstreamsView.vue` and
 `ui/src/components/PoolUpstreams.vue`; tests in
 `crates/devstack-node/tests/upstreams.rs` and the hub's `upstreams.rs`.
+
+*The instructions, noted 2026-11-04*:
+`crates/devstack-hub/src/mcpclient.rs` and `stdio.rs` (the `instructions`
+of `initialize`), `upstreams.rs` (`note`, `warm`, `instructions`,
+`upstream-instructions.json`, `INSTRUCTIONS_MAX`), the route
+`/hub/upstreams/instructions` in `lib.rs`; `crates/devstack/src/upstream.rs`
+(`instructions`) and `mcp.rs` (`instructions`, the quoting and the cap in
+all); tests in the hub's `upstreams.rs` and `stdio.rs`, `mcp.rs`, and
+`crates/devstack/tests/hub.rs`.

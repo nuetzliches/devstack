@@ -537,6 +537,7 @@ fn router(state: AppState) -> axum::Router {
         .route(upstreams::CALLBACK, get(upstream_callback))
         .route("/hub/upstreams", get(upstreams_list).post(upstream_put))
         .route("/hub/upstreams/tools", get(upstream_tools))
+        .route("/hub/upstreams/instructions", get(upstream_instructions))
         .route("/hub/upstreams/call", post(upstream_call))
         .route("/hub/upstreams/{name}", delete(upstream_remove))
         .route("/hub/upstreams/{name}/login", post(upstream_login))
@@ -2766,6 +2767,49 @@ async fn upstream_tools(State(s): State<AppState>) -> Response {
     let ups = s.upstreams.clone();
     match tokio::task::spawn_blocking(move || ups.tools(&upstreams::http())).await {
         Ok(tools) => Json(serde_json::json!({ "tools": tools })).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// How long `GET /hub/upstreams/instructions` waits for upstreams whose
+/// session is not open yet. `devstack mcp` asks it while answering
+/// `initialize`, which an agent waits for.
+const INSTRUCTIONS_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// `GET /hub/upstreams/instructions`: the `instructions` each upstream gave
+/// when its session opened, for `devstack mcp`'s `initialize`:
+/// `{instructions: [{name, prefix, instructions, cut}]}`. Upstreams are
+/// asked side by side for at most [`INSTRUCTIONS_WAIT`]; one that is slow,
+/// down or logged out is left out unless a session of it gave some before
+/// (and keeps being asked after the answer, for the `tools/list` that
+/// follows).
+async fn upstream_instructions(State(s): State<AppState>) -> Response {
+    let ups = s.upstreams.clone();
+    let names: Vec<String> = match tokio::task::spawn_blocking({
+        let ups = ups.clone();
+        move || ups.list().map(|l| l.into_iter().map(|u| u.name).collect())
+    })
+    .await
+    {
+        Ok(Ok(n)) => n,
+        Ok(Err(e)) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let asked: Vec<_> = names
+        .into_iter()
+        .map(|n| {
+            let ups = ups.clone();
+            tokio::task::spawn_blocking(move || ups.warm(&upstreams::http(), &n))
+        })
+        .collect();
+    let _ = tokio::time::timeout(INSTRUCTIONS_WAIT, async {
+        for a in asked {
+            let _ = a.await;
+        }
+    })
+    .await;
+    match tokio::task::spawn_blocking(move || ups.instructions()).await {
+        Ok(i) => Json(serde_json::json!({ "instructions": i })).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
