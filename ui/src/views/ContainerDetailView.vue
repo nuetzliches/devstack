@@ -77,13 +77,13 @@ const kv = computed(() => {
       </div>
       <div class="row head-right">
         <div v-if="!stack.readOnly" class="btn-group">
-          <button v-if="!running" type="button" class="btn btn-primary" :disabled="!!busy || stack.stale || !!refuses" :title="refuses ?? undefined" data-testid="action-container-start" @click="stack.containerAction(group, service, 'start')">
+          <button v-if="!running" type="button" class="btn btn-primary" :disabled="!!busy || !!stack.treeBusy || stack.stale || !!refuses" :title="refuses ?? undefined" data-testid="action-container-start" @click="stack.containerAction(group, service, 'start')">
             <span v-if="busy === 'start'" class="spinner" /><Icon v-else name="play" /> Start
           </button>
-          <button v-if="running" type="button" class="btn" :disabled="!!busy || stack.stale || !!refuses" :title="refuses ?? undefined" data-testid="action-container-restart" @click="stack.containerAction(group, service, 'restart')">
+          <button v-if="running" type="button" class="btn" :disabled="!!busy || !!stack.treeBusy || stack.stale || !!refuses" :title="refuses ?? undefined" data-testid="action-container-restart" @click="stack.containerAction(group, service, 'restart')">
             <span v-if="busy === 'restart'" class="spinner" /><Icon v-else name="restart" /> Restart
           </button>
-          <button v-if="running" type="button" class="btn btn-stop" :disabled="!!busy || stack.stale" data-testid="action-container-stop" @click="stack.containerAction(group, service, 'stop')">
+          <button v-if="running" type="button" class="btn btn-stop" :disabled="!!busy || !!stack.treeBusy || stack.stale" data-testid="action-container-stop" @click="stack.containerAction(group, service, 'stop')">
             <span v-if="busy === 'stop'" class="spinner" /><Icon v-else name="stop" /> Stop
           </button>
         </div>

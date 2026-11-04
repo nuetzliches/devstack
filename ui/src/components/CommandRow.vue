@@ -37,7 +37,7 @@ async function run() {
       v-if="!stack.readOnly"
       type="button"
       class="btn btn-sm"
-      :disabled="running || stack.stale"
+      :disabled="running || stack.commandBusy(command.name) || stack.stale"
       :aria-label="`Run ${command.name}`"
       data-testid="command-run"
       @click="run"

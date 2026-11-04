@@ -31,6 +31,8 @@ const name = computed(() => route.params.name as string);
 const svc = computed(() => stack.view?.services.find((s) => s.name === name.value) ?? null);
 const look = computed(() => (svc.value ? statusLook(svc.value.status) : null));
 const busy = computed(() => stack.busy[`svc:${name.value}`]);
+/** Its tree or one of its groups is busy: its own actions wait. */
+const blocked = computed(() => stack.serviceBlocked(name.value));
 const state = computed(() => svc.value?.status.state ?? 'stopped');
 const isDown = computed(() => ['stopped', 'completed', 'exited', 'failed'].includes(state.value));
 
@@ -124,7 +126,7 @@ const kv = computed(() => {
                 type="button"
                 class="btn"
                 :class="{ 'btn-primary': a.primary && a.action !== 'promote', 'btn-warn': a.action === 'promote', 'btn-stop': a.action === 'stop' }"
-                :disabled="!!busy || stack.stale"
+                :disabled="!!busy || !!blocked || stack.stale"
                 :title="a.title"
                 :data-testid="`action-${a.action}`"
                 @click="stack.serviceAction(svc.name, a.action)"

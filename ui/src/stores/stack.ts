@@ -60,7 +60,31 @@ export const useStack = defineStore('stack', () => {
   const usage = shallowRef<UsageReport | null>(null);
   const history = shallowRef<Map<SeriesKey, Point[]>>(new Map());
   const runs = ref<Record<string, Run[]>>({});
-  const busy = ref<Record<string, string>>({});
+  /**
+   * What this dashboard is busy with, by place: a stack's lanes and branches
+   * (`<stack>`), and a tree's services, groups, containers and links
+   * (`<stack>#<lane>`). Kept across switches: an action that runs on goes on
+   * holding its buttons when its lane is shown again. Set with `mark`.
+   */
+  const marks = ref<Record<string, Record<string, string>>>({});
+  /** The keys of a stack, not of one tree: the lanes' own actions name the lane. */
+  const STACK_WIDE = new Set(['stack', 'branches', 'lane-start', 'lane-stop', 'lane-restart', 'lane-reset', 'lane-move', 'lane-main']);
+  const markScope = (key: string) => (STACK_WIDE.has(key) ? (id.value ?? '') : `${id.value ?? ''}#${lane.value ?? MAIN}`);
+  /** What the stack and tree shown are busy with (read only; `mark` sets it). A stack the hub stops is busy with `stack: stop`. */
+  const busy = computed<Readonly<Record<string, string>>>(() => ({
+    ...(id.value && hub.stopping[id.value] ? { stack: 'stop' } : {}),
+    ...marks.value[id.value ?? ''],
+    ...marks.value[`${id.value ?? ''}#${lane.value ?? MAIN}`],
+  }));
+  /** Mark `key` busy with `value` where it is now; the function returned clears it there, also once another stack or lane is shown. */
+  function mark(key: string, value: string): () => void {
+    const scope = markScope(key);
+    (marks.value[scope] ??= {})[key] = value;
+    return () => {
+      const m = marks.value[scope];
+      if (m?.[key] === value) delete m[key];
+    };
+  }
   /** Increments with each `instance` swap or new build; lets views react without deep watching. */
   const changeTick = ref(0);
 
@@ -156,22 +180,18 @@ export const useStack = defineStore('stack', () => {
   async function startOfflineLane(l: LaneView, on: string | null, profile?: string) {
     const sid = id.value;
     if (!sid || !beginStart(l, on)) return;
-    busy.value['lane-start'] = l.name;
+    const unmark = mark('lane-start', l.name);
     const r = await act({
       label: on ? `Start ${l.name} on ${on === 'pool' ? 'the pool' : on}` : `Start ${l.name}`,
       path: paths.laneStart(sid),
       body: { path: l.path, ...(on ? { on } : {}), ...(profile ? { profile } : {}) },
       success: on ? `${l.name} starts on ${on === 'pool' ? 'the pool' : on}; its stack's daemon comes up first` : `${l.name} starts here; its stack's daemon comes up first`,
     });
-    if (!r.ok) {
-      delete busy.value['lane-start'];
-      endStart(sid, l.name);
-    } else startSent(sid, l.name);
+    // What follows is the start's own to show (`starts`).
+    unmark();
+    if (!r.ok) endStart(sid, l.name);
+    else startSent(sid, l.name);
   }
-  // The daemon is up: its own lane list and stream take over.
-  watch(running, (now) => {
-    if (now) delete busy.value['lane-start'];
-  });
   /** The view shown is not live: hub away, stack down, or not connected yet. */
   const stale = computed(() => !live.value);
   const services = computed(() => view.value?.services ?? []);
@@ -387,7 +407,6 @@ export const useStack = defineStore('stack', () => {
     usage.value = null;
     history.value = new Map();
     runs.value = {};
-    busy.value = {};
     usageFetched = false;
     if (running.value) connect();
     void loadLanes();
@@ -395,7 +414,7 @@ export const useStack = defineStore('stack', () => {
 
   async function laneMain(name: string) {
     if (!id.value) return;
-    busy.value['lane-main'] = 'promote';
+    const unmark = mark('lane-main', 'promote');
     try {
       await act({
         label: `Lane ${name} serves the main ports`,
@@ -404,7 +423,7 @@ export const useStack = defineStore('stack', () => {
       });
       await loadLanes();
     } finally {
-      delete busy.value['lane-main'];
+      unmark();
     }
   }
 
@@ -442,7 +461,7 @@ export const useStack = defineStore('stack', () => {
     const l = lanes.value.find((x) => x.name === name);
     const sid0 = id.value;
     if (!sid0 || !l || !beginStart(l, on ?? null)) return;
-    busy.value[`lane-start`] = name;
+    const unmark = mark('lane-start', name);
     let sent = false;
     try {
       const res = await act({
@@ -476,7 +495,7 @@ export const useStack = defineStore('stack', () => {
       // daemon reports it (`settleStarts`).
       if (lanes.value.some((x) => x.name === name && x.active !== false)) selectLane(name);
     } finally {
-      delete busy.value['lane-start'];
+      unmark();
       if (!sent) endStart(sid0, name);
     }
   }
@@ -497,7 +516,7 @@ export const useStack = defineStore('stack', () => {
 
   async function moveLane(name: string, to: string) {
     if (!id.value || busy.value['lane-move']) return;
-    busy.value[`lane-move`] = to;
+    const unmark = mark('lane-move', name);
     try {
       const res = await act({
         label: `Move lane ${name} to ${to === 'local' ? 'this machine' : to}`,
@@ -507,7 +526,7 @@ export const useStack = defineStore('stack', () => {
       });
       if (res.ok) await loadLanes();
     } finally {
-      delete busy.value['lane-move'];
+      unmark();
     }
   }
 
@@ -529,11 +548,13 @@ export const useStack = defineStore('stack', () => {
     if (!ok) return false;
     if (!option.checked) return true;
     const stackName = entry.value?.name ?? 'stack';
-    busy.value['stack'] = 'stop';
+    const unmark = mark('stack', 'stop');
     try {
-      await act({ label: `Stop ${stackName}`, path: paths.down(id.value, true, false, true), success: 'Stopping the stack…' });
+      const sid = id.value;
+      const r = await act({ label: `Stop ${stackName}`, path: paths.down(sid, true, false, true), success: 'Stopping the stack…' });
+      if (r.ok) hub.markStopping(sid);
     } finally {
-      delete busy.value['stack'];
+      unmark();
     }
     return false;
   }
@@ -542,7 +563,7 @@ export const useStack = defineStore('stack', () => {
     if (!id.value || !(await lastLaneStop(name))) return;
     // A start under way ends with it: its page shows the lane stopped.
     endStart(id.value, name);
-    busy.value['lane-stop'] = name;
+    const unmark = mark('lane-stop', name);
     try {
       const res = await act({
         label: `Stop lane ${name}`,
@@ -553,7 +574,7 @@ export const useStack = defineStore('stack', () => {
       // stopped it, and "Stop stack" there would be the main tree's.
       if (res.ok) await loadLanes();
     } finally {
-      delete busy.value['lane-stop'];
+      unmark();
     }
   }
 
@@ -565,7 +586,7 @@ export const useStack = defineStore('stack', () => {
   async function restartLane(name: string, mode: RestartMode) {
     if (refuseReadOnly() || !id.value) return;
     const what = { warm: 'Restart', rebuild: 'Rebuild', cold: 'Cold restart' }[mode];
-    busy.value['lane-restart'] = name;
+    const unmark = mark('lane-restart', name);
     try {
       const r = await act<LaneView[]>({
         label: `${what} lane ${name}`,
@@ -584,7 +605,7 @@ export const useStack = defineStore('stack', () => {
       });
       if (r.ok && Array.isArray(r.body)) setLanes(r.body);
     } finally {
-      delete busy.value['lane-restart'];
+      unmark();
     }
   }
 
@@ -613,11 +634,11 @@ export const useStack = defineStore('stack', () => {
   async function stopMain() {
     if (refuseReadOnly() || !id.value || !(await lastLaneStop(MAIN))) return;
     endStart(id.value, MAIN);
-    busy.value['lane-stop'] = MAIN;
+    const unmark = mark('lane-stop', MAIN);
     try {
       await act({ label: 'Stop main', path: paths.api(id.value, v1.downTree), success: 'main stopped' });
     } finally {
-      delete busy.value['lane-stop'];
+      unmark();
     }
   }
 
@@ -630,7 +651,7 @@ export const useStack = defineStore('stack', () => {
     if (refuseReadOnly() || !id.value) return;
     const sid = id.value;
     const what = how === 'restart' ? 'Restart' : 'Rebuild';
-    busy.value['lane-restart'] = MAIN;
+    const unmark = mark('lane-restart', MAIN);
     try {
       let list = mainView.value?.services ?? [];
       try {
@@ -649,7 +670,7 @@ export const useStack = defineStore('stack', () => {
       );
       if (results.every((r) => r.ok)) ui.toast('success', `${what} main: done`);
     } finally {
-      delete busy.value['lane-restart'];
+      unmark();
     }
   }
 
@@ -664,8 +685,20 @@ export const useStack = defineStore('stack', () => {
     const s = startOf(name);
     if (s) return s.sent ? 'starting' : 'start';
     for (const k of ['lane-start', 'lane-stop', 'lane-restart', 'lane-reset'] as const) if (busy.value[k] === name) return k.slice(5);
-    if (busy.value['lane-move'] && name === lane.value) return 'move';
+    if (busy.value['lane-move'] === name) return 'move';
     if (busy.value['stack']) return 'stack';
+    return null;
+  }
+
+  /** What the tree shown is busy with as a whole (a start, stop, restart, discard, or the stack's stop or restart): its services, groups and containers wait meanwhile. */
+  const treeBusy = computed(() => {
+    const b = laneBusy(lane.value ?? MAIN);
+    return b === 'move' ? null : b;
+  });
+  /** Why service `name`'s own actions wait now: its tree, or one of its groups, is busy. */
+  function serviceBlocked(name: string): string | null {
+    if (treeBusy.value) return treeBusy.value;
+    for (const g of svc(name)?.groups ?? []) if (busy.value[`grp:${g}`]) return `grp:${g}`;
     return null;
   }
 
@@ -757,12 +790,12 @@ export const useStack = defineStore('stack', () => {
   /** `git fetch --all --prune` (ADR-0047 point 7): only when asked. */
   async function fetchBranches() {
     if (refuseReadOnly() || !id.value) return;
-    busy.value.branches = 'fetch';
+    const unmark = mark('branches', 'fetch');
     try {
       const r = await act({ label: 'Fetch', path: paths.fetch(id.value), success: false });
       if (r.ok) await loadBranches();
     } finally {
-      delete busy.value.branches;
+      unmark();
     }
   }
 
@@ -774,7 +807,7 @@ export const useStack = defineStore('stack', () => {
   async function newLane(branch: string, create?: string) {
     if (refuseReadOnly() || !id.value) return;
     const sid = id.value;
-    busy.value.branches = 'add';
+    const unmark = mark('branches', 'add');
     try {
       const r = await act<{ path: string }>({
         label: create ? `New branch ${create}` : `New lane on ${branch}`,
@@ -802,7 +835,7 @@ export const useStack = defineStore('stack', () => {
         await new Promise((res) => setTimeout(res, 250));
       }
     } finally {
-      delete busy.value.branches;
+      unmark();
     }
   }
 
@@ -829,7 +862,7 @@ export const useStack = defineStore('stack', () => {
 
   async function resetLane(name: string) {
     if (!id.value) return;
-    busy.value['lane-reset'] = name;
+    const unmark = mark('lane-reset', name);
     const r = await act<Pruned[]>({
       label: `Discard the data of lane ${name}`,
       path: daemonPath(id.value, v1.laneReset(name)),
@@ -837,7 +870,7 @@ export const useStack = defineStore('stack', () => {
       confirmLabel: 'Discard data',
       danger: true,
       success: false,
-    }).finally(() => delete busy.value['lane-reset']);
+    }).finally(unmark);
     if (!r.ok) return;
     // Removed everywhere, or where it was not: those places keep its data.
     const failed = (r.body ?? []).filter((p) => !p.removed);
@@ -1203,10 +1236,20 @@ export const useStack = defineStore('stack', () => {
     void usePool().openShared(r.pool, r.lease, svc.name, path);
   }
 
+  /** Command `name` is being started, or its last run still runs: no second run beside it. */
+  function commandBusy(name: string): boolean {
+    return !!busy.value[`cmd:${name}`] || runs.value[name]?.[0]?.status === 'running';
+  }
+
   async function runCommand(name: string): Promise<number | null> {
     if (refuseReadOnly()) return null;
     if (!id.value) return null;
+    if (commandBusy(name)) {
+      ui.toast('info', `${name} runs already`, 'Its run is shown on the Commands page; run it again once it ended.');
+      return null;
+    }
     const cmd = view.value?.commands.find((c) => c.name === name);
+    const unmark = mark(`cmd:${name}`, 'run');
     const res = await act<{ run: number }>({
       label: `Run ${name}`,
       path: daemonPath(id.value, v1.command(name)),
@@ -1216,7 +1259,7 @@ export const useStack = defineStore('stack', () => {
       confirmText: cmd?.confirm ?? undefined,
       success: (b) => (b ? `${name}: run #${b.run} started` : `${name} started`),
       conflictHint: cmd?.requires.length ? `Requires: ${cmd.requires.join(', ')}` : undefined,
-    });
+    }).finally(unmark);
     return res.ok && res.body ? res.body.run : null;
   }
 
@@ -1228,8 +1271,8 @@ export const useStack = defineStore('stack', () => {
     if (refuseReadOnly()) return;
     if (!id.value) return;
     const key = `svc:${name}`;
-    if (busy.value[key]) return;
-    busy.value[key] = action;
+    if (busy.value[key] || serviceBlocked(name)) return;
+    const unmark = mark(key, action);
     try {
       const res = await act<StackView>({
         label: `${actionLabels[action]} ${name}`,
@@ -1239,7 +1282,7 @@ export const useStack = defineStore('stack', () => {
       });
       if (res.ok && res.body && 'services' in res.body) applyView(res.body);
     } finally {
-      delete busy.value[key];
+      unmark();
     }
   }
 
@@ -1250,7 +1293,7 @@ export const useStack = defineStore('stack', () => {
     if (!id.value) return;
     const key = `svc:${name}`;
     if (busy.value[key]) return;
-    busy.value[key] = 'public-link';
+    const unmark = mark(key, 'public-link');
     try {
       const res = await act<StackView>({
         label: `Public link to ${name}`,
@@ -1261,7 +1304,7 @@ export const useStack = defineStore('stack', () => {
       });
       if (res.ok && res.body && 'services' in res.body) applyView(res.body);
     } finally {
-      delete busy.value[key];
+      unmark();
     }
   }
 
@@ -1279,14 +1322,14 @@ export const useStack = defineStore('stack', () => {
     if (!id.value) return;
     if (busy.value['lane-public']) return;
     const names = (view.value?.services ?? []).filter((s) => s.public_link_available && s.status.state !== 'stopped').map((s) => s.name);
-    busy.value['lane-public'] = 'open';
+    const unmark = mark('lane-public', 'open');
     const res = await act<StackView>({
       label: 'Make the lane public',
       path: daemonPath(id.value, v1.publicLinks),
       confirmText: `Anyone with a link reaches ${names.join(', ') || 'its services'} from the internet, ${publicWhere()}. They stay open until you close them, stop a service or stop the stack.`,
       confirmLabel: 'Make public',
       success: false,
-    }).finally(() => delete busy.value['lane-public']);
+    }).finally(unmark);
     if (res.ok && res.body && 'services' in res.body) applyView(res.body);
   }
 
@@ -1294,10 +1337,8 @@ export const useStack = defineStore('stack', () => {
   async function closeLanePublic() {
     if (refuseReadOnly()) return;
     if (!id.value || busy.value['lane-public']) return;
-    busy.value['lane-public'] = 'close';
-    const res = await act<StackView>({ label: 'Close the public links', method: 'DELETE', path: daemonPath(id.value, v1.publicLinks), success: 'The lane is no longer public' }).finally(
-      () => delete busy.value['lane-public'],
-    );
+    const unmark = mark('lane-public', 'close');
+    const res = await act<StackView>({ label: 'Close the public links', method: 'DELETE', path: daemonPath(id.value, v1.publicLinks), success: 'The lane is no longer public' }).finally(unmark);
     if (res.ok && res.body && 'services' in res.body) applyView(res.body);
   }
 
@@ -1307,13 +1348,13 @@ export const useStack = defineStore('stack', () => {
     if (!id.value) return;
     const key = `svc:${name}`;
     if (busy.value[key]) return;
-    busy.value[key] = 'public-link';
+    const unmark = mark(key, 'public-link');
     const res = await act<StackView>({
       label: `Close the public link to ${name}`,
       method: 'DELETE',
       path: daemonPath(id.value, v1.publicLink(name)),
       success: false,
-    }).finally(() => delete busy.value[key]);
+    }).finally(unmark);
     if (res.ok && res.body && 'services' in res.body) applyView(res.body);
   }
 
@@ -1322,8 +1363,8 @@ export const useStack = defineStore('stack', () => {
     if (refuseReadOnly()) return;
     if (!id.value) return;
     const key = `grp:${group}`;
-    if (busy.value[key]) return;
-    busy.value[key] = action;
+    if (busy.value[key] || treeBusy.value) return;
+    const unmark = mark(key, action);
     try {
       const res = await act<StackView>({
         label: `${actionLabels[action]} ${label}`,
@@ -1333,7 +1374,7 @@ export const useStack = defineStore('stack', () => {
       });
       if (res.ok && res.body && 'services' in res.body) applyView(res.body);
     } finally {
-      delete busy.value[key];
+      unmark();
     }
   }
 
@@ -1342,13 +1383,13 @@ export const useStack = defineStore('stack', () => {
     if (refuseReadOnly()) return;
     if (!id.value) return;
     const key = `ctr:${group}/${service}`;
-    if (busy.value[key]) return;
-    busy.value[key] = action;
+    if (busy.value[key] || treeBusy.value) return;
+    const unmark = mark(key, action);
     const label = { start: 'Start', stop: 'Stop', restart: 'Restart' }[action];
     try {
       await act({ label: `${label} ${service}`, path: daemonPath(id.value, v1.infraAction(group, service, action)), success: `${service}: ${action} done` });
     } finally {
-      delete busy.value[key];
+      unmark();
     }
   }
 
@@ -1368,13 +1409,13 @@ export const useStack = defineStore('stack', () => {
     if (main && !beginStart(main, null)) return;
     if (running.value) {
       // The daemon runs (for its lanes, or the main tree was stopped): the main tree starts in it.
-      busy.value['lane-start'] = MAIN;
+      const unmark = mark('lane-start', MAIN);
       try {
         const res = await act({ label: 'Start main', path: paths.api(stackId, v1.up), success: 'main is starting…' });
         if (res.ok) startSent(stackId, MAIN);
         else endStart(stackId, MAIN);
       } finally {
-        delete busy.value['lane-start'];
+        unmark();
       }
       return;
     }
@@ -1412,7 +1453,7 @@ export const useStack = defineStore('stack', () => {
       danger: !restartLanes.value.carried && !!lanesText,
     });
     if (!ok) return;
-    busy.value['stack'] = 'restart';
+    const unmark = mark('stack', 'restart');
     try {
       // A stack file this devstack cannot load (it needs a newer one) would
       // stop the stack for good: say so and leave it running (#11).
@@ -1453,7 +1494,7 @@ export const useStack = defineStore('stack', () => {
       const up = await act({ label: `Start ${name}`, path: paths.up(stackId), success: 'Starting the stack again…' });
       if (!up.ok) delete hub.starting[stackId];
     } finally {
-      delete busy.value['stack'];
+      unmark();
     }
   }
 
@@ -1476,11 +1517,13 @@ export const useStack = defineStore('stack', () => {
       option,
     });
     if (!ok) return;
-    busy.value['stack'] = 'stop';
+    const unmark = mark('stack', 'stop');
     try {
-      await act({ label: `Stop ${name}`, path: paths.down(id.value, !option?.checked, false, true), success: 'Stopping the stack…' });
+      const sid = id.value;
+      const r = await act({ label: `Stop ${name}`, path: paths.down(sid, !option?.checked, false, true), success: 'Stopping the stack…' });
+      if (r.ok) hub.markStopping(sid);
     } finally {
-      delete busy.value['stack'];
+      unmark();
     }
   }
 
@@ -1540,6 +1583,9 @@ export const useStack = defineStore('stack', () => {
     startOfflineLane,
     starts,
     startOf,
+    commandBusy,
+    treeBusy,
+    serviceBlocked,
     laneBusy,
     keepContainers,
     id,

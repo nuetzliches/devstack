@@ -608,6 +608,73 @@ describe('stack store', () => {
     fake.stream('/hub/stacks/shop/api/v1/events');
   });
 
+  describe('clicks wait for their answer', () => {
+    const feat = { name: 'feat', path: '/src/feat', number: 1, active: true, port_offset: 100, owns_main: false, running: 2, services: 3 };
+    /** A response the test lets go of. */
+    function held() {
+      let release: (r: { status: number; ok: boolean; body: unknown }) => void = () => {};
+      const answer = new Promise<{ status: number; ok: boolean; body: unknown }>((r) => (release = r));
+      return { answer, release: () => release({ status: 200, ok: true, body: [feat] }) };
+    }
+    const posts = (part: string) => fake.requests.filter((r) => r.method === 'POST' && r.path.includes(part)).length;
+
+    it("keeps a lane's restart marked across a lane switch, and holds the main tree's services meanwhile", async () => {
+      const stack = await shownStack();
+      fake.stream('/hub/stacks/shop/api/v1/events').handlers.onMessage({ type: 'lanes', lanes: [feat] });
+      const h = held();
+      fake.on('/hub/stacks/shop/api/v1/lanes/feat/restart', () => h.answer as never);
+      const done = stack.restartLane('feat', 'warm');
+      stack.selectLane('feat');
+      stack.selectLane(null);
+      expect(stack.busy['lane-restart']).toBe('feat');
+      expect(stack.laneBusy('feat')).toBe('restart');
+      stack.laneAction(feat, 'stop');
+      expect(posts('/lanes/feat/stop')).toBe(0);
+      h.release();
+      await done;
+      expect(stack.busy['lane-restart']).toBeUndefined();
+    });
+
+    it("holds a tree's services while the tree restarts", async () => {
+      const stack = await shownStack();
+      fake.stream('/hub/stacks/shop/api/v1/events').handlers.onMessage({ type: 'lanes', lanes: [] });
+      const h = held();
+      fake.on('/hub/stacks/shop/api/v1/stack', () => h.answer as never);
+      const done = stack.laneAction(stack.mainLane!, 'restart');
+      expect(stack.treeBusy).toBe('restart');
+      await stack.serviceAction('api', 'restart');
+      await stack.groupAction('backend', 'backend', 'restart');
+      expect(posts('/services/api/') + posts('/groups/')).toBe(0);
+      h.release();
+      await done;
+      expect(stack.treeBusy).toBeNull();
+    });
+
+    it('marks a stack stopping until the hub says it no longer runs', async () => {
+      const stack = await shownStack();
+      useUi().confirm = async () => true;
+      fake.on(/\/hub\/stacks\/shop\/down/, { status: 202, ok: true, body: null });
+      await stack.stopStack();
+      expect(useHub().stopping.shop).toBe(true);
+      expect(stack.busy.stack).toBe('stop');
+      await stack.stopStack();
+      expect(posts('/hub/stacks/shop/down')).toBe(1);
+      fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [entry('shop', false)] });
+      expect(useHub().stopping.shop).toBeUndefined();
+    });
+
+    it('runs a command once while its run goes on', async () => {
+      const stack = await shownStack();
+      fake.on('/hub/stacks/shop/api/v1/commands/seed', ok({ run: 1 }));
+      stack.runs.seed = [{ id: 1, command: 'seed', status: 'running' } as never];
+      expect(stack.commandBusy('seed')).toBe(true);
+      expect(await stack.runCommand('seed')).toBeNull();
+      expect(posts('/commands/seed')).toBe(0);
+      stack.runs.seed = [{ id: 1, command: 'seed', status: 'ok' } as never];
+      expect(await stack.runCommand('seed')).toBe(1);
+    });
+  });
+
   describe('a lane started on a node (202, B1)', () => {
     const lane = { name: 'feat', path: '/src/feat', number: 1, port_offset: 100, owns_main: false, running: 0, services: 3 };
     const starting = { ...lane, active: false, moving: { kind: 'start' as const, to: 'build', step: 2, steps: 3, what: 'sync', since: 0 } };

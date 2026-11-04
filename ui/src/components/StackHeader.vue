@@ -326,14 +326,14 @@ function manageFromSync() {
             ref="moveTrigger"
             type="button"
             class="btn btn-sm"
-            :disabled="!!moving || !!stack.busy['lane-move']"
+            :disabled="!!moving || stack.busy['lane-move'] === current.name"
             :aria-expanded="moveOpen"
             aria-haspopup="menu"
             title="Run this worktree's lane elsewhere: a cold start there that takes over once it is ready"
             data-testid="lane-move"
             @click="moveOpen = !moveOpen"
           >
-            <span v-if="moving || stack.busy['lane-move']" class="spinner" /><Icon v-else name="server" :size="14" />
+            <span v-if="moving || stack.busy['lane-move'] === current.name" class="spinner" /><Icon v-else name="server" :size="14" />
             {{ moving ? `Moving to ${placeName(moving.to)}… ${moving.step}/${moving.steps}` : 'Move' }}
           </button>
           <div v-if="moveOpen" class="menu menu-right" role="menu">
