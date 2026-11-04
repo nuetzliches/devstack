@@ -20,6 +20,9 @@ and listed with their assets on the
   in the pool area's *Public links* card. A member takes the pool's tunnel
   there, or with `devstack tunnel --pool <name>`; their own named tunnel
   goes first.
+- **A lane on a node gets public links**, carried by its owner's machine
+  through a named tunnel there (their own or the pool's): the lane's ports
+  are forwarded to it, so the links answer while it is on.
 
 - **Public links at stable addresses, through your own Cloudflare tunnel**
   (ADR-0091). `devstack tunnel --setup <credentials.json> --domain

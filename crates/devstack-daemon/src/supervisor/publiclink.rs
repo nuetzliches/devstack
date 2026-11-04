@@ -11,6 +11,12 @@
 //! `https://{service}-{lane}-{stack}.{domain}`, and the hub, which follows
 //! this tree's events, routes it through its one connector; the link is
 //! open once the hub says that connector runs and has the host.
+//!
+//! A lane on a node (ADR-0092 point 6) has its links carried by its
+//! owner's machine: the owner's daemon passes the request on with its
+//! tunnel's domain and suffix (`carried`), the lane's daemon names the
+//! host and runs nothing, and the owner's hub, which follows the lane's
+//! events, routes the host to the lane's ports forwarded to it.
 
 use super::Supervisor;
 use crate::state::{EventBody, PublicLinkState, PublicLinkView, Status, now_ms};
@@ -41,7 +47,11 @@ impl Supervisor {
     /// Open a public link to every service of this tree that may have one
     /// and runs, those already open kept ("make the lane public"). The
     /// services it opened, and why the others were not.
-    pub fn open_public_links(self: &Arc<Self>, own_ports: &[u16]) -> (Vec<String>, Vec<String>) {
+    pub fn open_public_links(
+        self: &Arc<Self>,
+        own_ports: &[u16],
+        carried: Option<&crate::namedtunnel::Config>,
+    ) -> (Vec<String>, Vec<String>) {
         let names: Vec<String> = {
             let slots = self.slots.lock().unwrap();
             slots
@@ -54,7 +64,7 @@ impl Supervisor {
         };
         let (mut opened, mut failed) = (Vec::new(), Vec::new());
         for n in names {
-            match self.open_public_link(&n, own_ports) {
+            match self.open_public_link(&n, own_ports, carried) {
                 Ok(()) => opened.push(n),
                 Err(e) => failed.push(format!("{n}: {e}")),
             }
@@ -80,12 +90,18 @@ impl Supervisor {
 
     /// Open a public link to `name`'s fixed port; one already open stays.
     /// `own_ports`: devstack's own (the hub's, this daemon's API), which are
-    /// never tunnelled.
-    pub fn open_public_link(self: &Arc<Self>, name: &str, own_ports: &[u16]) -> Result<(), String> {
+    /// never tunnelled. `carried`: on a node, the owner's tunnel that
+    /// carries it (its owner's daemon passes it on).
+    pub fn open_public_link(
+        self: &Arc<Self>,
+        name: &str,
+        own_ports: &[u16],
+        carried: Option<&crate::namedtunnel::Config>,
+    ) -> Result<(), String> {
         let svc = self.service(name)?;
-        if crate::remote_lane_name().is_some() {
+        if crate::remote_lane_name().is_some() && carried.is_none() {
             return Err(
-                "a public link is opened on the developer's machine, not yet for a lane on a node"
+                "a lane on a node gets its public links through its owner's machine: open them there"
                     .into(),
             );
         }
@@ -120,6 +136,34 @@ impl Supervisor {
                 None => 0,
             }
         };
+        if let Some(tunnel) = carried {
+            // Carried by the owner's machine: open as soon as it is named,
+            // the owner's daemon having checked its hub runs the tunnel.
+            let lane = crate::remote_lane_name().unwrap_or(&self.lane);
+            let view = PublicLinkView {
+                state: PublicLinkState::Open,
+                url: Some(format!(
+                    "https://{}",
+                    tunnel.host(&self.stack.stack.name, lane, name)
+                )),
+                since: now_ms(),
+                error: None,
+            };
+            self.public_links.lock().unwrap().insert(
+                name.to_string(),
+                Link {
+                    view: view.clone(),
+                    tree: None,
+                    record: String::new(),
+                    generation,
+                },
+            );
+            self.emit(EventBody::PublicLink {
+                service: name.into(),
+                link: Some(view),
+            });
+            return Ok(());
+        }
         if let Some(tunnel) = crate::namedtunnel::read() {
             let host = tunnel.host(&self.stack.stack.name, &self.lane, name);
             let view = PublicLinkView {

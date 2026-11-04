@@ -1,6 +1,6 @@
 # ADR-0092: A pool can give its members public links below a zone of its own; the coordinator holds the token, each machine gets its own tunnel
 
-- **Status:** Accepted (card in the pull request); points 1 to 5 built, points 6 and 7 (lanes on nodes) follow in their own pull request
+- **Status:** Accepted (card in the pull request); points 1 to 5 built; point 6 built for links carried by the owner's machine, the node's own connector and point 7 not yet
 - **Date:** 2026-11-03
 - **Deciders:** project owner
 - **Related:** [ADR-0091](0091-public-links-through-the-users-own-named-tunnel.md) (the user's own named tunnel, which a pool's works like), [ADR-0090](0090-a-service-can-get-a-public-link-by-hand.md) (its points 1 to 3 hold), [ADR-0051](0051-a-pool-can-grow-by-nodes-a-provisioner-makes.md) (the provisioner's token, kept the same way), [ADR-0069](0069-devstack-mcp-can-carry-the-tools-of-upstream-mcp-servers.md) (option B: a pool offers, a member accepts), [ADR-0033](0033-a-node-decides-what-runs-on-it.md) (a node's policy), [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md)
@@ -58,6 +58,15 @@ As built (points 1 to 5):
 3. **The dashboard**'s *Public links* card in the pool area: the offer and
    *Use for my public links* for every member; the settings, the token's
    presence, Access and the open links with *Close* for admins.
+
+As built (point 6, through the owner's machine): the owner's daemon passes
+a public-link request for a lane on a node on only with a named tunnel set
+up here and its hub answering, with the tunnel's domain and suffix in
+`x-devstack-public-link-tunnel`; the lane's daemon names the host, opens
+the link and runs nothing; the owner's hub, which follows the lane's
+events, routes the host to the lane's ports forwarded to it (and in a
+pool's tunnel reports it). A Quick Tunnel is refused for a lane on a node:
+it would leave from the node.
 
 ## Consequences
 

@@ -723,6 +723,10 @@ reported, and all of a machine's after five minutes without a report (or
 when it leaves the pool). A link opens once its record is there; a host
 the coordinator refuses fails the link with why.
 
+A lane on a node gets public links too: its owner's machine carries them
+(the lane's ports are forwarded there), through the pool's tunnel or the
+owner's own, so they answer while that machine is on and its hub runs.
+
 ## Skill sets for the members
 
 A pool can hand its members agent skills
