@@ -92,15 +92,16 @@ pub fn pid_alive(pid: u32) -> bool {
     backend::pid_alive(pid)
 }
 
-/// Write a minidump of this process to `path`: its threads' stacks and
-/// what they point at, for reading a hang afterwards with the build's PDB
-/// (#398). Windows only; elsewhere `Unsupported`.
+/// Write a minidump of this process to `path`: its threads' stacks, for
+/// reading a hang afterwards with the build's PDB (#398). Not the heap
+/// they point at: that holds tokens and secrets, and a dump gets attached
+/// to an issue. Windows only; elsewhere `Unsupported`.
 pub fn write_dump(path: &std::path::Path) -> std::io::Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::System::Diagnostics::Debug::{
-            MiniDumpWithIndirectlyReferencedMemory, MiniDumpWithThreadInfo, MiniDumpWriteDump,
+            MiniDumpNormal, MiniDumpWithThreadInfo, MiniDumpWriteDump,
         };
         use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentProcessId};
         let file = std::fs::File::create(path)?;
@@ -111,7 +112,7 @@ pub fn write_dump(path: &std::path::Path) -> std::io::Result<()> {
                 GetCurrentProcess(),
                 GetCurrentProcessId(),
                 file.as_raw_handle(),
-                MiniDumpWithThreadInfo | MiniDumpWithIndirectlyReferencedMemory,
+                MiniDumpNormal | MiniDumpWithThreadInfo,
                 std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),

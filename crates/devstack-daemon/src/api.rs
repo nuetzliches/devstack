@@ -134,14 +134,15 @@ fn routes(state: AppState) -> axum::Router {
             "/v1/lanes/{lane}/v1/{*rest}",
             axum::routing::any(lane_forward),
         )
-        .layer(middleware::from_fn_with_state(state.clone(), guard))
         .layer(middleware::from_fn_with_state(state.clone(), audit))
+        .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
 }
 
 /// Every request that changes something goes to the diagnostic log with its
-/// answer, refused ones included (outermost layer): "who restarted that, and
-/// did it work" is answerable afterwards. Once: a lane's request is logged
+/// answer, refused ones included: "who restarted that, and did it work" is
+/// answerable afterwards. Inside the guard: what it turns away (no token, a
+/// foreign page's form) changed nothing and would push the record out. Once: a lane's request is logged
 /// by the main API it came through (with the lane), not again by the lane's.
 async fn audit(State(s): State<AppState>, req: Request, next: Next) -> Response {
     let method = req.method().clone();

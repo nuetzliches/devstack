@@ -1,6 +1,6 @@
 # ADR-0023: Stack files stay readable; migrations once devstack has outside users
 
-- **Status:** Accepted
+- **Status:** Accepted; phase 2 holds since 2026-10-23 (ADR-0054 point 8)
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** [ADR-0017](0017-stack-file-is-toml.md), plan §4
@@ -48,6 +48,11 @@ copies of stack files as released versions wrote them
 (`v<schema>-<devstack>-<what>.toml`). A test loads every one; a red test means a
 change breaks existing files, which is fine in phase 1 only on purpose (replace
 the frozen copy and say so in the commit), and not at all in phase 2.
+
+*Amended 2026-11-04.* Phase 2 holds since 2026-10-23: the first macOS build
+handed to a tester outside the maintainers made devstack's users outside
+users, as [ADR-0054](0054-macos-is-a-developer-platform-in-preview.md) point 8
+says. The question in phase 1 is answered; it is not asked again.
 
 ## Alternatives considered
 

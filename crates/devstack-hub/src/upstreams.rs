@@ -219,10 +219,7 @@ impl Upstream {
             }
         } else {
             let u = self.url.trim();
-            let local = ["http://127.0.0.1", "http://localhost", "http://[::1]"]
-                .iter()
-                .any(|l| u.starts_with(l));
-            if !(u.starts_with("https://") || local) {
+            if !secure(u) {
                 return Err(format!(
                     "`{u}`: an upstream is reached over https (plain http on this machine only)"
                 ));
@@ -1520,6 +1517,23 @@ struct Server {
 }
 
 /// `scheme://host[:port]` and the path of `url`.
+/// Whether `url` is https, or plain http on this machine.
+fn secure(url: &str) -> bool {
+    if url.starts_with("https://") {
+        return true;
+    }
+    let Some(rest) = url.strip_prefix("http://") else {
+        return false;
+    };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    let host = match host.rsplit_once(':') {
+        Some((h, port)) if !port.contains(']') => h,
+        _ => host,
+    };
+    ["127.0.0.1", "localhost", "[::1]"].contains(&host)
+}
+
 fn split(url: &str) -> Result<(String, String), String> {
     let (scheme, rest) = url
         .split_once("://")
@@ -1582,7 +1596,14 @@ fn discover(http: &ureq::Agent, url: &str) -> Result<Server, String> {
     .iter()
     .find_map(|u| get_json(http, u))
     .ok_or_else(|| format!("{issuer} publishes no OAuth metadata"))?;
-    let field = |k: &str| meta[k].as_str().map(str::to_string);
+    // The browser is sent to these, and the code and secret go to them:
+    // https only, as the upstream itself.
+    let field = |k: &str| -> Result<Option<String>, String> {
+        match meta[k].as_str() {
+            Some(u) if !secure(u) => Err(format!("{issuer} names `{u}` as its {k}: not https")),
+            u => Ok(u.map(str::to_string)),
+        }
+    };
     if meta["code_challenge_methods_supported"]
         .as_array()
         .is_some_and(|m| !m.iter().any(|x| x == "S256"))
@@ -1590,11 +1611,11 @@ fn discover(http: &ureq::Agent, url: &str) -> Result<Server, String> {
         return Err(format!("{issuer} does not take PKCE with S256"));
     }
     Ok(Server {
-        authorization_endpoint: field("authorization_endpoint")
+        authorization_endpoint: field("authorization_endpoint")?
             .ok_or_else(|| format!("{issuer} names no authorization endpoint"))?,
-        token_endpoint: field("token_endpoint")
+        token_endpoint: field("token_endpoint")?
             .ok_or_else(|| format!("{issuer} names no token endpoint"))?,
-        registration_endpoint: field("registration_endpoint"),
+        registration_endpoint: field("registration_endpoint")?,
         issuer,
         resource,
     })
@@ -1796,6 +1817,23 @@ mod tests {
         assert!(ups.list().unwrap().is_empty());
         // Clean the test's keychain entry, wherever it went.
         let _ = ups.secrets.delete("tracker");
+    }
+
+    #[test]
+    fn an_oauth_endpoint_is_https_or_on_this_machine() {
+        assert!(secure("https://auth.example.com/authorize"));
+        assert!(secure("http://127.0.0.1:9000/token"));
+        assert!(secure("http://localhost/token"));
+        assert!(secure("http://[::1]:80"));
+        for u in [
+            "http://auth.example.com/authorize",
+            "javascript:alert(1)",
+            "data:text/html,x",
+            "http://127.0.0.1.example.com/x",
+            "http://localhost@evil.example.com/x",
+        ] {
+            assert!(!secure(u), "{u}");
+        }
     }
 
     /// An upstream and its authorization server on one loopback port,

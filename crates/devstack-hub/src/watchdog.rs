@@ -49,6 +49,7 @@ fn watch(port: u16, dir: &Path) {
                 "silent_s": u64::from(failed) * EVERY.as_secs(),
                 "dump": written.as_ref().ok().map(|()| dump.display().to_string()),
                 "dump_error": written.as_ref().err().map(ToString::to_string),
+                "dump_note": "its stacks may hold secrets: look before attaching it anywhere",
             }),
         );
         prune(dir);

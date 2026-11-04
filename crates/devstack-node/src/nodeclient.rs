@@ -695,11 +695,21 @@ fn hash_all(
     // What each file is, and its hash when the cache knows it; the others
     // are read together afterwards.
     let mut found = Vec::with_capacity(files.len());
+    let real_root = std::fs::canonicalize(root).ok();
     for rel in files {
         let path = elsewhere
             .get(rel)
             .cloned()
             .unwrap_or_else(|| root.join(rel));
+        // A link git tracks is followed only to a file in the working tree:
+        // its content leaves the machine, and a link to `~/.ssh` must not.
+        if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink())
+            && (elsewhere.contains_key(rel)
+                || !std::fs::canonicalize(&path)
+                    .is_ok_and(|t| real_root.as_ref().is_some_and(|r| t.starts_with(r))))
+        {
+            continue;
+        }
         let Ok(meta) = std::fs::metadata(&path) else {
             continue;
         };
@@ -836,5 +846,28 @@ mod tests {
         // A file no longer listed leaves the cache.
         let none = hash_all(d.path(), &[], &Elsewhere::new(), &mut cache, &mut read).unwrap();
         assert!(none.is_empty() && cache.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_out_of_the_working_tree_is_not_synced() {
+        let (d, out) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(out.path().join("credentials"), "secret").unwrap();
+        std::fs::write(d.path().join("a.txt"), "one").unwrap();
+        std::os::unix::fs::symlink(out.path().join("credentials"), d.path().join("secrets"))
+            .unwrap();
+        std::os::unix::fs::symlink("a.txt", d.path().join("b.txt")).unwrap();
+        let list = ["a.txt", "secrets", "b.txt"].map(String::from);
+        let mut read = 0;
+        let out = hash_all(
+            d.path(),
+            &list,
+            &Elsewhere::new(),
+            &mut HashCache::default(),
+            &mut read,
+        )
+        .unwrap();
+        let synced: Vec<_> = out.iter().map(|(e, _, _)| e.path.as_str()).collect();
+        assert_eq!(synced, ["a.txt", "b.txt"]);
     }
 }

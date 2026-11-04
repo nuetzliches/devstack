@@ -1,6 +1,6 @@
 # ADR-0091: Public links can go through the user's own named tunnel, at stable addresses; the hub runs its one connector
 
-- **Status:** Accepted (card in the pull request); built
+- **Status:** Accepted (card in the pull request); built; its step 3, the pool, built by [ADR-0092](0092-public-links-through-the-pool.md)
 - **Date:** 2026-11-03
 - **Deciders:** project owner
 - **Related:** [ADR-0090](0090-a-service-can-get-a-public-link-by-hand.md) (public links as Quick Tunnels, which this extends; its points 1 to 3 hold here too), [ADR-0069](0069-devstack-mcp-can-carry-the-tools-of-upstream-mcp-servers.md) (the hub's keychain), [ADR-0053](0053-whoever-a-lane-is-shared-with-connects-to-it.md) (connecting a lane as a whole), [ADR-0045](0045-the-hub-notifies-the-desktop.md) (the hub follows every tree's events), [ADR-0023](0023-stack-file-compatibility.md), [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md)

@@ -1,6 +1,6 @@
 # ADR-0033: A node decides who runs lanes on it, and what a lane there may do
 
-- **Status:** Accepted (2026-10-16), amended 2026-10-17 (what a lane's Compose files may ask; limits on every container; the node's own policy), amended 2026-10-20 (the node runs the model it checked; known keys only; a lane's projects end with it); noted 2026-10-21 (what holds while a lane's containers start under its running daemon, #164)
+- **Status:** Accepted (2026-10-16), amended 2026-10-17 (what a lane's Compose files may ask; limits on every container; the node's own policy), amended 2026-10-20 (the node runs the model it checked; known keys only; a lane's projects end with it); noted 2026-10-21 (what holds while a lane's containers start under its running daemon, #164); extended by [ADR-0092](0092-public-links-through-the-pool.md) point 7 (the policy's `public_links`, off by default)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md) (point 4: the node admits), [ADR-0027](0027-trust-between-nodes.md), [ADR-0031](0031-a-coordinator-places-lanes.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md)

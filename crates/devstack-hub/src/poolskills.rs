@@ -621,7 +621,12 @@ impl PoolSkills {
                 }) else {
                     continue;
                 };
-                for k in m.skills.iter().filter(|k| !d.off.contains(&k.name)) {
+                // A name from the manifest becomes a folder name: one that
+                // is not a skill name (`..`, a separator) is not written.
+                let skills = m.skills.iter().filter(|k| {
+                    devstack_node::skills::valid_skill_name(&k.name) && !d.off.contains(&k.name)
+                });
+                for k in skills {
                     let sha = if d.auto {
                         Some(k.sha256.clone())
                     } else {
@@ -1023,6 +1028,9 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// swapped in; in a working tree (`ignored`) with a `.gitignore` that
 /// ignores the folder. The hash of what was written.
 fn install(dir: &Path, name: &str, bytes: &[u8], ignored: bool) -> Result<String, String> {
+    if !devstack_node::skills::valid_skill_name(name) {
+        return Err(format!("{name:?} is not a skill name"));
+    }
     let n = rand::random::<u32>();
     let fresh = dir.join(format!(".{name}.devstack-new-{n:08x}"));
     let old = dir.join(format!(".{name}.devstack-old-{n:08x}"));
@@ -1064,6 +1072,9 @@ fn unpack(dir: &Path, into: &Path, bytes: &[u8], ignored: bool) -> Result<(), St
 /// The hash `install` would leave in `dir/name`, found by unpacking the
 /// skill beside it and taking that away again.
 fn would_write(dir: &Path, name: &str, bytes: &[u8], ignored: bool) -> Result<String, String> {
+    if !devstack_node::skills::valid_skill_name(name) {
+        return Err(format!("{name:?} is not a skill name"));
+    }
     let n = rand::random::<u32>();
     let probe = dir.join(format!(".{name}.devstack-probe-{n:08x}"));
     unpack(dir, &probe, bytes, ignored)?;
@@ -1500,6 +1511,28 @@ mod tests {
             skills,
             ..Default::default()
         }]
+    }
+
+    #[test]
+    fn a_manifest_name_that_is_no_skill_name_writes_nothing() {
+        let (st, home) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (hub, pool) = hub(st.path(), home.path());
+        let mut bad = pool.put("../../escaped", "v1");
+        bad.name = "../../escaped".into();
+        let good = pool.put("work-issue", "v1");
+        hub.set_pool("default", Some(set(vec![bad, good])));
+        hub.set_agent("claude-code", true).unwrap();
+        hub.accept("default", "core", true).unwrap();
+        assert!(
+            home.path()
+                .join(".claude/skills/work-issue/SKILL.md")
+                .exists()
+        );
+        assert!(!home.path().join("escaped").exists());
+        assert!(!home.path().join(".claude/escaped").exists());
+        let dir = home.path().join("skills");
+        assert!(install(&dir, "../x", &archive("x", "v1"), false).is_err());
+        assert!(!home.path().join("x").exists());
     }
 
     #[test]

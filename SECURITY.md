@@ -24,6 +24,7 @@ runs lanes on other machines, adds two network listeners
 | `/hub/pick-folder`, `/hub/inspect`, `/hub/stacks/add`, `/hub/stacks/scan`, `/hub/stacks/init` | the hub | The paired browser, from the hub's own page (`GET /hub/inspect` included): opens the system's folder dialog on this machine, inspects a folder the user chose or named, lists the repositories with a stack file below one and registers them, or writes a first `devstack.toml` there, never over an existing file. Local paths only: a network path (`\\host\share`, `//host/share`; on Windows anything but a drive) is refused, as it would make the hub connect to that host as the user |
 | `devstack://hub/start`, `devstack://open` | the operating system | Any web page can open the links; the browser asks first. `hub/start` starts the hub; `open?stack=…&lane=…&service=…` (what a click on a notification opens, ADR-0045) opens the dashboard there in the user's browser, paired as `devstack ui` does; each value must be a name, and the hub sends the browser on only to a dashboard route. Neither does anything else |
 | MCP server (`devstack mcp`) | stdio of the agent that started it | That agent. Commands with a confirmation text run only with `confirm: true`, which an agent must not send without the user's consent |
+| Public link (`devstack tunnel <service>`, the dashboard's *Public link*) | the internet, through Cloudflare: a Quick Tunnel (ADR-0090), your own named tunnel (ADR-0091) or the pool's (ADR-0092) | **Anyone with the address, without a login**, until the link is closed, the service is stopped by hand, the tree goes `down` or its daemon ends. Only the stack's owner opens one, by a click or that command, never the stack file; `tunnel = false` keeps a service from it. devstack's own ports (daemon API, hub) are never tunnelled. A dev service with seed data or an open admin page is public while its link is open |
 | Coordinator (`devstack node serve`) | the address the operator passes (`--listen`), TLS | Anyone who reaches the port may ask to join (bounded: a certificate request of normal size, ten requests a minute per address, at most 64 waiting for an admin). Everything else needs mutual TLS with a certificate of the pool's own CA, issued once an admin approved the member; the member's identity comes from the verified certificate, never from the request. Admin routes need the admin role |
 | Node agent (`devstack node agent`) | the address the operator passes (`--listen`), TLS | Members of the pool only: mutual TLS with the pool's CA, required for every connection, and the member must be on the coordinator's member list. A lane's API and sync are its requester's; others reach the services of a lane its owner shared with them, nothing else, checked with the coordinator at every connection |
 
@@ -113,6 +114,20 @@ browsers as well.
     Never file contents, environment values, command lines or service output.
     The coordinator stamps your identity from your certificate. A node sends
     what concerns the lanes it runs with the coordinator's setting alone.
+
+- **Public links**, only when you open one (above): the service's traffic
+  passes Cloudflare, whose account holder could read it (Cloudflare's for a
+  Quick Tunnel, yours for your own named tunnel, the pool's for the pool's).
+  devstack runs `cloudflared` from the `PATH` (or `DEVSTACK_CLOUDFLARED`); it
+  downloads none. With your own named tunnel its credentials stay in the
+  system's keychain and the hub runs the one connector, routing each host to
+  its service on this machine. In a pool: the Cloudflare API token (DNS edit
+  of one zone) is on the coordinator's host only; the coordinator hands each
+  member the credentials of a tunnel of its own, makes a DNS record per open
+  link, and learns the hosts open; the pool's admin sees every open link and
+  can close it. A member uses the pool's tunnel only after accepting it, and
+  a node carries links only if its own policy (`public_links`, off by
+  default) allows it.
 
 ## The pool's trust model
 
