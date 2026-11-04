@@ -467,6 +467,20 @@ impl Local {
         Ok(())
     }
 
+    /// `PUT` JSON to a coordinator path as this member, its answer read.
+    pub fn put_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        payload: &impl Serialize,
+    ) -> Result<T> {
+        let (m, a) = self.client()?;
+        json(&body(
+            a.put(&format!("{}{path}", m.coordinator))
+                .header("Content-Type", "application/json")
+                .send(serde_json::to_string(payload).expect("a request serialises"))?,
+        )?)
+    }
+
     /// `DELETE` a coordinator path as this member; the answer is not read.
     pub fn delete(&self, path: &str) -> Result<()> {
         let (m, a) = self.client()?;

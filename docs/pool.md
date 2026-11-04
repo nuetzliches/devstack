@@ -681,6 +681,48 @@ another. A declined entry stays declined. An entry the pool drops, or every
 entry of a pool the machine leaves, goes with its login. A pool that does not
 answer keeps what it named last.
 
+## Public links through the pool
+
+A pool can give its members public links at stable addresses below a zone
+of its own ([ADR-0092](adr/0092-public-links-through-the-pool.md)):
+`https://{service}-{lane}-{stack}--{member}.<domain>`, one DNS label, so
+Cloudflare's free certificate covers it. Use a zone only for this (a
+`dev-team.link`), not the company's: whoever holds the coordinator holds
+its DNS.
+
+**On the coordinator's host**, a Cloudflare API token for that zone, with
+*Cloudflare Tunnel: Edit*, *DNS: Edit*, *Zone: Read* and *Access: Apps and
+Policies: Read*, goes into `cloudflare.token` in its directory (readable by
+its user only), or `DEVSTACK_CLOUDFLARE_TOKEN`. No route of the coordinator
+takes it or hands it out.
+
+**An admin** sets, in the pool area's *Public links* card (or `POST
+/v1/admin/public-links`):
+
+- the **domain**;
+- the **mode**: *only with Cloudflare Access* (the default: the coordinator
+  gives no member a link until an Access application covers `*.<domain>`;
+  set it up in Cloudflare's Zero Trust dashboard, with the policy of who
+  may in), *open* (no login in front), or *off*;
+- optionally a **tag** a member needs (`public-links`).
+
+The card lists every open link, with its machine and since when; *Close*
+removes its DNS record at once, and the member cannot open it again until
+they closed it on their side. Every change, every tunnel handed out and
+every close is in the admin log.
+
+**A member** sees the offer in the same card and chooses *Use for my
+public links* (or `devstack tunnel --pool <name>`): their links then pass
+the pool's Cloudflare account, so it is their choice, and their own named
+tunnel, if they set one up, goes first. The coordinator makes the machine
+a tunnel of its own and hands its hub only that tunnel's credentials,
+which go into the keychain. The hub reports the hosts it carries whenever
+they change and every minute; the coordinator makes a DNS record for each
+host with the machine's suffix, removes the records of hosts no longer
+reported, and all of a machine's after five minutes without a report (or
+when it leaves the pool). A link opens once its record is there; a host
+the coordinator refuses fails the link with why.
+
 ## Skill sets for the members
 
 A pool can hand its members agent skills
@@ -950,7 +992,7 @@ until it is approved.
 | The pools' skill sets on a member | in the hub's state: `pool-skills.json` (the sets as last read), `skills.json` (the user's choices and the lock of what it installed), `skill-store/` (archives by SHA-256) |
 | Skill sets on the coordinator | `skills.json` (the sets), `skills/<set>/` (manifest and archives of the last fetch), `skill-sources/` (folder sources); `DEVSTACK_SKILLS_GITHUB_TOKEN`, `DEVSTACK_SKILLS_REFRESH_SECRET` |
 | The pools' MCP upstreams on a member | in the hub's state: `pool-upstreams.json` (the lists as last got), the member's answers in `upstreams.toml` (`[[pool]]`) |
-| Coordinator | `DEVSTACK_COORDINATOR_DIR`; `members.json` (changed under `members.lock`), `audit.jsonl`, `telemetry.json`, `upstreams.json` (the MCP upstreams it names); with a provisioner `provisioning.json` (the settings), `machines.json` (the machines asked for, until deleted), `provisioner.token` |
+| Coordinator | `DEVSTACK_COORDINATOR_DIR`; `members.json` (changed under `members.lock`), `audit.jsonl`, `telemetry.json`, `upstreams.json` (the MCP upstreams it names); `public-links.json` (the settings, the members' tunnels with their secrets, the records, readable by its user only), `cloudflare.token`; with a provisioner `provisioning.json` (the settings), `machines.json` (the machines asked for, until deleted), `provisioner.token` |
 | Node agent state (leases, mirrors, uploaded files per member, `policy.json`, `secret`) | `node/` beside its membership |
 | Ports | coordinator and node agent: as you choose (`--listen`); mutual TLS with the pool's CA |
 | Certificates | the pool's CA 20 years, the coordinator's server certificate 10, a member's 5; not renewed: when one expires, that member (for the CA, the pool) is set up again |

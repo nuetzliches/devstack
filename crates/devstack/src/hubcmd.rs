@@ -116,9 +116,53 @@ pub fn tunnel_remove() -> Result<()> {
     Ok(())
 }
 
-/// `devstack tunnel`: the named tunnel and what it carries.
+/// `devstack tunnel`: the named tunnel and what it carries, and what the
+/// pools offer.
 pub fn tunnel_show() -> Result<()> {
     print_tunnel(&hub_get("/hub/public-links")?);
+    if let Ok(pools) = hub_get("/hub/public-links/pools") {
+        for p in pools.as_array().into_iter().flatten() {
+            let name = p["pool"].as_str().unwrap_or("?");
+            let o = &p["offer"];
+            if let Some(e) = p["error"].as_str() {
+                println!("pool {name}: not reachable ({e})");
+            } else if o["allowed"] == true {
+                println!(
+                    "pool {name} offers links below {} ({}): `devstack tunnel --pool {name}`",
+                    o["domain"].as_str().unwrap_or("?"),
+                    if o["mode"] == "access" {
+                        "behind Cloudflare Access"
+                    } else {
+                        "without a login"
+                    }
+                );
+            } else if o["domain"].is_string() {
+                println!(
+                    "pool {name}: {}",
+                    o["why"]
+                        .as_str()
+                        .unwrap_or("no public links for this machine")
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `devstack tunnel --pool <name>`: take the tunnel the pool offers.
+pub fn tunnel_pool(pool: &str) -> Result<()> {
+    let v = hub_send(
+        "PUT",
+        "/hub/public-links/pool",
+        Some(serde_json::json!({ "pool": pool })),
+    )?;
+    print_tunnel(&v);
+    println!(
+        "
+Public links opened from now on answer at https://<service>-<lane>-<stack>--{}.{}, through pool {pool}'s Cloudflare account",
+        v["suffix"].as_str().unwrap_or("?"),
+        v["domain"].as_str().unwrap_or("?")
+    );
     Ok(())
 }
 
@@ -134,10 +178,20 @@ fn print_tunnel(v: &Value) {
     }
     let c = &v["connector"];
     println!(
-        "named tunnel {} for *.{}",
+        "named tunnel {} for *.{}{}",
         v["tunnel_id"].as_str().unwrap_or("?"),
-        v["domain"].as_str().unwrap_or("?")
+        v["domain"].as_str().unwrap_or("?"),
+        v["pool"]
+            .as_str()
+            .map(|p| format!(", from pool {p}"))
+            .unwrap_or_default()
     );
+    if let Some(e) = v["pool_error"].as_str() {
+        println!("the pool did not answer: {e}");
+    }
+    for (host, why) in v["refused"].as_object().into_iter().flatten() {
+        println!("  refused {host}: {}", why.as_str().unwrap_or("?"));
+    }
     match c["state"].as_str() {
         Some("failed") => println!("connector: failed: {}", c["error"].as_str().unwrap_or("?")),
         Some(s) => println!("connector: {s}"),

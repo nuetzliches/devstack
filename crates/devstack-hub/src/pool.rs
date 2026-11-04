@@ -631,6 +631,36 @@ pub async fn upstream_remove(
     }
 }
 
+/// `GET /hub/pool/public-links`: the pool's public links as an admin sees
+/// them (ADR-0092): its settings, whether its token is there, Access, the
+/// open links.
+pub async fn public_links(Query(q): Query<PoolQuery>) -> Response {
+    match blocking(&q, |l| l.get::<Value>("/v1/admin/public-links")).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+/// `POST /hub/pool/public-links`: whether and how the pool offers them.
+pub async fn public_links_set(Query(q): Query<PoolQuery>, Json(b): Json<Value>) -> Response {
+    match blocking(&q, move |l| l.post::<Value>("/v1/admin/public-links", &b)).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
+/// `POST /hub/pool/public-links/close`: close a member's link.
+pub async fn public_link_close(Query(q): Query<PoolQuery>, Json(b): Json<Value>) -> Response {
+    match blocking(&q, move |l| {
+        l.post::<Value>("/v1/admin/public-links/close", &b)
+    })
+    .await
+    {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => error(&e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

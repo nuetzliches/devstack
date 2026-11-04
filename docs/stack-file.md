@@ -543,6 +543,10 @@ devstack tunnel --setup ~/.cloudflared/<id>.json --domain dev-example.com
   `requires = "0.37.0"`.
 - devstack sets up no login in front: a Cloudflare Access application for
   `*.<domain>` in Cloudflare's dashboard puts one before every link.
+- **Through the pool** instead: a pool can offer its members a tunnel
+  below a zone of its own (`devstack tunnel` lists the offers, `devstack
+  tunnel --pool <name>` takes one); links then answer at
+  `…--<member>.<domain>`. See [pool.md](pool.md#public-links-through-the-pool).
 
 ### A container as a service (`docker run`)
 

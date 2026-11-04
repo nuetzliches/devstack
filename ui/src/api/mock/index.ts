@@ -12,7 +12,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { DockerEngine, Guest, HubEvent, PoolFeed, PoolNode, PoolSkillsAdmin, PoolSkillsState, LaneView, McpUpstream, NotifySettings, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry, StackView } from '../types';
+import type { DockerEngine, Guest, HubEvent, PoolFeed, PoolNode, PoolSkillsAdmin, PoolSkillsState, LaneView, McpUpstream, NotifySettings, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry, StackView, PoolPublicLinksAdmin, PublicLinksState } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -662,6 +662,27 @@ export class MockTransport implements Transport {
     }
     if (p === '/hub/pool/skills' && method === 'GET') return json(200, this.hub.poolSkills);
     if (p === '/hub/pool/skills/refresh' && method === 'POST') return json(202, {});
+    if (p === '/hub/public-links/pools' && method === 'GET')
+      return json(200, [{ pool: 'default', offer: { domain: mockPublicLinks.settings.domain ?? null, mode: mockPublicLinks.settings.mode, allowed: !!mockPublicLinks.settings.domain && mockPublicLinks.settings.mode !== 'off', suffix: 'dev', why: mockPublicLinks.settings.mode === 'off' ? 'an admin switched the pool\'s public links off' : undefined } }]);
+    if (p === '/hub/public-links' && method === 'GET') return json(200, mockTunnel);
+    if (p === '/hub/public-links/pool' && method === 'PUT') {
+      Object.assign(mockTunnel, { configured: true, domain: mockPublicLinks.settings.domain, tunnel_id: 'tun-dev', pool: 'default', suffix: 'dev' });
+      return json(200, mockTunnel);
+    }
+    if (p === '/hub/public-links/tunnel' && method === 'DELETE') {
+      Object.assign(mockTunnel, { configured: false, domain: null, tunnel_id: null, pool: null, suffix: null });
+      return json(200, mockTunnel);
+    }
+    if (p === '/hub/pool/public-links' && method === 'GET') return json(200, mockPublicLinks);
+    if (p === '/hub/pool/public-links' && method === 'POST') {
+      mockPublicLinks.settings = body as unknown as PoolPublicLinksAdmin['settings'];
+      return json(200, mockPublicLinks);
+    }
+    if (p === '/hub/pool/public-links/close' && method === 'POST') {
+      const host = String((body as { host?: string } | undefined)?.host ?? '');
+      mockPublicLinks.links = mockPublicLinks.links.filter((l) => l.host !== host);
+      return json(200, mockPublicLinks);
+    }
     if (p === '/hub/pool/upstreams' && method === 'GET') return json(200, mockPoolUpstreams);
     if (p === '/hub/pool/upstreams' && method === 'POST') {
       const u = body as unknown as PoolUpstream;
@@ -1433,3 +1454,13 @@ function commandPlan(name: string): { lines: string[]; fail?: string; stepMs?: n
 function mockLinkUrl(view: StackView, service: string): string {
   return view.public_link_domain ? `https://${service}-${view.name}.${view.public_link_domain}` : `https://${service}-quiet-river-stone.trycloudflare.com`;
 }
+
+/** The pool's public links in the mock (ADR-0092): a domain behind Access, one member's link open. */
+const mockPublicLinks: PoolPublicLinksAdmin = {
+  settings: { domain: 'dev-team.link', mode: 'access', tag: null },
+  token: true,
+  access: { Ok: true },
+  links: [{ host: 'web-feat-cart-shop--laptop-anna.dev-team.link', member: 'a1b2c3', name: 'laptop-anna', since: Math.floor(Date.now() / 1000) - 1800 }],
+  blocked: [],
+};
+const mockTunnel: PublicLinksState = { configured: false, domain: null, tunnel_id: null, pool: null, suffix: null, connector: { state: 'off', since: Date.now() }, hosts: [], refused: {} };

@@ -11,6 +11,16 @@ and listed with their assets on the
 
 ### Added
 
+- **Public links through the pool** (ADR-0092). A coordinator with a
+  Cloudflare token for a zone of its own (`cloudflare.token`) gives each
+  member machine a tunnel and a DNS record per open link, at
+  `https://{service}-{lane}-{stack}--{member}.<domain>`. An admin sets the
+  domain, the mode (*only with Cloudflare Access*, the default; *open*;
+  *off*) and a tag a member needs, sees every open link and can close one,
+  in the pool area's *Public links* card. A member takes the pool's tunnel
+  there, or with `devstack tunnel --pool <name>`; their own named tunnel
+  goes first.
+
 - **Public links at stable addresses, through your own Cloudflare tunnel**
   (ADR-0091). `devstack tunnel --setup <credentials.json> --domain
   dev-example.com` once (the file `cloudflared tunnel create` writes; it

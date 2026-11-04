@@ -23,8 +23,11 @@ pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
             setup,
             domain,
             remove_setup,
+            pool,
         } => {
-            if let Some(credentials) = setup {
+            if let Some(pool) = pool {
+                crate::hubcmd::tunnel_pool(&pool)
+            } else if let Some(credentials) = setup {
                 crate::hubcmd::tunnel_setup(&credentials, &domain.unwrap_or_default())
             } else if remove_setup {
                 crate::hubcmd::tunnel_remove()

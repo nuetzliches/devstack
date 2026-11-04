@@ -1250,6 +1250,9 @@ struct Inner {
     versions: tokio::sync::watch::Sender<crate::events::Versions>,
     /// Count the versions again: something may have changed.
     recount: Arc<tokio::sync::Notify>,
+    /// Public links through the pool (ADR-0092): its Cloudflare token,
+    /// the members' tunnels, the records of their open links.
+    public_links: crate::publiclinks::Registry,
 }
 
 /// A lease that waits for a machine (ADR-0051 point 5).
@@ -1346,6 +1349,20 @@ fn router(shared: Shared) -> Router {
         .route("/v1/history", get(history))
         .route("/v1/telemetry", get(telemetry_info))
         .route("/v1/upstreams", get(upstreams_list))
+        .route("/v1/public-links", get(public_links_offer))
+        .route("/v1/public-links/tunnel", post(public_links_issue))
+        .route(
+            "/v1/public-links/hosts",
+            axum::routing::put(public_links_hosts),
+        )
+        .route(
+            "/v1/admin/public-links",
+            get(admin_public_links).post(admin_public_links_set),
+        )
+        .route(
+            "/v1/admin/public-links/close",
+            post(admin_public_links_close),
+        )
         .route("/v1/admin/upstreams", post(admin_upstream_put))
         .route(
             "/v1/admin/upstreams/{name}",
@@ -3497,6 +3514,12 @@ async fn admin_remove(
     let (_, by) = admin(&s, &peer)?;
     let m = s.store.remove(&id, &by).map_err(store_err)?;
     s.reports.lock().unwrap().remove(&m.id);
+    // Its links' records go, and its tunnel is no longer its (ADR-0092).
+    {
+        let s = s.clone();
+        let id = m.id.clone();
+        let _ = tokio::task::spawn_blocking(move || s.public_links.forget(&id)).await;
+    }
     Ok(Json(MemberView::for_admin(&m)))
 }
 
@@ -3509,6 +3532,138 @@ async fn admin_role(
     let (_, by) = admin(&s, &peer)?;
     let m = s.store.set_role(&id, r.role, &by).map_err(store_err)?;
     Ok(Json(MemberView::for_admin(&m)))
+}
+
+/// A refusal of [`crate::publiclinks`] as an answer.
+fn refusal((code, why): crate::publiclinks::Refusal) -> (StatusCode, String) {
+    (
+        StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        why,
+    )
+}
+
+/// `GET /v1/public-links`: whether the pool offers this member public
+/// links through its tunnel (ADR-0092), and why not.
+async fn public_links_offer(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+) -> ApiResult<Json<crate::publiclinks::Offer>> {
+    let m = member(&s, &peer)?;
+    let offer = tokio::task::spawn_blocking(move || s.public_links.offer(&m.id, &m.name, &m.tags))
+        .await
+        .map_err(internal)?;
+    Ok(Json(offer))
+}
+
+/// `POST /v1/public-links/tunnel`: this machine's tunnel (made at the first
+/// request), its credentials for the member's hub (audited).
+async fn public_links_issue(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+) -> ApiResult<Json<crate::publiclinks::Issued>> {
+    let m = member(&s, &peer)?;
+    let by = format!("{} ({})", m.id, m.name);
+    let s2 = s.clone();
+    let (id, name, tags) = (m.id.clone(), m.name.clone(), m.tags.clone());
+    let issued = tokio::task::spawn_blocking(move || s2.public_links.issue(&id, &name, &tags))
+        .await
+        .map_err(internal)?
+        .map_err(refusal)?;
+    s.store
+        .record(
+            &by,
+            "public-link-tunnel",
+            &m.id,
+            Some(issued.tunnel_id.clone()),
+        )
+        .map_err(store_err)?;
+    Ok(Json(issued))
+}
+
+/// `PUT /v1/public-links/hosts`: the hosts this machine carries now; their
+/// records are made, those it no longer reports removed.
+async fn public_links_hosts(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    Json(r): Json<crate::publiclinks::HostsReport>,
+) -> ApiResult<Json<crate::publiclinks::HostsAnswer>> {
+    let m = member(&s, &peer)?;
+    let answer =
+        tokio::task::spawn_blocking(move || s.public_links.report(&m.id, &m.tags, &r.hosts))
+            .await
+            .map_err(internal)?;
+    Ok(Json(answer))
+}
+
+/// `GET /v1/admin/public-links`: the settings, whether the token is there
+/// (never what it is), whether Access covers the domain, the open links.
+async fn admin_public_links(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+) -> ApiResult<Json<crate::publiclinks::AdminView>> {
+    admin(&s, &peer)?;
+    let names: HashMap<String, String> = s
+        .store
+        .list()
+        .map_err(internal)?
+        .into_iter()
+        .map(|m| (m.id, m.name))
+        .collect();
+    let view = tokio::task::spawn_blocking(move || s.public_links.admin_view(&names))
+        .await
+        .map_err(internal)?;
+    Ok(Json(view))
+}
+
+/// `POST /v1/admin/public-links`: whether and how the pool offers public
+/// links (admins only; audited).
+async fn admin_public_links_set(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    Json(settings): Json<crate::publiclinks::Settings>,
+) -> ApiResult<Json<crate::publiclinks::AdminView>> {
+    let (me, by) = admin(&s, &peer)?;
+    let detail = format!(
+        "{} {:?} {}",
+        settings.domain.as_deref().unwrap_or("-"),
+        settings.mode,
+        settings.tag.as_deref().unwrap_or("-")
+    );
+    let s2 = s.clone();
+    tokio::task::spawn_blocking(move || s2.public_links.set_settings(settings))
+        .await
+        .map_err(internal)?
+        .map_err(refusal)?;
+    s.store
+        .record(&by, "public-links", &me.id, Some(detail))
+        .map_err(store_err)?;
+    admin_public_links(AxState(s), Extension(peer)).await
+}
+
+#[derive(Debug, Deserialize)]
+struct CloseRequest {
+    host: String,
+}
+
+/// `POST /v1/admin/public-links/close`: close a member's link: its record
+/// goes, and its member is refused it until it stops reporting it
+/// (admins only; audited).
+async fn admin_public_links_close(
+    AxState(s): AxState<Shared>,
+    Extension(peer): Extension<Peer>,
+    Json(r): Json<CloseRequest>,
+) -> ApiResult<Json<crate::publiclinks::AdminView>> {
+    let (me, by) = admin(&s, &peer)?;
+    let s2 = s.clone();
+    let host = r.host.clone();
+    tokio::task::spawn_blocking(move || s2.public_links.close(&host))
+        .await
+        .map_err(internal)?
+        .map_err(refusal)?;
+    s.store
+        .record(&by, "public-link-close", &me.id, Some(r.host))
+        .map_err(store_err)?;
+    admin_public_links(AxState(s), Extension(peer)).await
 }
 
 /// `GET /v1/upstreams`: the MCP upstreams this pool names for its members
@@ -3655,6 +3810,7 @@ pub async fn serve_with(
         skill_fetch: Mutex::new(SkillFetch::default()),
         versions: tokio::sync::watch::Sender::new(crate::events::Versions::new()),
         recount: Arc::new(tokio::sync::Notify::new()),
+        public_links: crate::publiclinks::Registry::open(dir),
         ca_pem,
     });
     shared.versions.send_replace(versions(&shared));
@@ -3678,6 +3834,18 @@ pub async fn serve_with(
                     }
                 })
                 .await;
+            }
+        });
+    }
+    // The records of members that went silent go (ADR-0092).
+    {
+        let s = Arc::downgrade(&shared);
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                every.tick().await;
+                let Some(s) = s.upgrade() else { return };
+                let _ = tokio::task::spawn_blocking(move || s.public_links.sweep()).await;
             }
         });
     }

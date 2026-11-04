@@ -11,6 +11,7 @@ import { useUi } from '@/stores/ui';
 import Icon from '@/components/icons/Icon.vue';
 import PoolCapacityChart from '@/components/PoolCapacityChart.vue';
 import NodeLoad from '@/components/NodeLoad.vue';
+import PoolPublicLinks from '@/components/PoolPublicLinks.vue';
 
 const pool = usePool();
 const hub = useHub();
@@ -168,6 +169,7 @@ const onProvisioned = computed(() => !(me.value?.no_provisioned ?? myMember.valu
           </div>
         </div>
       </section>
+      <PoolPublicLinks v-if="approved" />
     </div>
   </div>
   <section v-if="approved" class="card" data-testid="pool-capacity">

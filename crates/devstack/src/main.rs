@@ -162,6 +162,10 @@ enum Cmd {
         /// Tunnels again.
         #[arg(long, conflicts_with_all = ["service", "all", "stop", "setup"])]
         remove_setup: bool,
+        /// Use the tunnel this pool offers (ADR-0092): links answer below
+        /// the pool's domain, `devstack tunnel` lists what each pool offers.
+        #[arg(long, value_name = "POOL", conflicts_with_all = ["service", "all", "stop", "setup", "remove_setup"])]
+        pool: Option<String>,
     },
     /// Take over a candidate that waits for promotion (a schema change, ADR-0013).
     Promote {
@@ -1089,6 +1093,10 @@ mod tests {
         ));
         refused(&["tunnel", "--setup", "t.json"]);
         refused(&["tunnel", "web", "--all"]);
+        assert!(matches!(
+            parse(&["tunnel", "--pool", "team"]).cmd,
+            Cmd::Tunnel { pool: Some(p), .. } if p == "team"
+        ));
     }
 
     #[test]
