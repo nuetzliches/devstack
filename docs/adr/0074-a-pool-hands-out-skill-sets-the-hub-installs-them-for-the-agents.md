@@ -1,6 +1,6 @@
 # ADR-0074: A pool hands out skill sets; each member's hub installs them into the coding agents' user skill folders
 
-- **Status:** Accepted (2026-10-29), extended by [ADR-0079](0079-skills-local-to-a-working-tree.md); its conflict rule amended there 2026-11-03 (an identical copy is taken over)
+- **Status:** Accepted (2026-10-29), extended by [ADR-0079](0079-skills-local-to-a-working-tree.md) and [ADR-0094](0094-a-skill-carries-hooks-that-give-text-to-the-agents.md) (a skill's hooks); its conflict rule amended there 2026-11-03 (an identical copy is taken over)
 - **Date:** 2026-10-29
 - **Deciders:** project owner
 - **Related:** [ADR-0069](0069-devstack-mcp-can-carry-the-tools-of-upstream-mcp-servers.md) (the pool's MCP upstreams, the model for acceptance and precedence), [ADR-0071](0071-the-dashboard-writes-no-file-of-a-repository.md) (nothing goes into a repository), [ADR-0073](0073-a-pool-tells-its-members-what-changed-over-one-stream.md) (how a change reaches the members), [ADR-0046](0046-the-hub-opens-a-worktree-in-the-users-programs.md) ("Open with"), [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md)

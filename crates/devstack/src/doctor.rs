@@ -84,6 +84,7 @@ pub fn run(stack_file: &Path) -> Vec<Finding> {
     out.extend(preview());
     out.extend(release());
     out.extend(path_entry());
+    out.extend(agent_hooks());
     #[cfg(windows)]
     out.extend(dev_drive(stack_file));
     out
@@ -547,6 +548,68 @@ fn path_entry() -> Option<Finding> {
             ),
         ),
     })
+}
+
+/// The hooks of the pools' skills (ADR-0094): which agents get them, which
+/// switched on get none, and whether the entries find `devstack`.
+fn agent_hooks() -> Vec<Finding> {
+    let index = devstack_hub::agenthooks::read_index(&devstack_hub::upstreams::dir());
+    if index.hooks.is_empty() {
+        return Vec::new();
+    }
+    let name =
+        |id: &str| devstack_skills::agents::get(id).map_or(id.to_string(), |a| a.name.clone());
+    let mut out = Vec::new();
+    if index.agents.is_empty() {
+        out.push(f(
+            Level::Info,
+            format!(
+                "agent hooks: {} from the pools' skills, but no agent switched on gets them",
+                index.hooks.len()
+            ),
+        ));
+    } else {
+        let trust = if index.agents.iter().any(|a| a == "codex") {
+            " (Codex runs its entry once you trusted it with `/hooks`)"
+        } else {
+            ""
+        };
+        out.push(f(
+            Level::Ok,
+            format!(
+                "agent hooks: {} from the pools' skills, for {}{trust}",
+                index.hooks.len(),
+                index
+                    .agents
+                    .iter()
+                    .map(|a| name(a))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
+    }
+    if !index.without.is_empty() {
+        let with: Vec<String> = devstack_skills::agents::all()
+            .iter()
+            .filter(|a| a.hooks.is_some())
+            .map(|a| a.name.clone())
+            .collect();
+        out.push(f(
+            Level::Info,
+            format!(
+                "agent hooks: {} get none; devstack writes hooks for {} only",
+                index.without.join(", "),
+                with.join(" and ")
+            ),
+        ));
+    }
+    if !index.agents.is_empty() && find_on_path("devstack").is_none() {
+        out.push(f(
+            Level::Warn,
+            "agent hooks: the agents run `devstack hook`, but `devstack` is not on PATH",
+        ));
+    }
+    out
 }
 
 fn same_dir(a: &Path, b: &Path) -> bool {

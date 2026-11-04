@@ -3,7 +3,8 @@
 //! told installed, as data (`agents.toml`, taken from
 //! vercel-labs/skills by `scripts/sync-agents.py`). The hub installs a
 //! pool's skill sets into these folders; "Open with" takes its agents from
-//! here too, with what `[agent.open]` adds.
+//! here too, with what `[agent.open]` adds; `[agent.hooks]` names where the
+//! hub writes the entries of a skill's hooks (ADR-0094).
 //!
 //! A path in the table starts with `~` (the user's home) or
 //! `${VAR:-default}` (a variable, else its default); `/etc/...` stays as it
@@ -28,6 +29,28 @@ pub struct Agent {
     pub detect: Vec<String>,
     #[serde(default)]
     pub open: Option<Open>,
+    #[serde(default)]
+    pub hooks: Option<Hooks>,
+}
+
+/// Where an agent reads its hooks from (ADR-0094): devstack's own, for the
+/// agents whose hooks can add text to the context at a session's start and
+/// on a prompt.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Hooks {
+    /// The configuration file the entries go into.
+    pub file: String,
+    pub format: HookFormat,
+}
+
+/// How an agent's hook configuration is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookFormat {
+    /// Claude Code's `settings.json`: `hooks.<Event>[].hooks[]`.
+    Claude,
+    /// Codex's `hooks.json`: the same shape.
+    Codex,
 }
 
 /// How "Open with" starts an agent: links of a URL scheme it registered.
@@ -119,6 +142,11 @@ impl Agent {
         resolve(&self.skills)
     }
 
+    /// The file its hooks go into on this machine; `None`: it gets none.
+    pub fn hooks_file(&self) -> Option<PathBuf> {
+        resolve(&self.hooks.as_ref()?.file)
+    }
+
     /// Whether it is installed here: one of its `detect` paths exists.
     pub fn installed(&self) -> bool {
         self.detect
@@ -153,6 +181,12 @@ mod tests {
         );
         let links = &get("claude-code").unwrap().open.as_ref().unwrap().links;
         assert!(links.iter().any(|l| l.scheme == "claude-cli"));
+        let with: Vec<&str> = all()
+            .iter()
+            .filter(|a| a.hooks.is_some())
+            .map(|a| a.id.as_str())
+            .collect();
+        assert_eq!(with, ["claude-code", "codex"]);
     }
 
     #[test]

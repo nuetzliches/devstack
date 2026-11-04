@@ -351,6 +351,14 @@ pub struct SkillEntry {
     /// The folder of the set it is from, for a set of several folders.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
+    /// How many hooks its `hooks.toml` has (ADR-0094); 0 from an older
+    /// coordinator.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub hooks: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// A set as its members read it: what the last fetch that worked found,
@@ -659,8 +667,15 @@ fn pack(
                 ));
                 continue;
             }
-            match skill(&folder, &files) {
-                Ok(front) => {
+            let hooks = skill(&folder, &files).and_then(|front| {
+                let texts = files
+                    .iter()
+                    .map(|(k, (b, _))| (k.clone(), b.clone()))
+                    .collect();
+                Ok((front, crate::hooks::of_files(&texts)?.len()))
+            });
+            match hooks {
+                Ok((front, hooks)) => {
                     let bytes = tar_gz(&files).map_err(|e| format!("{}: {e}", at(&folder)))?;
                     if bytes.len() as u64 > MAX_ARCHIVE {
                         m.skipped.push(format!(
@@ -683,6 +698,7 @@ fn pack(
                             front.repos
                         },
                         folder: p.folder.clone(),
+                        hooks,
                     });
                     archives.push((folder, bytes));
                 }
@@ -1288,11 +1304,29 @@ mod tests {
             "---\nname: other\ndescription: d\n---\n",
         );
         write(&src, "notes/README.md", "no skill");
+        // Hooks (ADR-0094): counted; a wrong file leaves its skill out.
+        write(
+            &src,
+            "work-issue/hooks.toml",
+            "[[hook]]\nevent = \"session-start\"\ncontext = \"Load work-issue.\"",
+        );
+        write(
+            &src,
+            "hooked/SKILL.md",
+            "---\nname: hooked\ndescription: d\n---\n",
+        );
+        write(&src, "hooked/hooks.toml", "[[hook]]\nevent = \"tool-use\"");
         let m = refresh(dir.path(), &set("core"));
         assert_eq!(m.error, None);
         assert_eq!(m.skills.len(), 1);
         assert_eq!(m.skills[0].name, "work-issue");
-        assert_eq!(m.skipped.len(), 2, "{:?}", m.skipped);
+        assert_eq!(m.skills[0].hooks, 1);
+        assert_eq!(m.skipped.len(), 3, "{:?}", m.skipped);
+        assert!(
+            m.skipped
+                .iter()
+                .any(|s| s.starts_with("hooked: hooks.toml"))
+        );
         // The same files, the same archive.
         let again = refresh(dir.path(), &set("core"));
         assert_eq!(again.skills[0].sha256, m.skills[0].sha256);

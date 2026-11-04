@@ -396,6 +396,16 @@ enum Cmd {
         #[arg(long)]
         pool: Option<String>,
     },
+    /// Internal: what a coding agent's hook runs (ADR-0094): the texts of
+    /// the pools' skills' hooks that apply, on stdout. Never fails.
+    #[command(hide = true)]
+    Hook {
+        /// `session-start` or `prompt-submit`.
+        event: String,
+        /// The agent (its id in the agent table).
+        #[arg(long)]
+        agent: String,
+    },
     /// Internal (Linux): the shim between daemon and service (ADR-0009).
     #[command(hide = true)]
     Shim {
@@ -935,6 +945,21 @@ fn repo_of(file: &Path) -> Result<PathBuf> {
 }
 
 /// Every command goes to the area that handles it ([`dispatch`]).
+/// `devstack hook`: the agent's input on stdin, the texts on stdout;
+/// nothing on any error, so that a prompt is never held up.
+fn hook(event: &str, agent: &str) {
+    use std::io::{Read as _, Write as _};
+    let Some(event) = devstack_node::hooks::Event::parse(event) else {
+        return;
+    };
+    let mut input = String::new();
+    let _ = std::io::stdin().take(1 << 20).read_to_string(&mut input);
+    let out = devstack_hub::agenthooks::run_here(event, agent, &input);
+    if !out.is_empty() {
+        let _ = writeln!(std::io::stdout(), "{out}");
+    }
+}
+
 fn main() -> Result<()> {
     // Daemons, agents and the hub hold many connections (unix: the soft
     // limit up to the hard one).
@@ -972,6 +997,10 @@ fn main() -> Result<()> {
         }
         cmd @ (Cmd::Update { .. } | Cmd::Myself { .. }) => dispatch::myself::run(cmd),
         Cmd::Skills { action } => dispatch::skills::run(&file, action),
+        Cmd::Hook { event, agent } => {
+            hook(&event, &agent);
+            Ok(())
+        }
         cmd @ (Cmd::Daemon | Cmd::ServeStatic { .. } | Cmd::Shim { .. }) => {
             dispatch::internal::run(&file, cmd)
         }
@@ -1278,6 +1307,10 @@ mod tests {
             Cmd::Shim { args } if args == ["run", "--flag", "-x"]
         ));
         assert!(matches!(parse(&["daemon"]).cmd, Cmd::Daemon));
+        assert!(matches!(
+            parse(&["hook", "session-start", "--agent", "codex"]).cmd,
+            Cmd::Hook { event, agent } if event == "session-start" && agent == "codex"
+        ));
         assert!(matches!(
             parse(&["open-url", "devstack://hub/start"]).cmd,
             Cmd::OpenUrl { .. }

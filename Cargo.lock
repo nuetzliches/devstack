@@ -915,8 +915,10 @@ dependencies = [
  "hyper",
  "hyper-util",
  "include_dir",
+ "indexmap",
  "keyring",
  "rand 0.10.3",
+ "regex",
  "rustls",
  "rustls-pki-types",
  "serde",
@@ -951,6 +953,7 @@ dependencies = [
  "libc",
  "rand 0.10.3",
  "rcgen",
+ "regex",
  "rustls",
  "rustls-pki-types",
  "serde",
@@ -962,6 +965,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-rustls",
+ "toml",
  "ureq",
  "x509-parser",
 ]
@@ -1443,6 +1447,8 @@ checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]

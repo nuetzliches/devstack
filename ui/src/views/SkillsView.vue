@@ -158,6 +158,9 @@ const statusClass: Record<SkillStatus, string> = {
   'not-accepted': 'faint',
 };
 const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name === k.name);
+/** A skill with hooks is accepted and on (ADR-0094): the agents switched on that get none say so. */
+const hooked = computed(() => !!state.value?.sets.some((s) => s.state === 'accepted' && s.skills.some((k) => k.hooks && k.enabled !== false)));
+const hookAgents = computed(() => (state.value?.agents ?? []).filter((a) => a.enabled && a.hooks).map((a) => a.name));
 </script>
 
 <template>
@@ -168,7 +171,8 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
         <p class="subtitle">
           Skill sets your pools hand out, installed into the user skill folders of the agents you switch on. A skill bound to repositories goes into the
           agents' folders in their working trees instead, where it ignores itself: git never sees it, and no file of a repository changes. A skill of your own
-          of the same name, or one you changed, is left as it is. An agent sees a new or removed skill in its next session.
+          of the same name, or one you changed, is left as it is. An agent sees a new or removed skill in its next session. A skill's hooks give its text to
+          the agents that support them at a session's start or on a matching prompt; they never run a command.
         </p>
       </div>
       <button type="button" class="btn btn-sm" :disabled="busy === 'sync' || !state" title="Install what is missing again" data-testid="skills-sync" @click="sync">
@@ -203,6 +207,13 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
                 <strong>{{ a.name }}</strong>
                 <code class="faint small">{{ a.dir }}</code>
                 <code v-if="a.project" class="faint small">{{ a.project }}</code>
+                <span
+                  v-if="a.enabled && hooked && a.hooks === false"
+                  class="faint small"
+                  title="devstack writes the skills' hooks for the agents whose hooks can add text to the context only"
+                  data-testid="skills-agent-no-hooks"
+                  >no hooks</span
+                >
               </span>
             </label>
           </div>
@@ -336,6 +347,13 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
                     data-testid="skills-skill-repos"
                     >only {{ r.skill.repos.join(', ') }}</span
                   >
+                  <span
+                    v-if="r.skill.hooks"
+                    class="pill sm outline hooks"
+                    :title="`${r.skill.hooks} hook(s): text given to the agents at a session's start or on a matching prompt`"
+                    data-testid="skills-skill-hooks"
+                    >{{ r.skill.hooks }} hook{{ r.skill.hooks === 1 ? '' : 's' }}</span
+                  >
                   <span v-if="s.state === 'accepted'" class="status small" :class="statusClass[r.status]">
                     <Icon v-if="r.status === 'installed'" name="check" :size="12" /> {{ STATUS_LABEL[r.status] }}
                   </span>
@@ -352,6 +370,10 @@ const conflictOf = (k: SkillState) => state.value?.conflicts.find((c) => c.name 
                     <dd>{{ r.skill.updated ? new Date(r.skill.updated).toLocaleString() : 'not yet' }}</dd>
                     <dt>In</dt>
                     <dd>{{ r.skill.agents?.length ? r.skill.agents.join(', ') : 'no agent' }}</dd>
+                    <template v-if="r.skill.hooks">
+                      <dt>Hooks</dt>
+                      <dd>{{ r.skill.hooks }}, given to {{ hookAgents.length ? hookAgents.join(', ') : 'no agent switched on' }}</dd>
+                    </template>
                     <template v-if="r.skill.repos?.length">
                       <dt>Bound to</dt>
                       <dd>{{ r.skill.repos.join(', ') }}</dd>

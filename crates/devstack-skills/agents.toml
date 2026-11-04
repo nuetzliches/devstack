@@ -2,8 +2,9 @@
 # its skill folder in a working tree (`project`, ADR-0079), and the paths
 # that tell it installed. Taken from src/agents.ts of
 # https://github.com/vercel-labs/skills (MIT, Copyright (c) Vercel, Inc.)
-# by scripts/sync-agents.py; `[agent.open]` is devstack's own (how
-# "Open with" starts the agent) and kept when the table is taken again.
+# by scripts/sync-agents.py; `[agent.open]` (how "Open with" starts the
+# agent) and `[agent.hooks]` (where its hooks go, ADR-0094) are devstack's
+# own and kept when the table is taken again.
 # `~` is the user's home, `${VAR:-default}` a variable or its default.
 
 [[agent]]
@@ -70,6 +71,9 @@ project = ".claude/skills"
 detect = ["${CLAUDE_CONFIG_DIR:-~/.claude}"]
 [agent.open]
 links = [{ scheme = "claude-cli", label = "Claude Code" }, { scheme = "claude", label = "Claude Desktop" }]
+[agent.hooks]
+file = "${CLAUDE_CONFIG_DIR:-~/.claude}/settings.json"
+format = "claude"
 
 [[agent]]
 id = "cline"
@@ -112,6 +116,9 @@ name = "Codex"
 skills = "~/.agents/skills"
 project = ".agents/skills"
 detect = ["${CODEX_HOME:-~/.codex}", "/etc/codex"]
+[agent.hooks]
+file = "${CODEX_HOME:-~/.codex}/hooks.json"
+format = "codex"
 
 [[agent]]
 id = "command-code"

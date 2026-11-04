@@ -113,9 +113,9 @@ class MockHub {
   /** The pool's skill sets on this machine (ADR-0074): one accepted, one offered. */
   poolSkillState: PoolSkillsState = {
     agents: [
-      { id: 'claude-code', name: 'Claude Code', dir: '~/.claude/skills', project: '.claude/skills', enabled: true },
-      { id: 'codex', name: 'Codex', dir: '~/.agents/skills', project: '.agents/skills', enabled: false },
-      { id: 'opencode', name: 'OpenCode', dir: '~/.config/opencode/skills', project: '.agents/skills', enabled: false },
+      { id: 'claude-code', name: 'Claude Code', dir: '~/.claude/skills', project: '.claude/skills', enabled: true, hooks: true },
+      { id: 'codex', name: 'Codex', dir: '~/.agents/skills', project: '.agents/skills', enabled: false, hooks: true },
+      { id: 'opencode', name: 'OpenCode', dir: '~/.config/opencode/skills', project: '.agents/skills', enabled: false, hooks: false },
     ],
     sets: [
       {
@@ -129,7 +129,7 @@ class MockHub {
         skills: [
           { name: 'work-issue', description: 'Work on an issue from the tracker to a pull request', sha256: 'aa11', installed: true, pending: false, enabled: true, group: 'Development', tags: ['git', 'tracker'], updated: Date.now() - 3_600_000, agents: ['Claude Code'] },
           { name: 'push-tag', description: 'Tag a release and push it', sha256: 'bb22', installed: true, pending: false, enabled: true, group: 'Development', tags: ['release'], updated: Date.now() - 3_600_000, agents: ['Claude Code'] },
-          { name: 'timetrack', description: 'Book time entries from the commits of a day', sha256: 'cc33', installed: true, pending: false, enabled: true, group: 'Time', updated: Date.now() - 600_000, agents: ['Claude Code'] },
+          { name: 'timetrack', description: 'Book time entries from the commits of a day', sha256: 'cc33', installed: true, pending: false, enabled: true, group: 'Time', updated: Date.now() - 600_000, agents: ['Claude Code'], hooks: 1 },
           { name: 'idea-validate', description: 'Validate a business idea in six phases, as an HTML report', sha256: 'dd44', installed: false, pending: false, enabled: false, group: 'Business', tags: ['html'] },
           { name: 'idea-overview', description: 'A one-page overview of a business idea', sha256: 'ee55', installed: false, pending: false, enabled: false, group: 'Business', tags: ['html'] },
           // Bound to a repository (ADR-0079): in the working trees of shop only; crm's is no stack here.

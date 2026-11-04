@@ -837,6 +837,51 @@ is in; *no working tree here* when none of them is a stack on this
 machine. devstack's own generated skills live in the same place, ignored
 the same way.
 
+### A skill's hooks
+
+A skill fires when the model decides it should. A routine that must reach
+every session, or every prompt that names a ticket, can come with the skill
+as a hook ([ADR-0094](adr/0094-a-skill-carries-hooks-that-give-text-to-the-agents.md)):
+a `hooks.toml` beside its `SKILL.md`.
+
+```toml
+[[hook]]
+event = "session-start"          # a session starts, or starts again after /clear or a compaction
+upstream = "timetrack"           # only while the member accepted the pool's upstream of that name
+context = """
+Work session: load the skill time-session now, before the first task.
+If its tools are not listed yet, search for them; if they are still missing,
+tell the user that this session is not tracked.
+"""
+
+[[hook]]
+event = "prompt-submit"          # the user sent a prompt
+match = '(^|\W)ABC-[0-9]+\b'      # a regex on the prompt
+once = "match"                   # once a session per ticket (the default with `match`); "session": once
+context_file = "hooks/ticket.md" # a file of the skill, instead of `context`
+```
+
+A hook only gives text to the agent's context; no command of a pool runs on
+a member's machine. The text is 1 to 2000 characters, a skill has eight
+hooks at most, and a `hooks.toml` that is wrong (an unknown key, a pattern
+that is no regex, a file not in the skill) leaves the skill out of the
+fetch, with why. A hook comes and goes with its skill: accepted with the
+set, switched on and off with the skill, bound to its repositories, and
+updated when the skill is (with updates waiting, the text stays as agreed
+to).
+
+The member's hub writes one entry per event into the hook configuration of
+each agent switched on that supports such hooks, Claude Code
+(`~/.claude/settings.json`) and Codex (`~/.codex/hooks.json`): `devstack
+hook session-start --agent claude-code`. That command picks the hooks that
+apply each time (the working tree's repository, the upstream, the pattern,
+not given yet in this session) and prints their texts; it reads the hub's
+state from disk and prints nothing on an error. The entry is the same
+whatever the hooks say: Codex asks once to trust it (`/hooks`), not on every
+change. The user's own hooks and the files' other keys stay as they are; an
+agent switched off loses the entry. The Skills page shows a skill's hooks
+and which agent switched on gets none; `devstack doctor` says so too.
+
 ## Several pools
 
 A machine can belong to several pools, a customer's beside the team's, each

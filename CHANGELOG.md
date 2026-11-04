@@ -9,6 +9,22 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **A pool's skill can carry hooks** (ADR-0094, #453). A `hooks.toml`
+  beside a skill's `SKILL.md` names texts for the agent's context: at a
+  session's start (again after `/clear` or a compaction), or on a prompt
+  that matches a pattern, once a session or once per match, optionally
+  only while the member accepted a pool's MCP upstream. The coordinator
+  checks the file when it fetches the set (a wrong one leaves the skill
+  out); the hook comes and goes with its skill. Each member's hub writes
+  one entry per event, `devstack hook <event> --agent <id>`, into the
+  hook configuration of Claude Code and Codex when switched on; that
+  command picks the hooks that apply and prints their texts, and never
+  holds up a prompt. No command of a pool runs on a member's machine. The
+  Skills page shows a skill's hooks and the agents switched on that get
+  none; `devstack doctor` too.
+
 ## [0.39.0] - 2026-11-04
 
 `devstack mcp` passes on what its MCP upstreams say about their tools:

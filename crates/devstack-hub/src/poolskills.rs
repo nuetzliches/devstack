@@ -124,6 +124,13 @@ pub struct SkillView {
     /// The working trees it is in as the set has it (a bound skill).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub trees: Vec<String>,
+    /// How many hooks it carries (ADR-0094).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub hooks: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -155,6 +162,9 @@ pub struct AgentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     pub enabled: bool,
+    /// Whether it gets the skills' hooks (ADR-0094): devstack writes hooks
+    /// for the agents with `[agent.hooks]` in the table only.
+    pub hooks: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -198,6 +208,8 @@ struct Want {
     set: String,
     sha: String,
     repos: Vec<String>,
+    /// How many hooks it has (ADR-0094).
+    hooks: usize,
 }
 type Wanted = BTreeMap<String, Want>;
 
@@ -221,6 +233,9 @@ pub struct PoolSkills {
     home: Option<PathBuf>,
     /// The stacks whose working trees get the generated skills.
     stacks: Stacks,
+    /// Where an agent's hook configuration is (ADR-0094): the table's, or
+    /// (tests) another.
+    hooks_file: Folder,
 }
 
 fn now_ms() -> u128 {
@@ -281,6 +296,7 @@ impl PoolSkills {
         s.tracked = Box::new(crate::branches::tracked);
         s.home = devstack_skills::agents::home();
         s.stacks = Box::new(devstack_daemon::registry::list);
+        s.hooks_file = Box::new(|a| a.hooks_file());
         s
     }
 
@@ -298,6 +314,7 @@ impl PoolSkills {
             tracked: Box::new(|_, _| false),
             home: None,
             stacks: Box::new(Vec::new),
+            hooks_file: Box::new(|_| None),
         };
         s.publish();
         s
@@ -368,6 +385,7 @@ impl PoolSkills {
                     dir: (self.folder)(a)?.to_string_lossy().into_owned(),
                     project: a.project.clone(),
                     enabled: s.agents.get(&a.id) == Some(&true),
+                    hooks: a.hooks.is_some(),
                 })
             })
             .collect()
@@ -643,6 +661,7 @@ impl PoolSkills {
                                 set: m.name.clone(),
                                 sha,
                                 repos: k.repos.clone(),
+                                hooks: k.hooks,
                             },
                         );
                     }
@@ -812,6 +831,32 @@ impl PoolSkills {
                 }
             }
         }
+        // The hooks of the skills wanted, as the versions agreed to have them.
+        let mut hooks = Vec::new();
+        for (name, w) in want.iter().filter(|(_, w)| w.hooks > 0) {
+            let got = self
+                .archive(&w.pool, &w.set, name, &w.sha)
+                .and_then(|b| devstack_node::hooks::of_archive(&b));
+            match got {
+                Ok(hs) => hooks.extend(hs.into_iter().enumerate().map(|(index, hook)| {
+                    crate::agenthooks::Entry {
+                        pool: w.pool.clone(),
+                        set: w.set.clone(),
+                        skill: name.clone(),
+                        index,
+                        repos: w.repos.clone(),
+                        hook,
+                    }
+                })),
+                Err(e) => errors.push(format!("{name}: its hooks: {e}")),
+            }
+        }
+        errors.extend(crate::agenthooks::apply(
+            &self.dir,
+            hooks,
+            &|a| s.agents.get(&a.id) == Some(&true),
+            &|a| (self.hooks_file)(a),
+        ));
         let _ = self.save(&s);
         self.prune_store(&lists);
         *self.last.lock().unwrap() = (conflicts, errors, Some(now_ms()));
@@ -980,6 +1025,7 @@ impl PoolSkills {
                                     t.dedup();
                                     t
                                 },
+                                hooks: k.hooks,
                             }
                         })
                         .collect(),
@@ -1269,14 +1315,23 @@ mod tests {
 
     /// A skill's archive with `text` in its `SKILL.md`.
     fn archive(name: &str, text: &str) -> Vec<u8> {
+        archive_with(name, text, None)
+    }
+
+    /// A skill's archive, with `hooks` as its `hooks.toml`.
+    fn archive_with(name: &str, text: &str, hooks: Option<&str>) -> Vec<u8> {
         let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         let mut t = tar::Builder::new(gz);
         let body = format!("---\nname: {name}\ndescription: d\n---\n{text}");
-        let mut h = tar::Header::new_gnu();
-        h.set_size(body.len() as u64);
-        h.set_mode(0o644);
-        h.set_entry_type(tar::EntryType::Regular);
-        t.append_data(&mut h, "SKILL.md", body.as_bytes()).unwrap();
+        let files = std::iter::once(("SKILL.md", body.as_str()))
+            .chain(hooks.map(|h| (devstack_node::hooks::FILE, h)));
+        for (path, content) in files {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(content.len() as u64);
+            h.set_mode(0o644);
+            h.set_entry_type(tar::EntryType::Regular);
+            t.append_data(&mut h, path, content.as_bytes()).unwrap();
+        }
         t.into_inner().unwrap().finish().unwrap()
     }
 
@@ -1286,7 +1341,11 @@ mod tests {
 
     impl Pool {
         fn put(&self, name: &str, text: &str) -> SkillEntry {
-            let b = archive(name, text);
+            self.put_with(name, text, None)
+        }
+
+        fn put_with(&self, name: &str, text: &str, hooks: Option<&str>) -> SkillEntry {
+            let b = archive_with(name, text, hooks);
             let e = SkillEntry {
                 name: name.into(),
                 description: "d".into(),
@@ -1300,6 +1359,7 @@ mod tests {
                     Vec::new()
                 },
                 folder: None,
+                hooks: hooks.map_or(0, |h| h.matches("[[hook]]").count()),
             };
             self.archives.lock().unwrap().insert(name.into(), b);
             e
@@ -1511,6 +1571,53 @@ mod tests {
             skills,
             ..Default::default()
         }]
+    }
+
+    #[test]
+    fn a_skills_hooks_go_to_the_agents_with_it_as_agreed_to() {
+        let (st, home) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (mut hub, pool) = hub(st.path(), home.path());
+        let h = home.path().to_path_buf();
+        hub.hooks_file = Box::new(move |a| {
+            (a.id == "claude-code").then(|| h.join(".claude").join("settings.json"))
+        });
+        let hooks =
+            |text: &str| format!("[[hook]]\nevent = \"session-start\"\ncontext = \"{text}\"\n");
+        let a = pool.put_with("work", "v1", Some(&hooks("Start the timer.")));
+        hub.set_pool("default", Some(set(vec![a])));
+        hub.set_agent("claude-code", true).unwrap();
+        let settings = home.path().join(".claude/settings.json");
+        // Offered only: no hook.
+        assert!(!settings.exists());
+        hub.accept("default", "core", false).unwrap();
+        let index = crate::agenthooks::read_index(st.path());
+        assert_eq!(index.hooks.len(), 1);
+        assert_eq!(index.hooks[0].hook.context, "Start the timer.");
+        assert_eq!(index.agents, ["claude-code"]);
+        assert!(
+            std::fs::read_to_string(&settings)
+                .unwrap()
+                .contains("devstack hook session-start --agent claude-code")
+        );
+        assert_eq!(hub.view().sets[0].skills[0].hooks, 1);
+
+        // An update waits for the user's word: so does its hook's text.
+        let b = pool.put_with("work", "v2", Some(&hooks("Changed.")));
+        hub.set_pool("default", Some(set(vec![b])));
+        let index = crate::agenthooks::read_index(st.path());
+        assert_eq!(index.hooks[0].hook.context, "Start the timer.");
+        hub.update("default", "core").unwrap();
+        let index = crate::agenthooks::read_index(st.path());
+        assert_eq!(index.hooks[0].hook.context, "Changed.");
+
+        // The skill switched off: its hook goes, and the entry with it.
+        hub.set_skill("default", "core", "work", false).unwrap();
+        assert!(crate::agenthooks::read_index(st.path()).hooks.is_empty());
+        assert!(
+            !std::fs::read_to_string(&settings)
+                .unwrap()
+                .contains("devstack hook")
+        );
     }
 
     #[test]
