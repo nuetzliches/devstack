@@ -1,7 +1,9 @@
 //! The tools of the user's MCP upstreams in `devstack mcp` (ADR-0069; review
 //! card on #316, points 2, 5, 6): listed beside devstack's own as
 //! `<prefix>__<tool>`, and called through the hub, which holds the logins.
-//! The hub is started when it does not run. Without a hub
+//! The hub is started when it does not run, by what the agent asks; the
+//! watch for changed tools only asks a hub that runs, so a hub stopped with
+//! `devstack hub stop` stays stopped. Without a hub
 //! (`DEVSTACK_NO_HUB`), only upstreams without a login or with a token from
 //! the environment are asked, from here.
 
@@ -10,10 +12,20 @@ use std::time::Duration;
 
 /// The hub's answer, or `None` when there is none to ask.
 fn hub(path: &str, body: Option<Value>, within: Duration) -> Option<Value> {
+    ask_hub(true, path, body, within)
+}
+
+/// [`hub`]; with `start` false, only a hub that already runs is asked.
+fn ask_hub(start: bool, path: &str, body: Option<Value>, within: Duration) -> Option<Value> {
     if std::env::var_os("DEVSTACK_NO_HUB").is_some() {
         return None;
     }
-    let port = devstack_hub::ensure_running().ok()?;
+    let port = if start {
+        devstack_hub::ensure_running().ok()?
+    } else {
+        let port = devstack_hub::port();
+        (devstack_hub::who_answers(port) == devstack_hub::Listener::Ours).then_some(port)?
+    };
     let token = devstack_daemon::token::load().filter(|t| !t.is_empty())?;
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(within))
@@ -55,15 +67,25 @@ fn direct() -> devstack_hub::upstreams::Upstreams {
 
 /// The upstreams' tools as an agent sees them.
 pub fn tools() -> Vec<Value> {
+    tools_from(true).unwrap_or_default()
+}
+
+/// [`tools`] for the watch for changes: `None` when the hub does not run,
+/// which is then not started (ADR-0069 point 5: started as `devstack ui`
+/// does, not kept alive).
+pub fn tools_if_hub_runs() -> Option<Vec<Value>> {
+    tools_from(false)
+}
+
+fn tools_from(start: bool) -> Option<Vec<Value>> {
     if !configured() {
-        return Vec::new();
+        return Some(Vec::new());
     }
     if std::env::var_os("DEVSTACK_NO_HUB").is_some() {
-        return direct().tools(&devstack_hub::upstreams::http());
+        return Some(direct().tools(&devstack_hub::upstreams::http()));
     }
-    hub("/hub/upstreams/tools", None, Duration::from_secs(60))
-        .and_then(|v| v["tools"].as_array().cloned())
-        .unwrap_or_default()
+    let v = ask_hub(start, "/hub/upstreams/tools", None, Duration::from_secs(60))?;
+    Some(v["tools"].as_array().cloned().unwrap_or_default())
 }
 
 /// How long `initialize` waits for the upstreams' instructions, the hub's
