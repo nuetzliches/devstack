@@ -359,6 +359,11 @@ pub struct Upstreams {
     /// The tools each upstream listed last, kept across restarts: a
     /// logged-out or unreachable upstream keeps them listed (card point 5).
     seen: PathBuf,
+    /// The `instructions` each upstream gave when its session opened last,
+    /// kept across restarts like `seen` (`upstream-instructions.json`; not
+    /// written when that path is empty).
+    noted: PathBuf,
+    notes: Mutex<HashMap<String, Note>>,
     /// The running command of each upstream that is one.
     procs: Mutex<HashMap<String, std::sync::Arc<crate::stdio::Process>>>,
     /// Where those commands' stderr goes.
@@ -416,13 +421,22 @@ impl Upstreams {
     pub fn without_secrets(dir: PathBuf) -> Self {
         let mut u = Self::with(dir, Secrets::nothing());
         u.seen = PathBuf::new();
+        u.noted = PathBuf::new();
+        u.notes = Mutex::new(HashMap::new());
         u
     }
 
     fn with(dir: PathBuf, secrets: Secrets) -> Self {
+        let noted = dir.join("upstream-instructions.json");
+        let notes = std::fs::read(&noted)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
         Self {
             file: dir.join("upstreams.toml"),
             seen: dir.join("upstream-tools.json"),
+            noted,
+            notes: Mutex::new(notes),
             secrets,
             flows: Mutex::new(HashMap::new()),
             write: Mutex::new(()),
@@ -838,6 +852,9 @@ impl Upstreams {
                 {
                     self.secrets.delete(&u.name)?;
                 }
+                if o.url != u.url || o.command != u.command {
+                    self.note(&u.name, "", None);
+                }
                 *o = u;
             }
             None => all.push(u),
@@ -856,6 +873,7 @@ impl Upstreams {
             return Ok(false);
         }
         self.procs.lock().unwrap().remove(name);
+        self.note(name, "", None);
         self.secrets.delete(name)?;
         self.secrets.delete(&client_key(name))?;
         self.save(&all)?;
@@ -1128,6 +1146,7 @@ impl Upstreams {
                 .unwrap()
                 .remove(&u.name)
                 .unwrap_or_default();
+            let was_ready = session.ready();
             let r = crate::mcpclient::request(
                 http,
                 &u.url,
@@ -1136,6 +1155,12 @@ impl Upstreams {
                 method,
                 params.clone(),
             );
+            // A session opened: what the upstream said to do in it. (One
+            // the server forgot and that was opened again inside `request`
+            // is not seen here; its next session after the hub's will be.)
+            if !was_ready && session.ready() {
+                self.note(&u.name, &u.url, session.instructions());
+            }
             self.sessions
                 .lock()
                 .unwrap()
@@ -1197,6 +1222,7 @@ impl Upstreams {
                     })?,
                 );
                 self.procs.lock().unwrap().insert(u.name.clone(), p.clone());
+                self.note(&u.name, &u.command.join(" "), p.instructions());
                 p
             }
         };
@@ -1355,7 +1381,97 @@ impl Upstreams {
             Err(e) => failed(e),
         }
     }
+
+    /// Ask the upstream `name` for its tools unless it was asked within the
+    /// last minute: its session opens, and with it its `instructions` are
+    /// known. For [`Self::instructions`], one upstream per thread.
+    pub fn warm(&self, http: &ureq::Agent, name: &str) {
+        if let Ok(u) = self.get(name) {
+            let _ = self.current(http, &u);
+        }
+    }
+
+    /// Keep what upstream `name` (at `from`, its URL or its command) said
+    /// to do when its session opened; `None` forgets it.
+    fn note(&self, name: &str, from: &str, text: Option<&str>) {
+        let mut notes = self.notes.lock().unwrap();
+        let new = text.map(|t| Note {
+            from: from.to_string(),
+            text: t.to_string(),
+        });
+        if notes.get(name) == new.as_ref() {
+            return;
+        }
+        match new {
+            Some(n) => notes.insert(name.to_string(), n),
+            None => notes.remove(name),
+        };
+        if self.noted.as_os_str().is_empty() {
+            return;
+        }
+        if let Ok(text) = serde_json::to_vec(&*notes) {
+            let _ = std::fs::write(&self.noted, text);
+        }
+    }
+
+    /// The `instructions` each upstream gave when its session opened last,
+    /// as `devstack mcp` adds them to its own: `{name, prefix, instructions,
+    /// cut}`, at most [`INSTRUCTIONS_MAX`] characters each, control
+    /// characters other than line ends and tabs taken out. Asks no
+    /// upstream: what is there is what a session opened with (by `tools`,
+    /// `call`, or before a restart of the hub, while the upstream's URL or
+    /// command is the same). An upstream never reached, or that gave none,
+    /// is not in it. Never a URL, a command or a credential.
+    pub fn instructions(&self) -> Vec<Value> {
+        let Ok(all) = self.list() else {
+            return Vec::new();
+        };
+        let notes = self.notes.lock().unwrap();
+        all.iter()
+            .filter_map(|u| {
+                let n = notes.get(&u.name)?;
+                let from = if u.is_command() {
+                    u.command.join(" ")
+                } else {
+                    u.url.clone()
+                };
+                if n.from != from {
+                    return None;
+                }
+                let clean: String = n
+                    .text
+                    .chars()
+                    .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+                    .collect();
+                let clean = clean.trim();
+                if clean.is_empty() {
+                    return None;
+                }
+                let cut = clean.chars().count() > INSTRUCTIONS_MAX;
+                let text: String = clean.chars().take(INSTRUCTIONS_MAX).collect();
+                Some(json!({
+                    "name": u.name,
+                    "prefix": u.prefix(),
+                    "instructions": text,
+                    "cut": cut,
+                }))
+            })
+            .collect()
+    }
 }
+
+/// What an upstream said to do (`instructions`) when its session opened,
+/// and where it was then (its URL or command): a note of another URL or
+/// command is not used.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Note {
+    from: String,
+    text: String,
+}
+
+/// The characters of an upstream's `instructions` passed on to an agent:
+/// enough for a paragraph of guidance, not for a manual in every session.
+pub const INSTRUCTIONS_MAX: usize = 4000;
 
 fn now_s() -> u64 {
     std::time::SystemTime::now()
@@ -2046,7 +2162,7 @@ mod tests {
                 let id = m["id"].clone();
                 match method.as_str() {
                     "initialize" => {
-                        let text = serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": { "protocolVersion": "2025-06-18", "capabilities": { "tools": {} } } }).to_string();
+                        let text = serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": { "protocolVersion": "2025-06-18", "capabilities": { "tools": {} }, "instructions": "Search before you file.\u{7}" } }).to_string();
                         reply(
                             &mut c,
                             200,
@@ -2157,6 +2273,79 @@ mod tests {
     }
 
     #[test]
+    fn an_upstreams_instructions_come_from_its_session_and_stay_with_its_url() {
+        let (base, _) = fake_mcp();
+        let d = tempfile::tempdir().unwrap();
+        let ups = Upstreams::for_test(d.path().to_path_buf(), Vec::new);
+        let name = format!("i{}", std::process::id());
+        let mut u = Upstream {
+            name: name.clone(),
+            url: format!("{base}/mcp"),
+            prefix: Some("tr".into()),
+            auth: Auth::Token { env: None },
+            ..Default::default()
+        };
+        ups.put(u.clone()).unwrap();
+        let http = http();
+        // Logged out: no session, nothing said.
+        ups.warm(&http, &name);
+        assert!(ups.instructions().is_empty());
+
+        ups.set_token(&name, "good").unwrap();
+        ups.warm(&http, &name);
+        let said = ups.instructions();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert_eq!(said[0]["name"], name.as_str());
+        assert_eq!(said[0]["prefix"], "tr");
+        // The bell is taken out; the text is as the upstream gave it.
+        assert_eq!(said[0]["instructions"], "Search before you file.");
+        assert_eq!(said[0]["cut"], false);
+        assert!(
+            !said[0].to_string().contains(&base),
+            "never the URL: {said:?}"
+        );
+
+        // Kept across a restart of the hub, without asking the upstream.
+        let again = Upstreams::for_test(d.path().to_path_buf(), Vec::new);
+        assert_eq!(again.instructions(), said);
+
+        // Another URL: what the old one said goes.
+        u.url = "http://127.0.0.1:1/mcp".into();
+        ups.put(u).unwrap();
+        assert!(ups.instructions().is_empty());
+        let _ = ups.remove(&name);
+    }
+
+    #[test]
+    fn long_instructions_are_cut_and_control_characters_go() {
+        let d = tempfile::tempdir().unwrap();
+        let ups = Upstreams::for_test(d.path().to_path_buf(), Vec::new);
+        let url = "http://127.0.0.1:1/mcp";
+        ups.put(Upstream {
+            name: "long".into(),
+            url: url.into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let text = format!(
+            "line one\n\u{1b}[31mred\u{1b}[0m\t{}",
+            "ä".repeat(INSTRUCTIONS_MAX)
+        );
+        ups.note("long", url, Some(&text));
+        let said = ups.instructions();
+        let got = said[0]["instructions"].as_str().unwrap();
+        assert_eq!(got.chars().count(), INSTRUCTIONS_MAX);
+        assert!(got.starts_with("line one\n[31mred[0m\tä"), "{got}");
+        assert_eq!(said[0]["cut"], true);
+        // A note of another URL is not used; none at all forgets it.
+        ups.note("long", "http://elsewhere/mcp", Some("other"));
+        assert!(ups.instructions().is_empty());
+        ups.note("long", url, None);
+        assert!(ups.instructions().is_empty());
+        let _ = ups.remove("long");
+    }
+
+    #[test]
     fn a_command_gets_the_token_the_hub_keeps_in_its_variable_and_nothing_else() {
         let d = tempfile::tempdir().unwrap();
         let ups = Upstreams::for_test(d.path().to_path_buf(), Vec::new);
@@ -2197,6 +2386,10 @@ mod tests {
             json!({ "var": "THE_TOKEN" }),
         );
         assert_eq!(r["content"][0]["text"], "tk-1", "{r}");
+        let said = ups.instructions();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert_eq!(said[0]["prefix"], name);
+        assert_eq!(said[0]["instructions"], "Ask `env` first.");
         // A change of it starts the command again.
         assert_eq!(ups.procs.lock().unwrap().len(), 1);
         ups.remove(&name).unwrap();

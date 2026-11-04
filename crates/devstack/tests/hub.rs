@@ -1445,9 +1445,11 @@ fn fake_mcp() -> String {
             let m: serde_json::Value = serde_json::from_slice(&body).unwrap();
             let id = m["id"].clone();
             let result = match m["method"].as_str().unwrap_or("") {
-                "initialize" => {
-                    serde_json::json!({ "protocolVersion": "2025-06-18", "capabilities": {} })
-                }
+                "initialize" => serde_json::json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "instructions": "Say hello with `echo` first.",
+                }),
                 "tools/list" => serde_json::json!({ "tools": [
                     { "name": "echo", "description": "Says it back", "inputSchema": { "type": "object" } },
                     { "name": "hidden", "description": "Not offered", "inputSchema": { "type": "object" } },
@@ -1521,6 +1523,14 @@ fn devstack_mcp_offers_and_calls_an_upstreams_tools_through_the_hub() {
         init["result"]["capabilities"]["tools"]["listChanged"], true,
         "{init}"
     );
+    // The upstream's instructions follow devstack's own, under its prefix.
+    let said = init["result"]["instructions"].as_str().unwrap();
+    assert!(said.starts_with("devstack runs"), "{said}");
+    assert!(
+        said.contains("## `fk__` (MCP server `fake`)\n\n> Say hello with `echo` first."),
+        "{said}"
+    );
+    assert!(!said.contains(&url), "never the URL: {said}");
     let list = ask(serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
     let names: Vec<&str> = list["result"]["tools"]
         .as_array()
@@ -1545,5 +1555,60 @@ fn devstack_mcp_offers_and_calls_an_upstreams_tools_through_the_hub() {
     );
     assert_eq!(refused["result"]["isError"], true, "{refused}");
     drop(stdin);
+    let _ = mcp.wait();
+}
+
+/// An upstream that takes the connection and never answers does not hold
+/// up `initialize`: devstack's own instructions go out alone, in seconds.
+#[test]
+fn a_silent_upstream_does_not_hold_up_initialize() {
+    let h = start();
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://127.0.0.1:{}/mcp", l.local_addr().unwrap().port());
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for c in l.incoming().flatten() {
+            held.push(c); // read nothing, answer nothing
+        }
+    });
+    std::fs::write(
+        h.home.path().join("devstack/hub/upstreams.toml"),
+        format!("[[upstream]]\nname = \"mute\"\nurl = \"{url}\"\n"),
+    )
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut mcp = Command::new(BIN)
+        .arg("mcp")
+        .current_dir(dir.path())
+        .env("DEVSTACK_HUB_PORT", h.port.to_string())
+        .env("LOCALAPPDATA", h.home.path())
+        .env("XDG_STATE_HOME", h.home.path())
+        .env("DEVSTACK_NO_UPDATE_CHECK", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = mcp.stdin.take().unwrap();
+    let mut lines = BufReader::new(mcp.stdout.take().unwrap()).lines();
+    let t0 = std::time::Instant::now();
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "t", "version": "1" } } })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+    let init: serde_json::Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert!(
+        t0.elapsed() < std::time::Duration::from_secs(10),
+        "{:?}",
+        t0.elapsed()
+    );
+    let said = init["result"]["instructions"].as_str().unwrap();
+    assert!(said.starts_with("devstack runs"), "{said}");
+    assert!(!said.contains("mute"), "{said}");
+    drop(stdin);
+    let _ = mcp.kill();
     let _ = mcp.wait();
 }

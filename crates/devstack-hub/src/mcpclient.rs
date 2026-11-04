@@ -16,6 +16,20 @@ pub struct Session {
     id: Option<String>,
     version: Option<String>,
     ready: bool,
+    /// The server's `instructions` from its `initialize` answer, if any.
+    instructions: Option<String>,
+}
+
+impl Session {
+    /// Whether the session is open (`initialize` answered).
+    pub fn ready(&self) -> bool {
+        self.ready
+    }
+
+    /// The `instructions` the server gave when the session opened.
+    pub fn instructions(&self) -> Option<&str> {
+        self.instructions.as_deref()
+    }
 }
 
 #[derive(Debug)]
@@ -88,6 +102,10 @@ fn start(
         }
     };
     session.version = result["protocolVersion"].as_str().map(str::to_string);
+    session.instructions = result["instructions"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
     // The notification has no answer to wait for (`202`).
     let _ = notify(http, url, bearer, session, "notifications/initialized");
     session.ready = true;

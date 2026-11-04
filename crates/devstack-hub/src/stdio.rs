@@ -57,6 +57,8 @@ pub struct Process {
     waiting: Arc<Mutex<HashMap<u64, mpsc::Sender<Value>>>>,
     next: AtomicU64,
     alive: Arc<AtomicBool>,
+    /// The `instructions` of the command's `initialize` answer, if any.
+    instructions: Option<String>,
 }
 
 impl Drop for Process {
@@ -130,12 +132,13 @@ impl Process {
         let stdout = child.stdout.take().ok_or("no stdout")?;
         let waiting: Arc<Mutex<HashMap<u64, mpsc::Sender<Value>>>> = Arc::default();
         let alive = Arc::new(AtomicBool::new(true));
-        let p = Self {
+        let mut p = Self {
             child: Mutex::new(child),
             stdin: Mutex::new(stdin),
             waiting: waiting.clone(),
             next: AtomicU64::new(1),
             alive: alive.clone(),
+            instructions: None,
         };
         let (w, a) = (waiting, alive);
         std::thread::Builder::new()
@@ -170,13 +173,21 @@ impl Process {
             }),
             Duration::from_secs(60),
         )?;
-        let _ = init;
+        p.instructions = init["instructions"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string);
         p.write(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))?;
         Ok(p)
     }
 
     pub fn alive(&self) -> bool {
         self.alive.load(Ordering::SeqCst)
+    }
+
+    /// The `instructions` the command gave when it started.
+    pub fn instructions(&self) -> Option<&str> {
+        self.instructions.as_deref()
     }
 
     fn write(&self, msg: &Value) -> Result<(), String> {
@@ -247,7 +258,11 @@ pub(crate) mod tests {
                 continue;
             };
             let result = match m["method"].as_str().unwrap_or("") {
-                "initialize" => json!({ "protocolVersion": "2025-06-18", "capabilities": {} }),
+                "initialize" => json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "instructions": "Ask `env` first.",
+                }),
                 "tools/list" => {
                     json!({ "tools": [{ "name": "env", "description": "What it was given", "inputSchema": { "type": "object" } }] })
                 }
@@ -294,6 +309,7 @@ pub(crate) mod tests {
             ("GIVEN".to_string(), "for-the-command".to_string()),
         ]);
         let p = Process::start(&fake_command(), &env, &d.path().join("log")).unwrap();
+        assert_eq!(p.instructions(), Some("Ask `env` first."));
         let tools = p
             .request("tools/list", json!({}), Duration::from_secs(30))
             .unwrap();
