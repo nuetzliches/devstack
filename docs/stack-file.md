@@ -496,8 +496,11 @@ false` keeps a service from it (an admin UI, something that is no HTTP).
   (`devstack tunnel <service> --stop`, the dashboard), with a stop of the
   service by hand, `devstack down`, and the daemon; the address is new
   every time.
-- A lane's link goes to the lane's port. A lane on a node has none yet, and
-  a lane shared with you (ADR-0035) none for you: only its owner opens one.
+- A lane's link goes to the lane's port. A lane on a node gets one through
+  a named tunnel on its owner's machine (your own, or a pool's): its ports
+  are forwarded there, and your hub carries the link, so it answers while
+  your machine is on. A lane shared with you (ADR-0035) gets none from you:
+  only its owner opens one.
 - One service per link: a front end that calls its API on
   `localhost:<port>` only works from outside when it proxies the API
   itself (Vite's `server.proxy`, `ng serve --proxy-config`). Quick Tunnels

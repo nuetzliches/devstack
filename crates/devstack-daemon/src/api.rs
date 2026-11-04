@@ -533,10 +533,17 @@ async fn service_action(
 /// `POST /v1/services/{name}/public-link`: open a public link to the
 /// service's fixed port (a Cloudflare Quick Tunnel); the view answers, its
 /// `public_link` `starting` until the tunnel is registered.
-async fn public_link_open(State(s): State<AppState>, Path(name): Path<String>) -> Response {
+async fn public_link_open(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Response {
     let sup = s.sup.clone();
     let own = [s.port, crate::namedtunnel::hub_port()];
-    match tokio::task::spawn_blocking(move || sup.open_public_link(&name, &own)).await {
+    let carried = carried_by(&headers);
+    match tokio::task::spawn_blocking(move || sup.open_public_link(&name, &own, carried.as_ref()))
+        .await
+    {
         Ok(Ok(())) => Json(s.sup.view()).into_response(),
         Ok(Err(e)) if e.starts_with("no service") => err(StatusCode::NOT_FOUND, e),
         Ok(Err(e)) => err(StatusCode::CONFLICT, e),
@@ -560,16 +567,39 @@ async fn public_link_close(State(s): State<AppState>, Path(name): Path<String>) 
 /// `POST /v1/public-link`: open a public link to every service of the tree
 /// that may have one and runs ("make the lane public"); `409` with the
 /// reasons when none opened.
-async fn public_links_open(State(s): State<AppState>) -> Response {
+async fn public_links_open(State(s): State<AppState>, headers: HeaderMap) -> Response {
     let sup = s.sup.clone();
     let own = [s.port, crate::namedtunnel::hub_port()];
-    match tokio::task::spawn_blocking(move || sup.open_public_links(&own)).await {
+    let carried = carried_by(&headers);
+    match tokio::task::spawn_blocking(move || sup.open_public_links(&own, carried.as_ref())).await {
         Ok((opened, failed)) if opened.is_empty() && !failed.is_empty() => {
             err(StatusCode::CONFLICT, failed.join("\n"))
         }
         Ok(_) => Json(s.sup.view()).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
+}
+
+/// The owner's tunnel that carries a link of a lane on a node, as its
+/// owner's daemon passes it on (ADR-0092 point 6); only a daemon on a node
+/// takes it (elsewhere the header means nothing).
+fn carried_by(headers: &HeaderMap) -> Option<crate::namedtunnel::Config> {
+    crate::remote_lane_name()?;
+    serde_json::from_str(headers.get(CARRIED)?.to_str().ok()?).ok()
+}
+
+/// The header that carries it.
+const CARRIED: &str = "x-devstack-public-link-tunnel";
+
+/// Whether a request to a lane on a node opens public links: those are
+/// carried by this machine's tunnel, so they need one set up here and the
+/// hub running it.
+fn remote_public_link(method: &Method, rest: &str) -> bool {
+    *method == Method::POST
+        && (rest == "public-link"
+            || rest
+                .strip_prefix("services/")
+                .is_some_and(|r| r.ends_with("/public-link") && r.matches('/').count() == 1))
 }
 
 /// `DELETE /v1/public-link`: close every public link of the tree.
@@ -1208,6 +1238,30 @@ async fn lane_forward(
         if let Some(e) = r.too_old_for(&s.sup.stack, req.method(), &format!("/v1/{rest}")) {
             return err(StatusCode::CONFLICT, e);
         }
+        // A public link of a lane on a node is carried by this machine
+        // (ADR-0092 point 6): its tunnel named, the hub checked.
+        let carried = if remote_public_link(req.method(), &rest) {
+            let Some(tunnel) = crate::namedtunnel::read() else {
+                return err(
+                    StatusCode::CONFLICT,
+                    "a lane on a node gets public links through a named tunnel on this machine, your own or a pool's (`devstack tunnel`); a Quick Tunnel would leave from the node",
+                );
+            };
+            if let Err(e) = tokio::task::spawn_blocking(crate::namedtunnel::hub_links)
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()))
+            {
+                return err(
+                    StatusCode::CONFLICT,
+                    format!(
+                        "the hub carries the lane's public links, and does not answer ({e}): `devstack ui` starts it"
+                    ),
+                );
+            }
+            serde_json::to_string(&tunnel).ok()
+        } else {
+            None
+        };
         // On a node: its daemon's API, passed through as it is.
         let query = req
             .uri()
@@ -1222,9 +1276,12 @@ async fn lane_forward(
         };
         *out.uri_mut() = uri;
         for (k, v) in &parts.headers {
-            if k != header::HOST && k != header::AUTHORIZATION {
+            if k != header::HOST && k != header::AUTHORIZATION && k.as_str() != CARRIED {
                 out.headers_mut().insert(k, v.clone());
             }
+        }
+        if let Some(v) = carried.and_then(|c| axum::http::HeaderValue::from_str(&c).ok()) {
+            out.headers_mut().insert(CARRIED, v);
         }
         return r.forward(out).await;
     }
@@ -2129,6 +2186,19 @@ async fn act_on_container(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opening_a_public_link_of_a_lane_on_a_node_is_seen() {
+        let post = Method::POST;
+        assert!(remote_public_link(&post, "services/web/public-link"));
+        assert!(remote_public_link(&post, "public-link"));
+        assert!(!remote_public_link(
+            &Method::DELETE,
+            "services/web/public-link"
+        ));
+        assert!(!remote_public_link(&post, "services/web/restart"));
+        assert!(!remote_public_link(&post, "services/a/b/public-link"));
+    }
     use axum::body::Body;
 
     const GB: u64 = 1 << 30;
