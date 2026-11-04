@@ -1,6 +1,6 @@
 # ADR-0092: A pool can give its members public links below a zone of its own; the coordinator holds the token, each machine gets its own tunnel
 
-- **Status:** Accepted (card in the pull request); points 1 to 5 built; point 6 built for links carried by the owner's machine, the node's own connector and point 7 not yet
+- **Status:** Accepted (card in the pull request); built
 - **Date:** 2026-11-03
 - **Deciders:** project owner
 - **Related:** [ADR-0091](0091-public-links-through-the-users-own-named-tunnel.md) (the user's own named tunnel, which a pool's works like), [ADR-0090](0090-a-service-can-get-a-public-link-by-hand.md) (its points 1 to 3 hold), [ADR-0051](0051-a-pool-can-grow-by-nodes-a-provisioner-makes.md) (the provisioner's token, kept the same way), [ADR-0069](0069-devstack-mcp-can-carry-the-tools-of-upstream-mcp-servers.md) (option B: a pool offers, a member accepts), [ADR-0033](0033-a-node-decides-what-runs-on-it.md) (a node's policy), [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md)
@@ -68,6 +68,20 @@ events, routes the host to the lane's ports forwarded to it (and in a
 pool's tunnel reports it). A Quick Tunnel is refused for a lane on a node:
 it would leave from the node.
 
+As built (point 6, the node's own connector, and point 7): `public_links`
+in a node's policy, honoured only from its own `policy.json` (read when
+its agent starts; where two policies meet, `false` wins). Such a node
+takes a tunnel of the pool (no tag needed), reads its lanes' links from
+their daemons every two seconds, reports the hosts below the pool's domain,
+and runs the connector and a router that reaches a lane's port through its
+daemon's tunnel (`/v1/tunnel/{port}`). The coordinator lets a node report
+hosts with the suffix of an owner of a lease running there that has the
+pool's tunnel; the record then points at the node's tunnel, and the owner's
+report of the host is answered "carried by the node its lane runs on".
+Which machine carries a link is decided there, by who reports it: no
+switch on the lane. The connector and the router are shared by the hub and
+the node (`linkrouter.rs`).
+
 ## Consequences
 
 - A pool's admins see every member's open links, and whoever holds the
@@ -80,7 +94,10 @@ it would leave from the node.
 
 ## Enforced by
 
-`crates/devstack-node/src/publiclinks.rs` (points 1, 2, 4, 5; its tests
+`crates/devstack-node/src/node/links.rs` and `crates/devstack-node/src/linkrouter.rs`
+(points 6, 7: the node's connector and router), `crates/devstack-node/src/policy.rs`
+(`public_links`), `crates/devstack-node/src/publiclinks.rs` (points 1, 2, 4, 5,
+a node carrying its owners' hosts; its tests
 against a fake Cloudflare API), `crates/devstack-node/src/coordinator.rs`
 (the routes, the audit, the sweep, a removed member),
 `crates/devstack-hub/src/publiclinks.rs` (point 3: acceptance, the report,

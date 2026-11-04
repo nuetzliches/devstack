@@ -23,6 +23,11 @@ and listed with their assets on the
 - **A lane on a node gets public links**, carried by its owner's machine
   through a named tunnel there (their own or the pool's): the lane's ports
   are forwarded to it, so the links answer while it is on.
+- **A node can carry its lanes' public links itself** (ADR-0092 point 7):
+  with `"public_links": true` in its own `policy.json`, it takes a tunnel
+  of the pool and runs the connector, so the links answer while the
+  owner's machine is off; the coordinator points their records at the node
+  and gives them back to the owner's machine when the node stops.
 
 - **Public links at stable addresses, through your own Cloudflare tunnel**
   (ADR-0091). `devstack tunnel --setup <credentials.json> --domain

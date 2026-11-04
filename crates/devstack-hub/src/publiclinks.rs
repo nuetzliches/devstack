@@ -26,13 +26,9 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use bytes::Bytes;
 use devstack_daemon::namedtunnel::{self, Config};
-use http_body_util::{BodyExt, Full, combinators::BoxBody};
-use hyper::body::Incoming;
-use hyper::{Request, header};
-use hyper_util::rt::TokioIo;
-use serde::{Deserialize, Serialize};
+use devstack_node::linkrouter::{self, Connector, Dial};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -41,17 +37,8 @@ use std::time::{Duration, Instant};
 
 /// The keychain entry of the tunnel's credentials.
 const ACCOUNT: &str = "credentials";
-/// How long the connector runs on after the last link closed: a link
-/// closed and opened again (a restart of its lane) keeps it.
-const GRACE: Duration = Duration::from_secs(20);
-/// How long `cloudflared` gets to register a connection.
-const OPEN_TIMEOUT: Duration = Duration::from_secs(45);
-/// A failed connector is started again no sooner than this.
-const RETRY: Duration = Duration::from_secs(30);
 /// The hosts are reported to the pool at least this often.
 const REPORT_EVERY: Duration = Duration::from_secs(60);
-
-type Body = BoxBody<Bytes, hyper::Error>;
 
 /// What the hub knows of one tree (a stack's main tree, or a lane).
 #[derive(Default)]
@@ -60,26 +47,6 @@ struct Tree {
     ports: BTreeMap<String, (u16, bool)>,
     /// Service -> the host of its open (or starting) link.
     open: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case", tag = "state")]
-enum ConnState {
-    Off,
-    Starting,
-    Running,
-    Failed { error: String },
-}
-
-struct Connector {
-    tree: Option<devstack_proc::Owned>,
-    state: ConnState,
-    /// Unix ms of the last change of `state`.
-    since: u128,
-    started: Option<Instant>,
-    failed_at: Option<Instant>,
-    /// No link open since then.
-    idle_since: Option<Instant>,
 }
 
 /// What the pool's coordinator said of the hosts last.
@@ -113,23 +80,27 @@ impl PublicLinks {
             .await
             .map_err(|e| format!("the public links' router: {e}"))?;
         let router_port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        let log = dir.join("cloudflared.log");
         let me = Arc::new(Self {
             secrets: Secrets::open_as("devstack-tunnel", dir.clone()),
             dir,
             config: Mutex::new(namedtunnel::read()),
             trees: Mutex::new(BTreeMap::new()),
-            connector: Mutex::new(Connector {
-                tree: None,
-                state: ConnState::Off,
-                since: crate::now_ms(),
-                started: None,
-                failed_at: None,
-                idle_since: None,
-            }),
+            connector: Mutex::new(Connector::new(log)),
             router_port,
             pool: Mutex::default(),
         });
-        tokio::spawn(serve(me.clone(), listener));
+        // The router asks this hub where a host goes: a port here.
+        let dialer = Arc::downgrade(&me);
+        let dial: Dial = Arc::new(move |host: String| {
+            let me = dialer.upgrade();
+            Box::pin(async move {
+                let me = me.ok_or((503, "the hub is stopping".to_string()))?;
+                let (port, tls) = me.route(&host).map_err(|w| (404, w.to_string()))?;
+                linkrouter::local(port, tls).await
+            })
+        });
+        tokio::spawn(linkrouter::serve(listener, dial));
         let watcher = me.clone();
         tokio::spawn(async move {
             loop {
@@ -304,64 +275,11 @@ impl PublicLinks {
     /// set up and a link is open.
     fn tick(&self) {
         let wanted = self.config.lock().unwrap().is_some() && !self.open_hosts().is_empty();
-        let mut c = self.connector.lock().unwrap();
-        if let Some(tree) = c.tree.as_mut() {
-            if let Some(code) = tree.try_exit_code() {
-                let out =
-                    std::fs::read_to_string(self.dir.join("cloudflared.log")).unwrap_or_default();
-                let error = namedtunnel::cloudflared_error(&out)
-                    .unwrap_or_else(|| format!("cloudflared ended (exit code {code})"));
-                c.tree = None;
-                set(&mut c, ConnState::Failed { error });
-                c.failed_at = Some(Instant::now());
-            } else if c.state == ConnState::Starting {
-                let out =
-                    std::fs::read_to_string(self.dir.join("cloudflared.log")).unwrap_or_default();
-                if out.contains("Registered tunnel connection") {
-                    set(&mut c, ConnState::Running);
-                } else if c.started.is_some_and(|t| t.elapsed() > OPEN_TIMEOUT) {
-                    if let Some(mut t) = c.tree.take() {
-                        t.kill();
-                    }
-                    let error = namedtunnel::cloudflared_error(&out).unwrap_or_else(|| {
-                        format!(
-                            "no connection registered after {} s",
-                            OPEN_TIMEOUT.as_secs()
-                        )
-                    });
-                    set(&mut c, ConnState::Failed { error });
-                    c.failed_at = Some(Instant::now());
-                }
-            }
-        }
-        if wanted {
-            c.idle_since = None;
-            let may_retry = c.failed_at.is_none_or(|t| t.elapsed() > RETRY);
-            if c.tree.is_none() && may_retry {
-                match self.spawn() {
-                    Ok(tree) => {
-                        c.tree = Some(tree);
-                        c.started = Some(Instant::now());
-                        c.failed_at = None;
-                        set(&mut c, ConnState::Starting);
-                    }
-                    Err(error) => {
-                        set(&mut c, ConnState::Failed { error });
-                        c.failed_at = Some(Instant::now());
-                    }
-                }
-            }
-        } else if c.tree.is_some() {
-            let idle = *c.idle_since.get_or_insert_with(Instant::now);
-            if idle.elapsed() > GRACE || self.config.lock().unwrap().is_none() {
-                if let Some(mut t) = c.tree.take() {
-                    t.kill();
-                }
-                set(&mut c, ConnState::Off);
-            }
-        } else if !matches!(c.state, ConnState::Off) && !wanted && c.failed_at.is_none() {
-            set(&mut c, ConnState::Off);
-        }
+        let off_now = self.config.lock().unwrap().is_none();
+        self.connector
+            .lock()
+            .unwrap()
+            .tick(wanted, off_now, || self.spawn());
     }
 
     /// `cloudflared tunnel run` for the tunnel, its credentials in the
@@ -377,45 +295,18 @@ impl PublicLinks {
             .secrets
             .get(ACCOUNT)?
             .ok_or("the named tunnel's credentials are gone from the keychain: set it up again (`devstack tunnel --setup`)")?;
-        let program = namedtunnel::cloudflared()?;
-        std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
-        // Its own file: `cloudflared` would otherwise read the user's
-        // `~/.cloudflared/config.yml`, and its ingress rules.
-        let file = self.dir.join("cloudflared.yml");
-        std::fs::write(
-            &file,
-            format!(
-                "tunnel: {id}\nno-autoupdate: true\ningress:\n  - service: http://127.0.0.1:{port}\n",
-                id = config.tunnel_id,
-                port = self.router_port
-            ),
+        linkrouter::spawn_connector(
+            &self.dir,
+            &config.tunnel_id,
+            self.router_port,
+            credentials,
+            &self.dir.join("cloudflared.log"),
+            &linkrouter::proc_options(),
         )
-        .map_err(|e| e.to_string())?;
-        let log =
-            std::fs::File::create(self.dir.join("cloudflared.log")).map_err(|e| e.to_string())?;
-        let mut env = BTreeMap::new();
-        env.insert("TUNNEL_CRED_CONTENTS".to_string(), credentials);
-        let (tree, _) = devstack_proc::spawn(
-            devstack_proc::Spec {
-                name: "public-links".into(),
-                command: format!(
-                    "{} tunnel --config {} run",
-                    namedtunnel::quoted(&program),
-                    namedtunnel::quoted(&file)
-                ),
-                cwd: self.dir.clone(),
-                env,
-                log,
-            },
-            &proc_options(),
-        )
-        .map_err(|e| e.to_string())?;
-        Ok(tree)
     }
 
     fn view(&self) -> Value {
         let config = self.config.lock().unwrap().clone();
-        let c = self.connector.lock().unwrap();
         let links: Vec<Value> = self
             .trees
             .lock()
@@ -427,10 +318,7 @@ impl PublicLinks {
                 })
             })
             .collect();
-        let mut connector = serde_json::to_value(&c.state).unwrap_or_default();
-        connector["since"] = json!(c.since);
-        connector["pid"] = json!(c.tree.as_ref().map(|t| t.root_pid()));
-        drop(c);
+        let connector = self.connector.lock().unwrap().view();
         let (refused, pool_error) = {
             let p = self.pool.lock().unwrap();
             (p.refused.clone(), p.error.clone())
@@ -456,31 +344,7 @@ impl PublicLinks {
     }
 
     fn stop_connector(&self) {
-        let mut c = self.connector.lock().unwrap();
-        if let Some(mut t) = c.tree.take() {
-            t.kill();
-        }
-        c.failed_at = None;
-        set(&mut c, ConnState::Off);
-    }
-}
-
-fn set(c: &mut Connector, state: ConnState) {
-    if c.state != state {
-        c.state = state;
-        c.since = crate::now_ms();
-    }
-}
-
-/// The hub owns `cloudflared`'s tree as the daemon owns a service's
-/// (ADR-0009): on Unix through devstack's shim.
-fn proc_options() -> devstack_proc::Options {
-    let shim = std::env::current_exe()
-        .map(|exe| vec![exe.to_string_lossy().into_owned(), "shim".into()])
-        .unwrap_or_default();
-    devstack_proc::Options {
-        cgroup_root: None,
-        shim,
+        self.connector.lock().unwrap().stop();
     }
 }
 
@@ -699,198 +563,6 @@ pub(crate) async fn delete(State(s): State<AppState>) -> Response {
     }
 }
 
-// ---------------------------------------------------------- the router
-
-async fn serve(links: Arc<PublicLinks>, listener: tokio::net::TcpListener) {
-    loop {
-        let Ok((stream, _)) = listener.accept().await else {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            continue;
-        };
-        let _ = stream.set_nodelay(true);
-        let links = links.clone();
-        tokio::spawn(async move {
-            let service = hyper::service::service_fn(move |r| handle(links.clone(), r));
-            let _ = hyper::server::conn::http1::Builder::new()
-                .serve_connection(TokioIo::new(stream), service)
-                .with_upgrades()
-                .await;
-        });
-    }
-}
-
-fn text(status: StatusCode, body: String) -> hyper::Response<Body> {
-    let mut r = hyper::Response::new(Full::new(Bytes::from(body)).map_err(|n| match n {}).boxed());
-    *r.status_mut() = status;
-    r.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-    r
-}
-
-async fn handle(
-    links: Arc<PublicLinks>,
-    req: Request<Incoming>,
-) -> Result<hyper::Response<Body>, std::convert::Infallible> {
-    let host = req
-        .headers()
-        .get(header::HOST)
-        .and_then(|h| h.to_str().ok())
-        .map(|h| h.split(':').next().unwrap_or(h).to_ascii_lowercase())
-        .unwrap_or_default();
-    let (port, tls) = match links.route(&host) {
-        Ok(t) => t,
-        Err(why) => return Ok(text(StatusCode::NOT_FOUND, format!("devstack: {why}\n"))),
-    };
-    Ok(forward(req, &host, port, tls).await.unwrap_or_else(|e| {
-        text(
-            StatusCode::BAD_GATEWAY,
-            format!("devstack: the service does not answer: {e}\n"),
-        )
-    }))
-}
-
-trait Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
-impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> Io for T {}
-
-/// Forward a request to the service's port on this machine, with the Host
-/// a browser here sends (as a Quick Tunnel's `--http-host-header` does);
-/// WebSockets pass through.
-async fn forward(
-    mut req: Request<Incoming>,
-    host: &str,
-    port: u16,
-    tls: bool,
-) -> Result<hyper::Response<Body>, String> {
-    let tcp = match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
-        Ok(s) => s,
-        // A dev server may listen on IPv6 loopback only.
-        Err(_) => tokio::net::TcpStream::connect(("::1", port))
-            .await
-            .map_err(|e| e.to_string())?,
-    };
-    let _ = tcp.set_nodelay(true);
-    let io: Box<dyn Io> = if tls {
-        let name =
-            rustls_pki_types::ServerName::try_from("localhost").map_err(|e| e.to_string())?;
-        Box::new(
-            tokio_rustls::TlsConnector::from(any_certificate())
-                .connect(name, tcp)
-                .await
-                .map_err(|e| e.to_string())?,
-        )
-    } else {
-        Box::new(tcp)
-    };
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(io))
-        .await
-        .map_err(|e| e.to_string())?;
-    tokio::spawn(conn.with_upgrades());
-    let client_upgrade = req
-        .headers()
-        .contains_key(header::UPGRADE)
-        .then(|| hyper::upgrade::on(&mut req));
-    {
-        let h = req.headers_mut();
-        devstack_daemon::proxy::strip_hop_by_hop(h, client_upgrade.is_some());
-        if let Ok(v) = header::HeaderValue::from_str(&format!("localhost:{port}")) {
-            h.insert(header::HOST, v);
-        }
-        if let Ok(v) = header::HeaderValue::from_str(host) {
-            h.insert("x-forwarded-host", v);
-        }
-        h.insert(
-            "x-forwarded-proto",
-            header::HeaderValue::from_static("https"),
-        );
-    }
-    let mut resp = sender.send_request(req).await.map_err(|e| e.to_string())?;
-    let upgraded = resp.status() == StatusCode::SWITCHING_PROTOCOLS && client_upgrade.is_some();
-    devstack_daemon::proxy::strip_hop_by_hop(resp.headers_mut(), upgraded);
-    if upgraded && let Some(client) = client_upgrade {
-        let upstream = hyper::upgrade::on(&mut resp);
-        tokio::spawn(async move {
-            if let (Ok(c), Ok(u)) = (client.await, upstream.await) {
-                let (mut c, mut u) = (TokioIo::new(c), TokioIo::new(u));
-                let _ = tokio::io::copy_bidirectional(&mut c, &mut u).await;
-            }
-        });
-        let (parts, _) = resp.into_parts();
-        return Ok(hyper::Response::from_parts(
-            parts,
-            Full::new(Bytes::new()).map_err(|n| match n {}).boxed(),
-        ));
-    }
-    Ok(resp.map(BodyExt::boxed))
-}
-
-/// TLS to a service on this machine: its certificate is a development one
-/// (`insecure_tls`, as its health check takes it), so any is accepted.
-fn any_certificate() -> Arc<rustls::ClientConfig> {
-    static CONFIG: std::sync::OnceLock<Arc<rustls::ClientConfig>> = std::sync::OnceLock::new();
-    CONFIG
-        .get_or_init(|| {
-            let provider = Arc::new(rustls::crypto::ring::default_provider());
-            let config = rustls::ClientConfig::builder_with_provider(provider.clone())
-                .with_safe_default_protocol_versions()
-                .expect("ring supports the default versions")
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(AnyCertificate(provider)))
-                .with_no_client_auth();
-            Arc::new(config)
-        })
-        .clone()
-}
-
-#[derive(Debug)]
-struct AnyCertificate(Arc<rustls::crypto::CryptoProvider>);
-
-impl rustls::client::danger::ServerCertVerifier for AnyCertificate {
-    fn verify_server_cert(
-        &self,
-        _: &rustls_pki_types::CertificateDer<'_>,
-        _: &[rustls_pki_types::CertificateDer<'_>],
-        _: &rustls_pki_types::ServerName<'_>,
-        _: &[u8],
-        _: rustls_pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &rustls_pki_types::CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &self.0.signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &rustls_pki_types::CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.0.signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        self.0.signature_verification_algorithms.supported_schemes()
-    }
-}
-
 /// Clears a tree's links when the task that follows its stream ends,
 /// aborted included (a lane that stopped).
 pub(crate) struct Following {
@@ -930,14 +602,9 @@ mod tests {
                 pool: None,
             })),
             trees: Mutex::new(BTreeMap::new()),
-            connector: Mutex::new(Connector {
-                tree: None,
-                state: ConnState::Off,
-                since: 0,
-                started: None,
-                failed_at: None,
-                idle_since: None,
-            }),
+            connector: Mutex::new(Connector::new(
+                std::env::temp_dir().join("public-links-test.log"),
+            )),
             router_port: 1,
             pool: Mutex::default(),
         }

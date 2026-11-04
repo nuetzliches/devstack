@@ -113,6 +113,11 @@ pub struct NodePolicy {
     /// `prepare` run ahead into its store here. Not set: yes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warm: Option<bool>,
+    /// Whether this node carries its lanes' public links itself, through
+    /// the pool's tunnel (ADR-0092 point 7): only this node's own
+    /// `policy.json` says `true`. Not set: no; the owners' machines do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_links: Option<bool>,
 }
 
 impl NodePolicy {
@@ -185,6 +190,10 @@ impl NodePolicy {
                     remote_update: a.remote_update.or(p.remote_update),
                     // `false` anywhere wins.
                     warm: match (a.warm, p.warm) {
+                        (Some(false), _) | (_, Some(false)) => Some(false),
+                        (x, y) => x.or(y),
+                    },
+                    public_links: match (a.public_links, p.public_links) {
                         (Some(false), _) | (_, Some(false)) => Some(false),
                         (x, y) => x.or(y),
                     },

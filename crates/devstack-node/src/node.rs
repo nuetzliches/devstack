@@ -354,6 +354,8 @@ fn is_zero(v: &u64) -> bool {
     *v == 0
 }
 
+mod links;
+
 type Shared = Arc<Inner>;
 /// The approved members, each with its tags.
 type MemberTags = HashMap<String, Vec<String>>;
@@ -4108,6 +4110,9 @@ pub async fn serve(
         }
     }
     let bg = tokio::spawn(background(s.clone()));
+    // Its lanes' public links, if its own policy lets it carry them
+    // (ADR-0092 point 7).
+    links::start(s.clone());
     // The containers of the running lanes: their states and load into each
     // lane's file, so its dashboard shows them (#101).
     let weak = Arc::downgrade(&s);

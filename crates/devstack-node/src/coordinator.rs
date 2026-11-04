@@ -3564,11 +3564,12 @@ async fn public_links_issue(
     let m = member(&s, &peer)?;
     let by = format!("{} ({})", m.id, m.name);
     let s2 = s.clone();
-    let (id, name, tags) = (m.id.clone(), m.name.clone(), m.tags.clone());
-    let issued = tokio::task::spawn_blocking(move || s2.public_links.issue(&id, &name, &tags))
-        .await
-        .map_err(internal)?
-        .map_err(refusal)?;
+    let (id, name, tags, as_node) = (m.id.clone(), m.name.clone(), m.tags.clone(), m.node);
+    let issued =
+        tokio::task::spawn_blocking(move || s2.public_links.issue(&id, &name, &tags, as_node))
+            .await
+            .map_err(internal)?
+            .map_err(refusal)?;
     s.store
         .record(
             &by,
@@ -3588,10 +3589,28 @@ async fn public_links_hosts(
     Json(r): Json<crate::publiclinks::HostsReport>,
 ) -> ApiResult<Json<crate::publiclinks::HostsAnswer>> {
     let m = member(&s, &peer)?;
-    let answer =
-        tokio::task::spawn_blocking(move || s.public_links.report(&m.id, &m.tags, &r.hosts))
-            .await
-            .map_err(internal)?;
+    // A node carries its running lanes' owners' links (ADR-0092 point 6):
+    // their suffixes, for the owners that took the pool's tunnel.
+    let owners: Vec<String> = if m.node {
+        s.leases
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|(l, _, _)| l.node == m.id && l.state == "running")
+            .map(|(l, _, _)| l.member.clone())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let answer = tokio::task::spawn_blocking(move || {
+        let carries: std::collections::BTreeMap<String, String> = owners
+            .into_iter()
+            .filter_map(|o| s.public_links.suffix_of(&o).map(|sfx| (sfx, o)))
+            .collect();
+        s.public_links.report(&m.id, &m.tags, &r.hosts, &carries)
+    })
+    .await
+    .map_err(internal)?;
     Ok(Json(answer))
 }
 

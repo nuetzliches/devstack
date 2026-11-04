@@ -8,6 +8,7 @@ pub mod events;
 pub mod footprint;
 pub mod laneinfra;
 pub mod lanerun;
+pub mod linkrouter;
 pub mod member;
 pub mod node;
 pub mod nodeclient;
