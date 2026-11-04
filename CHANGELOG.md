@@ -9,6 +9,15 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-11-05
+
+A pool's skill can carry hooks (ADR-0094): a `hooks.toml` beside its
+`SKILL.md` gives Claude Code and Codex a text at a session's start or on
+a prompt that matches a pattern, mechanically, whatever the model decides
+to load. Each hub writes one entry per agent and event, `devstack hook`,
+which picks the texts that apply; no command of a pool runs on a
+member's machine.
+
 ### Added
 
 - **A pool's skill can carry hooks** (ADR-0094, #453). A `hooks.toml`
@@ -2901,7 +2910,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.39.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.40.0...HEAD
+[0.40.0]: https://github.com/nuetzliches/devstack/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/nuetzliches/devstack/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/nuetzliches/devstack/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/nuetzliches/devstack/compare/v0.36.0...v0.37.0
