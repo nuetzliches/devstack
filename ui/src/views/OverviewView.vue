@@ -191,7 +191,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
                       class="btn btn-ghost btn-sm btn-icon"
                       :title="`Start every service and container of ${card.label}`"
                       :aria-label="`Start every service and container of ${card.label}`"
-                      :disabled="!!stack.busy[`grp:${card.key}`] || stack.stale || hubAway"
+                      :disabled="!!stack.busy[`grp:${card.key}`] || !!stack.treeBusy || stack.stale || hubAway"
                       data-testid="group-start"
                       @click="stack.groupAction(card.key, card.label, 'start')"
                     >
@@ -202,7 +202,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
                       icon="restart"
                       :title="`Restart every service and container of ${card.label}: from the builds there are for their inputs, else built`"
                       :items="groupRestartItems"
-                      :disabled="!!stack.busy[`grp:${card.key}`] || stack.stale || hubAway"
+                      :disabled="!!stack.busy[`grp:${card.key}`] || !!stack.treeBusy || stack.stale || hubAway"
                       :busy="stack.busy[`grp:${card.key}`] === 'restart' || stack.busy[`grp:${card.key}`] === 'rebuild'"
                       :menu-label="`More restarts of ${card.label}`"
                       testid="group-restart"
@@ -214,7 +214,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
                       class="btn btn-ghost btn-sm btn-icon btn-stop"
                       :title="`Stop every service and container of ${card.label}`"
                       :aria-label="`Stop every service and container of ${card.label}`"
-                      :disabled="!!stack.busy[`grp:${card.key}`] || stack.stale || hubAway"
+                      :disabled="!!stack.busy[`grp:${card.key}`] || !!stack.treeBusy || stack.stale || hubAway"
                       data-testid="group-stop"
                       @click="stack.groupAction(card.key, card.label, 'stop')"
                     >

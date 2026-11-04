@@ -71,7 +71,7 @@ const extraUrls = computed(() => webUrls.value.filter((u) => !props.container!.p
             v-if="container.unreachable?.length && !refuses && !stack.readOnly"
             type="button"
             class="tag lost"
-            :disabled="busy || stack.stale"
+            :disabled="busy || !!stack.treeBusy || stack.stale"
             :title="`${container.unreachable.join(', ')} closes connections from this machine at once: Docker lost the port forward, or nothing listens on it inside. Click to restart the container.`"
             data-testid="container-unreachable"
             @click="stack.containerAction(group, service, 'restart')"
@@ -105,7 +105,7 @@ const extraUrls = computed(() => webUrls.value.filter((u) => !props.container!.p
         class="btn btn-ghost btn-sm btn-icon"
         :aria-label="`Start container ${service}`"
         :title="refuses ?? 'Start container'"
-        :disabled="busy || stack.stale || !!refuses"
+        :disabled="busy || !!stack.treeBusy || stack.stale || !!refuses"
         data-testid="action-container-start"
         @click="stack.containerAction(group, service, 'start')"
       >
@@ -117,7 +117,7 @@ const extraUrls = computed(() => webUrls.value.filter((u) => !props.container!.p
           class="btn btn-ghost btn-sm btn-icon"
           :aria-label="`Restart container ${service}`"
           :title="refuses ?? 'Restart container'"
-          :disabled="busy || stack.stale || !!refuses"
+          :disabled="busy || !!stack.treeBusy || stack.stale || !!refuses"
           data-testid="action-container-restart"
           @click="stack.containerAction(group, service, 'restart')"
         >
@@ -128,7 +128,7 @@ const extraUrls = computed(() => webUrls.value.filter((u) => !props.container!.p
           class="btn btn-ghost btn-sm btn-icon btn-stop"
           :aria-label="`Stop container ${service}`"
           title="Stop container"
-          :disabled="busy || stack.stale"
+          :disabled="busy || !!stack.treeBusy || stack.stale"
           data-testid="action-container-stop"
           @click="stack.containerAction(group, service, 'stop')"
         >

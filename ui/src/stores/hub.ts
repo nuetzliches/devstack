@@ -28,6 +28,13 @@ export const useHub = defineStore('hub', () => {
   /** True once the hub stream delivered a list in this page session. */
   const fresh = ref(false);
   const starting = ref<Record<string, boolean>>({});
+  /** Stacks whose stop the hub took (it answers before the daemon is gone): until it says they no longer run. */
+  const stopping = ref<Record<string, boolean>>({});
+  /** Stack `id` is stopping; a stop nothing reports the end of holds at most two minutes. */
+  function markStopping(id: string) {
+    stopping.value[id] = true;
+    setTimeout(() => delete stopping.value[id], 120_000);
+  }
   /** The Docker engine; null until the hub said (older hubs never do). */
   const docker = ref<DockerEngine | null>(null);
   const dockerStarting = ref(false);
@@ -154,6 +161,7 @@ export const useHub = defineStore('hub', () => {
         if (status.value !== 'ok') void checkSession();
         // Running, or its start failed (the hub says why): no longer "Starting…".
         for (const s of ev.stacks) if ((s.running || s.start_error) && starting.value[s.id]) delete starting.value[s.id];
+        for (const s of ev.stacks) if (!s.running && stopping.value[s.id]) delete stopping.value[s.id];
         save();
       },
       onState(s) {
@@ -251,6 +259,8 @@ export const useHub = defineStore('hub', () => {
     stream,
     fresh,
     starting,
+    stopping,
+    markStopping,
     docker,
     dockerStarting,
     newer,

@@ -20,6 +20,8 @@ const now = useNow();
 const c = computed(() => props.service.candidate!);
 const look = computed(() => candidateLook(c.value));
 const busy = computed(() => stack.busy[`svc:${props.service.name}`]);
+/** Its tree or one of its groups is busy: its own actions wait. */
+const blocked = computed(() => stack.serviceBlocked(props.service.name));
 
 const steps = ['building', 'starting', 'switching'] as const;
 const stepIndex = computed(() => {
@@ -73,7 +75,7 @@ const heldParts = computed(() => (c.value.reason ?? '').split(/(devstack promote
           v-if="c.state === 'held' && !stack.readOnly"
           type="button"
           class="btn btn-warn"
-          :disabled="!!busy || stack.stale"
+          :disabled="!!busy || !!blocked || stack.stale"
           data-testid="action-promote"
           @click="stack.serviceAction(service.name, 'promote')"
         >
@@ -86,7 +88,7 @@ const heldParts = computed(() => (c.value.reason ?? '').split(/(devstack promote
             v-if="!stack.readOnly"
             type="button"
             class="btn"
-            :disabled="!!busy || stack.stale"
+            :disabled="!!busy || !!blocked || stack.stale"
             data-testid="action-retry"
             title="Build the current tree again"
             @click="stack.serviceAction(service.name, 'restart')"

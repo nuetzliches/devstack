@@ -89,7 +89,8 @@ function collapseAll() {
   persist.set('sidebar.collapsed', collapsed.value);
 }
 const allFolded = computed(() => hub.stacks.every((s) => collapsed.value[s.id]));
-const runningStacks = computed(() => hub.stacks.filter((s) => s.running));
+/** The stacks that run, and are not stopping already. */
+const runningStacks = computed(() => hub.stacks.filter((s) => s.running && !hub.stopping[s.id]));
 
 // By name or by last opened, never by state: a start or a stop moves nothing
 // in the list. Last opened is the snapshot taken when the page loaded or the
@@ -367,8 +368,12 @@ async function stopStack(s: StackEntry) {
     danger: true,
     option,
   });
-  if (ok) await act({ label: `Stop ${s.name}`, path: paths.down(s.id, !option.checked, false, true), success: 'Stopping the stack…' });
+  if (!ok) return;
+  const r = await act({ label: `Stop ${s.name}`, path: paths.down(s.id, !option.checked, false, true), success: 'Stopping the stack…' });
+  if (r.ok) hub.markStopping(s.id);
 }
+/** Stop all is sending its stops. */
+const stoppingAll = ref(false);
 /** Every stack that runs, after one question; the shown one is no exception. */
 async function stopAll() {
   const list = runningStacks.value;
@@ -381,8 +386,16 @@ async function stopAll() {
     danger: true,
     option,
   });
-  if (!ok) return;
-  for (const s of list) await act({ label: `Stop ${s.name}`, path: paths.down(s.id, !option.checked, false, true), success: `Stopping ${s.name}…` });
+  if (!ok || stoppingAll.value) return;
+  stoppingAll.value = true;
+  try {
+    for (const s of list) {
+      const r = await act({ label: `Stop ${s.name}`, path: paths.down(s.id, !option.checked, false, true), success: `Stopping ${s.name}…` });
+      if (r.ok) hub.markStopping(s.id);
+    }
+  } finally {
+    stoppingAll.value = false;
+  }
 }
 async function removeStack(s: StackEntry) {
   closeMenu();
@@ -450,11 +463,11 @@ function toggleFavourite(s: StackEntry) {
         class="head-btn"
         title="Stop all stacks…"
         aria-label="Stop all stacks"
-        :disabled="!runningStacks.length"
+        :disabled="!runningStacks.length || stoppingAll"
         data-testid="sidebar-stop-all"
         @click="stopAll()"
       >
-        <Icon name="power" :size="14" />
+        <span v-if="stoppingAll" class="spinner sm" aria-hidden="true" /><Icon v-else name="power" :size="14" />
       </button>
       <button type="button" class="head-btn" title="Add a stack…" aria-label="Add a stack" data-testid="sidebar-add-stack" @click="adding = true">
         <Icon name="plus" :size="14" />
@@ -483,7 +496,7 @@ function toggleFavourite(s: StackEntry) {
             data-testid="sidebar-stack"
             @click="openStack(s)"
           >
-            <span v-if="hub.starting[s.id]" class="spinner sm" aria-hidden="true" />
+            <span v-if="hub.starting[s.id] || hub.stopping[s.id]" class="spinner sm" aria-hidden="true" />
             <span v-else-if="expanded(s)" class="dot-space" aria-hidden="true" />
             <span v-else class="dot" :class="stackDot(s)" aria-hidden="true" data-testid="sidebar-stack-dot" />
             <span class="label truncate">{{ s.name }}</span>
@@ -672,7 +685,7 @@ function toggleFavourite(s: StackEntry) {
         <button v-if="!menu.s.running" type="button" class="opt" role="menuitem" :disabled="!!hub.starting[menu.s.id]" data-testid="sidebar-menu-start" @click="startStack(menu!.s)">
           <Icon name="play" :size="14" /> Start
         </button>
-        <button v-else type="button" class="opt" role="menuitem" data-testid="sidebar-menu-stop" @click="stopStack(menu!.s)"><Icon name="power" :size="14" /> Stop…</button>
+        <button v-else type="button" class="opt" role="menuitem" :disabled="!!hub.stopping[menu.s.id]" data-testid="sidebar-menu-stop" @click="stopStack(menu!.s)"><Icon name="power" :size="14" /> {{ hub.stopping[menu.s.id] ? 'Stopping…' : 'Stop…' }}</button>
         <button type="button" class="opt" role="menuitem" @click="copyPath(menu!.s)"><Icon name="copy" :size="14" /> Copy path</button>
         <button type="button" class="opt" role="menuitem" data-testid="sidebar-menu-fav" @click="toggleFavourite(menu!.s)">
           <Icon name="star" :size="14" /> {{ favourites.has(menu.s.id) ? 'Remove from favourites' : 'Add to favourites' }}

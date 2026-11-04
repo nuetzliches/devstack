@@ -29,6 +29,8 @@ const candLook = computed(() => (cand.value ? candidateLook(cand.value) : null))
 const reb = computed(() => (cand.value ? null : (props.service.rebuild ?? null)));
 const rebLook = computed(() => (reb.value ? rebuildLook(reb.value) : null));
 const busy = computed(() => stack.busy[`svc:${props.service.name}`]);
+/** Its tree or one of its groups is busy: its own actions wait. */
+const blocked = computed(() => stack.serviceBlocked(props.service.name));
 /** Restart's menu: Rebuild, for a service that runs a build. */
 const restartItems = computed<MenuItem[]>(() => [
   {
@@ -99,7 +101,7 @@ function open(e: MouseEvent) {
           class="btn btn-ghost btn-sm btn-icon"
           :aria-label="`Start ${service.name}`"
           title="Start"
-          :disabled="!!busy || stack.stale"
+          :disabled="!!busy || !!blocked || stack.stale"
           data-testid="action-start"
           @click="stack.serviceAction(service.name, 'start')"
         >
@@ -111,7 +113,7 @@ function open(e: MouseEvent) {
           icon="restart"
           :title="`Restart ${service.name}: from the build there is for its inputs, else built; switches when healthy`"
           :items="restartItems"
-          :disabled="!!busy || stack.stale"
+          :disabled="!!busy || !!blocked || stack.stale"
           :busy="!!busy"
           :menu-label="`More restarts of ${service.name}`"
           testid="action-restart"
@@ -124,7 +126,7 @@ function open(e: MouseEvent) {
           class="btn btn-ghost btn-sm btn-icon"
           :aria-label="`Open a public link to ${service.name}`"
           title="Public link: reachable from the internet through a Cloudflare Quick Tunnel"
-          :disabled="!!busy || stack.stale"
+          :disabled="!!busy || !!blocked || stack.stale"
           data-testid="action-public-link"
           @click="stack.openPublicLink(service.name)"
         >
@@ -136,7 +138,7 @@ function open(e: MouseEvent) {
           class="btn btn-ghost btn-sm btn-icon btn-stop"
           :aria-label="`Stop ${service.name}`"
           title="Stop"
-          :disabled="!!busy || stack.stale"
+          :disabled="!!busy || !!blocked || stack.stale"
           data-testid="action-stop"
           @click="stack.serviceAction(service.name, 'stop')"
         >
