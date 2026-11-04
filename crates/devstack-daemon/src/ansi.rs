@@ -45,6 +45,15 @@ pub fn strip(text: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// What a terminal leaves of a line that returns to its start: a progress
+/// bar (cargo, npm) redraws itself with `\r` and ends with the line that
+/// stays, so a log line holds every redraw. The part after the last `\r`;
+/// a `\r` before the newline (`\r\n`) is no redraw.
+pub fn shown(line: &str) -> &str {
+    let line = line.trim_end_matches('\r');
+    line.rsplit('\r').next().unwrap_or(line)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,5 +68,14 @@ mod tests {
             "link"
         );
         assert!(matches!(strip("plain"), Cow::Borrowed("plain")));
+    }
+
+    #[test]
+    fn a_redrawn_line_shows_its_last_state() {
+        let cargo = "\u{1b}[1m    Building\u{1b}[0m [==>   ] 310/381: tauri\r          \r\u{1b}[1m   Compiling\u{1b}[0m vcpkg v0.2.15";
+        assert_eq!(shown(cargo), "\u{1b}[1m   Compiling\u{1b}[0m vcpkg v0.2.15");
+        assert_eq!(shown("line\r"), "line");
+        assert_eq!(shown("plain"), "plain");
+        assert_eq!(shown(""), "");
     }
 }

@@ -9,6 +9,17 @@ const ESC = '\u001b';
 // eslint-disable-next-line no-control-regex
 const SEQ = /\u001b\[([0-?]*)[ -/]*([@-~])|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b./g;
 
+/**
+ * What a terminal leaves of a line that returns to its start: a progress bar
+ * (cargo, npm) redraws itself with `\r`, so a log line holds every redraw.
+ * The part after the last `\r`; a trailing one (`\r\n`) is no redraw.
+ */
+export function shownLine(text: string): string {
+  if (!text.includes('\r')) return text;
+  const t = text.replace(/\r+$/, '');
+  return t.slice(t.lastIndexOf('\r') + 1);
+}
+
 /** The visible text, without escape sequences. */
 export function stripAnsi(text: string): string {
   return text.includes(ESC) ? text.replace(SEQ, '') : text;

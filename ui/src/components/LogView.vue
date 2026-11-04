@@ -7,7 +7,7 @@ import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue
 import { api, type StreamState, type Subscription } from '@/api';
 import type { LogStreamEvent, RunLogEvent } from '@/api/types';
 import { shortBuild } from '@/lib/format';
-import { parseAnsi, stripAnsi, type AnsiSeg } from '@/lib/ansi';
+import { parseAnsi, shownLine, stripAnsi, type AnsiSeg } from '@/lib/ansi';
 import Icon from './icons/Icon.vue';
 
 type Level = 'error' | 'warn' | 'debug' | 'info';
@@ -118,8 +118,9 @@ function connect(path: string | null) {
   sub = api().subscribe<LogStreamEvent | RunLogEvent>(path, {
     onMessage(ev) {
       if (ev.type === 'line') {
-        const text = stripAnsi(ev.text);
-        push({ text, segs: parseAnsi(ev.text), level: level(text) });
+        const raw = shownLine(ev.text);
+        const text = stripAnsi(raw);
+        push({ text, segs: parseAnsi(raw), level: level(text) });
       }
       else if (ev.type === 'instance') push({ text: `New instance took over · build ${shortBuild(ev.build_id)}`, level: 'info', marker: 'instance' });
       else if (ev.type === 'end') {

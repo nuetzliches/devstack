@@ -118,7 +118,7 @@ fn known() -> &'static [Rules] {
 
 /// The line without ANSI escape sequences (colours, cursor moves).
 fn plain(line: &str) -> String {
-    crate::ansi::strip(line).trim_end_matches('\r').to_string()
+    crate::ansi::strip(crate::ansi::shown(line)).into_owned()
 }
 
 enum Mode {
