@@ -9,6 +9,19 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-11-04
+
+`devstack mcp` passes on what its MCP upstreams say about their tools:
+its `initialize` answer carries their instructions after its own
+(ADR-0069). Fixed, from the review of 0.33.0 to 0.38.0: a pool's skill
+set writes only into the agents' skill folders, a remote lane's sync no
+longer follows a link out of the working tree, an upstream's OAuth
+endpoints must be https, requests the daemon's guard refuses no longer
+fill the journal, the hub's watchdog dump leaves out the heap,
+`devstack mcp` no longer starts a hub stopped by hand, and `devstack
+check` warns about `singleton` without its `requires`. `SECURITY.md`
+describes public links.
+
 ### Added
 
 - **`devstack mcp` passes on the upstreams' instructions** (ADR-0069,
@@ -2872,7 +2885,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.38.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.39.0...HEAD
+[0.39.0]: https://github.com/nuetzliches/devstack/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/nuetzliches/devstack/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/nuetzliches/devstack/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/nuetzliches/devstack/compare/v0.35.0...v0.36.0
