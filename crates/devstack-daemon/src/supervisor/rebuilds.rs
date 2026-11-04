@@ -47,7 +47,7 @@ impl Supervisor {
     /// supervisor lives (the main tree's, a lane's).
     pub fn follow_rebuilds(self: &Arc<Self>) {
         if !self
-            .stack
+            .stack()
             .services
             .values()
             .any(|s| s.kind == Kind::Devserver || s.hot_reload.is_some())
@@ -70,7 +70,7 @@ impl Supervisor {
     }
 
     fn rebuild_round(&self, runs: &mut BTreeMap<String, Run>) {
-        for (name, svc) in &self.stack.services {
+        for (name, svc) in &self.stack().services {
             if svc.kind != Kind::Devserver && svc.hot_reload.is_none() {
                 continue;
             }

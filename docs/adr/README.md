@@ -175,3 +175,4 @@ stay.
 | [0090](0090-a-service-can-get-a-public-link-by-hand.md) | A service can get a public link, by its owner's hand: a Cloudflare Quick Tunnel to its fixed port | Accepted (card in the pull request); built; extended by ADR-0091 (the user's own named tunnel) |
 | [0091](0091-public-links-through-the-users-own-named-tunnel.md) | Public links can go through the user's own named tunnel, at stable addresses; the hub runs its one connector | Accepted (card in the pull request); built |
 | [0092](0092-public-links-through-the-pool.md) | A pool can give its members public links below a zone of its own; the coordinator holds the token, each machine gets its own tunnel | Accepted (card in the pull request); built |
+| [0093](0093-the-main-tree-takes-its-profile-when-it-starts.md) | The main working tree takes its profile when it starts; the daemon carries none | Accepted (card in the pull request); built |

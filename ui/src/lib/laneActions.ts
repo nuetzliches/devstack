@@ -11,7 +11,7 @@ export type LaneAction = 'restart' | 'rebuild' | 'cold' | 'start' | 'stop' | 're
  * Why an action of a lane has no meaning for the main working tree (the lane
  * `main`, ADR-0080): shown on the item, which stays in the menu, disabled
  * (ADR-0081). The daemon keeps the main tree as its own tree: it runs in
- * place, on this machine, with the daemon's profile.
+ * place, on this machine; its profile comes with its start (ADR-0041).
  */
 export const NOT_FOR_MAIN = {
   cold: 'The main working tree has no cold restart: the daemon throws away and seeds again a lane’s data only',
@@ -20,7 +20,6 @@ export const NOT_FOR_MAIN = {
   move: 'The main working tree runs in place, on this machine: a worktree’s lane moves to a node',
   share: 'Only a lane on a node of the pool is shared: the main working tree runs on this machine',
   pool: 'The main working tree runs on this machine, on its own ports: a worktree’s lane starts in the pool',
-  profile: 'The main working tree runs with the profile its daemon started with (devstack up --profile in it)',
 } as const;
 
 /**

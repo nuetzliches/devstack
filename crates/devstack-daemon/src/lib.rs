@@ -239,8 +239,12 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
             return Err(e.to_string());
         }
     };
-    // The profile it starts with (ADR-0041): `devstack up --profile` sets it
-    // for the main tree, a node's agent for a lane there.
+    // The stack file's stack as it is: a start of the main tree with a
+    // profile makes its stack from it (ADR-0041 point 2).
+    let unprofiled = stack.clone();
+    // The profile a lane on a node runs with, set by the node's agent. On
+    // this machine the daemon carries none: the main tree's comes with its
+    // start (`POST /v1/up`).
     let stack = match std::env::var("DEVSTACK_PROFILE")
         .ok()
         .filter(|p| !p.trim().is_empty())
@@ -311,6 +315,9 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
         rt.handle().clone(),
     )?;
     sup.set_shift(shift);
+    if !remote_lane() {
+        sup.set_unprofiled(unprofiled);
+    }
     if shift > 0 {
         diag::info("stack_shifted", serde_json::json!({ "shift": shift }));
     }
@@ -320,7 +327,7 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     // lane here does (#314).
     if remote_lane() {
         let asked = std::env::var_os("DEVSTACK_LANE_WORKERS").is_some_and(|v| v == "1");
-        let profile = sup.stack.profile.as_ref().and_then(|p| p.workers);
+        let profile = sup.stack().profile.as_ref().and_then(|p| p.workers);
         sup.set_lane_workers(profile.unwrap_or(asked));
     }
     let usage = usage::Sampler::start(sup.clone());
@@ -359,7 +366,7 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
                 "version": devstack_config::VERSION,
                 "pid": info.pid,
                 "port": port,
-                "stack": sup.stack.stack.name,
+                "stack": sup.stack().stack.name,
                 // What it may hold open (unix; raised to the hard limit).
                 "open_files_limit": devstack_proc::raise_open_files(),
             }),

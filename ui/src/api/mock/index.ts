@@ -1100,6 +1100,8 @@ export class MockTransport implements Transport {
     const se = /^\/v1\/store\/([^/]+)\/([^/]+)$/.exec(p);
     if (se && method === 'DELETE') return s.removeStoreEntry(decodeURIComponent(se[1]), decodeURIComponent(se[2])) ? empty(204) : json(404, { error: 'no such entry in the store' });
     if (p === '/v1/up' && method === 'POST') {
+      // The main tree's profile comes with its start (ADR-0041 point 2).
+      if (!fw && typeof body?.profile === 'string') s.view.profile = body.profile || undefined;
       if (!fw)
         for (const svc of s.view.services)
           if (svc.autostart && ['stopped', 'exited', 'failed'].includes(svc.status.state)) s.startInstance(svc, svc.build_id ?? '0000000000000000');

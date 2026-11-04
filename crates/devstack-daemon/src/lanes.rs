@@ -917,7 +917,7 @@ impl Lanes {
         token: Arc<String>,
         port: u16,
     ) -> Arc<Self> {
-        let shares = load_shares(&root_state, &main.stack.lanes.share);
+        let shares = load_shares(&root_state, &main.stack().lanes.share);
         let me = Arc::new(Self {
             root_state,
             main,
@@ -1149,7 +1149,7 @@ impl Lanes {
             let text = format!(
                 "The worktree {} gets no lane: no lane number up to 199 moves the stack's ports to ones free of the other lanes and below 65536 (`[lanes] port_step` is {}). Remove a worktree no longer needed, or lower `port_step`.",
                 w.display(),
-                self.main.stack.lanes.port_step
+                self.main.stack().lanes.port_step
             );
             if self.main.set_notice(&id(w), NoticeLevel::Warn, text) {
                 crate::diag::warn("lane_no_ports", serde_json::json!({ "worktree": w }));
@@ -1218,7 +1218,7 @@ impl Lanes {
     /// then on the nodes this repository's lanes use. One ref at a time, in
     /// the background, under the one-`prepare`-at-a-time lock.
     pub fn follow_warm(self: &Arc<Self>) {
-        if self.main.stack.prepare.warm.is_empty() || crate::remote_lane() {
+        if self.main.stack().prepare.warm.is_empty() || crate::remote_lane() {
             return;
         }
         let weak = Arc::downgrade(self);
@@ -1253,7 +1253,7 @@ impl Lanes {
     /// The nodes this repository's lanes use, warmed for the commit checked
     /// out at `checkout` (ADR-0065 point 5).
     fn warm_nodes(&self, r: &str, commit: &str, cancel: &dyn Fn() -> bool) {
-        let repo = self.main.stack.stack.name.clone();
+        let repo = self.main.stack().stack.name.clone();
         // The nodes this repository's lanes ran on, while one of them is
         // kept or runs there, and that know warm leases.
         let mut nodes: Vec<crate::remote::RanOn> = Vec::new();
@@ -1399,7 +1399,7 @@ impl Lanes {
                 continue;
             }
             let stack = devstack_config::load(&self.stack_file_of(path))
-                .unwrap_or_else(|_| self.main.stack.clone());
+                .unwrap_or_else(|_| (*self.main.stack()).clone());
             let report = |links: &[crate::supervisor::NodeLink]| {
                 self.node_links
                     .lock()
@@ -1444,7 +1444,7 @@ impl Lanes {
             return;
         }
         let stack = devstack_config::load(&self.stack_file_of(&path))
-            .unwrap_or_else(|_| self.main.stack.clone());
+            .unwrap_or_else(|_| (*self.main.stack()).clone());
         self.main
             .unlink_node_lane(&path, &self.state_dir(name), &stack);
     }
@@ -1528,7 +1528,7 @@ impl Lanes {
         free_number_in(
             &self.lane_base(),
             &numbers,
-            self.main.stack.lanes.port_step,
+            self.main.stack().lanes.port_step,
             &foreign,
             |q| probe && crate::supervisor::port_in_use(q),
         )
@@ -1543,7 +1543,7 @@ impl Lanes {
     /// fixed ports and its containers' host ports, which a lane's
     /// containers publish moved by the same step (ADR-0030).
     fn lane_base(&self) -> Vec<u16> {
-        let mut base = ports(&self.main.stack);
+        let mut base = ports(&self.main.stack());
         base.extend(self.main.infra_host_ports());
         base
     }
@@ -1553,7 +1553,7 @@ impl Lanes {
     /// own stack file, its containers and a node running it start from the
     /// files' ports. The main tree's ports are shifted already.
     fn files_offset(&self, number: u16) -> Option<u16> {
-        lane_offset(number, self.main.stack.lanes.port_step)?.checked_add(self.main.shift())
+        lane_offset(number, self.main.stack().lanes.port_step)?.checked_add(self.main.shift())
     }
 
     /// What the stack claims on this machine (ADR-0082 point 5): the main
@@ -1563,7 +1563,7 @@ impl Lanes {
     pub fn claims(&self) -> crate::registry::Claims {
         let mut main: BTreeSet<u16> = self.lane_base().into_iter().collect();
         let shift = self.main.shift();
-        for g in self.main.stack.compose.values() {
+        for g in self.main.stack().compose.values() {
             main.extend(
                 g.announced()
                     .iter()
@@ -1572,7 +1572,7 @@ impl Lanes {
             // `urls` are moved already.
             main.extend(g.urls.values().filter_map(|u| url_port(u).map(|(_, p)| p)));
         }
-        let step = self.main.stack.lanes.port_step;
+        let step = self.main.stack().lanes.port_step;
         let lanes = self
             .known
             .lock()
@@ -1629,7 +1629,7 @@ impl Lanes {
         if remote.is_empty() {
             return out;
         }
-        let step = self.main.stack.lanes.port_step;
+        let step = self.main.stack().lanes.port_step;
         let numbers: BTreeMap<String, u16> = self
             .known
             .lock()
@@ -1643,7 +1643,7 @@ impl Lanes {
             let holders = numbers
                 .get(&r.name)
                 .and_then(|n| lane_offset(*n, step))
-                .map(|off| crate::ports::lane_holders(&self.main.stack, &published, off))
+                .map(|off| crate::ports::lane_holders(&self.main.stack(), &published, off))
                 .unwrap_or_default();
             out.extend(crate::ports::node_entries(&crate::ports::NodeFacts {
                 lane: r.name.clone(),
@@ -1728,7 +1728,7 @@ impl Lanes {
         if !ran.is_empty() {
             let (rt, repo, lane) = (
                 self.rt.clone(),
-                self.main.stack.stack.name.clone(),
+                self.main.stack().stack.name.clone(),
                 name.to_string(),
             );
             std::thread::spawn(move || {
@@ -1776,7 +1776,7 @@ impl Lanes {
             removed: here.is_ok(),
             error: here.err(),
         }];
-        let repo = self.main.stack.stack.name.clone();
+        let repo = self.main.stack().stack.name.clone();
         for on in crate::remote::ran_on(&self.state_dir(name)) {
             let r = crate::remote::purge_slot(&self.rt, &on, &repo, name);
             out.push(Pruned {
@@ -1802,7 +1802,7 @@ impl Lanes {
         let mut out = Vec::new();
         // This machine: `<project>-<lane>` of a lane no worktree has.
         let projects = compose_projects();
-        for (g, cfg) in &self.main.stack.compose {
+        for (g, cfg) in &self.main.stack().compose {
             let prefix = format!("{}-", cfg.project);
             for (p, files) in &projects {
                 let Some(lane) = p.strip_prefix(&prefix) else {
@@ -1819,7 +1819,7 @@ impl Lanes {
                 }
                 // Another group's project that starts the same (`app` and
                 // `app-tools`) is not a lane's.
-                if self.main.stack.compose.values().any(|c| c.project == *p) {
+                if self.main.stack().compose.values().any(|c| c.project == *p) {
                     continue;
                 }
                 let mut removed = false;
@@ -1852,7 +1852,7 @@ impl Lanes {
             }
         }
         // The nodes of every pool this machine is in.
-        let repo = self.main.stack.stack.name.clone();
+        let repo = self.main.stack().stack.name.clone();
         let now = crate::state::now_ms() as u64 / 1000;
         for (pool, _) in devstack_node::member::pools(&crate::remote::state_dir()) {
             let local = crate::remote::local_member(&pool);
@@ -1940,7 +1940,7 @@ impl Lanes {
     /// (left over from a local start), which would hold its ports here.
     fn stop_local_infra(&self, name: &str) {
         let docker = devstack_compose::Docker::default();
-        for (g, cfg) in &self.main.stack.compose {
+        for (g, cfg) in &self.main.stack().compose {
             let group = devstack_compose::Group {
                 name: g.clone(),
                 project: format!("{}-{name}", cfg.project),
@@ -1969,7 +1969,7 @@ impl Lanes {
     fn remove_infra(&self, name: &str) -> Result<(), String> {
         let docker = devstack_compose::Docker::default();
         let mut failed = Vec::new();
-        for (g, cfg) in &self.main.stack.compose {
+        for (g, cfg) in &self.main.stack().compose {
             let group = devstack_compose::Group {
                 name: g.clone(),
                 project: format!("{}-{name}", cfg.project),
@@ -2037,7 +2037,7 @@ impl Lanes {
     /// `[lanes] sync`, and the stack file, from the main tree while the
     /// worktree has none of its own (ADR-0055 point 2).
     fn synced(&self) -> Vec<String> {
-        let mut extra = self.main.stack.lanes.sync.clone();
+        let mut extra = self.main.stack().lanes.sync.clone();
         extra.push(self.stack_file_rel().to_string_lossy().replace('\\', "/"));
         extra
     }
@@ -2165,7 +2165,7 @@ impl Lanes {
             });
             m.clone()
         };
-        let services = self.main.stack.services.len();
+        let services = self.main.stack().services.len();
         let forgetting = self.forgetting.lock().unwrap().clone();
         let stack_file = self.stack_file_rel();
         self.known
@@ -2201,7 +2201,7 @@ impl Lanes {
                     path: k.entry.path.clone(),
                     branch: k.branch.clone(),
                     number: k.entry.number,
-                    port_offset: lane_offset(k.entry.number, self.main.stack.lanes.port_step)
+                    port_offset: lane_offset(k.entry.number, self.main.stack().lanes.port_step)
                         .unwrap_or(0),
                     active: lane.is_some() || node_state.as_ref().is_some_and(|st| !st.ended),
                     owns_main: lane.is_some_and(|l| l.sup.owns_main())
@@ -2284,7 +2284,8 @@ impl Lanes {
             })?;
         let name = entry.name.clone();
         if let Some(l) = self.map.lock().unwrap().get(&name) {
-            let runs = l.sup.stack.profile.as_ref().map(|p| p.name.as_str());
+            let stack = l.sup.stack();
+            let runs = stack.profile.as_ref().map(|p| p.name.as_str());
             if profile.is_some() && runs != profile {
                 return Err(format!(
                     "lane `{name}` runs {}: `devstack lane stop {name}` first",
@@ -2320,9 +2321,9 @@ impl Lanes {
         let t0 = std::time::Instant::now();
         let result = (|| {
             // Its range taken by another process since it was found: a new one.
-            let step = self.main.stack.lanes.port_step;
+            let step = self.main.stack().lanes.port_step;
             let mut entry = entry;
-            let busy = ports(&self.main.stack).iter().any(|p| {
+            let busy = ports(&self.main.stack()).iter().any(|p| {
                 lane_offset(entry.number, step)
                     .and_then(|off| p.checked_add(off))
                     .is_none_or(crate::supervisor::port_in_use)
@@ -2604,13 +2605,13 @@ impl Lanes {
             .unwrap()
             .get(&t)
             .map_or(Some(0), |k| {
-                lane_offset(k.entry.number, main.stack.lanes.port_step)
+                lane_offset(k.entry.number, main.stack().lanes.port_step)
             })
             .ok_or_else(|| format!("lane `{t}`: its ports are beyond 65535"))?;
         let remote_active = remote.as_ref().map(|r| r.active_now(&self.rt));
         let active = |s: &str| match &remote_active {
             Some(names) => names.iter().any(|n| n == s).then(|| {
-                main.stack
+                main.stack()
                     .services
                     .get(s)
                     .and_then(|svc| svc.port)
@@ -2627,7 +2628,7 @@ impl Lanes {
         // proxied service's does (ADR-0024 point 5). Refusing kept the main
         // ports from a lane that ran all but one service.
         let lane_port = |s: &str| {
-            main.stack
+            main.stack()
                 .services
                 .get(s)
                 .and_then(|svc| svc.port)
@@ -2983,7 +2984,7 @@ impl Lanes {
         }
         Carry {
             written: crate::state::now_ms(),
-            stack: self.main.stack.stack.name.clone(),
+            stack: self.main.stack().stack.name.clone(),
             lanes,
             main: self.main.served_by(),
         }
@@ -3061,11 +3062,11 @@ impl Lanes {
             }
         };
         let age = crate::state::now_ms().saturating_sub(carry.written);
-        if carry.stack != self.main.stack.stack.name || age > CARRY_FOR.as_millis() {
+        if carry.stack != self.main.stack().stack.name || age > CARRY_FOR.as_millis() {
             crate::diag::warn(
                 "carry_ignored",
                 serde_json::json!({ "age_ms": age as u64, "lanes": carry.lanes.len(),
-                    "why": if carry.stack != self.main.stack.stack.name { "written for another stack" } else { "too old: the leases may be over" } }),
+                    "why": if carry.stack != self.main.stack().stack.name { "written for another stack" } else { "too old: the leases may be over" } }),
             );
             return None;
         }
@@ -3199,10 +3200,10 @@ impl Lanes {
         // Its ports stay its own: the old daemon's processes of the lane may
         // hold them a moment after it exited (Windows), and a start that
         // finds them taken moves the lane to another range.
-        let step = self.main.stack.lanes.port_step;
+        let step = self.main.stack().lanes.port_step;
         let mine: Vec<u16> = lane_offset(number, step)
             .map(|off| {
-                ports(&self.main.stack)
+                ports(&self.main.stack())
                     .iter()
                     .filter_map(|p| p.checked_add(off))
                     .collect()
@@ -3508,7 +3509,7 @@ impl Lanes {
             .unwrap()
             .get(name)
             .cloned()
-            .unwrap_or_else(|| self.main.stack.lanes.share.clone())
+            .unwrap_or_else(|| self.main.stack().lanes.share.clone())
     }
 
     /// What the coordinator is told of the lane `entry` shared: whom with,
@@ -3518,9 +3519,9 @@ impl Lanes {
         if with.is_empty() {
             return None;
         }
-        let offset = lane_offset(entry.number, self.main.stack.lanes.port_step)?;
+        let offset = lane_offset(entry.number, self.main.stack().lanes.port_step)?;
         let services = shared_services(
-            &self.main.stack,
+            &self.main.stack(),
             offset,
             &entry.name,
             &self.main.published_fixed(),
@@ -3549,9 +3550,9 @@ impl Lanes {
         // reported as shared (ADR-0085 point 5).
         let remote = self.remote(name);
         if remote.is_some() && !with.is_empty() {
-            let offset = lane_offset(entry.number, self.main.stack.lanes.port_step).unwrap_or(0);
+            let offset = lane_offset(entry.number, self.main.stack().lanes.port_step).unwrap_or(0);
             let services = shared_services(
-                &self.main.stack,
+                &self.main.stack(),
                 offset,
                 &entry.name,
                 &self.main.published_fixed(),
@@ -3616,13 +3617,13 @@ impl Lanes {
         // load.
         let declared = devstack_config::load(&entry.path.join(&stack_file))
             .map(|s| s.lane_need(profile.as_deref()))
-            .unwrap_or_else(|_| self.main.stack.lane_need(profile.as_deref()));
+            .unwrap_or_else(|_| self.main.stack().lane_need(profile.as_deref()));
         // No node can run it without an image: said before the lease.
         if let Some(why) = not_in_pool(&self.stack_file_of(&entry.path)) {
             return Err(format!("lane `{}`: {why}", entry.name));
         }
         let worktree = devstack_proc::long_path(&entry.path);
-        let offset = lane_offset(entry.number, self.main.stack.lanes.port_step)
+        let offset = lane_offset(entry.number, self.main.stack().lanes.port_step)
             .ok_or_else(|| format!("lane `{}`: its ports are beyond 65535", entry.name))?;
         // The node starts from the files' ports: the shift too (ADR-0082).
         let node_offset = self
@@ -3630,7 +3631,7 @@ impl Lanes {
             .ok_or_else(|| format!("lane `{}`: its ports are beyond 65535", entry.name))?;
         f(crate::remote::RemoteSpec {
             name: &entry.name,
-            repo: &self.main.stack.stack.name,
+            repo: &self.main.stack().stack.name,
             worktree: &worktree,
             main: &self.main.repo,
             extra: &synced,
@@ -3642,7 +3643,7 @@ impl Lanes {
             scratch: &scratch,
             // The lane runs on its lane ports there as well: the same
             // port on both ends.
-            ports: ports(&self.main.stack)
+            ports: ports(&self.main.stack())
                 .into_iter()
                 .filter_map(|p| p.checked_add(offset))
                 .map(|p| (p, p))
@@ -3661,7 +3662,7 @@ impl Lanes {
     /// every autostart service that runs in lanes and on Linux.
     fn expected_remote(&self) -> Vec<String> {
         self.main
-            .stack
+            .stack()
             .services
             .iter()
             .filter(|(_, s)| {

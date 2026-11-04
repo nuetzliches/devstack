@@ -1039,9 +1039,12 @@ devstack lane start <lane> --profile acceptance --run  # from the main tree
   valid stack (a `static` needs `build`, `output` and `port`); a service, a
   command or a key that is not there is an error.
 - **A tree runs with it until it stops.** `status`, `lane list` and the
-  dashboard show it; a start without `--profile` runs without one. In the
-  main tree the daemon starts with it: another profile needs `devstack down`
-  first, and `data = "fresh"` there needs `--yes` (its data usually matters).
+  dashboard show it; a start without `--profile` runs without one. The main
+  tree takes it with its own start too, not with the daemon's: while it runs,
+  another profile needs `devstack down` in it first (the lanes keep running),
+  and `data = "fresh"` there needs `--yes` (its data usually matters). The
+  dashboard's start card of the lane `main` offers the profiles as a lane's
+  does.
 - A lane takes its profiles from its own worktree's stack file, so a branch
   can bring one. On a node, `fresh` empties its slot's volumes (ADR-0038).
 - A file with `[profiles]` should say `requires = "0.11.0"` in `[stack]`.

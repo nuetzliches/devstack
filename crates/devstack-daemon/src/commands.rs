@@ -173,7 +173,7 @@ pub fn start(
     confirmed: bool,
 ) -> Result<u64, RunError> {
     let cmd = sup
-        .stack
+        .stack()
         .commands
         .get(name)
         .ok_or_else(|| RunError::Unknown(name.into()))?
@@ -270,7 +270,7 @@ fn exec_env(
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<BTreeMap<String, String>, String> {
     let mut step_env = BTreeMap::new();
-    for (k, v) in sup.stack.profile.iter().flat_map(|p| &p.env) {
+    for (k, v) in sup.stack().profile.iter().flat_map(|p| &p.env) {
         step_env.insert(k.clone(), expand(v, ctx, env).map_err(|e| e.to_string())?);
     }
     step_env.extend(sup.compose_variables());
@@ -291,7 +291,7 @@ fn execute(
     sup.sync_copy()?;
     let root = sup.run_root();
     let mut urls = BTreeMap::new();
-    for (n, s) in &sup.stack.services {
+    for (n, s) in &sup.stack().services {
         if let Some(p) = s.port {
             urls.insert(n.clone(), format!("{}://127.0.0.1:{p}", s.scheme()));
         }
@@ -305,7 +305,7 @@ fn execute(
         // On a node the lane's name (ADR-0064 addendum), as for its services.
         lane: sup.presented_lane(),
     };
-    let vars = devstack_env::variables(&sup.stack, None, &sup.repo);
+    let vars = devstack_env::variables(&sup.stack(), None, &sup.repo);
     let env = |k: &str| vars.get(k).cloned();
     let mut out = std::fs::OpenOptions::new()
         .create(true)
@@ -319,7 +319,7 @@ fn execute(
         }
         let action = step.action().map_err(|_| format!("step {i} is invalid"))?;
         let _ = writeln!(out, "--- step {} : {action:?}", i + 1);
-        if let Some(why) = main_tree_only(&sup.stack, &sup.lane, &action) {
+        if let Some(why) = main_tree_only(&sup.stack(), &sup.lane, &action) {
             let _ = writeln!(out, "--- skipped: {why}");
             continue;
         }

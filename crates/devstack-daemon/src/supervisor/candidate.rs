@@ -20,7 +20,8 @@ impl Supervisor {
         if self.is_hot(name) {
             return; // its own watcher reloads it
         }
-        if self.served_by().is_some() && self.stack.services.get(name).is_some_and(|s| s.proxied())
+        if self.served_by().is_some()
+            && self.stack().services.get(name).is_some_and(|s| s.proxied())
         {
             return; // another lane serves its port; no candidate may take it back
         }
@@ -127,7 +128,7 @@ impl Supervisor {
     }
 
     fn candidate_inner(self: &Arc<Self>, name: &str, paths: &BTreeSet<String>, epoch: u64) -> bool {
-        let Ok(svc) = self.service(name).cloned() else {
+        let Ok(svc) = self.service(name) else {
             return false;
         };
         let clear = || {

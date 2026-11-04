@@ -147,7 +147,7 @@ The running instance was left as it was."
     ) -> Result<(), String> {
         for dep in &svc.after {
             if !self
-                .stack
+                .stack()
                 .services
                 .get(dep)
                 .is_some_and(|d| d.kind == Kind::Job)

@@ -53,7 +53,7 @@ impl Supervisor {
                 let running = slot.view.status.is_active();
                 ServiceFacts {
                     name: name.clone(),
-                    port: self.stack.services.get(name).and_then(|s| s.port),
+                    port: self.stack().services.get(name).and_then(|s| s.port),
                     proxy: proxies.get(name).copied(),
                     front: fronts.get(name).copied(),
                     forward: forwards.get(name).copied(),

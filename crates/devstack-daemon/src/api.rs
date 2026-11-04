@@ -343,8 +343,63 @@ async fn telemetry_take() -> Response {
     Json(serde_json::json!({ "lines": crate::telemetry::take_relayed() })).into_response()
 }
 
+/// What a start of the main tree asks (ADR-0041 point 2).
+#[derive(Deserialize, Default)]
+struct UpBody {
+    /// Run with this profile; `""`: without one. Absent: as it ran last.
+    #[serde(default)]
+    profile: Option<String>,
+    /// Confirms a profile with `data = "fresh"`, which throws the main
+    /// tree's data away.
+    #[serde(default)]
+    yes: bool,
+}
+
 /// Long operations run in the background; progress arrives on `/v1/events`.
-async fn up(State(s): State<AppState>) -> Response {
+/// With `profile`, the main tree runs with it from this start on: `409`
+/// while it runs with another one, or for a `data = "fresh"` one without
+/// `yes`.
+async fn up(State(s): State<AppState>, body: Option<Json<UpBody>>) -> Response {
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    if let Some(p) = body.profile.as_deref().map(str::trim) {
+        let profile = (!p.is_empty()).then_some(p);
+        let fresh = profile.is_some_and(|p| {
+            s.sup
+                .stack()
+                .profiles
+                .get(p)
+                .is_some_and(|p| p.data == Some(devstack_config::model::DataMode::Fresh))
+        });
+        if fresh && s.lanes.is_some() && !body.yes {
+            return err(
+                StatusCode::CONFLICT,
+                format!(
+                    "the profile `{}` starts the main working tree with fresh data: its containers' volumes go. Confirm it, or run it in a lane",
+                    p
+                ),
+            );
+        }
+        match s.sup.use_profile(profile) {
+            Ok(()) => {}
+            Err(crate::supervisor::ProfileRefused::Invalid(e)) => {
+                return err(StatusCode::BAD_REQUEST, e);
+            }
+            Err(crate::supervisor::ProfileRefused::Running(runs)) => {
+                return err(
+                    StatusCode::CONFLICT,
+                    format!(
+                        "the main working tree runs {}: stop it first (`devstack down` in it; the lanes keep running), then start it {}",
+                        runs.map_or("without a profile".to_string(), |r| format!(
+                            "with the profile `{r}`"
+                        )),
+                        profile.map_or("without one".to_string(), |p| format!(
+                            "with the profile `{p}`"
+                        )),
+                    ),
+                );
+            }
+        }
+    }
     let sup = s.sup.clone();
     tokio::task::spawn_blocking(move || {
         if let Err(e) = sup.up() {
@@ -480,15 +535,15 @@ async fn service_action(
     Path((name, action)): Path<(String, String)>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    if !s.sup.stack.services.contains_key(&name) {
+    if !s.sup.stack().services.contains_key(&name) {
         // A group by its name, so `devstack restart backend` works.
-        if s.sup.stack.groups.contains_key(&name) {
+        if s.sup.stack().groups.contains_key(&name) {
             return group_action(State(s), Path((name, action)), headers).await;
         }
         // A Compose service as a group member names it, or by its own name
         // (`app.web`, `compose.app.web`, `web`), so `devstack restart web`
         // works too (#128).
-        if let Some((group, service)) = s.sup.stack.compose_service(&name)
+        if let Some((group, service)) = s.sup.stack().compose_service(&name)
             && matches!(action.as_str(), "start" | "stop" | "restart")
         {
             return match act_on_container(&s, group, service, action, node_acted(&headers)).await {
@@ -554,7 +609,7 @@ async fn public_link_open(
 /// `DELETE /v1/services/{name}/public-link`: close it (a failed one is
 /// cleared); a service without one answers the same.
 async fn public_link_close(State(s): State<AppState>, Path(name): Path<String>) -> Response {
-    if !s.sup.stack.services.contains_key(&name) {
+    if !s.sup.stack().services.contains_key(&name) {
         return err(StatusCode::NOT_FOUND, format!("no service `{name}`"));
     }
     let sup = s.sup.clone();
@@ -709,9 +764,9 @@ async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> 
         }
         let lane = lanes.activate(&body.path, profile)?;
         // A profile may turn the workers on (ADR-0041).
-        let workers = lane.sup.stack.profile.as_ref().and_then(|p| p.workers);
+        let workers = lane.sup.stack().profile.as_ref().and_then(|p| p.workers);
         lane.sup.set_lane_workers(workers.unwrap_or(body.workers));
-        if body.infra && main.stack.compose.values().any(|g| !g.shared.is_empty()) {
+        if body.infra && main.stack().compose.values().any(|g| !g.shared.is_empty()) {
             main.infra_up()?;
         }
         view(&lane.entry.name).map(|v| (StatusCode::CREATED, v))
@@ -950,7 +1005,7 @@ async fn tcp_tunnel(s: &AppState, port: u16, mut req: Request) -> Response {
     if container.is_none()
         && !s
             .sup
-            .stack
+            .stack()
             .services
             .values()
             .any(|svc| svc.port == Some(port))
@@ -1235,7 +1290,7 @@ async fn lane_forward(
         // A node too old to act on the lane's containers would hand the
         // request to the lane's daemon, which has no Docker (#128): said
         // here, by the names of this machine's stack file.
-        if let Some(e) = r.too_old_for(&s.sup.stack, req.method(), &format!("/v1/{rest}")) {
+        if let Some(e) = r.too_old_for(&s.sup.stack(), req.method(), &format!("/v1/{rest}")) {
             return err(StatusCode::CONFLICT, e);
         }
         // A public link of a lane on a node is carried by this machine
@@ -1362,7 +1417,7 @@ async fn group_action(
     headers: axum::http::HeaderMap,
 ) -> Response {
     let acted = node_acted(&headers);
-    if !s.sup.stack.groups.contains_key(&name) {
+    if !s.sup.stack().groups.contains_key(&name) {
         return err(StatusCode::NOT_FOUND, format!("no group `{name}`"));
     }
     if !matches!(action.as_str(), "start" | "stop" | "restart" | "rebuild") {
@@ -1409,7 +1464,7 @@ async fn logs(
     Path(name): Path<String>,
     Query(q): Query<LogQuery>,
 ) -> Response {
-    if !s.sup.stack.services.contains_key(&name) {
+    if !s.sup.stack().services.contains_key(&name) {
         // A container by its Compose service name, so `devstack logs postgres` works.
         return match s.sup.container_group(&name) {
             Some(group) => container_logs(&s, group, name, &q).await,
@@ -1477,7 +1532,7 @@ async fn builds(
     Path(name): Path<String>,
     Query(q): Query<LimitQuery>,
 ) -> Response {
-    if !s.sup.stack.services.contains_key(&name) {
+    if !s.sup.stack().services.contains_key(&name) {
         return err(StatusCode::NOT_FOUND, format!("no service `{name}`"));
     }
     let view = s.sup.view().services.into_iter().find(|v| v.name == name);
@@ -1525,7 +1580,7 @@ async fn builds(
 
 /// `GET /v1/services/{name}/logs/files`: the kept logs, newest first.
 async fn log_files(State(s): State<AppState>, Path(name): Path<String>) -> Response {
-    if !s.sup.stack.services.contains_key(&name) {
+    if !s.sup.stack().services.contains_key(&name) {
         return err(StatusCode::NOT_FOUND, format!("no service `{name}`"));
     }
     let current = s.sup.service_log(&name);
@@ -1858,7 +1913,7 @@ async fn log_stream(
     Path(name): Path<String>,
     Query(q): Query<StreamQuery>,
 ) -> Response {
-    if !s.sup.stack.services.contains_key(&name) {
+    if !s.sup.stack().services.contains_key(&name) {
         return err(StatusCode::NOT_FOUND, format!("no service `{name}`"));
     }
     let (tx, rx) = tokio::sync::mpsc::channel(512);
@@ -1964,7 +2019,7 @@ async fn run_log_stream(State(s): State<AppState>, Path(id): Path<u64>) -> Respo
 
 /// The latest build log of a service, compiler paths pointing at the repository.
 async fn build_log(State(s): State<AppState>, Path(name): Path<String>) -> Response {
-    if !s.sup.stack.services.contains_key(&name) {
+    if !s.sup.stack().services.contains_key(&name) {
         return err(StatusCode::NOT_FOUND, format!("no service `{name}`"));
     }
     let (sup, n) = (s.sup.clone(), name.clone());

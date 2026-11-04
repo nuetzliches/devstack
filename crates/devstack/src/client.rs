@@ -489,16 +489,6 @@ fn daemon_older_than_file(text: &str, ours: &str) -> Option<String> {
 
 /// Start the daemon in the background unless it runs; wait until it answers.
 pub fn ensure_daemon(stack_file: &Path, state_dir: &Path) -> Result<Client> {
-    ensure_daemon_with(stack_file, state_dir, None)
-}
-
-/// [`ensure_daemon`]; a daemon it starts runs the main tree with `profile`
-/// (ADR-0041).
-pub fn ensure_daemon_with(
-    stack_file: &Path,
-    state_dir: &Path,
-    profile: Option<&str>,
-) -> Result<Client> {
     // A daemon that runs but does not answer is an error: a second one would
     // only fail on its state lock.
     if let Some(c) = Client::probe(state_dir)? {
@@ -529,10 +519,9 @@ pub fn ensure_daemon_with(
         .stdin(std::process::Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
-    match profile {
-        Some(p) => cmd.env("DEVSTACK_PROFILE", p),
-        None => cmd.env_remove("DEVSTACK_PROFILE"),
-    };
+    // The daemon carries no profile: the main tree's comes with its start
+    // (`POST /v1/up`, ADR-0041 point 2).
+    cmd.env_remove("DEVSTACK_PROFILE");
     // Own console without a window, out of the terminal's job, no inherited
     // pipes (devstack_proc::spawn_detached).
     let mut child = devstack_proc::spawn_detached(&mut cmd).context("start the daemon")?;
@@ -1040,25 +1029,7 @@ pub fn up(
             println!("{line}");
         }
     }
-    let mut c = ensure_daemon_with(
-        &daemon_file(stack_file),
-        &sd,
-        main_profile.map(|p| p.name.as_str()),
-    )?;
-    if worktree().is_none() {
-        let runs = c.stack()?["profile"].as_str().map(str::to_string);
-        if runs.as_deref() != profile {
-            bail!(
-                "the main working tree runs {}: `devstack down` first, then `devstack up{}`",
-                runs.map_or("without a profile".to_string(), |p| format!(
-                    "with the profile `{p}`"
-                )),
-                profile
-                    .map(|p| format!(" --profile {p}"))
-                    .unwrap_or_default()
-            );
-        }
-    }
+    let mut c = ensure_daemon(&daemon_file(stack_file), &sd)?;
     // Started already somewhere else than `--on` names (here, or another
     // node): it moves there, a cold start there that takes over once ready,
     // as `devstack lane move` does. Without `--on`, a started lane stays
@@ -1130,9 +1101,15 @@ no node of the pool can run this lane: name the Linux image it runs in there in 
     }
     crate::hubcmd::ensure_quietly();
     let t0 = Instant::now();
-    let outcome = start_and_wait(&c, stack_file, None, |name, st| {
-        println!("{:>6.1}s  {name:<22} {st}", t0.elapsed().as_secs_f64());
-    })?;
+    let outcome = start_and_wait(
+        &c,
+        stack_file,
+        main_start(profile, yes),
+        None,
+        |name, st| {
+            println!("{:>6.1}s  {name:<22} {st}", t0.elapsed().as_secs_f64());
+        },
+    )?;
     match outcome {
         UpOutcome::Ready(stack) => {
             println!();
@@ -1183,16 +1160,27 @@ pub enum UpOutcome {
     TimedOut(Value),
 }
 
-/// `POST /v1/up`, then follow the stack until every autostart service and
-/// every container of its Compose groups is ready, or one fails. `progress`
-/// hears every change of a service's or a container's state.
+/// The body of a main tree's `POST /v1/up` (ADR-0041 point 2): it runs
+/// with `profile`, or without one, from this start on; `None` in a
+/// worktree, whose lane got its profile when it joined.
+pub fn main_start(profile: Option<&str>, yes: bool) -> Option<Value> {
+    worktree()
+        .is_none()
+        .then(|| serde_json::json!({ "profile": profile.unwrap_or(""), "yes": yes }))
+}
+
+/// `POST /v1/up` (with `start`, [`main_start`]), then follow the stack until
+/// every autostart service and every container of its Compose groups is
+/// ready, or one fails. `progress` hears every change of a service's or a
+/// container's state.
 pub fn start_and_wait(
     c: &Client,
     stack_file: &Path,
+    start: Option<Value>,
     timeout: Option<Duration>,
     mut progress: impl FnMut(&str, &str),
 ) -> Result<UpOutcome> {
-    let (status, body) = c.post("/v1/up", None)?;
+    let (status, body) = c.post("/v1/up", start)?;
     if status >= 400 {
         bail!("{}", error_text(&body));
     }
@@ -2149,7 +2137,7 @@ pub fn lane_start(
     let wanted = started.wanted.as_ref();
     println!("lane `{}` started", started.name);
     let t0 = Instant::now();
-    let outcome = start_and_wait(&started.client, &started.file, None, |name, st| {
+    let outcome = start_and_wait(&started.client, &started.file, None, None, |name, st| {
         println!("{:>6.1}s  {name:<22} {st}", t0.elapsed().as_secs_f64());
     })?;
     match outcome {

@@ -1,6 +1,6 @@
 # ADR-0081: A stack has a page of its own; every lane, `main` included, has the same view
 
-- **Status:** Accepted (card in the pull request)
+- **Status:** Accepted (card in the pull request); point 2's disabled profile superseded by [ADR-0093](0093-the-main-tree-takes-its-profile-when-it-starts.md) (`main`'s start card offers the profiles)
 - **Date:** 2026-10-30
 - **Deciders:** project owner
 - **Related:** [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (a worktree is a lane), [ADR-0047](0047-the-dashboard-makes-a-lane-from-a-branch.md) (the branch picker), [ADR-0067](0067-a-change-at-runtime-says-who-made-it.md) (who serves the main ports, set how), [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md), [ADR-0076](0076-a-pool-machine-has-one-page-the-pool-area-has-tabs.md) (the URL style of the pool area), [ADR-0078](0078-the-hub-follows-every-stacks-worktrees.md) (a stopped stack's worktrees), [ADR-0080](0080-the-main-tree-answers-as-a-lane-shared-is-deprecated.md) (the main tree answers as the lane `main`; `singleton`), [#387](https://github.com/nuetzliches/devstack/issues/387) (several stacks on one machine)

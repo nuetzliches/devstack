@@ -6,8 +6,9 @@
 // The same page for every lane (ADR-0078, ADR-0081): a lane of a running
 // stack (its daemon starts it), a lane of a stack that does not run (the hub
 // starts it, the daemon comes up), and the lane `main`, the main working
-// tree: it runs on this machine only, on its own ports, with the daemon's
-// profile; what does not apply to it is shown disabled, with the reason.
+// tree: it runs on this machine only, on its own ports, with the profile
+// its start chooses (ADR-0041 point 2); what does not apply to it is shown
+// disabled, with the reason.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { api, paths } from '@/api';
 import type { LaneView, Placement } from '@/api/types';
@@ -86,7 +87,7 @@ const lanesOn = (poolName: string, node: string) => (pool.overviews[poolName]?.l
 /** The stack file's profiles (ADR-0041): how the lane runs for a purpose. */
 const profiles = computed(() => stack.view?.profiles ?? []);
 const profile = ref('');
-// The main working tree's is its daemon's: shown, not chosen.
+// The main working tree's: the one it ran with last, chosen again or not.
 watch(
   () => (isMain.value ? (stack.mainView?.profile ?? '') : null),
   (p) => {
@@ -180,7 +181,7 @@ function lit(n: LaneTarget | null) {
 function start(on?: string) {
   // One start at a time: the buttons are disabled, a click that came through anyway does nothing.
   if (starting.value) return;
-  if (!props.lane || isMain.value) void stack.startStack();
+  if (!props.lane || isMain.value) void stack.startStack(undefined, profile.value);
   else if (!stack.running) void stack.startOfflineLane(props.lane, on ?? null, profile.value || undefined);
   else void stack.startLane(props.lane.name, on, profile.value || undefined);
 }
@@ -259,13 +260,13 @@ function start(on?: string) {
         </li>
       </ol>
 
-      <label v-if="profiles.length" class="profile" data-testid="lane-start-profile" :title="isMain ? NOT_FOR_MAIN.profile : undefined">
+      <label v-if="profiles.length" class="profile" data-testid="lane-start-profile">
         <span>Profile</span>
-        <select v-model="profile" class="input" :disabled="isMain || starting">
+        <select v-model="profile" class="input" :disabled="starting">
           <option value="">none: as the stack file says</option>
           <option v-for="p in profiles" :key="p.name" :value="p.name">{{ p.name }}{{ p.description ? ` · ${p.description}` : '' }}</option>
         </select>
-        <span v-if="chosen?.fresh" class="faint small">starts with fresh data: its databases are seeded again</span>
+        <span v-if="chosen?.fresh" class="faint small">starts with fresh data: its databases are seeded again<template v-if="isMain">; asked before it starts</template></span>
       </label>
       <div class="choices">
         <button

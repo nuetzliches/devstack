@@ -289,14 +289,14 @@ fn watch(sup: Arc<Supervisor>) -> Result<Watcher, String> {
         (s.platforms.is_empty() || s.platforms.contains(&platform)) && (!in_lane || !s.singleton())
     };
     let built: Vec<(String, GlobSet)> = sup
-        .stack
+        .stack()
         .services
         .iter()
         .filter(|(_, s)| s.build.is_some() && runs(s))
         .filter_map(|(n, s)| set(&s.watch).map(|g| (n.clone(), g)))
         .collect();
     let devservers: Vec<(String, GlobSet)> = sup
-        .stack
+        .stack()
         .services
         .iter()
         .filter(|(_, s)| s.kind == Kind::Devserver && runs(s))
@@ -305,7 +305,7 @@ fn watch(sup: Arc<Supervisor>) -> Result<Watcher, String> {
     // A lane restarts its own containers, never the `shared` ones of the
     // main tree (ADR-0030).
     let containers: Vec<(String, String, GlobSet)> = sup
-        .stack
+        .stack()
         .compose
         .iter()
         .flat_map(|(g, c)| {
