@@ -1516,8 +1516,13 @@ command = "check"
     assert!(s.ok(&["status"]).contains("profile: acc"));
     // Another profile, or none, needs the tree stopped first.
     let other = s.cli(&["up"], None);
-    assert!(!other.status.success(), "the daemon runs with `acc`");
+    assert!(!other.status.success(), "the main tree runs with `acc`");
     assert!(String::from_utf8_lossy(&other.stderr).contains("down"));
+    // Stopped, it starts with what its start says (ADR-0041 point 2).
+    s.ok(&["down"]);
+    let plain = s.ok(&["up"]);
+    assert!(!plain.contains("profile: acc"), "{plain}");
+    assert_eq!(state("base"), "running", "without the profile it starts");
     s.ok(&["down", "--all"]);
 }
 

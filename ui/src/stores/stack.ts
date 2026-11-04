@@ -1411,20 +1411,41 @@ export const useStack = defineStore('stack', () => {
   }
 
   /**
-   * Start the stack (`devstack up`); with `shift`, moved by a port shift on
-   * this machine (`--shift`, ADR-0082), which sticks to it until `none`.
+   * Start the stack (`devstack up`): its daemon if it does not run, and the
+   * main working tree in it. With `shift`, moved by a port shift on this
+   * machine (`--shift`, ADR-0082), which sticks to it until `none`. With
+   * `profile`, the main tree runs with it from this start on (`''`: without
+   * one; absent: as it ran last, ADR-0041 point 2); one with fresh data is
+   * confirmed first.
    */
-  async function startStack(shift?: 'auto' | 'none' | number) {
+  async function startStack(shift?: 'auto' | 'none' | number, profile?: string) {
     if (refuseReadOnly()) return;
     if (!id.value) return;
     const stackId = id.value;
+    const fresh = !!profile && !!view.value?.profiles?.find((p) => p.name === profile)?.fresh;
+    if (
+      fresh &&
+      !(await ui.confirm({
+        title: `Start main with ${profile}`,
+        text: `The profile ${profile} starts the main working tree with fresh data: its containers' volumes go, and its databases are seeded again.`,
+        confirmLabel: 'Start with fresh data',
+        danger: true,
+      }))
+    )
+      return;
+    const chosen = profile === undefined ? {} : { profile, ...(fresh ? { yes: true } : {}) };
     const main = mainLane.value;
     if (main && !beginStart(main, null)) return;
     if (running.value) {
       // The daemon runs (for its lanes, or the main tree was stopped): the main tree starts in it.
       const unmark = mark('lane-start', MAIN);
       try {
-        const res = await act({ label: 'Start main', path: paths.api(stackId, v1.up), success: 'main is starting…' });
+        const res = await act({
+          label: 'Start main',
+          path: paths.api(stackId, v1.up),
+          body: profile === undefined ? undefined : chosen,
+          success: 'main is starting…',
+        });
         if (res.ok) startSent(stackId, MAIN);
         else endStart(stackId, MAIN);
       } finally {
@@ -1436,7 +1457,7 @@ export const useStack = defineStore('stack', () => {
     const res = await act({
       label: `Start ${entry.value?.name ?? 'stack'}`,
       path: paths.up(stackId),
-      body: shift === undefined ? undefined : { shift },
+      body: shift === undefined && profile === undefined ? undefined : { ...(shift === undefined ? {} : { shift }), ...chosen },
       success: shift === undefined ? 'Starting the stack…' : 'Starting the stack with a port shift…',
     });
     if (!res.ok) {
@@ -1459,11 +1480,15 @@ export const useStack = defineStore('stack', () => {
     const stackId = id.value;
     const name = entry.value?.name ?? 'stack';
     const lanesText = restartLanesText(restartLanes.value);
+    // The main tree starts again with the profile it runs with (ADR-0041 point 2).
+    const profile = mainView.value?.profile ?? undefined;
+    const fresh = !!profile && !!view.value?.profiles?.find((p) => p.name === profile)?.fresh;
+    const profileText = profile ? ` main starts again with the profile ${profile}${fresh ? ', with fresh data: its volumes go' : ''}.` : '';
     const ok = await ui.confirm({
       title: `Restart ${name}`,
-      text: `All services stop and start again, with the installed devstack and the current stack file. Containers keep running unless the file changes them.${lanesText ? ` ${lanesText}` : ''}`,
+      text: `All services stop and start again, with the installed devstack and the current stack file. Containers keep running unless the file changes them.${lanesText ? ` ${lanesText}` : ''}${profileText}`,
       confirmLabel: 'Restart stack',
-      danger: !restartLanes.value.carried && !!lanesText,
+      danger: (!restartLanes.value.carried && !!lanesText) || fresh,
     });
     if (!ok) return;
     const unmark = mark('stack', 'restart');
@@ -1504,7 +1529,12 @@ export const useStack = defineStore('stack', () => {
         return;
       }
       hub.starting[stackId] = true;
-      const up = await act({ label: `Start ${name}`, path: paths.up(stackId), success: 'Starting the stack again…' });
+      const up = await act({
+        label: `Start ${name}`,
+        path: paths.up(stackId),
+        body: profile ? { profile, ...(fresh ? { yes: true } : {}) } : undefined,
+        success: 'Starting the stack again…',
+      });
       if (!up.ok) delete hub.starting[stackId];
     } finally {
       unmark();

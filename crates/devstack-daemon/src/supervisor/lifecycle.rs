@@ -160,7 +160,7 @@ impl Supervisor {
             let mut go = Vec::new();
             for name in level {
                 let svc = self.service(&name)?;
-                if !svc.autostart || !self.runs_here(svc) {
+                if !svc.autostart || !self.runs_here(&svc) {
                     continue;
                 }
                 if let Some(dep) = svc.after.iter().find(|d| failed.contains(*d)) {
@@ -211,10 +211,10 @@ impl Supervisor {
             let Ok(declared) = self.service(&name) else {
                 continue;
             };
-            if !declared.autostart || !self.runs_here(declared) || first.contains(&name) {
+            if !declared.autostart || !self.runs_here(&declared) || first.contains(&name) {
                 continue;
             }
-            let svc = self.effective(&name, declared);
+            let svc = self.effective(&name, &declared);
             if svc.build.is_none()
                 || !super::on_this_platform(&svc)
                 || self.restorable(&name).is_some()
@@ -241,7 +241,7 @@ impl Supervisor {
 
     fn fresh_data(&self) {
         let fresh = self
-            .stack
+            .stack()
             .profile
             .as_ref()
             .is_some_and(|p| p.data == devstack_config::model::DataMode::Fresh);
@@ -281,7 +281,7 @@ impl Supervisor {
         local_lanes: bool,
     ) -> (Vec<String>, Vec<String>, Vec<String>) {
         let mut keep: BTreeSet<String> = self
-            .stack
+            .stack()
             .services
             .iter()
             .filter(|(_, s)| s.singleton())
@@ -291,7 +291,7 @@ impl Supervisor {
         let mut todo: Vec<String> = keep.iter().cloned().collect();
         while let Some(n) = todo.pop() {
             for dep in self
-                .stack
+                .stack()
                 .services
                 .get(&n)
                 .map(|s| s.after.clone())
@@ -301,7 +301,7 @@ impl Supervisor {
                     && let Some((g, s)) = rest.split_once('.')
                 {
                     containers.insert((g.to_string(), s.to_string()));
-                } else if self.stack.services.contains_key(&dep) && keep.insert(dep.clone()) {
+                } else if self.stack().services.contains_key(&dep) && keep.insert(dep.clone()) {
                     todo.push(dep);
                 }
             }
@@ -310,7 +310,8 @@ impl Supervisor {
         let mut kept = Vec::new();
         if infra && self.external_infra().is_none() {
             for g in self.group_order().into_iter().rev() {
-                let Some(cfg) = self.stack.compose.get(&g) else {
+                let stack = self.stack();
+                let Some(cfg) = stack.compose.get(&g) else {
                     continue;
                 };
                 let stays: BTreeSet<&String> = containers
@@ -542,7 +543,7 @@ impl Supervisor {
         name: &str,
         prebuilt: Option<(String, PathBuf)>,
     ) -> Result<(), String> {
-        let svc = self.effective(name, self.service(name)?);
+        let svc = self.effective(name, &self.service(name)?);
         let requested = now_ms();
         let epoch = self.stop_epoch(name);
         if let Some(e) = self.main_ports_elsewhere(name, &svc) {
@@ -1006,7 +1007,7 @@ impl Supervisor {
         };
         // Other services are reached on their fixed port: through the proxy, at
         // whichever instance is current.
-        for (n, s) in &self.stack.services {
+        for (n, s) in &self.stack().services {
             if let Some(p) = s.port {
                 let tls = s.health.as_ref().is_some_and(|h| h.insecure_tls);
                 ctx.service_urls.insert(
@@ -1016,8 +1017,11 @@ impl Supervisor {
             }
         }
         ctx.public_urls = self.public_urls();
-        ctx.vars
-            .extend(devstack_env::variables(&self.stack, Some(svc), &self.repo));
+        ctx.vars.extend(devstack_env::variables(
+            &self.stack(),
+            Some(svc),
+            &self.repo,
+        ));
         ctx
     }
 
@@ -1305,18 +1309,18 @@ impl Supervisor {
         action: &str,
         node_acted: bool,
     ) -> Result<(), String> {
-        let g = self
-            .stack
+        let stack = self.stack();
+        let g = stack
             .groups
             .get(group)
             .ok_or_else(|| format!("no group `{group}`"))?;
         let services: Vec<String> = g
             .members
             .iter()
-            .filter(|m| self.stack.services.contains_key(m.as_str()))
+            .filter(|m| self.stack().services.contains_key(m.as_str()))
             .cloned()
             .collect();
-        let containers = self.stack.group_containers(group);
+        let containers = self.stack().group_containers(group);
         let mut failed: Vec<String> = Vec::new();
         match action {
             "start" => {
@@ -1343,7 +1347,7 @@ impl Supervisor {
                         .map(|s| {
                             let built = rebuild
                                 && self
-                                    .stack
+                                    .stack()
                                     .services
                                     .get(s)
                                     .is_some_and(|v| v.build.is_some());
@@ -1387,7 +1391,7 @@ impl Supervisor {
     /// failed, the others still ran.
     pub fn restart_running(self: &Arc<Self>, rebuild: bool) -> Result<(), String> {
         let running: Vec<String> = self
-            .stack
+            .stack()
             .services
             .keys()
             .filter(|n| self.service_running(n))
@@ -1399,7 +1403,7 @@ impl Supervisor {
                 .map(|s| {
                     let built = rebuild
                         && self
-                            .stack
+                            .stack()
                             .services
                             .get(s)
                             .is_some_and(|v| v.build.is_some());
@@ -1490,7 +1494,8 @@ impl Supervisor {
                 self.ensure_reachable(group, service)?;
                 continue;
             }
-            let Some(d) = self.stack.services.get(dep) else {
+            let stack = self.stack();
+            let Some(d) = stack.services.get(dep) else {
                 continue;
             };
             if !self.runs_here(d) {

@@ -9,6 +9,20 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **The main working tree takes its profile when it starts, not with its
+  daemon** (ADR-0093, ADR-0041 point 2). The daemon carries no profile of
+  its own: `POST /v1/up` takes `{"profile", "yes"}`, and a stopped main
+  tree starts with the profile asked while the lanes keep running, where
+  the daemon had to be stopped and started again before. `devstack up
+  --profile <name>` in the main tree does so too; it is refused only while
+  the main tree runs with another one. The hub's `POST /hub/stacks/{id}/up`
+  takes `profile` and `yes`. The dashboard's start card of the lane `main`
+  offers the profiles (one with fresh data is confirmed first), *Restart
+  stack* starts main again with its profile, and the stack page shows the
+  daemon's state and main's beside each other.
+
 ## [0.37.0] - 2026-11-04
 
 A service can get a public link: a Cloudflare Quick Tunnel by a click

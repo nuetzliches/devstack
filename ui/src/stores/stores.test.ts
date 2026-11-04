@@ -533,6 +533,39 @@ describe('stack store', () => {
       expect(posts.some((p) => p.includes('/down?') && p.startsWith('/hub/stacks/shop/down'))).toBe(false);
     });
 
+    it('takes its profile with its start; one with fresh data is confirmed (ADR-0041 point 2)', async () => {
+      const stack = await shownStack();
+      const ui = useUi();
+      fake.on('/hub/stacks/shop/api/v1/up', { status: 202, ok: true, body: null });
+      const profiles = [
+        { name: 'e2e', fresh: false },
+        { name: 'acc', fresh: true },
+      ];
+      fake.stream('/hub/stacks/shop/api/v1/events').handlers.onMessage({ type: 'snapshot', stack: { ...view([svc('api', 'stopped')]), profiles } } as never);
+      const ups = () => fake.requests.filter((r) => r.path === '/hub/stacks/shop/api/v1/up').map((r) => r.body ?? null);
+      // Fresh data: asked first; declined, nothing starts.
+      let done = stack.startStack(undefined, 'acc');
+      await vi.waitFor(() => expect(ui.confirmRequest).not.toBeNull());
+      ui.confirmRequest!.resolve(false);
+      ui.confirmRequest = null;
+      await done;
+      expect(ups()).toEqual([]);
+      done = stack.startStack(undefined, 'acc');
+      await vi.waitFor(() => expect(ui.confirmRequest).not.toBeNull());
+      ui.confirmRequest!.resolve(true);
+      ui.confirmRequest = null;
+      await done;
+      expect(ups()).toEqual([{ profile: 'acc', yes: true }]);
+    });
+
+    it('starts without a profile when its start card says none', async () => {
+      const stack = await shownStack();
+      fake.on('/hub/stacks/shop/api/v1/up', { status: 202, ok: true, body: null });
+      fake.stream('/hub/stacks/shop/api/v1/events').handlers.onMessage({ type: 'snapshot', stack: { ...view([svc('api', 'stopped')]), profile: 'e2e' } } as never);
+      await stack.startStack(undefined, '');
+      expect(fake.requests.filter((r) => r.path === '/hub/stacks/shop/api/v1/up').map((r) => r.body)).toEqual([{ profile: '' }]);
+    });
+
     it('the last lane that runs, main or not, asks, with the stack stopped too by default', async () => {
       const stack = await shownStack();
       const events = fake.stream('/hub/stacks/shop/api/v1/events');

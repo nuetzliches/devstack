@@ -302,7 +302,7 @@ impl Sampler {
         let trees: BTreeMap<String, devstack_proc::Usage> = sup.tree_usage().into_iter().collect();
         let build = sup.build_usage();
         let mut inner = self.inner.lock().unwrap();
-        for name in sup.stack.services.keys() {
+        for name in sup.stack().services.keys() {
             let s = inner.series.entry(format!("service:{name}")).or_default();
             match trees.get(name) {
                 Some(u) => s.native(*u),
@@ -467,7 +467,7 @@ impl Sampler {
         let get = |key: &str| inner.series.get(key).unwrap_or(&empty);
 
         let services: Vec<Entry> = sup
-            .stack
+            .stack()
             .services
             .keys()
             .map(|name| {
@@ -503,7 +503,7 @@ impl Sampler {
             })
             .collect();
         let groups = sup
-            .stack
+            .stack()
             .groups
             .iter()
             .map(|(name, g)| {

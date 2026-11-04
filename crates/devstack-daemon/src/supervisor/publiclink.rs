@@ -41,7 +41,7 @@ pub(crate) struct Link {
 impl Supervisor {
     /// `{service.<name>.public_url}` of this tree (ADR-0090).
     pub(crate) fn public_urls(&self) -> std::collections::BTreeMap<String, String> {
-        crate::namedtunnel::public_urls(&self.stack, &self.lane)
+        crate::namedtunnel::public_urls(&self.stack(), &self.lane)
     }
 
     /// Open a public link to every service of this tree that may have one
@@ -144,7 +144,7 @@ impl Supervisor {
                 state: PublicLinkState::Open,
                 url: Some(format!(
                     "https://{}",
-                    tunnel.host(&self.stack.stack.name, lane, name)
+                    tunnel.host(&self.stack().stack.name, lane, name)
                 )),
                 since: now_ms(),
                 error: None,
@@ -165,7 +165,7 @@ impl Supervisor {
             return Ok(());
         }
         if let Some(tunnel) = crate::namedtunnel::read() {
-            let host = tunnel.host(&self.stack.stack.name, &self.lane, name);
+            let host = tunnel.host(&self.stack().stack.name, &self.lane, name);
             let view = PublicLinkView {
                 state: PublicLinkState::Starting,
                 url: Some(format!("https://{host}")),

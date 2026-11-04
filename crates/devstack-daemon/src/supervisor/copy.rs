@@ -754,7 +754,7 @@ impl Supervisor {
     /// member's store or run into it; what each did, for the requester.
     pub(crate) fn warm_lane(&self, cancel: &dyn Fn() -> bool) -> Vec<serde_json::Value> {
         let mut out = Vec::new();
-        for (name, svc) in &self.stack.services {
+        for (name, svc) in &self.stack().services {
             if svc.prepare.as_ref().is_none_or(|p| p.outputs.is_empty()) {
                 continue;
             }
@@ -825,7 +825,7 @@ impl Supervisor {
         }
         let copy = self.run_root();
         for rel in self
-            .stack
+            .stack()
             .services
             .values()
             .filter_map(|s| s.prepare.as_ref())
@@ -1643,7 +1643,7 @@ mod tests {
             &[("package-lock.json", "{\"v\":1}"), ("app.js", "1")],
             &rt,
         );
-        let svc = &sup.stack.services["web"];
+        let svc = &sup.stack().services["web"];
         let p = svc.prepare.as_ref().unwrap();
         let key = prepare_key(
             p,

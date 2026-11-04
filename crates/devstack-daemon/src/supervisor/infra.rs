@@ -46,7 +46,7 @@ impl Supervisor {
     /// reach this tree's containers, not the main tree's.
     pub(crate) fn compose_projects(&self) -> BTreeMap<String, String> {
         let known = self.infra.lock().unwrap().projects.clone();
-        self.stack
+        self.stack()
             .compose
             .keys()
             .map(|g| {
@@ -83,7 +83,7 @@ impl Supervisor {
     fn write_main_overlay(&self, group: &str) -> Result<Vec<devstack_compose::HeldPort>, String> {
         let file = self.main_overlay_file(group);
         let _ = std::fs::remove_file(&file);
-        let cfg = &self.stack.compose[group];
+        let cfg = &self.stack().compose[group];
         let names = &cfg.main_ports;
         let announced = cfg.announced();
         let shift = self.shift();
@@ -248,7 +248,7 @@ impl Supervisor {
     /// `<name>-<lane>`, the overlay written by [`Self::write_lane_overlay`]
     /// last, and without the `shared` services, which the main tree runs.
     pub(super) fn compose_group(&self, name: &str) -> Group {
-        let cfg = &self.stack.compose[name];
+        let cfg = &self.stack().compose[name];
         let mut g = Group::from_config(name, cfg, &self.repo);
         g.env = self.group_variables(name);
         if self.lane.is_empty() {
@@ -279,7 +279,7 @@ impl Supervisor {
     /// no main tree: every one moves); and `DEVSTACK_LANE` /
     /// `DEVSTACK_LANE_SUFFIX` of the tree ([`Self::presented_lane`]).
     fn group_variables(&self, group: &str) -> BTreeMap<String, String> {
-        let cfg = &self.stack.compose[group];
+        let cfg = &self.stack().compose[group];
         let lane = self.presented_lane();
         if self.external_infra().is_some() {
             // A lane on a node runs as a main tree on its developer's
@@ -319,7 +319,7 @@ impl Supervisor {
     pub(crate) fn compose_variables(&self) -> BTreeMap<String, String> {
         let mut env = devstack_config::model::lane_variables(&self.presented_lane());
         env.extend(
-            self.stack
+            self.stack()
                 .compose
                 .keys()
                 .flat_map(|g| self.group_variables(g)),
@@ -336,7 +336,8 @@ impl Supervisor {
         if offset == 0 {
             return None;
         }
-        let cfg = self.stack.compose.get(group)?;
+        let stack = self.stack();
+        let cfg = stack.compose.get(group)?;
         if !self.lane.is_empty() && cfg.shared.iter().any(|s| s == service) {
             return None;
         }
@@ -378,7 +379,7 @@ impl Supervisor {
         let _ = std::fs::remove_file(&file);
         let g = self.compose_group(group);
         let model = self.docker.config(&g).map_err(|e| e.to_string())?;
-        let cfg = &self.stack.compose[group];
+        let cfg = &self.stack().compose[group];
         let announced = cfg.announced();
         let text = devstack_compose::check_announced(&model, &announced)
             .and_then(|()| {
@@ -408,15 +409,15 @@ impl Supervisor {
 
     /// The tree's profile leaves every container of `group` out (ADR-0058).
     fn left_out(&self, group: &str) -> bool {
-        self.stack.compose.get(group).is_some_and(|g| {
-            !g.services.is_empty() && g.services.iter().all(|s| self.stack.skips(group, s))
+        self.stack().compose.get(group).is_some_and(|g| {
+            !g.services.is_empty() && g.services.iter().all(|s| self.stack().skips(group, s))
         })
     }
 
     /// Compose groups in `after` order.
     pub(super) fn group_order(&self) -> Vec<String> {
         topo(
-            self.stack
+            self.stack()
                 .compose
                 .iter()
                 .map(|(k, g)| (k.clone(), g.after.clone()))
@@ -431,7 +432,7 @@ impl Supervisor {
         }
         // Groups no `after` orders start side by side.
         let deps: BTreeMap<String, Vec<String>> = self
-            .stack
+            .stack()
             .compose
             .iter()
             .map(|(k, g)| (k.clone(), g.after.clone()))
@@ -496,7 +497,7 @@ impl Supervisor {
             let skipped: Vec<String> = group
                 .services
                 .iter()
-                .filter(|s| self.stack.skips(&g, s))
+                .filter(|s| self.stack().skips(&g, s))
                 .cloned()
                 .collect();
             if !skipped.is_empty() {
@@ -595,7 +596,7 @@ impl Supervisor {
     /// port, as Docker Desktop does.
     fn container_urls(&self, group: &str, service: &str, ports: &[String]) -> Vec<String> {
         match self
-            .stack
+            .stack()
             .compose
             .get(group)
             .and_then(|g| g.urls.get(service))
@@ -787,9 +788,9 @@ impl Supervisor {
             }
             // A lane's `shared` services run in the main tree's project: their
             // addresses come from there, also when Docker assigned the port.
-            let shared = &self.stack.compose[&g].shared;
+            let shared = &self.stack().compose[&g].shared;
             if !self.lane.is_empty() && !shared.is_empty() {
-                let main = Group::from_config(&g, &self.stack.compose[&g], &self.repo);
+                let main = Group::from_config(&g, &self.stack().compose[&g], &self.repo);
                 for c in self.docker.ps(&main).unwrap_or_default() {
                     if !shared.contains(&c.service) {
                         continue;
@@ -821,7 +822,7 @@ impl Supervisor {
             return Err(NODE_TOO_OLD.into());
         }
         let g = if self.is_shared(group, service) {
-            Group::from_config(group, &self.stack.compose[group], &self.repo)
+            Group::from_config(group, &self.stack().compose[group], &self.repo)
         } else {
             self.compose_group(group)
         };
@@ -849,8 +850,8 @@ impl Supervisor {
     /// The group of the Compose service called `name`, if exactly one group
     /// starts one by that name.
     pub fn container_group(&self, name: &str) -> Option<String> {
-        let mut groups = self
-            .stack
+        let stack = self.stack();
+        let mut groups = stack
             .compose
             .iter()
             .filter(|(_, g)| g.services.iter().any(|s| s == name))
@@ -861,7 +862,7 @@ impl Supervisor {
 
     /// The Compose group `group` starts `service` (it is in its `services`).
     pub fn starts(&self, group: &str, service: &str) -> bool {
-        self.stack
+        self.stack()
             .compose
             .get(group)
             .is_some_and(|g| g.services.iter().any(|s| s == service))
@@ -872,7 +873,8 @@ impl Supervisor {
     /// container `compose ps` reports for the group's project, also one of a
     /// service the group does not start.
     pub fn container_target(&self, group: &str, service: &str) -> Option<ContainerTarget> {
-        let cfg = self.stack.compose.get(group)?;
+        let stack = self.stack();
+        let cfg = stack.compose.get(group)?;
         let infra = self.infra.lock().unwrap();
         let shown = infra
             .views
@@ -1242,7 +1244,7 @@ impl Supervisor {
     pub(super) fn is_shared(&self, group: &str, service: &str) -> bool {
         !self.lane.is_empty()
             && self
-                .stack
+                .stack()
                 .compose
                 .get(group)
                 .is_some_and(|g| g.shared.iter().any(|s| s == service))

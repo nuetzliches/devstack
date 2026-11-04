@@ -79,7 +79,7 @@ impl Watch {
     pub(crate) fn due(&mut self, sup: &Supervisor) -> Vec<(String, String)> {
         let done = load_done(&done_file(sup));
         let mut out = Vec::new();
-        for r in &sup.stack.prepare.warm {
+        for r in &sup.stack().prepare.warm {
             let Some(commit) = rev_parse(&sup.repo, r) else {
                 continue;
             };
@@ -281,7 +281,7 @@ pub(crate) fn warm_here(
 ) -> Result<Checkout, String> {
     let co = Checkout::new(sup, r, commit, "")?;
     let files = co.files()?;
-    for (name, svc) in &sup.stack.services {
+    for (name, svc) in &sup.stack().services {
         let Some(p) = svc.prepare.as_ref().filter(|p| !p.outputs.is_empty()) else {
             continue;
         };

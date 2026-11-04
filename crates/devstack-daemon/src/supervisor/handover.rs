@@ -77,7 +77,7 @@ impl Supervisor {
     /// Services whose fixed port is a devstack proxy: what `promote --lane`
     /// moves (a dev server keeps its port).
     pub fn proxied_services(&self) -> Vec<String> {
-        self.stack
+        self.stack()
             .services
             .iter()
             .filter(|(_, s)| s.proxied() && !s.singleton() && self.runs_here(s))
@@ -89,7 +89,7 @@ impl Supervisor {
     /// proxy (dev servers, `proxy = false`): `promote --lane` forwards their
     /// port byte for byte.
     pub fn unproxied_services(&self) -> Vec<String> {
-        self.stack
+        self.stack()
             .services
             .iter()
             .filter(|(_, s)| {
@@ -105,7 +105,7 @@ impl Supervisor {
 
     /// The main slot moves something in this stack: see [`moves_main_slot`].
     pub fn main_slot_moves(&self) -> bool {
-        moves_main_slot(&self.stack)
+        moves_main_slot(&self.stack())
     }
 
     /// Main lane: forward the fixed port of `name` to `target` (`None` ends
@@ -157,7 +157,7 @@ impl Supervisor {
     /// Running services that have worker switches (ADR-0008).
     pub fn running_worker_services(&self) -> Vec<String> {
         let slots = self.slots.lock().unwrap();
-        self.stack
+        self.stack()
             .services
             .iter()
             // A `singleton` keeps its workers wherever the main slot is.

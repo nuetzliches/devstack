@@ -101,6 +101,15 @@ struct Held {
     reason: String,
 }
 
+/// Why the main tree does not take a profile for its start.
+#[derive(Debug)]
+pub enum ProfileRefused {
+    /// No such profile, or the stack it makes is not valid.
+    Invalid(String),
+    /// Its services run, with this profile (`None`: without one).
+    Running(Option<String>),
+}
+
 #[derive(Default)]
 struct InfraCache {
     published: BTreeMap<(String, String, u16), String>,
@@ -113,7 +122,13 @@ struct InfraCache {
 }
 
 pub struct Supervisor {
-    pub stack: Stack,
+    /// The stack it runs: the file's, with its profile, moved by its shift.
+    /// The main tree's changes with the profile of each start (ADR-0041
+    /// point 2), while it is stopped; read it through [`Self::stack`].
+    stack: std::sync::RwLock<Arc<Stack>>,
+    /// Main tree only: the stack file's stack, without a profile or a
+    /// shift, which a start with a profile makes its stack from.
+    unprofiled: Mutex<Option<Stack>>,
     pub repo: PathBuf,
     pub state_dir: PathBuf,
     layout: Layout,
@@ -487,7 +502,8 @@ impl Supervisor {
             .collect();
         let (events, _) = broadcast::channel(1024);
         let sup = Arc::new(Self {
-            stack,
+            stack: std::sync::RwLock::new(Arc::new(stack)),
+            unprofiled: Mutex::new(None),
             repo,
             state_dir,
             layout,
@@ -591,6 +607,90 @@ impl Supervisor {
     /// containers, the main tree's own).
     pub fn set_shift(&self, shift: u16) {
         self.shift.store(shift, Ordering::SeqCst);
+    }
+
+    /// The stack it runs now (its profile applied, moved by its shift).
+    pub fn stack(&self) -> Arc<Stack> {
+        self.stack.read().unwrap().clone()
+    }
+
+    /// Main tree: the stack file's stack, without a profile or a shift, that
+    /// [`Self::use_profile`] makes the stack of a start from.
+    pub fn set_unprofiled(&self, stack: Stack) {
+        *self.unprofiled.lock().unwrap() = Some(stack);
+    }
+
+    /// Main tree: run with `profile` (`None`: without one) from this start
+    /// on (ADR-0041 point 2). The daemon carries no profile of its own: the
+    /// main tree's is chosen when it starts, as a lane's is. Only while
+    /// none of its services runs; the same profile again changes nothing.
+    pub fn use_profile(&self, profile: Option<&str>) -> Result<(), ProfileRefused> {
+        let runs = self.stack().profile.as_ref().map(|p| p.name.clone());
+        if runs.as_deref() == profile {
+            // A new start: `data = "fresh"` goes once per start.
+            if !self
+                .slots
+                .lock()
+                .unwrap()
+                .values()
+                .any(|s| s.view.status.is_active())
+            {
+                self.fresh_done.store(false, Ordering::SeqCst);
+            }
+            return Ok(());
+        }
+        let Some(base) = self.unprofiled.lock().unwrap().clone() else {
+            return Err(ProfileRefused::Invalid(
+                "a lane's profile is chosen when the lane starts".into(),
+            ));
+        };
+        if self
+            .slots
+            .lock()
+            .unwrap()
+            .values()
+            .any(|s| s.view.status.is_active())
+        {
+            return Err(ProfileRefused::Running(runs));
+        }
+        let stack = match profile {
+            Some(p) => base.with_profile(p).map_err(|issues| {
+                ProfileRefused::Invalid(
+                    issues
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                )
+            })?,
+            None => base,
+        };
+        let stack = match self.shift() {
+            0 => stack,
+            off => crate::lanes::lane_stack(&stack, off).map_err(ProfileRefused::Invalid)?,
+        };
+        let stack = with_static_servers(stack);
+        // A profile changes how services run, never which there are: the
+        // slots stay, what they show of the stack file follows.
+        {
+            let mut slots = self.slots.lock().unwrap();
+            for (name, svc) in &stack.services {
+                if let Some(slot) = slots.get_mut(name) {
+                    slot.view.kind = format!("{:?}", svc.kind).to_lowercase();
+                    slot.view.autostart = svc.autostart;
+                    slot.view.hot_reload_available = svc.hot_reload.is_some();
+                    slot.view.singleton = svc.singleton();
+                }
+            }
+        }
+        *self.stack.write().unwrap() = Arc::new(stack);
+        // `data = "fresh"` once per start, this one included.
+        self.fresh_done.store(false, Ordering::SeqCst);
+        crate::diag::info(
+            "main_profile",
+            serde_json::json!({ "from": runs, "to": profile }),
+        );
+        Ok(())
     }
 
     /// What this tree's Compose ports are moved by against its Compose
@@ -748,7 +848,7 @@ impl Supervisor {
             .collect();
         let infra = self.infra.lock().unwrap().views.clone();
         let groups = self
-            .stack
+            .stack()
             .groups
             .iter()
             .map(|(k, g)| GroupView {
@@ -759,7 +859,7 @@ impl Supervisor {
             })
             .collect();
         let commands = self
-            .stack
+            .stack()
             .commands
             .iter()
             .map(|(k, c)| CommandView {
@@ -770,7 +870,7 @@ impl Supervisor {
             })
             .collect();
         let profiles = self
-            .stack
+            .stack()
             .profiles
             .iter()
             .map(|(name, p)| crate::state::ProfileView {
@@ -783,9 +883,9 @@ impl Supervisor {
         StackView {
             public_link_domain: crate::namedtunnel::read().map(|c| c.domain),
             shift: self.shift(),
-            profile: self.stack.profile.as_ref().map(|p| p.name.clone()),
+            profile: self.stack().profile.as_ref().map(|p| p.name.clone()),
             profiles,
-            name: self.stack.stack.name.clone(),
+            name: self.stack().stack.name.clone(),
             repo: self.repo.clone(),
             version: devstack_config::VERSION.into(),
             services,
@@ -975,17 +1075,18 @@ impl Supervisor {
             .and_then(|s| s.view.log.clone())
     }
 
-    fn service(&self, name: &str) -> Result<&Service, String> {
-        self.stack
+    fn service(&self, name: &str) -> Result<Service, String> {
+        self.stack()
             .services
             .get(name)
+            .cloned()
             .ok_or_else(|| format!("no service `{name}`"))
     }
 
     /// Services in `after` order (Compose dependencies are handled by `infra_up`).
     pub fn service_order(&self) -> Vec<String> {
         topo(
-            self.stack
+            self.stack()
                 .services
                 .iter()
                 .map(|(k, s)| {
@@ -1005,7 +1106,7 @@ impl Supervisor {
     /// Each service's services it comes `after` (Compose dependencies are
     /// `infra_up`'s).
     pub(super) fn service_deps(&self) -> BTreeMap<String, Vec<String>> {
-        self.stack
+        self.stack()
             .services
             .iter()
             .map(|(k, s)| {
@@ -1598,6 +1699,87 @@ mod notice_tests {
 }
 
 #[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    /// ADR-0041 point 2: the main tree's profile comes with its start, not
+    /// with the daemon; it changes only while nothing of it runs.
+    #[test]
+    fn the_main_tree_takes_its_profile_when_it_starts() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("devstack.toml");
+        let stack = devstack_config::from_str(
+            r#"version = 1
+[stack]
+name = "s"
+[services.base]
+kind = "tool"
+run = "x"
+[services.extra]
+kind = "tool"
+run = "x"
+autostart = false
+[profiles.acc]
+autostart = ["extra"]
+"#,
+            &file,
+        )
+        .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let sup = Supervisor::new(
+            stack.clone(),
+            file,
+            d.path().to_path_buf(),
+            d.path().join(".devstack"),
+            devstack_proc::Options::default(),
+            rt.handle().clone(),
+        )
+        .unwrap();
+        let autostart = |n: &str| {
+            sup.view()
+                .services
+                .iter()
+                .find(|s| s.name == n)
+                .unwrap()
+                .autostart
+        };
+        assert!(
+            matches!(
+                sup.use_profile(Some("acc")),
+                Err(ProfileRefused::Invalid(_))
+            ),
+            "a lane's supervisor has no stack to make another from"
+        );
+        sup.set_unprofiled(stack);
+        assert!(matches!(
+            sup.use_profile(Some("nope")),
+            Err(ProfileRefused::Invalid(_))
+        ));
+
+        sup.use_profile(Some("acc")).unwrap();
+        assert_eq!(sup.view().profile.as_deref(), Some("acc"));
+        assert!(autostart("extra") && !autostart("base"));
+        assert_eq!(sup.view().profiles.len(), 1, "the others stay offered");
+
+        sup.set_status("extra", Status::Running);
+        match sup.use_profile(None) {
+            Err(ProfileRefused::Running(runs)) => assert_eq!(runs.as_deref(), Some("acc")),
+            other => panic!("refused while it runs: {other:?}"),
+        }
+        sup.use_profile(Some("acc"))
+            .expect("the same profile again is no change");
+
+        sup.set_status("extra", Status::Stopped);
+        sup.use_profile(None).unwrap();
+        assert_eq!(sup.view().profile, None);
+        assert!(autostart("base") && !autostart("extra"));
+    }
+}
+
+#[cfg(test)]
 mod copy_note_tests {
     use super::*;
 
@@ -1630,7 +1812,7 @@ mod copy_note_tests {
                 None,
             )
             .unwrap();
-            let web = sup.stack.services["web"].clone();
+            let web = sup.stack().services["web"].clone();
             let note = sup.copy_note(&web);
             if lane.is_empty() {
                 assert_eq!(note, "", "the main tree runs it in place");
@@ -1650,7 +1832,7 @@ mod copy_note_tests {
                     "it has `prepare`"
                 );
                 assert_eq!(
-                    sup.copy_note(&sup.stack.services["api"]),
+                    sup.copy_note(&sup.stack().services["api"]),
                     "",
                     "no dev server"
                 );

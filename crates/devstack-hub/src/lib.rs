@@ -2430,11 +2430,46 @@ async fn stack_scan(Json(q): Json<ScanQuery>) -> Response {
 
 /// `POST /hub/stacks/{id}/up`, optionally with `{"shift": "auto" | N |
 /// "none"}`: `devstack up --shift` (ADR-0082), which sets the stack's shift
-/// on this machine before it starts.
+/// on this machine before it starts; with `{"profile": "<name>", "yes":
+/// true}`: `devstack up --profile <name> --yes`, the main tree's profile
+/// for this start (ADR-0041 point 2).
 #[derive(Deserialize, Default)]
 struct UpBody {
     #[serde(default)]
     shift: Option<serde_json::Value>,
+    #[serde(default)]
+    profile: Option<String>,
+    #[serde(default)]
+    yes: bool,
+}
+
+/// The `--profile` and `--yes` arguments of an [`UpBody`].
+fn profile_args(body: &[u8]) -> Result<Vec<String>, String> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(Vec::new());
+    }
+    let b: UpBody = serde_json::from_slice(body).map_err(|e| e.to_string())?;
+    let mut args = Vec::new();
+    if let Some(p) = b
+        .profile
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        if p.len() > 64
+            || p.starts_with('-')
+            || !p
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_".contains(c))
+        {
+            return Err("`profile`: a profile's name".into());
+        }
+        args.extend(["--profile".to_string(), p.to_string()]);
+    }
+    if b.yes {
+        args.push("--yes".into());
+    }
+    Ok(args)
 }
 
 /// The `--shift` value of an [`UpBody`]: `auto`, `none` or a number.
@@ -2471,6 +2506,10 @@ async fn stack_up(
         Ok(v) => v,
         Err(m) => return err(StatusCode::BAD_REQUEST, m),
     };
+    let profile = match profile_args(&body) {
+        Ok(v) => v,
+        Err(m) => return err(StatusCode::BAD_REQUEST, m),
+    };
     let Ok(exe) = devstack_exe() else {
         return err(StatusCode::INTERNAL_SERVER_ERROR, "cannot find devstack");
     };
@@ -2478,7 +2517,7 @@ async fn stack_up(
     let stopping = s.phases.lock().unwrap().get(&id) == Some(&Phase::Stopping);
     if !stopping {
         s.phases.lock().unwrap().insert(id.clone(), Phase::Starting);
-        return match start_up(&s, &id, &exe, &e, shift.as_deref()) {
+        return match start_up(&s, &id, &exe, &e, shift.as_deref(), &profile) {
             Ok(()) => StatusCode::ACCEPTED.into_response(),
             Err(msg) => {
                 end_phase(&s.phases, &id, Phase::Starting);
@@ -2498,7 +2537,7 @@ async fn stack_up(
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         s.phases.lock().unwrap().insert(id.clone(), Phase::Starting);
-        if let Err(msg) = start_up(&s, &id, &exe, &e, shift.as_deref()) {
+        if let Err(msg) = start_up(&s, &id, &exe, &e, shift.as_deref(), &profile) {
             end_phase(&s.phases, &id, Phase::Starting);
             s.start_errors.lock().unwrap().insert(id, msg);
         }
@@ -2526,6 +2565,7 @@ fn start_up(
     exe: &std::path::Path,
     e: &StackEntry,
     shift: Option<&str>,
+    profile: &[String],
 ) -> Result<(), String> {
     // What `up` says goes to a file: when it fails before the daemon runs
     // (a stack file that needs a newer devstack, a port taken), its last
@@ -2539,6 +2579,7 @@ fn start_up(
     if let Some(shift) = shift {
         cmd.arg("--shift").arg(shift);
     }
+    cmd.args(profile);
     cmd.current_dir(&e.repo)
         .env("NO_COLOR", "1")
         .stdin(std::process::Stdio::null())
@@ -4080,7 +4121,7 @@ mod hung_hub_tests {
 
 #[cfg(test)]
 mod shift_tests {
-    use super::shift_arg;
+    use super::{profile_args, shift_arg};
 
     #[test]
     fn a_start_takes_a_shift_as_auto_none_or_a_number() {
@@ -4096,5 +4137,15 @@ mod shift_tests {
         assert!(shift_arg(br#"{"shift":-1}"#).is_err());
         assert!(shift_arg(br#"{"shift":70000}"#).is_err());
         assert!(shift_arg(b"nope").is_err());
+        assert_eq!(profile_args(b""), Ok(Vec::<String>::new()));
+        assert_eq!(
+            profile_args(br#"{"shift":"auto"}"#),
+            Ok(Vec::<String>::new())
+        );
+        assert_eq!(
+            profile_args(br#"{"profile":"e2e","yes":true}"#),
+            Ok(vec!["--profile".to_string(), "e2e".into(), "--yes".into()])
+        );
+        assert!(profile_args(br#"{"profile":"--run"}"#).is_err());
     }
 }

@@ -65,9 +65,24 @@ const state = computed(() => {
   if (hubDown.value) return { tone: '', label: 'unknown', title: 'The hub is not reachable' };
   if (!stack.running && stack.fileProblem === 'missing') return { tone: 'warn', label: 'not set up', title: 'Its devstack.toml does not exist' };
   if (!stack.running && stack.fileProblem === 'invalid') return { tone: 'warn', label: 'file does not load', title: 'Its devstack.toml does not load' };
-  if (!stack.running) return { tone: '', label: 'offline', title: 'Its daemon does not run' };
-  if (!stack.mainActive && !stack.runningLanes.length) return { tone: '', label: 'idle', title: 'Its daemon runs; nothing of its lanes does' };
-  return { tone: 'ok', label: 'running', title: 'Its daemon runs' };
+  if (!stack.running) return { tone: '', label: 'daemon offline', title: 'Its daemon does not run' };
+  if (!stack.mainActive && !stack.runningLanes.length) return { tone: '', label: 'daemon idle', title: 'Its daemon runs; nothing of its lanes does' };
+  return { tone: 'ok', label: 'daemon runs', title: 'Its daemon runs' };
+});
+/**
+ * The main working tree's own state beside the daemon's (ADR-0041 point 2):
+ * a lane's start brings the daemon up without it, and its profile comes with
+ * its start, not with the daemon.
+ */
+const mainState = computed(() => {
+  if (!stack.running || hubDown.value) return null;
+  const profile = stack.mainView?.profile;
+  if (!stack.mainActive) return { tone: '', label: 'main stopped', title: 'The main working tree runs nothing; the daemon runs for its lanes. Its start card chooses a profile.' };
+  return {
+    tone: 'ok',
+    label: profile ? `main runs · ${profile}` : 'main runs',
+    title: profile ? `The main working tree runs with the profile ${profile} until it stops` : 'The main working tree runs without a profile',
+  };
 });
 
 // ------------------------------------------------------------ lanes
@@ -230,6 +245,7 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
         <p class="subtitle mono truncate" :title="repo">{{ repo }}</p>
         <p class="daemon small">
           <span class="pill" :class="state.tone" :title="state.title" data-testid="stack-state"><span class="dot" />{{ state.label }}</span>
+          <span v-if="mainState" class="pill" :class="mainState.tone" :title="mainState.title" data-testid="stack-main-state"><span class="dot" />{{ mainState.label }}</span>
           <template v-if="daemon && stack.running">
             <span class="muted" data-testid="stack-daemon">daemon pid {{ daemon.pid }} · port {{ daemon.port }} · up {{ duration(now - daemon.started) }}</span>
             <span class="tag" title="daemon version">devstack {{ daemon.version }}</span>
@@ -246,7 +262,7 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
       </div>
       <div v-if="changes" class="actions">
         <template v-if="!stack.running && !stack.fileProblem">
-          <button type="button" class="btn btn-primary" :disabled="starting" title="Its daemon, and the lane main: its infrastructure and autostart services" data-testid="action-stack-start" @click="stack.startStack()">
+          <button type="button" class="btn btn-primary" :disabled="starting" title="Starts its daemon and the lane main in it (infrastructure and autostart services, without a profile: main's start card chooses one); a lane's own start brings the daemon up without main" data-testid="action-stack-start" @click="stack.startStack()">
             <span v-if="starting" class="spinner" /><Icon v-else name="play" :size="14" /> {{ starting ? 'Starting…' : 'Start stack' }}
           </button>
           <button

@@ -601,22 +601,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 notes.push_str(&line);
                 notes.push('\n');
             }
-            let mut c = client::ensure_daemon_with(
-                &client::daemon_file(file),
-                &sd,
-                main_profile.map(|p| p.name.as_str()),
-            )?;
-            if client::worktree().is_none() {
-                let runs = c.stack()?["profile"].as_str().map(str::to_string);
-                if runs.as_deref() != profile {
-                    anyhow::bail!(
-                        "the main working tree runs {}: `down` first, then `up` with the profile you want",
-                        runs.map_or("without a profile".to_string(), |p| format!(
-                            "with the profile `{p}`"
-                        ))
-                    );
-                }
-            }
+            let mut c = client::ensure_daemon(&client::daemon_file(file), &sd)?;
             // Started already elsewhere than `on` names: it moves there, as
             // `devstack up --on` and `lane move` do.
             let mut moved = false;
@@ -644,7 +629,13 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                     notes.push_str(&format!("warning: {w}\n"));
                 }
             }
-            match client::start_and_wait(&c, file, Some(left()), |_, _| {})? {
+            match client::start_and_wait(
+                &c,
+                file,
+                client::main_start(profile, yes),
+                Some(left()),
+                |_, _| {},
+            )? {
                 UpOutcome::Ready(stack) => {
                     let mut text = format!(
                         "{notes}ready\n\n{}\n{}\n",
@@ -759,8 +750,13 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             if let Some(w) = &started.warning {
                 notes.push_str(&format!("warning: {w}\n"));
             }
-            match client::start_and_wait(&started.client, &started.file, Some(timeout), |_, _| {})?
-            {
+            match client::start_and_wait(
+                &started.client,
+                &started.file,
+                None,
+                Some(timeout),
+                |_, _| {},
+            )? {
                 UpOutcome::Ready(stack) => {
                     let mut text = format!(
                         "{notes}ready\n\n{}\n{}\n",
