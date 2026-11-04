@@ -9,6 +9,19 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-11-04
+
+A service can get a public link: a Cloudflare Quick Tunnel by a click
+(ADR-0090), stable addresses through the user's own named tunnel
+(ADR-0091), or addresses below a zone of the pool's, whose coordinator
+holds the Cloudflare token and gives each machine a tunnel of its own
+(ADR-0092); a lane on a node gets them too, carried by its owner's machine
+or, where the node's policy allows, by the node itself. The pool's links
+are not yet checked against Cloudflare itself. The stacks header folds all
+stacks and stops all running ones. Fixed: a log line a progress bar redrew
+shows its last state, and a pool's skill copied along with a worktree is
+taken over instead of a conflict.
+
 ### Added
 
 - **Public links through the pool** (ADR-0092). A coordinator with a
@@ -49,10 +62,30 @@ and listed with their assets on the
   down` or the daemon. Only the stack's owner opens one: not the stack
   file (`tunnel = false` keeps a service from it), not a member a lane is
   shared with. `devstack status` and the journal say which are open;
-  `devstack doctor` whether `cloudflared` is installed. Not yet for a lane
-  on a node, nor for Compose containers. `POST`/`DELETE
-  /v1/services/{name}/public-link`, `ServiceView.public_link`, the
-  `public_link` event.
+  `devstack doctor` whether `cloudflared` is installed. Not for Compose
+  containers; a lane on a node gets links only through a named tunnel
+  (above). `POST`/`DELETE /v1/services/{name}/public-link`,
+  `ServiceView.public_link`, the `public_link` event.
+- **Fold all stacks, stop all stacks** (#437): two buttons in the
+  sidebar's stacks header. One folds every stack's worktrees at once; the
+  other stops every running stack after one confirmation that lists them
+  (with "Keep its containers running").
+
+### Changed
+
+- **A pool's skill copied along with a worktree is no longer a conflict**
+  (ADR-0079, amended). A folder of a skill's name the hub did not write,
+  but whose files are exactly what it would write there, and of which git
+  tracks nothing, is taken into the hub's lock: updated and removed as its
+  own from then on. A copy that differs in any file stays a conflict.
+
+### Fixed
+
+- **A log line a progress bar redrew shows its last state** (#441). Cargo,
+  npm, pip and others redraw a progress bar with `\r`; each log line
+  carried every redraw, side by side in the dashboard. The dashboard, the
+  log tail, `grep` and the MCP `logs` tool now show the part after the
+  last `\r`; the log files keep the output as written.
 
 ## [0.36.0] - 2026-11-03
 
@@ -80,11 +113,6 @@ stack's stop, and an Activity row names its subject once.
 
 ### Changed
 
-- **A pool's skill copied along with a worktree is no longer a conflict**
-  (ADR-0079, amended). A folder of a skill's name the hub did not write,
-  but whose files are exactly what it would write there, and of which git
-  tracks nothing, is taken into the hub's lock: updated and removed as its
-  own from then on. A copy that differs in any file stays a conflict.
 - **Stop is a button of its own** in a lane's header: red, beside Restart,
   no longer in Restart's menu (ADR-0072 point 5, amended).
 - **The folder scan looks one level deep and at git repositories only by
@@ -2749,7 +2777,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.36.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.37.0...HEAD
+[0.37.0]: https://github.com/nuetzliches/devstack/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/nuetzliches/devstack/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/nuetzliches/devstack/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/nuetzliches/devstack/compare/v0.33.0...v0.34.0
