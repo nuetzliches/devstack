@@ -92,6 +92,8 @@ export const useStack = defineStore('stack', () => {
   let refetchTimer: ReturnType<typeof setTimeout> | null = null;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let usageFetched = false;
+  /** The runs of every command were read for this tree: one that runs already holds the others. */
+  let runsFetched = false;
 
   /** A lane someone shares with this machine (ADR-0040): shown as one's own, read only. */
   const shared = computed(() => sharedRef(id.value));
@@ -408,6 +410,7 @@ export const useStack = defineStore('stack', () => {
     history.value = new Map();
     runs.value = {};
     usageFetched = false;
+    runsFetched = false;
     if (running.value) connect();
     void loadLanes();
   }
@@ -950,6 +953,10 @@ export const useStack = defineStore('stack', () => {
         viewAt.value = Date.now();
         save();
         if (!usageFetched) void fetchUsage();
+        if (!runsFetched) {
+          runsFetched = true;
+          for (const c of ev.stack.commands ?? []) void loadRuns(c.name);
+        }
         void fetchJournal();
         break;
       case 'service': {
@@ -1236,16 +1243,22 @@ export const useStack = defineStore('stack', () => {
     void usePool().openShared(r.pool, r.lease, svc.name, path);
   }
 
-  /** Command `name` is being started, or its last run still runs: no second run beside it. */
-  function commandBusy(name: string): boolean {
-    return !!busy.value[`cmd:${name}`] || runs.value[name]?.[0]?.status === 'running';
-  }
+  /**
+   * The command of the tree shown that is being started, or whose last run
+   * still runs: one at a time, no other run beside it. `null`: none.
+   */
+  const commandRunning = computed<string | null>(() => {
+    const starting = Object.keys(busy.value).find((k) => k.startsWith('cmd:'));
+    if (starting) return starting.slice(4);
+    return Object.entries(runs.value).find(([, list]) => list[0]?.status === 'running')?.[0] ?? null;
+  });
 
   async function runCommand(name: string): Promise<number | null> {
     if (refuseReadOnly()) return null;
     if (!id.value) return null;
-    if (commandBusy(name)) {
-      ui.toast('info', `${name} runs already`, 'Its run is shown on the Commands page; run it again once it ended.');
+    const other = commandRunning.value;
+    if (other) {
+      ui.toast('info', `${other} runs`, `One command at a time: run ${name} once it ended. Its run is shown on the Commands page.`);
       return null;
     }
     const cmd = view.value?.commands.find((c) => c.name === name);
@@ -1583,7 +1596,7 @@ export const useStack = defineStore('stack', () => {
     startOfflineLane,
     starts,
     startOf,
-    commandBusy,
+    commandRunning,
     treeBusy,
     serviceBlocked,
     laneBusy,

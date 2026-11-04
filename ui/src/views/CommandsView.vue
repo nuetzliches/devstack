@@ -126,7 +126,7 @@ function runTone(r: Run) {
               </div>
               <p v-if="selected.confirm" class="confirm-note"><Icon name="shield" :size="14" /> Asks for confirmation: “{{ selected.confirm }}”</p>
             </div>
-            <button v-if="!stack.readOnly" type="button" class="btn btn-primary" :disabled="running || stack.commandBusy(selected.name) || stack.stale" :title="stack.commandBusy(selected.name) ? 'It runs: run it again once this run ended' : undefined" data-testid="command-run" :data-command="selected.name" @click="run">
+            <button v-if="!stack.readOnly" type="button" class="btn btn-primary" :disabled="running || !!stack.commandRunning || stack.stale" :title="stack.commandRunning ? `${stack.commandRunning} runs: one command at a time` : undefined" data-testid="command-run" :data-command="selected.name" @click="run">
               <span v-if="running" class="spinner" /><Icon v-else name="play" />
               Run {{ selected.name }}
             </button>
