@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseAnsi, stripAnsi } from './ansi';
+import { parseAnsi, shownLine, stripAnsi } from './ansi';
 
 const E = '\u001b';
 
@@ -38,5 +38,17 @@ describe('parseAnsi', () => {
 
   it('ignores sequences that are no colour', () => {
     expect(parseAnsi(`${E}[2Kx`)).toEqual([{ text: 'x', cls: '', style: '' }]);
+  });
+});
+
+describe('shownLine', () => {
+  it('keeps what is left after a progress bar redrew the line', () => {
+    const cargo = `${E}[1m    Building${E}[0m [==>   ] 310/381: tauri\r          \r${E}[1m   Compiling${E}[0m vcpkg v0.2.15`;
+    expect(shownLine(cargo)).toBe(`${E}[1m   Compiling${E}[0m vcpkg v0.2.15`);
+  });
+
+  it('treats a trailing carriage return as no redraw', () => {
+    expect(shownLine('line\r')).toBe('line');
+    expect(shownLine('plain')).toBe('plain');
   });
 });

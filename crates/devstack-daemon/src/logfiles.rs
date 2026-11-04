@@ -132,7 +132,7 @@ pub fn last_lines_at(path: &Path, n: usize, grep: Option<&str>) -> (Vec<String>,
     let mut out: Vec<String> = Vec::new(); // newest first
     let push = |seg: &[u8], out: &mut Vec<String>| {
         let text = String::from_utf8_lossy(seg);
-        let line = text.strip_suffix('\r').unwrap_or(&text);
+        let line = crate::ansi::shown(&text);
         let hit = needle
             .as_ref()
             .is_none_or(|g| crate::ansi::strip(line).to_lowercase().contains(g));

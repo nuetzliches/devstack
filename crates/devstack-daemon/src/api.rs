@@ -1789,8 +1789,9 @@ struct StreamQuery {
     build: Option<String>,
 }
 
+/// A log line as a terminal shows it (see [`crate::ansi::shown`]).
 fn line(text: String) -> serde_json::Value {
-    serde_json::json!({"type": "line", "text": text})
+    serde_json::json!({"type": "line", "text": crate::ansi::shown(&text)})
 }
 
 /// The current instance's console output, then every new line; follows the
