@@ -128,7 +128,10 @@ why. A member that only shares from the dashboard is no node.
   machine restarts, sleeps or loses the network, and its daemon follows it
   again when it starts; for as long, a requester that never comes back
   holds the lane's CPU, memory and disk on the node. Ending the lease in
-  the pool area frees them at once.
+  the pool area frees them at once. `"public_links": true` (here only; an
+  admin cannot set it for the node) lets the node carry its lanes' public
+  links itself, through a tunnel of the pool: see [Public links through the
+  pool](#public-links-through-the-pool). Read when the agent starts.
 - Docker's networks: each lane takes one or more (its own, one per Compose
   project, and its groups' fixed-name ones). With Docker's default address
   pools an engine has about 30 bridge networks in all, which a host that
@@ -726,6 +729,17 @@ the coordinator refuses fails the link with why.
 A lane on a node gets public links too: its owner's machine carries them
 (the lane's ports are forwarded there), through the pool's tunnel or the
 owner's own, so they answer while that machine is on and its hub runs.
+
+A node whose own `policy.json` says `"public_links": true` carries them
+itself, through the pool's tunnel (the owner's own tunnel stays the
+owner's): it takes a tunnel of the pool, reads its lanes' open links from
+their daemons and reports their hosts; the coordinator points their
+records at the node's tunnel, for the owners of the leases it runs that
+took the pool's tunnel, and answers the owner's machine "carried by the
+node its lane runs on". The node needs `cloudflared` on its `PATH`. The
+links then answer while the owner's machine is off; once the node stops
+reporting one (the lane ends, its connector fails), the owner's machine
+carries it again at its next report, within a minute.
 
 ## Skill sets for the members
 

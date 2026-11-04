@@ -10,7 +10,7 @@
 //! (`{service}-{lane}-{stack}--{member}.{domain}`) and names the pool.
 
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// What the hub knows of the tunnel, beside the token (no secret in it).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,63 +178,7 @@ fn part(s: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
-/// `cloudflared`, if not on the `PATH` (a test's fake, an install elsewhere).
-const PROGRAM_VARIABLE: &str = "DEVSTACK_CLOUDFLARED";
-
-/// `cloudflared`'s last error line in its output, without its timestamp and level.
-pub fn cloudflared_error(output: &str) -> Option<String> {
-    output
-        .lines()
-        .rev()
-        .find_map(|l| {
-            l.split_once(" ERR ")
-                .map(|(_, rest)| rest.trim().to_string())
-        })
-        .filter(|e| !e.is_empty())
-}
-
-pub fn cloudflared() -> Result<PathBuf, String> {
-    if let Some(p) = std::env::var_os(PROGRAM_VARIABLE).filter(|p| !p.is_empty()) {
-        let p = PathBuf::from(p);
-        return if p.is_file() {
-            Ok(p)
-        } else {
-            Err(format!(
-                "{PROGRAM_VARIABLE} names {}, which is not a file",
-                p.display()
-            ))
-        };
-    }
-    find_on_path("cloudflared").ok_or_else(|| {
-        "cloudflared is not installed, or not on the PATH of devstack's daemon and hub: \
-         `winget install Cloudflare.cloudflared` (Windows), `brew install cloudflared` (macOS), \
-         https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/ (Linux); \
-         then restart the stack (and the hub, `devstack hub stop`) so they see it"
-            .into()
-    })
-}
-
-/// `name` in the directories of `PATH`, as the shell would find it.
-fn find_on_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    let names: Vec<String> = if cfg!(windows) {
-        vec![format!("{name}.exe"), name.to_string()]
-    } else {
-        vec![name.to_string()]
-    };
-    std::env::split_paths(&path)
-        .flat_map(|dir| names.iter().map(move |n| dir.join(n)))
-        .find(|p| p.is_file())
-}
-
-pub fn quoted(p: &Path) -> String {
-    let s = p.to_string_lossy();
-    if s.contains(' ') {
-        format!("\"{s}\"")
-    } else {
-        s.into_owned()
-    }
-}
+pub use devstack_node::linkrouter::{cloudflared, cloudflared_error, quoted};
 
 #[cfg(test)]
 mod tests {
@@ -272,16 +216,5 @@ mod tests {
         assert!(!valid_domain("Dev.com"));
         assert!(!valid_domain("*.dev.com"));
         assert!(!valid_domain("-a.com"));
-    }
-
-    #[test]
-    fn the_last_error_line_is_the_reason() {
-        let out = "2026-11-03T10:00:00Z INF Starting\n\
-                   2026-11-03T10:00:01Z ERR failed to request quick Tunnel: 429 Too Many Requests\n";
-        assert_eq!(
-            cloudflared_error(out).as_deref(),
-            Some("failed to request quick Tunnel: 429 Too Many Requests")
-        );
-        assert_eq!(cloudflared_error("INF Registered tunnel connection"), None);
     }
 }

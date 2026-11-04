@@ -16,6 +16,12 @@
 //! no longer reported, and all of a member's once it has not reported for
 //! [`SILENT`]. An admin can close a link: its record goes, and the host is
 //! refused to its member until the member stops reporting it.
+//!
+//! A node whose own policy lets it (ADR-0092 points 6 and 7) reports the
+//! hosts of its lanes' links too, with their owners' suffixes: the record
+//! then points at the node's tunnel, and the owner's report of the host is
+//! answered "carried by its node". Once the node no longer reports it, its
+//! record goes, and the owner's next report makes it again, at the owner's.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -132,10 +138,17 @@ struct Tunnel {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Host {
+    /// Who reports it: its owner, or the node that carries it.
     member: String,
     record: String,
     since: u64,
+    /// The owner, when a node carries it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    carried_for: Option<String>,
 }
+
+/// Why an owner's host has no record of its: its lane's node carries it.
+pub const CARRIED_BY_NODE: &str = "carried by the node its lane runs on";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct State {
@@ -248,12 +261,7 @@ impl Registry {
     }
 
     fn allowed(&self, s: &Settings, tags: &[String]) -> Result<String, String> {
-        let Some(domain) = s.domain.clone() else {
-            return Err("the pool offers no public links".into());
-        };
-        if s.mode == Mode::Off {
-            return Err("an admin switched the pool's public links off".into());
-        }
+        let domain = self.offered(s)?;
         if let Some(tag) = &s.tag
             && !tags.iter().any(|t| t == tag)
         {
@@ -261,12 +269,33 @@ impl Registry {
                 "the pool's public links are for members tagged `{tag}`"
             ));
         }
+        Ok(domain)
+    }
+
+    /// The pool offers public links at all: its domain. A node carries
+    /// its lanes' owners' links whatever its own tags.
+    fn offered(&self, s: &Settings) -> Result<String, String> {
+        let Some(domain) = s.domain.clone() else {
+            return Err("the pool offers no public links".into());
+        };
+        if s.mode == Mode::Off {
+            return Err("an admin switched the pool's public links off".into());
+        }
         if self.token.is_none() {
             return Err("the coordinator has no Cloudflare token (`cloudflare.token`)".into());
         }
         Ok(domain)
     }
 
+    /// The suffix of a member that has a tunnel of the pool.
+    pub fn suffix_of(&self, member: &str) -> Option<String> {
+        self.state
+            .lock()
+            .unwrap()
+            .tunnels
+            .get(member)
+            .map(|t| t.suffix.clone())
+    }
     /// What `member` reads of the pool's public links.
     pub fn offer(&self, member: &str, name: &str, tags: &[String]) -> Offer {
         let s = self.settings();
@@ -345,9 +374,21 @@ impl Registry {
     }
 
     /// The member's tunnel, made at its first request.
-    pub fn issue(&self, member: &str, name: &str, tags: &[String]) -> Result<Issued, Refusal> {
+    /// `as_node`: a node, for its lanes' links (no tag needed).
+    pub fn issue(
+        &self,
+        member: &str,
+        name: &str,
+        tags: &[String],
+        as_node: bool,
+    ) -> Result<Issued, Refusal> {
         let settings = self.settings();
-        let domain = self.allowed(&settings, tags).map_err(|e| (403, e))?;
+        let domain = if as_node {
+            self.offered(&settings)
+        } else {
+            self.allowed(&settings, tags)
+        }
+        .map_err(|e| (403, e))?;
         self.access_ok(&settings).map_err(|e| (403, e))?;
         let _one = self.one.lock().unwrap();
         let suffix = self.suffix_for(member, name);
@@ -397,8 +438,15 @@ impl Registry {
     }
 
     /// The hosts a member carries now: records made for the new ones,
-    /// removed for those it no longer reports.
-    pub fn report(&self, member: &str, tags: &[String], hosts: &[String]) -> HostsAnswer {
+    /// removed for those it no longer reports. `carries_for`: a node's
+    /// lanes' owners, by their suffix, whose hosts it may carry.
+    pub fn report(
+        &self,
+        member: &str,
+        tags: &[String],
+        hosts: &[String],
+        carries_for: &BTreeMap<String, String>,
+    ) -> HostsAnswer {
         self.seen
             .lock()
             .unwrap()
@@ -425,9 +473,12 @@ impl Registry {
         for (host, record) in gone {
             self.remove_record(&settings, &host, &record);
         }
-        let allowed = self
-            .allowed(&settings, tags)
-            .and_then(|d| self.access_ok(&settings).map(|_| d));
+        let allowed = if carries_for.is_empty() {
+            self.allowed(&settings, tags)
+        } else {
+            self.offered(&settings)
+        }
+        .and_then(|d| self.access_ok(&settings).map(|_| d));
         let Some((tunnel, suffix)) = self
             .state
             .lock()
@@ -444,28 +495,66 @@ impl Registry {
             return answer;
         };
         for host in reported {
-            let why = match &allowed {
-                Err(e) => Some(e.clone()),
-                Ok(domain) => host_refused(&host, domain, &suffix),
+            // A node's host of an owner it carries for: that owner's suffix.
+            let owner = carries_for.iter().find_map(|(sfx, owner)| {
+                host.strip_suffix(&format!(
+                    "--{sfx}.{}",
+                    settings.domain.as_deref().unwrap_or("")
+                ))
+                .map(|_| (sfx.clone(), owner.clone()))
+            });
+            let why = match (&allowed, &owner) {
+                (Err(e), _) => Some(e.clone()),
+                (Ok(domain), Some((sfx, _))) => host_refused(&host, domain, sfx),
+                (Ok(domain), None) => host_refused(&host, domain, &suffix),
             };
+            let held = self.state.lock().unwrap().hosts.get(&host).cloned();
             let why = why.or_else(|| {
-                let s = self.state.lock().unwrap();
-                if s.blocked.contains_key(&host) {
-                    Some("an admin of the pool closed this link".into())
-                } else {
-                    s.hosts
-                        .get(&host)
-                        .filter(|r| r.member != member)
-                        .map(|_| "another member has this address".to_string())
+                if self.state.lock().unwrap().blocked.contains_key(&host) {
+                    return Some("an admin of the pool closed this link".into());
+                }
+                match (&held, &owner) {
+                    (Some(r), None) if r.carried_for.as_deref() == Some(member) => {
+                        Some(CARRIED_BY_NODE.to_string())
+                    }
+                    // A node takes over its owner's record.
+                    (Some(r), Some((_, o))) if r.member == *o || r.member == member => None,
+                    (Some(r), _) if r.member != member => {
+                        Some("another member has this address".to_string())
+                    }
+                    _ => None,
                 }
             });
             if let Some(why) = why {
                 answer.refused.insert(host, why);
                 continue;
             }
-            if self.state.lock().unwrap().hosts.contains_key(&host) {
-                answer.hosts.push(host);
-                continue;
+            match held {
+                Some(r) if r.member == member => {
+                    answer.hosts.push(host);
+                    continue;
+                }
+                // The owner's record, the node's now.
+                Some(r) => {
+                    if let Err(e) = self.point_record(&settings, &r.record, &host, &tunnel) {
+                        answer.refused.insert(host, format!("Cloudflare: {e}"));
+                        continue;
+                    }
+                    let mut s = self.state.lock().unwrap();
+                    s.hosts.insert(
+                        host.clone(),
+                        Host {
+                            member: member.to_string(),
+                            record: r.record,
+                            since: now_secs(),
+                            carried_for: owner.map(|(_, o)| o),
+                        },
+                    );
+                    self.save(&s);
+                    answer.hosts.push(host);
+                    continue;
+                }
+                None => {}
             }
             match self.make_record(&settings, &host, &tunnel) {
                 Ok(record) => {
@@ -476,6 +565,7 @@ impl Registry {
                             member: member.to_string(),
                             record,
                             since: now_secs(),
+                            carried_for: owner.map(|(_, o)| o),
                         },
                     );
                     self.save(&s);
@@ -663,6 +753,29 @@ impl Registry {
         }
     }
 
+    /// Point an existing record at another tunnel.
+    fn point_record(
+        &self,
+        settings: &Settings,
+        record: &str,
+        host: &str,
+        tunnel: &str,
+    ) -> Result<(), String> {
+        let (zone, _) = self.zone(settings)?;
+        self.cf(
+            "PUT",
+            &format!("/zones/{zone}/dns_records/{record}"),
+            Some(json!({
+                "type": "CNAME",
+                "name": host,
+                "content": format!("{tunnel}.cfargotunnel.com"),
+                "proxied": true,
+                "comment": "devstack public link",
+            })),
+        )
+        .map(|_| ())
+    }
+
     /// The zone's id and its account's.
     fn zone(&self, settings: &Settings) -> Result<(String, String), String> {
         if let (Some(z), Some(a)) = (&settings.zone_id, &settings.account_id) {
@@ -831,7 +944,17 @@ mod tests {
                 delete(|State(r): State<Records>, P(id): P<String>| async move {
                     r.lock().unwrap().remove(&id);
                     ok(json!({ "id": id }))
-                }),
+                })
+                .put(
+                    |State(r): State<Records>,
+                     P(id): P<String>,
+                     axum::Json(b): axum::Json<Value>| async move {
+                        r.lock()
+                            .unwrap()
+                            .insert(id.clone(), b["name"].as_str().unwrap_or("").to_string());
+                        ok(json!({ "id": id }))
+                    },
+                ),
             )
             .with_state(records.clone());
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -866,7 +989,8 @@ mod tests {
         assert_eq!(offer.suffix.as_deref(), Some("anna"));
         assert!(!r.offer("bbbb2222", "Bert", &[]).allowed, "untagged");
 
-        let issued = r.issue("aaaa1111", "Anna", &tags).unwrap();
+        let none = BTreeMap::new();
+        let issued = r.issue("aaaa1111", "Anna", &tags, false).unwrap();
         assert_eq!(
             (issued.tunnel_id.as_str(), issued.suffix.as_str()),
             ("tun1", "anna")
@@ -885,32 +1009,86 @@ mod tests {
                 "web-shop--anna.dev.link".into(),
                 "web-shop--bert.dev.link".into(),
             ],
+            &none,
         );
         assert_eq!(a.hosts, vec!["web-shop--anna.dev.link".to_string()]);
         assert!(a.refused.contains_key("web-shop--bert.dev.link"), "{a:?}");
         assert_eq!(records.lock().unwrap().len(), 1);
         // No longer reported: its record goes.
-        r.report("aaaa1111", &tags, &[]);
+        r.report("aaaa1111", &tags, &[], &none);
         assert!(records.lock().unwrap().is_empty());
 
         // An admin closes one: refused until its member stops reporting it.
-        r.report("aaaa1111", &tags, &["api-shop--anna.dev.link".into()]);
+        r.report(
+            "aaaa1111",
+            &tags,
+            &["api-shop--anna.dev.link".into()],
+            &none,
+        );
         r.close("api-shop--anna.dev.link").unwrap();
         assert!(records.lock().unwrap().is_empty());
         // Another member's report does not open it again.
-        r.report("bbbb2222", &tags, &[]);
-        let a = r.report("aaaa1111", &tags, &["api-shop--anna.dev.link".into()]);
+        r.report("bbbb2222", &tags, &[], &none);
+        let a = r.report(
+            "aaaa1111",
+            &tags,
+            &["api-shop--anna.dev.link".into()],
+            &none,
+        );
         assert!(
             a.hosts.is_empty() && a.refused.contains_key("api-shop--anna.dev.link"),
             "{a:?}"
         );
-        r.report("aaaa1111", &tags, &[]);
-        let a = r.report("aaaa1111", &tags, &["api-shop--anna.dev.link".into()]);
+        r.report("aaaa1111", &tags, &[], &none);
+        let a = r.report(
+            "aaaa1111",
+            &tags,
+            &["api-shop--anna.dev.link".into()],
+            &none,
+        );
         assert_eq!(a.hosts.len(), 1, "{a:?}");
         // A coordinator that starts again keeps the records a while.
         let again = Registry::with(d.path(), &api, Some("token".into()));
         again.sweep();
         assert_eq!(records.lock().unwrap().len(), 1);
+        // Its lane's node carries the host: the record is the node's, the
+        // owner's report is told so; the node stops, the owner's is again.
+        let carries: BTreeMap<String, String> =
+            [("anna".to_string(), "aaaa1111".to_string())].into();
+        r.issue("nnnn9999", "build", &[], true).unwrap();
+        let a = r.report(
+            "nnnn9999",
+            &[],
+            &["api-shop--anna.dev.link".into(), "x--bert.dev.link".into()],
+            &carries,
+        );
+        assert_eq!(
+            a.hosts,
+            vec!["api-shop--anna.dev.link".to_string()],
+            "{a:?}"
+        );
+        assert!(
+            a.refused.contains_key("x--bert.dev.link"),
+            "not its owner's"
+        );
+        let a = r.report(
+            "aaaa1111",
+            &tags,
+            &["api-shop--anna.dev.link".into()],
+            &none,
+        );
+        assert_eq!(
+            a.refused.get("api-shop--anna.dev.link").map(String::as_str),
+            Some(CARRIED_BY_NODE)
+        );
+        r.report("nnnn9999", &[], &[], &carries);
+        let a = r.report(
+            "aaaa1111",
+            &tags,
+            &["api-shop--anna.dev.link".into()],
+            &none,
+        );
+        assert_eq!(a.hosts.len(), 1, "{a:?}");
         // The member leaves the pool: its records go.
         r.forget("aaaa1111");
         assert!(records.lock().unwrap().is_empty());
@@ -931,7 +1109,7 @@ mod tests {
             !offer.allowed && offer.why.as_deref().is_some_and(|w| w.contains("Access")),
             "{offer:?}"
         );
-        assert_eq!(r.issue("aaaa1111", "Anna", &[]).unwrap_err().0, 403);
+        assert_eq!(r.issue("aaaa1111", "Anna", &[], false).unwrap_err().0, 403);
         r.set_settings(Settings {
             domain: Some("dev.link".into()),
             mode: Mode::Open,
