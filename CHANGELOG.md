@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-11-04
+
+The main working tree takes its profile when it starts, not with its
+daemon (ADR-0093): a stopped main tree starts with another profile while
+the lanes keep running, and the dashboard's start card of `main` offers
+the profiles. The stack page shows the daemon's state and main's apart.
+Fixed: a lane start shows its progress until its daemon reports it, busy
+buttons stay held across a lane switch, and one command runs at a time
+from the dashboard.
+
 ### Changed
 
 - **The main working tree takes its profile when it starts, not with its
@@ -22,6 +32,23 @@ and listed with their assets on the
   offers the profiles (one with fresh data is confirmed first), *Restart
   stack* starts main again with its profile, and the stack page shows the
   daemon's state and main's beside each other.
+
+### Fixed
+
+- **A lane start shows its progress until its daemon reports it** (#444).
+  A start asked for is kept per stack and lane, not cleared by a lane
+  switch, until the lane's own stream reports it, it fails or it is
+  stopped; no second start goes out meanwhile. Lane, stack, container,
+  public-link, pool and upstream actions are disabled while their request
+  runs.
+- **Busy buttons survive a lane switch** (#445). A stack whose stop the hub
+  took shows `stopping` until it no longer runs (stack page, sidebar, Stop
+  all); a tree's start, stop, restart or discard, and a group's action,
+  hold its services', groups' and containers' own actions.
+- **One command at a time from the dashboard** (#446). While a command of
+  the tree shown starts or runs, every Run (commands page, command rows,
+  palette) waits; a run started elsewhere holds them too. CLI and MCP can
+  still start runs side by side.
 
 ## [0.37.0] - 2026-11-04
 
@@ -2791,7 +2818,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.37.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.38.0...HEAD
+[0.38.0]: https://github.com/nuetzliches/devstack/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/nuetzliches/devstack/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/nuetzliches/devstack/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/nuetzliches/devstack/compare/v0.34.0...v0.35.0
