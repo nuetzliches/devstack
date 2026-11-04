@@ -261,6 +261,28 @@ export const usePool = defineStore('pool', () => {
     };
   }
 
+  /**
+   * What a member, node or lease is busy with, by its id: one request at a
+   * time each (Approve and Reject, Pause and Update…), its buttons wait. Held
+   * until the pool's state was read again, so a button does not come back
+   * as it was before the click.
+   */
+  const busy = ref<Record<string, string>>({});
+  function one<A extends [string, ...unknown[]]>(what: string, fn: (...a: A) => Promise<void>) {
+    return async (...a: A) => {
+      const id = a[0];
+      if (busy.value[id]) return;
+      busy.value[id] = what;
+      try {
+        await fn(...a);
+      } finally {
+        delete busy.value[id];
+      }
+    };
+  }
+  /** Read the pool again once the coordinator had a moment to pass on what was asked. */
+  const loadSoon = () => new Promise((r) => setTimeout(r, 1500)).then(load);
+
   async function approve(id: string, name: string, role: PoolRole = 'member') {
     const r = await act({
       label: `Approve ${name}`,
@@ -320,7 +342,7 @@ export const usePool = defineStore('pool', () => {
       danger: false,
       success: `${name} updates at its next report`,
     });
-    if (r.ok) setTimeout(() => void load(), 1500);
+    if (r.ok) await loadSoon();
   }
 
   /** Withdraw an update a server waits for its lanes for (ADR-0039): it takes lanes again. */
@@ -331,7 +353,7 @@ export const usePool = defineStore('pool', () => {
       method: 'DELETE',
       success: `${name} takes lanes again after its next report`,
     });
-    if (r.ok) setTimeout(() => void load(), 1500);
+    if (r.ok) await loadSoon();
   }
 
   /** Have a node remove the stopped lanes it keeps (ADR-0038). */
@@ -343,7 +365,7 @@ export const usePool = defineStore('pool', () => {
       confirmLabel: 'Remove them',
       success: `${name} removes its kept lanes at its next report`,
     });
-    if (r.ok) setTimeout(() => void load(), 1500);
+    if (r.ok) await loadSoon();
   }
 
   async function endLease(id: string, what: string) {
@@ -354,7 +376,7 @@ export const usePool = defineStore('pool', () => {
       confirmLabel: 'End it',
       success: `${what} ends`,
     });
-    if (r.ok) setTimeout(() => void load(), 1500);
+    if (r.ok) await loadSoon();
   }
 
   async function setTags(id: string, name: string, tags: string[]) {
@@ -415,7 +437,7 @@ export const usePool = defineStore('pool', () => {
       confirmLabel: 'Give it back',
       success: `${name} is given back`,
     });
-    if (r.ok) setTimeout(() => void load(), 1500);
+    if (r.ok) await loadSoon();
   }
 
   /** Whether this member's lanes may run on provisioned nodes (ADR-0051 point 10). */
@@ -546,21 +568,22 @@ export const usePool = defineStore('pool', () => {
     load,
     loadShare,
     watch,
-    approve,
-    remove,
-    setRole,
-    setPaused,
-    updateNode,
-    cancelUpdate,
-    pruneNode,
-    endLease,
+    busy,
+    approve: one('approve', approve),
+    remove: one('remove', remove),
+    setRole: one('role', setRole),
+    setPaused: one('pause', setPaused),
+    updateNode: one('update', updateNode),
+    cancelUpdate: one('cancel-update', cancelUpdate),
+    pruneNode: one('prune', pruneNode),
+    endLease: one('end', endLease),
     join,
-    setTags,
-    setNode,
-    setPolicy,
-    setProvision,
-    confirmNode,
-    giveBack,
+    setTags: one('tags', setTags),
+    setNode: one('node', setNode),
+    setPolicy: one('policy', setPolicy),
+    setProvision: one('provision', setProvision),
+    confirmNode: one('confirm', confirmNode),
+    giveBack: one('give-back', giveBack),
     setProvisioned,
   };
 });

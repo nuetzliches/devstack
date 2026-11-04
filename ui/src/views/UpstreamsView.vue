@@ -154,8 +154,7 @@ async function remove(u: McpUpstream) {
     danger: true,
   });
   if (!ok) return;
-  const r = await act({ label: `Remove ${u.name}`, method: 'DELETE', path: paths.upstream(u.name), success: `${u.name} removed` });
-  if (r.ok) await load();
+  await one(u, 'remove', () => act({ label: `Remove ${u.name}`, method: 'DELETE', path: paths.upstream(u.name), success: `${u.name} removed` }));
 }
 
 async function login(u: McpUpstream) {
@@ -217,7 +216,10 @@ onUnmounted(() => {
 const tokenFor = ref<string | null>(null);
 const tokenValue = ref('');
 async function saveToken(u: McpUpstream) {
+  if (busy.value[u.name]) return;
+  busy.value[u.name] = 'token';
   const r = await act({ label: `Token for ${u.name}`, path: paths.upstreamToken(u.name), body: { token: tokenValue.value }, success: `Token for ${u.name} kept in the keychain` });
+  delete busy.value[u.name];
   tokenValue.value = '';
   if (r.ok) {
     tokenFor.value = null;
@@ -226,8 +228,18 @@ async function saveToken(u: McpUpstream) {
 }
 
 async function logout(u: McpUpstream) {
-  const r = await act({ label: `Log out of ${u.name}`, path: paths.upstreamLogout(u.name), success: `Logged out of ${u.name}` });
-  if (r.ok) await load();
+  await one(u, 'logout', () => act({ label: `Log out of ${u.name}`, path: paths.upstreamLogout(u.name), success: `Logged out of ${u.name}` }));
+}
+
+/** One request at a time per upstream: its buttons wait, then the list is read again. */
+async function one(u: McpUpstream, what: string, fn: () => Promise<{ ok: boolean }>) {
+  if (busy.value[u.name]) return;
+  busy.value[u.name] = what;
+  try {
+    if ((await fn()).ok) await load();
+  } finally {
+    delete busy.value[u.name];
+  }
 }
 
 /** A prefix of the user's for a pool's upstream whose own one is taken. */
@@ -244,8 +256,7 @@ async function accept(u: McpUpstream) {
 
 async function decline(u: McpUpstream) {
   const p = u.pool!;
-  const r = await act({ label: `Do not use ${p.name} of pool ${p.pool}`, path: paths.upstreamDecline(p.pool, p.name), success: `${p.name} is not used` });
-  if (r.ok) await load();
+  await one(u, 'decline', () => act({ label: `Do not use ${p.name} of pool ${p.pool}`, path: paths.upstreamDecline(p.pool, p.name), success: `${p.name} is not used` }));
 }
 
 const statusText: Record<string, string> = {
@@ -366,7 +377,7 @@ function how(u: McpUpstream): string {
               <button type="button" class="btn btn-primary btn-sm" :disabled="!!busy[u.name]" data-testid="upstream-accept" @click="accept(u)">
                 {{ u.pool.status === 'changed' ? 'Use the new URL' : 'Use' }}
               </button>
-              <button v-if="u.pool.status !== 'declined'" type="button" class="btn btn-ghost btn-sm" data-testid="upstream-decline" @click="decline(u)">Decline</button>
+              <button v-if="u.pool.status !== 'declined'" type="button" class="btn btn-ghost btn-sm" :disabled="!!busy[u.name]" data-testid="upstream-decline" @click="decline(u)">Decline</button>
             </div>
             <div v-else class="actions">
               <button v-if="u.auth.kind === 'oauth'" type="button" class="btn btn-sm" :disabled="!!busy[u.name]" data-testid="upstream-login" @click="login(u)">
@@ -375,16 +386,16 @@ function how(u: McpUpstream): string {
               <button v-if="u.auth.kind === 'token' && !u.auth.env" type="button" class="btn btn-sm" data-testid="upstream-token" @click="tokenFor = tokenFor === u.name ? null : u.name">
                 <Icon name="key" :size="14" /> {{ u.logged_in ? 'New token' : 'Give token' }}
               </button>
-              <button v-if="u.logged_in && u.auth.kind !== 'none' && !(u.auth.kind === 'token' && u.auth.env)" type="button" class="btn btn-sm" @click="logout(u)">Log out</button>
-              <button v-if="u.pool" type="button" class="btn btn-ghost btn-sm" data-testid="upstream-decline" @click="decline(u)">Stop using</button>
+              <button v-if="u.logged_in && u.auth.kind !== 'none' && !(u.auth.kind === 'token' && u.auth.env)" type="button" class="btn btn-sm" :disabled="!!busy[u.name]" @click="logout(u)">Log out</button>
+              <button v-if="u.pool" type="button" class="btn btn-ghost btn-sm" :disabled="!!busy[u.name]" data-testid="upstream-decline" @click="decline(u)">Stop using</button>
               <template v-else>
                 <button type="button" class="btn btn-ghost btn-sm" @click="startEdit(u)">Change</button>
-                <button type="button" class="btn btn-ghost btn-sm" @click="remove(u)">Remove</button>
+                <button type="button" class="btn btn-ghost btn-sm" :disabled="!!busy[u.name]" @click="remove(u)">Remove</button>
               </template>
             </div>
             <form v-if="tokenFor === u.name" class="token" @submit.prevent="saveToken(u)">
               <input v-model="tokenValue" class="input grow" type="password" autocomplete="off" placeholder="the token; kept in your keychain, never shown again" />
-              <button type="submit" class="btn btn-primary btn-sm" :disabled="!tokenValue.trim()">Keep</button>
+              <button type="submit" class="btn btn-primary btn-sm" :disabled="!tokenValue.trim() || !!busy[u.name]">Keep</button>
             </form>
           </li>
         </ul>

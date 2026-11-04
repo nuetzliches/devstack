@@ -1,8 +1,28 @@
 // Mutating requests: same-origin, JSON, with the two answers that need the
 // user: 409 {"error"} (shown in a readable panel, e.g. compiler errors) and
 // 428 {"confirm"} (ask, then send again with confirm: true).
+import { ref } from 'vue';
 import { api, Unreachable } from '@/api';
 import { useUi } from '@/stores/ui';
+
+/**
+ * A component's own mark of the action under way: one at a time, `busy`
+ * names it while its request runs (a click meanwhile does nothing), for the
+ * buttons to disable and spin on.
+ */
+export function useBusy() {
+  const busy = ref<string | null>(null);
+  async function run<T>(key: string, fn: () => Promise<T>): Promise<T | undefined> {
+    if (busy.value) return undefined;
+    busy.value = key;
+    try {
+      return await fn();
+    } finally {
+      busy.value = null;
+    }
+  }
+  return { busy, run };
+}
 
 export type ActResult<T> = { ok: boolean; status: number; body: T | null };
 

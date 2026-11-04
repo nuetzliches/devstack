@@ -37,9 +37,34 @@ const isMain = computed(() => !props.lane || props.lane.name === MAIN);
 const title = computed(() => (props.lane ? laneLabel(props.lane) : MAIN));
 const branch = computed(() => (isMain.value ? (props.lane?.branch ?? stack.view?.branch ?? null) : null));
 const path = computed(() => props.lane?.path ?? stack.entry?.repo ?? '');
-const busy = computed(() => stack.busy['lane-start'] === (props.lane?.name ?? MAIN) || (!stack.running && !!(stack.id && hub.starting[stack.id])));
+/** The start this dashboard asked for, until the lane's daemon reports it. */
+const asked = computed(() => stack.startOf(props.lane?.name));
+const busy = computed(() => !!asked.value || stack.busy['lane-start'] === (props.lane?.name ?? MAIN) || (!stack.running && !!(stack.id && hub.starting[stack.id])));
 const m = computed(() => props.lane?.moving ?? null);
 const running = computed(() => !!m.value && !m.value.error && m.value.kind === 'start');
+/** It is on its way: asked for here, or a start on a node the daemon reports. */
+const starting = computed(() => busy.value || running.value);
+/** Where it starts, as said. */
+const askedWhere = computed(() => {
+  const on = asked.value?.on ?? null;
+  return on ? placeName(pool.targets.find((t) => t.on === on)?.node.name ?? on) : 'this machine';
+});
+/**
+ * The steps of a start no node reports (here, or before the daemon names
+ * the node): what was done, and what goes on now.
+ */
+const steps = computed(() => {
+  const a = asked.value;
+  if (!a || m.value) return [];
+  type Step = { what: string; state: 'done' | 'now' | 'next' };
+  const out: Step[] = [{ what: a.cold ? "Ask the hub to bring the stack's daemon up" : 'Ask the daemon to start it', state: a.sent ? 'done' : 'now' }];
+  if (a.cold) out.push({ what: "The stack's daemon comes up", state: stack.running ? 'done' : a.sent ? 'now' : 'next' });
+  const active = stack.running && !!props.lane && props.lane.active !== false;
+  const under = stack.running && a.sent;
+  out.push({ what: a.on ? `The pool takes it: on to ${askedWhere.value}` : 'Its containers and services start', state: active ? 'done' : under ? 'now' : 'next' });
+  out.push({ what: "Its daemon reports it, and the lane's pages open", state: active ? 'now' : 'next' });
+  return out;
+});
 /** Why it does not start in the pool: it is the main working tree (ADR-0078
  * point 4), or its stack file names no lane image (ADR-0028). Said before a
  * start, not after a lease and a sync. */
@@ -112,6 +137,8 @@ function placeOf(poolName: string, nodeId: string) {
  * lane that holds room there already. */
 function startingOn(n: LaneTarget) {
   const mv = m.value;
+  // Asked for, before the daemon says where: where it was asked to.
+  if (!mv && asked.value) return asked.value.on === n.on;
   if (!running.value || !mv) return false;
   if (mv.to === n.on || mv.to === n.node.name) return true;
   const lease = `lease on ${n.node.name}`;
@@ -151,6 +178,8 @@ function lit(n: LaneTarget | null) {
 }
 
 function start(on?: string) {
+  // One start at a time: the buttons are disabled, a click that came through anyway does nothing.
+  if (starting.value) return;
   if (!props.lane || isMain.value) void stack.startStack();
   else if (!stack.running) void stack.startOfflineLane(props.lane, on ?? null, profile.value || undefined);
   else void stack.startLane(props.lane.name, on, profile.value || undefined);
@@ -159,7 +188,17 @@ function start(on?: string) {
 
 <template>
   <!-- Nothing of this tree runs: said first, across the page, unlike any running tree's view. -->
-  <div class="not-running" data-testid="tree-not-running">
+  <!-- On its way: what goes on, until the lane's daemon reports it and its pages open. -->
+  <div v-if="starting" class="not-running starting" data-testid="tree-starting">
+    <span class="spinner nr-spin" aria-hidden="true" />
+    <div class="nr-text">
+      <strong>{{ title }} is starting<template v-if="asked || m"> on {{ asked ? askedWhere : placeName(m!.to) }}</template></strong>
+      <span>Its pages open once its daemon reports it. Until then, nothing else starts it.</span>
+    </div>
+    <span v-if="asked || m" class="faint small tabular">{{ duration(now - (asked?.since ?? m!.since)) }}</span>
+    <span class="pill sm info">starting</span>
+  </div>
+  <div v-else class="not-running" data-testid="tree-not-running">
     <Icon name="power" :size="26" class="nr-icon" />
     <div class="nr-text">
       <strong>{{ title }} is not running</strong>
@@ -173,10 +212,10 @@ function start(on?: string) {
       <Icon name="gitBranch" :size="18" />
       <h2>{{ title }}</h2>
       <span class="faint small">{{ isMain ? `main working tree${branch ? ` · ${branch}` : ''}` : 'worktree' }}</span>
-      <span class="pill sm outline">not started</span>
+      <span class="pill sm" :class="starting ? 'info' : 'outline'">{{ starting ? 'starting' : 'not started' }}</span>
     </header>
     <div class="card-body">
-      <p class="muted">
+      <p v-if="!starting" class="muted">
         This lane runs nothing now<template v-if="!stack.running">; starting it brings the stack's daemon up</template>. Start it here<template v-if="!isMain">, or on another
         machine of the pool: everything of the lane runs there (build, services, its own infrastructure), its ports are forwarded here</template><template v-else>: the main working tree runs on this machine, on its own ports</template>.
       </p>
@@ -210,10 +249,19 @@ function start(on?: string) {
         </li>
       </ol>
       <p v-if="running" class="faint small">The lane's pages open once its daemon runs on the node; its containers and services show their own start there.</p>
+      <!-- A start no node reports the steps of: here, or before the daemon names the node. -->
+      <ol v-if="steps.length" class="phases" data-testid="lane-start-steps">
+        <li v-for="(s, i) in steps" :key="i" :class="s.state">
+          <Icon v-if="s.state === 'done'" name="checkCircle" :size="13" />
+          <span v-else-if="s.state === 'now'" class="spinner sm" aria-hidden="true" />
+          <span v-else class="dot" aria-hidden="true" />
+          <span class="ph">{{ s.what }}</span>
+        </li>
+      </ol>
 
       <label v-if="profiles.length" class="profile" data-testid="lane-start-profile" :title="isMain ? NOT_FOR_MAIN.profile : undefined">
         <span>Profile</span>
-        <select v-model="profile" class="input" :disabled="isMain">
+        <select v-model="profile" class="input" :disabled="isMain || starting">
           <option value="">none: as the stack file says</option>
           <option v-for="p in profiles" :key="p.name" :value="p.name">{{ p.name }}{{ p.description ? ` · ${p.description}` : '' }}</option>
         </select>
@@ -303,6 +351,7 @@ function start(on?: string) {
               <Icon name="play" :size="12" /> Start
             </button>
           </span>
+          <span v-if="asked && !asked.on && !m" class="why" data-testid="lane-start-why">the lane is starting here</span>
           <LocalLoad :need="need ?? undefined" />
         </div>
         <template v-for="g in groups" :key="g.pool">
@@ -458,6 +507,26 @@ function start(on?: string) {
 }
 .phases .failed {
   color: var(--danger);
+}
+.phases .next {
+  color: var(--text-faint);
+}
+.phases .dot {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+}
+.not-running.starting {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--info) 45%, var(--border));
+  background: var(--info-soft);
+}
+.nr-spin {
+  flex: none;
+  width: 22px;
+  height: 22px;
 }
 .phases .t {
   margin-left: auto;

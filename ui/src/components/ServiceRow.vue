@@ -160,10 +160,11 @@ function open(e: MouseEvent) {
         class="btn btn-ghost btn-sm btn-icon"
         :aria-label="link.state === 'failed' ? 'Dismiss' : `Close the public link to ${service.name}`"
         :title="link.state === 'failed' ? 'Dismiss' : 'Close the public link'"
+        :disabled="!!busy"
         data-testid="action-public-link-close"
         @click="stack.closePublicLink(service.name)"
       >
-        <Icon name="x" :size="13" />
+        <span v-if="busy === 'public-link'" class="spinner sm" /><Icon v-else name="x" :size="13" />
       </button>
     </div>
     <ErrorLine v-if="look.detail && !cand" class="detail" :text="look.detail" :tone="look.tone === 'danger' ? 'danger' : 'warn'" />

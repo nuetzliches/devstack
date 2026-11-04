@@ -47,14 +47,14 @@ watchEffect(() => {
               <td class="mono">{{ m.address ?? '–' }}</td>
               <td>{{ ago(m.requested_at * 1000, now) }}</td>
               <td class="actions">
-                <button type="button" class="btn btn-sm btn-primary" data-testid="pool-approve" @click="pool.approve(m.id, m.name)">
-                  <Icon name="check" :size="14" /> Approve
+                <button type="button" class="btn btn-sm btn-primary" :disabled="!!pool.busy[m.id]" data-testid="pool-approve" @click="pool.approve(m.id, m.name)">
+                  <span v-if="pool.busy[m.id] === 'approve'" class="spinner" /><Icon v-else name="check" :size="14" /> Approve
                 </button>
-                <button type="button" class="btn btn-sm" title="Approve, as an admin who manages the pool" data-testid="pool-approve-admin" @click="pool.approve(m.id, m.name, 'admin')">
+                <button type="button" class="btn btn-sm" title="Approve, as an admin who manages the pool" :disabled="!!pool.busy[m.id]" data-testid="pool-approve-admin" @click="pool.approve(m.id, m.name, 'admin')">
                   <Icon name="shield" :size="14" /> As admin
                 </button>
-                <button type="button" class="btn btn-sm btn-danger" data-testid="pool-reject" @click="pool.remove(m.id, m.name, true)">
-                  <Icon name="x" :size="14" /> Reject
+                <button type="button" class="btn btn-sm btn-danger" :disabled="!!pool.busy[m.id]" data-testid="pool-reject" @click="pool.remove(m.id, m.name, true)">
+                  <span v-if="pool.busy[m.id] === 'remove'" class="spinner" /><Icon v-else name="x" :size="14" /> Reject
                 </button>
               </td>
             </tr>

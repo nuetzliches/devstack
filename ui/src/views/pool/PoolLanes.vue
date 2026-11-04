@@ -3,6 +3,7 @@
 // machine in it (ADR-0035), to watch, open and connect to (ADR-0053).
 import { computed } from 'vue';
 import { sharedId } from '@/api';
+import { useBusy } from '@/lib/actions';
 import { connectedTo, usePool } from '@/stores/pool';
 import Icon from '@/components/icons/Icon.vue';
 import PoolLeases from './PoolLeases.vue';
@@ -11,6 +12,8 @@ import { laneView } from '@/lib/stackRoutes';
 const pool = usePool();
 const leases = computed(() => pool.overview?.leases ?? []);
 const sharedHere = computed(() => pool.shared.filter((l) => l.pool === pool.current));
+/** The shared lane being connected, disconnected or opened: one at a time. */
+const { busy, run } = useBusy();
 </script>
 
 <template>
@@ -53,8 +56,9 @@ const sharedHere = computed(() => pool.shared.filter((l) => l.pool === pool.curr
                 type="button"
                 class="btn btn-xs svc"
                 :title="s.forwarded ? `${s.scheme}://localhost:${s.forwarded}` : `${s.scheme}://localhost:${s.here} if free here; opening it connects the lane`"
+                :disabled="!!busy"
                 data-testid="pool-shared-open"
-                @click="pool.openShared(l.pool, l.lease, s.name)"
+                @click="run(l.lease, () => pool.openShared(l.pool, l.lease, s.name))"
               >
                 <Icon name="external" :size="12" /> {{ s.name }}<span v-if="s.forwarded" class="faint"> :{{ s.forwarded }}</span>
               </button>
@@ -64,9 +68,11 @@ const sharedHere = computed(() => pool.shared.filter((l) => l.pool === pool.curr
                 type="button"
                 class="btn btn-xs"
                 :title="connectedTo(l) ? 'Close its forwards: its ports here are free again' : 'Forward each of its services here, on its owner\'s port if free (ADR-0053)'"
+                :disabled="!!busy"
                 data-testid="pool-shared-connect"
-                @click="connectedTo(l) ? pool.disconnectShared(l.pool, l.lease) : pool.connectShared(l.pool, l.lease)"
+                @click="run(l.lease, () => (connectedTo(l) ? pool.disconnectShared(l.pool, l.lease) : pool.connectShared(l.pool, l.lease)))"
               >
+                <span v-if="busy === l.lease" class="spinner" />
                 {{ connectedTo(l) ? 'Disconnect' : 'Connect' }}
               </button>
             </td>

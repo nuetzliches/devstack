@@ -53,8 +53,11 @@ const hubDown = computed(() => hub.status === 'unreachable' || hub.stream === 'e
  * stack's daemon runs or not (ADR-0078, ADR-0081).
  */
 const idleLane = computed(() => {
-  const l = stack.shownLane;
-  if (!l || l.active !== false || l.removing) return null;
+  // A start asked for holds the page until the lane's daemon reports it, also
+  // while the daemon that comes up has not listed its lanes yet.
+  const asked = stack.startOf(stack.lane);
+  const l = stack.shownLane ?? asked?.lane ?? null;
+  if (!l || (l.active !== false && !asked) || l.removing) return null;
   if (!stack.running && (hubDown.value || stack.readOnly || !stack.entry)) return null;
   return l;
 });
@@ -225,7 +228,7 @@ function isActive(name: string) {
         </button>
         <RouterLink :to="laneView(stack.id ?? '', null)" class="btn btn-primary btn-sm" data-testid="lane-ending-main">Show main</RouterLink>
       </div>
-      <div v-else-if="!hubDown && stack.running && !stack.live" class="banner info" data-testid="stack-connecting">
+      <div v-else-if="!hubDown && stack.running && !stack.live && !stack.startOf(stack.lane)" class="banner info" data-testid="stack-connecting">
         <span class="spinner" />
         <span class="grow">
           {{ stack.stream === 'error' ? 'Lost the event stream; reconnecting…' : 'Connecting to the stack…' }}

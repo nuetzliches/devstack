@@ -228,7 +228,7 @@ function create() {
           </div>
           <div v-if="actionsOf === r.b.name && r.lane" class="lane-actions" role="menu" :aria-label="`Actions of lane ${laneLabel(r.lane)}`" data-testid="branch-lane-menu">
             <template v-for="a in [laneActions(r.lane).main, ...laneActions(r.lane).items]" :key="a.key">
-              <button type="button" class="opt" :class="{ danger: a.danger }" role="menuitem" :disabled="a.disabled" :title="a.title" :data-testid="`branch-lane-${a.key}`" @click="laneAct(r, a.key)">
+              <button type="button" class="opt" :class="{ danger: a.danger }" role="menuitem" :disabled="a.disabled || !!stack.laneBusy(r.lane.name)" :title="a.title" :data-testid="`branch-lane-${a.key}`" @click="laneAct(r, a.key)">
                 <Icon :name="a.icon ?? 'gitBranch'" :size="13" class="muted" />
                 <span class="grow">{{ a.label }}</span>
                 <span v-if="a.hint" class="faint small">{{ a.hint }}</span>
