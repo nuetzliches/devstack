@@ -490,6 +490,30 @@ impl Upstreams {
         Ok(f.upstreams.clone().into_iter().chain(pooled).collect())
     }
 
+    /// Whether the user accepted the upstream `name` of `pool` at the URL the
+    /// pool names now, and has none of their own of that name: what gives
+    /// the hooks bound to it (ADR-0094). Read from `dir`, without a hub.
+    pub fn pool_accepted(dir: &std::path::Path, pool: &str, name: &str) -> bool {
+        let f: File = std::fs::read_to_string(dir.join("upstreams.toml"))
+            .ok()
+            .and_then(|t| toml::from_str(&t).ok())
+            .unwrap_or_default();
+        let lists: PoolLists = std::fs::read(dir.join("pool-upstreams.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        let Some(e) = lists
+            .get(pool)
+            .and_then(|l| l.iter().find(|e| e.name == name))
+        else {
+            return false;
+        };
+        !f.upstreams.iter().any(|o| o.name == e.name)
+            && f.decisions
+                .iter()
+                .any(|d| d.pool == pool && d.name == name && d.accepted && d.url == e.url)
+    }
+
     /// The user configured an upstream, or accepted one of a pool: what makes
     /// `devstack mcp` ask the hub at all.
     pub fn configured(dir: &std::path::Path) -> bool {

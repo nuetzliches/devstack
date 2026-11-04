@@ -34,6 +34,7 @@ use tokio_stream::StreamExt;
 
 static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 
+pub mod agenthooks;
 mod branches;
 mod guests;
 mod mcp;

@@ -74,7 +74,8 @@ export type PoolFeed = {
 /** The pools' skill sets on this machine (ADR-0074), as `GET /hub/skills` and `skills` events give them. */
 export type PoolSkillsState = {
   /** The coding agents found here (and those switched on), with their user skill folder and their folder in a working tree (ADR-0079). */
-  agents: { id: string; name: string; dir: string; project?: string; enabled: boolean }[];
+  /** `hooks`: it gets the skills' hooks (ADR-0094); older hubs never send it. */
+  agents: { id: string; name: string; dir: string; project?: string; enabled: boolean; hooks?: boolean }[];
   sets: SkillSetState[];
   conflicts: { dir: string; name: string; reason: string }[];
   errors?: string[];
@@ -118,6 +119,8 @@ export type SkillState = {
   repos?: string[];
   /** The working trees it is in, a bound skill. */
   trees?: string[];
+  /** How many hooks its `hooks.toml` has (ADR-0094): texts given to the agents at a session's start or on a matching prompt. */
+  hooks?: number;
 };
 
 /** A pool's skill set as an admin names it (`/hub/pool/skills`). */

@@ -12,7 +12,8 @@ the skill folders a pool's sets go to, and the agents "Open with" knows
 
 Only agents with a user folder made of a base and fixed parts are taken; one
 found another way (a function, the current directory) is left out. What
-devstack adds to an agent (`[agent.open]`, how "Open with" starts it) is kept
+devstack adds to an agent (`[agent.open]`, how "Open with" starts it;
+`[agent.hooks]`, where its hooks go) is kept
 from the file as it was.
 """
 
@@ -77,11 +78,11 @@ def agents(src: str):
 
 
 def kept(old: str) -> dict:
-    """The `[agent.open]` blocks of the file as it is, by agent id."""
+    """The `[agent.open]` and `[agent.hooks]` blocks of the file as it is, by agent id."""
     out = {}
     for block in re.split(r"\n(?=\[\[agent\]\])", old):
         m = re.search(r'^id = "([^"]+)"', block, re.M)
-        o = re.search(r"(\[agent\.open\].*?)(?=\n\n|\Z)", block, re.S)
+        o = re.search(r"(\[agent\.(?:open|hooks)\].*?)(?=\n\n|\Z)", block, re.S)
         if m and o:
             out[m.group(1)] = o.group(1).strip()
     return out
@@ -96,8 +97,9 @@ def main():
         "# its skill folder in a working tree (`project`, ADR-0079), and the paths",
         "# that tell it installed. Taken from src/agents.ts of",
         "# https://github.com/vercel-labs/skills (MIT, Copyright (c) Vercel, Inc.)",
-        "# by scripts/sync-agents.py; `[agent.open]` is devstack's own (how",
-        "# \"Open with\" starts the agent) and kept when the table is taken again.",
+        "# by scripts/sync-agents.py; `[agent.open]` (how \"Open with\" starts the",
+        "# agent) and `[agent.hooks]` (where its hooks go, ADR-0094) are devstack's",
+        "# own and kept when the table is taken again.",
         "# `~` is the user's home, `${VAR:-default}` a variable or its default.",
         "",
     ]

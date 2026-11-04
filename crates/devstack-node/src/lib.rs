@@ -6,6 +6,7 @@ pub mod coordinator;
 pub mod egress;
 pub mod events;
 pub mod footprint;
+pub mod hooks;
 pub mod laneinfra;
 pub mod lanerun;
 pub mod linkrouter;
