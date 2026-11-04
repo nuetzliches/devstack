@@ -93,7 +93,7 @@ const items = computed<Item[]>(() => {
       out.push({
         id: `cmd:${c.name}`,
         label: `Run ${c.name}`,
-        hint: c.description || 'command',
+        hint: stack.commandRunning ? `waits: ${stack.commandRunning} runs` : c.description || 'command',
         icon: 'terminal',
         run: async () => {
           const run = await stack.runCommand(c.name);

@@ -663,15 +663,28 @@ describe('stack store', () => {
       expect(useHub().stopping.shop).toBeUndefined();
     });
 
-    it('runs a command once while its run goes on', async () => {
+    it('runs one command at a time: none beside a run that goes on', async () => {
       const stack = await shownStack();
       fake.on('/hub/stacks/shop/api/v1/commands/seed', ok({ run: 1 }));
+      fake.on('/hub/stacks/shop/api/v1/commands/reset', ok({ run: 2 }));
       stack.runs.seed = [{ id: 1, command: 'seed', status: 'running' } as never];
-      expect(stack.commandBusy('seed')).toBe(true);
+      expect(stack.commandRunning).toBe('seed');
       expect(await stack.runCommand('seed')).toBeNull();
-      expect(posts('/commands/seed')).toBe(0);
-      stack.runs.seed = [{ id: 1, command: 'seed', status: 'ok' } as never];
-      expect(await stack.runCommand('seed')).toBe(1);
+      expect(await stack.runCommand('reset')).toBeNull();
+      expect(posts('/commands/')).toBe(0);
+      stack.runs.seed = [{ id: 1, command: 'seed', status: 'succeeded' } as never];
+      expect(stack.commandRunning).toBeNull();
+      expect(await stack.runCommand('reset')).toBe(2);
+    });
+
+    it("reads every command's runs when the tree connects, so one that runs already holds the others", async () => {
+      const stack = await shownStack();
+      fake.on('/hub/stacks/shop/api/v1/commands/seed/runs', ok([{ id: 4, command: 'seed', started: 0, finished: null, status: 'running', error: null, log: null }]));
+      fake.stream('/hub/stacks/shop/api/v1/events').handlers.onMessage({
+        type: 'snapshot',
+        stack: { services: [], infra: [], groups: [], commands: [{ name: 'seed', description: '', confirm: null, requires: [] }] },
+      } as never);
+      await vi.waitFor(() => expect(stack.commandRunning).toBe('seed'));
     });
   });
 
