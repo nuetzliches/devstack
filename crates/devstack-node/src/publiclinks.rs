@@ -147,8 +147,9 @@ struct State {
     /// Host -> its record.
     #[serde(default)]
     hosts: BTreeMap<String, Host>,
+    /// Host an admin closed -> the member it was closed to.
     #[serde(default)]
-    blocked: BTreeSet<String>,
+    blocked: BTreeMap<String, String>,
 }
 
 /// The coordinator's side of public links.
@@ -183,16 +184,24 @@ impl Registry {
 
     /// [`Self::open`] with the API and the token given.
     pub fn with(dir: &Path, api: &str, token: Option<String>) -> Self {
-        let state = std::fs::read(dir.join(FILE))
+        let state: State = std::fs::read(dir.join(FILE))
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
+        // A coordinator that starts again gives its members a full
+        // [`SILENT`] to report before their records go.
+        let now = Instant::now();
+        let seen = state
+            .hosts
+            .values()
+            .map(|h| (h.member.clone(), now))
+            .collect();
         Self {
             dir: dir.to_path_buf(),
             api: api.trim_end_matches('/').to_string(),
             token,
             state: Mutex::new(state),
-            seen: Mutex::new(HashMap::new()),
+            seen: Mutex::new(seen),
             access: Mutex::new(None),
             one: Mutex::new(()),
         }
@@ -402,14 +411,10 @@ impl Registry {
         // again once its member stops reporting it.
         let gone: Vec<(String, String)> = {
             let mut s = self.state.lock().unwrap();
-            let mine: Vec<String> = s
-                .blocked
-                .iter()
-                .filter(|h| !reported.contains(*h))
-                .cloned()
-                .collect();
-            for h in mine {
-                s.blocked.remove(&h);
+            let before = s.blocked.len();
+            s.blocked.retain(|h, m| m != member || reported.contains(h));
+            if s.blocked.len() != before {
+                self.save(&s);
             }
             s.hosts
                 .iter()
@@ -445,7 +450,7 @@ impl Registry {
             };
             let why = why.or_else(|| {
                 let s = self.state.lock().unwrap();
-                if s.blocked.contains(&host) {
+                if s.blocked.contains_key(&host) {
                     Some("an admin of the pool closed this link".into())
                 } else {
                     s.hosts
@@ -520,17 +525,17 @@ impl Registry {
         let host = host.to_ascii_lowercase();
         let settings = self.settings();
         let _one = self.one.lock().unwrap();
-        let record = self
+        let (member, record) = self
             .state
             .lock()
             .unwrap()
             .hosts
             .get(&host)
-            .map(|h| h.record.clone())
+            .map(|h| (h.member.clone(), h.record.clone()))
             .ok_or((404, format!("no public link `{host}` is open")))?;
         self.remove_record(&settings, &host, &record);
         let mut s = self.state.lock().unwrap();
-        s.blocked.insert(host);
+        s.blocked.insert(host, member);
         self.save(&s);
         Ok(())
     }
@@ -559,7 +564,7 @@ impl Registry {
                     since: h.since,
                 })
                 .collect(),
-            blocked: s.blocked.iter().cloned().collect(),
+            blocked: s.blocked.keys().cloned().collect(),
         }
     }
 
@@ -583,6 +588,7 @@ impl Registry {
         }
         let mut s = self.state.lock().unwrap();
         s.tunnels.remove(member);
+        s.blocked.retain(|_, m| m != member);
         self.save(&s);
     }
 
@@ -891,6 +897,8 @@ mod tests {
         r.report("aaaa1111", &tags, &["api-shop--anna.dev.link".into()]);
         r.close("api-shop--anna.dev.link").unwrap();
         assert!(records.lock().unwrap().is_empty());
+        // Another member's report does not open it again.
+        r.report("bbbb2222", &tags, &[]);
         let a = r.report("aaaa1111", &tags, &["api-shop--anna.dev.link".into()]);
         assert!(
             a.hosts.is_empty() && a.refused.contains_key("api-shop--anna.dev.link"),
@@ -899,6 +907,10 @@ mod tests {
         r.report("aaaa1111", &tags, &[]);
         let a = r.report("aaaa1111", &tags, &["api-shop--anna.dev.link".into()]);
         assert_eq!(a.hosts.len(), 1, "{a:?}");
+        // A coordinator that starts again keeps the records a while.
+        let again = Registry::with(d.path(), &api, Some("token".into()));
+        again.sweep();
+        assert_eq!(records.lock().unwrap().len(), 1);
         // The member leaves the pool: its records go.
         r.forget("aaaa1111");
         assert!(records.lock().unwrap().is_empty());
