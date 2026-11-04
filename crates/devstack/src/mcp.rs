@@ -118,7 +118,11 @@ fn follow_upstreams(out: Out) {
                 if LISTED.lock().unwrap().is_none() {
                     continue;
                 }
-                let now = names(&crate::upstream::tools());
+                // A stopped hub stays stopped: the next `tools/list` asks.
+                let Some(tools) = crate::upstream::tools_if_hub_runs() else {
+                    continue;
+                };
+                let now = names(&tools);
                 let mut listed = LISTED.lock().unwrap();
                 if listed.as_ref() != Some(&now) {
                     *listed = Some(now);
