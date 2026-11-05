@@ -9,6 +9,17 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-11-05
+
+A stack's daemon now ends with its last tree (ADR-0095): every tree,
+`main` included, starts on its own, and once nothing of the stack runs
+the daemon ends by itself; a stop always takes a tree's containers. A
+port in use refuses a start at once, whoever holds it, and a tree runs
+one `up` at a time (ADR-0096); `devstack down` removes a stopped stack's
+containers. The dashboard says what changed after an update, shows no
+ADR numbers, and suggests the folder to scan. A release's GitHub notes
+are now its section of this changelog.
+
 ### Added
 
 - **The folder scan suggests the folder to scan.** *Add a stack*, *Scan a
@@ -18,14 +29,12 @@ and listed with their assets on the
   and scans it. Nothing is scanned until you ask, and a path you typed or
   picked is never replaced. The dashboard works it out from its list of
   stacks; nothing is stored and the hub's API is unchanged.
-
 - **`devstack down` removes a stack's containers without its daemon.**
   Docker starts a stack's containers again by their restart policy when it
   starts, while the stack's daemon stays down; `down` used to say only "no
   daemon is running". It now removes the main tree's containers (volumes
   kept; `--all` the lanes' too). The dashboard does the same with *Remove
   containers* on a stopped stack whose containers run (ADR-0096).
-
 - **The dashboard says what changed after an update.** When the hub runs a
   newer devstack than the one this browser last saw, whichever way it was
   installed (the dashboard's button, `devstack update`, winget, Homebrew),
@@ -49,7 +58,6 @@ and listed with their assets on the
   joins it instead of running `docker compose up` a second time, which
   failed on the containers' names; one asking for another profile is
   refused (ADR-0096).
-
 - **A release's GitHub notes are the changelog's section of its version**
   instead of a list of pull requests, so the release page and winget's
   release-notes link say what `CHANGELOG.md` says. The release workflow
@@ -2984,7 +2992,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.40.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.41.0...HEAD
+[0.41.0]: https://github.com/nuetzliches/devstack/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/nuetzliches/devstack/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/nuetzliches/devstack/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/nuetzliches/devstack/compare/v0.37.0...v0.38.0
