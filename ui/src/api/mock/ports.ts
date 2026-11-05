@@ -114,7 +114,7 @@ export function refusal(holders: { name: string; ports: number[] }[]): string {
   const who = holders.map((h) => `the stack \`${h.name}\` runs on ${h.ports.join(', ')}`).join('; ');
   return [
     `this stack would start on its ports, and ${who}. Nothing started; whoever was first keeps its ports.`,
-    'Start this stack moved by a port shift on this machine (its services, containers and links move; its data stays):',
+    'Or start this stack moved by a port shift on this machine (its services, containers and links move; its data stays):',
     '  devstack up --shift auto',
     '  devstack up --shift <n>    (a multiple of 1000)',
     'The shift sticks to this stack on this machine until `devstack up --shift none`.',
@@ -123,11 +123,13 @@ export function refusal(holders: { name: string; ports: number[] }[]): string {
 
 /** `GET /hub/ports`. */
 export function hubPorts(stacks: MockStack[], lanesOf: (s: MockStack) => MockLane[]): HubPorts {
-  const list: StackPorts[] = stacks.map((s) => ({
-    id: s.entry.id,
-    name: s.entry.name,
-    running: s.running,
-    ports: s.running ? daemonPorts(s, lanesOf(s)) : declared(s),
-  }));
+  const list: StackPorts[] = stacks.map((s) => {
+    // A stopped stack's containers that run all the same hold their ports (ADR-0096).
+    const strays = !s.running && s.strayContainers;
+    const ports = s.running
+      ? daemonPorts(s, lanesOf(s))
+      : declared(s).map((e): PortEntry => (strays && e.via === 'docker' ? { ...e, kind: 'published', listening: true } : e));
+    return { id: s.entry.id, name: s.entry.name, running: s.running, ...(strays ? { containers: true } : {}), ports };
+  });
   return { stacks: list, overlaps: overlapsOf(list) };
 }

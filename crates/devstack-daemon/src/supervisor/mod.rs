@@ -1706,6 +1706,41 @@ mod notice_tests {
 mod profile_tests {
     use super::*;
 
+    /// ADR-0096 point 4: one `up` of a tree at a time; a second joins it.
+    #[test]
+    fn one_up_of_a_tree_at_a_time() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("devstack.toml");
+        let stack = devstack_config::from_str(
+            "version = 1\n[stack]\nname = \"s\"\n[services.base]\nkind = \"tool\"\nrun = \"x\"\nautostart = false\n",
+            &file,
+        )
+        .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let sup = Supervisor::new(
+            stack,
+            file,
+            d.path().to_path_buf(),
+            d.path().join(".devstack"),
+            devstack_proc::Options::default(),
+            rt.handle().clone(),
+        )
+        .unwrap();
+        assert!(sup.begin_up(), "none under way: this one starts");
+        assert!(sup.is_upping());
+        assert!(!sup.begin_up(), "one under way: a second joins it");
+        sup.up_dropped();
+        assert!(!sup.is_upping());
+        assert!(sup.begin_up());
+        sup.up_begun().unwrap();
+        assert!(!sup.is_upping());
+        assert!(sup.begin_up(), "after it ended, the next starts");
+        sup.up_dropped();
+    }
+
     /// ADR-0041 point 2: the main tree's profile comes with its start, not
     /// with the daemon; it changes only while nothing of it runs.
     #[test]

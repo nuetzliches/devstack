@@ -103,10 +103,36 @@ impl Supervisor {
     /// service that fails holds back only what comes `after` it.
     pub fn up(self: &Arc<Self>) -> Result<(), String> {
         self.upping.fetch_add(1, Ordering::SeqCst);
+        self.up_begun()
+    }
+
+    /// Take the start of this tree's `up` (ADR-0096 point 4): `false` when
+    /// one is under way already, which the caller joins instead of running
+    /// a second (two `docker compose up` on one project take each other's
+    /// container names). Taken, it is [`Self::up_begun`]'s to run, or
+    /// [`Self::up_dropped`]'s to give back.
+    pub fn begin_up(&self) -> bool {
+        self.upping
+            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    /// Give back a start [`Self::begin_up`] took and did not run.
+    pub fn up_dropped(&self) {
+        self.upping.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    /// Run the `up` [`Self::begin_up`] (or [`Self::up`]) took.
+    pub fn up_begun(self: &Arc<Self>) -> Result<(), String> {
         let r = self.up_all();
         self.upping.fetch_sub(1, Ordering::SeqCst);
         self.upped.store(true, Ordering::SeqCst);
         r
+    }
+
+    /// An `up` of this tree is under way.
+    pub fn is_upping(&self) -> bool {
+        self.upping.load(Ordering::SeqCst) > 0
     }
 
     /// Something of this tree runs or is on its way: an `up` under way, a

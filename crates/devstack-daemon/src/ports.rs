@@ -378,9 +378,26 @@ fn local_port(url: &str) -> Option<u16> {
 pub struct StackPorts {
     pub id: String,
     pub name: String,
-    /// Its daemon runs; else `ports` is what its stack file declares.
+    /// Its daemon runs; else `ports` is what its stack file declares, and
+    /// what its containers publish that run all the same.
     pub running: bool,
+    /// Its daemon does not run, but containers of it do and hold ports
+    /// (ADR-0096): Docker started them again, or a `down` kept them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub containers: bool,
     pub ports: Vec<PortEntry>,
+}
+
+/// A stopped stack's `declared` ports with what its running containers
+/// publish (`held`, [`crate::leftover::entries`]): those count as held,
+/// the declared entry of the same port and protocol goes.
+pub fn with_held(declared: Vec<PortEntry>, held: Vec<PortEntry>) -> Vec<PortEntry> {
+    let mut out: Vec<PortEntry> = declared
+        .into_iter()
+        .filter(|d| !held.iter().any(|h| h.port == d.port && h.proto == d.proto))
+        .collect();
+    out.extend(held);
+    out
 }
 
 /// One stack's use of an overlapping port.
@@ -799,12 +816,30 @@ db = ""
     }
 
     #[test]
+    fn a_stopped_stacks_running_containers_replace_what_it_declares() {
+        let declared = vec![
+            PortEntry::new(4317, "tcp", "main", DECLARED, VIA_DOCKER).held_by("app.otel"),
+            PortEntry::new(5432, "tcp", "main", DECLARED, VIA_DOCKER).held_by("app.db"),
+        ];
+        let held = vec![
+            PortEntry::new(4317, "tcp", "main", PUBLISHED, VIA_DOCKER)
+                .held_by("app.otel")
+                .listening(true),
+        ];
+        let got = with_held(declared, held);
+        assert_eq!(got.len(), 2);
+        assert_eq!((got[0].port, got[0].kind.as_str()), (5432, DECLARED));
+        assert_eq!((got[1].port, got[1].kind.as_str()), (4317, PUBLISHED));
+    }
+
+    #[test]
     fn an_overlap_is_one_port_and_protocol_in_more_than_one_stack() {
         let stacks = vec![
             StackPorts {
                 id: "a".into(),
                 name: "shop".into(),
                 running: true,
+                containers: false,
                 ports: vec![
                     entry(4200, "tcp", "main", "web"),
                     entry(5000, "tcp", "main", "api"),
@@ -815,6 +850,7 @@ db = ""
                 id: "b".into(),
                 name: "crm".into(),
                 running: true,
+                containers: false,
                 ports: vec![
                     entry(4200, "tcp", "feat", "portal"),
                     entry(5353, "tcp", "main", "gateway"),
@@ -826,6 +862,7 @@ db = ""
                 id: "c".into(),
                 name: "docs".into(),
                 running: false,
+                containers: false,
                 ports: vec![
                     PortEntry::new(4200, "tcp", "main", DECLARED, VIA_DIRECT).held_by("site"),
                     // Twice in one stack is no overlap.

@@ -11,6 +11,13 @@ and listed with their assets on the
 
 ### Added
 
+- **`devstack down` removes a stack's containers without its daemon.**
+  Docker starts a stack's containers again by their restart policy when it
+  starts, while the stack's daemon stays down; `down` used to say only "no
+  daemon is running". It now removes the main tree's containers (volumes
+  kept; `--all` the lanes' too). The dashboard does the same with *Remove
+  containers* on a stopped stack whose containers run (ADR-0096).
+
 - **The dashboard says what changed after an update.** When the hub runs a
   newer devstack than the one this browser last saw, whichever way it was
   installed (the dashboard's button, `devstack update`, winget, Homebrew),
@@ -21,6 +28,19 @@ and listed with their assets on the
   first visit only notes the version.
 
 ### Changed
+
+- **A port in use refuses a start, whoever holds it.** `devstack up`
+  checked the other stacks' claims and only warned about a stopped stack's;
+  it now also asks the machine. A port that another stack's containers hold
+  (its daemon stopped, Docker started them again) or another program holds
+  refuses the start at once, naming the holder, with `devstack down` there
+  or a port shift as the way out, instead of a Compose error ("port is
+  already allocated") minutes later. `/hub/ports` and `devstack doctor` count
+  those containers' ports too (ADR-0096).
+- **One `up` of a tree at a time.** A second start while one is under way
+  joins it instead of running `docker compose up` a second time, which
+  failed on the containers' names; one asking for another profile is
+  refused (ADR-0096).
 
 - **A release's GitHub notes are the changelog's section of its version**
   instead of a list of pull requests, so the release page and winget's

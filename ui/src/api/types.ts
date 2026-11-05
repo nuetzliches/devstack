@@ -938,7 +938,8 @@ export type PortEntry = {
 };
 
 /** One stack in `GET /hub/ports`: its daemon's entries, or its stack file's (`declared`) while it does not run. */
-export type StackPorts = { id: string; name: string; running: boolean; ports: PortEntry[] };
+/** One stack's ports; `containers`: its daemon does not run, but containers of it do and hold ports (ADR-0096). */
+export type StackPorts = { id: string; name: string; running: boolean; containers?: boolean; ports: PortEntry[] };
 
 /** A port and protocol more than one stack uses: each stack's use of it. */
 export type PortOverlap = {

@@ -2658,6 +2658,25 @@ async fn stack_down(
         return err(StatusCode::SERVICE_UNAVAILABLE, "stack not running");
     };
     let Some(daemon) = e.daemon else {
+        // Its containers may run all the same (ADR-0096): remove them.
+        if q.infra && !q.restart {
+            let file = e.file.clone();
+            let all = q.all;
+            let removed = tokio::task::spawn_blocking(move || {
+                let stack = devstack_config::load(&file).map_err(|e| e.to_string())?;
+                devstack_daemon::leftover::remove(&stack, all)
+            })
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+            return match removed {
+                Ok(r) if !r.is_empty() => {
+                    diag::info("stack_containers_removed", serde_json::json!({ "id": id }));
+                    Json(serde_json::json!({ "removed": r })).into_response()
+                }
+                Ok(_) => err(StatusCode::SERVICE_UNAVAILABLE, "stack not running"),
+                Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
+            };
+        }
         return err(StatusCode::SERVICE_UNAVAILABLE, "stack not running");
     };
     {

@@ -12,7 +12,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { api, paths, v1 } from '@/api';
-import type { HubPorts, LaneView, Load, PortEntry, PortOverlap, UsageReport } from '@/api/types';
+import type { HubPorts, LaneView, Load, PortEntry, PortOverlap, StackPorts, UsageReport } from '@/api/types';
 import { ago, bytes, clock, duration, percent, useNow } from '@/lib/format';
 import { journalLabel, viaText } from '@/lib/journal';
 import { laneLabel, lastTab, MAIN, nodeLabel, started } from '@/lib/lanes';
@@ -148,7 +148,7 @@ function open(l: LaneView) {
  * Read when the page opens, when its lanes or the main slot change, and
  * every 10 s while it is shown.
  */
-const ports = ref<{ of: string; entries: PortEntry[] | null; overlaps: PortOverlap[]; error: string | null } | null>(null);
+const ports = ref<{ of: string; entries: PortEntry[] | null; overlaps: PortOverlap[]; stacks: StackPorts[]; containers: boolean; error: string | null } | null>(null);
 async function loadPorts() {
   const sid = stack.id;
   if (!sid || stack.foreign) return;
@@ -172,6 +172,8 @@ async function loadPorts() {
     // A failed read keeps what was there.
     entries: entries ?? before?.entries ?? null,
     overlaps: all ? overlaps : (before?.overlaps ?? []),
+    stacks: Array.isArray(all?.stacks) ? all.stacks : (before?.stacks ?? []),
+    containers: all ? !!all.stacks?.find((x) => x.id === sid)?.containers : !!before?.containers,
     error: entries ? null : 'Neither its daemon nor the hub says which ports it uses (an older devstack?).',
   };
 }
@@ -192,14 +194,23 @@ const portLanes = computed(() => lanes.value.map((l) => ({ name: l.name, node: l
 
 /** Its shift on this machine (ADR-0082): "shifted +1000". */
 const shifted = computed(() => shiftLabel(stack.entry?.shift ?? stack.mainView?.shift));
-/** Running stacks that hold its ports: `up` would refuse, naming them. */
-const holders = computed(() => (stack.id && ports.value?.of === stack.id ? runningHolders(stack.id, ports.value.overlaps) : []));
+/** Stacks that hold its ports (running, or a stopped one's containers): `up` would refuse, naming them. */
+const holders = computed(() => (stack.id && ports.value?.of === stack.id ? runningHolders(stack.id, ports.value.overlaps, ports.value.stacks) : []));
+/** Its own containers run though its daemon does not (ADR-0096). */
+const ownContainers = computed(() => !stack.running && !!stack.id && ports.value?.of === stack.id && ports.value.containers);
+const ownHeld = computed(() =>
+  [...new Set((ports.value?.entries ?? []).filter((e) => e.kind === 'published' && e.listening).map((e) => e.port))].sort((a, b) => a - b),
+);
+async function removeContainers(id: string, name: string) {
+  await stack.removeContainers(id, name);
+  void loadPorts();
+}
 /** A stopped stack that collides with a running one, or whose start was refused for it: main's start card offers the shift. */
 const collides = computed(() => !stack.running && (holders.value.length > 0 || refusedForPorts(stack.entry)));
 const collisionText = computed(() => {
   const h = holders.value;
   if (!h.length) return 'Another running stack holds its ports.';
-  return `${h.map((x) => `${x.name} holds ${x.ports.join(', ')}`).join('; ')}.`;
+  return `${h.map((x) => (x.containers ? `The containers of ${x.name} hold ${x.ports.join(', ')}, though its daemon does not run` : `${x.name} holds ${x.ports.join(', ')}`)).join('; ')}.`;
 });
 function openLane(name: string) {
   if (stack.id) void router.push(laneView(stack.id, name, lastTab(route.name)));
@@ -277,6 +288,24 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
     <div v-if="!hubDown && collides && !stack.entry?.start_error" class="banner warn" data-testid="stack-collides">
       <Icon name="alert" :size="18" />
       <span class="grow">{{ collisionText }} main would not start on its ports: its start is refused, then its start card offers one with a port shift.</span>
+      <button
+        v-for="h in holders.filter((x) => x.containers)"
+        :key="h.id"
+        type="button"
+        class="btn"
+        :title="`Stop and remove the containers of ${h.name} (devstack down there); their volumes stay`"
+        :data-testid="`remove-containers-${h.id}`"
+        @click="removeContainers(h.id, h.name)"
+      >
+        Remove containers of {{ h.name }}
+      </button>
+    </div>
+    <div v-if="!hubDown && ownContainers" class="banner warn" data-testid="stack-own-containers">
+      <Icon name="alert" :size="18" />
+      <span class="grow">Its containers run though its daemon does not<template v-if="ownHeld.length">, and hold {{ ownHeld.join(', ') }}</template>: Docker started them again, or a stop kept them. Another stack cannot start on those ports.</span>
+      <button v-if="changes && stack.id" type="button" class="btn" title="Stop and remove its containers (devstack down); their volumes stay" data-testid="remove-own-containers" @click="removeContainers(stack.id, stack.entry?.name ?? 'this stack')">
+        Remove containers
+      </button>
     </div>
     <div v-if="!hubDown && stack.entry?.start_error && !stack.running" class="banner warn" data-testid="stack-start-error">
       <Icon name="alert" :size="18" />

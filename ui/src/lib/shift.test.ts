@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { PortOverlap } from '@/api/types';
+import type { PortOverlap, StackPorts } from '@/api/types';
 import { refusedForPorts, runningHolders, shiftLabel } from './shift';
 
 describe('port shift (ADR-0082)', () => {
@@ -23,9 +23,24 @@ describe('port shift (ADR-0082)', () => {
   ];
 
   it('names the running stacks that hold a port of a stack, not the stopped ones', () => {
-    expect(runningHolders('docs', overlaps)).toEqual([{ name: 'shop', ports: [4200] }]);
+    expect(runningHolders('docs', overlaps)).toEqual([{ id: 'shop', name: 'shop', ports: [4200], containers: false }]);
     expect(runningHolders('blog', overlaps)).toEqual([]);
     expect(runningHolders('crm', overlaps)).toEqual([]);
+  });
+
+  it("names a stopped stack whose containers hold a port (ADR-0096)", () => {
+    const held: PortOverlap[] = [
+      {
+        port: 4317,
+        proto: 'tcp',
+        stacks: [
+          { id: 'docs', name: 'docs', lane: 'main', holder: 'tempo', kind: 'declared' },
+          { id: 'crm', name: 'crm', lane: 'main', holder: 'app.otel', kind: 'published' },
+        ],
+      },
+    ];
+    const stacks: StackPorts[] = [{ id: 'crm', name: 'crm', running: false, containers: true, ports: [] }];
+    expect(runningHolders('docs', held, stacks)).toEqual([{ id: 'crm', name: 'crm', ports: [4317], containers: true }]);
   });
 
   it('tells a start refused for its ports and labels a shift', () => {

@@ -357,6 +357,35 @@ fn ports(stack: &devstack_config::Stack, stack_file: &Path) -> Vec<Finding> {
     }
 }
 
+/// `stacks` with what the running containers of the stopped ones publish
+/// (ADR-0096), as the hub's `/hub/ports` has them.
+fn with_containers(
+    mut stacks: Vec<devstack_daemon::ports::StackPorts>,
+) -> Vec<devstack_daemon::ports::StackPorts> {
+    use devstack_daemon::leftover;
+    if stacks.iter().all(|s| s.running) {
+        return stacks;
+    }
+    let known: Vec<leftover::Project> = devstack_daemon::registry::list()
+        .iter()
+        .filter_map(|e| {
+            Some(leftover::projects(
+                &e.id,
+                &devstack_config::load(&e.file).ok()?,
+            ))
+        })
+        .flatten()
+        .collect();
+    let mut held = leftover::entries(&known, &leftover::running());
+    for s in stacks.iter_mut().filter(|s| !s.running) {
+        if let Some(mine) = held.remove(&s.id) {
+            s.containers = true;
+            s.ports = devstack_daemon::ports::with_held(std::mem::take(&mut s.ports), mine);
+        }
+    }
+    stacks
+}
+
 /// Ports two stacks on this machine both use (ADR-0082): the hub's
 /// `/hub/ports` when it runs (it is not started for this), else the same
 /// read here, from each running daemon and each stopped stack's file.
@@ -396,11 +425,12 @@ fn overlaps() -> Vec<Finding> {
                     id: e.id,
                     name: e.name,
                     running,
+                    containers: false,
                     ports,
                 })
             })
             .collect();
-        overlaps(&stacks)
+        overlaps(&with_containers(stacks))
     };
     let found = from_hub().unwrap_or_else(here);
     if found.is_empty() {

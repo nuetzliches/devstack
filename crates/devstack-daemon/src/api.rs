@@ -369,6 +369,55 @@ struct UpBody {
 /// `yes`.
 async fn up(State(s): State<AppState>, body: Option<Json<UpBody>>) -> Response {
     let body = body.map(|Json(b)| b).unwrap_or_default();
+    // One `up` of a tree at a time (ADR-0096 point 4): a second joins the
+    // one under way, or is refused when it asks for another profile.
+    if !s.sup.begin_up() {
+        let runs = s.sup.stack().profile.as_ref().map(|p| p.name.clone());
+        let asked = body
+            .profile
+            .as_deref()
+            .map(str::trim)
+            .map(|p| (!p.is_empty()).then(|| p.to_string()));
+        return match asked {
+            Some(a) if a != runs => err(
+                StatusCode::CONFLICT,
+                format!(
+                    "the main working tree is starting {}: wait until it is up, then `devstack down` and start it {}",
+                    runs.map_or("without a profile".to_string(), |r| format!(
+                        "with the profile `{r}`"
+                    )),
+                    a.map_or("without one".to_string(), |p| format!(
+                        "with the profile `{p}`"
+                    )),
+                ),
+            ),
+            _ => (
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({ "joined": true })),
+            )
+                .into_response(),
+        };
+    }
+    if let Err(r) = up_profile(&s, &body) {
+        s.sup.up_dropped();
+        return r;
+    }
+    let sup = s.sup.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = sup.up_begun() {
+            sup.emit(crate::state::EventBody::Infra {
+                group: "*".into(),
+                message: format!("up stopped: {e}"),
+            });
+        }
+    });
+    StatusCode::ACCEPTED.into_response()
+}
+
+/// The profile an `up` asks for, taken (ADR-0041 point 2); the answer
+/// that refuses it.
+#[allow(clippy::result_large_err)] // the error is the answer itself
+fn up_profile(s: &AppState, body: &UpBody) -> Result<(), Response> {
     if let Some(p) = body.profile.as_deref().map(str::trim) {
         let profile = (!p.is_empty()).then_some(p);
         let fresh = profile.is_some_and(|p| {
@@ -379,21 +428,21 @@ async fn up(State(s): State<AppState>, body: Option<Json<UpBody>>) -> Response {
                 .is_some_and(|p| p.data == Some(devstack_config::model::DataMode::Fresh))
         });
         if fresh && s.lanes.is_some() && !body.yes {
-            return err(
+            return Err(err(
                 StatusCode::CONFLICT,
                 format!(
                     "the profile `{}` starts the main working tree with fresh data: its containers' volumes go. Confirm it, or run it in a lane",
                     p
                 ),
-            );
+            ));
         }
         match s.sup.use_profile(profile) {
             Ok(()) => {}
             Err(crate::supervisor::ProfileRefused::Invalid(e)) => {
-                return err(StatusCode::BAD_REQUEST, e);
+                return Err(err(StatusCode::BAD_REQUEST, e));
             }
             Err(crate::supervisor::ProfileRefused::Running(runs)) => {
-                return err(
+                return Err(err(
                     StatusCode::CONFLICT,
                     format!(
                         "the main working tree runs {}: stop it first (`devstack down` in it; the lanes keep running), then start it {}",
@@ -404,20 +453,11 @@ async fn up(State(s): State<AppState>, body: Option<Json<UpBody>>) -> Response {
                             "with the profile `{p}`"
                         )),
                     ),
-                );
+                ));
             }
         }
     }
-    let sup = s.sup.clone();
-    tokio::task::spawn_blocking(move || {
-        if let Err(e) = sup.up() {
-            sup.emit(crate::state::EventBody::Infra {
-                group: "*".into(),
-                message: format!("up stopped: {e}"),
-            });
-        }
-    });
-    StatusCode::ACCEPTED.into_response()
+    Ok(())
 }
 
 fn yes() -> bool {
