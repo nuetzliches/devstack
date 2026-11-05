@@ -20,12 +20,12 @@ pub struct Deprecation {
 pub const DEPRECATED: &[Deprecation] = &[
     Deprecation {
         path: "services.*.lanes",
-        replacement: "`singleton = true` (ADR-0080)",
+        replacement: "`singleton = true`", // ADR-0080
         since: "0.33.0",
     },
     Deprecation {
         path: "compose.*.shared",
-        replacement: "each lane's own containers: drop the key; a profile's `skip` leaves containers out (ADR-0080)",
+        replacement: "each lane's own containers: drop the key; a profile's `skip` leaves containers out", // ADR-0080
         since: "0.33.0",
     },
 ];

@@ -41,7 +41,7 @@ const showRemoved = ref(false);
               <div class="pills">
                 <span class="pill sm" :class="m.node?.online ? 'ok' : 'outline'">{{ m.node?.online ? 'online' : 'offline' }}</span>
                 <span v-if="m.node?.paused" class="pill sm warn" title="Paused by an admin: no new lanes, running ones stay">paused</span>
-                <span v-if="m.node?.provisioned?.unconfirmed" class="pill sm warn" title="It admits no lane until an admin confirms it (ADR-0051 point 6)" data-testid="pool-unconfirmed">unconfirmed</span>
+                <span v-if="m.node?.provisioned?.unconfirmed" class="pill sm warn" title="It admits no lane until an admin confirms it" data-testid="pool-unconfirmed">unconfirmed</span>
               </div>
             </td>
             <td>

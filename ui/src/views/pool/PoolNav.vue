@@ -51,7 +51,7 @@ const isPool = (name: string) => route.params.pool === name && !adding.value;
       class="join"
       :class="{ on: adding }"
       :aria-current="adding ? 'page' : undefined"
-      title="Join another pool, e.g. a customer's (ADR-0034)"
+      title="Join another pool, e.g. a customer's"
       data-testid="pool-add"
     >
       <Icon name="plus" :size="14" /> Join another pool

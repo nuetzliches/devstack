@@ -18,6 +18,35 @@ const GROUP = /^###\s+(.+?)\s*$/;
 /** The link references at the end of the file: `[0.40.0]: https://...`. */
 const REFERENCE = /^\[[^\]]+\]:\s/;
 
+/** An ADR named in a link, `[ADR-0038](docs/adr/...)`: its text alone. */
+const ADR_LINK = /\[(ADR-\d{4}[^\]]*)\]\([^)]*\)/g;
+/** A bracket, links in it included: `([#128](https://...), ADR-0025)`. */
+const BRACKET = /(\s?)\(((?:[^()]|\[[^\]]*\]\([^)]*\))*)\)/g;
+/** A part of a bracket about an ADR: `ADR-0051`, `ADR-0024 point 7 amended`, `ADR-0046's list itself is unchanged`. */
+const ADR_PART = /^ADR-\d{4}\b/;
+/** A sentence about an ADR: `ADR-0017 is amended for ADR-0041's profiles.` */
+const ADR_SENTENCE = /(?<=^|[.!?]\s+)ADR-\d{4}.*?\.(?=\s|$)\s*/g;
+
+/**
+ * A changelog line without its ADR references: the decision log is for the
+ * people who build devstack, the dashboard shows no ADR (ADR-0006, addendum
+ * 2026-11-05). A bracket's parts about an ADR go, `(ADR-0094, #453)` keeps
+ * `(#453)`, and so do the sentences about one; an empty line is dropped by
+ * the caller.
+ */
+export function withoutAdr(text: string): string {
+  return text
+    .replace(ADR_LINK, '$1')
+    .replace(BRACKET, (whole, space: string, inner: string) => {
+      const parts = inner.split(/\s*[,;]\s*/);
+      const kept = parts.filter((p) => !ADR_PART.test(p.trim()));
+      if (kept.length === parts.length) return whole;
+      return kept.length ? `${space}(${kept.join(', ')})` : '';
+    })
+    .replace(ADR_SENTENCE, '')
+    .trim();
+}
+
 /** Sections of a changelog, newest first as the file has them; `[Unreleased]` is left out. */
 export function parseChangelog(text: string): ChangelogSection[] {
   const sections: ChangelogSection[] = [];
@@ -28,11 +57,13 @@ export function parseChangelog(text: string): ChangelogSection[] {
   let item: string | null = null;
 
   const endParagraph = () => {
-    if (section && paragraph.length) section.summary.push(paragraph.join(' '));
+    const text = withoutAdr(paragraph.join(' '));
+    if (section && text) section.summary.push(text);
     paragraph = [];
   };
   const endItem = () => {
-    if (group && item !== null) group.items.push(item);
+    const text = item === null ? '' : withoutAdr(item);
+    if (group && text) group.items.push(text);
     item = null;
   };
 
