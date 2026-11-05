@@ -13,6 +13,8 @@ export default defineConfig({
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
+  // The repository's CHANGELOG.md is bundled for "What's new" (src/lib/changelogText.ts).
+  server: { fs: { allow: [fileURLToPath(new URL('..', import.meta.url))] } },
   test: {
     environment: 'happy-dom',
     include: ['src/**/*.test.ts'],

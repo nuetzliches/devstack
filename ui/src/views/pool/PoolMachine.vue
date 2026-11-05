@@ -155,7 +155,7 @@ async function savePolicy(clear = false) {
                     <span
                       v-if="report.kept.store_bytes"
                       class="faint"
-                      title="The members' stores of what prepare makes there (ADR-0062): a lane with the same inputs copies an entry instead of running prepare."
+                      title="The members' stores of what prepare makes there: a lane with the same inputs copies an entry instead of running prepare."
                       data-testid="pool-node-store"
                     > · store {{ bytes(report.kept.store_bytes) }}</span>
                   </dd>
@@ -165,7 +165,7 @@ async function savePolicy(clear = false) {
                 <dt>Grants</dt>
                 <dd>
                   <span v-if="member.node" class="pill sm accent" title="An admin let it run the pool's lanes" data-testid="pool-node-granted">runs lanes</span>
-                  <span v-if="member.provision" class="pill sm info" title="An admin let its lanes have the pool make a node (ADR-0051)" data-testid="pool-provision-granted">may provision</span>
+                  <span v-if="member.provision" class="pill sm info" title="An admin let its lanes have the pool make a node" data-testid="pool-provision-granted">may provision</span>
                   <span v-if="member.no_provisioned" class="pill sm outline" title="It keeps its lanes off provisioned nodes">not on provisioned nodes</span>
                   <span v-if="!member.node && !member.provision && !member.no_provisioned" class="faint">none</span>
                 </dd>
@@ -179,7 +179,7 @@ async function savePolicy(clear = false) {
                   <template v-else>
                     <span v-for="t in member.tags ?? []" :key="t" class="pill sm info" data-testid="pool-tag">{{ t }}</span>
                     <span v-if="!member.tags?.length" class="faint">none</span>
-                    <button v-if="pool.isAdmin" type="button" class="btn btn-xs btn-ghost" title="Tags for nodes' policies (ADR-0033)" data-testid="pool-tags" @click="startTags">Edit</button>
+                    <button v-if="pool.isAdmin" type="button" class="btn btn-xs btn-ghost" title="Tags for nodes' policies" data-testid="pool-tags" @click="startTags">Edit</button>
                   </template>
                 </dd>
               </template>
@@ -191,7 +191,7 @@ async function savePolicy(clear = false) {
           <header class="card-header">
             <Icon name="server" :size="18" />
             <h2>Provisioned</h2>
-            <span class="faint small">made by the pool's provisioner (ADR-0051)</span>
+            <span class="faint small">made by the pool's provisioner</span>
           </header>
           <div class="card-body">
             <dl class="facts">
@@ -250,7 +250,7 @@ async function savePolicy(clear = false) {
               <input type="checkbox" :checked="!!member.node" :disabled="!!pool.busy[m.id]" data-testid="pool-node" @change="pool.setNode(m.id, m.name, !member.node)" />
               <span>Runs the pool's lanes</span>
             </label>
-            <label v-if="provisioner || member.provision" class="consent" title="Its lanes have the pool make a node when none has room (ADR-0051)">
+            <label v-if="provisioner || member.provision" class="consent" title="Its lanes have the pool make a node when none has room">
               <input type="checkbox" :checked="!!member.provision" :disabled="!!pool.busy[m.id]" data-testid="pool-provision" @change="pool.setProvision(m.id, m.name, !member.provision)" />
               <span>Its lanes may have the pool make a node</span>
             </label>
@@ -283,7 +283,7 @@ async function savePolicy(clear = false) {
                 class="btn btn-sm"
                 :class="{ 'btn-primary': !report?.no_update && (hub.newer || releaseClass(report?.devstack, true, hub.version) === 'warn') }"
                 :disabled="!!report?.no_update || !!pool.busy[m.id]"
-                :title="report?.no_update ? `It does not update itself: ${report.no_update}` : 'Have this server install the latest devstack once its lanes have ended (ADR-0039)'"
+                :title="report?.no_update ? `It does not update itself: ${report.no_update}` : 'Have this server install the latest devstack once its lanes have ended'"
                 data-testid="pool-update"
                 @click="pool.updateNode(m.id, m.name)"
               >
@@ -358,7 +358,7 @@ async function savePolicy(clear = false) {
           <header class="card-header">
             <Icon name="shield" :size="18" />
             <h2>Policy</h2>
-            <span class="faint small">who may run lanes here, which repositories, limits, network (ADR-0033)</span>
+            <span class="faint small">who may run lanes here, which repositories, limits, network</span>
           </header>
           <div class="card-body">
             <form v-if="editPolicy" class="stack-form" data-testid="pool-policy-form" @submit.prevent="savePolicy()">

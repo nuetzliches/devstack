@@ -1,8 +1,10 @@
+import { nextTick } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import type { StackEntry } from '@/api/types';
 import { FakeTransport, ok } from '@/test/fake';
 import { persist } from '@/lib/persist';
+import { parseChangelog } from '@/lib/changelog';
 
 const t = vi.hoisted(() => ({ current: null as FakeTransport | null }));
 
@@ -22,6 +24,7 @@ const { useHub } = await import('./hub');
 const { useStack } = await import('./stack');
 const { usePool, connectedTo } = await import('./pool');
 const { useUi } = await import('./ui');
+const { useWhatsNew } = await import('./whatsNew');
 
 const entry = (id: string, running = true): StackEntry => ({
   id,
@@ -905,5 +908,71 @@ describe('pool store', () => {
     const titles = useUi().toasts.map((x) => x.title);
     expect(titles).toContain("build may run the pool's lanes");
     expect(titles).toContain('build takes no new lanes of the pool');
+  });
+});
+
+describe('the What is new store', () => {
+  const RELEASES = parseChangelog(
+    ['## [0.40.0] - 2026-11-05', '', 'Forty.', '', '## [0.39.0] - 2026-11-04', '', 'Thirty-nine.', '', '## [0.38.0] - 2026-11-03', '', 'Thirty-eight.'].join('\n'),
+  );
+  /** A hub that answered with `version`, and the version this browser saw before (null: a first visit). */
+  async function start(version: string, seen: string | null) {
+    if (seen) localStorage.setItem('devstack.whatsNewSeen', JSON.stringify(seen));
+    const hub = useHub();
+    const news = useWhatsNew();
+    news.releases = RELEASES;
+    hub.status = 'ok';
+    hub.version = version;
+    await nextTick();
+    return news;
+  }
+  const stored = () => JSON.parse(localStorage.getItem('devstack.whatsNewSeen') ?? 'null') as string | null;
+
+  it('only notes the version on a first visit', async () => {
+    const news = await start('0.40.0', null);
+    expect(news.banner).toBe(false);
+    expect(stored()).toBe('0.40.0');
+  });
+
+  it('says what changed since the version seen, then counts it as seen', async () => {
+    const news = await start('0.40.0', '0.38.0');
+    expect(news.banner).toBe(true);
+    expect(stored()).toBe('0.38.0');
+    news.show();
+    expect(news.banner).toBe(false);
+    expect(news.shown.map((s) => s.version)).toEqual(['0.40.0', '0.39.0']);
+    news.dismiss();
+    expect(news.open).toBe(false);
+    expect(stored()).toBe('0.40.0');
+    expect(news.banner).toBe(false);
+  });
+
+  it('notes a version without an entry in the changelog, and a rollback, without a banner', async () => {
+    const ahead = await start('0.41.0', '0.40.0');
+    expect(ahead.banner).toBe(false);
+    expect(stored()).toBe('0.41.0');
+    localStorage.clear();
+    setActivePinia(createPinia());
+    const back = await start('0.39.0', '0.40.0');
+    expect(back.banner).toBe(false);
+    expect(stored()).toBe('0.39.0');
+  });
+
+  it('lists the newest releases when opened without an update behind it', async () => {
+    const news = await start('0.40.0', '0.40.0');
+    news.show();
+    expect(news.shown.map((s) => s.version)).toEqual(['0.40.0', '0.39.0', '0.38.0']);
+  });
+
+  it('does not take the version remembered from the last visit for the one the hub runs', async () => {
+    localStorage.setItem('devstack.whatsNewSeen', JSON.stringify('0.38.0'));
+    const hub = useHub();
+    const news = useWhatsNew();
+    news.releases = RELEASES;
+    hub.version = '0.40.0';
+    await nextTick();
+    expect(hub.status).toBe('loading');
+    expect(news.banner).toBe(false);
+    expect(stored()).toBe('0.38.0');
   });
 });

@@ -2569,10 +2569,10 @@ impl Lanes {
         let Some(t) = target else {
             return self.give_back(&mut ho);
         };
-        // Taking it would change the owner and move nothing (#184).
+        // Taking it would change the owner and move nothing (#184, ADR-0048).
         if !main.main_slot_moves() {
             return Err(
-                "this stack has no services on main ports: Compose containers keep their own ports unless `[compose.<group>] main_ports` names them (ADR-0048)"
+                "this stack has no services on main ports: Compose containers keep their own ports unless `[compose.<group>] main_ports` names them"
                     .into(),
             );
         }
@@ -2591,7 +2591,7 @@ impl Lanes {
                 .is_some_and(|rep| rep.dedicated);
             if !dedicated {
                 return Err(format!(
-                    "lane `{t}` runs on {}, which is no dedicated node (a server): the main slot goes to a lane there only (ADR-0025 point 4)",
+                    "lane `{t}` runs on {}, which is no dedicated node (a server): the main slot goes to a lane there only",
                     r.node.name
                 ));
             }

@@ -88,7 +88,7 @@ stay.
 | [0003](0003-changes-flow-through-candidates.md) | Changes flow through candidates; the main slot only holds a stack that built and passed health | Accepted |
 | [0004](0004-infrastructure-is-delegated-to-compose.md) | Infrastructure comes from the project's existing Compose files plus a dev overlay | Accepted; what a stop does with the containers, ADR-0068 |
 | [0005](0005-rust-for-daemon-and-cli.md) | Rust for daemon and CLI | Accepted |
-| [0006](0006-dashboard-vue-same-origin.md) | The dashboard is a Vue 3 SPA served same-origin by the daemon | Accepted; who serves it replaced by ADR-0021 (the hub) |
+| [0006](0006-dashboard-vue-same-origin.md) | The dashboard is a Vue 3 SPA served same-origin by the daemon | Accepted; who serves it replaced by ADR-0021 (the hub); amended 2026-11-05 (text a user sees names no ADR) |
 | [0007](0007-one-http-api-is-the-control-surface.md) | One HTTP API is the control surface; CLI, MCP and dashboard are its clients | Accepted |
 | [0008](0008-background-workers-run-only-in-the-active-slot.md) | Background workers run only in the active slot | Accepted |
 | [0009](0009-the-daemon-owns-every-process-tree.md) | The daemon owns every process tree it starts | Accepted; what a service starts outside its tree is ended by its `stop` command, ADR-0059 |

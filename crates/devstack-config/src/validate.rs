@@ -611,7 +611,8 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         match svc.kind {
             Kind::Service | Kind::Job => {
                 if svc.build.is_some() != svc.output.is_some() {
-                    c.err(&p, "`build` and `output` go together (ADR-0002): the build's output is copied into the artifact");
+                    // ADR-0002
+                    c.err(&p, "`build` and `output` go together: the build's output is copied into the artifact");
                 }
             }
             Kind::Devserver | Kind::Tool => {
@@ -646,7 +647,7 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
             } else if stop.trim().is_empty() {
                 c.err(
                     format!("{p}.stop"),
-                    "is empty: leave it out, or give the command that ends what `run` started (ADR-0059)",
+                    "is empty: leave it out, or give the command that ends what `run` started", // ADR-0059
                 );
             }
         }
@@ -768,7 +769,7 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         if svc.proxy == Some(true) && svc.kind == Kind::Devserver && !svc.run_takes_port() {
             c.err(
                 format!("{p}.proxy"),
-                "a dev server behind devstack's forward runs on a port of its own: its `run` needs `{port}` (ADR-0043)",
+                "a dev server behind devstack's forward runs on a port of its own: its `run` needs `{port}`", // ADR-0043
             );
         }
         if svc.health.is_some() && svc.port.is_none() {
@@ -857,8 +858,14 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
             }
         }
         match &svc.compose {
-            Some(r) if !stack.compose.contains_key(&r.group) => c.err(format!("{p}.compose.group"), format!("no compose group `{}`", r.group)),
-            None if !svc.rewrite_hosts.is_empty() => c.err(format!("{p}.rewrite_hosts"), "needs `compose` (ADR-0014): hosts are rewritten in the Compose service's environment"),
+            Some(r) if !stack.compose.contains_key(&r.group) => c.err(
+                format!("{p}.compose.group"),
+                format!("no compose group `{}`", r.group),
+            ),
+            None if !svc.rewrite_hosts.is_empty() => c.err(
+                format!("{p}.rewrite_hosts"),
+                "needs `compose`: hosts are rewritten in the Compose service's environment",
+            ), // ADR-0014
             _ => {}
         }
         if let Some(r) = &svc.compose {
@@ -873,7 +880,7 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         {
             c.err(
                 format!("{p}.workers.env"),
-                "must name at least one variable (ADR-0008)",
+                "must name at least one variable", // ADR-0008
             );
         }
         // Strings that are interpolated.

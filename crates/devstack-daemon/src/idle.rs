@@ -144,7 +144,7 @@ pub fn ending_response() -> Response {
         StatusCode::SERVICE_UNAVAILABLE,
         [(axum::http::header::RETRY_AFTER, "1")],
         axum::Json(serde_json::json!({
-            "error": "the stack's daemon is ending: nothing runs in it any more (ADR-0095); start again, a new one comes up",
+            "error": "the stack's daemon is ending: nothing runs in it any more; start again, a new one comes up",
             "ending": true,
         })),
     )

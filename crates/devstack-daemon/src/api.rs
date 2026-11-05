@@ -303,7 +303,7 @@ async fn guard(State(s): State<AppState>, req: Request, next: Next) -> Response 
     if !bearer.is_some_and(|t| constant_time_eq(t.as_bytes(), s.token.as_bytes())) {
         return err(
             StatusCode::UNAUTHORIZED,
-            "missing or wrong token (see `devstack` docs, ADR-0019)",
+            "missing or wrong token (see `devstack` docs)", // ADR-0019
         );
     }
     if req.method() != Method::GET

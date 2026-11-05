@@ -9,8 +9,30 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **The dashboard says what changed after an update.** When the hub runs a
+  newer devstack than the one this browser last saw, whichever way it was
+  installed (the dashboard's button, `devstack update`, winget, Homebrew),
+  a line below the top bar says so and opens "What's new": each release in
+  between with its summary, its bullets under "Details". The version menu
+  has a "What's new" entry for later. The text is `CHANGELOG.md`, bundled
+  into the dashboard at build time, so there is no new route; a browser's
+  first visit only notes the version.
+
 ### Changed
 
+- **A release's GitHub notes are the changelog's section of its version**
+  instead of a list of pull requests, so the release page and winget's
+  release-notes link say what `CHANGELOG.md` says. The release workflow
+  refuses a tag whose version has no section
+  (`scripts/release-notes.sh`).
+- **The dashboard's tooltips and hints no longer show ADR numbers**, and
+  neither do the messages it shows from the hub and the daemon (a stack
+  file's errors, a refused lane start or main slot), nor "What's new",
+  which leaves them out of the changelog as it shows it. The references stay
+  in code comments and in this file; tests in `ui/` keep them out of the
+  dashboard's text.
 - **The daemon ends with the last tree; a stack has no start of its own**
   (ADR-0095). The first tree that starts, `main` or a lane, brings the
   stack's daemon up, as before; once nothing runs in it any more (no tree
