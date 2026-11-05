@@ -67,7 +67,7 @@ const { busy, run } = useBusy();
               <button
                 type="button"
                 class="btn btn-xs"
-                :title="connectedTo(l) ? 'Close its forwards: its ports here are free again' : 'Forward each of its services here, on its owner\'s port if free (ADR-0053)'"
+                :title="connectedTo(l) ? 'Close its forwards: its ports here are free again' : 'Forward each of its services here, on its owner\'s port if free'"
                 :disabled="!!busy"
                 data-testid="pool-shared-connect"
                 @click="run(l.lease, () => (connectedTo(l) ? pool.disconnectShared(l.pool, l.lease) : pool.connectShared(l.pool, l.lease)))"

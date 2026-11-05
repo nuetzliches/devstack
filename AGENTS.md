@@ -22,7 +22,10 @@
    the ADR records what was built. An ADR with status `Open` is a question,
    not a licence: do not build on either side of it.
 4. **Dependencies:** MIT-compatible licences only, latest stable versions.
-5. **Code style:** `cargo clippy` clean, `cargo fmt` formatted.
+5. **Code style:** `cargo clippy` clean, `cargo fmt` formatted. Text a user
+   sees (the dashboard, and the messages it shows) names no ADR; a reference
+   goes into a code comment beside it ([ADR-0006](docs/adr/0006-dashboard-vue-same-origin.md),
+   addendum 2026-11-05).
 6. **Windows is a first-class target.** Every feature works on native Windows
    (process control, paths, file watching, signals) before it is called done.
    See [ADR-0011](docs/adr/0011-platform-windows-native-first.md).

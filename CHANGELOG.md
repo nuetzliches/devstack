@@ -27,6 +27,12 @@ and listed with their assets on the
   release-notes link say what `CHANGELOG.md` says. The release workflow
   refuses a tag whose version has no section
   (`scripts/release-notes.sh`).
+- **The dashboard's tooltips and hints no longer show ADR numbers**, and
+  neither do the messages it shows from the hub and the daemon (a stack
+  file's errors, a refused lane start or main slot), nor "What's new",
+  which leaves them out of the changelog as it shows it. The references stay
+  in code comments and in this file; tests in `ui/` keep them out of the
+  dashboard's text.
 
 ## [0.40.0] - 2026-11-05
 

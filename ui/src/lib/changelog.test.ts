@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inline, laterVersion, newestUpTo, parseChangelog, sectionsBetween } from './changelog';
+import { inline, laterVersion, newestUpTo, parseChangelog, sectionsBetween, withoutAdr } from './changelog';
 import { changelog } from './changelogText';
 
 const FIXTURE = [
@@ -110,7 +110,35 @@ describe('inline', () => {
   });
 });
 
+describe('withoutAdr (ADR-0006 addendum)', () => {
+  it('drops a bracket of ADR references, and the ADR parts of a mixed one', () => {
+    expect(withoutAdr('**Hooks** (ADR-0094). Text.')).toBe('**Hooks**. Text.');
+    expect(withoutAdr('a lane (ADR-0024 point 7 amended), b (ADR-0062, ADR-0063 addendum 2026-10-27)')).toBe('a lane, b');
+    expect(withoutAdr('**Skills** (ADR-0094, #453): more')).toBe('**Skills** (#453): more');
+    expect(withoutAdr('x ([#128](https://example.invalid/128), ADR-0025).')).toBe('x ([#128](https://example.invalid/128)).');
+    expect(withoutAdr('y ([ADR-0038](docs/adr/0038-x.md)) and z (ADR-0031 point 8; [pool.md](docs/pool.md#v)).')).toBe('y and z ([pool.md](docs/pool.md#v)).');
+  });
+
+  it('drops a sentence about an ADR, and leaves other brackets alone', () => {
+    expect(withoutAdr("Not code-signed. ADR-0017 is amended for ADR-0041's profiles. `doctor` says so.")).toBe('Not code-signed. `doctor` says so.');
+    expect(withoutAdr('ADR-0023 holds; `AGENTS.md` says so. ADR-0091 names ADR-0092.')).toBe('');
+    expect(withoutAdr('kept (`a`, `b`, ...) as is')).toBe('kept (`a`, `b`, ...) as is');
+  });
+
+  it('leaves out a bullet that was only about ADRs', () => {
+    const text = ['## [1.0.0] - 2026-11-05', '', 'Summary (ADR-0001).', '', '### Changed', '', '- ADR-0023 holds.', '- A change (ADR-0002).', ''];
+    const [s] = parseChangelog(text.join('\n'));
+    expect(s!.summary).toEqual(['Summary.']);
+    expect(s!.groups[0]!.items).toEqual(['A change.']);
+  });
+});
+
 describe('the repository CHANGELOG.md', () => {
+  it('shows no ADR in the dashboard', () => {
+    const lines = changelog.flatMap((s) => [...s.summary, ...s.groups.flatMap((g) => g.items)]);
+    expect(lines.filter((l) => /ADR-\d{4}/.test(l))).toEqual([]);
+  });
+
   it('has releases that follow the format docs/releasing.md asks for', () => {
     expect(changelog.length).toBeGreaterThan(5);
     for (const s of changelog) {

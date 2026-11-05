@@ -440,7 +440,7 @@ pub struct Lanes {
 /// Why a lane of a stack without `[lanes] image` or `dockerfile` cannot
 /// run on a node of the pool (ADR-0028).
 pub const NO_LANE_IMAGE: &str =
-    "the stack names no lane image: set `[lanes] image` or `[lanes] dockerfile` (ADR-0028)";
+    "the stack names no lane image: set `[lanes] image` or `[lanes] dockerfile`";
 
 impl Lanes {
     /// Whether a lane can run on a node of the pool: it names the image it

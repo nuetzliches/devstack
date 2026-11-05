@@ -86,7 +86,7 @@ function startMove(to: string, t0: number) {
 /** The devstack the mock hub runs. */
 const MOCK_VERSION = '0.2.0';
 /** What the daemon says of a lane whose stack file names no lane image (ADR-0028). */
-const NO_LANE_IMAGE = 'the stack names no lane image: set `[lanes] image` or `[lanes] dockerfile` (ADR-0028)';
+const NO_LANE_IMAGE = 'the stack names no lane image: set `[lanes] image` or `[lanes] dockerfile`';
 
 /** The user's MCP upstreams in the mock (ADR-0069). */
 const mockUpstreams: McpUpstream[] = [

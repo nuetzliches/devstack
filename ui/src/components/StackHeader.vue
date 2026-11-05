@@ -229,7 +229,7 @@ function manageFromSync() {
       <span v-else class="pill" :class="liveState.tone" :title="liveState.title" data-testid="stack-live" role="status"><span class="dot" />{{ liveState.label }}</span>
       <span v-if="daemon" class="tag" title="daemon version">devstack {{ daemon.version }}</span>
       <McpHint v-if="!hubAway && stack.entry && !stack.foreign" />
-      <span v-if="view?.profile" class="pill accent" data-testid="stack-profile" title="It runs with this profile of the stack file (ADR-0041) until it stops">profile: {{ view.profile }}</span>
+      <span v-if="view?.profile" class="pill accent" data-testid="stack-profile" title="It runs with this profile of the stack file until it stops">profile: {{ view.profile }}</span>
       <span v-if="stack.sharedLane" class="pill info" data-testid="shared-banner" :title="`Shared with you by ${stack.sharedLane.owner_name}: its state, logs and events, read only. It runs on ${stack.sharedLane.node.name}.`">
         {{ stack.sharedLane.owner_name }}'s lane on {{ stack.sharedLane.node.name }} · read only
       </span>
@@ -254,7 +254,7 @@ function manageFromSync() {
         :title="
           sharedConn.connected
             ? 'Close its forwards: its ports here are free again'
-            : 'Forward each of its services here, on the port its owner has it on if free (ADR-0053); nothing is forwarded until then'
+            : 'Forward each of its services here, on the port its owner has it on if free; nothing is forwarded until then'
         "
         data-testid="shared-connect"
         @click="toggleConnection"
@@ -299,7 +299,7 @@ function manageFromSync() {
             class="btn btn-sm"
             :class="{ 'btn-primary': sharedWith.length }"
             :aria-expanded="shareOpen"
-            title="Who in the pool sees this lane and may open its services (ADR-0035)"
+            title="Who in the pool sees this lane and may open its services"
             @click="
               shareText = sharedWith.filter((w) => w !== '*').join(', ');
               shareOpen = !shareOpen;
@@ -453,7 +453,7 @@ function manageFromSync() {
           v-for="k in current.links ?? []"
           :key="k.path"
           :class="{ 'warn-text': k.state === 'not linked' || k.state === 'linked (stale)' }"
-          :title="k.why ?? `${k.path} in the worktree points to a copy on this machine (ADR-0063)`"
+          :title="k.why ?? `${k.path} in the worktree points to a copy on this machine`"
           data-testid="lane-link"
         > · {{ k.path }}: {{ k.state }}</span>
       </span>
