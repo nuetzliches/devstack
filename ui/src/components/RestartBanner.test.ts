@@ -1,5 +1,5 @@
 // The restart banner (a changed stack file, another devstack installed): the
-// same one above the stack's page and a lane's views, with its Restart stack
+// same one above the stack's page and a lane's views, with its Reload
 // button.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, h, nextTick, ref } from 'vue';
@@ -68,7 +68,7 @@ describe('the restart banner', () => {
     configChanged.value = true;
     await nextTick();
     expect(el.querySelector('[data-testid="config-changed"]')?.textContent).toContain('The stack file changed since shop started.');
-    expect(el.querySelector('[data-testid="banner-restart-stack"]')?.textContent).toContain('Restart stack');
+    expect(el.querySelector('[data-testid="banner-restart-stack"]')?.textContent).toContain('Reload');
   });
 
   it('says another devstack is installed, and that the changed stack file applies with it', async () => {

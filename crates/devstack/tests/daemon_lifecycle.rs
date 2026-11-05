@@ -2201,9 +2201,12 @@ fn a_stop_while_the_migrator_runs_holds() {
     let s = Stack::new(false);
     std::fs::write(
         s.file(),
+        // `keep` runs on, so the daemon stays once `app` is stopped and the
+        // migrator done: it ends with the last thing that runs (ADR-0095).
         format!(
-            "version = 1\n[stack]\nname = \"migrating\"\n[services.migrate]\nkind = \"job\"\nrun = \"{}\"\n[services.app]\n{SITE_BUILD}run = \"{}\"\nafter = [\"migrate\"]\n",
+            "version = 1\n[stack]\nname = \"migrating\"\n[services.migrate]\nkind = \"job\"\nrun = \"{}\"\n[services.app]\n{SITE_BUILD}run = \"{}\"\nafter = [\"migrate\"]\n[services.keep]\nkind = \"tool\"\nrun = \"{}\"\n",
             runs_for(8),
+            runs_for(600),
             runs_for(600)
         ),
     )

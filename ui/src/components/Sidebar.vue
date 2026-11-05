@@ -77,7 +77,7 @@ function sharedTitle(l: (typeof pool.shared)[number]): string {
   return `${l.repo} · ${l.lane}\nshared by ${l.owner_name}, runs on ${node} · read only\n${conn}`;
 }
 const adding = ref(false);
-/** Stacks whose worktrees are folded away; only the toggle changes it. */
+/** Stacks whose worktrees are folded away: the toggle, and a stack whose last tree stopped. */
 const collapsed = ref<Record<string, boolean>>(persist.get<Record<string, boolean>>('sidebar.collapsed') ?? {});
 function toggle(id: string) {
   collapsed.value[id] = !collapsed.value[id];
@@ -89,6 +89,21 @@ function collapseAll() {
   persist.set('sidebar.collapsed', collapsed.value);
 }
 const allFolded = computed(() => hub.stacks.every((s) => collapsed.value[s.id]));
+// A stack folds away once its last tree stopped and its daemon ended with it
+// (ADR-0095); not for a reload, which starts it again at once.
+watch(
+  () => Object.fromEntries(hub.stacks.map((s) => [s.id, s.running])) as Record<string, boolean>,
+  (now, before) => {
+    let folded = false;
+    for (const [id, running] of Object.entries(now)) {
+      if (running || before?.[id] !== true || collapsed.value[id]) continue;
+      if (stack.id === id && stack.busy.stack === 'restart') continue;
+      collapsed.value[id] = true;
+      folded = true;
+    }
+    if (folded) persist.set('sidebar.collapsed', collapsed.value);
+  },
+);
 /** The stacks that run, and are not stopping already. */
 const runningStacks = computed(() => hub.stacks.filter((s) => s.running && !hub.stopping[s.id]));
 
@@ -350,26 +365,18 @@ watch(menu, (m, before) => {
 });
 onBeforeUnmount(closeMenu);
 
-async function startStack(s: StackEntry) {
-  closeMenu();
-  hub.starting[s.id] = true;
-  const res = await act({ label: `Start ${s.name}`, path: paths.up(s.id), success: 'Starting the stack…' });
-  if (!res.ok) delete hub.starting[s.id];
-}
 async function stopStack(s: StackEntry) {
   closeMenu();
   // The shown stack's own stop knows its lanes and says what stays.
   if (isCurrent(s)) return void stack.stopStack();
-  const option = stack.keepContainers();
   const ok = await ui.confirm({
-    title: `Stop ${s.name}`,
-    text: 'All services and containers of this stack stop, its lanes’ too, and its daemon exits. Their volumes stay.',
-    confirmLabel: 'Stop stack',
+    title: `Stop all of ${s.name}`,
+    text: 'Every tree of this stack stops, main and its lanes, with their services and containers; its daemon ends with the last. Their volumes stay.',
+    confirmLabel: 'Stop all',
     danger: true,
-    option,
   });
   if (!ok) return;
-  const r = await act({ label: `Stop ${s.name}`, path: paths.down(s.id, !option.checked, false, true), success: 'Stopping the stack…' });
+  const r = await act({ label: `Stop ${s.name}`, path: paths.down(s.id, true, false, true), success: 'Stopping every tree…' });
   if (r.ok) hub.markStopping(s.id);
 }
 /** Stop all is sending its stops. */
@@ -378,19 +385,17 @@ const stoppingAll = ref(false);
 async function stopAll() {
   const list = runningStacks.value;
   if (!list.length) return;
-  const option = stack.keepContainers();
   const ok = await ui.confirm({
     title: 'Stop all stacks',
-    text: `${list.map((s) => s.name).join(', ')}: all services and containers of ${list.length === 1 ? 'this stack' : 'these stacks'} stop, their lanes’ too, and their daemons exit. Their volumes stay.`,
+    text: `${list.map((s) => s.name).join(', ')}: every tree of ${list.length === 1 ? 'this stack' : 'these stacks'} stops, main and its lanes, with their services and containers; their daemons end with them. Their volumes stay.`,
     confirmLabel: 'Stop all',
     danger: true,
-    option,
   });
   if (!ok || stoppingAll.value) return;
   stoppingAll.value = true;
   try {
     for (const s of list) {
-      const r = await act({ label: `Stop ${s.name}`, path: paths.down(s.id, !option.checked, false, true), success: `Stopping ${s.name}…` });
+      const r = await act({ label: `Stop ${s.name}`, path: paths.down(s.id, true, false, true), success: `Stopping ${s.name}…` });
       if (r.ok) hub.markStopping(s.id);
     }
   } finally {
@@ -682,10 +687,7 @@ function toggleFavourite(s: StackEntry) {
         data-testid="sidebar-stack-menu-list"
       >
         <button type="button" class="opt" role="menuitem" @click="(closeMenu(), openStack(menu!.s))"><Icon name="layers" :size="14" /> Open</button>
-        <button v-if="!menu.s.running" type="button" class="opt" role="menuitem" :disabled="!!hub.starting[menu.s.id]" data-testid="sidebar-menu-start" @click="startStack(menu!.s)">
-          <Icon name="play" :size="14" /> Start
-        </button>
-        <button v-else type="button" class="opt" role="menuitem" :disabled="!!hub.stopping[menu.s.id]" data-testid="sidebar-menu-stop" @click="stopStack(menu!.s)"><Icon name="power" :size="14" /> {{ hub.stopping[menu.s.id] ? 'Stopping…' : 'Stop…' }}</button>
+        <button v-if="menu.s.running" type="button" class="opt" role="menuitem" :disabled="!!hub.stopping[menu.s.id]" data-testid="sidebar-menu-stop" @click="stopStack(menu!.s)"><Icon name="power" :size="14" /> {{ hub.stopping[menu.s.id] ? 'Stopping…' : 'Stop all…' }}</button>
         <button type="button" class="opt" role="menuitem" @click="copyPath(menu!.s)"><Icon name="copy" :size="14" /> Copy path</button>
         <button type="button" class="opt" role="menuitem" data-testid="sidebar-menu-fav" @click="toggleFavourite(menu!.s)">
           <Icon name="star" :size="14" /> {{ favourites.has(menu.s.id) ? 'Remove from favourites' : 'Add to favourites' }}

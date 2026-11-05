@@ -12,7 +12,7 @@
 //! version stays true.
 //!
 //! Running stacks keep their daemon (and its version) until they restart; the
-//! dashboard offers that ("Restart stack"), the CLI says it.
+//! dashboard offers that ("Reload"), the CLI says it.
 
 use anyhow::{Result, anyhow, bail};
 use devstack_desktop::channel::WINGET_ID;
@@ -124,7 +124,7 @@ pub fn run(check_only: bool, version: Option<&str>) -> Result<()> {
     }
     println!(
         "devstack {target} is installed. Running stacks keep their version until they restart: \
-         `devstack down` + `devstack up`, or \"Restart stack\" in the dashboard."
+         `devstack down` + `devstack up`, or \"Reload\" on the stack's page in the dashboard."
     );
     Ok(())
 }

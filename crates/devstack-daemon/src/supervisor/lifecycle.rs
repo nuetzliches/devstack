@@ -102,9 +102,27 @@ impl Supervisor {
     /// Infra, then every autostart service for this platform, in order; a
     /// service that fails holds back only what comes `after` it.
     pub fn up(self: &Arc<Self>) -> Result<(), String> {
+        self.upping.fetch_add(1, Ordering::SeqCst);
         let r = self.up_all();
+        self.upping.fetch_sub(1, Ordering::SeqCst);
         self.upped.store(true, Ordering::SeqCst);
         r
+    }
+
+    /// Something of this tree runs or is on its way: an `up` under way, a
+    /// service not stopped (a failed or exited one too: its logs are still
+    /// to be read), or a container devstack started. What keeps the daemon
+    /// (ADR-0095).
+    pub fn runs_anything(&self) -> bool {
+        use crate::state::Status;
+        self.upping.load(Ordering::SeqCst) > 0
+            || self
+                .slots
+                .lock()
+                .unwrap()
+                .values()
+                .any(|s| !matches!(s.view.status, Status::Stopped | Status::Completed { .. }))
+            || crate::state::containers_running(&self.infra.lock().unwrap().views).0 > 0
     }
 
     /// Wait until an `up` of this tree ran to its end, `within` at most:

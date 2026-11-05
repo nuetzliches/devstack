@@ -49,7 +49,6 @@ const name = computed(() => stack.entry?.name ?? stack.mainView?.name ?? 'Stack'
 const repo = computed(() => stack.entry?.repo ?? stack.mainView?.repo ?? '');
 const daemon = computed(() => stack.entry?.daemon ?? null);
 const hubDown = computed(() => hub.status === 'unreachable' || hub.stream === 'error');
-const starting = computed(() => !!(stack.id && hub.starting[stack.id]));
 const changes = computed(() => !hubDown.value && !stack.readOnly && !!stack.entry);
 
 watch(
@@ -195,7 +194,7 @@ const portLanes = computed(() => lanes.value.map((l) => ({ name: l.name, node: l
 const shifted = computed(() => shiftLabel(stack.entry?.shift ?? stack.mainView?.shift));
 /** Running stacks that hold its ports: `up` would refuse, naming them. */
 const holders = computed(() => (stack.id && ports.value?.of === stack.id ? runningHolders(stack.id, ports.value.overlaps) : []));
-/** A stopped stack that collides with a running one, or whose start was refused for it: offer the shift. */
+/** A stopped stack that collides with a running one, or whose start was refused for it: main's start card offers the shift. */
 const collides = computed(() => !stack.running && (holders.value.length > 0 || refusedForPorts(stack.entry)));
 const collisionText = computed(() => {
   const h = holders.value;
@@ -261,27 +260,13 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
         </p>
       </div>
       <div v-if="changes" class="actions">
-        <template v-if="!stack.running && !stack.fileProblem">
-          <button type="button" class="btn btn-primary" :disabled="starting" title="Starts its daemon and the lane main in it (infrastructure and autostart services, without a profile: main's start card chooses one); a lane's own start brings the daemon up without main" data-testid="action-stack-start" @click="stack.startStack()">
-            <span v-if="starting" class="spinner" /><Icon v-else name="play" :size="14" /> {{ starting ? 'Starting…' : 'Start stack' }}
+        <!-- No start of the stack: each tree starts on its own card, main too; the daemon comes with the first (ADR-0095). -->
+        <template v-if="stack.running">
+          <button type="button" class="btn" :disabled="!!stack.busy.stack" title="Start its daemon again with the installed devstack and the current stack file; the lanes are carried over" data-testid="action-restart-stack" @click="stack.restartStack()">
+            <span v-if="stack.busy.stack === 'restart'" class="spinner" /><Icon v-else name="restart" :size="14" /> Reload
           </button>
-          <button
-            v-if="collides && !starting"
-            type="button"
-            class="btn"
-            :title="`${collisionText} Start it on its ports moved by the lowest free multiple of 1000 (devstack up --shift auto); the shift sticks on this machine`"
-            data-testid="action-stack-start-shifted"
-            @click="stack.startStack('auto')"
-          >
-            <Icon name="play" :size="14" /> Start with shift
-          </button>
-        </template>
-        <template v-else-if="stack.running">
-          <button type="button" class="btn" :disabled="!!stack.busy.stack" title="Stop every lane, then start the stack again with the installed devstack and the current stack file" data-testid="action-restart-stack" @click="stack.restartStack()">
-            <span v-if="stack.busy.stack === 'restart'" class="spinner" /><Icon v-else name="restart" :size="14" /> Restart stack
-          </button>
-          <button type="button" class="btn btn-stop" :disabled="!!stack.busy.stack" title="Every lane stops, main included, and the daemon exits" data-testid="action-stack-stop" @click="stack.stopStack()">
-            <span v-if="stack.busy.stack === 'stop'" class="spinner" /><Icon v-else name="power" :size="14" /> Stop stack
+          <button type="button" class="btn btn-stop" :disabled="!!stack.busy.stack" title="Every tree stops, main and each lane, with its services and containers; the daemon ends with the last" data-testid="action-stack-stop" @click="stack.stopStack()">
+            <span v-if="stack.busy.stack === 'stop'" class="spinner" /><Icon v-else name="power" :size="14" /> Stop all
           </button>
         </template>
       </div>
@@ -289,6 +274,10 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
 
     <RestartBanner :config-changed="!!stack.mainView?.config_changed" />
     <StackFileBanner v-if="!hubDown && changes" />
+    <div v-if="!hubDown && collides && !stack.entry?.start_error" class="banner warn" data-testid="stack-collides">
+      <Icon name="alert" :size="18" />
+      <span class="grow">{{ collisionText }} main would not start on its ports: its start is refused, then its start card offers one with a port shift.</span>
+    </div>
     <div v-if="!hubDown && stack.entry?.start_error && !stack.running" class="banner warn" data-testid="stack-start-error">
       <Icon name="alert" :size="18" />
       <span class="grow">

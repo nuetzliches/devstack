@@ -46,6 +46,15 @@ pub enum RunError {
 }
 
 impl Runs {
+    /// A run has not finished: it keeps the daemon (ADR-0095).
+    pub fn any_running(&self) -> bool {
+        self.runs
+            .lock()
+            .unwrap()
+            .values()
+            .any(|r| r.finished.is_none())
+    }
+
     pub fn list(&self, command: Option<&str>) -> Vec<RunInfo> {
         self.runs
             .lock()

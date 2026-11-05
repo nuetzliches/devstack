@@ -168,6 +168,9 @@ pub struct Supervisor {
     /// An `up` of this tree ran to its end (succeeded or not), since this
     /// daemon started: a restart's main slot moves after it (ADR-0052).
     upped: AtomicBool,
+    /// `up`s of this tree under way: its services and containers may all
+    /// be down yet while it starts, which must not end the daemon (ADR-0095).
+    upping: std::sync::atomic::AtomicUsize,
     /// Services started at least once by this daemon: the first start after
     /// a daemon start restores the last promoted artifact (ADR-0016).
     started: Mutex<BTreeSet<String>>,
@@ -532,6 +535,7 @@ impl Supervisor {
             stops,
             handing_over: AtomicBool::new(false),
             upped: AtomicBool::new(false),
+            upping: std::sync::atomic::AtomicUsize::new(0),
             started: Mutex::new(BTreeSet::new()),
             opened_manifest: Mutex::new(opened_manifest),
             watcher_error: Mutex::new(None),

@@ -244,8 +244,8 @@ fn stack_menu(s: &Value) -> Entry {
     ));
     match state {
         "starting" | "stopping" => {}
-        _ if running => children.push(action("Stop", format!("stop:{id}"), true)),
-        _ => children.push(action("Start", format!("start:{id}"), true)),
+        _ if running => children.push(action("Stop main", format!("stop:{id}"), true)),
+        _ => children.push(action("Start main", format!("start:{id}"), true)),
     }
     children.push(action("Open Folder", format!("folder:{id}"), true));
     Entry::Submenu {

@@ -247,7 +247,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
         <p v-if="stack.entry && !stack.running">Start it to see its services, infrastructure and commands.</p>
         <p v-else-if="stack.running">Waiting for the first snapshot…</p>
         <button v-if="stack.entry && !stack.running && !stack.readOnly" type="button" class="btn btn-primary" :disabled="starting" @click="stack.startStack()">
-          <span v-if="starting" class="spinner" /><Icon v-else name="play" /> Start stack
+          <span v-if="starting" class="spinner" /><Icon v-else name="play" /> Start main
         </button>
       </div>
     </div>

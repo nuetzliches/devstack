@@ -8,6 +8,7 @@ pub mod commands;
 pub mod diag;
 pub mod external;
 pub mod health;
+pub mod idle;
 pub mod journal;
 pub mod lanes;
 pub mod logfiles;
@@ -426,15 +427,42 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
                 ]
             });
         }
+        let runs = Arc::new(commands::Runs::default());
+        // On a node the daemon runs one lane for its requester, whose agent
+        // ends it; here it ends with the last tree it runs (ADR-0095).
+        let idle = (!remote_lane()).then(|| Arc::new(idle::Idle::default()));
         let app = api::router(api::AppState {
             sup: sup.clone(),
-            runs: Arc::new(commands::Runs::default()),
+            runs: runs.clone(),
             usage,
             token,
             port,
             shutdown: shutdown.clone(),
             lanes: Some(lanes.clone()),
+            idle: idle.clone(),
         });
+        if let Some(idle) = idle {
+            let (sup, lanes, shutdown) = (sup.clone(), lanes.clone(), shutdown.clone());
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(idle::TICK);
+                loop {
+                    tick.tick().await;
+                    // A restart hands what runs to the next daemon (ADR-0052).
+                    if lanes.restarting() {
+                        continue;
+                    }
+                    let runs = sup.runs_anything() || lanes.any_running() || runs.any_running();
+                    if idle.settle(runs, idle::GRACE) {
+                        diag::info(
+                            "daemon_idle_end",
+                            serde_json::json!({ "why": "nothing runs in it any more" }),
+                        );
+                        shutdown.notify_one();
+                        break;
+                    }
+                }
+            });
+        }
         // What a daemon before this one left running for a restart
         // (ADR-0052), taken up beside the main tree's start.
         {

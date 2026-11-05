@@ -28,7 +28,15 @@ pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
         ),
         Cmd::Down {
             keep_infra, all, ..
-        } => client::down(file, !keep_infra, all),
+        } => {
+            // A stop takes a tree's containers like its services (ADR-0095).
+            if keep_infra {
+                eprintln!(
+                    "warning: `--keep-infra` is deprecated: a stop takes the containers too, as a lane's always did; it still works for now"
+                );
+            }
+            client::down(file, !keep_infra, all)
+        }
         Cmd::Journal { lines } => {
             let c = client::need(&client::state_dir(file)?)?;
             print!("{}", client::journal_text(&c.journal()?, lines));

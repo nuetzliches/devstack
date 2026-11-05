@@ -2110,6 +2110,7 @@ impl Lanes {
             // `shutdown` inside a lane stops nothing; `down` stops the lane.
             shutdown: Arc::new(tokio::sync::Notify::new()),
             lanes: None,
+            idle: None,
         });
         let watcher = crate::watch::start(sup.clone());
         sup.follow_rebuilds();
@@ -2843,6 +2844,17 @@ impl Lanes {
         names.extend(self.remote.lock().unwrap().keys().cloned());
         names.extend(self.pending.lock().unwrap().iter().cloned());
         names.into_iter().collect()
+    }
+
+    /// Something of a lane runs: one on a node (its daemon there is this
+    /// one's to keep), one starting or moving, or one here with a service or
+    /// container up. What keeps the daemon (ADR-0095).
+    pub fn any_running(&self) -> bool {
+        if !self.remote.lock().unwrap().is_empty() || !self.pending.lock().unwrap().is_empty() {
+            return true;
+        }
+        let local: Vec<Arc<Lane>> = self.map.lock().unwrap().values().cloned().collect();
+        local.iter().any(|l| l.sup.runs_anything())
     }
 
     /// A lane runs, or starts, on this machine: it may use the main tree's

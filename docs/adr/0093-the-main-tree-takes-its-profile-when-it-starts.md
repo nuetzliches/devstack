@@ -1,6 +1,6 @@
 # ADR-0093: The main working tree takes its profile when it starts; the daemon carries none
 
-- **Status:** Accepted (card in the pull request); built
+- **Status:** Accepted (card in the pull request); built; point 6's *Start stack* gone with [ADR-0095](0095-the-daemon-ends-with-the-last-tree.md) (`main` starts on its card)
 - **Date:** 2026-11-04
 - **Deciders:** project owner
 - **Related:** [ADR-0041](0041-a-profile-says-how-a-lane-runs-for-a-purpose.md) (point 2: a profile is chosen when a tree starts, which the main tree now follows), [ADR-0081](0081-a-stack-has-a-page-every-lane-the-same-view.md) (point 2: `main`'s profile was shown disabled; superseded there), [ADR-0080](0080-the-main-tree-answers-as-a-lane-shared-is-deprecated.md) (path A: the main tree stays the daemon's home tree), [ADR-0078](0078-the-hub-follows-every-stacks-worktrees.md) (a lane's start brings the daemon up without the main tree), [ADR-0052](0052-a-restart-carries-the-lanes-over.md) (a restart), [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md)

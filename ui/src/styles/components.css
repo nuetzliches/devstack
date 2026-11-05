@@ -445,7 +445,7 @@ select.input {
 }
 
 /* Content of a view that is not live (hub away, stack down): greyed. Actions
-   such as "Start stack" stay outside the dimmed parts. */
+   such as "Start here" stay outside the dimmed parts. */
 [data-stale='true'] .stale-dim {
   filter: saturate(0.3);
   opacity: 0.7;
