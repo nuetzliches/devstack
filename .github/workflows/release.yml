@@ -13,6 +13,9 @@ name: release
 # read caches of main but not of another tag, and GitHub drops a cache unused
 # for 7 days, hence twice a week.
 #
+# The release's text is the changelog's section of its version
+# (scripts/release-notes.sh), not a list of pull requests.
+#
 # After the release, the Windows build goes to winget: job `winget` submits
 # the manifests of packaging/winget/ as a pull request to
 # microsoft/winget-pkgs (a dry run only renders and checks them). The macOS
@@ -148,8 +151,25 @@ jobs:
           name: bin-${{ matrix.target }}
           path: dist/devstack-${{ matrix.target }}*
 
+  notes:
+    # The release's text is the changelog's section of its version
+    # (scripts/release-notes.sh): a tag without one is refused before anything
+    # is published, a dry run checks the version in the tree.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: the changelog has a section for this release
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          fi
+          echo "### Release notes of $version" >> "$GITHUB_STEP_SUMMARY"
+          sh scripts/release-notes.sh "$version" | tee -a "$GITHUB_STEP_SUMMARY"
+
   publish:
-    needs: [build, advisories]
+    needs: [build, advisories, notes]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -190,8 +210,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         # --verify-tag: only a tag that exists in the repository is released.
         run: |
+          sh scripts/release-notes.sh "${GITHUB_REF_NAME#v}" > release-notes.md
+          printf '\n**Full changelog:** https://github.com/%s/blob/%s/CHANGELOG.md\n' \
+            "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" >> release-notes.md
           gh release create "$GITHUB_REF_NAME" dist/* --verify-tag \
-            --title "devstack ${GITHUB_REF_NAME#v}" --generate-notes
+            --title "devstack ${GITHUB_REF_NAME#v}" --notes-file release-notes.md
 
   winget:
     # The manifests of packaging/winget/ with this release's version and the

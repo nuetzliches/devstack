@@ -45,7 +45,10 @@ On a branch `chore/X.Y.Z` from `main`:
       not match both.
 - [ ] **Changelog.** Below `## [Unreleased]`, a heading
       `## [X.Y.Z] - YYYY-MM-DD` with a summary paragraph (the release in a
-      few sentences, then "Fixed: ..."); `[Unreleased]` stays, empty. At
+      few sentences, then "Fixed: ..."); `[Unreleased]` stays, empty. The
+      summary is what users read first: the dashboard's "What's new" lists
+      it per release after an update, the bullets one click away, and it is
+      the text of the GitHub release. At
       the end of the file, `[Unreleased]` compares from `vX.Y.Z`, and a
       line `[X.Y.Z]` compares the previous tag with `vX.Y.Z`.
 - [ ] **Plan.** In [plan.md](plan.md), the status line names the release
@@ -88,7 +91,9 @@ The release workflow checks that the tag matches `Cargo.toml` and
   symbols (`devstack-x86_64-pc-windows-msvc-pdb.zip`, for reading a hung
   hub's dump, #398), `install.sh`,
   `install.ps1` and `SHA256SUMS`, each with a build provenance
-  attestation, and notes generated from the merged pull requests;
+  attestation, and as its notes the changelog's section of the version
+  (`scripts/release-notes.sh`; job `notes` refuses a tag without one and
+  checks the version in the tree on every dry run);
 - submits the Windows build to winget (no second pull request while the
   package's first one is open; afterwards
   `gh workflow run winget.yml -f tag=vX.Y.Z` submits by hand);
@@ -109,4 +114,6 @@ patch version.
       by #PR" and a line on what changed.
 - [ ] **This machine.** `devstack update`, then `devstack down` and
       `devstack up` here: the stack runs the new daemon, and the dashboard
-      shows neither the upgrade banner nor the skills banner.
+      shows neither the upgrade banner nor the skills banner, and "What's
+      new" (the line below the top bar, then the version menu) lists the
+      release's summary.

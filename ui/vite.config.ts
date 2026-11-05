@@ -22,6 +22,8 @@ export default defineConfig(({ mode }) => {
       alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
     },
     server: {
+      // The repository's CHANGELOG.md is bundled for "What's new" (src/lib/changelogText.ts).
+      fs: { allow: [fileURLToPath(new URL('..', import.meta.url))] },
       // `npm run dev` against a running hub: forward the API, keep the page on Vite.
       proxy: mock
         ? undefined

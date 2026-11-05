@@ -6,6 +6,7 @@ import { usePopover } from '@/lib/popover';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import { useUi } from '@/stores/ui';
+import { useWhatsNew } from '@/stores/whatsNew';
 import StackSwitcher from './StackSwitcher.vue';
 import PendingIndicator from './PendingIndicator.vue';
 import NotifyMenu from './NotifyMenu.vue';
@@ -14,6 +15,7 @@ import Icon from './icons/Icon.vue';
 const hub = useHub();
 const stack = useStack();
 const ui = useUi();
+const whatsNew = useWhatsNew();
 
 // The hub's connection; whether the shown stack or lane is live is in its
 // own header (StackHeader).
@@ -43,6 +45,10 @@ const { open: verOpen, toggle: verToggle } = usePopover(verRoot, verTrigger);
 function install() {
   verOpen.value = false;
   void hub.installUpdate();
+}
+function showNews() {
+  verOpen.value = false;
+  whatsNew.show();
 }
 
 const mismatch = computed(() => {
@@ -150,6 +156,9 @@ const mismatch = computed(() => {
           <p v-else-if="hub.releaseError" class="err small" data-testid="version-check-failed">The last check for updates failed: {{ hub.releaseError }}</p>
           <p v-else-if="hub.lastCheck" class="faint small" data-testid="version-current">Up to date · checked {{ ago(hub.lastCheck.at, now) }}</p>
           <div class="ver-actions">
+            <button v-if="whatsNew.current" type="button" class="btn btn-sm" data-testid="version-whats-new" @click="showNews()">
+              <Icon name="info" :size="13" /> What's new
+            </button>
             <button v-if="!hub.newer" type="button" class="btn btn-sm" :disabled="hub.checkingUpdate" data-testid="version-check" @click="hub.checkUpdate()">
               <span v-if="hub.checkingUpdate" class="spinner" /><Icon v-else name="restart" :size="13" /> Check for updates
             </button>
