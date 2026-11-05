@@ -46,6 +46,9 @@ Decided by the agent alone (not asked):
 - A container belongs to the registered stack whose Compose project it
   carries: a group's `project` for the main tree, `<project>-<lane>` for a
   lane; of several, the longest project that fits.
+- The port of a service `up` does not start (`autostart = false`) is not
+  checked as held: it is taken only when the service starts, and that
+  start fails on it as before.
 - The lanes' port allocation is unchanged: it avoids the other stacks'
   claims and what is in use already.
 - devstack does not touch the restart policy of anyone's Compose files.

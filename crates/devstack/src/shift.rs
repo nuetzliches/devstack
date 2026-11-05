@@ -411,10 +411,18 @@ pub fn before_up(stack_file: &Path, running: bool, asked: Option<Asked>) -> Resu
     let mut found = collisions(&ports, &others);
     // What holds a port now, not only who claims it (ADR-0096): Docker
     // starts a stopped stack's containers again by their restart policy.
+    // A service `up` does not start takes its port only when it is
+    // started, and its start says so then.
+    let later: BTreeSet<u16> = stack
+        .services
+        .values()
+        .filter(|s| !s.autostart)
+        .filter_map(|s| s.port?.checked_add(shift))
+        .collect();
     let taken: Vec<u16> = ports
         .iter()
         .copied()
-        .filter(|p| devstack_daemon::supervisor::port_in_use(*p))
+        .filter(|p| !later.contains(p) && devstack_daemon::supervisor::port_in_use(*p))
         .collect();
     let programs = if taken.is_empty() {
         Vec::new()
