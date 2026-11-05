@@ -29,7 +29,7 @@ describe('mock ports (ADR-0082)', () => {
     const other = new MockStack(docsSeed(now));
     const h = hubPorts([shop, other], () => []);
     const holders = runningHolders(other.entry.id, h.overlaps);
-    expect(holders).toEqual([{ name: 'shop', ports: [4200] }]);
+    expect(holders).toEqual([{ id: shop.entry.id, name: 'shop', ports: [4200], containers: false }]);
     expect(refusal(holders)).toContain('devstack up --shift auto');
     const shift = autoShift(other, [shop, other]);
     expect(shift).toBe(1000);

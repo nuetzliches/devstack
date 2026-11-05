@@ -11,6 +11,7 @@ pub mod health;
 pub mod idle;
 pub mod journal;
 pub mod lanes;
+pub mod leftover;
 pub mod logfiles;
 pub(crate) mod loopback;
 pub mod namedtunnel;

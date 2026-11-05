@@ -2,7 +2,9 @@
 //! tree's daemon starts, `devstack up` compares the stack's ports, after
 //! its shift on this machine, with what the other registered stacks claim.
 //! A running stack's claim refuses the start, naming it, and offers a
-//! shift; a stopped stack's only warns. `--shift auto|<n>|none` sets the
+//! shift; a stopped stack's only warns, unless something holds the port
+//! now (ADR-0096): a stopped stack's containers (Docker started them by
+//! their restart policy), or another program. `--shift auto|<n>|none` sets the
 //! shift in the stack's registry entry, where it sticks; the daemon moves
 //! the stack by it when it starts.
 
@@ -55,6 +57,30 @@ pub fn base_ports(stack: &devstack_config::Stack, own: Option<&Entry>) -> BTreeS
     out
 }
 
+/// The host ports the main tree's Compose files publish, as `docker compose
+/// config` reads them: what a stack that never ran has no claim of yet
+/// (ADR-0096). Nothing when Docker does not answer.
+fn compose_published(stack: &devstack_config::Stack, repo: &Path) -> BTreeSet<u16> {
+    let docker = devstack_compose::Docker::clean();
+    stack
+        .compose
+        .iter()
+        .filter_map(|(name, cfg)| {
+            docker
+                .config(&devstack_compose::Group::from_config(name, cfg, repo))
+                .ok()
+        })
+        .flat_map(|m| m.services.into_values())
+        .flat_map(|s| s.ports)
+        .filter_map(|p| published_first(p.published.as_deref()?))
+        .collect()
+}
+
+/// The first host port of a published port (`5432`, `8000-8001`).
+fn published_first(text: &str) -> Option<u16> {
+    text.split('-').next()?.trim().parse().ok()
+}
+
 /// `base` moved by `shift`; `None` beyond 65535.
 fn moved(base: &BTreeSet<u16>, shift: u16) -> Option<BTreeSet<u16>> {
     base.iter().map(|p| p.checked_add(shift)).collect()
@@ -63,11 +89,14 @@ fn moved(base: &BTreeSet<u16>, shift: u16) -> Option<BTreeSet<u16>> {
 /// Another stack that claims some of the ports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Collision {
+    pub id: String,
     pub name: String,
     pub repo: String,
     pub running: bool,
     /// Each port, with who of it claims it (`main` or a lane).
     pub ports: Vec<(u16, String)>,
+    /// The ports its containers hold now (ADR-0096).
+    pub held: Vec<u16>,
 }
 
 impl Collision {
@@ -99,12 +128,72 @@ pub fn collisions(ports: &BTreeSet<u16>, others: &[Other]) -> Vec<Collision> {
                 .filter_map(|p| Some((*p, o.entry.claims.holder(*p)?.to_string())))
                 .collect();
             (!hit.is_empty()).then(|| Collision {
+                id: o.entry.id.clone(),
                 name: o.entry.name.clone(),
                 repo: o.entry.repo.display().to_string(),
                 running: o.running,
                 ports: hit,
+                held: Vec::new(),
             })
         })
+        .collect()
+}
+
+/// Of `taken` (ports something holds now), those a container of another
+/// stack holds (`held_by`: port -> stack id, [`devstack_daemon::leftover`])
+/// go to that stack's collision, one added for a stack that claims none of
+/// them; this stack's own (`own_id`) are its own; the rest another program
+/// holds, which is returned (ADR-0096).
+pub fn add_held(
+    found: &mut Vec<Collision>,
+    taken: &[u16],
+    held_by: &BTreeMap<u16, String>,
+    own_id: &str,
+    others: &[Other],
+) -> Vec<u16> {
+    let mut programs = Vec::new();
+    for p in taken {
+        match held_by.get(p) {
+            Some(id) if id == own_id => {}
+            Some(id) => {
+                if let Some(c) = found.iter_mut().find(|c| &c.id == id) {
+                    c.held.push(*p);
+                } else if let Some(o) = others.iter().find(|o| &o.entry.id == id) {
+                    found.push(Collision {
+                        id: id.clone(),
+                        name: o.entry.name.clone(),
+                        repo: o.entry.repo.display().to_string(),
+                        running: o.running,
+                        ports: Vec::new(),
+                        held: vec![*p],
+                    });
+                } else {
+                    programs.push(*p);
+                }
+            }
+            None => programs.push(*p),
+        }
+    }
+    programs
+}
+
+/// The ports running Compose containers publish, by the registered stack
+/// they belong to (this one, `own_id`, among them), port -> stack id.
+fn held_by(
+    own_id: &str,
+    stack: &devstack_config::Stack,
+    others: &[Other],
+) -> BTreeMap<u16, String> {
+    use devstack_daemon::leftover;
+    let mut known = leftover::projects(own_id, stack);
+    for o in others {
+        if let Ok(st) = devstack_config::load(&o.entry.file) {
+            known.extend(leftover::projects(&o.entry.id, &st));
+        }
+    }
+    leftover::entries(&known, &leftover::running())
+        .into_iter()
+        .flat_map(|(id, es)| es.into_iter().map(move |e| (e.port, id.clone())))
         .collect()
 }
 
@@ -142,39 +231,85 @@ pub enum Decision {
     Refuse(String),
 }
 
-/// Refuse when a running stack claims one of the ports, naming it, and
-/// offer the shifts (`suggested`: what `auto` would take); a stopped
-/// stack's claim is a warning (ADR-0082 point 6).
-pub fn decide(collisions: &[Collision], shift: u16, suggested: Option<u16>) -> Decision {
-    let running: Vec<&Collision> = collisions.iter().filter(|c| c.running).collect();
-    if !running.is_empty() {
-        let who: Vec<String> = running
+/// Refuse when a running stack claims one of the ports, or something holds
+/// one now: a stopped stack's containers, another program (`programs`,
+/// ADR-0096). Name each, and offer what frees the ports (`devstack down`
+/// in a stack whose containers hold them) and the shifts (`suggested`:
+/// what `auto` would take). A stopped stack's claim on a free port is a
+/// warning (ADR-0082 point 6).
+pub fn decide(
+    collisions: &[Collision],
+    programs: &[u16],
+    shift: u16,
+    suggested: Option<u16>,
+) -> Decision {
+    let blocking: Vec<&Collision> = collisions
+        .iter()
+        .filter(|c| c.running || !c.held.is_empty())
+        .collect();
+    if !blocking.is_empty() || !programs.is_empty() {
+        let list = |ps: &[u16]| ps.iter().map(u16::to_string).collect::<Vec<_>>().join(", ");
+        let mut who: Vec<String> = blocking
             .iter()
             .map(|c| {
-                format!(
-                    "the stack `{}` ({}) runs on {}",
-                    c.name,
-                    c.repo,
-                    c.ports_text()
-                )
+                if c.running {
+                    let mut text = c.ports_text();
+                    let more: Vec<u16> = c
+                        .held
+                        .iter()
+                        .copied()
+                        .filter(|p| !c.ports.iter().any(|(q, _)| q == p))
+                        .collect();
+                    if !more.is_empty() {
+                        if !text.is_empty() {
+                            text.push_str(", ");
+                        }
+                        text.push_str(&list(&more));
+                    }
+                    format!("the stack `{}` ({}) runs on {text}", c.name, c.repo)
+                } else {
+                    format!(
+                        "the containers of the stack `{}` ({}) hold {}, though its daemon does not run",
+                        c.name,
+                        c.repo,
+                        list(&c.held)
+                    )
+                }
             })
             .collect();
+        if !programs.is_empty() {
+            who.push(format!("another program holds {}", list(programs)));
+        }
         let at = if shift == 0 {
             "its ports".to_string()
         } else {
             format!("its ports shifted by {shift}")
         };
+        let mut text = format!(
+            "this stack would start on {at}, and {}. Nothing started; whoever was first keeps its ports.\n",
+            who.join("; ")
+        );
+        for c in blocking.iter().filter(|c| !c.running) {
+            text.push_str(&format!(
+                "Remove the containers of `{}` (its data stays): `devstack down` in {}\n",
+                c.name, c.repo
+            ));
+        }
+        if let Some(p) = programs.first() {
+            text.push_str(&format!(
+                "Find the program: `Get-NetTCPConnection -LocalPort {p}` (Windows), `lsof -nP -iTCP:{p} -sTCP:LISTEN` (macOS, Linux)\n"
+            ));
+        }
         let auto = suggested
             .map(|s| format!(" (the lowest free one now: {s})"))
             .unwrap_or_default();
-        return Decision::Refuse(format!(
-            "this stack would start on {at}, and {}. Nothing started; whoever was first keeps its ports.\n\
-             Start this stack moved by a port shift on this machine (its services, containers and links move; its data stays):\n  \
+        text.push_str(&format!(
+            "Or start this stack moved by a port shift on this machine (its services, containers and links move; its data stays):\n  \
              devstack up --shift auto{auto}\n  \
              devstack up --shift <n>    (a multiple of {SHIFT_STEP})\n\
-             The shift sticks to this stack on this machine until `devstack up --shift none`.",
-            who.join("; ")
+             The shift sticks to this stack on this machine until `devstack up --shift none`."
         ));
+        return Decision::Refuse(text);
     }
     Decision::Go(
         collisions
@@ -244,7 +379,10 @@ pub fn before_up(stack_file: &Path, running: bool, asked: Option<Asked>) -> Resu
             ),
         };
     }
-    let base = base_ports(&stack, own.as_ref());
+    let mut base = base_ports(&stack, own.as_ref());
+    if own.as_ref().is_none_or(|e| e.claims.main.is_empty()) {
+        base.extend(compose_published(&stack, &base_entry.repo));
+    }
     let others = registry::others(&base_entry.id);
     let claimed: BTreeSet<u16> = others.iter().flat_map(|o| o.entry.claims.ports()).collect();
     let step = stack.lanes.port_step;
@@ -270,8 +408,34 @@ pub fn before_up(stack_file: &Path, running: bool, asked: Option<Asked>) -> Resu
             "the shift {shift} moves a port of this stack beyond 65535: `devstack up --shift none`, or a smaller one"
         )
     })?;
-    let found = collisions(&ports, &others);
-    let mut notes = match decide(&found, shift, None) {
+    let mut found = collisions(&ports, &others);
+    // What holds a port now, not only who claims it (ADR-0096): Docker
+    // starts a stopped stack's containers again by their restart policy.
+    // A service `up` does not start takes its port only when it is
+    // started, and its start says so then.
+    let later: BTreeSet<u16> = stack
+        .services
+        .values()
+        .filter(|s| !s.autostart)
+        .filter_map(|s| s.port?.checked_add(shift))
+        .collect();
+    let taken: Vec<u16> = ports
+        .iter()
+        .copied()
+        .filter(|p| !later.contains(p) && devstack_daemon::supervisor::port_in_use(*p))
+        .collect();
+    let programs = if taken.is_empty() {
+        Vec::new()
+    } else {
+        add_held(
+            &mut found,
+            &taken,
+            &held_by(&base_entry.id, &stack, &others),
+            &base_entry.id,
+            &others,
+        )
+    };
+    let mut notes = match decide(&found, &programs, shift, None) {
         Decision::Go(w) => w,
         Decision::Refuse(_) => {
             let suggested = if asked == Some(Asked::Auto) {
@@ -279,7 +443,7 @@ pub fn before_up(stack_file: &Path, running: bool, asked: Option<Asked>) -> Resu
             } else {
                 auto()
             };
-            match decide(&found, shift, suggested) {
+            match decide(&found, &programs, shift, suggested) {
                 Decision::Refuse(why) => bail!("{why}"),
                 Decision::Go(w) => w,
             }
@@ -365,7 +529,7 @@ mod tests {
         ];
         let found = collisions(&ports, &others);
         assert_eq!(found.len(), 2, "{found:?}");
-        match decide(&found, 0, Some(1000)) {
+        match decide(&found, &[], 0, Some(1000)) {
             Decision::Refuse(why) => {
                 assert!(why.contains("`shop`") && why.contains("5000"), "{why}");
                 assert!(
@@ -382,7 +546,7 @@ mod tests {
         }
         // Only the stopped one: a warning, then go on.
         let found = collisions(&ports, &others[1..]);
-        match decide(&found, 0, None) {
+        match decide(&found, &[], 0, None) {
             Decision::Go(w) => {
                 assert_eq!(w.len(), 1);
                 assert!(
@@ -393,7 +557,50 @@ mod tests {
             d => panic!("{d:?}"),
         }
         // Nobody else: go on, nothing to say.
-        assert_eq!(decide(&[], 1000, None), Decision::Go(Vec::new()));
+        assert_eq!(decide(&[], &[], 1000, None), Decision::Go(Vec::new()));
+    }
+
+    #[test]
+    fn a_port_held_now_refuses_the_start_whoever_holds_it() {
+        let ports = BTreeSet::from([4317, 5432, 8080]);
+        let others = vec![
+            other("docs", false, &[4317, 5432], &[]),
+            other("blog", false, &[], &[]),
+        ];
+        let mut found = collisions(&ports, &others);
+        // Without anything holding them: only a warning.
+        assert!(matches!(decide(&found, &[], 0, None), Decision::Go(w) if w.len() == 1));
+        // docs' containers hold 4317, blog's 9000 (not ours), ours 5432
+        // (left from our own last run), something else 8080.
+        let held = BTreeMap::from([(4317, "docs-id".to_string()), (5432, "me".to_string())]);
+        let programs = add_held(&mut found, &[4317, 5432, 8080], &held, "me", &others);
+        assert_eq!(programs, vec![8080]);
+        assert_eq!(found[0].held, vec![4317]);
+        match decide(&found, &programs, 0, Some(2000)) {
+            Decision::Refuse(why) => {
+                assert!(
+                    why.contains("the containers of the stack `docs`")
+                        && why.contains("hold 4317, though its daemon does not run"),
+                    "{why}"
+                );
+                assert!(why.contains("another program holds 8080"), "{why}");
+                assert!(why.contains("`devstack down` in /work/docs"), "{why}");
+                assert!(
+                    why.contains("--shift auto (the lowest free one now: 2000)"),
+                    "{why}"
+                );
+                assert!(!why.contains("5432,"), "our own container is ours: {why}");
+            }
+            d => panic!("{d:?}"),
+        }
+        // A stack that claims none of them, whose containers hold one.
+        let mut found = Vec::new();
+        let held = BTreeMap::from([(8080, "blog-id".to_string())]);
+        assert!(add_held(&mut found, &[8080], &held, "me", &others).is_empty());
+        assert_eq!(
+            (found[0].name.as_str(), found[0].held.clone()),
+            ("blog", vec![8080])
+        );
     }
 
     #[test]
@@ -420,5 +627,8 @@ port = 5000
         assert_eq!(base_ports(&stack, None), BTreeSet::from([5000]));
         assert_eq!(base_ports(&stack, Some(&own)), BTreeSet::from([5000, 5432]));
         assert_eq!(moved(&BTreeSet::from([65000]), 1000), None);
+        assert_eq!(published_first("5432"), Some(5432));
+        assert_eq!(published_first("8000-8001"), Some(8000));
+        assert_eq!(published_first(""), None);
     }
 }

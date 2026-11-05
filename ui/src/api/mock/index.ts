@@ -8,6 +8,7 @@
 //   ?mock=hubtrouble the hub's last release check failed, and devstack's name is not registered for notifications
 //   ?mock=skills     shop's stack file has no `reviewed`; its agent skills name an older devstack
 //   ?mock=startfailed  the docs stack's last start from the dashboard failed
+//   ?mock=strays     the stopped docs stack's containers run (Docker started them again, ADR-0096)
 //   Add a stack with a path containing "broken": a stack file that does not load
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
@@ -246,6 +247,7 @@ class MockHub {
     // `?mock=nofile`: docs was registered, then its setup broken off and its stack file removed; `?mock=badfile`: it does not load.
     if (q.includes('nofile')) docs.entry.no_file = true;
     if (q.includes('badfile')) this.brokenFile = docs;
+    if (q.includes('strays')) docs.strayContainers = true;
     if (q.includes('startfailed')) docs.entry.start_error = 'Error: port 4000 (site) is taken by another process (node.exe, pid 4242)\n  devstack doctor names it; stop it or change the port in devstack.toml';
     // `?mock=skills`: shop was set up with an older devstack.
     // `?mock=worktrees`: a worktree appears in docs (not running) after 4 s, as one made by `git worktree add` elsewhere.
@@ -915,6 +917,13 @@ export class MockTransport implements Transport {
       return empty(202);
     }
     if (rest === '/down' && method === 'POST') {
+      // Without a daemon: its containers that run all the same go (ADR-0096).
+      if (!stack.running) {
+        if (!stack.strayContainers) return json(503, { error: 'stack not running' });
+        stack.strayContainers = false;
+        hub.publish();
+        return json(200, { removed: stack.view.infra.map((g) => g.project) });
+      }
       setTimeout(() => stack.goDown(), 600);
       return empty(202);
     }

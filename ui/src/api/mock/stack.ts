@@ -44,6 +44,8 @@ export class MockStack {
   startedLanes = new Set<string>();
   /** Worktrees without a stack file of their own (ADR-0055) until one is copied in. */
   noStackFile = new Set<string>(['C:\\work\\_wt\\1333']);
+  /** Its containers run though its daemon does not (ADR-0096; `?mock=strays`). */
+  strayContainers = false;
   private seq = 1;
   private nextRun = 1;
   private eventSubs = new Set<Listener<StackEvent>>();

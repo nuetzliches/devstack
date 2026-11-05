@@ -1487,6 +1487,100 @@ impl Docker {
         }
         Ok(total)
     }
+
+    /// The host ports every running Compose container on this engine
+    /// publishes, with its project and service: who holds a port while no
+    /// daemon of its stack runs (ADR-0096).
+    pub fn published_by_projects(&self) -> Result<Vec<ProjectPort>> {
+        let a: Vec<OsString> = vec![
+            "ps".into(),
+            "--filter".into(),
+            "label=com.docker.compose.project".into(),
+            "--format".into(),
+            "{{.Label \"com.docker.compose.project\"}}\t{{.Label \"com.docker.compose.service\"}}\t{{.Ports}}".into(),
+        ];
+        let out = self.run(Path::new("."), &a, budget::QUICK)?;
+        Ok(parse_project_ports(&String::from_utf8_lossy(&out.stdout)))
+    }
+
+    /// Stop and remove the containers of the Compose project `project`,
+    /// volumes and networks of other projects kept: what `down` does
+    /// without its files, by the project's labels (ADR-0096).
+    pub fn down_project(&self, project: &str) -> Result<()> {
+        let a: Vec<OsString> = vec![
+            "compose".into(),
+            "-p".into(),
+            project.into(),
+            "down".into(),
+            "--timeout".into(),
+            "10".into(),
+        ];
+        self.run(Path::new("."), &a, budget::STOP).map(|_| ())
+    }
+}
+
+/// A host port a running Compose container publishes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectPort {
+    pub project: String,
+    pub service: String,
+    /// On this machine.
+    pub port: u16,
+    /// In the container.
+    pub target: u16,
+    /// `tcp` or `udp`.
+    pub proto: String,
+}
+
+/// Lines of `project\tservice\tports`, `ports` as `docker ps` writes them
+/// (`127.0.0.1:4317-4318->4317-4318/tcp, [::]:80->80/tcp, 9000/tcp`): each
+/// published host port and protocol once; an exposed port without a host
+/// side is none.
+pub fn parse_project_ports(text: &str) -> Vec<ProjectPort> {
+    let range = |s: &str| -> Option<(u16, u16)> {
+        match s.split_once('-') {
+            Some((a, b)) => Some((a.parse().ok()?, b.parse().ok()?)),
+            None => {
+                let p = s.parse().ok()?;
+                Some((p, p))
+            }
+        }
+    };
+    let mut out: Vec<ProjectPort> = Vec::new();
+    for line in text.lines() {
+        let mut f = line.splitn(3, '\t');
+        let (Some(project), Some(service), Some(ports)) = (f.next(), f.next(), f.next()) else {
+            continue;
+        };
+        if project.trim().is_empty() {
+            continue;
+        }
+        for p in ports.split(',').map(str::trim) {
+            let Some((host, inner)) = p.split_once("->") else {
+                continue;
+            };
+            let (inner, proto) = inner.split_once('/').unwrap_or((inner, "tcp"));
+            let Some((_, host)) = host.rsplit_once(':') else {
+                continue;
+            };
+            let (Some((h0, h1)), Some((t0, _))) = (range(host), range(inner)) else {
+                continue;
+            };
+            for (i, port) in (h0..=h1).enumerate() {
+                let e = ProjectPort {
+                    project: project.trim().to_string(),
+                    service: service.trim().to_string(),
+                    port,
+                    target: t0.saturating_add(i as u16),
+                    proto: proto.to_string(),
+                };
+                if !out.contains(&e) {
+                    out.push(e);
+                }
+            }
+        }
+    }
+    out
 }
 
 pub fn parse_stats(text: &str) -> std::result::Result<Vec<ContainerStats>, String> {
@@ -1589,6 +1683,37 @@ fn describe(program: &str, args: &[OsString]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn published_ports_by_project_come_from_docker_ps() {
+        let text = "shop-dev\totel\t127.0.0.1:4317-4318->4317-4318/tcp\n\
+                    shop-dev\tweb\t0.0.0.0:80->8080/tcp, [::]:80->8080/tcp, 9000/tcp\n\
+                    shop-dev\tdns\t127.0.0.1:5353->53/udp\n\
+                    \tloose\t0.0.0.0:1234->1234/tcp\n\
+                    docs-dev\tdb\t\n";
+        let got = parse_project_ports(text);
+        let ports: Vec<(&str, &str, u16, u16, &str)> = got
+            .iter()
+            .map(|p| {
+                (
+                    p.project.as_str(),
+                    p.service.as_str(),
+                    p.port,
+                    p.target,
+                    p.proto.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            ports,
+            vec![
+                ("shop-dev", "otel", 4317, 4317, "tcp"),
+                ("shop-dev", "otel", 4318, 4318, "tcp"),
+                ("shop-dev", "web", 80, 8080, "tcp"),
+                ("shop-dev", "dns", 5353, 53, "udp"),
+            ]
+        );
+    }
 
     #[test]
     fn probe_tells_a_lost_forward_from_a_silent_server() {

@@ -1997,23 +1997,29 @@ fn a_failed_first_start_restores_again() {
     }
     let s = Stack::new(false);
     let port = free_port();
+    // `app` is started by hand: `up` refuses a port held at its start
+    // (ADR-0096), a service's own start fails on it. `keep` keeps the
+    // daemon meanwhile (ADR-0095).
     std::fs::write(
         s.file(),
         format!(
-            "version = 1\n[stack]\nname = \"restore\"\n[services.app]\n{SITE_BUILD}run = \"{}\"\nport = {port}\nproxy = false\n",
+            "version = 1\n[stack]\nname = \"restore\"\n[services.keep]\nrun = \"{}\"\n[services.app]\n{SITE_BUILD}run = \"{}\"\nport = {port}\nproxy = false\nautostart = false\n",
+            runs_for(600),
             runs_for(600)
         ),
     )
     .unwrap();
     s.ok(&["up"]);
+    s.ok(&["start", "app"]);
     let promoted = s.build_of("app");
     assert!(!promoted.is_empty(), "{}", s.diag());
     s.ok(&["down"]);
 
     s.edit_site("<p>edited while down</p>");
     let held = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
-    let up = s.cli(&["up"], None);
-    assert!(!up.status.success(), "the port is held: {}", s.diag());
+    s.ok(&["up"]);
+    let start = s.cli(&["start", "app"], None);
+    assert!(!start.status.success(), "the port is held: {}", s.diag());
     drop(held);
     s.ok(&["start", "app"]);
     assert_eq!(

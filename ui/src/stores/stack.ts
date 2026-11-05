@@ -1542,6 +1542,22 @@ export const useStack = defineStore('stack', () => {
   }
 
   /**
+   * Stop and remove the containers of stack `sid`, whose daemon does not
+   * run (ADR-0096): they hold ports another stack needs. Volumes stay.
+   */
+  async function removeContainers(sid: string, name: string) {
+    if (refuseReadOnly()) return;
+    const ok = await ui.confirm({
+      title: `Remove the containers of ${name}`,
+      text: `Its daemon does not run, but its containers do: they are stopped and removed (devstack down). Their volumes stay; the next start of ${name} creates them again.`,
+      confirmLabel: 'Remove containers',
+      danger: true,
+    });
+    if (!ok) return;
+    await act({ label: `Remove the containers of ${name}`, path: paths.down(sid, true), success: 'Containers removed' });
+  }
+
+  /**
    * End the starts asked for that are over: the lane's daemon reported it
    * (the lane shown: its own stream's first snapshot; another: the lane
    * list calls it started), or its start failed (the start page shows why,
@@ -1664,5 +1680,6 @@ export const useStack = defineStore('stack', () => {
     containerAction,
     startStack,
     stopStack,
+    removeContainers,
     restartStack, restartLanes, shareLane };
 });

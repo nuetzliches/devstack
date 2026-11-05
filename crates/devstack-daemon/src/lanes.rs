@@ -490,6 +490,12 @@ fn compose_projects() -> Vec<(String, String)> {
         .collect()
 }
 
+/// The names of every Compose project on this machine's engine, running
+/// or not ([`compose_projects`]).
+pub(crate) fn compose_project_names() -> Vec<String> {
+    compose_projects().into_iter().map(|(n, _)| n).collect()
+}
+
 /// `path` among Compose's comma-separated `files`, spelled either way.
 fn among(files: &str, path: &Path) -> bool {
     let norm = |s: &str| {
@@ -2467,7 +2473,12 @@ impl Lanes {
                 std::thread::Builder::new()
                     .name(format!("lane-cold-{name}"))
                     .spawn(move || {
-                        if let Err(e) = sup.up() {
+                        // One `up` of a tree at a time (ADR-0096): one
+                        // under way already is this start.
+                        if !sup.begin_up() {
+                            return;
+                        }
+                        if let Err(e) = sup.up_begun() {
                             sup.emit(crate::state::EventBody::Infra {
                                 group: "*".into(),
                                 message: format!("up stopped: {e}"),

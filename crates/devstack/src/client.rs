@@ -2510,6 +2510,20 @@ pub fn down(stack_file: &Path, infra: bool, all: bool) -> Result<()> {
     let c = match Client::probe(&sd) {
         Ok(Some(c)) => c,
         Ok(None) => {
+            // Its containers may run all the same: Docker starts them
+            // again by their restart policy (ADR-0096).
+            if infra && worktree().is_none() {
+                let stack = devstack_config::load(stack_file)?;
+                let removed =
+                    devstack_daemon::leftover::remove(&stack, all).map_err(|e| anyhow!(e))?;
+                if !removed.is_empty() {
+                    println!(
+                        "no daemon is running for this stack; its containers removed (volumes kept): {}",
+                        removed.join(", ")
+                    );
+                    return Ok(());
+                }
+            }
             println!("no daemon is running for this stack");
             return Ok(());
         }
