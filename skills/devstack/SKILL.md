@@ -83,7 +83,7 @@ Run from the repository root (devstack looks for `{{devstack:stack_file}}` there
 | `devstack hub notify` | the desktop notifications the hub shows (a build failed, a candidate held, a service crashed, a lane's start on a node failed) and whether they show; `on\|off <kind>…\|all`, `test`. The user's own choice: change it only when asked |
 | `devstack hub tray` | whether the tray icon runs (the hub starts it); `on\|off`. The user's own choice: change it only when asked |
 | `devstack update` | install the newest devstack (`--check` only asks); stacks switch at their next restart |
-| `devstack down` | stop the services and the daemon and remove the containers (volumes, and with them the data, stay); `down --keep-infra` leaves the containers running. In the main tree, lanes that run keep the daemon, what serves them and the `shared` containers they use (only the main tree's services and its other containers stop); `down --all` stops the lanes too: ask first, they may be someone else's |
+| `devstack down` | stop this tree's services and remove its containers (volumes, and with them the data, stay); the daemon ends by itself once no tree runs. In the main tree, lanes that run keep what serves them and the `shared` containers they use (only the main tree's services and its other containers stop); `down --all` stops the lanes too: ask first, they may be someone else's. `--keep-infra` is deprecated |
 
 ### Is my change live?
 
@@ -187,7 +187,7 @@ shows *no MCP* in the stack's head while neither has it):
 | a service exits right after start | `devstack logs <service> -n 200`; every start has its own log in `.devstack/logs/<service>/run-*.log` |
 | dashboard: "hub not reachable" | `devstack ui` (or the "Start hub" button once `devstack hub install` ran; macOS has none yet: `devstack hub start`) |
 | this skill names services or commands the stack file no longer has | the devstack hub writes it again within seconds of a change; without a running hub, `devstack skills install` refreshes it. `devstack skills check` fails when git still tracks it: the hub leaves such a copy alone, and the `git rm -r --cached` it prints takes it out of git |
-| dashboard: "runs devstack X, Y is installed" | the stack still runs the old daemon: "Restart stack" there, or `devstack down` + `devstack up` |
+| dashboard: "runs devstack X, Y is installed" | the stack still runs the old daemon: "Reload" on the stack's page, or `devstack down` + `devstack up` |
 | a job `failed` after a long wait | jobs end after 30 minutes unless the stack file sets `timeout`; read its log, then ask the user before raising it (skill `devstack-config`) |
 | `devstack down` names services that did not stop | they still run: `devstack status`, then `devstack stop <service>`; ask before ending a process yourself |
 | `devstack up --on`: the node refuses the lane | the message names what the lane's Compose files ask that a node does not allow (privileged, host mounts, devices, build `tags`, a service key the node does not know, ...) or that the pool has not granted that node; the lane can still run on this machine with `devstack up --on local` (a plain `devstack up` goes to the machine's default, which may be the pool again) |

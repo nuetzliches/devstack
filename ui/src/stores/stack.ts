@@ -10,7 +10,7 @@ import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
 import { useHub } from './hub';
 import { usePool } from './pool';
-import { useUi, type ConfirmOption } from './ui';
+import { useUi } from './ui';
 
 const MAX_EVENTS = 500;
 const HISTORY_WINDOW_MS = 10 * 60_000;
@@ -533,37 +533,8 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
-  /**
-   * The last lane that runs (main included) stops: ask, and offer the whole
-   * stack's stop, on by default; the daemon would only idle on. `true`: go on
-   * with the lane's own stop; `false`: cancelled, or the stack stops instead.
-   */
-  async function lastLaneStop(name: string): Promise<boolean> {
-    const others = runningLanes.value.filter((l) => l !== name);
-    if (others.length || (name !== MAIN && mainActive.value) || !id.value) return true;
-    const option: ConfirmOption = { label: 'Stop the stack too', hint: 'Its daemon exits and its containers go; their volumes stay.', checked: true };
-    const ok = await ui.confirm({
-      title: `Stop ${name}`,
-      text: `${name} is the last lane that runs: nothing of the stack runs once it stops.`,
-      confirmLabel: 'Stop',
-      option,
-    });
-    if (!ok) return false;
-    if (!option.checked) return true;
-    const stackName = entry.value?.name ?? 'stack';
-    const unmark = mark('stack', 'stop');
-    try {
-      const sid = id.value;
-      const r = await act({ label: `Stop ${stackName}`, path: paths.down(sid, true, false, true), success: 'Stopping the stack…' });
-      if (r.ok) hub.markStopping(sid);
-    } finally {
-      unmark();
-    }
-    return false;
-  }
-
   async function stopLane(name: string) {
-    if (!id.value || !(await lastLaneStop(name))) return;
+    if (!id.value) return;
     // A start under way ends with it: its page shows the lane stopped.
     endStart(id.value, name);
     const unmark = mark('lane-stop', name);
@@ -574,7 +545,7 @@ export const useStack = defineStore('stack', () => {
         success: `Lane ${name} stopped`,
       });
       // The lane stays shown, with its start: the eyes are on the button that
-      // stopped it, and "Stop stack" there would be the main tree's.
+      // stopped it, and "Stop all" there would stop every tree.
       if (res.ok) await loadLanes();
     } finally {
       unmark();
@@ -633,9 +604,9 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
-  /** Stop the main working tree only: its services and containers; the daemon and every lane keep running. */
+  /** Stop the main working tree only: its services and containers; every lane keeps running, the daemon ends with the last tree (ADR-0095). */
   async function stopMain() {
-    if (refuseReadOnly() || !id.value || !(await lastLaneStop(MAIN))) return;
+    if (refuseReadOnly() || !id.value) return;
     endStart(id.value, MAIN);
     const unmark = mark('lane-stop', MAIN);
     try {
@@ -1485,9 +1456,9 @@ export const useStack = defineStore('stack', () => {
     const fresh = !!profile && !!view.value?.profiles?.find((p) => p.name === profile)?.fresh;
     const profileText = profile ? ` main starts again with the profile ${profile}${fresh ? ', with fresh data: its volumes go' : ''}.` : '';
     const ok = await ui.confirm({
-      title: `Restart ${name}`,
-      text: `All services stop and start again, with the installed devstack and the current stack file. Containers keep running unless the file changes them.${lanesText ? ` ${lanesText}` : ''}${profileText}`,
-      confirmLabel: 'Restart stack',
+      title: `Reload ${name}`,
+      text: `Its daemon starts again with the installed devstack and the current stack file: all services stop and start again. Containers keep running unless the file changes them.${lanesText ? ` ${lanesText}` : ''}${profileText}`,
+      confirmLabel: 'Reload',
       danger: (!restartLanes.value.carried && !!lanesText) || fresh,
     });
     if (!ok) return;
@@ -1541,38 +1512,33 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
-  /** Stop the whole stack (ADR-0081): every lane, the main working tree, and the daemon. */
+  /**
+   * Stop every tree of the stack (ADR-0095): `main` and each lane, with
+   * their services and containers (volumes stay); the daemon ends with the
+   * last of them.
+   */
   async function stopStack() {
     if (refuseReadOnly()) return;
     if (!id.value || busy.value['stack']) return;
     const name = entry.value?.name ?? 'stack';
     const stopping = runningLanes.value;
-    // Stop takes the containers too (ADR-0068), unless asked to keep them.
-    const containers = (mainView.value ?? view.value)?.infra.some((g) => g.containers.length) ?? true;
-    const option = containers ? keepContainers() : undefined;
     const ok = await ui.confirm({
-      title: `Stop ${name}`,
+      title: `Stop all of ${name}`,
       text: stopping.length
-        ? `All services and containers of this stack stop: the main working tree's, and ${laneList(stopping)}. Its daemon exits; their volumes stay.`
-        : 'All services and containers of this stack stop and its daemon exits. Their volumes stay.',
-      confirmLabel: 'Stop stack',
+        ? `Every tree of this stack stops with its services and containers: main, and ${laneList(stopping)}. Its daemon ends with the last; their volumes stay.`
+        : 'Every tree of this stack stops with its services and containers, and its daemon ends with them. Their volumes stay.',
+      confirmLabel: 'Stop all',
       danger: true,
-      option,
     });
     if (!ok) return;
     const unmark = mark('stack', 'stop');
     try {
       const sid = id.value;
-      const r = await act({ label: `Stop ${name}`, path: paths.down(sid, !option?.checked, false, true), success: 'Stopping the stack…' });
+      const r = await act({ label: `Stop ${name}`, path: paths.down(sid, true, false, true), success: 'Stopping every tree…' });
       if (r.ok) hub.markStopping(sid);
     } finally {
       unmark();
     }
-  }
-
-  /** The choice to leave a stack's containers running when it stops (`devstack down --keep-infra`). */
-  function keepContainers(): ConfirmOption {
-    return { label: 'Keep its containers running', hint: 'The next start is faster; `devstack down` removes them later.', checked: false };
   }
 
   /**
@@ -1630,7 +1596,6 @@ export const useStack = defineStore('stack', () => {
     treeBusy,
     serviceBlocked,
     laneBusy,
-    keepContainers,
     id,
     view,
     viewAt,

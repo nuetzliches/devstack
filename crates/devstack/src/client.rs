@@ -125,6 +125,21 @@ impl Client {
         };
         match c.call_timeout("GET", "/v1/stack", None, Some(PROBE)) {
             Ok((s, _)) if s < 400 => {}
+            // It ends with its last tree (ADR-0095) and has just decided to:
+            // as good as gone once it says so in `daemon.json`, which
+            // `ensure_daemon` then waits on.
+            Ok((503, body))
+                if serde_json::from_str::<Value>(&body).is_ok_and(|v| v["ending"] == true) =>
+            {
+                let t0 = Instant::now();
+                while t0.elapsed() < Duration::from_secs(5)
+                    && devstack_daemon::read_info(state_dir)
+                        .is_some_and(|i| !i.stopping && pid_alive(i.pid))
+                {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                return Ok(None);
+            }
             Ok((s, body)) => bail!(
                 "the daemon (pid {}, port {}) refused: {} (HTTP {s})",
                 info.pid,
@@ -481,7 +496,7 @@ fn daemon_older_than_file(text: &str, ours: &str) -> Option<String> {
     }
     Some(format!(
         "{file} needs devstack {required} or newer; the running daemon is {daemon}, this devstack is {ours}. \
-         Restart the main working tree's daemon to run it: \"Restart stack\" in the dashboard, or \
+         Restart the main working tree's daemon to run it: \"Reload\" on the stack's page in the dashboard, or \
          `devstack down` + `devstack up` in the main working tree (`devstack down --all` while lanes run). \
          The main tree's services stop for a moment.{after}"
     ))
@@ -3057,7 +3072,7 @@ data: {\"type\":\"line\",\"text\":\"c\"}\n\n";
             text.starts_with("wt/devstack.toml needs devstack 0.9.0 or newer")
                 && text.contains("the running daemon is 0.8.0, this devstack is 0.9.0")
                 && text.contains("`devstack down` + `devstack up` in the main working tree")
-                && text.contains("\"Restart stack\"")
+                && text.contains("\"Reload\"")
                 && !text.contains("Update devstack"),
             "{text}"
         );

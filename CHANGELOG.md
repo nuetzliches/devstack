@@ -9,6 +9,30 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **The daemon ends with the last tree; a stack has no start of its own**
+  (ADR-0095). The first tree that starts, `main` or a lane, brings the
+  stack's daemon up, as before; once nothing runs in it any more (no tree
+  with a service or container up, no lane on a node, no command), it ends
+  by itself a few seconds later instead of idling until *Stop stack*. A
+  start that reaches it while it ends gets a `503` with `"ending": true`;
+  the CLI and `devstack mcp` wait for it and start a new one.
+- **Dashboard:** the stack's page has no *Start stack* any more: every
+  tree, `main` included, starts on its own card, and `main`'s offers the
+  port shift once its start was refused for the ports. *Stop stack* is now
+  *Stop all*, *Restart stack* is *Reload*. The last lane's stop no longer
+  asks to stop the stack too, and a stack folds away in the sidebar once
+  nothing of it runs.
+- **A stop always takes a tree's containers** (ADR-0095, amending
+  ADR-0068): the dashboard no longer offers "Keep its containers running".
+
+### Deprecated
+
+- `devstack down --keep-infra`, the MCP tool `down`'s `keep_infra` and
+  `infra=false` on `/v1/down` and `/hub/stacks/{id}/down` (ADR-0095). They
+  still work; the CLI warns.
+
 ## [0.40.0] - 2026-11-05
 
 A pool's skill can carry hooks (ADR-0094): a `hooks.toml` beside its

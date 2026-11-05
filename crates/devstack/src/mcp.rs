@@ -353,8 +353,8 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "down",
-            "Stop every service and remove the infrastructure containers (volumes are kept); with `keep_infra` the containers keep running. The daemon keeps running. In the main tree, lanes that run keep what serves them and the `shared` containers they use. POST /v1/down.",
-            json!({ "keep_infra": { "type": "boolean", "default": false } }),
+            "Stop this tree: every service and its infrastructure containers (volumes are kept). In the main tree, lanes that run keep what serves them and the `shared` containers they use. When nothing else runs in the stack's daemon, it ends; the next start brings it up (ADR-0095). `keep_infra` (deprecated) leaves the containers running. POST /v1/down.",
+            json!({ "keep_infra": { "type": "boolean", "default": false, "description": "Deprecated: a stop takes the containers too" } }),
             &[],
             false,
         ),

@@ -44,7 +44,7 @@ const canRestart = computed(() => !stack.readOnly && !!stack.entry);
     <span v-else class="grow"><strong>The stack file changed since {{ name ?? 'the stack' }} started.</strong> It applies after a restart.</span>
     <button v-if="canRestart" type="button" class="btn btn-primary btn-sm" :disabled="!!stack.busy.stack" data-testid="banner-restart-stack" @click="stack.restartStack()">
       <span v-if="stack.busy.stack === 'restart'" class="spinner" /><Icon v-else name="restart" :size="14" />
-      {{ stack.busy.stack === 'restart' ? 'Restarting…' : 'Restart stack' }}
+      {{ stack.busy.stack === 'restart' ? 'Reloading…' : 'Reload' }}
     </button>
   </div>
 </template>

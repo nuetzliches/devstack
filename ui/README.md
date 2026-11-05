@@ -42,7 +42,7 @@ hub and three daemons without any network:
   migrate job and switches).
 - **crm** (running): an unhealthy service, a container that becomes healthy, a
   periodic candidate.
-- **docs** (offline): shown from its last known state; **Start stack** brings it up.
+- **docs** (offline): shown from its last known state; main's start card (or any lane's) brings it up.
 
 Usage events arrive every 2 s and log lines stream for running services.
 Switches for the edge screens:
@@ -136,7 +136,7 @@ end-to-end suite in this repository, and the unit tests do not use them): `stack
 `stack-option`, `service-row` (with `data-service`, `data-state`),
 `candidate-banner` and `candidate-line` (with `data-state`), `action-start`,
 `action-stop`, `action-restart`, `action-promote`, `action-rollback`,
-`action-build-log`, `action-stack-start`, `action-stack-stop`,
+`action-build-log`, `action-stack-stop`,
 `action-start-stack`, `action-container-restart`, `log-view`, `log-filter`,
 `log-pause`, `log-jump`, `log-marker`, `command-run`, `run-log`,
 `confirm-dialog`, `confirm-accept`, `confirm-cancel`, `problem-dialog`,

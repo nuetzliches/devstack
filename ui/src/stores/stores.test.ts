@@ -479,28 +479,19 @@ describe('stack store', () => {
     expect(stack.view?.services[0].pid).toBeNull();
   });
 
-  it('a stack stops every lane and its containers too, unless told to keep them (ADR-0081)', async () => {
+  it('stopping all stops every tree with its containers, without a choice to keep them (ADR-0095)', async () => {
     const stack = await shownStack();
     const app = { group: 'app', project: 'shop', containers: [{ service: 'db', name: 'shop-db-1', state: 'running', health: '', ports: [] }], error: null };
     const view = (services: unknown[]) => ({ name: 'shop', repo: '/src/shop', version: '0.9.8', services, infra: [app], groups: [], commands: [] });
     const events = fake.stream('/hub/stacks/shop/api/v1/events');
     const ui = useUi();
-    const stopWith = async (checked?: boolean) => {
-      const done = stack.stopStack();
-      await vi.waitFor(() => expect(ui.confirmRequest).not.toBeNull());
-      const option = ui.confirmRequest!.option!;
-      const offered = option.checked;
-      if (checked !== undefined) option.checked = checked;
-      ui.confirmRequest!.resolve(true);
-      await done;
-      return { offered, path: fake.requests.at(-1)?.path };
-    };
-    events.handlers.onMessage({ type: 'snapshot', stack: view([]) } as never);
-    expect(await stopWith()).toEqual({ offered: false, path: '/hub/stacks/shop/down?infra=true&all=true' });
-    expect((await stopWith(true)).path).toBe('/hub/stacks/shop/down?infra=false&all=true');
-    // Services of its own: the containers go all the same (ADR-0068).
     events.handlers.onMessage({ type: 'snapshot', stack: view([{ name: 'api', status: { state: 'running' } }]) } as never);
-    expect(await stopWith()).toEqual({ offered: false, path: '/hub/stacks/shop/down?infra=true&all=true' });
+    const done = stack.stopStack();
+    await vi.waitFor(() => expect(ui.confirmRequest).not.toBeNull());
+    expect(ui.confirmRequest!.option).toBeUndefined();
+    ui.confirmRequest!.resolve(true);
+    await done;
+    expect(fake.requests.at(-1)?.path).toBe('/hub/stacks/shop/down?infra=true&all=true');
   });
 
   describe('the main working tree as the lane main (ADR-0081)', () => {
@@ -566,36 +557,24 @@ describe('stack store', () => {
       expect(fake.requests.filter((r) => r.path === '/hub/stacks/shop/api/v1/up').map((r) => r.body)).toEqual([{ profile: '' }]);
     });
 
-    it('the last lane that runs, main or not, asks, with the stack stopped too by default', async () => {
+    it('the last tree that stops asks nothing more: the daemon ends with it (ADR-0095)', async () => {
       const stack = await shownStack();
       const events = fake.stream('/hub/stacks/shop/api/v1/events');
       const ui = useUi();
       fake.on('/hub/stacks/shop/api/v1/lanes', ok([{ ...feat, active: false }]));
-      const stopWith = async (stop: () => unknown, checked?: boolean) => {
+      const posts = async (stop: () => unknown) => {
         const before = fake.requests.length;
-        const done = stop();
-        await vi.waitFor(() => expect(ui.confirmRequest).not.toBeNull());
-        const offered = ui.confirmRequest!.option!.checked;
-        if (checked !== undefined) ui.confirmRequest!.option!.checked = checked;
-        ui.confirmRequest!.resolve(true);
-        ui.confirmRequest = null;
-        await done;
-        return { offered, posts: fake.requests.slice(before).filter((r) => r.method === 'POST').map((r) => r.path) };
+        await stop();
+        return fake.requests.slice(before).filter((r) => r.method === 'POST').map((r) => r.path);
       };
-      // main alone: its stop, or the stack's.
+      // main alone: its own stop.
       events.handlers.onMessage({ type: 'snapshot', stack: view([svc('api', 'healthy')]) } as never);
       events.handlers.onMessage({ type: 'lanes', lanes: [] });
-      expect(await stopWith(() => stack.laneAction(stack.mainLane!, 'stop'))).toEqual({ offered: true, posts: ['/hub/stacks/shop/down?infra=true&all=true'] });
-      expect((await stopWith(() => stack.laneAction(stack.mainLane!, 'stop'), false)).posts).toEqual(['/hub/stacks/shop/api/v1/down?infra=true']);
-      // A lane alone, main stopped.
+      expect(await posts(() => stack.laneAction(stack.mainLane!, 'stop'))).toEqual(['/hub/stacks/shop/api/v1/down?infra=true']);
+      // A lane alone, main stopped: the lane's.
       events.handlers.onMessage({ type: 'snapshot', stack: view([svc('api', 'stopped')]) } as never);
       events.handlers.onMessage({ type: 'lanes', lanes: [feat] });
-      expect(await stopWith(() => stack.stopLane('feat'))).toEqual({ offered: true, posts: ['/hub/stacks/shop/down?infra=true&all=true'] });
-      expect((await stopWith(() => stack.stopLane('feat'), false)).posts).toEqual(['/hub/stacks/shop/api/v1/lanes/feat/stop']);
-      // main runs beside it: no question.
-      events.handlers.onMessage({ type: 'snapshot', stack: view([svc('api', 'healthy')]) } as never);
-      events.handlers.onMessage({ type: 'lanes', lanes: [feat] });
-      await stack.stopLane('feat');
+      expect(await posts(() => stack.stopLane('feat'))).toEqual(['/hub/stacks/shop/api/v1/lanes/feat/stop']);
       expect(ui.confirmRequest).toBeNull();
     });
 

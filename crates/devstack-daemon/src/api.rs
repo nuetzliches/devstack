@@ -32,6 +32,9 @@ pub struct AppState {
     pub shutdown: Arc<tokio::sync::Notify>,
     /// The other working trees (plan §3.5); `None` inside a lane's own API.
     pub lanes: Option<Arc<crate::lanes::Lanes>>,
+    /// The main tree's daemon ends with its last tree (ADR-0095); `None`
+    /// inside a lane's own API, whose requests come through the main one.
+    pub idle: Option<Arc<crate::idle::Idle>>,
 }
 
 pub fn router(state: AppState) -> axum::Router {
@@ -134,6 +137,10 @@ fn routes(state: AppState) -> axum::Router {
             "/v1/lanes/{lane}/v1/{*rest}",
             axum::routing::any(lane_forward),
         )
+        .layer(middleware::from_fn_with_state(
+            state.idle.clone().unwrap_or_default(),
+            crate::idle::keep,
+        ))
         .layer(middleware::from_fn_with_state(state.clone(), audit))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)

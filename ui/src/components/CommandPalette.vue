@@ -61,9 +61,9 @@ const items = computed<Item[]>(() => {
   const changes = !stack.readOnly;
   if (sid && stack.entry && changes && onPage) {
     if (stack.running) {
-      out.push({ id: 'stack:restart', label: `Restart stack ${stack.entry.name}`, hint: 'stack', icon: 'restart', run: () => stack.restartStack() });
-      out.push({ id: 'stack:stop', label: `Stop stack ${stack.entry.name}`, hint: 'stack', icon: 'stop', run: () => stack.stopStack() });
-    } else out.push({ id: 'stack:start', label: `Start stack ${stack.entry.name}`, hint: 'stack', icon: 'play', run: () => stack.startStack() });
+      out.push({ id: 'stack:restart', label: `Reload ${stack.entry.name}`, hint: 'stack', icon: 'restart', run: () => stack.restartStack() });
+      out.push({ id: 'stack:stop', label: `Stop all of ${stack.entry.name}`, hint: 'stack', icon: 'stop', run: () => stack.stopStack() });
+    } else out.push({ id: 'stack:start', label: `Start main of ${stack.entry.name}`, hint: 'stack', icon: 'play', run: () => stack.startStack() });
   }
   // The shown lane's actions, as its menu in the header has them.
   const lane = onPage ? null : stack.shownLane;

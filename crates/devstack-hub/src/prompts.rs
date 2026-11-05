@@ -144,7 +144,7 @@ pub fn text(p: &Prompt) -> String {
 5. Tell me which new features would help this stack, and add only those I agree to. Raise `[stack] requires` only when the file uses something an older devstack does not know: it shuts out everyone still on one.
 6. Set `reviewed = \"{current}\"` in `[stack]`: the stack file is up to date with devstack {current} then, and the dashboard stops offering this.{requires}
 7. Run `devstack skills install` to refresh the generated skills. {untrack} Check the project's own skills, CLAUDE.md and AGENTS.md for anything that contradicts devstack {current}. Where no agent configuration of the project registers devstack's MCP server, ask me whether to; suggest yes. {mcp}
-8. Restart the stack so it runs devstack {current}, and check that every service becomes healthy. Before you stop it, look at `devstack status` and `devstack lane list`: when lanes run, a lane holds the main ports, or other sessions may use this stack, ask me first. Restart with `devstack down --keep-infra`, then `devstack up`: the containers keep running (a plain `down` removes them since 0.25.0). {careful}",
+8. Restart the stack so it runs devstack {current}, and check that every service becomes healthy. Before you stop it, look at `devstack status` and `devstack lane list`: when lanes run, a lane holds the main ports, or other sessions may use this stack, ask me first. Restart with `devstack down`, then `devstack up`: the containers start again with it, their volumes stay. {careful}",
                 repo = display(repo),
                 file = display(file),
             )
@@ -347,7 +347,10 @@ mod tests {
         assert!(p[3].contains("the sections after 0.1.0, up to 0.2.0"));
         assert!(p[3].contains("Set `reviewed = \"0.2.0\"`"));
         assert!(p[3].contains("`devstack --version` must say 0.2.0"));
-        assert!(p[3].contains("`devstack lane list`") && p[3].contains("down --keep-infra"));
+        assert!(
+            p[3].contains("`devstack lane list`")
+                && p[3].contains("`devstack down`, then `devstack up`")
+        );
         assert!(!p[3].contains("raise `requires`"), "the file has the key");
         assert!(p[4].contains("an earlier devstack"));
         assert!(p[5].contains("its generated agent skills name"));

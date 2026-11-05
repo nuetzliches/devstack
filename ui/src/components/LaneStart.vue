@@ -16,6 +16,7 @@ import type { LaneTarget } from '@/stores/pool';
 import { bytes, duration, useNow } from '@/lib/format';
 import { NOT_FOR_MAIN } from '@/lib/laneActions';
 import { laneLabel, MAIN } from '@/lib/lanes';
+import { refusedForPorts } from '@/lib/shift';
 import { throttle } from '@/lib/throttle';
 import { usePool } from '@/stores/pool';
 import { useHub } from '@/stores/hub';
@@ -178,6 +179,17 @@ function lit(n: LaneTarget | null) {
   return pick ? pick.node === n.node.id : true;
 }
 
+/**
+ * main's start was refused because a running stack holds its ports (ADR-0082):
+ * offered here with a port shift, now that the stack has no start of its own
+ * (ADR-0095).
+ */
+const shiftOffered = computed(() => isMain.value && !stack.running && refusedForPorts(stack.entry));
+function startShifted() {
+  if (starting.value) return;
+  void stack.startStack('auto', profile.value);
+}
+
 function start(on?: string) {
   // One start at a time: the buttons are disabled, a click that came through anyway does nothing.
   if (starting.value) return;
@@ -281,6 +293,17 @@ function start(on?: string) {
           @blur="hl = null"
         >
           <span v-if="busy && !running" class="spinner" /><Icon v-else name="play" :size="14" /> Start here
+        </button>
+        <button
+          v-if="shiftOffered"
+          type="button"
+          class="btn"
+          :disabled="busy"
+          title="Start main on its ports moved by the lowest free multiple of 1000 (devstack up --shift auto); the shift sticks on this machine"
+          data-testid="lane-start-shifted"
+          @click="startShifted()"
+        >
+          <Icon name="play" :size="14" /> Start with shift
         </button>
         <button
           v-if="!pool.placeable.length"

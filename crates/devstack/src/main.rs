@@ -84,13 +84,14 @@ enum Cmd {
     /// daemon. In the main working tree, lanes that still run keep the daemon,
     /// what serves them and the `shared` containers they use.
     Down {
-        /// Leave the containers running: the next `up` is faster.
+        /// Deprecated (ADR-0095): leave the containers running. A stop
+        /// takes them too, as a lane's does.
         #[arg(long)]
         keep_infra: bool,
         /// What `down` does anyway since 0.25.0 (ADR-0068); kept for scripts.
         #[arg(long, hide = true, conflicts_with = "keep_infra")]
         infra: bool,
-        /// The lanes too: the daemon exits even while lanes run. A daemon
+        /// The lanes too: every tree stops and the daemon with them. A daemon
         /// that refuses this CLI or hangs is ended by its pid.
         #[arg(long)]
         all: bool,
