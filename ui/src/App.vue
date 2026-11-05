@@ -11,6 +11,8 @@ import CommandPalette from '@/components/CommandPalette.vue';
 import Icon from '@/components/icons/Icon.vue';
 import Sidebar from '@/components/Sidebar.vue';
 import GuestBanner from '@/components/GuestBanner.vue';
+import WhatsNewBanner from '@/components/WhatsNewBanner.vue';
+import WhatsNewDialog from '@/components/WhatsNewDialog.vue';
 import UnpairedView from '@/views/UnpairedView.vue';
 
 const hub = useHub();
@@ -141,6 +143,7 @@ async function startHub() {
           <span class="retry"><span class="spinner" aria-hidden="true" /> retrying</span>
         </div>
       </div>
+      <WhatsNewBanner v-if="!hubDown" />
       <GuestBanner v-if="!hubDown" />
     </div>
     <div
@@ -178,6 +181,7 @@ async function startHub() {
     </div>
     <Toasts />
     <GlobalDialogs />
+    <WhatsNewDialog />
     <CommandPalette />
   </template>
 </template>
