@@ -5,14 +5,20 @@
 // file is added "not set up", and a coding agent sets it up (ADR-0089).
 // Repositories are looked at at their root only; linked worktrees are skipped
 // (they run as lanes of their main tree).
+// The folder is suggested from the stacks already in the list: the folder
+// they sit in fills the empty field, the others (and that one again) are
+// chips under it. Nothing is scanned until the user asks.
 import { computed, ref, watch } from 'vue';
 import { api, paths } from '@/api';
+import { suggestRoots } from '@/lib/scanRoots';
+import { useHub } from '@/stores/hub';
 import { useUi } from '@/stores/ui';
 import FolderField from './FolderField.vue';
 import Icon from './icons/Icon.vue';
 
 const emit = defineEmits<{ added: [ids: string[]] }>();
 const ui = useUi();
+const hub = useHub();
 
 type Found = { repo: string; id: string; name: string | null; error: string | null; configured: boolean; registered: boolean; added: boolean };
 
@@ -26,7 +32,28 @@ const gitOnly = ref(true);
 const configuredOnly = ref(true);
 const deep = ref(false);
 
-const fresh = computed(() => (found.value ?? []).filter((f) => !f.registered && !f.error));
+/** The folders the registered stacks sit in, the one with the most first. */
+const roots = computed(() => suggestRoots(hub.stacks.map((s) => s.repo)));
+
+// The first one fills the field once, when it is empty: a path the user typed
+// or picked is never overwritten, and a list that arrives late still fills it.
+let prefilled = false;
+watch(
+  roots,
+  (r) => {
+    if (prefilled || !r.length) return;
+    prefilled = true;
+    if (!path.value.trim()) path.value = r[0].path;
+  },
+  { immediate: true },
+);
+
+function pickRoot(root: string) {
+  path.value = root;
+  void scan();
+}
+
+const fresh =computed(() => (found.value ?? []).filter((f) => !f.registered && !f.error));
 /** The new repositories to add, by id: every new one after a scan. */
 const chosen = ref(new Set<string>());
 const all = computed(() => fresh.value.length > 0 && fresh.value.every((f) => chosen.value.has(f.id)));
@@ -106,6 +133,22 @@ async function add() {
         <span v-if="scanning" class="spinner" /><Icon v-else name="search" :size="14" /> Scan
       </button>
     </FolderField>
+    <p v-if="roots.length" class="roots" data-testid="scan-roots">
+      <span class="muted">Where your stacks live:</span>
+      <button
+        v-for="(r, i) in roots"
+        :key="r.path"
+        type="button"
+        class="chip"
+        :class="{ active: path.trim() === r.path }"
+        :aria-pressed="path.trim() === r.path"
+        :title="`${r.count} stack${r.count === 1 ? '' : 's'} in this folder`"
+        :data-testid="`scan-root-${i}`"
+        @click="pickRoot(r.path)"
+      >
+        <span class="mono">{{ r.path }}</span> <span class="faint">{{ r.count }}</span>
+      </button>
+    </p>
     <div class="filters" data-testid="scan-filters">
       <label title="A plain folder with a devstack.toml is listed too when this is off">
         <input v-model="gitOnly" type="checkbox" :disabled="!configuredOnly" data-testid="scan-git-only" /> Only git repositories
@@ -149,6 +192,37 @@ async function add() {
 </template>
 
 <style scoped>
+.roots {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 4px;
+  font-size: 12px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.chip:hover {
+  background: var(--surface-hover);
+}
+.chip.active {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+.chip:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
 .filters {
   display: flex;
   flex-wrap: wrap;

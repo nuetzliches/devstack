@@ -11,6 +11,14 @@ and listed with their assets on the
 
 ### Added
 
+- **The folder scan suggests the folder to scan.** *Add a stack*, *Scan a
+  folder of repositories* used to open with an empty field. It now holds the
+  folder most of your registered stacks sit in, and a line under it lists
+  up to three such folders with how many stacks each holds; a click takes one
+  and scans it. Nothing is scanned until you ask, and a path you typed or
+  picked is never replaced. The dashboard works it out from its list of
+  stacks; nothing is stored and the hub's API is unchanged.
+
 - **`devstack down` removes a stack's containers without its daemon.**
   Docker starts a stack's containers again by their restart policy when it
   starts, while the stack's daemon stays down; `down` used to say only "no
