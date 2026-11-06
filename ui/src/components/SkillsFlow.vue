@@ -6,7 +6,7 @@
 // argument or answer: only what happened.
 import { computed, ref } from 'vue';
 import type { ActivityRecord, ActivityView, PoolSkillsState } from '@/api/types';
-import { conditionText, firings, refKey, flowNodes, onceText, phases, recordsFor, recordText, sessionLabel, toolsBySkill, type FlowNode } from '@/lib/flow';
+import { conditionText, firings, refKey, flowNodes, onceText, phases, recordsFor, recordText, sessionLabel, toolsByUpstream, type FlowNode } from '@/lib/flow';
 import { ago } from '@/lib/format';
 
 const props = defineProps<{
@@ -24,7 +24,7 @@ const records = computed<ActivityRecord[]>(() => props.activity?.records ?? []);
 const selected = ref<string | null>(null);
 const picked = computed<FlowNode | null>(() => nodes.value.find((n) => n.key === selected.value) ?? null);
 const shown = computed(() => recordsFor(records.value, picked.value).slice(0, 200));
-const tools = computed(() => toolsBySkill(records.value));
+const tools = computed(() => toolsByUpstream(records.value));
 const skillOf = (key: string) => nodes.value.find((n) => n.key === key)?.skill;
 const colorOf = (skill: string | null | undefined) => nodes.value.find((n) => n.skill === skill)?.color;
 /** Skills with hooks that are off or whose set is not accepted: not in the flow. */
@@ -105,8 +105,14 @@ const eventWords: Record<FlowNode['hook']['event'], string> = {
 
           <div v-if="tools.length" class="tools" data-testid="skills-flow-tools">
             <h3>Tools through devstack</h3>
-            <div v-for="g in tools" :key="g.skill ?? '-'" class="tool-group">
-              <span class="tool-skill" :class="colorOf(g.skill) !== undefined ? `c${colorOf(g.skill)}` : ''">{{ g.skill ?? 'tied to no skill' }}</span>
+            <div v-for="g in tools" :key="g.upstream ?? '-'" class="tool-group">
+              <span class="tool-skill">
+                <template v-if="g.skills.length">
+                  <span v-for="(s, i) in g.skills" :key="s" :class="colorOf(s) !== undefined ? `c${colorOf(s)}` : ''">{{ s }}<template v-if="i < g.skills.length - 1">, </template></span>
+                  <small class="muted"> · upstream {{ g.upstream }}</small>
+                </template>
+                <template v-else>tied to no skill</template>
+              </span>
               <span class="tool-list small">
                 <code v-for="t in g.tools" :key="t.tool" :class="{ 'err-text': t.failed }" :title="t.failed ? `${t.failed} of ${t.calls} failed` : ''">{{ t.tool }}<template v-if="t.calls > 1"> ×{{ t.calls }}</template></code>
               </span>

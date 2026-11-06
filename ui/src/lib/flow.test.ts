@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PoolSkillsState } from '@/api/types';
 import { mockActivity, mockHookDetails } from '@/api/mock/activity';
-import { firings, flowNodes, phases, recordsFor, recordText, refKey, toolsBySkill } from './flow';
+import { firings, flowNodes, phases, recordsFor, recordText, refKey, toolsByUpstream } from './flow';
 
 const skill = (name: string, extra: Record<string, unknown> = {}) => ({
   name,
@@ -61,11 +61,17 @@ describe('the flow', () => {
     expect(recordsFor(records, null)).toHaveLength(records.length);
   });
 
-  it('groups the tool calls by the skill whose upstream they use, the rest last', () => {
-    const groups = toolsBySkill(mockActivity().records);
-    expect(groups.at(-1)!.skill).toBeNull();
+  it('groups the tool calls by upstream, each call once however many skills name it, the rest last', () => {
+    const records = mockActivity().records;
+    const groups = toolsByUpstream(records);
+    expect(groups.at(-1)!.upstream).toBeNull();
+    expect(groups.at(-1)!.skills).toEqual([]);
     expect(groups.at(-1)!.tools.find((t) => t.tool === 'lane_stop')).toEqual({ tool: 'lane_stop', calls: 2, failed: 1 });
-    expect(groups[0].tools.find((t) => t.tool === 'timetrack__append_to_timer')!.calls).toBe(2);
+    const counted = groups.flatMap((g) => g.tools).reduce((n, t) => n + t.calls, 0);
+    expect(counted).toBe(records.filter((r) => r.kind === 'tool').length);
+    const tt = groups.find((g) => g.tools.some((t) => t.tool === 'timetrack__append_to_timer'))!;
+    expect(tt.skills.length).toBeGreaterThan(1);
+    expect(tt.tools.find((t) => t.tool === 'timetrack__append_to_timer')!.calls).toBe(2);
   });
 
   it('says what happened, never more', () => {

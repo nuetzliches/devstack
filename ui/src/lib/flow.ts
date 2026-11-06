@@ -104,22 +104,31 @@ export function recordsFor(records: ActivityRecord[], node: FlowNode | null): Ac
   });
 }
 
-/** The tool calls, by the skill whose upstream they use (`null`: none), each tool with how often and how often it failed. */
-export function toolsBySkill(records: ActivityRecord[]): { skill: string | null; tools: { tool: string; calls: number; failed: number }[] }[] {
-  const out: { skill: string | null; tools: { tool: string; calls: number; failed: number }[] }[] = [];
+export type ToolGroup = {
+  /** The pool's upstream the tools belong to; `null`: devstack's own, or an upstream no skill names. */
+  upstream: string | null;
+  /** The skills whose hooks name that upstream. */
+  skills: string[];
+  tools: { tool: string; calls: number; failed: number }[];
+};
+
+/** The tool calls, by the upstream they use, with the skills whose hooks name it; each call counted
+ *  once, however many skills share the upstream. Those tied to a skill first, the rest last. */
+export function toolsByUpstream(records: ActivityRecord[]): ToolGroup[] {
+  const out: ToolGroup[] = [];
   for (const r of records) {
     if (r.kind !== 'tool') continue;
-    for (const skill of r.skills?.length ? r.skills : [null]) {
-      let g = out.find((x) => x.skill === skill);
-      if (!g) out.push((g = { skill, tools: [] }));
-      let t = g.tools.find((x) => x.tool === r.tool);
-      if (!t) g.tools.push((t = { tool: r.tool, calls: 0, failed: 0 }));
-      t.calls++;
-      if (!r.ok) t.failed++;
-    }
+    const skills = r.skills ?? [];
+    const upstream = skills.length ? (r.upstream ?? null) : null;
+    let g = out.find((x) => x.upstream === upstream);
+    if (!g) out.push((g = { upstream, skills: [], tools: [] }));
+    for (const s of skills) if (!g.skills.includes(s)) g.skills.push(s);
+    let t = g.tools.find((x) => x.tool === r.tool);
+    if (!t) g.tools.push((t = { tool: r.tool, calls: 0, failed: 0 }));
+    t.calls++;
+    if (!r.ok) t.failed++;
   }
-  // Tied to a skill first; the rest last.
-  return out.sort((a, b) => (a.skill === null ? 1 : 0) - (b.skill === null ? 1 : 0));
+  return out.sort((a, b) => (a.skills.length ? 0 : 1) - (b.skills.length ? 0 : 1));
 }
 
 /** A session in a line: its working tree's last folder, the agent, when it started. */
