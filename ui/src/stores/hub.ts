@@ -57,6 +57,8 @@ export const useHub = defineStore('hub', () => {
   );
   /** What needs attention in every stack (ADR-0097); empty from an older hub. */
   const attention = ref<AttentionItem[]>([]);
+  /** When a record was last added to the agents' activity (`activity` events, #482). */
+  const activityAt = ref(0);
   /** A version of each stack's worktrees (ADR-0078); empty from an older hub. */
   const worktrees = ref<Record<string, string>>({});
   /** What this machine opens a stack's folder with (ADR-0046); null until asked. */
@@ -145,6 +147,10 @@ export const useHub = defineStore('hub', () => {
         }
         if (ev.type === 'skills') {
           skills.value = ev.skills;
+          return;
+        }
+        if (ev.type === 'activity') {
+          activityAt.value = ev.at;
           return;
         }
         if (ev.type === 'attention') {
@@ -279,6 +285,7 @@ export const useHub = defineStore('hub', () => {
     skills,
     skillsWaiting,
     attention,
+    activityAt,
     worktrees,
     updating,
     lastCheck,

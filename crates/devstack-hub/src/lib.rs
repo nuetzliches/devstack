@@ -34,6 +34,7 @@ use tokio_stream::StreamExt;
 
 static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 
+pub mod activity;
 pub mod agenthooks;
 pub mod agentmcp;
 mod branches;
@@ -82,7 +83,7 @@ pub struct HubInfo {
     pub started: u128,
 }
 
-fn state_dir() -> PathBuf {
+pub(crate) fn state_dir() -> PathBuf {
     devstack_daemon::token::token_path()
         .parent()
         .expect("token path has a parent")
@@ -489,6 +490,9 @@ pub fn serve() -> Result<(), String> {
         // Every stack's worktrees, its daemon running or not (ADR-0078),
         // and the skills local to them (ADR-0079).
         worktrees::start();
+        // What devstack did for the agents (#482), told while a dashboard
+        // listens.
+        activity::follow();
         poolskills::follow(state.skills.clone());
         // The lanes connected to, connected again when they or this hub
         // start again (ADR-0085).
@@ -659,6 +663,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/pool/skills/refresh", post(pool::skills_refresh))
         .route("/hub/pool/skills/{name}", delete(pool::skill_remove))
         .route("/hub/skills", get(poolskills::get))
+        .route("/hub/activity", get(activity_get))
         .route("/hub/skills/sync", post(poolskills::sync))
         .route("/hub/skills/agents/{id}", put(poolskills::agent))
         .route("/hub/skills/sets/{pool}/{set}", put(poolskills::auto))
@@ -1576,6 +1581,10 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
         .map(|w| serde_json::json!({ "type": "worktrees", "worktrees": w }));
     let skills = tokio_stream::wrappers::WatchStream::new(s.skills.subscribe())
         .map(|skills| serde_json::json!({ "type": "skills", "skills": skills }));
+    // A record added to the agents' activity (#482): the page asks again.
+    let activity = tokio_stream::wrappers::WatchStream::new(activity::subscribe())
+        .filter(|at| *at > 0)
+        .map(|at| serde_json::json!({ "type": "activity", "at": at }));
     // What needs attention (ADR-0097): again when a stream's glance or the
     // stack list (a start failed, a stack stopped) changed, sent only when
     // the items did.
@@ -1603,6 +1612,7 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
         .merge(guests)
         .merge(pools)
         .merge(skills)
+        .merge(activity)
         .merge(trees)
         .merge(attention)
         .merge(notices)
@@ -2875,6 +2885,47 @@ async fn upstream_call(State(s): State<AppState>, Json(b): Json<CallBody>) -> Re
             );
             Json(r).into_response()
         }
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct ActivityQuery {
+    #[serde(default)]
+    tree: Option<String>,
+    #[serde(default)]
+    session: Option<String>,
+    #[serde(default)]
+    since: Option<u64>,
+}
+
+/// `GET /hub/activity`: what devstack did for the coding agents (#482), the
+/// agents' sessions and the records, narrowed by `tree`, `session`, `since`.
+async fn activity_get(State(s): State<AppState>, Query(q): Query<ActivityQuery>) -> Response {
+    let ups = s.upstreams.clone();
+    let got = tokio::task::spawn_blocking(move || {
+        let state = activity::state();
+        let records = activity::read(&state);
+        // A pool's upstream by the prefix of its tools.
+        let prefixes: activity::Prefixes = ups
+            .views()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|v| v.pool.map(|p| (p.pool, p.name, v.prefix)))
+            .collect();
+        let index = agenthooks::read_index(&state);
+        activity::view(
+            &records,
+            q.tree.as_deref(),
+            q.session.as_deref(),
+            q.since,
+            &prefixes,
+            &index,
+        )
+    })
+    .await;
+    match got {
+        Ok(v) => Json(v).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
