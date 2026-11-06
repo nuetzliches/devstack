@@ -123,6 +123,7 @@ describe('withoutAdr (ADR-0006 addendum)', () => {
     expect(withoutAdr("Not code-signed. ADR-0017 is amended for ADR-0041's profiles. `doctor` says so.")).toBe('Not code-signed. `doctor` says so.');
     expect(withoutAdr('ADR-0023 holds; `AGENTS.md` says so. ADR-0091 names ADR-0092.')).toBe('');
     expect(withoutAdr('kept (`a`, `b`, ...) as is')).toBe('kept (`a`, `b`, ...) as is');
+    expect(withoutAdr('**A stop** (ADR-0095, amending ADR-0068): no longer offered.')).toBe('**A stop**: no longer offered.');
   });
 
   it('leaves out a bullet that was only about ADRs', () => {

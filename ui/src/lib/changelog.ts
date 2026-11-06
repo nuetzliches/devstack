@@ -22,8 +22,8 @@ const REFERENCE = /^\[[^\]]+\]:\s/;
 const ADR_LINK = /\[(ADR-\d{4}[^\]]*)\]\([^)]*\)/g;
 /** A bracket, links in it included: `([#128](https://...), ADR-0025)`. */
 const BRACKET = /(\s?)\(((?:[^()]|\[[^\]]*\]\([^)]*\))*)\)/g;
-/** A part of a bracket about an ADR: `ADR-0051`, `ADR-0024 point 7 amended`, `ADR-0046's list itself is unchanged`. */
-const ADR_PART = /^ADR-\d{4}\b/;
+/** A part of a bracket about an ADR: `ADR-0051`, `ADR-0024 point 7 amended`, `ADR-0046's list itself is unchanged`, `amending ADR-0068`. */
+const ADR_PART = /\bADR-\d{4}\b/;
 /** A sentence about an ADR: `ADR-0017 is amended for ADR-0041's profiles.` */
 const ADR_SENTENCE = /(?<=^|[.!?]\s+)ADR-\d{4}.*?\.(?=\s|$)\s*/g;
 

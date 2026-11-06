@@ -40,4 +40,12 @@ const mem = computed(() => (stack.history.get(props.seriesKey) ?? []).map((p) =>
   line-height: 1.2;
   min-width: 52px;
 }
+/* In a narrow group card the usage gives way, in every row and the head
+   alike, so the name keeps its room beside pin, state and actions; the
+   usage page has it all the same. */
+@container members (max-width: 600px) {
+  .row-usage {
+    display: none;
+  }
+}
 </style>

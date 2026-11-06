@@ -63,6 +63,19 @@ and listed with their assets on the
   section says so in its last line, and the new tool `instructions` with the
   upstream's `prefix` returns its full text. Where too many upstreams leave
   no useful share, the last ones are named as left out.
+- **A service's name stays readable in a narrow overview card.** With the
+  detail open beside the list, the fixed columns (usage, pin, state,
+  actions) left a row's name no room, and the build tag ran into the
+  usage graph. Where the card is narrow, the usage now gives way in every
+  row and in the group's head; the usage page shows it all the same.
+- **The pool's join command no longer shows the whole fingerprint.** The
+  dashboard shows its first digits only, so a screenshot of the page does
+  not carry it; a click on the command (or Copy) copies it whole.
+- **The pool's public links say what "Off" leaves.** A member's own
+  public links, Cloudflare Quick Tunnels from a service's globe button,
+  need no pool; the settings now say so beside the mode.
+- **What's new leaves out a bracket's part that names a decision record
+  anywhere in it**, not only at its start.
 
 ## [0.41.0] - 2026-11-05
 

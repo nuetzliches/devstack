@@ -316,6 +316,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
   gap: 8px;
   font-size: 13px;
 }
+/* A group's card is what its rows measure their room against (RowUsage),
+   not the window: the detail beside the list narrows it at any width. */
+.list > .section {
+  container: members / inline-size;
+}
 .members {
   list-style: none;
   margin: 0;

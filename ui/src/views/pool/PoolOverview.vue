@@ -21,6 +21,14 @@ const me = computed(() => o.value?.me);
 const nodes = computed(() => o.value?.nodes ?? []);
 const approved = computed(() => me.value?.state === 'approved');
 
+/** The join command as it shows: the fingerprint cut to its first digits, so
+ *  that a screenshot of the page does not carry it; a copy has it whole. */
+const joinShown = computed(() => {
+  const j = o.value?.join;
+  if (!j) return '';
+  return j.fingerprint ? j.command.replace(j.fingerprint, `${j.fingerprint.slice(0, 6)}…`) : j.command;
+});
+
 async function copyJoin() {
   const c = o.value?.join?.command;
   if (!c) return;
@@ -110,7 +118,7 @@ const onProvisioned = computed(() => !(me.value?.no_provisioned ?? myMember.valu
           <p v-else-if="me.state === 'removed'" class="err"><Icon name="xCircle" :size="14" /> This machine was removed from the pool.</p>
           <div v-if="approved && o?.join" class="join-cmd" data-testid="pool-join-command">
             <span class="muted small">Another machine joins with</span>
-            <code class="mono">{{ o.join.command }}</code>
+            <button type="button" class="cmd mono" title="Copy the command, with the whole fingerprint" data-testid="pool-join-shown" @click="copyJoin">{{ joinShown }}</button>
             <button type="button" class="btn btn-xs" title="Copy the command" data-testid="pool-join-copy" @click="copyJoin">
               <Icon name="copy" :size="13" /> Copy
             </button>
@@ -227,9 +235,21 @@ const onProvisioned = computed(() => !(me.value?.no_provisioned ?? myMember.valu
   gap: 8px;
   margin-top: 10px;
 }
-.join-cmd code {
+.join-cmd .cmd {
+  flex: 1 1 16rem;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--text);
   font-size: 12px;
-  word-break: break-all;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: copy;
+}
+.join-cmd .cmd:hover {
+  border-color: var(--accent);
 }
 .due-card {
   border-color: color-mix(in srgb, var(--warn) 45%, var(--border));

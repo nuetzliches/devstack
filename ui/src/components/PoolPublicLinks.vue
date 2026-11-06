@@ -132,6 +132,12 @@ const close = (host: string) => run(host, async () => {
           <label>Members tagged <input v-model="form.tag" class="input" placeholder="every member" /></label>
           <button type="submit" class="btn btn-sm btn-primary" :disabled="!!busy"><span v-if="busy === 'save'" class="spinner" /> Save</button>
         </form>
+        <!-- The pool only offers its domain (ADR-0092); a service's own Quick Tunnel (ADR-0090) needs no pool. -->
+        <p class="muted small" data-testid="pool-public-links-quick">
+          <template v-if="form.mode === 'off'">Off: the pool offers no domain. A member’s public links</template>
+          <template v-else>The public links of a member not using the pool’s domain</template>
+          still open as Cloudflare Quick Tunnels (a random <span class="mono">trycloudflare.com</span> address) from a service’s globe button; the pool does not govern those.
+        </p>
         <p v-if="!admin.token" class="muted small" data-testid="pool-public-links-no-token">
           The coordinator has no Cloudflare token: put one (Tunnel: Edit, DNS: Edit for the zone, Access: Read) into <span class="mono">cloudflare.token</span> in its directory, or <span class="mono">DEVSTACK_CLOUDFLARE_TOKEN</span>.
         </p>
