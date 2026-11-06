@@ -34,6 +34,16 @@ and listed with their assets on the
   appeared or went in it is reported by its own path, and a generated
   directory never counts. The same held for `watch` (a candidate) and a
   lane's copy.
+- **Every MCP upstream's instructions reach the agent.** `devstack mcp`
+  passed on its upstreams' instructions without a limit on the whole, and
+  Claude Code keeps only the first 4096 characters of a server's
+  instructions: a short in-house server listed after two long public ones
+  never reached the agent. The whole text now stays within 4096
+  characters; the upstreams share what devstack's own text leaves, evenly,
+  and what a short one does not need goes to the longer ones. A shortened
+  section says so in its last line, and the new tool `instructions` with the
+  upstream's `prefix` returns its full text. Where too many upstreams leave
+  no useful share, the last ones are named as left out.
 
 ## [0.41.0] - 2026-11-05
 
