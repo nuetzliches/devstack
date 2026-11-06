@@ -84,6 +84,12 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A restart no longer ends the stack's daemon.** Since the daemon ends
+  with the last tree (0.41.0), a restart (`restart_on`, `devstack restart`,
+  a rebuild) could end it: between the service's stop and its start
+  nothing ran, and on Windows the stop takes seconds. The daemon ended in
+  that gap, and the dashboard and the CLI found no daemon until the next
+  `up`. A restart under way now counts as running.
 - **Python creating `__pycache__` no longer restarts a dev server** (#463).
   On Windows the OS reports a folder as modified when an entry appears in
   it, beside the entry's own event; with a folder in `restart_on`
