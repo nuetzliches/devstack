@@ -13,7 +13,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { DockerEngine, Guest, HubEvent, PoolFeed, PoolNode, PoolSkillsAdmin, PoolSkillsState, LaneView, McpUpstream, NotifySettings, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry, StackView, PoolPublicLinksAdmin, PublicLinksState } from '../types';
+import type { AttentionItem, DockerEngine, Guest, HubEvent, PoolFeed, PoolNode, PoolSkillsAdmin, PoolSkillsState, LaneView, McpUpstream, NotifySettings, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry, StackView, PoolPublicLinksAdmin, PublicLinksState } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -234,6 +234,8 @@ class MockHub {
     }
     void shopScript(shop);
     void crmScript(crm);
+    // What needs attention, as the hub follows the streams (ADR-0097): told on a change.
+    setInterval(() => this.publishAttention(), 1000);
 
     const q = new URLSearchParams(location.search).get('mock') ?? '';
     this.hubDown = q.includes('hubdown');
@@ -287,6 +289,33 @@ class MockHub {
   publish(): void {
     const ev: HubEvent = { type: 'stacks', stacks: this.entries() };
     for (const l of this.hubSubs) l.send(ev);
+    this.publishAttention();
+  }
+
+  /** What needs attention in every stack's main tree, as `/hub/summary` lists it. */
+  attention(): AttentionItem[] {
+    const out: AttentionItem[] = [];
+    for (const s of this.empty ? [] : this.stacks) {
+      const base = { stack: s.entry.id, lane: null };
+      if (s.entry.start_error) out.push({ ...base, service: null, text: 'the start failed', detail: s.entry.start_error.split('\n')[0]!, level: 'error' });
+      if (!s.entry.running) continue;
+      for (const v of s.view.services) {
+        const why = v.status.state === 'failed' ? (v.status.reason ?? '') : '';
+        if (v.status.state === 'failed' && !why.startsWith('stopped') && !why.startsWith('not started'))
+          out.push({ ...base, service: v.name, text: `${v.name}: failed`, detail: why, level: 'error' });
+        if (v.candidate?.state === 'held') out.push({ ...base, service: v.name, text: `${v.name}: build held for promote`, detail: v.candidate.reason ?? '', level: 'warn' });
+        if (v.candidate?.state === 'failed') out.push({ ...base, service: v.name, text: `${v.name}: build failed`, detail: v.candidate.reason ?? '', level: 'error' });
+      }
+    }
+    return out;
+  }
+  private lastAttention = '';
+  publishAttention(): void {
+    const items = this.attention();
+    const key = JSON.stringify(items);
+    if (key === this.lastAttention) return;
+    this.lastAttention = key;
+    for (const l of this.hubSubs) l.send({ type: 'attention', items });
   }
 
   /** Worktrees made in a stack (by the dashboard, or `?mock=worktrees`), by stack id; each stack has `fix-login` besides (ADR-0078). */
@@ -1390,6 +1419,7 @@ export class MockTransport implements Transport {
       l.send({ type: 'pools', pools: hub.pools });
       l.send({ type: 'skills', skills: hub.poolSkillState });
       l.send({ type: 'worktrees', worktrees: hub.worktreeVersions });
+      l.send({ type: 'attention', items: hub.attention() });
       hub.hubSubs.add(l);
       return { stop: () => hub.hubSubs.delete(l) };
     }

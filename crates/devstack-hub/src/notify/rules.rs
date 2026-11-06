@@ -10,6 +10,8 @@
 use serde_json::Value;
 use std::collections::HashMap;
 
+use crate::summary::Level;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Kind {
     BuildFailed,
@@ -179,7 +181,8 @@ impl Scope {
                     if !svc.reason.starts_with(STOPPED_PREFIX)
                         && !svc.reason.starts_with(CASCADE_PREFIX) =>
                 {
-                    g.attention.push(attention(name, "failed", &svc.reason));
+                    g.attention
+                        .push(attention(name, "failed", &svc.reason, Level::Error));
                 }
                 _ => {}
             }
@@ -188,11 +191,14 @@ impl Scope {
                     name,
                     "build held for promote",
                     &svc.candidate_reason,
+                    Level::Warn,
                 )),
-                Some("failed") => {
-                    g.attention
-                        .push(attention(name, "build failed", &svc.candidate_reason));
-                }
+                Some("failed") => g.attention.push(attention(
+                    name,
+                    "build failed",
+                    &svc.candidate_reason,
+                    Level::Error,
+                )),
                 _ => {}
             }
         }
@@ -201,12 +207,13 @@ impl Scope {
 }
 
 /// `<service>: <what>`, and the first line of why.
-fn attention(service: &str, what: &str, reason: &str) -> crate::summary::Item {
+fn attention(service: &str, what: &str, reason: &str, level: Level) -> crate::summary::Item {
     crate::summary::Item {
         lane: None,
         service: Some(service.to_string()),
         text: format!("{service}: {what}"),
         detail: first_lines(reason, 1),
+        level,
     }
 }
 
@@ -325,6 +332,8 @@ pub struct Lanes {
 struct LaneSeen {
     owns_main: bool,
     failed_at: Option<u64>,
+    /// `<start|move> on <node> failed`, and why, while it is so.
+    failure: Option<(String, String)>,
 }
 
 impl Lanes {
@@ -350,13 +359,11 @@ impl Lanes {
                 && was.failed_at != Some(at)
             {
                 let m = &l["moving"];
-                let what = if m["kind"] == "move" { "move" } else { "start" };
-                let to = m["to"].as_str().unwrap_or("a node");
                 out.push(Notice {
                     kind: Kind::LaneFailed,
                     service: None,
                     lane: Some(name.to_string()),
-                    title: format!("Lane {name}: {what} on {to} failed"),
+                    title: format!("Lane {name}: {}", failed_what(m)),
                     body: first_lines(m["error"].as_str().unwrap_or(""), 3),
                 });
             }
@@ -374,6 +381,28 @@ impl Lanes {
                 });
             }
         }
+        out
+    }
+
+    /// The lanes whose start or move on a node failed and that are still
+    /// so, for the hub's summary (ADR-0097).
+    pub fn attention(&self) -> Vec<crate::summary::Item> {
+        let mut out: Vec<_> = self
+            .known
+            .iter()
+            .flatten()
+            .filter_map(|(name, l)| {
+                let (what, why) = l.failure.clone()?;
+                Some(crate::summary::Item {
+                    lane: Some(name.clone()),
+                    service: None,
+                    text: format!("lane {name}: {what}"),
+                    detail: why,
+                    level: Level::Error,
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| a.lane.cmp(&b.lane));
         out
     }
 
@@ -401,10 +430,25 @@ fn seen(lanes: &Value) -> HashMap<String, LaneSeen> {
                 LaneSeen {
                     owns_main: l["owns_main"].as_bool().unwrap_or(false),
                     failed_at: l["moving"]["failed_at"].as_u64(),
+                    failure: failure(&l["moving"]),
                 },
             ))
         })
         .collect()
+}
+
+/// A lane's failed start or move: `<start|move> on <node> failed`, and the
+/// first line of why; `None` while it has not failed.
+fn failure(m: &Value) -> Option<(String, String)> {
+    let error = m["error"].as_str()?;
+    Some((failed_what(m), first_lines(error, 1)))
+}
+
+/// `<start|move> on <node> failed`.
+fn failed_what(m: &Value) -> String {
+    let what = if m["kind"] == "move" { "move" } else { "start" };
+    let to = m["to"].as_str().unwrap_or("a node");
+    format!("{what} on {to} failed")
 }
 
 /// At most `n` non-empty lines, each at most 200 characters.
@@ -465,6 +509,7 @@ mod tests {
         assert_eq!(g.attention.len(), 1);
         assert_eq!(g.attention[0].text, "api: build held for promote");
         assert_eq!(g.attention[0].detail, "schema");
+        assert_eq!(g.attention[0].level, Level::Warn);
         s.apply(&service(
             "worker",
             json!({ "state": "failed", "reason": "port taken" }),
@@ -473,6 +518,7 @@ mod tests {
         assert!(!g.starting);
         assert_eq!(g.attention[1].text, "worker: failed");
         assert_eq!(g.attention[1].service.as_deref(), Some("worker"));
+        assert_eq!(g.attention[1].level, Level::Error);
     }
 
     #[test]
@@ -632,6 +678,28 @@ mod tests {
             ))
             .is_empty()
         );
+    }
+
+    #[test]
+    fn a_failed_lane_needs_attention_while_it_is_so() {
+        let mut l = Lanes::default();
+        let lane = |error: Option<&str>| {
+            json!([{ "name": "feat-x", "active": false,
+                     "moving": error.map(|e| json!({ "kind": "move", "to": "big-box", "error": e, "failed_at": 1 })) }])
+        };
+        l.baseline(&lane(Some(
+            "no lease: node full
+more",
+        )));
+        // Unlike a notification, what had failed before counts: it still is.
+        let a = l.attention();
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].text, "lane feat-x: move on big-box failed");
+        assert_eq!(a[0].detail, "no lease: node full");
+        assert_eq!(a[0].lane.as_deref(), Some("feat-x"));
+        assert_eq!(a[0].level, Level::Error);
+        l.apply(&lane(None));
+        assert!(l.attention().is_empty());
     }
 
     #[test]

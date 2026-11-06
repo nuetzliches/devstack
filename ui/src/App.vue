@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue';
 import { useRoute } from 'vue-router';
 import { useHub } from '@/stores/hub';
 import { SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, useUi } from '@/stores/ui';
+import { faviconHref, markFlipped, useAttentionTone } from '@/lib/brand';
 import { ago, useNow } from '@/lib/format';
 import TopBar from '@/components/TopBar.vue';
 import Toasts from '@/components/Toasts.vue';
@@ -21,6 +22,13 @@ const route = useRoute();
 const now = useNow();
 
 onMounted(() => void hub.init());
+
+// The favicon: the mark, or the nut while the pointer is on the mark, with
+// the dot of what needs attention (ADR-0097).
+const tone = useAttentionTone();
+watchEffect(() => {
+  document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.setAttribute('href', faviconHref(markFlipped.value ? 'nut' : 'mark', tone.value));
+});
 
 // The banners below the top bar stay with it; the sidebar and other sticky
 // parts start below them and are as much shorter (`--banners-h`), so a

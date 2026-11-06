@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, paths, Unreachable, type StreamState, type Subscription } from '@/api';
-import type { DockerEngine, Guest, HubEvent, HubSession, Opener, PoolSkillsState, StackEntry, UpdateState } from '@/api/types';
+import type { AttentionItem, DockerEngine, Guest, HubEvent, HubSession, Opener, PoolSkillsState, StackEntry, UpdateState } from '@/api/types';
 import { act } from '@/lib/actions';
 import { checkForAppUpdate } from '@/lib/app-update';
 import { persist } from '@/lib/persist';
@@ -51,6 +51,12 @@ export const useHub = defineStore('hub', () => {
   const guests = ref<Guest[]>([]);
   /** The pools' skill sets on this machine (ADR-0074); `null` until the hub tells (older hubs never do). */
   const skills = ref<PoolSkillsState | null>(null);
+  /** Skill sets offered and not answered, and updates that wait for the user (ADR-0074). */
+  const skillsWaiting = computed(
+    () => (skills.value?.sets ?? []).filter((x) => x.state === 'offered' || x.state === 'changed' || x.skills.some((k) => k.pending)).length,
+  );
+  /** What needs attention in every stack (ADR-0097); empty from an older hub. */
+  const attention = ref<AttentionItem[]>([]);
   /** A version of each stack's worktrees (ADR-0078); empty from an older hub. */
   const worktrees = ref<Record<string, string>>({});
   /** What this machine opens a stack's folder with (ADR-0046); null until asked. */
@@ -139,6 +145,10 @@ export const useHub = defineStore('hub', () => {
         }
         if (ev.type === 'skills') {
           skills.value = ev.skills;
+          return;
+        }
+        if (ev.type === 'attention') {
+          attention.value = ev.items;
           return;
         }
         if (ev.type === 'pools') {
@@ -267,6 +277,8 @@ export const useHub = defineStore('hub', () => {
     releaseError,
     guests,
     skills,
+    skillsWaiting,
+    attention,
     worktrees,
     updating,
     lastCheck,

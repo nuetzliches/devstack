@@ -2,7 +2,9 @@
 //! and one state over all of them, for the tray. What needs attention is
 //! what notifies (ADR-0045), read from the streams the hub follows for that
 //! (`notify`): each stream leaves its [`Glance`] on the [`Board`] after every
-//! event, and takes it away when it ends.
+//! event, and takes it away when it ends. The same items go to the
+//! dashboard on `/hub/events` as an `attention` event, on every change
+//! (ADR-0097).
 
 use axum::Json;
 use axum::extract::State;
@@ -10,8 +12,19 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
+use tokio::sync::watch;
 
 use crate::{AppState, Phase, StackEntry};
+
+/// How bad an [`Item`] is (ADR-0097): something failed, or something
+/// waits for the user.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Level {
+    #[default]
+    Error,
+    Warn,
+}
 
 /// Something that needs attention.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -24,6 +37,7 @@ pub(crate) struct Item {
     pub text: String,
     /// The first line of why, or empty.
     pub detail: String,
+    pub level: Level,
 }
 
 /// What one stream (a stack's main tree, or one of its lanes) shows now.
@@ -38,19 +52,33 @@ pub(crate) struct Glance {
 }
 
 /// Each followed stream's last [`Glance`], by stack id and lane.
-#[derive(Default)]
 pub(crate) struct Board {
     streams: Mutex<HashMap<String, BTreeMap<Option<String>, Glance>>>,
+    /// Moves when a glance changed: the dashboard's `attention` event.
+    changed: watch::Sender<u64>,
+}
+
+impl Default for Board {
+    fn default() -> Self {
+        Self {
+            streams: Mutex::default(),
+            changed: watch::Sender::new(0),
+        }
+    }
 }
 
 impl Board {
     pub fn set(&self, stack: &str, lane: Option<&str>, g: Glance) {
-        self.streams
+        let before = self
+            .streams
             .lock()
             .unwrap()
             .entry(stack.to_string())
             .or_default()
-            .insert(lane.map(str::to_string), g);
+            .insert(lane.map(str::to_string), g.clone());
+        if before.as_ref() != Some(&g) {
+            self.changed.send_modify(|n| *n += 1);
+        }
     }
 
     fn remove(&self, stack: &str, lane: Option<&str>) {
@@ -61,6 +89,13 @@ impl Board {
                 streams.remove(stack);
             }
         }
+        drop(streams);
+        self.changed.send_modify(|n| *n += 1);
+    }
+
+    /// Moves on every change of a glance.
+    pub fn subscribe(&self) -> watch::Receiver<u64> {
+        self.changed.subscribe()
     }
 
     /// Takes the stream's glance off the board when dropped: when its
@@ -141,6 +176,7 @@ fn stack(
                 .unwrap_or("")
                 .trim()
                 .to_string(),
+            level: Level::Error,
         });
     }
     let mut starting = false;
@@ -206,6 +242,28 @@ pub(crate) async fn get(State(s): State<AppState>) -> Response {
     Json(summary(&s)).into_response()
 }
 
+/// One item of the dashboard's `attention` event: an [`Item`] and its stack.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct Attention {
+    pub stack: String,
+    #[serde(flatten)]
+    pub item: Item,
+}
+
+/// What needs attention in every stack, for `/hub/events` (ADR-0097).
+pub(crate) fn attention(s: &AppState) -> Vec<Attention> {
+    summary(s)
+        .stacks
+        .into_iter()
+        .flat_map(|st| {
+            st.attention.into_iter().map(move |item| Attention {
+                stack: st.id.clone(),
+                item,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,6 +289,7 @@ mod tests {
             service: Some(service.into()),
             text: format!("{service}: build held for promote"),
             detail: String::new(),
+            level: Level::Warn,
         }
     }
 
@@ -310,5 +369,38 @@ mod tests {
             assert_eq!(board.of("ab12").len(), 2);
         }
         assert_eq!(board.of("ab12").len(), 1);
+    }
+
+    #[test]
+    fn the_board_says_when_a_glance_changed_and_only_then() {
+        let board = Board::default();
+        let mut rx = board.subscribe();
+        rx.mark_unchanged();
+        board.set("ab12", None, Glance::default());
+        assert!(rx.has_changed().unwrap());
+        rx.mark_unchanged();
+        board.set("ab12", None, Glance::default());
+        assert!(!rx.has_changed().unwrap());
+        board.set(
+            "ab12",
+            None,
+            Glance {
+                attention: vec![held("api")],
+                ..Default::default()
+            },
+        );
+        assert!(rx.has_changed().unwrap());
+    }
+
+    #[test]
+    fn an_item_says_its_level() {
+        let v = serde_json::to_value(Attention {
+            stack: "ab12".into(),
+            item: held("api"),
+        })
+        .unwrap();
+        assert_eq!(v["stack"], "ab12");
+        assert_eq!(v["level"], "warn");
+        assert_eq!(v["text"], "api: build held for promote");
     }
 }
