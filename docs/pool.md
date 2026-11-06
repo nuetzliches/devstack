@@ -859,13 +859,38 @@ event = "prompt-submit"          # the user sent a prompt
 match = '(^|\W)ABC-[0-9]+\b'      # a regex on the prompt
 once = "match"                   # once a session per ticket (the default with `match`); "session": once
 context_file = "hooks/ticket.md" # a file of the skill, instead of `context`
+
+[[hook]]
+event = "lane-stop"              # `devstack lane stop` or the MCP tool `lane_stop` stopped a lane
+upstream = "timetrack"
+context = "The lane is down: stop the session's timer now, then run the session review."
+
+[[hook]]
+event = "session-end"            # given at the next session start in the same working tree
+upstream = "timetrack"
+context = "Close that session's timer at its last activity and review it."
 ```
+
+Two events belong to the end of a session. A `lane-stop` text follows the
+output of `devstack lane stop` and of the MCP tool `lane_stop`, every time,
+whichever agent (or person) ran it; it applies by the lane's worktree. A
+`session-end` text cannot reach a session that is over: when Claude Code
+ends a session (exit, `/clear`, logout) in a working tree where such a hook
+applies, devstack keeps that it ended, and the next session start of the
+same agent in the same working tree gives the text once, after a line that
+names the ended session and its transcript. An end not followed by a start
+within a week is forgotten. Codex reports no end of a session and gets no
+`session-end` hooks; `devstack doctor` says so.
 
 A hook only gives text to the agent's context; no command of a pool runs on
 a member's machine. The text is 1 to 2000 characters, a skill has eight
 hooks at most, and a `hooks.toml` that is wrong (an unknown key, a pattern
-that is no regex, a file not in the skill) leaves the skill out of the
-fetch, with why. A hook comes and goes with its skill: accepted with the
+that is no regex, a file not in the skill, an event the coordinator does
+not know) leaves the skill out of the fetch, with why. A member's hub skips
+a hook of an event it does not know yet and keeps the skill's others; a
+hub before 0.42.0 leaves out all hooks of such a skill instead, so put
+`lane-stop` and `session-end` hooks into a skill of their own while members
+run older releases. A hook comes and goes with its skill: accepted with the
 set, switched on and off with the skill, bound to its repositories, and
 updated when the skill is (with updates waiting, the text stays as agreed
 to).

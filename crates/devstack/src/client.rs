@@ -2044,7 +2044,30 @@ pub fn lane_stop(stack_file: &Path, name: &str) -> Result<()> {
     println!(
         "lane `{name}` stopped; `devstack lane start {name}` (or `devstack up` in its worktree) starts it again"
     );
+    let texts = lane_stop_texts(&c, name);
+    if !texts.is_empty() {
+        println!("\n{texts}");
+    }
     Ok(())
+}
+
+/// The texts of the pools' `lane-stop` hooks that apply in the worktree of
+/// the lane `name` (its name or branch), for whoever stopped it (#462).
+/// Empty when none, and on any error: the stop stands.
+pub fn lane_stop_texts(c: &Client, name: &str) -> String {
+    let lanes: Vec<Value> = c
+        .get("/v1/lanes")
+        .ok()
+        .and_then(|b| serde_json::from_str(&b).ok())
+        .unwrap_or_default();
+    let Some(path) = lanes
+        .iter()
+        .find(|l| l["name"] == name || l["branch"] == name)
+        .and_then(|l| l["path"].as_str())
+    else {
+        return String::new();
+    };
+    devstack_hub::agenthooks::texts_here(devstack_node::hooks::Event::LaneStop, Path::new(path))
 }
 
 /// A lane started from wherever this runs (#103): its name and its

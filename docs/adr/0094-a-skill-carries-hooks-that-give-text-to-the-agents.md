@@ -1,6 +1,6 @@
 # ADR-0094: A skill carries hooks that give text to the agents; the hub writes one entry per agent and event, `devstack hook` picks the texts
 
-- **Status:** Accepted (card in the pull request); built
+- **Status:** Accepted (card in the pull request); built; addendum 2026-11-06 (end-of-session events, #462)
 - **Date:** 2026-11-05
 - **Deciders:** project owner
 - **Related:** [ADR-0074](0074-a-pool-hands-out-skill-sets-the-hub-installs-them-for-the-agents.md) (skill sets, acceptance, the agent table), [ADR-0077](0077-a-sets-skills-are-grouped-and-switched-one-by-one.md) (a skill switched on and off), [ADR-0079](0079-skills-local-to-a-working-tree.md) (a skill bound to repositories), [ADR-0083](0083-the-hub-takes-out-what-an-agent-switched-off-leaves.md) (an agent switched off leaves nothing), [ADR-0069](0069-devstack-mcp-can-carry-the-tools-of-upstream-mcp-servers.md) (a pool's upstreams, accepted per member), [ADR-0071](0071-the-dashboard-writes-no-file-of-a-repository.md), [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md); issue #453
@@ -157,3 +157,59 @@ wanted), `crates/devstack-hub/src/upstreams.rs` (`pool_accepted`),
 `crates/devstack-skills/src/agents.rs`, `scripts/sync-agents.py`,
 `crates/devstack/src/main.rs` (`devstack hook`), `crates/devstack/src/doctor.rs`
 (`agent_hooks`), `ui/src/views/SkillsView.vue`.
+
+## Addendum 2026-11-06: two events for the end of a session
+
+Issue #462. A routine that belongs to a session's end (stop a timer, review
+the session) had only a `prompt-submit` hook matching closing words: a
+session that ends without one gets nothing, a closing word mid-session fires
+early. The owner approved the review card in the conversation on
+**2026-11-06**, all three points:
+
+| # | Category | Point | Beats | Reversing costs |
+|---|---|---|---|---|
+| 1 | contract | `event` gets two values, `lane-stop` and `session-end`; a hub from 0.42.0 skips a hook of an event it does not know instead of leaving out the skill's hooks, a hub before it still leaves them out, so the documentation advises a skill of their own while members run older releases. | A version per hook; a file of their own for the new events. | The format has users outside the maintainers: additive changes only. |
+| 2 | concept | `lane-stop`: after `devstack lane stop` (CLI) or the MCP tool `lane_stop` succeeded, devstack appends the texts of the `lane-stop` hooks that apply to the lane's worktree (skill on, repository bound, upstream accepted) to the output, every time, whichever agent ran it. | An agent hook on the shell command (Claude Code's `PostToolUse` only). | Low. |
+| 3 | concept | `session-end`: the hub writes an entry for Claude Code's `SessionEnd`; the dispatcher only records the end (agent, session id, transcript path, working tree, time), and the next `session-start` of the same agent in the same working tree gives the texts once, with a line naming the ended session; a record older than seven days is dropped. | Text at `SessionEnd` (it never reaches the model); the closing-words heuristic. | Medium: state on disk, one more agent entry. |
+
+As built:
+
+1. **The format.** `Event` has `session-end` and `lane-stop`; `match` stays
+   `prompt-submit`'s. `hooks::of_files` (the hub, reading an archive) skips
+   a hook whose `event` looks like an event's name (`a-z` and `-`) but is
+   not one it knows; `hooks::check_files` (the coordinator, packing) refuses
+   it, so an author's typo still leaves the skill out with why.
+2. **The entries.** `configure` writes entries for `session-start`,
+   `prompt-submit` and `session-end` where the agent has the event: Claude
+   Code `SessionEnd`; Codex documents no end of a session and gets none.
+   `lane-stop` is no agent's event; hooks of only that event write no entry.
+3. **The end.** `devstack hook session-end` prints nothing. Where a
+   `session-end` hook applies at `cwd`, it writes `hook-ended/<hash of agent
+   and working tree>.json` in the hub's state (session id, transcript path,
+   time). The working tree is the nearest folder holding `.git` above `cwd`
+   (no git asked; on Windows compared without case). The next
+   `session-start` of that agent there appends, after the session-start
+   texts, "The previous session in this working tree (session `…`,
+   transcript `…`) ended at …. What follows was meant for its end:" and the
+   texts of the `session-end` hooks that apply then, and removes the file.
+   Records not touched for seven days are removed.
+4. **The lane stop.** `client::lane_stop_texts` looks up the lane's worktree
+   (`GET /v1/lanes`, by name or branch) and `agenthooks::texts_here` gives
+   the `lane-stop` texts that apply there; `devstack lane stop` prints them
+   after its line, `lane_stop` appends them to its result. An error gives
+   nothing; the stop stands.
+5. **Visibility.** `devstack doctor` names the agents that get hooks but no
+   `session-end` ones.
+
+Decided while building, not on the card:
+
+- `lane-stop` gives its texts on every stop; `once` does not apply.
+- The end is recorded only where a `session-end` hook applies; a record is
+  given whatever the next session's source (`startup`, `resume`, `clear`).
+- The coordinator stays strict about events (`check_files`).
+
+*Enforced by, added:* `crates/devstack-node/src/hooks.rs` (`Event`,
+`of_files`, `check_files`), `crates/devstack-hub/src/agenthooks.rs`
+(`event_name`, `end`, `ended`, `texts_for`), `crates/devstack/src/client.rs`
+(`lane_stop`, `lane_stop_texts`), `crates/devstack/src/mcp.rs` (`lane_stop`),
+`crates/devstack/src/doctor.rs` (`agent_hooks`).

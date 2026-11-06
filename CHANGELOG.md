@@ -19,9 +19,20 @@ and listed with their assets on the
   folder of it), and so does the MCP tool `lane_stop` without `lane`. In
   the main working tree, or outside a worktree, they ask for the name as
   before.
-
-### Added
-
+- **Hooks for the end of a session: `lane-stop` and `session-end`.** A
+  pool's skill can now give text at the end of the work, not only at a
+  session's start or a prompt (ADR-0094, addendum 2026-11-06). A
+  `lane-stop` text follows the output of `devstack lane stop` and of the
+  MCP tool `lane_stop`, every time, for the lane's worktree. A
+  `session-end` text cannot reach a session that is over: when Claude
+  Code ends a session where such a hook applies, devstack keeps that it
+  ended, and the next session of the same agent in the same working tree
+  is given the text once, with a line naming the ended session and its
+  transcript. Codex reports no end of a session and gets none; `devstack
+  doctor` says so. A hub now skips a hook of an event it does not know
+  and keeps the skill's other hooks; a hub before this release leaves out
+  all hooks of such a skill, so keep end-of-session hooks in a skill of
+  their own while members run older releases.
 - **`devstack init` sets `PYTHONUTF8 = "1"` for Python apps.** On Windows a
   native Python process opens text files in the ANSI code page (cp1252)
   unless the code passes `encoding=`, while the same code in a container

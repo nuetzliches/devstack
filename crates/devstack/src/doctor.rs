@@ -618,6 +618,26 @@ fn agent_hooks() -> Vec<Finding> {
             ),
         ));
     }
+    // An agent with hooks, but without an end of a session (#462).
+    let ends = index
+        .hooks
+        .iter()
+        .any(|h| h.hook.event == devstack_node::hooks::Event::SessionEnd);
+    let no_end: Vec<String> = index
+        .agents
+        .iter()
+        .filter(|a| ends && !devstack_hub::agenthooks::has_session_end(a))
+        .map(|a| name(a))
+        .collect();
+    if !no_end.is_empty() {
+        out.push(f(
+            Level::Info,
+            format!(
+                "agent hooks: {} get no session-end hooks (the agent reports no end of a session)",
+                no_end.join(", ")
+            ),
+        ));
+    }
     if !index.without.is_empty() {
         let with: Vec<String> = devstack_skills::agents::all()
             .iter()

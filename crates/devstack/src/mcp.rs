@@ -986,9 +986,13 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             if status >= 400 {
                 anyhow::bail!("{}", client::error_text(&text));
             }
-            Ok(format!(
-                "lane `{lane}` stopped; `lane_start` starts it again"
-            ))
+            let mut out = format!("lane `{lane}` stopped; `lane_start` starts it again");
+            let texts = client::lane_stop_texts(&c, lane);
+            if !texts.is_empty() {
+                out.push_str("\n\n");
+                out.push_str(&texts);
+            }
+            Ok(out)
         }
         "lane_move" | "lane_share" | "promote_lane" => {
             let lane = name_arg(args, "lane")?;

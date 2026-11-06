@@ -35,6 +35,8 @@ const COMMAND: &str = "devstack hook ";
 const TIMEOUT: u64 = 5;
 /// The folder of what each session was given.
 const SESSIONS: &str = "hook-sessions";
+/// The folder of the sessions that ended, kept for the next start.
+const ENDED: &str = "hook-ended";
 /// What a session was given is forgotten after this long.
 const KEEP: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 3600);
 
@@ -79,12 +81,26 @@ pub fn read_index(state: &Path) -> Index {
         .unwrap_or_default()
 }
 
-/// An event's name in an agent's configuration.
-fn event_name(format: HookFormat, e: Event) -> &'static str {
+/// The events an agent's configuration can carry an entry for.
+const AGENT_EVENTS: [Event; 3] = [Event::SessionStart, Event::PromptSubmit, Event::SessionEnd];
+
+/// An event's name in an agent's configuration; `None`: the agent has no
+/// such event. `lane-stop` is no agent's: its texts follow `devstack lane
+/// stop`'s output. Codex documents no end of a session (#462).
+fn event_name(format: HookFormat, e: Event) -> Option<&'static str> {
     match (format, e) {
-        (HookFormat::Claude | HookFormat::Codex, Event::SessionStart) => "SessionStart",
-        (HookFormat::Claude | HookFormat::Codex, Event::PromptSubmit) => "UserPromptSubmit",
+        (HookFormat::Claude | HookFormat::Codex, Event::SessionStart) => Some("SessionStart"),
+        (HookFormat::Claude | HookFormat::Codex, Event::PromptSubmit) => Some("UserPromptSubmit"),
+        (HookFormat::Claude, Event::SessionEnd) => Some("SessionEnd"),
+        (HookFormat::Codex, Event::SessionEnd) | (_, Event::LaneStop) => None,
     }
+}
+
+/// Whether the agent `id` reports the end of a session (`session-end`).
+pub fn has_session_end(id: &str) -> bool {
+    devstack_skills::agents::get(id)
+        .and_then(|a| a.hooks.as_ref())
+        .is_some_and(|h| event_name(h.format, Event::SessionEnd).is_some())
 }
 
 /// The hub's entry for `agent` on `event`.
@@ -136,8 +152,10 @@ pub fn configure(
         None => IndexMap::new(),
     };
     let mut changed = false;
-    for e in [Event::SessionStart, Event::PromptSubmit] {
-        let name = event_name(format, e);
+    for e in AGENT_EVENTS {
+        let Some(name) = event_name(format, e) else {
+            continue;
+        };
         let before: Value = match hooks.get(name) {
             Some(r) => serde_json::from_str(r.get()).map_err(|e| e.to_string())?,
             None => Value::Null,
@@ -227,7 +245,7 @@ pub fn apply(
     let mut errors = Vec::new();
     let mut events: Vec<Event> = Vec::new();
     for h in &hooks {
-        if !events.contains(&h.hook.event) {
+        if AGENT_EVENTS.contains(&h.hook.event) && !events.contains(&h.hook.event) {
             events.push(h.hook.event);
         }
     }
@@ -283,6 +301,19 @@ struct Input {
     /// Why a session starts: `startup`, `resume`, `clear`, `compact`.
     #[serde(default)]
     source: Option<String>,
+    /// The session's transcript (`session-end`): named at the next start.
+    #[serde(default, alias = "transcriptPath")]
+    transcript_path: Option<String>,
+}
+
+/// The end of a session, kept for the next start in its working tree.
+#[derive(Debug, Serialize, Deserialize)]
+struct Ended {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    transcript_path: Option<String>,
+    at: String,
 }
 
 /// Where the dispatcher looks things up: the hub's state and git.
@@ -314,6 +345,12 @@ pub fn run(event: Event, agent: &str, input: &str, at: &Lookup<'_>) -> String {
     if !index.agents.iter().any(|a| a == agent) {
         return String::new();
     }
+    let cwd = input.cwd.as_deref().map(PathBuf::from);
+    let mut origin: Option<Option<String>> = None;
+    if event == Event::SessionEnd {
+        end(agent, &input, &index, cwd.as_deref(), at);
+        return String::new();
+    }
     let session = input
         .session_id
         .as_deref()
@@ -331,25 +368,12 @@ pub fn run(event: Event, agent: &str, input: &str, at: &Lookup<'_>) -> String {
             given.clear();
         }
     }
-    let cwd = input.cwd.as_deref().map(PathBuf::from);
-    let mut origin: Option<Option<String>> = None;
     let prompt = input.prompt.as_deref().unwrap_or("");
-    let mut out: Vec<&str> = Vec::new();
+    let mut out: Vec<String> = Vec::new();
     let before = given.len();
     for h in index.hooks.iter().filter(|h| h.hook.event == event) {
-        if let Some(u) = &h.hook.upstream
-            && !(at.accepted)(&h.pool, u)
-        {
+        if !applies(h, cwd.as_deref(), &mut origin, at) {
             continue;
-        }
-        if !h.repos.is_empty() {
-            let o = origin.get_or_insert_with(|| cwd.as_deref().and_then(|c| (at.origin)(c)));
-            if !o
-                .as_deref()
-                .is_some_and(|o| devstack_node::skills::repo_matches(&h.repos, o))
-            {
-                continue;
-            }
         }
         let matched = match &h.hook.pattern {
             Some(p) => match regex::Regex::new(p).ok().and_then(|r| r.find(prompt)) {
@@ -366,7 +390,13 @@ pub fn run(event: Event, agent: &str, input: &str, at: &Lookup<'_>) -> String {
             continue;
         }
         given.push(key);
-        out.push(&h.hook.context);
+        out.push(h.hook.context.clone());
+    }
+    if event == Event::SessionStart
+        && let Some(cwd) = &cwd
+        && let Some(texts) = ended(agent, &index, cwd, &mut origin, at)
+    {
+        out.push(texts);
     }
     if let Some(p) = &session
         && (given.len() != before || event == Event::SessionStart)
@@ -377,6 +407,149 @@ pub fn run(event: Event, agent: &str, input: &str, at: &Lookup<'_>) -> String {
         }
     }
     out.join("\n\n")
+}
+
+/// Whether a hook applies in the working tree at `cwd`: its upstream
+/// accepted, its skill's repositories matching the tree's `origin` (asked
+/// once, kept in `origin`).
+fn applies(
+    h: &Entry,
+    cwd: Option<&Path>,
+    origin: &mut Option<Option<String>>,
+    at: &Lookup<'_>,
+) -> bool {
+    if let Some(u) = &h.hook.upstream
+        && !(at.accepted)(&h.pool, u)
+    {
+        return false;
+    }
+    if !h.repos.is_empty() {
+        let o = origin.get_or_insert_with(|| cwd.and_then(|c| (at.origin)(c)));
+        if !o
+            .as_deref()
+            .is_some_and(|o| devstack_node::skills::repo_matches(&h.repos, o))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// The working tree a path is in: the nearest folder above it (or it)
+/// holding `.git`; the path itself outside a repository. Written the same
+/// way whatever case or separators the agent used.
+fn tree_of(cwd: &Path) -> String {
+    let tree = cwd
+        .ancestors()
+        .find(|d| d.join(".git").exists())
+        .unwrap_or(cwd);
+    let s = tree.to_string_lossy().replace('\\', "/");
+    let s = s.trim_end_matches('/');
+    if cfg!(windows) {
+        s.to_lowercase()
+    } else {
+        s.to_string()
+    }
+}
+
+/// The file that keeps the end of `agent`'s last session in `tree`.
+fn ended_file(state: &Path, agent: &str, tree: &str) -> PathBuf {
+    let h = Sha256::digest(format!("{agent}\0{tree}").as_bytes());
+    state
+        .join(ENDED)
+        .join(format!("{}.json", &devstack_node::skills::hex(&h)[..32]))
+}
+
+/// `session-end`: the session can be told nothing any more. Where a
+/// `session-end` hook applies in its working tree, keep that it ended, for
+/// the next start of the same agent there ([`ended`]).
+fn end(agent: &str, input: &Input, index: &Index, cwd: Option<&Path>, at: &Lookup<'_>) {
+    let Some(cwd) = cwd else { return };
+    let mut origin = None;
+    let any = index
+        .hooks
+        .iter()
+        .filter(|h| h.hook.event == Event::SessionEnd)
+        .any(|h| applies(h, Some(cwd), &mut origin, at));
+    if !any {
+        return;
+    }
+    let file = ended_file(at.state, agent, &tree_of(cwd));
+    let record = Ended {
+        session_id: input.session_id.clone().filter(|s| !s.is_empty()),
+        transcript_path: input.transcript_path.clone().filter(|s| !s.is_empty()),
+        at: jiff::Zoned::now()
+            .strftime("%Y-%m-%dT%H:%M:%S%:z")
+            .to_string(),
+    };
+    let _ = std::fs::create_dir_all(file.parent().expect("in the folder of ends"));
+    if let Err(e) = write(&file, &serde_json::to_vec(&record).expect("serialises")) {
+        (at.warn)(e);
+    }
+}
+
+/// At a session's start: the texts of the `session-end` hooks for the
+/// previous session of `agent` in this working tree, if one ended there
+/// since, with a line that names it. Given once: the record goes.
+fn ended(
+    agent: &str,
+    index: &Index,
+    cwd: &Path,
+    origin: &mut Option<Option<String>>,
+    at: &Lookup<'_>,
+) -> Option<String> {
+    prune(&at.state.join(ENDED));
+    let file = ended_file(at.state, agent, &tree_of(cwd));
+    let record: Ended = serde_json::from_slice(&std::fs::read(&file).ok()?).ok()?;
+    let _ = std::fs::remove_file(&file);
+    let texts: Vec<&str> = index
+        .hooks
+        .iter()
+        .filter(|h| h.hook.event == Event::SessionEnd)
+        .filter(|h| applies(h, Some(cwd), origin, at))
+        .map(|h| h.hook.context.as_str())
+        .collect();
+    if texts.is_empty() {
+        return None;
+    }
+    let mut which = Vec::new();
+    if let Some(id) = &record.session_id {
+        which.push(format!("session `{id}`"));
+    }
+    if let Some(t) = &record.transcript_path {
+        which.push(format!("transcript `{t}`"));
+    }
+    let which = if which.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", which.join(", "))
+    };
+    Some(format!(
+        "The previous session in this working tree{which} ended at {}. What follows was meant for its end:\n\n{}",
+        record.at,
+        texts.join("\n\n")
+    ))
+}
+
+/// The texts of the hooks of `event` that apply in the working tree at
+/// `cwd`, for every agent: `lane-stop`, whose texts follow `devstack lane
+/// stop`'s output. Empty when none, or on any error.
+pub fn texts_for(event: Event, cwd: &Path, at: &Lookup<'_>) -> String {
+    let index = read_index(at.state);
+    let mut origin = None;
+    index
+        .hooks
+        .iter()
+        .filter(|h| h.hook.event == event)
+        .filter(|h| applies(h, Some(cwd), &mut origin, at))
+        .map(|h| h.hook.context.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// [`texts_for`] with this machine's hub state, its git, its upstreams.
+pub fn texts_here(event: Event, cwd: &Path) -> String {
+    here(event, "-", |at| texts_for(event, cwd, at))
 }
 
 /// The file of what `agent`'s session `id` was given.
@@ -406,24 +579,24 @@ fn prune(dir: &Path) {
 /// The dispatcher as `devstack hook` runs it: this machine's hub state,
 /// its git, its upstreams.
 pub fn run_here(event: Event, agent: &str, input: &str) -> String {
+    here(event, agent, |at| run(event, agent, input, at))
+}
+
+/// This machine's hub state, its git and its upstreams, for `f`.
+fn here<R>(event: Event, agent: &str, f: impl FnOnce(&Lookup<'_>) -> R) -> R {
     let state = crate::state_dir();
-    run(
-        event,
-        agent,
-        input,
-        &Lookup {
-            state: &state,
-            origin: &|p| crate::branches::origin(p),
-            accepted: &|pool, name| crate::upstreams::Upstreams::pool_accepted(&state, pool, name),
-            warn: &|error| {
-                devstack_daemon::diag::DiagLog::open(crate::log_path()).write(
-                    "warn",
-                    "agent_hook",
-                    serde_json::json!({ "event": event.as_str(), "agent": agent, "error": error }),
-                );
-            },
+    f(&Lookup {
+        state: &state,
+        origin: &|p| crate::branches::origin(p),
+        accepted: &|pool, name| crate::upstreams::Upstreams::pool_accepted(&state, pool, name),
+        warn: &|error| {
+            devstack_daemon::diag::DiagLog::open(crate::log_path()).write(
+                "warn",
+                "agent_hook",
+                serde_json::json!({ "event": event.as_str(), "agent": agent, "error": error }),
+            );
         },
-    )
+    })
 }
 
 #[cfg(test)]
@@ -508,6 +681,158 @@ mod tests {
         let none = d.path().join("hooks.json");
         configure(&none, HookFormat::Codex, "codex", &[]).unwrap();
         assert!(!none.exists());
+    }
+
+    /// `session-end` is Claude Code's `SessionEnd`; Codex documents no end
+    /// of a session, and `lane-stop` is no agent's (#462).
+    #[test]
+    fn the_end_of_a_session_has_an_entry_where_the_agent_has_the_event() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("settings.json");
+        let all = [Event::SessionStart, Event::SessionEnd, Event::LaneStop];
+        configure(&f, HookFormat::Claude, "claude-code", &all).unwrap();
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&f).unwrap()).unwrap();
+        assert_eq!(
+            v["hooks"]["SessionEnd"][0]["hooks"][0]["command"],
+            "devstack hook session-end --agent claude-code"
+        );
+        let names: Vec<&String> = v["hooks"].as_object().unwrap().keys().collect();
+        assert_eq!(names, ["SessionEnd", "SessionStart"]);
+        let c = d.path().join("hooks.json");
+        configure(&c, HookFormat::Codex, "codex", &all).unwrap();
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&c).unwrap()).unwrap();
+        let names: Vec<&String> = v["hooks"].as_object().unwrap().keys().collect();
+        assert_eq!(names, ["SessionStart"]);
+        // Only `lane-stop` hooks: no entry at all.
+        let st = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".claude")).unwrap();
+        let file =
+            |a: &Agent| (a.id == "claude-code").then(|| home.path().join(".claude/settings.json"));
+        let lane = vec![entry(
+            "timer",
+            hook(Event::LaneStop, None, "Stop the timer."),
+        )];
+        assert!(apply(st.path(), lane, &|_| true, &file).is_empty());
+        assert!(!home.path().join(".claude/settings.json").exists());
+        assert_eq!(read_index(st.path()).hooks.len(), 1);
+    }
+
+    /// The end of a session is kept, and its texts are given once at the
+    /// next start of the same agent in the same working tree (#462).
+    #[test]
+    fn the_end_of_a_session_reaches_the_next_start_in_its_tree() {
+        let st = tempfile::tempdir().unwrap();
+        let src = tempfile::tempdir().unwrap();
+        let shop = src.path().join("shop");
+        let blog = src.path().join("blog");
+        for d in [&shop, &blog] {
+            std::fs::create_dir_all(d.join(".git")).unwrap();
+        }
+        std::fs::create_dir_all(shop.join("apps/web")).unwrap();
+        let mut review = entry("work", hook(Event::SessionEnd, None, "Review the session."));
+        review.repos = vec!["acme/shop".into()];
+        let start = entry("work", hook(Event::SessionStart, None, "Start the timer."));
+        let index = Index {
+            hooks: vec![start, review],
+            agents: vec!["claude-code".into(), "codex".into()],
+            without: Vec::new(),
+        };
+        std::fs::write(st.path().join(INDEX), serde_json::to_vec(&index).unwrap()).unwrap();
+        let at = Lookup {
+            state: st.path(),
+            origin: &|p| {
+                p.ancestors()
+                    .any(|a| a.ends_with("shop"))
+                    .then(|| "https://github.com/acme/shop".into())
+            },
+            accepted: &|_, _| true,
+            warn: &|e| panic!("{e}"),
+        };
+        let input = |sid: &str, cwd: &Path| {
+            serde_json::json!({
+                "session_id": sid,
+                "cwd": cwd,
+                "transcript_path": format!("/t/{sid}.jsonl"),
+                "source": "startup",
+            })
+            .to_string()
+        };
+        // Ending prints nothing; in a tree where no hook applies, nothing is kept.
+        assert_eq!(
+            run(Event::SessionEnd, "claude-code", &input("a", &blog), &at),
+            ""
+        );
+        assert!(!st.path().join(ENDED).exists());
+        assert_eq!(
+            run(
+                Event::SessionEnd,
+                "claude-code",
+                &input("a", &shop.join("apps/web")),
+                &at
+            ),
+            ""
+        );
+        // Another agent, another tree: not theirs.
+        assert_eq!(
+            run(Event::SessionStart, "codex", &input("b", &shop), &at),
+            "Start the timer."
+        );
+        assert_eq!(
+            run(Event::SessionStart, "claude-code", &input("b", &blog), &at),
+            "Start the timer."
+        );
+        // The same agent in the same tree, from another folder of it.
+        let next = run(Event::SessionStart, "claude-code", &input("c", &shop), &at);
+        assert!(next.starts_with("Start the timer.\n\nThe previous session in this working tree (session `a`, transcript `/t/a.jsonl`) ended at "), "{next}");
+        assert!(
+            next.ends_with("was meant for its end:\n\nReview the session."),
+            "{next}"
+        );
+        // Once.
+        assert_eq!(
+            run(Event::SessionStart, "claude-code", &input("d", &shop), &at),
+            "Start the timer."
+        );
+    }
+
+    /// `lane-stop`: the texts that apply in the lane's worktree, every time.
+    #[test]
+    fn a_lane_stop_gives_its_texts_every_time() {
+        let st = tempfile::tempdir().unwrap();
+        let mut timer = entry("timer", hook(Event::LaneStop, None, "Stop the timer."));
+        timer.hook.upstream = Some("timetrack".into());
+        let mut shop = entry("shop", hook(Event::LaneStop, None, "Shop teardown."));
+        shop.repos = vec!["acme/shop".into()];
+        let index = Index {
+            hooks: vec![
+                timer,
+                shop,
+                entry("x", hook(Event::SessionStart, None, "Start.")),
+            ],
+            agents: Vec::new(),
+            without: Vec::new(),
+        };
+        std::fs::write(st.path().join(INDEX), serde_json::to_vec(&index).unwrap()).unwrap();
+        let accepted = std::cell::Cell::new(true);
+        let at = Lookup {
+            state: st.path(),
+            origin: &|p| {
+                p.ends_with("shop")
+                    .then(|| "git@github.com:acme/shop.git".into())
+            },
+            accepted: &|_, name| name == "timetrack" && accepted.get(),
+            warn: &|e| panic!("{e}"),
+        };
+        let shop_tree = Path::new("/src/shop");
+        for _ in 0..2 {
+            assert_eq!(
+                texts_for(Event::LaneStop, shop_tree, &at),
+                "Stop the timer.\n\nShop teardown."
+            );
+        }
+        accepted.set(false);
+        assert_eq!(texts_for(Event::LaneStop, Path::new("/src/blog"), &at), "");
     }
 
     #[test]
