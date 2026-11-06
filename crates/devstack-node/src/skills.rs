@@ -672,7 +672,7 @@ fn pack(
                     .iter()
                     .map(|(k, (b, _))| (k.clone(), b.clone()))
                     .collect();
-                Ok((front, crate::hooks::of_files(&texts)?.len()))
+                Ok((front, crate::hooks::check_files(&texts)?.len()))
             });
             match hooks {
                 Ok((front, hooks)) => {

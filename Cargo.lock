@@ -916,6 +916,7 @@ dependencies = [
  "hyper-util",
  "include_dir",
  "indexmap",
+ "jiff",
  "keyring",
  "rand 0.10.3",
  "regex",

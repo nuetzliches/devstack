@@ -4,7 +4,7 @@
 //!
 //! ```toml
 //! [[hook]]
-//! event = "prompt-submit"          # or "session-start"
+//! event = "prompt-submit"          # "session-start", "session-end", "lane-stop"
 //! match = '(^|\W)ABC-[0-9]+\b'     # a regex on the prompt; prompt-submit only
 //! once = "match"                   # "session" or "match"
 //! upstream = "tracker"             # only while the pool's upstream is accepted
@@ -12,7 +12,8 @@
 //! ```
 //!
 //! A hook only adds text to the agent's context: no command of a pool runs
-//! on a member's machine.
+//! on a member's machine. A hook of an event this devstack does not know (a
+//! newer one's) is skipped, the skill's other hooks stay (#462).
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -35,6 +36,13 @@ pub enum Event {
     SessionStart,
     /// The user sent a prompt, before the model reads it.
     PromptSubmit,
+    /// A session ended. Its text cannot reach that session any more: it is
+    /// given once at the next session start of the same agent in the same
+    /// working tree (#462).
+    SessionEnd,
+    /// `devstack lane stop` (or the MCP tool `lane_stop`) stopped a lane:
+    /// its text follows the command's output, for whoever ran it (#462).
+    LaneStop,
 }
 
 impl Event {
@@ -42,6 +50,8 @@ impl Event {
         match self {
             Event::SessionStart => "session-start",
             Event::PromptSubmit => "prompt-submit",
+            Event::SessionEnd => "session-end",
+            Event::LaneStop => "lane-stop",
         }
     }
 
@@ -49,6 +59,8 @@ impl Event {
         match s {
             "session-start" => Some(Event::SessionStart),
             "prompt-submit" => Some(Event::PromptSubmit),
+            "session-end" => Some(Event::SessionEnd),
+            "lane-stop" => Some(Event::LaneStop),
             _ => None,
         }
     }
@@ -104,8 +116,21 @@ pub struct Hook {
 }
 
 /// The hooks of a skill whose files are `files` (path → content); none
-/// without a `hooks.toml`; why not, for one that is wrong.
+/// without a `hooks.toml`; why not, for one that is wrong. A hook of an
+/// event a newer devstack knows is left out (a hub reads what its
+/// coordinator, perhaps newer, packed); [`check_files`] refuses it.
 pub fn of_files(files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<Hook>, String> {
+    read(files, false)
+}
+
+/// As [`of_files`], but an event this devstack does not know is an error:
+/// the coordinator's check when it packs a skill, where it is a mistake of
+/// the skill's author.
+pub fn check_files(files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<Hook>, String> {
+    read(files, true)
+}
+
+fn read(files: &BTreeMap<String, Vec<u8>>, strict: bool) -> Result<Vec<Hook>, String> {
     let Some(text) = files.get(FILE) else {
         return Ok(Vec::new());
     };
@@ -117,13 +142,25 @@ pub fn of_files(files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<Hook>, String> 
     raw.hook
         .into_iter()
         .enumerate()
+        // An event a newer devstack knows: not this one's to give (#462).
+        .filter(|(_, r)| strict || Event::parse(&r.event).is_some() || !is_event_name(&r.event))
         .map(|(i, r)| check(r, files).map_err(|e| format!("{FILE}, hook {}: {e}", i + 1)))
         .collect()
 }
 
+/// What an event a newer devstack may know looks like (`a-z` and `-`): a
+/// value that does not is a mistake, and the file is wrong.
+fn is_event_name(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 32 && s.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
+}
+
 fn check(r: Raw, files: &BTreeMap<String, Vec<u8>>) -> Result<Hook, String> {
-    let event = Event::parse(&r.event)
-        .ok_or_else(|| format!("`{}`: the event is session-start or prompt-submit", r.event))?;
+    let event = Event::parse(&r.event).ok_or_else(|| {
+        format!(
+            "`{}`: the event is session-start, prompt-submit, session-end or lane-stop",
+            r.event
+        )
+    })?;
     if let Some(p) = &r.pattern {
         if event != Event::PromptSubmit {
             return Err("`match` is for prompt-submit only".into());
@@ -239,10 +276,53 @@ context_file = "hooks/ticket.md"
         assert!(of_files(&BTreeMap::new()).unwrap().is_empty());
     }
 
+    /// A hub reads what a newer coordinator packed: a hook of an event it
+    /// does not know is left out, the skill's other hooks stay (#462).
+    #[test]
+    fn an_event_of_a_newer_devstack_is_skipped_not_the_skill() {
+        let text = r#"
+[[hook]]
+event = "session-start"
+context = "Start."
+
+[[hook]]
+event = "tool-use"
+context = "Later."
+
+[[hook]]
+event = "session-end"
+context = "Review the last session."
+
+[[hook]]
+event = "lane-stop"
+upstream = "nuts-timetrack"
+context = "Stop the timer."
+"#;
+        let h = of_files(&files(text)).unwrap();
+        let events: Vec<Event> = h.iter().map(|h| h.event).collect();
+        assert_eq!(
+            events,
+            [Event::SessionStart, Event::SessionEnd, Event::LaneStop]
+        );
+        assert!(check_files(&files(text)).unwrap_err().contains("hook 2"));
+        for e in [Event::SessionEnd, Event::LaneStop] {
+            assert_eq!(Event::parse(e.as_str()), Some(e));
+        }
+        // `match` stays prompt-submit's.
+        let lane_match = "[[hook]]\nevent = \"lane-stop\"\nmatch = \"x\"\ncontext = \"x\"";
+        assert!(
+            of_files(&files(lane_match))
+                .unwrap_err()
+                .contains("prompt-submit only")
+        );
+    }
+
     #[test]
     fn a_wrong_hook_is_refused_with_why() {
         let wrong = |s: &str| of_files(&files(s)).unwrap_err();
-        assert!(wrong("[[hook]]\nevent = \"tool-use\"\ncontext = \"x\"").contains("event"));
+        let strict = |s: &str| check_files(&files(s)).unwrap_err();
+        assert!(strict("[[hook]]\nevent = \"tool-use\"\ncontext = \"x\"").contains("event"));
+        assert!(wrong("[[hook]]\nevent = \"Session Start\"\ncontext = \"x\"").contains("event"));
         assert!(
             wrong("[[hook]]\nevent = \"session-start\"\nmatch = \"x\"\ncontext = \"x\"")
                 .contains("prompt-submit only")
