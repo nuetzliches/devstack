@@ -464,7 +464,9 @@ async fn follow_stack(s: AppState, id: String, name: String) {
                     }
                     _ => scope.apply(&ev),
                 };
-                s.board.set(&id, None, scope.glance());
+                let mut glance = scope.glance();
+                glance.attention.extend(lanes.attention());
+                s.board.set(&id, None, glance);
                 for n in notices {
                     s.notify.deliver(&id, &name, None, n);
                 }

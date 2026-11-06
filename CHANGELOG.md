@@ -43,6 +43,15 @@ and listed with their assets on the
   entry under the pool's with the command that removes it, `devstack
   doctor` warns, and a hook bound to the upstream applies for the agent
   that has it set up itself.
+- **The dashboard's mark says when something needs attention.** A dot on
+  the mark in the top bar and on the browser tab's icon turns red when
+  something failed in any stack (a service, a build, a start, a lane's
+  start on a node) or the hub cannot be reached, and yellow when something
+  waits for you (a build held for promote, a pool request, a skill set to
+  answer). The hub sends it on its event stream as an `attention` event;
+  `/hub/summary` gives each item a `level` and now lists failed lane
+  starts too. On hover the mark turns over to the nut of the nuts family
+  ([ADR-0097](docs/adr/0097-the-dashboards-mark-says-what-needs-attention.md)).
 - **`devstack init` sets `PYTHONUTF8 = "1"` for Python apps.** On Windows a
   native Python process opens text files in the ANSI code page (cp1252)
   unless the code passes `encoding=`, while the same code in a container

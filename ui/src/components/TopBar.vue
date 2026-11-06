@@ -10,6 +10,7 @@ import { useWhatsNew } from '@/stores/whatsNew';
 import StackSwitcher from './StackSwitcher.vue';
 import PendingIndicator from './PendingIndicator.vue';
 import NotifyMenu from './NotifyMenu.vue';
+import BrandMark from './BrandMark.vue';
 import Icon from './icons/Icon.vue';
 
 const hub = useHub();
@@ -77,15 +78,7 @@ const mismatch = computed(() => {
         <Icon name="panelLeft" />
       </button>
       <RouterLink to="/" class="brand" aria-label="devstack home">
-        <svg width="22" height="22" viewBox="0 0 512 512" aria-hidden="true">
-          <rect width="512" height="512" rx="112" fill="#0f1115" stroke="var(--border-strong)" stroke-width="16" />
-          <g fill="none" stroke-linecap="round" stroke-width="40">
-            <path d="M136 176h240" stroke="#5b8cff" />
-            <path d="M136 256h168" stroke="#3ecf8e" />
-            <path d="M136 336h240" stroke="#5b8cff" opacity=".55" />
-          </g>
-          <circle cx="364" cy="256" r="32" fill="#3ecf8e" />
-        </svg>
+        <BrandMark />
         <span class="brand-name hide-xs">devstack</span>
       </RouterLink>
       <span class="sep hide-xs switcher-narrow" aria-hidden="true">/</span>

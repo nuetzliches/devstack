@@ -52,10 +52,6 @@ const route = useRoute();
 // admin as a badge.
 const pool = usePool();
 onBeforeUnmount(pool.watch());
-/** Skill sets offered and not answered, and updates that wait for the user (ADR-0074). */
-const skillsWaiting = computed(
-  () => (hub.skills?.sets ?? []).filter((x) => x.state === 'offered' || x.state === 'changed' || x.skills.some((k) => k.pending)).length,
-);
 const poolHint = computed(() => {
   const o = pool.overview;
   if (!o) return '';
@@ -643,7 +639,7 @@ function toggleFavourite(s: StackEntry) {
       >
         <Icon name="layers" :size="14" class="branch" />
         <span class="label">Skills</span>
-        <span v-if="skillsWaiting" class="pill sm warn" data-testid="sidebar-skills-badge">{{ skillsWaiting }}</span>
+        <span v-if="hub.skillsWaiting" class="pill sm warn" data-testid="sidebar-skills-badge">{{ hub.skillsWaiting }}</span>
       </button>
     </div>
     <AddStackDialog :open="adding" @close="adding = false" />

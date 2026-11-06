@@ -1576,6 +1576,23 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
         .map(|w| serde_json::json!({ "type": "worktrees", "worktrees": w }));
     let skills = tokio_stream::wrappers::WatchStream::new(s.skills.subscribe())
         .map(|skills| serde_json::json!({ "type": "skills", "skills": skills }));
+    // What needs attention (ADR-0097): again when a stream's glance or the
+    // stack list (a start failed, a stack stopped) changed, sent only when
+    // the items did.
+    let attention = {
+        let s = s.clone();
+        let mut last: Option<Vec<summary::Attention>> = None;
+        tokio_stream::wrappers::WatchStream::new(s.board.subscribe())
+            .map(|_| ())
+            .merge(tokio_stream::wrappers::WatchStream::new(s.stacks.clone()).map(|_| ()))
+            .filter_map(move |()| {
+                let now = summary::attention(&s);
+                (last.as_ref() != Some(&now)).then(|| {
+                    last = Some(now.clone());
+                    serde_json::json!({ "type": "attention", "items": now })
+                })
+            })
+    };
     // A dashboard that fell behind misses a toast, nothing it shows.
     let notices =
         tokio_stream::wrappers::BroadcastStream::new(notice::subscribe()).filter_map(|n| n.ok());
@@ -1587,6 +1604,7 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
         .merge(pools)
         .merge(skills)
         .merge(trees)
+        .merge(attention)
         .merge(notices)
 }
 

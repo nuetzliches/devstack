@@ -55,8 +55,26 @@ export type HubEvent =
   | { type: 'skills'; skills: PoolSkillsState }
   /** A version of each stack's worktrees (ADR-0078): read a stack's lanes again when its version changes. Older hubs never send it. */
   | { type: 'worktrees'; worktrees: Record<string, string> }
+  /** What needs attention in every stack (ADR-0097), first and on every change; older hubs never send it. */
+  | { type: 'attention'; items: AttentionItem[] }
   /** Something happened once in the hub that no request reports (ADR-0050): a toast. */
   | { type: 'notice'; level: NoticeLevel; text: string };
+
+/**
+ * Something in a stack that needs attention, as the hub's summary lists it
+ * (ADR-0060, ADR-0097): a failed service, build, start or lane start
+ * (`error`), or a candidate held for promote (`warn`).
+ */
+export interface AttentionItem {
+  stack: string;
+  /** The lane it is in; `null`: the main working tree. */
+  lane: string | null;
+  /** The service it is about; `null`: the stack's or the lane's start. */
+  service: string | null;
+  text: string;
+  detail: string;
+  level: 'error' | 'warn';
+}
 
 /**
  * A pool as the hub follows it (ADR-0073): `live` while its coordinator's
