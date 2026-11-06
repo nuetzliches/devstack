@@ -189,7 +189,7 @@ per machine, a customer's beside the team's. Setup and everything else:
 `stop_service`, `restart_service`, `promote_service`, `rollback_service`,
 `hot_reload`, `logs`, `builds`, `diagnostics`, `doctor`, `run_command`,
 `usage`, `lanes`, `lane_start`, `lane_stop`, `lane_move`, `lane_share`,
-`promote_lane`, `placement`, `hub_status`, `hub_start`.
+`promote_lane`, `placement`, `hub_status`, `hub_start`, `instructions`.
 
 ```json
 { "mcpServers": { "devstack": { "command": "devstack", "args": ["mcp"] } } }

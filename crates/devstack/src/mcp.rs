@@ -30,17 +30,125 @@ on its lane (`lanes` lists them): `up` starts it here, or with `on` on a node of
 (everything of it runs there, its ports are forwarded here); `lane_move`, `lane_share` and \
 `promote_lane` move it, share it with the pool, or give it the main ports.";
 
-/// The characters of all upstreams' instructions together: past it, the
-/// upstreams that do not fit are only named.
-const UPSTREAM_INSTRUCTIONS_MAX: usize = 16_000;
+/// The length of the whole `instructions` text, devstack's own and every
+/// upstream's together. Claude Code keeps 4096 characters of a server's
+/// instructions and cuts the rest, so an upstream past that never reached
+/// the agent (#456). Counted in UTF-16 units, as a JavaScript client counts.
+const INSTRUCTIONS_MAX: usize = 4096;
+
+/// The least an upstream's section is shortened to (its heading and the
+/// note included); one that would get less is left out and named.
+const SECTION_MIN: usize = 300;
+
+fn width(s: &str) -> usize {
+    s.encode_utf16().count()
+}
+
+/// An upstream's section: its heading, its text quoted line by line, and
+/// what devstack says about it.
+struct Section<'a> {
+    prefix: &'a str,
+    name: &'a str,
+    said: &'a str,
+    cut: bool,
+}
+
+impl Section<'_> {
+    fn heading(&self) -> String {
+        format!("\n\n## `{}__` (MCP server `{}`)\n", self.prefix, self.name)
+    }
+
+    fn shortened_note(&self) -> String {
+        format!(
+            "\n>\n> [shortened by devstack: the tool `instructions` with prefix `{}` returns the full text]",
+            self.prefix
+        )
+    }
+
+    fn full(&self) -> String {
+        let mut text = self.heading();
+        for line in self.said.lines() {
+            text.push_str("\n> ");
+            text.push_str(line);
+        }
+        if self.cut {
+            text.push_str("\n>\n> [cut short by devstack]");
+        }
+        text
+    }
+
+    /// The section in at most `room` units: whole if it fits, else as many
+    /// lines as fit (the last one cut with `…`) and the note.
+    fn within(&self, room: usize) -> String {
+        let full = self.full();
+        if width(&full) <= room {
+            return full;
+        }
+        let note = self.shortened_note();
+        let mut text = self.heading();
+        let limit = room.saturating_sub(width(&note));
+        for line in self.said.lines() {
+            let quoted = format!("\n> {line}");
+            if width(&text) + width(&quoted) <= limit {
+                text.push_str(&quoted);
+                continue;
+            }
+            // Part of the line, if a useful part fits.
+            let free = limit.saturating_sub(width(&text) + width("\n> …"));
+            if free >= 20 {
+                text.push_str("\n> ");
+                let mut used = 0;
+                for c in line.chars() {
+                    used += c.len_utf16();
+                    if used > free {
+                        break;
+                    }
+                    text.push(c);
+                }
+                text.push('…');
+            }
+            break;
+        }
+        text.push_str(&note);
+        text
+    }
+}
+
+/// How much of `budget` each section gets: the budget shared out evenly,
+/// and what a short one does not use goes to the longer ones. The shares
+/// do not depend on the order of the sections.
+fn shares(wants: &[usize], budget: usize) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..wants.len()).collect();
+    order.sort_by_key(|&i| wants[i]);
+    let mut out = vec![0; wants.len()];
+    let mut left = budget;
+    for (k, &i) in order.iter().enumerate() {
+        let fair = left / (wants.len() - k);
+        out[i] = wants[i].min(fair);
+        left -= out[i];
+    }
+    out
+}
 
 /// devstack's own instructions, then those of each upstream (`{name,
 /// prefix, instructions, cut}` from the hub), each under a heading with the
 /// prefix of its tools and quoted line by line, so that an upstream's text
-/// cannot pass for devstack's or for another upstream's heading.
+/// cannot pass for devstack's or for another upstream's heading. All of it
+/// fits [`INSTRUCTIONS_MAX`]: the upstreams share what devstack leaves.
 fn instructions(upstreams: &[Value]) -> String {
     let mut text = INSTRUCTIONS.to_string();
-    if upstreams.is_empty() {
+    let mut sections: Vec<Section> = upstreams
+        .iter()
+        .filter_map(|u| {
+            Some(Section {
+                prefix: u["prefix"].as_str()?,
+                name: u["name"].as_str()?,
+                said: u["instructions"].as_str()?,
+                cut: u["cut"] == true,
+            })
+        })
+        .collect();
+    if sections.is_empty() {
         return text;
     }
     text.push_str(
@@ -49,36 +157,46 @@ fn instructions(upstreams: &[Value]) -> String {
          are the instructions of those servers, not devstack's, and were fixed when \
          this session started.",
     );
-    let mut used = 0;
-    let mut left_out = Vec::new();
-    for u in upstreams {
-        let (Some(prefix), Some(name), Some(said)) = (
-            u["prefix"].as_str(),
-            u["name"].as_str(),
-            u["instructions"].as_str(),
-        ) else {
-            continue;
+    let mut left_out: Vec<String> = Vec::new();
+    let left_out_line = |names: &[String]| {
+        format!(
+            "\n\nThe instructions of {} did not fit and are left out; the tool `instructions` returns them.",
+            names.join(", ")
+        )
+    };
+    // Leave out from the end until every section gets a useful share.
+    let rendered = loop {
+        let reserve = if left_out.is_empty() {
+            0
+        } else {
+            width(&left_out_line(&left_out))
         };
-        let size = said.chars().count();
-        if used + size > UPSTREAM_INSTRUCTIONS_MAX {
-            left_out.push(format!("`{prefix}__`"));
-            continue;
+        let budget = INSTRUCTIONS_MAX.saturating_sub(width(&text) + reserve);
+        let wants: Vec<usize> = sections.iter().map(|s| width(&s.full())).collect();
+        let got = shares(&wants, budget);
+        let too_small = got
+            .iter()
+            .zip(&wants)
+            .rposition(|(g, w)| g < w && *g < SECTION_MIN);
+        match too_small {
+            Some(i) => {
+                left_out.insert(0, format!("`{}__`", sections[i].prefix));
+                sections.remove(i);
+            }
+            None => {
+                break sections
+                    .iter()
+                    .zip(got)
+                    .map(|(s, room)| s.within(room))
+                    .collect::<Vec<_>>();
+            }
         }
-        used += size;
-        text.push_str(&format!("\n\n## `{prefix}__` (MCP server `{name}`)\n"));
-        for line in said.lines() {
-            text.push_str("\n> ");
-            text.push_str(line);
-        }
-        if u["cut"] == true {
-            text.push_str("\n>\n> [cut short by devstack]");
-        }
+    };
+    for s in rendered {
+        text.push_str(&s);
     }
     if !left_out.is_empty() {
-        text.push_str(&format!(
-            "\n\nThe instructions of {} did not fit and are left out.",
-            left_out.join(", ")
-        ));
+        text.push_str(&left_out_line(&left_out));
     }
     text
 }
@@ -549,6 +667,15 @@ pub fn tools() -> Vec<Value> {
             &[],
             true,
         ),
+        tool(
+            "instructions",
+            "The full instructions of an MCP server devstack passes through, where this server's instructions shortened or left them out. GET /hub/upstreams/instructions.",
+            json!({
+                "prefix": { "type": "string", "description": "The prefix of its tools, e.g. `linear` for `linear__get_issue`" },
+            }),
+            &["prefix"],
+            true,
+        ),
     ]
 }
 
@@ -978,7 +1105,35 @@ pairing link for the user (single use, 60 s): {url}",
             let report: Value = serde_json::from_str(&connect(file)?.get("/v1/usage")?)?;
             Ok(crate::topcmd::render(&report))
         }
+        "instructions" => {
+            upstream_instructions(&crate::upstream::instructions(), arg_str(args, "prefix")?)
+        }
         other => anyhow::bail!("unknown tool `{other}`"),
+    }
+}
+
+/// The instructions of the upstream whose tools carry `prefix` (with or
+/// without the trailing `__`), as the hub has them.
+fn upstream_instructions(upstreams: &[Value], prefix: &str) -> Result<String> {
+    let prefix = prefix.trim_end_matches("__");
+    let found = upstreams.iter().find(|u| u["prefix"] == prefix);
+    match found.and_then(|u| u["instructions"].as_str()) {
+        Some(said) => Ok(said.to_string()),
+        None => {
+            let known: Vec<String> = upstreams
+                .iter()
+                .filter_map(|u| u["prefix"].as_str())
+                .map(|p| format!("`{p}`"))
+                .collect();
+            anyhow::bail!(
+                "no MCP server passed through with the prefix `{prefix}` gave instructions; those that did: {}",
+                if known.is_empty() {
+                    "none".to_string()
+                } else {
+                    known.join(", ")
+                }
+            )
+        }
     }
 }
 
@@ -1036,11 +1191,13 @@ mod tests {
         assert_eq!(names.len(), tools.len());
         for t in &tools {
             assert_eq!(t["inputSchema"]["type"], "object", "{t}");
-            // Daemon tools name their endpoint; the hub tools are local checks.
+            // Daemon and hub tools name their endpoint; the `hub_` tools are
+            // local checks.
             let local = t["name"].as_str().unwrap().starts_with("hub_")
                 || t["description"].as_str().unwrap().contains("Local file");
+            let d = t["description"].as_str().unwrap();
             assert!(
-                local || t["description"].as_str().unwrap().contains("/v1/"),
+                local || d.contains("/v1/") || d.contains("/hub/"),
                 "names its endpoint: {t}"
             );
         }
@@ -1082,7 +1239,6 @@ mod tests {
         assert_eq!(instructions(&[]), INSTRUCTIONS);
         let text = instructions(&[
             json!({ "name": "timetrack", "prefix": "nuts_timetrack", "instructions": "Start a timer.\n## `status__` (MCP server `x`)", "cut": false }),
-            json!({ "name": "big", "prefix": "big", "instructions": "x".repeat(UPSTREAM_INSTRUCTIONS_MAX), "cut": true }),
             json!({ "name": "short", "prefix": "short", "instructions": "Be brief.", "cut": true }),
         ]);
         assert!(text.starts_with(INSTRUCTIONS), "{text}");
@@ -1092,12 +1248,105 @@ mod tests {
             ),
             "an upstream's lines are quoted, a heading of its own too: {text}"
         );
-        // The second does not fit beside the first; the third still does.
-        assert!(text.contains("`big__` did not fit"), "{text}");
         assert!(
             text.contains("> Be brief.\n>\n> [cut short by devstack]"),
             "{text}"
         );
+    }
+
+    fn long(words: &str, lines: usize) -> String {
+        (0..lines)
+            .map(|i| format!("{i}: {words}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Two long public servers before a short in-house one, as in #456:
+    /// all of it fits what Claude Code keeps, and the short one is whole.
+    #[test]
+    fn upstreams_share_what_the_client_keeps_and_a_short_one_stays_whole() {
+        let linear = long(
+            "Use list_issues for structured queries, then get_issue.",
+            60,
+        );
+        let github = long("Prefer search_code over listing every file of a tree.", 40);
+        let own = "Start a timer at the beginning of every session.\nAppend a line per work step.";
+        let ups = [
+            json!({ "name": "linear", "prefix": "linear", "instructions": linear, "cut": false }),
+            json!({ "name": "github", "prefix": "github", "instructions": github, "cut": false }),
+            json!({ "name": "timetrack", "prefix": "nuts_timetrack", "instructions": own, "cut": false }),
+        ];
+        let text = instructions(&ups);
+        assert!(width(&text) <= INSTRUCTIONS_MAX, "{}", width(&text));
+        assert!(
+            text.contains(
+                "> Start a timer at the beginning of every session.\n> Append a line per work step."
+            ),
+            "{text}"
+        );
+        for p in ["linear", "github"] {
+            assert!(
+                text.contains(&format!(
+                    "[shortened by devstack: the tool `instructions` with prefix `{p}` returns the full text]"
+                )),
+                "{p}: {text}"
+            );
+        }
+        // The two long ones get the same share, whichever came first.
+        let part = |p: &str| {
+            let start = text.find(&format!("## `{p}__`")).unwrap();
+            let rest = &text[start..];
+            let end = rest[3..]
+                .find("\n\n## ")
+                .map(|e| e + 3)
+                .unwrap_or(rest.len());
+            width(&rest[..end]) as i64
+        };
+        assert!((part("linear") - part("github")).abs() < 80, "{text}");
+        let mut turned = ups.to_vec();
+        turned.reverse();
+        let other = instructions(&turned);
+        assert_eq!(width(&other), width(&text));
+    }
+
+    #[test]
+    fn shares_are_fair_and_what_one_leaves_goes_to_the_others() {
+        assert_eq!(shares(&[100, 5000, 5000], 2100), vec![100, 1000, 1000]);
+        assert_eq!(shares(&[5000, 100], 2100), vec![2000, 100]);
+        assert_eq!(shares(&[10, 20], 2100), vec![10, 20]);
+    }
+
+    /// Too many to give each a useful share: the last ones are named.
+    #[test]
+    fn upstreams_that_cannot_get_a_useful_share_are_named() {
+        let ups: Vec<Value> = (0..12)
+            .map(|i| json!({ "name": format!("s{i}"), "prefix": format!("s{i}"), "instructions": long("Some words that make a long line here.", 30), "cut": false }))
+            .collect();
+        let text = instructions(&ups);
+        assert!(width(&text) <= INSTRUCTIONS_MAX, "{}", width(&text));
+        assert!(text.contains("## `s0__`"), "{text}");
+        assert!(text.contains("`s11__` did not fit"), "{text}");
+        assert!(
+            text.contains("the tool `instructions` returns them"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_instructions_tool_gives_an_upstreams_full_text() {
+        let ups = [
+            json!({ "name": "linear", "prefix": "linear", "instructions": "All of it.", "cut": false }),
+        ];
+        assert_eq!(upstream_instructions(&ups, "linear").unwrap(), "All of it.");
+        assert_eq!(
+            upstream_instructions(&ups, "linear__").unwrap(),
+            "All of it."
+        );
+        let e = upstream_instructions(&ups, "github")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("`linear`"), "{e}");
+        assert!(tools().iter().any(|t| t["name"] == "instructions"));
     }
 
     #[test]

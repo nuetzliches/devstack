@@ -148,7 +148,7 @@ node), `down`, `start_service`, `stop_service`, `restart_service`,
 `promote_service`, `rollback_service`, `hot_reload`, `logs`, `builds`,
 `diagnostics`, `doctor`, `run_command`, `usage`, `lanes`, `lane_start`,
 `lane_stop`, `lane_move`, `lane_share`, `promote_lane`, `placement`,
-`hub_status`, `hub_start`. `status`, `up` and `lane_start` end with the
+`hub_status`, `hub_start`, `instructions`. `status`, `up` and `lane_start` end with the
 `dashboard:` page, `lanes` names each lane's. `lane_start` and `lane_stop` work from the main tree too: an
 agent there runs another worktree's lane without moving to it. `up` also
 takes `profile`, `run`, `yes` and `shift` (as `--profile`, `--run`, `--yes`, `--shift`) and
@@ -161,6 +161,9 @@ upstreams, which the hub logs in to (the dashboard's *MCP upstreams*), some
 of them named by the user's pool and accepted there. One that answers it is
 not logged in needs the user, in the dashboard; tell them, do not look for
 another way in.
+devstack passes their instructions on in its own, within what the client keeps
+(4096 characters); one shortened or left out there says so, and the tool
+`instructions` with its `prefix` returns its full text.
 Register it once (project `.mcp.json` or user configuration; the dashboard
 shows *no MCP* in the stack's head while neither has it):
 
