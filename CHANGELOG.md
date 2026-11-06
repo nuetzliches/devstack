@@ -33,6 +33,16 @@ and listed with their assets on the
   and keeps the skill's other hooks; a hub before this release leaves out
   all hooks of such a skill, so keep end-of-session hooks in a skill of
   their own while members run older releases.
+- **devstack notices a pool's upstream an agent has set up itself.** A
+  member who added one of the pool's MCP servers to Claude Code or Codex
+  directly (a service's own setup hint, `claude mcp add ...`) had the tools,
+  but a hook bound to that upstream stayed silent, and accepting it as well
+  gave the agent the tools twice. The hub now reads the MCP servers the
+  agents have configured (names and URLs only; it never writes them) and
+  matches them to the pool's by URL: the *MCP upstreams* page shows the own
+  entry under the pool's with the command that removes it, `devstack
+  doctor` warns, and a hook bound to the upstream applies for the agent
+  that has it set up itself.
 - **`devstack init` sets `PYTHONUTF8 = "1"` for Python apps.** On Windows a
   native Python process opens text files in the ANSI code page (cp1252)
   unless the code passes `encoding=`, while the same code in a container

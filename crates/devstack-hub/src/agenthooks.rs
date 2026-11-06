@@ -14,7 +14,8 @@
 //! - **The dispatcher** ([`run`]) is what that entry starts. It reads the
 //!   index and the hub's state from disk (no hub needs to run), picks the
 //!   hooks that apply (the working tree is of a bound repository, the bound
-//!   upstream is accepted, the pattern matches the prompt, not given yet in
+//!   upstream is accepted or the agent has it as a server of its own, the
+//!   pattern matches the prompt, not given yet in
 //!   this session) and prints their texts. It never blocks a prompt: on
 //!   any error it prints nothing.
 
@@ -321,8 +322,10 @@ pub struct Lookup<'a> {
     pub state: &'a Path,
     /// The `origin` of the working tree at a path.
     pub origin: &'a dyn Fn(&Path) -> Option<String>,
-    /// Whether the user accepted a pool's upstream.
-    pub accepted: &'a dyn Fn(&str, &str) -> bool,
+    /// Whether a pool's upstream (pool, name) is there for the agent in
+    /// the working tree (`cwd`): accepted in the hub, or configured in the
+    /// agent itself at the same URL (#473).
+    pub accepted: &'a dyn Fn(&str, &str, Option<&Path>) -> bool,
     /// Where an error goes (the hub's diagnostic log).
     pub warn: &'a dyn Fn(String),
 }
@@ -419,7 +422,7 @@ fn applies(
     at: &Lookup<'_>,
 ) -> bool {
     if let Some(u) = &h.hook.upstream
-        && !(at.accepted)(&h.pool, u)
+        && !(at.accepted)(&h.pool, u, cwd)
     {
         return false;
     }
@@ -576,6 +579,25 @@ fn prune(dir: &Path) {
     }
 }
 
+/// A pool's upstream is there for `agent` in `cwd`: accepted in the hub, or,
+/// read only then, configured in the agent itself at the pool's URL (#473:
+/// a member who added the server by its own setup hint got no hook).
+/// `own` reads the agent's servers.
+fn upstream_there(
+    state: &Path,
+    pool: &str,
+    name: &str,
+    own: &dyn Fn() -> Vec<crate::agentmcp::Direct>,
+) -> bool {
+    use crate::upstreams::Upstreams;
+    Upstreams::pool_accepted(state, pool, name)
+        || Upstreams::pool_url(state, pool, name).is_some_and(|url| {
+            own()
+                .iter()
+                .any(|d| crate::agentmcp::same_url(&d.url, &url))
+        })
+}
+
 /// The dispatcher as `devstack hook` runs it: this machine's hub state,
 /// its git, its upstreams.
 pub fn run_here(event: Event, agent: &str, input: &str) -> String {
@@ -588,7 +610,11 @@ fn here<R>(event: Event, agent: &str, f: impl FnOnce(&Lookup<'_>) -> R) -> R {
     f(&Lookup {
         state: &state,
         origin: &|p| crate::branches::origin(p),
-        accepted: &|pool, name| crate::upstreams::Upstreams::pool_accepted(&state, pool, name),
+        accepted: &|pool, name, cwd| {
+            upstream_there(&state, pool, name, &|| {
+                crate::agentmcp::of_agent(agent, cwd)
+            })
+        },
         warn: &|error| {
             devstack_daemon::diag::DiagLog::open(crate::log_path()).write(
                 "warn",
@@ -746,7 +772,7 @@ mod tests {
                     .any(|a| a.ends_with("shop"))
                     .then(|| "https://github.com/acme/shop".into())
             },
-            accepted: &|_, _| true,
+            accepted: &|_, _, _| true,
             warn: &|e| panic!("{e}"),
         };
         let input = |sid: &str, cwd: &Path| {
@@ -821,7 +847,7 @@ mod tests {
                 p.ends_with("shop")
                     .then(|| "git@github.com:acme/shop.git".into())
             },
-            accepted: &|_, name| name == "timetrack" && accepted.get(),
+            accepted: &|_, name, _| name == "timetrack" && accepted.get(),
             warn: &|e| panic!("{e}"),
         };
         let shop_tree = Path::new("/src/shop");
@@ -867,6 +893,65 @@ mod tests {
         assert!(read_index(st.path()).agents.is_empty());
     }
 
+    /// A pool's upstream the agent has as a server of its own, at the
+    /// pool's URL, is there for its hooks though never accepted (#473); the
+    /// agent's configuration is read only when it is not accepted.
+    #[test]
+    fn an_upstream_the_agent_configured_itself_counts_as_there() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("pool-upstreams.json"),
+            r#"{"default":[{"name":"timetrack","url":"https://timetrack.example/mcp"}]}"#,
+        )
+        .unwrap();
+        let own = |url: &'static str| {
+            move || {
+                let cfg = tempfile::NamedTempFile::new().unwrap();
+                std::fs::write(
+                    cfg.path(),
+                    serde_json::json!({ "mcpServers": { "tt": { "type": "http", "url": url } } })
+                        .to_string(),
+                )
+                .unwrap();
+                crate::agentmcp::claude(cfg.path(), None)
+            }
+        };
+        let s = dir.path();
+        assert!(upstream_there(
+            s,
+            "default",
+            "timetrack",
+            &own("https://TimeTrack.example/mcp/")
+        ));
+        assert!(!upstream_there(
+            s,
+            "default",
+            "timetrack",
+            &own("https://other.example/mcp")
+        ));
+        assert!(!upstream_there(
+            s,
+            "default",
+            "other",
+            &own("https://timetrack.example/mcp")
+        ));
+        assert!(!upstream_there(
+            s,
+            "elsewhere",
+            "timetrack",
+            &own("https://timetrack.example/mcp")
+        ));
+        // Accepted: the agent's configuration is not read at all.
+        std::fs::write(
+            s.join("upstreams.toml"),
+            "[[pool]]\npool = \"default\"\nname = \"timetrack\"\naccepted = true\nurl = \"https://timetrack.example/mcp\"\n",
+        )
+        .unwrap();
+        assert!(upstream_there(s, "default", "timetrack", &|| panic!(
+            "read"
+        )));
+    }
+
     #[test]
     fn the_dispatcher_gives_each_text_once_where_it_applies() {
         let st = tempfile::tempdir().unwrap();
@@ -895,7 +980,7 @@ mod tests {
                 p.ends_with("shop")
                     .then(|| "git@github.com:acme/shop.git".into())
             },
-            accepted: &|pool, name| pool == "default" && name == "timetrack" && accepted.get(),
+            accepted: &|pool, name, _| pool == "default" && name == "timetrack" && accepted.get(),
             warn: &|e| panic!("{e}"),
         };
         let start = |sid: &str, cwd: &str, source: &str| {

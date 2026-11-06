@@ -891,6 +891,24 @@ export type McpUpstreamFromPool = {
   why?: string;
   /** The prefix the pool gives it. */
   pool_prefix: string;
+  /** Where an agent has a server of its own at this URL (#473). */
+  direct?: AgentOwnServer[];
+};
+
+/** An MCP server a coding agent has configured itself, outside devstack. */
+export type AgentOwnServer = {
+  /** The agent's id (`claude-code`, `codex`). */
+  agent: string;
+  agent_name: string;
+  scope: 'user' | 'local' | 'project';
+  /** The entry's name in the agent's configuration. */
+  name: string;
+  url: string;
+  /** The folder of a local or project entry. */
+  folder?: string;
+  file: string;
+  /** What takes it out again. */
+  remove: string;
 };
 
 /** An MCP upstream a pool names for its members (`GET /hub/pool/upstreams`): a URL, never a secret. */

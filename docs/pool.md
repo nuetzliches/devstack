@@ -684,6 +684,19 @@ another. A declined entry stays declined. An entry the pool drops, or every
 entry of a pool the machine leaves, goes with its login. A pool that does not
 answer keeps what it named last.
 
+A member may have one of the pool's servers set up in a coding agent
+directly, outside devstack (`claude mcp add --transport http tracker
+https://mcp.example.com/mcp`, a service's own setup hint). The hub reads, and
+never writes, the MCP servers Claude Code (`.claude.json`, user and local
+scope; a working tree's `.mcp.json`) and Codex (`config.toml`) have
+configured, only their names and URLs, and matches them to the pool's
+entries by URL (scheme and host in lower case, no default port, no trailing
+`/`). The *MCP upstreams* page shows such an entry under the pool's, with the
+command that removes it (`claude mcp remove --scope user tracker`), and
+`devstack doctor` warns with the same: accepted as well, the agent gets the
+tools twice. A hook bound to that upstream applies for the agent that has it
+set up itself, accepted in the hub or not.
+
 ## Public links through the pool
 
 A pool can give its members public links at stable addresses below a zone
@@ -847,7 +860,7 @@ a `hooks.toml` beside its `SKILL.md`.
 ```toml
 [[hook]]
 event = "session-start"          # a session starts, or starts again after /clear or a compaction
-upstream = "timetrack"           # only while the member accepted the pool's upstream of that name
+upstream = "timetrack"           # only while that pool upstream is there: accepted, or set up in the agent at its URL
 context = """
 Work session: load the skill time-session now, before the first task.
 If its tools are not listed yet, search for them; if they are still missing,
