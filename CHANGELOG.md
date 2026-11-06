@@ -11,6 +11,17 @@ and listed with their assets on the
 
 ### Added
 
+- **`devstack lane start`, `stop` and `reset` take the lane of the worktree
+  they run in.** In a lane's worktree, `devstack up` found the lane by
+  itself, while `devstack lane stop` refused without its name, and an agent
+  finishing its work had to work out the name first. Without a name, the
+  three now take the lane whose worktree the command runs in (from any
+  folder of it), and so does the MCP tool `lane_stop` without `lane`. In
+  the main working tree, or outside a worktree, they ask for the name as
+  before.
+
+### Added
+
 - **`devstack init` sets `PYTHONUTF8 = "1"` for Python apps.** On Windows a
   native Python process opens text files in the ANSI code page (cp1252)
   unless the code passes `encoding=`, while the same code in a container

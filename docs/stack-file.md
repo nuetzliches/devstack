@@ -882,7 +882,8 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
   `devstack lane stop <name>` stops a lane (its builds stay, the worktree
   too); `devstack lane reset <name>` throws a stopped lane's data away (its
   containers and volumes, here and on the nodes it ran on), so it starts
-  fresh; `devstack lane prune [--older-than 7d] [--dry-run]` removes what
+  fresh. In a lane's worktree, `start`, `stop` and `reset` take that lane
+  without a name; `devstack lane prune [--older-than 7d] [--dry-run]` removes what
   lanes whose worktree is gone left behind, here and on the pool's nodes
   (ADR-0038); with `--older-than`, also entries of the store of `prepare`
   that no copy used for as long (ADR-0062).

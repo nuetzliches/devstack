@@ -576,9 +576,9 @@ pub fn tools() -> Vec<Value> {
             "lane_stop",
             "Stop a started lane: its services stop, its builds and containers' data stay; `lane_start` starts it again. Not the lane serving the main ports (`promote_lane` main first). POST /v1/lanes/{lane}/stop.",
             json!({
-                "lane": { "type": "string", "description": "The lane's name (see `lanes`)" },
+                "lane": { "type": "string", "description": "The lane's name (see `lanes`). Without it: the lane of the worktree this server runs in" },
             }),
-            &["lane"],
+            &[],
             false,
         ),
         tool(
@@ -973,7 +973,14 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             }
         }
         "lane_stop" => {
-            let lane = name_arg(args, "lane")?;
+            // Without a name, the lane of this worktree, as the CLI (#476).
+            let here;
+            let lane = if args.get("lane").is_some_and(|l| !l.is_null()) {
+                name_arg(args, "lane")?
+            } else {
+                here = client::lane_here(file, false)?;
+                here.as_str()
+            };
             let c = client::main_client(file)?;
             let (status, text) = c.call_raw("POST", &format!("/v1/lanes/{lane}/stop"), None)?;
             if status >= 400 {
