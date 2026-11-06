@@ -227,8 +227,12 @@ const eventWords: Record<FlowNode['hook']['event'], string> = {
 .node.picked {
   box-shadow: 0 0 0 1px var(--c);
 }
+/* Dimmed by its parts, not `opacity` on the node: the tooltip inside it
+   would take the opacity too and let the page show through. */
 .node.off {
   border-left-style: dashed;
+}
+.node.off > :not(.tip) {
   opacity: 0.6;
 }
 .fired {
