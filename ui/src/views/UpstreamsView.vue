@@ -13,6 +13,7 @@ import { act } from '@/lib/actions';
 import { webUrl } from '@/lib/format';
 import { oauthAuth } from '@/lib/oauthAuth';
 import { line, words } from '@/lib/commandLine';
+import { ownServerAdvice, ownServerWhere } from '@/lib/upstreams';
 import { useUi } from '@/stores/ui';
 import Icon from '@/components/icons/Icon.vue';
 
@@ -368,6 +369,9 @@ function how(u: McpUpstream): string {
                 <template v-if="u.allow?.length"> · {{ u.allow.length }} tool(s)</template>
               </span>
               <span v-if="u.pool?.why" class="faint small">{{ u.pool.why }}</span>
+              <span v-for="d in u.pool?.direct ?? []" :key="d.agent + d.scope + d.name" class="small warn-text" data-testid="upstream-direct">
+                {{ ownServerWhere(d) }} {{ ownServerAdvice(u.pool!.status) }} <code>{{ d.remove }}</code>
+              </span>
             </div>
             <div v-if="u.pool && u.pool.status !== 'accepted'" class="actions">
               <input

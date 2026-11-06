@@ -1,6 +1,6 @@
 # ADR-0069: `devstack mcp` can carry the tools of upstream MCP servers, logged in once by the hub
 
-- **Status:** Accepted (2026-10-27, [card](https://github.com/nuetzliches/devstack/issues/316#issuecomment-6452598449)); amended 2026-10-27 (the keychain spike: `keyring`, a file on Linux without a Secret Service); addendum 2026-10-28 (option B: a pool names upstreams, card approved 2026-10-28); addendum 2026-10-30 (an OAuth app's client secret, card approved 2026-10-30); addendum 2026-11-04 (the upstreams' instructions in `initialize`, card approved 2026-11-04)
+- **Status:** Accepted (2026-10-27, [card](https://github.com/nuetzliches/devstack/issues/316#issuecomment-6452598449)); amended 2026-10-27 (the keychain spike: `keyring`, a file on Linux without a Secret Service); addendum 2026-10-28 (option B: a pool names upstreams, card approved 2026-10-28); addendum 2026-10-30 (an OAuth app's client secret, card approved 2026-10-30); addendum 2026-11-04 (the upstreams' instructions in `initialize`, card approved 2026-11-04); addendum 2026-11-06 (a pool's upstream an agent has set up itself, card approved 2026-11-06)
 - **Date:** 2026-10-27
 - **Deciders:** project owner
 - **Related:** [#316](https://github.com/nuetzliches/devstack/issues/316), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md), [ADR-0054](0054-macos-is-a-developer-platform-in-preview.md), [ADR-0060](0060-the-tray-is-a-client-of-the-hub.md), [ADR-0067](0067-a-change-at-runtime-says-who-made-it.md)
@@ -323,3 +323,40 @@ of `initialize`), `upstreams.rs` (`note`, `warm`, `instructions`,
 (`instructions`) and `mcp.rs` (`instructions`, the quoting and the cap in
 all); tests in the hub's `upstreams.rs` and `stdio.rs`, `mcp.rs`, and
 `crates/devstack/tests/hub.rs`.
+
+## Addendum 2026-11-06: a pool's upstream an agent has set up itself
+
+A member had a pool's upstream set up in Claude Code directly, by the
+service's own setup hint, and had never answered the pool's offer. The hub
+did not notice: the agent had the tools, a hook bound to the upstream
+(ADR-0094) stayed silent for the whole session, and accepting it as well
+would have given the agent the tools twice (#473).
+
+The owner approved these points of the card in the conversation on
+**2026-11-06** (points 4 and 6 of the pull request's card; point 5 is in
+ADR-0094's addendum of the same day):
+
+| # | Category | Point | Beats | Reversing costs |
+|---|---|---|---|---|
+| 4 | trust | The dispatcher and the hub read the MCP servers configured directly in the agents (Claude Code `.claude.json`, global and per folder, and a working tree's `.mcp.json`; Codex `config.toml`), read only, names and URLs only; nothing leaves the machine, nothing is written. If wrong: nothing gained by an attacker; they are the user's own files and no token is read. | Asking the agent's CLI (`claude mcp list`: slow, starts the servers). | Low. |
+| 6 | term | The *MCP upstreams* page shows on a pool's upstream that it is already set up directly in an agent (scope, entry), with the command that removes it; `devstack doctor` warns with the same; the hub never changes an agent's MCP configuration. | A button that accepts and removes the own entry (the hub writing `.claude.json`). | Low: a button can come later. |
+
+As built: `crates/devstack-hub/src/agentmcp.rs` reads Claude Code's
+`.claude.json` (in `CLAUDE_CONFIG_DIR`, else the home folder: `mcpServers`,
+user scope; `projects.<folder>.mcpServers`, local scope), the `.mcp.json` of
+each registered stack's repository (project scope), and Codex's
+`config.toml` (`CODEX_HOME`, else `~/.codex`: `[mcp_servers.<name>]` with a
+`url`). It keeps a server's name and URL only, never its headers, and skips
+one without an http(s) URL. URLs compare with scheme and host in lower case,
+the default port, user, query and fragment dropped, and no trailing `/`.
+`GET /hub/upstreams` carries the matches as `pool.direct`; the page shows
+each under the pool's entry, with advice by whether it is accepted (the
+tools twice) or not (use it here, then remove the own entry); `devstack
+doctor` warns once per match. The command for Claude Code is `claude mcp
+remove --scope <user|local|project> <name>` (in the folder, for local and
+project); for Codex, the `[mcp_servers.<name>]` table to delete from the
+file.
+
+Decided while building: the page reads the agents' files when it lists the
+upstreams, and only when a pool offers any; Claude Code's local scope counts
+for a working tree in that folder or below it; Codex has a user scope only.

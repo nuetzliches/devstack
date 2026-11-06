@@ -85,6 +85,7 @@ pub fn run(stack_file: &Path) -> Vec<Finding> {
     out.extend(release());
     out.extend(path_entry());
     out.extend(agent_hooks());
+    out.extend(upstreams_direct());
     #[cfg(windows)]
     out.extend(dev_drive(stack_file));
     out
@@ -662,6 +663,51 @@ fn agent_hooks() -> Vec<Finding> {
     out
 }
 
+/// A pool's upstream an agent also has as a server of its own, at the same
+/// URL (#473): its tools twice once accepted, and before that a hook bound
+/// to it looked silent.
+fn upstreams_direct() -> Vec<Finding> {
+    let Ok(views) =
+        devstack_hub::upstreams::Upstreams::without_secrets(devstack_hub::upstreams::dir()).views()
+    else {
+        return Vec::new();
+    };
+    views
+        .iter()
+        .filter_map(|v| v.pool.as_ref().map(|p| (v, p)))
+        .flat_map(|(v, p)| {
+            p.direct.iter().map(move |d| {
+                f(
+                    Level::Warn,
+                    direct_text(&p.pool, &p.name, p.status, &v.upstream.url, d),
+                )
+            })
+        })
+        .collect()
+}
+
+fn direct_text(
+    pool: &str,
+    name: &str,
+    status: &str,
+    url: &str,
+    d: &devstack_hub::agentmcp::Direct,
+) -> String {
+    let scope = match &d.folder {
+        Some(folder) => format!("{} scope, {folder}", d.scope.as_str()),
+        None => format!("{} scope", d.scope.as_str()),
+    };
+    let what = if status == "accepted" {
+        "the agent gets its tools twice"
+    } else {
+        "accept it in the dashboard (Upstreams) to have it once, through devstack"
+    };
+    format!(
+        "upstream `{name}` of pool `{pool}` ({url}) is also configured directly in {} ({scope}, entry `{}`): {what}; remove the own entry with `{}`",
+        d.agent_name, d.name, d.remove
+    )
+}
+
 fn same_dir(a: &Path, b: &Path) -> bool {
     let norm = |p: &Path| {
         std::fs::canonicalize(p)
@@ -734,6 +780,39 @@ pub fn text(findings: &[Finding]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pools_upstream_the_agent_has_itself_is_named_with_its_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join(".claude.json");
+        std::fs::write(
+            &cfg,
+            r#"{"mcpServers":{"tt":{"type":"http","url":"https://timetrack.example/mcp"}}}"#,
+        )
+        .unwrap();
+        let d = &devstack_hub::agentmcp::claude(&cfg, None)[0];
+        let t = direct_text(
+            "default",
+            "timetrack",
+            "offered",
+            "https://timetrack.example/mcp",
+            d,
+        );
+        assert!(
+            t.contains("directly in Claude Code (user scope, entry `tt`)")
+                && t.contains("accept it in the dashboard")
+                && t.ends_with("`claude mcp remove --scope user tt`"),
+            "{t}"
+        );
+        let t = direct_text(
+            "default",
+            "timetrack",
+            "accepted",
+            "https://timetrack.example/mcp",
+            d,
+        );
+        assert!(t.contains("tools twice"), "{t}");
+    }
 
     #[test]
     fn the_memory_line_names_docker_desktops_vm() {

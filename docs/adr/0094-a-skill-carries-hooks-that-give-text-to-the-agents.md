@@ -1,6 +1,6 @@
 # ADR-0094: A skill carries hooks that give text to the agents; the hub writes one entry per agent and event, `devstack hook` picks the texts
 
-- **Status:** Accepted (card in the pull request); built; addendum 2026-11-06 (end-of-session events, #462)
+- **Status:** Accepted (card in the pull request); built; addenda 2026-11-06 (end-of-session events, #462; an upstream the agent has set up itself counts, #473)
 - **Date:** 2026-11-05
 - **Deciders:** project owner
 - **Related:** [ADR-0074](0074-a-pool-hands-out-skill-sets-the-hub-installs-them-for-the-agents.md) (skill sets, acceptance, the agent table), [ADR-0077](0077-a-sets-skills-are-grouped-and-switched-one-by-one.md) (a skill switched on and off), [ADR-0079](0079-skills-local-to-a-working-tree.md) (a skill bound to repositories), [ADR-0083](0083-the-hub-takes-out-what-an-agent-switched-off-leaves.md) (an agent switched off leaves nothing), [ADR-0069](0069-devstack-mcp-can-carry-the-tools-of-upstream-mcp-servers.md) (a pool's upstreams, accepted per member), [ADR-0071](0071-the-dashboard-writes-no-file-of-a-repository.md), [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md); issue #453
@@ -213,3 +213,23 @@ Decided while building, not on the card:
 (`event_name`, `end`, `ended`, `texts_for`), `crates/devstack/src/client.rs`
 (`lane_stop`, `lane_stop_texts`), `crates/devstack/src/mcp.rs` (`lane_stop`),
 `crates/devstack/src/doctor.rs` (`agent_hooks`).
+
+## Addendum 2026-11-06: an upstream the agent has set up itself counts
+
+Point 5 of the dispatcher (*a hook bound to an upstream applies while the
+member accepted that pool's upstream*) left a hook silent for a member who
+had set the upstream up in the agent directly, outside devstack (#473). The
+owner approved in the conversation on **2026-11-06** (point 5 of the pull
+request's card; points 4 and 6 are in ADR-0069's addendum of the same day):
+
+| # | Category | Point | Beats | Reversing costs |
+|---|---|---|---|---|
+| 5 | concept | A hook bound to an upstream also applies when the agent has a server of its own whose URL (normalised: scheme, lower-case host, port, path without trailing `/`) is the pool's upstream's URL: a direct configuration counts as the upstream being there. | Only a note line instead of silence. | Low. |
+
+As built: `upstream_there` in `crates/devstack-hub/src/agenthooks.rs` takes
+an accepted upstream as before, and only when it is not accepted reads the
+servers of the agent the entry names (`--agent`: Claude Code's user scope,
+its local scope for the session's `cwd`, the `.mcp.json` there; Codex's
+`config.toml`; `crates/devstack-hub/src/agentmcp.rs`) and compares their
+URLs with the one the pool's list gives (`pool-upstreams.json`). A member's
+own hub upstream of that name still keeps the pool's out.

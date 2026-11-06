@@ -303,6 +303,10 @@ pub struct FromPool {
     pub why: Option<String>,
     /// The prefix the pool gives it.
     pub pool_prefix: String,
+    /// Where an agent has a server of its own at this URL (#473): the
+    /// upstream is there twice, or there without being accepted.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub direct: Vec<crate::agentmcp::Direct>,
 }
 
 /// What the hub keeps of an upstream's login in the secrets store.
@@ -514,6 +518,19 @@ impl Upstreams {
                 .any(|d| d.pool == pool && d.name == name && d.accepted && d.url == e.url)
     }
 
+    /// The URL a pool's list gives its upstream `name`, as the hub got it
+    /// last.
+    pub fn pool_url(dir: &std::path::Path, pool: &str, name: &str) -> Option<String> {
+        let lists: PoolLists = std::fs::read(dir.join("pool-upstreams.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())?;
+        lists
+            .get(pool)?
+            .iter()
+            .find(|e| e.name == name)
+            .map(|e| e.url.clone())
+    }
+
     /// The user configured an upstream, or accepted one of a pool: what makes
     /// `devstack mcp` ask the hub at all.
     pub fn configured(dir: &std::path::Path) -> bool {
@@ -536,11 +553,30 @@ impl Upstreams {
             upstream: u,
             pool: None,
         });
-        let pooled = self.pooled(&f).into_iter().map(|(u, p)| View {
-            prefix: u.prefix(),
-            logged_in: p.status == "accepted" && logged_in(&u),
-            upstream: u,
-            pool: Some(p),
+        let pooled = self.pooled(&f);
+        // What the agents configured themselves: read once, only when a
+        // pool offers anything.
+        let directs = if pooled.is_empty() {
+            Vec::new()
+        } else {
+            let trees: Vec<PathBuf> = devstack_daemon::registry::list()
+                .into_iter()
+                .map(|e| e.repo)
+                .collect();
+            crate::agentmcp::everywhere(&trees)
+        };
+        let pooled = pooled.into_iter().map(|(u, mut p)| {
+            p.direct = directs
+                .iter()
+                .filter(|d| crate::agentmcp::same_url(&d.url, &u.url))
+                .cloned()
+                .collect();
+            View {
+                prefix: u.prefix(),
+                logged_in: p.status == "accepted" && logged_in(&u),
+                upstream: u,
+                pool: Some(p),
+            }
         });
         Ok(own.chain(pooled).collect())
     }
@@ -625,6 +661,7 @@ impl Upstreams {
                         status,
                         why,
                         pool_prefix: e.prefix(),
+                        direct: Vec::new(),
                     },
                 ));
             }

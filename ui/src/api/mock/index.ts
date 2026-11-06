@@ -95,7 +95,7 @@ const mockUpstreams: McpUpstream[] = [
   { name: 'wiki', url: 'https://wiki.example.com/mcp', prefix: 'wiki', allow: ['search', 'get_page'], auth: { kind: 'token' }, logged_in: false },
   // Named by the pool (ADR-0069 option B): one accepted, one offered.
   { name: 'default:docs', url: 'https://docs.example.com/mcp', prefix: 'docs', auth: { kind: 'oauth' }, logged_in: true, pool: { pool: 'default', name: 'docs', status: 'accepted', pool_prefix: 'docs' } },
-  { name: 'default:crm', url: 'https://crm.example.com/mcp', prefix: 'crm', auth: { kind: 'oauth' }, logged_in: false, pool: { pool: 'default', name: 'crm', status: 'offered', pool_prefix: 'crm' } },
+  { name: 'default:crm', url: 'https://crm.example.com/mcp', prefix: 'crm', auth: { kind: 'oauth' }, logged_in: false, pool: { pool: 'default', name: 'crm', status: 'offered', pool_prefix: 'crm', direct: [{ agent: 'claude-code', agent_name: 'Claude Code', scope: 'user', name: 'crm', url: 'https://crm.example.com/mcp', file: '~/.claude.json', remove: 'claude mcp remove --scope user crm' }] } },
 ];
 
 /** The MCP upstreams the mock pool names. */
