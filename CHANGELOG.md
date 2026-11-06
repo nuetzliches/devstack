@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **`devstack init` sets `PYTHONUTF8 = "1"` for Python apps.** On Windows a
+  native Python process opens text files in the ANSI code page (cp1252)
+  unless the code passes `encoding=`, while the same code in a container
+  reads UTF-8: UTF-8 fixtures turned into mojibake only under devstack. The
+  draft now gives each Django, FastAPI and Flask service the variable in its
+  `env`, and the stack file reference and the `devstack-config` skill name
+  the pitfall (#464).
+
 ### Changed
 
 - **devstack finds the stack file from any folder of the repository.**
