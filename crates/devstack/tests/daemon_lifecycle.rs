@@ -2190,9 +2190,23 @@ fn restart_on_a_folder_restarts_for_each_file_in_it() {
         s.diag()
     );
     // Up again after that restart, not the one before it: a change while it
-    // runs would wait for it and fire after the check below.
-    let restarted = pid();
-    assert!(up(restarted), "{}", s.diag());
+    // runs would wait for it and fire after the check below. Counted in the
+    // log (one start, then one run per restart): a pid read here may already
+    // be the restarted one.
+    let runs = || {
+        s.daemon_log()
+            .lines()
+            .filter(|l| l.contains("\"event\":\"service\"") && l.contains("\"state\":\"running\""))
+            .count()
+    };
+    assert!(
+        wait_for(
+            || runs() > fired().len() && s.state("dev") == "running",
+            Duration::from_secs(60)
+        ),
+        "{}",
+        s.diag()
+    );
     let before = fired().len();
     std::fs::write(server.join("__pycache__/app.cpython-313.pyc"), "x").unwrap();
     // A new `__pycache__`, as a first start of Python makes it: Windows
