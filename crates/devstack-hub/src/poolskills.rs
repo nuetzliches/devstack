@@ -413,7 +413,7 @@ impl PoolSkills {
     /// folders there of the agents switched on, and refreshed where an
     /// earlier one is; each folder ignores itself. Out of the folders of the
     /// agents switched off that no agent switched on reads (ADR-0083). A
-    /// skill git tracks is left to the upgrade prompt.
+    /// skill git tracks is left to `devstack skills check` (ADR-0087).
     pub fn local(&self) {
         let s = self.settings();
         let (mut rels, mut off): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());

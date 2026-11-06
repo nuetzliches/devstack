@@ -8,29 +8,20 @@ pub(crate) fn run(file: &Path, action: SkillsAction) -> Result<()> {
     match action {
         SkillsAction::Install { dir, force } => {
             let stack = load(file);
-            let mut tracked = Vec::new();
             for o in skills::install(&stack, file, dir.as_deref(), force)? {
                 let fresh = matches!(o, skills::Outcome::Written(_));
                 match o {
-                    skills::Outcome::Written(p) | skills::Outcome::Unchanged(p) => {
-                        println!(
-                            "{} {}",
-                            if fresh { "written   " } else { "up to date" },
-                            p.display()
-                        );
-                        if let Some(folder) = p.parent()
-                            && git_tracks(folder)
-                        {
-                            tracked.push(folder.to_path_buf());
-                        }
-                    }
+                    skills::Outcome::Written(p) | skills::Outcome::Unchanged(p) => println!(
+                        "{} {}",
+                        if fresh { "written   " } else { "up to date" },
+                        p.display()
+                    ),
                     skills::Outcome::Kept(p) => println!(
                         "kept       {} (written by the project, not by devstack; --force replaces it)",
                         p.display()
                     ),
                 }
             }
-            untrack_note(&tracked);
             Ok(())
         }
         // The hub keeps the generated skills current (ADR-0079); what it
@@ -53,7 +44,7 @@ pub(crate) fn run(file: &Path, action: SkillsAction) -> Result<()> {
 }
 
 /// Local to the working tree since ADR-0079: a copy an earlier devstack had
-/// committed is the user's to take out of git (a migration aid, #389).
+/// committed is the user's to take out of git (`skills check`, ADR-0087).
 fn untrack_note(tracked: &[std::path::PathBuf]) {
     if tracked.is_empty() {
         return;
