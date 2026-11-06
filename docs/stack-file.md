@@ -449,6 +449,10 @@ Telemetry__Endpoint = "http://127.0.0.1:4317"
   telemetry.
 - On Windows, variable names that differ only in case are one variable: the
   later layer wins, and `${PATH}` finds `Path`.
+- On Windows, Python opens text files in the ANSI code page (cp1252) unless
+  the code passes `encoding=`; in a container the same code reads UTF-8. Give
+  native Python services and commands `PYTHONUTF8 = "1"` in `env` (harmless
+  on Linux and macOS); `devstack init` writes it for the Python apps it finds.
 - `rewrite_hosts` needs `compose`; each entry is a service the service's own
   group starts, or `<group>.<service>` of another. `workers.env` names at
   least one variable.

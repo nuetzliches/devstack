@@ -49,6 +49,10 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   instance, only one of them may run schedulers and queue consumers: put their
   switches into `[services.<name>.workers] env = { X = "{is_main}" }`, not into
   `env`.
+- **Python on Windows reads files as cp1252.** A native Python service or
+  command opens text files in the ANSI code page unless the code passes
+  `encoding=`, so UTF-8 fixtures turn into mojibake only under devstack. Set
+  `PYTHONUTF8 = "1"` in its `env`.
 - **Lanes have their own containers.** A worktree runs as a lane with its
   ports moved (`[lanes] port_step`) and its own Compose project, so its
   database is its own and needs no `{lane_suffix}`. Every lane starts all of

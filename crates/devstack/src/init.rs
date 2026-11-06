@@ -490,6 +490,13 @@ fn python(repo: &Path, dir: &Path, all: &[PathBuf]) -> Option<Svc> {
     } else {
         return None;
     }
+    // On Windows, Python opens text files in the ANSI code page (cp1252)
+    // unless told otherwise; in a container the same code reads UTF-8 (#464).
+    let _ = writeln!(b, "\n[services.{name}.env]");
+    let _ = writeln!(
+        b,
+        "PYTHONUTF8 = \"1\"   # files as UTF-8, as on Linux (Windows reads them as cp1252 otherwise)"
+    );
     Some(Svc { name, body: b })
 }
 
@@ -1002,7 +1009,18 @@ mod tests {
             "{}",
             d.text
         );
-        devstack_config::from_str(&d.text, &r.join("devstack.toml")).expect("the draft loads");
+        let stack =
+            devstack_config::from_str(&d.text, &r.join("devstack.toml")).expect("the draft loads");
+        // Python reads files as UTF-8 on Windows too (#464); nothing else gets it.
+        for n in ["api", "admin"] {
+            assert_eq!(
+                stack.services[n].env.get("PYTHONUTF8").map(String::as_str),
+                Some("1"),
+                "{n}\n{}",
+                d.text
+            );
+        }
+        assert!(!stack.services["orders"].env.contains_key("PYTHONUTF8"));
     }
 
     #[test]
