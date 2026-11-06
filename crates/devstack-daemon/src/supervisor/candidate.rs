@@ -595,6 +595,22 @@ mod tests {
         panic!("late past the deadline at every try: {tries:?}");
     }
 
+    /// A restart under way keeps the daemon: between its stop and its start
+    /// nothing of the service runs, and the daemon must not end there.
+    #[test]
+    fn a_restart_under_way_counts_as_running() {
+        let (_d, _rt, sup) = two_after_a_job();
+        assert!(!sup.runs_anything(), "nothing started");
+        *sup.restarts_under_way
+            .lock()
+            .unwrap()
+            .entry("a".into())
+            .or_default() += 1;
+        assert!(sup.runs_anything(), "a restart between its stop and start");
+        *sup.restarts_under_way.lock().unwrap().get_mut("a").unwrap() -= 1;
+        assert!(!sup.runs_anything());
+    }
+
     /// A change reported after a restart began waits for the restart, past
     /// its quiet period: the restart may have built it already (#233).
     #[test]

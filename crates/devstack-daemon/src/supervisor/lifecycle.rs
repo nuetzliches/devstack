@@ -142,6 +142,16 @@ impl Supervisor {
     pub fn runs_anything(&self) -> bool {
         use crate::state::Status;
         self.upping.load(Ordering::SeqCst) > 0
+            // A restart stops before it starts: between the two nothing of
+            // the service runs, and on Windows the stop takes seconds. The
+            // daemon ended there, and the start that followed ran in a
+            // daemon on its way out.
+            || self
+                .restarts_under_way
+                .lock()
+                .unwrap()
+                .values()
+                .any(|n| *n > 0)
             || self
                 .slots
                 .lock()
