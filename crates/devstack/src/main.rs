@@ -26,9 +26,10 @@ mod update;
 #[derive(Parser)]
 #[command(version, about = "Local development orchestrator")]
 struct Cli {
-    /// Stack file.
-    #[arg(long, short = 'f', global = true, default_value = "devstack.toml")]
-    file: PathBuf,
+    /// Stack file [default: devstack.toml in this directory or the nearest
+    /// one above it, up to the repository root].
+    #[arg(long, short = 'f', global = true)]
+    file: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -945,6 +946,58 @@ fn repo_of(file: &Path) -> Result<PathBuf> {
     Ok(abs.parent().map(Path::to_path_buf).unwrap_or(abs))
 }
 
+const STACK_FILE: &str = "devstack.toml";
+
+/// The stack file without `-f`: in `dir`, else in the nearest directory
+/// above it, like git finds `.git`, so that a command run from an app's
+/// folder means the stack around it (#467). The search ends at the
+/// repository root (the first directory holding `.git`, a folder in the
+/// main tree, a file in a worktree): a repository nested in another
+/// never reaches the outer one's stack. Found in `dir` itself, the path
+/// stays relative, as it was before the search.
+fn find_stack_file(dir: &Path) -> Option<PathBuf> {
+    if dir.join(STACK_FILE).is_file() {
+        return Some(PathBuf::from(STACK_FILE));
+    }
+    let mut at = dir;
+    while !at.join(".git").exists() {
+        at = at.parent()?;
+        let file = at.join(STACK_FILE);
+        if file.is_file() {
+            return Some(file);
+        }
+    }
+    None
+}
+
+/// The commands that cannot do without the stack file: without one they
+/// say where devstack looked, not "no daemon is running" (#467). `init`
+/// writes one; `doctor` and `mcp` report its absence themselves; `down`
+/// still clears what a stack left behind; `tunnel` sets up the machine's
+/// tunnel too; the rest belong to the machine.
+fn needs_stack_file(cmd: &Cmd) -> bool {
+    matches!(
+        cmd,
+        Cmd::Check { .. }
+            | Cmd::Build { .. }
+            | Cmd::Up { .. }
+            | Cmd::Status
+            | Cmd::Journal { .. }
+            | Cmd::Env { .. }
+            | Cmd::Start { .. }
+            | Cmd::Stop { .. }
+            | Cmd::Restart { .. }
+            | Cmd::HotReload { .. }
+            | Cmd::Promote { .. }
+            | Cmd::Rollback { .. }
+            | Cmd::Logs { .. }
+            | Cmd::Builds { .. }
+            | Cmd::Top { .. }
+            | Cmd::Run { .. }
+            | Cmd::Lane { .. }
+    )
+}
+
 /// Every command goes to the area that handles it ([`dispatch`]).
 /// `devstack hook`: the agent's input on stdin, the texts on stdout;
 /// nothing on any error, so that a prompt is never held up.
@@ -966,6 +1019,29 @@ fn main() -> Result<()> {
     // limit up to the hard one).
     let _ = devstack_proc::raise_open_files();
     let Cli { file, cmd } = Cli::parse();
+    let file = match file {
+        Some(f) => {
+            if needs_stack_file(&cmd) && !f.is_file() {
+                anyhow::bail!("the stack file {} does not exist", f.display());
+            }
+            f
+        }
+        None => match std::env::current_dir()
+            .ok()
+            .and_then(|d| find_stack_file(&d))
+        {
+            Some(found) => found,
+            None => {
+                if needs_stack_file(&cmd) {
+                    anyhow::bail!(
+                        "no {STACK_FILE} in {} or above it up to the repository root (run it from the stack or pass -f)",
+                        std::env::current_dir()?.display()
+                    );
+                }
+                PathBuf::from(STACK_FILE)
+            }
+        },
+    };
     match cmd {
         cmd @ (Cmd::Check { .. }
         | Cmd::Build { .. }
@@ -1036,13 +1112,39 @@ mod tests {
 
     #[test]
     fn the_stack_file_defaults_and_is_global() {
-        assert_eq!(parse(&["status"]).file, PathBuf::from("devstack.toml"));
+        assert_eq!(parse(&["status"]).file, None, "found by the search");
         let cli = parse(&["restart", "api", "-f", "other.toml", "--rebuild"]);
-        assert_eq!(cli.file, PathBuf::from("other.toml"));
+        assert_eq!(cli.file, Some(PathBuf::from("other.toml")));
         assert!(matches!(
             cli.cmd,
             Cmd::Restart { service, rebuild: true } if service == "api"
         ));
+    }
+
+    /// From a folder below the stack, the stack around it (#467); never
+    /// past the repository root, never past a nested repository's.
+    #[test]
+    fn the_stack_file_is_found_above_up_to_the_repository_root() {
+        let root = tempfile::tempdir().unwrap();
+        let outer = root.path().join("outer");
+        let app = outer.join("apps").join("web").join("src");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::create_dir_all(outer.join(".git")).unwrap();
+        std::fs::write(outer.join(STACK_FILE), "").unwrap();
+        // Found in the folder itself: as before, relative.
+        assert_eq!(find_stack_file(&outer), Some(PathBuf::from(STACK_FILE)));
+        assert_eq!(find_stack_file(&app), Some(outer.join(STACK_FILE)));
+
+        // A worktree marks its root with a `.git` file.
+        let nested = app.join("vendor");
+        std::fs::create_dir_all(nested.join("pkg")).unwrap();
+        std::fs::write(nested.join(".git"), "gitdir: elsewhere").unwrap();
+        assert_eq!(find_stack_file(&nested.join("pkg")), None);
+
+        // Outside any repository the search ends at the filesystem's root.
+        let loose = root.path().join("loose").join("deep");
+        std::fs::create_dir_all(&loose).unwrap();
+        assert_eq!(find_stack_file(&loose), None);
     }
 
     #[test]

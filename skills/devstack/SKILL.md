@@ -43,7 +43,7 @@ PATH of an already running agent process: then use the full path
 
 ## 2. Operate
 
-Run from the repository root (devstack looks for `{{devstack:stack_file}}` there; `-f` otherwise).
+Run from anywhere in the repository: without `-f`, devstack looks for `devstack.toml` in the current folder and the folders above it, up to the repository root (`{{devstack:stack_file}}` under another name needs `-f`).
 
 | Command | Effect |
 | --- | --- |

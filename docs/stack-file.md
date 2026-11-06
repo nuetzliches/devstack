@@ -4,6 +4,11 @@ One file in the repository root describes the local stack: the containers it
 borrows from Compose, the native processes devstack builds and runs, and the
 commands people and agents can trigger. Schema version 1 ([ADR-0017](adr/0017-stack-file-is-toml.md)).
 
+- **Any folder of the repository will do.** Without `-f`, every command looks
+  for `devstack.toml` in the current folder, then in each folder above it up
+  to the repository root (the first folder holding `.git`), so a command run
+  from an app's folder means the stack around it. `-f <file>` is taken as
+  given, relative to the current folder.
 - **Every table rejects unknown keys.** A typo is an error, never a silently
   ignored setting.
 - **Validate after every edit:** `devstack check` (add `--compose` to let
