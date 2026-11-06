@@ -2184,9 +2184,13 @@ pub fn lane_start(
 /// daemon's list; `None` in the main working tree, or without a daemon.
 pub fn worktree_lane(stack_file: &Path) -> Option<String> {
     let c = Client::probe(&state_dir(stack_file).ok()?).ok().flatten()?;
-    let wt = worktree()?;
-    let lanes: Vec<Value> = serde_json::from_str(&c.get("/v1/lanes").ok()?).ok()?;
-    let me = devstack_proc::long_path(&wt.path);
+    lane_at(&c, &worktree()?.path).ok()
+}
+
+/// The name of the lane whose worktree is `path`, by the daemon's list.
+fn lane_at(c: &Client, path: &Path) -> Result<String> {
+    let lanes: Vec<Value> = serde_json::from_str(&c.get("/v1/lanes")?)?;
+    let me = devstack_proc::long_path(path);
     lanes
         .iter()
         .find(|l| {
@@ -2195,6 +2199,23 @@ pub fn worktree_lane(stack_file: &Path) -> Option<String> {
                 .is_some_and(|p| same_dir(&devstack_proc::long_path(Path::new(p)), &me))
         })
         .and_then(|l| l["name"].as_str().map(str::to_string))
+        .ok_or_else(|| anyhow!("the daemon knows no lane at {}", path.display()))
+}
+
+/// The lane of the worktree the CLI runs in, for `devstack lane` without a
+/// name (#476): an error in the main working tree or outside a worktree.
+/// With `start`, the daemon is started to ask it, as `up` does.
+pub fn lane_here(stack_file: &Path, start: bool) -> Result<String> {
+    let state = state_dir(stack_file)?;
+    let Some(wt) = worktree() else {
+        bail!("this is not a lane's worktree");
+    };
+    let c = if start {
+        ensure_daemon(&daemon_file(stack_file), &state)?
+    } else {
+        need(&state)?
+    };
+    lane_at(&c, &wt.path)
 }
 
 /// In the worktree of a lane on a node, for `status`: what `prepare` makes,

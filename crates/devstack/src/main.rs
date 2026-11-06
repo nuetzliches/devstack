@@ -553,9 +553,10 @@ enum LaneAction {
     List,
     /// Start a lane (its name or branch, see `lane list`) from anywhere in
     /// the repository, as `devstack up` in its worktree does: its own ports
-    /// and containers, beside the main tree.
+    /// and containers, beside the main tree. Without a name: the lane of
+    /// the worktree it runs in.
     Start {
-        name: String,
+        name: Option<String>,
         /// Run it on this node of the pool (its name or member id), or
         /// `pool` to let the coordinator choose (ADR-0025).
         #[arg(long, value_name = "NODE")]
@@ -570,12 +571,13 @@ enum LaneAction {
     },
     /// Stop a lane: its services stop and it is no longer started (its
     /// builds stay). The worktree is git's: devstack never creates or removes
-    /// one.
-    Stop { name: String },
+    /// one. Without a name: the lane of the worktree it runs in.
+    Stop { name: Option<String> },
     /// Throw a stopped lane's data away (ADR-0038): its containers and
     /// volumes here and on the nodes it ran on. Its next start is a fresh
-    /// one, seeded again; its worktree and builds stay.
-    Reset { name: String },
+    /// one, seeded again; its worktree and builds stay. Without a name: the
+    /// lane of the worktree it runs in.
+    Reset { name: Option<String> },
     /// Remove what this repository's lanes leave behind: on this machine
     /// the containers and volumes of lanes whose worktree is gone, on the
     /// pool's nodes this machine's kept lanes of this repository that are
@@ -1276,6 +1278,25 @@ mod tests {
 
     #[test]
     fn lane_pool_and_node_subcommands() {
+        // In a lane's worktree the name may be left out (#476).
+        for action in ["start", "stop", "reset"] {
+            let cli = parse(&["lane", action]);
+            assert!(
+                matches!(
+                    cli.cmd,
+                    Cmd::Lane {
+                        action: LaneAction::Start { name: None, .. }
+                            | LaneAction::Stop { name: None }
+                            | LaneAction::Reset { name: None }
+                    }
+                ),
+                "{action}"
+            );
+        }
+        assert!(matches!(
+            parse(&["lane", "stop", "feature"]).cmd,
+            Cmd::Lane { action: LaneAction::Stop { name: Some(n) } } if n == "feature"
+        ));
         assert!(matches!(
             parse(&["lane", "move", "feature", "--to", "local"]).cmd,
             Cmd::Lane { action: LaneAction::Move { name, to } } if name == "feature" && to == "local"
