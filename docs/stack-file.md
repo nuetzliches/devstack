@@ -352,7 +352,8 @@ Generated directories never count as changes: `bin`, `obj`, `node_modules`,
 `target`, `.git`, `.devstack`, the caches of frontend tools (`.angular`,
 `.vite`, `.next`, `.nuxt`, `.turbo`, `.cache`, `.svelte-kit`,
 `.parcel-cache`) and of Python (`__pycache__`, `.pytest_cache`,
-`.mypy_cache`, `.ruff_cache`), even where `.gitignore` does not list them. The watcher
+`.mypy_cache`, `.ruff_cache`), even where `.gitignore` does not list them,
+and neither does the folder that holds one when one is created in it. The watcher
 does not open them either, so a package install running in one is never held
 up by devstack.
 
