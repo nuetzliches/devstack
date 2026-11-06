@@ -9,6 +9,19 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **devstack finds the stack file from any folder of the repository.**
+  Without `-f`, a command looks for `devstack.toml` in the current folder,
+  then in each folder above it up to the repository root (the first folder
+  holding `.git`), as git finds `.git`. Run from an app's folder, `devstack
+  status`, `logs` and `lane list` used to answer "no daemon is running"
+  although the stack ran; they now mean the stack around it. Where no stack
+  file is found, a command says where it looked instead (`no devstack.toml
+  in <folder> or above it up to the repository root`), and a missing `-f`
+  file is named as such. `-f` is taken as given, and `devstack init` still
+  writes into the current folder.
+
 ## [0.41.0] - 2026-11-05
 
 A stack's daemon now ends with its last tree (ADR-0095): every tree,

@@ -572,6 +572,12 @@ fn name_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
 }
 
 fn connect(file: &Path) -> Result<Client> {
+    if !file.is_file() {
+        anyhow::bail!(
+            "no stack file {}: the MCP server was started outside a stack",
+            std::path::absolute(file)?.display()
+        );
+    }
     // A daemon that runs but refuses or hangs says so: `up` would not help.
     client::Client::probe(&client::state_dir(file)?)?
         .ok_or_else(|| anyhow::anyhow!("no daemon is running for this stack; call `up` first"))
