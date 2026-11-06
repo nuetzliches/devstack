@@ -9,6 +9,23 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-11-06
+
+A pool's skill can now speak at the end of the work: a `lane-stop`
+hook follows `devstack lane stop`, and a `session-end` hook reaches the
+next session in the same working tree (ADR-0094, addenda). A hook bound
+to an upstream also applies where the agent has that server set up
+itself, and the dashboard and `devstack doctor` point at such an entry.
+devstack finds the stack file from any folder of the repository, and in
+a lane's worktree `lane start`, `stop` and `reset` need no name. The
+dashboard's mark carries a dot when something needs attention
+(ADR-0097). `devstack mcp` keeps the instructions it passes on within
+what Claude Code reads, with a tool for the full text, and `devstack
+init` sets `PYTHONUTF8` for Python apps. Fixed: a restart no longer
+ends the stack's daemon (since 0.41.0, mostly on Windows); Python
+creating `__pycache__` no longer restarts a dev server; narrow overview
+cards, the pool's join command and its public links read better.
+
 ### Added
 
 - **`devstack lane start`, `stop` and `reset` take the lane of the worktree
@@ -3107,7 +3124,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.41.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.42.0...HEAD
+[0.42.0]: https://github.com/nuetzliches/devstack/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/nuetzliches/devstack/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/nuetzliches/devstack/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/nuetzliches/devstack/compare/v0.38.0...v0.39.0
