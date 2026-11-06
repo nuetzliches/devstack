@@ -2113,6 +2113,7 @@ fn restart_on_a_folder_restarts_for_each_file_in_it() {
     let s = Stack::new(false);
     let server = s.dir.path().join("src/server");
     std::fs::create_dir_all(server.join("__pycache__")).unwrap();
+    std::fs::create_dir_all(server.join("pkg")).unwrap();
     std::fs::write(
         s.file(),
         format!(
@@ -2188,11 +2189,38 @@ fn restart_on_a_folder_restarts_for_each_file_in_it() {
         "a change during a restart restarted it again\n{}",
         s.diag()
     );
-    assert!(up(old), "{}", s.diag());
+    // Up again after that restart, not the one before it: a change while it
+    // runs would wait for it and fire after the check below. Counted in the
+    // log (one start, then one run per restart): a pid read here may already
+    // be the restarted one.
+    let runs = || {
+        s.daemon_log()
+            .lines()
+            .filter(|l| l.contains("\"event\":\"service\"") && l.contains("\"state\":\"running\""))
+            .count()
+    };
+    assert!(
+        wait_for(
+            || runs() > fired().len() && s.state("dev") == "running",
+            Duration::from_secs(60)
+        ),
+        "{}",
+        s.diag()
+    );
     let before = fired().len();
     std::fs::write(server.join("__pycache__/app.cpython-313.pyc"), "x").unwrap();
+    // A new `__pycache__`, as a first start of Python makes it: Windows
+    // reports its folder as modified as well (#463).
+    let pkg = server.join("pkg");
+    std::fs::create_dir(pkg.join("__pycache__")).unwrap();
+    std::fs::write(pkg.join("__pycache__/mod.cpython-313.pyc"), "x").unwrap();
     std::thread::sleep(Duration::from_secs(4));
-    assert_eq!(fired().len(), before, "a compiled module restarts nothing");
+    assert_eq!(
+        fired().len(),
+        before,
+        "a compiled module, or a new __pycache__, restarts nothing\n{}",
+        s.diag()
+    );
     s.ok(&["down"]);
 }
 

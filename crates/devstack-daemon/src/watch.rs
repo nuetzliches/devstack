@@ -13,7 +13,9 @@
 //! `.git`, `.devstack`, and the caches of frontend tools and Python:
 //! `.angular`, `.vite`, `.next`, `__pycache__`, ...): a build in the
 //! repository, or a dev server as it starts, would otherwise see its own
-//! output as a change. They are not even looked at: an event is judged on its
+//! output as a change, nor does the folder that holds one (Windows reports the
+//! folder as modified when an entry appears in it, #463). They are not even
+//! looked at: an event is judged on its
 //! path alone, before the file system is asked anything about it. A package
 //! manager creates thousands of directories in `node_modules` in a burst, and
 //! a watcher that opens each one as it appears races the tool: on Windows
@@ -33,6 +35,7 @@
 use crate::supervisor::Supervisor;
 use devstack_config::model::Kind;
 use globset::GlobSet;
+use notify::event::ModifyKind;
 use notify::{EventKind, RecursiveMode, Watcher as _};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -59,7 +62,8 @@ fn set(patterns: &[String]) -> Option<GlobSet> {
 /// stamps changed) for some creations and deletions, depending on the tool
 /// that made them, and never for a saved file. So the restart came with
 /// whichever later event happened to name the folder: a second, minutes or
-/// the next change later (#221).
+/// the next change later (#221). That event of the folder itself counts for
+/// nothing now ([`event_paths`], #463).
 ///
 /// For `restart_on` only: a restart reads the working tree, so a folder means
 /// what is in it. `watch` also selects a build's input files
@@ -239,11 +243,22 @@ fn event_paths(repo: &Path, ev: notify::Event, fs: &dyn Fs, list_new_dirs: bool)
         return Vec::new();
     }
     let list = list_new_dirs && matches!(ev.kind, EventKind::Create(_));
+    // A folder "modified": Windows says so when an entry is added or removed
+    // (its time stamps change), beside the entry's own event. That event says
+    // what changed, and an entry that does not count (`__pycache__`) must
+    // not count through its folder (#463). A rename keeps its own kind.
+    let touched = matches!(
+        ev.kind,
+        EventKind::Modify(ModifyKind::Any | ModifyKind::Data(_) | ModifyKind::Metadata(_))
+    );
     let mut out = Vec::new();
     for path in ev.paths {
         let Some(rel) = counted(repo, &path) else {
             continue;
         };
+        if touched && fs.is_dir(&path) {
+            continue;
+        }
         out.push(rel);
         if list && fs.is_dir(&path) {
             let mut dirs = vec![path];
@@ -1081,7 +1096,6 @@ mod tests {
     fn only_a_creation_lists_a_directory() {
         let fs = Spy::new(&[("/r/src/new", &[("/r/src/new/a.cs", false)])]);
         for kind in [
-            EventKind::Modify(ModifyKind::Any),
             EventKind::Modify(ModifyKind::Name(RenameMode::To)),
             EventKind::Remove(RemoveKind::Folder),
         ] {
@@ -1091,6 +1105,46 @@ mod tests {
         let open = event(EventKind::Access(AccessKind::Any), "/r/src/new");
         assert!(event_paths(Path::new("/r"), open, &fs, true).is_empty());
         assert!(fs.asked.borrow().is_empty(), "{:?}", fs.asked);
+    }
+
+    /// Windows reports a folder as modified when an entry is added to it or
+    /// removed from it, beside the entry's own event (#463: Python creating
+    /// `__pycache__` in `shared` restarted every dev server whose
+    /// `restart_on` named `shared`). The folder's event is no change of its
+    /// own; the entry's says what changed, and a generated one does not
+    /// count. A file's modification, and a folder created, renamed in or
+    /// removed, still count.
+    #[test]
+    fn a_folder_reported_as_modified_is_no_change_of_its_own() {
+        let fs = Spy::new(&[("/r/shared", &[("/r/shared/__pycache__", true)])]);
+        for kind in [
+            ModifyKind::Any,
+            ModifyKind::Metadata(notify::event::MetadataKind::WriteTime),
+            ModifyKind::Data(notify::event::DataChange::Any),
+        ] {
+            let ev = event(EventKind::Modify(kind), "/r/shared");
+            assert!(
+                event_paths(Path::new("/r"), ev, &fs, false).is_empty(),
+                "{kind:?}"
+            );
+            let ev = event(EventKind::Modify(kind), "/r/shared/a.py");
+            assert_eq!(
+                event_paths(Path::new("/r"), ev, &fs, false),
+                ["shared/a.py"]
+            );
+        }
+        for kind in [
+            EventKind::Create(CreateKind::Any),
+            EventKind::Modify(ModifyKind::Name(RenameMode::To)),
+            EventKind::Modify(ModifyKind::Name(RenameMode::From)),
+            EventKind::Remove(RemoveKind::Any),
+        ] {
+            let got = event_paths(Path::new("/r"), event(kind, "/r/shared"), &fs, false);
+            assert_eq!(got, ["shared"], "{kind:?}");
+        }
+        // The entry itself, the other half of what Windows reports.
+        let ev = event(EventKind::Create(CreateKind::Any), "/r/shared/__pycache__");
+        assert!(event_paths(Path::new("/r"), ev, &fs, false).is_empty());
     }
 
     /// A link to the directory `target`, at `link`: a symlink, or a junction

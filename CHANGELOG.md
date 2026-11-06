@@ -22,6 +22,19 @@ and listed with their assets on the
   file is named as such. `-f` is taken as given, and `devstack init` still
   writes into the current folder.
 
+### Fixed
+
+- **Python creating `__pycache__` no longer restarts a dev server** (#463).
+  On Windows the OS reports a folder as modified when an entry appears in
+  it, beside the entry's own event; with a folder in `restart_on`
+  (`restart_on = ["shared"]`), the first start of a Python service, which
+  creates `__pycache__` in each imported package, restarted every dev
+  server naming the folder once or twice, and a job they wait for ran
+  again. A folder's own "modified" event no longer counts as a change: what
+  appeared or went in it is reported by its own path, and a generated
+  directory never counts. The same held for `watch` (a candidate) and a
+  lane's copy.
+
 ## [0.41.0] - 2026-11-05
 
 A stack's daemon now ends with its last tree (ADR-0095): every tree,
