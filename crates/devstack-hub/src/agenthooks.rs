@@ -19,6 +19,7 @@
 //!   this session) and prints their texts. It never blocks a prompt: on
 //!   any error it prints nothing.
 
+use crate::activity::{HookRef, Record, tree_of};
 use devstack_node::hooks::{Event, Hook, Once};
 use devstack_skills::agents::{Agent, HookFormat};
 use indexmap::IndexMap;
@@ -59,6 +60,15 @@ pub struct Entry {
 impl Entry {
     fn key(&self) -> String {
         format!("{}/{}/{}#{}", self.pool, self.set, self.skill, self.index)
+    }
+
+    fn reference(&self) -> HookRef {
+        HookRef {
+            pool: self.pool.clone(),
+            set: self.set.clone(),
+            skill: self.skill.clone(),
+            index: self.index,
+        }
     }
 }
 
@@ -351,7 +361,9 @@ pub fn run(event: Event, agent: &str, input: &str, at: &Lookup<'_>) -> String {
     let cwd = input.cwd.as_deref().map(PathBuf::from);
     let mut origin: Option<Option<String>> = None;
     if event == Event::SessionEnd {
-        end(agent, &input, &index, cwd.as_deref(), at);
+        if let Some(refs) = end(agent, &input, &index, cwd.as_deref(), at) {
+            record(at, event, agent, &input, cwd.as_deref(), refs, true);
+        }
         return String::new();
     }
     let session = input
@@ -373,6 +385,7 @@ pub fn run(event: Event, agent: &str, input: &str, at: &Lookup<'_>) -> String {
     }
     let prompt = input.prompt.as_deref().unwrap_or("");
     let mut out: Vec<String> = Vec::new();
+    let mut refs: Vec<HookRef> = Vec::new();
     let before = given.len();
     for h in index.hooks.iter().filter(|h| h.hook.event == event) {
         if !applies(h, cwd.as_deref(), &mut origin, at) {
@@ -394,12 +407,18 @@ pub fn run(event: Event, agent: &str, input: &str, at: &Lookup<'_>) -> String {
         }
         given.push(key);
         out.push(h.hook.context.clone());
+        refs.push(h.reference());
     }
     if event == Event::SessionStart
         && let Some(cwd) = &cwd
-        && let Some(texts) = ended(agent, &index, cwd, &mut origin, at)
+        && let Some(texts) = ended(agent, &index, cwd, &mut origin, at, &mut refs)
     {
         out.push(texts);
+    }
+    // A session's start always, to know the session; a prompt only when it
+    // was given something.
+    if event == Event::SessionStart || !refs.is_empty() {
+        record(at, event, agent, &input, cwd.as_deref(), refs, false);
     }
     if let Some(p) = &session
         && (given.len() != before || event == Event::SessionStart)
@@ -438,23 +457,6 @@ fn applies(
     true
 }
 
-/// The working tree a path is in: the nearest folder above it (or it)
-/// holding `.git`; the path itself outside a repository. Written the same
-/// way whatever case or separators the agent used.
-fn tree_of(cwd: &Path) -> String {
-    let tree = cwd
-        .ancestors()
-        .find(|d| d.join(".git").exists())
-        .unwrap_or(cwd);
-    let s = tree.to_string_lossy().replace('\\', "/");
-    let s = s.trim_end_matches('/');
-    if cfg!(windows) {
-        s.to_lowercase()
-    } else {
-        s.to_string()
-    }
-}
-
 /// The file that keeps the end of `agent`'s last session in `tree`.
 fn ended_file(state: &Path, agent: &str, tree: &str) -> PathBuf {
     let h = Sha256::digest(format!("{agent}\0{tree}").as_bytes());
@@ -463,19 +465,52 @@ fn ended_file(state: &Path, agent: &str, tree: &str) -> PathBuf {
         .join(format!("{}.json", &devstack_node::skills::hex(&h)[..32]))
 }
 
+/// What happened, into the activity (#482): never the prompt or a text.
+fn record(
+    at: &Lookup<'_>,
+    event: Event,
+    agent: &str,
+    input: &Input,
+    cwd: Option<&Path>,
+    hooks: Vec<HookRef>,
+    recorded: bool,
+) {
+    let r = Record::Hook {
+        at: crate::activity::now_ms(),
+        event: event.as_str().into(),
+        agent: agent.into(),
+        session: input.session_id.clone().filter(|s| !s.is_empty()),
+        tree: cwd.map(tree_of).unwrap_or_default(),
+        hooks,
+        recorded,
+    };
+    if let Err(e) = crate::activity::write(at.state, &r) {
+        (at.warn)(e);
+    }
+}
+
 /// `session-end`: the session can be told nothing any more. Where a
 /// `session-end` hook applies in its working tree, keep that it ended, for
-/// the next start of the same agent there ([`ended`]).
-fn end(agent: &str, input: &Input, index: &Index, cwd: Option<&Path>, at: &Lookup<'_>) {
-    let Some(cwd) = cwd else { return };
+/// the next start of the same agent there ([`ended`]). The hooks it was
+/// kept for; `None` when none applies.
+fn end(
+    agent: &str,
+    input: &Input,
+    index: &Index,
+    cwd: Option<&Path>,
+    at: &Lookup<'_>,
+) -> Option<Vec<HookRef>> {
+    let cwd = cwd?;
     let mut origin = None;
-    let any = index
+    let refs: Vec<HookRef> = index
         .hooks
         .iter()
         .filter(|h| h.hook.event == Event::SessionEnd)
-        .any(|h| applies(h, Some(cwd), &mut origin, at));
-    if !any {
-        return;
+        .filter(|h| applies(h, Some(cwd), &mut origin, at))
+        .map(Entry::reference)
+        .collect();
+    if refs.is_empty() {
+        return None;
     }
     let file = ended_file(at.state, agent, &tree_of(cwd));
     let record = Ended {
@@ -489,6 +524,7 @@ fn end(agent: &str, input: &Input, index: &Index, cwd: Option<&Path>, at: &Looku
     if let Err(e) = write(&file, &serde_json::to_vec(&record).expect("serialises")) {
         (at.warn)(e);
     }
+    Some(refs)
 }
 
 /// At a session's start: the texts of the `session-end` hooks for the
@@ -500,21 +536,23 @@ fn ended(
     cwd: &Path,
     origin: &mut Option<Option<String>>,
     at: &Lookup<'_>,
+    refs: &mut Vec<HookRef>,
 ) -> Option<String> {
     prune(&at.state.join(ENDED));
     let file = ended_file(at.state, agent, &tree_of(cwd));
     let record: Ended = serde_json::from_slice(&std::fs::read(&file).ok()?).ok()?;
     let _ = std::fs::remove_file(&file);
-    let texts: Vec<&str> = index
+    let given: Vec<&Entry> = index
         .hooks
         .iter()
         .filter(|h| h.hook.event == Event::SessionEnd)
         .filter(|h| applies(h, Some(cwd), origin, at))
-        .map(|h| h.hook.context.as_str())
         .collect();
-    if texts.is_empty() {
+    if given.is_empty() {
         return None;
     }
+    refs.extend(given.iter().map(|h| h.reference()));
+    let texts: Vec<&str> = given.iter().map(|h| h.hook.context.as_str()).collect();
     let mut which = Vec::new();
     if let Some(id) = &record.session_id {
         which.push(format!("session `{id}`"));
@@ -540,11 +578,18 @@ fn ended(
 pub fn texts_for(event: Event, cwd: &Path, at: &Lookup<'_>) -> String {
     let index = read_index(at.state);
     let mut origin = None;
-    index
+    let given: Vec<&Entry> = index
         .hooks
         .iter()
         .filter(|h| h.hook.event == event)
         .filter(|h| applies(h, Some(cwd), &mut origin, at))
+        .collect();
+    if !given.is_empty() {
+        let refs = given.iter().map(|h| h.reference()).collect();
+        record(at, event, "-", &Input::default(), Some(cwd), refs, false);
+    }
+    given
+        .iter()
         .map(|h| h.hook.context.as_str())
         .collect::<Vec<_>>()
         .join("\n\n")
@@ -583,7 +628,7 @@ fn prune(dir: &Path) {
 /// read only then, configured in the agent itself at the pool's URL (#473:
 /// a member who added the server by its own setup hint got no hook).
 /// `own` reads the agent's servers.
-fn upstream_there(
+pub(crate) fn upstream_there(
     state: &Path,
     pool: &str,
     name: &str,
@@ -1015,5 +1060,34 @@ mod tests {
         assert_eq!(prompt("now ABC-13"), "Ticket checklist.");
         // Input it cannot read: nothing, no error.
         assert_eq!(run(Event::PromptSubmit, "claude-code", "not json", &at), "");
+
+        // The activity (#482): each start, each prompt that was given
+        // something, with the hooks by where they are, never a text.
+        let records = crate::activity::read(st.path());
+        let hooks: Vec<(String, Vec<String>)> = records
+            .iter()
+            .map(|r| match r {
+                crate::activity::Record::Hook { event, hooks, .. } => (
+                    event.clone(),
+                    hooks.iter().map(|h| h.skill.clone()).collect(),
+                ),
+                crate::activity::Record::Tool { .. } => unreachable!(),
+            })
+            .collect();
+        assert_eq!(hooks.len(), 6, "{hooks:?}");
+        assert_eq!(hooks[1].1, ["shop", "timer"]);
+        assert_eq!(
+            hooks[4],
+            ("prompt-submit".to_string(), vec!["ticket".to_string()])
+        );
+        let text = std::fs::read_dir(st.path().join("activity"))
+            .unwrap()
+            .flatten()
+            .map(|e| std::fs::read_to_string(e.path()).unwrap())
+            .collect::<String>();
+        assert!(
+            !text.contains("Ticket checklist") && !text.contains("ABC-12"),
+            "{text}"
+        );
     }
 }

@@ -345,11 +345,35 @@ fn handle(m: Value, file: &Path, out: &Out) {
     }
     let (file, out) = (file.to_path_buf(), out.clone());
     std::thread::spawn(move || {
+        let tool = m["params"]["name"].as_str().unwrap_or("").to_string();
+        let t0 = std::time::Instant::now();
         let r = respond(m, &file);
         RUNNING.fetch_sub(1, Ordering::SeqCst);
+        record(&tool, t0.elapsed(), r.as_ref());
         if let Some(r) = r {
             send(&out, r);
         }
+    });
+}
+
+/// The MCP client's name, from its `initialize` (`clientInfo.name`).
+static CLIENT: Mutex<Option<String>> = Mutex::new(None);
+
+/// A tool call into the agents' activity (#482): its name, how long it
+/// took, whether it failed; never its arguments or its answer.
+fn record(tool: &str, took: Duration, r: Option<&Value>) {
+    let ok = r.is_some_and(|r| r.get("error").is_none() && r["result"]["isError"] != true);
+    let tree = std::env::current_dir()
+        .map(|d| devstack_hub::activity::tree_of(&d))
+        .unwrap_or_default();
+    devstack_hub::activity::write_here(&devstack_hub::activity::Record::Tool {
+        at: devstack_hub::activity::now_ms(),
+        tool: tool.to_string(),
+        client: CLIENT.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        tree,
+        pid: std::process::id(),
+        ms: u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
+        ok,
     });
 }
 
@@ -367,6 +391,9 @@ fn respond(m: Value, file: &Path) -> Option<Value> {
     let params = m.get("params").cloned().unwrap_or(Value::Null);
     Some(match method {
         "initialize" => {
+            if let Some(c) = params["clientInfo"]["name"].as_str() {
+                *CLIENT.lock().unwrap_or_else(|e| e.into_inner()) = Some(c.to_string());
+            }
             let asked = params["protocolVersion"].as_str().unwrap_or("");
             let version = VERSIONS
                 .iter()

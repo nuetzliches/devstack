@@ -920,6 +920,18 @@ change. The user's own hooks and the files' other keys stay as they are; an
 agent switched off loses the entry. The Skills page shows a skill's hooks
 and which agent switched on gets none; `devstack doctor` says so too.
 
+The Skills page's tab **Flow** ([ADR-0098](adr/0098-the-skills-page-shows-the-flow-of-the-hooks-and-the-agents-activity.md))
+draws the hooks of the skills switched on by when they give their text (a
+session starts, a prompt matches, a lane stops, a session ends); hovering a
+hook says when, on what condition, how often, for which agents, and the
+start of its text, and a hook that is not given says why. Beside it is what
+devstack did for the agent: each hook it gave and each tool call through
+`devstack mcp`, by session; a click on a hook narrows the list to it. Only
+what happened is kept (the event, the hook or the tool, how long, whether
+it failed), never a prompt, a text, an argument or an answer, on this
+machine, for a week. The agent's own tools (its shell, its edits) do not
+pass devstack and are not shown.
+
 ## Several pools
 
 A machine can belong to several pools, a customer's beside the team's, each

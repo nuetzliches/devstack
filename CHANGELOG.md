@@ -9,6 +9,22 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **The Skills page shows what happens for your agent.** A new tab, Flow,
+  draws the hooks of the skills switched on by when they give their text: a
+  session starts, a prompt matches, a lane stops, a session ends. Hovering a
+  hook says when it applies, on what condition, how often, for which agents,
+  and how its text begins; a hook that is not given is greyed and says why
+  (an upstream neither accepted nor set up in the agent). Beside it is what
+  devstack did for the agent, by session: each hook it gave and each tool
+  call through `devstack mcp`, with how long it took and whether it failed;
+  a click on a hook narrows the list to it, and the tool calls show under
+  the skill whose upstream they use. Only what happened is kept, never a
+  prompt, a hook's text, a tool's arguments or its answer, on this machine,
+  for a week (ADR-0098). The agent's own tools (its shell, its edits) do
+  not pass devstack and are not shown.
+
 ## [0.42.0] - 2026-11-06
 
 A pool's skill can now speak at the end of the work: a `lane-stop`

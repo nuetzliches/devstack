@@ -9,21 +9,49 @@
 // installed and left unchanged: a skill of the user's own, or one changed
 // by hand, stays and is shown as a conflict. The user switches each agent
 // found on. The state arrives on `/hub/events`.
-import { computed, onMounted, ref } from 'vue';
+// The tab Flow (#482) shows when the hooks of the skills switched on give
+// their text, and what devstack did for the agents (`GET /hub/activity`,
+// read again on each `activity` event).
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { api, paths } from '@/api';
-import type { PoolSkillsState, SkillSetState, SkillState } from '@/api/types';
+import type { ActivityView, PoolSkillsState, SkillSetState, SkillState } from '@/api/types';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
 import { ago, useNow } from '@/lib/format';
 import { counts, filtered, groupOf, groups, NO_FILTER, rows, setKey, STATUS_LABEL, type SkillFilter, type SkillRow, type SkillStatus } from '@/lib/skills';
 import { useHub } from '@/stores/hub';
 import Icon from '@/components/icons/Icon.vue';
+import SkillsFlow from '@/components/SkillsFlow.vue';
 
 const hub = useHub();
 const now = useNow();
 const problem = ref<string | null>(null);
 const busy = ref<string | null>(null);
 const state = computed<PoolSkillsState | null>(() => hub.skills);
+
+// Tabs: the sets, or the flow (`?tab=flow`).
+const route = useRoute();
+const router = useRouter();
+const tab = computed<'sets' | 'flow'>(() => (route.query.tab === 'flow' ? 'flow' : 'sets'));
+function show(t: 'sets' | 'flow') {
+  void router.replace({ query: { ...route.query, tab: t === 'flow' ? 'flow' : undefined } });
+}
+const flowCount = computed(() => (state.value?.sets ?? []).filter((s) => s.state === 'accepted').flatMap((s) => s.skills).filter((k) => k.enabled !== false).reduce((n, k) => n + (k.hooks ?? 0), 0));
+
+// The agents' activity, while the flow shows; again on each `activity` event.
+const activity = ref<ActivityView | null>(null);
+const session = ref('');
+async function readActivity() {
+  if (tab.value !== 'flow') return;
+  try {
+    const r = await api().request<ActivityView>('GET', paths.activity({ session: session.value || undefined }));
+    if (r.ok && r.body && typeof r.body === 'object') activity.value = r.body;
+  } catch {
+    // The hub's state shows elsewhere; the list keeps what it had.
+  }
+}
+watch([tab, session, () => hub.activityAt], () => void readActivity(), { immediate: true });
 
 // Read when the page opens: the hub looks again which agents are on this
 // machine (one installed since shows) and tells every dashboard.
@@ -182,7 +210,16 @@ const hookAgents = computed(() => (state.value?.agents ?? []).filter((a) => a.en
     <p v-if="problem" class="err">{{ problem }}</p>
     <p v-if="!state && !problem" class="muted">Reading…</p>
 
-    <template v-if="state">
+    <nav v-if="state" class="subnav" aria-label="Skills" data-testid="skills-tabs">
+      <button type="button" class="tab" :class="{ active: tab === 'sets' }" data-testid="skills-tab-sets" @click="show('sets')">Sets</button>
+      <button type="button" class="tab" :class="{ active: tab === 'flow' }" data-testid="skills-tab-flow" @click="show('flow')">
+        Flow <span v-if="flowCount" class="faint tabular">{{ flowCount }}</span>
+      </button>
+    </nav>
+
+    <SkillsFlow v-if="state && tab === 'flow'" :state="state" :activity="activity" :session="session" :now="now" @session="session = $event" />
+
+    <template v-if="state && tab === 'sets'">
       <section class="card" data-testid="skills-agents-card">
         <header class="card-header">
           <Icon name="zap" :size="16" />
@@ -420,6 +457,40 @@ const hookAgents = computed(() => (state.value?.agents ?? []).filter((a) => a.en
 <style scoped>
 .skills {
   max-width: 1000px;
+}
+.skills:has([data-testid='skills-flow']) {
+  max-width: 1400px;
+}
+.subnav {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  height: 36px;
+  margin-bottom: -1px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-weight: 550;
+  font-size: 13px;
+  cursor: pointer;
+}
+.tab:hover {
+  color: var(--text);
+}
+.tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.tab:focus-visible {
+  box-shadow: inset var(--focus);
 }
 .subtitle {
   max-width: 720px;

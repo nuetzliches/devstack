@@ -127,6 +127,98 @@ pub struct SkillView {
     /// How many hooks it carries (ADR-0094).
     #[serde(skip_serializing_if = "is_zero")]
     pub hooks: usize,
+    /// Its hooks as they are given (#482): only of a skill switched on and
+    /// installed, as the version agreed to has them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hook_details: Vec<HookDetail>,
+}
+
+/// A hook of a skill, for the Skills page's flow (#482).
+#[derive(Debug, Clone, Serialize)]
+pub struct HookDetail {
+    /// Its place in the skill's `hooks.toml`.
+    pub index: usize,
+    pub event: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    /// `session` or `match`.
+    pub once: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+    /// The start of its text.
+    pub preview: String,
+    /// The agents that get it, by name.
+    pub agents: Vec<String>,
+    /// Its upstream is there: accepted, or configured in an agent (#473).
+    pub applies: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+}
+
+/// How many characters of a hook's text the page shows.
+const PREVIEW: usize = 160;
+
+/// The hooks of `skill` in the index, as the page shows them.
+fn hook_details(
+    dir: &Path,
+    index: &crate::agenthooks::Index,
+    pool: &str,
+    set: &str,
+    skill: &str,
+) -> Vec<HookDetail> {
+    use devstack_node::hooks::{Event, Once};
+    let agents = |event: Event| -> Vec<String> {
+        index
+            .agents
+            .iter()
+            .filter(|a| event != Event::SessionEnd || crate::agenthooks::has_session_end(a))
+            .map(|a| {
+                devstack_skills::agents::get(a)
+                    .map(|x| x.name.clone())
+                    .unwrap_or_else(|| a.clone())
+            })
+            .collect()
+    };
+    index
+        .hooks
+        .iter()
+        .filter(|h| h.pool == pool && h.set == set && h.skill == skill)
+        .map(|h| {
+            let there = h.hook.upstream.as_deref().is_none_or(|u| {
+                crate::agenthooks::upstream_there(dir, pool, u, &|| {
+                    index
+                        .agents
+                        .iter()
+                        .flat_map(|a| crate::agentmcp::of_agent(a, None))
+                        .collect()
+                })
+            });
+            let text = &h.hook.context;
+            let mut preview: String = text.chars().take(PREVIEW).collect();
+            if text.chars().count() > PREVIEW {
+                preview.push('…');
+            }
+            HookDetail {
+                index: h.index,
+                event: h.hook.event.as_str(),
+                pattern: h.hook.pattern.clone(),
+                once: match h.hook.once {
+                    Once::Session => "session",
+                    Once::Match => "match",
+                },
+                upstream: h.hook.upstream.clone(),
+                preview,
+                agents: agents(h.hook.event),
+                applies: there,
+                why: (!there).then(|| {
+                    format!(
+                        "the upstream `{}` is neither accepted nor set up in an agent",
+                        h.hook.upstream.as_deref().unwrap_or_default()
+                    )
+                }),
+            }
+        })
+        .collect()
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -946,6 +1038,7 @@ impl PoolSkills {
         let lists = self.lists();
         let agents = self.agents(&s);
         let trees = self.seen.lock().unwrap().clone();
+        let index = crate::agenthooks::read_index(&self.dir);
         let mut sets = Vec::new();
         for (pool, ms) in &lists {
             for m in ms {
@@ -1026,6 +1119,11 @@ impl PoolSkills {
                                     t
                                 },
                                 hooks: k.hooks,
+                                hook_details: if enabled && k.hooks > 0 {
+                                    hook_details(&self.dir, &index, pool, &m.name, &k.name)
+                                } else {
+                                    Vec::new()
+                                },
                             }
                         })
                         .collect(),
