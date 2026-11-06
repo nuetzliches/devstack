@@ -32,6 +32,15 @@ and listed with their assets on the
   file is named as such. `-f` is taken as given, and `devstack init` still
   writes into the current folder.
 
+### Removed
+
+- **The step that takes committed devstack skills out of git.** The
+  dashboard's upgrade prompt no longer has the agent look for generated
+  skills git still tracks, and `devstack skills install` no longer lists
+  them: the known repositories moved over after 0.32.0, where the skills
+  became local to each working tree. `devstack skills check` still fails on
+  such a copy and prints the `git rm -r --cached` that takes it out (#389).
+
 ### Fixed
 
 - **Python creating `__pycache__` no longer restarts a dev server** (#463).

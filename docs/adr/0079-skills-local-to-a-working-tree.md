@@ -109,6 +109,10 @@ What was built:
    without such copies. It is a migration aid and goes again once the
    repositories have moved, with the hint of `devstack skills install`
    ([#389](https://github.com/nuetzliches/devstack/issues/389)).
+   *Removed in 0.42.0, noted 2026-11-06: the upgrade prompt and `devstack
+   skills install` no longer name tracked copies; `devstack skills check`
+   ([ADR-0087](0087-the-generated-skills-are-the-hubs-no-tool-reports-them-outdated.md))
+   still does.*
 9. **The dashboard.** The Skills page shows each agent's folder in a
    working tree beside its user folder, a bound skill's repositories as a
    pill and in its detail with the working trees it is in, and the state

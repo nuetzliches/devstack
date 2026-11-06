@@ -14,7 +14,7 @@
 //! A generated skill is local to the working tree (ADR-0079): its folder
 //! holds a `.gitignore` that ignores the folder, so git leaves it out, and
 //! the hub keeps it in step with this devstack ([`install_into`]); one git
-//! still tracks (an earlier devstack's) is left to the upgrade prompt.
+//! still tracks (an earlier devstack's) is left to `devstack skills check`.
 
 pub mod agents;
 
