@@ -55,6 +55,8 @@ export type HubEvent =
   | { type: 'skills'; skills: PoolSkillsState }
   /** A version of each stack's worktrees (ADR-0078): read a stack's lanes again when its version changes. Older hubs never send it. */
   | { type: 'worktrees'; worktrees: Record<string, string> }
+  /** A record was added to the agents' activity (`GET /hub/activity`): read it again. Older hubs never send it. */
+  | { type: 'activity'; at: number }
   /** What needs attention in every stack (ADR-0097), first and on every change; older hubs never send it. */
   | { type: 'attention'; items: AttentionItem[] }
   /** Something happened once in the hub that no request reports (ADR-0050): a toast. */
@@ -139,7 +141,61 @@ export type SkillState = {
   trees?: string[];
   /** How many hooks its `hooks.toml` has (ADR-0094): texts given to the agents at a session's start or on a matching prompt. */
   hooks?: number;
+  /** Its hooks as they are given, for the flow (#482); only a skill switched on, and newer hubs. */
+  hook_details?: HookDetail[];
 };
+
+/** When a hook gives its text. */
+export type HookEvent = 'session-start' | 'prompt-submit' | 'lane-stop' | 'session-end';
+
+/** A hook of a skill as the hub gives it (#482). */
+export type HookDetail = {
+  /** Its place in the skill's `hooks.toml`. */
+  index: number;
+  event: HookEvent;
+  /** A regex on the prompt (`prompt-submit`). */
+  pattern?: string;
+  /** Once a session, or once per match. */
+  once: 'session' | 'match';
+  /** The pool's MCP upstream it is bound to. */
+  upstream?: string;
+  /** The start of its text. */
+  preview: string;
+  /** The agents that get it, by name. */
+  agents: string[];
+  /** Its upstream is there (accepted, or set up in an agent). */
+  applies: boolean;
+  why?: string;
+};
+
+/** A hook given, by where it is. */
+export type HookRef = { pool: string; set: string; skill: string; index: number };
+
+/** A record of the agents' activity (`GET /hub/activity`, #482): never a prompt, text, argument or answer. */
+export type ActivityRecord =
+  | { kind: 'hook'; at: number; event: HookEvent; agent: string; session?: string; tree: string; hooks: HookRef[]; recorded?: boolean }
+  | {
+      kind: 'tool';
+      at: number;
+      /** With its upstream's prefix (`<prefix>__<tool>`), or one of devstack's own. */
+      tool: string;
+      client?: string;
+      tree: string;
+      pid: number;
+      ms: number;
+      ok: boolean;
+      /** The session it is put to: the latest that started in its working tree before it. */
+      session?: string;
+      agent?: string;
+      /** A pool's upstream's tool: the upstream, and the skills whose hooks name it. */
+      upstream?: string;
+      skills?: string[];
+    };
+
+/** An agent's session, from its hooks' records. */
+export type ActivitySession = { agent: string; session: string; tree: string; started: number; last: number; ended: boolean };
+
+export type ActivityView = { sessions: ActivitySession[]; records: ActivityRecord[] };
 
 /** A pool's skill set as an admin names it (`/hub/pool/skills`). */
 export type PoolSkillSet = {
