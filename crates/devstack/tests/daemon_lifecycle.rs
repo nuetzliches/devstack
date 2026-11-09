@@ -1702,6 +1702,121 @@ run = "{brief}"
     s.ok(&["down"]);
 }
 
+/// A lane takes its worktree's stack file as it is when it starts again:
+/// `devstack down` in the worktree stops the lane's services but keeps the
+/// lane in the daemon, and the `up` after an edit of the file ran with what
+/// the lane read the first time (#487). Without the .NET SDK.
+#[test]
+fn a_lane_started_again_reads_its_changed_stack_file() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    let out = tempfile::tempdir().unwrap();
+    let mark = out.path().join("mark.txt");
+    let file = |value: &str| {
+        let run = if cfg!(windows) {
+            format!("echo %MARK%>\"%MARK_FILE%\" & {}", runs_for(600))
+        } else {
+            format!("echo $MARK > \"$MARK_FILE\"; {}", runs_for(600))
+        };
+        format!(
+            "version = 1\n[stack]\nname = \"reread\"\n[services.dev]\nkind = \"devserver\"\nrun = '{run}'\nenv = {{ MARK = \"{value}\", MARK_FILE = '{}' }}\n",
+            mark.display()
+        )
+    };
+    std::fs::write(s.file(), file("one")).unwrap();
+    std::fs::write(s.dir.path().join(".gitignore"), ".devstack/\n").unwrap();
+    let git = |dir: &Path, args: &[&str]| {
+        let o = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            o.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    };
+    git(s.dir.path(), &["config", "core.autocrlf", "false"]);
+    git(s.dir.path(), &["add", "-A"]);
+    git(s.dir.path(), &["commit", "-qm", "init"]);
+    let wt = s
+        .dir
+        .path()
+        .parent()
+        .unwrap()
+        .join(format!("wt-reread-{}", s.port));
+    git(
+        s.dir.path(),
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "reread",
+            wt.to_str().unwrap(),
+        ],
+    );
+    let wt_cli = |args: &[&str]| {
+        let o = Command::new(BIN)
+            .args(args)
+            .arg("-f")
+            .arg(wt.join("devstack.toml"))
+            .env("LOCALAPPDATA", s.token_home.path())
+            .env("XDG_STATE_HOME", s.token_home.path())
+            .env("DEVSTACK_NO_HUB", "1")
+            .output()
+            .unwrap();
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        )
+    };
+    let marked = |value: &str| {
+        wait_for(
+            || std::fs::read_to_string(&mark).is_ok_and(|t| t.trim() == value),
+            Duration::from_secs(30),
+        )
+    };
+
+    let up = wt_cli(&["up"]);
+    assert!(marked("one"), "{up}\n{}", s.diag());
+
+    // The file changes while the lane runs: it keeps what it read, and says so.
+    std::fs::write(wt.join("devstack.toml"), file("two")).unwrap();
+    assert!(
+        wait_for(
+            || wt_cli(&["status"]).contains("stack file changed"),
+            Duration::from_secs(15)
+        ),
+        "{}",
+        wt_cli(&["status"])
+    );
+    // `down` and `up` in the worktree: the lane runs the file as it is now.
+    let down = wt_cli(&["down"]);
+    std::fs::remove_file(&mark).unwrap();
+    let up = wt_cli(&["up"]);
+    assert!(
+        marked("two"),
+        "{down}\n{up}\nmark: {:?}\n{}",
+        std::fs::read_to_string(&mark),
+        s.diag()
+    );
+    assert!(!wt_cli(&["status"]).contains("stack file changed"));
+
+    wt_cli(&["down"]);
+    s.ok(&["down", "--all"]);
+    git(
+        s.dir.path(),
+        &["worktree", "remove", "--force", wt.to_str().unwrap()],
+    );
+}
+
 /// A public link: `devstack tunnel` runs cloudflared (a fake here, which
 /// prints what a Quick Tunnel prints) to the service's fixed port, says its
 /// address once registered, keeps it across a restart and ends it with the

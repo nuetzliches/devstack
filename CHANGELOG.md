@@ -25,6 +25,18 @@ and listed with their assets on the
   for a week (ADR-0098). The agent's own tools (its shell, its edits) do
   not pass devstack and are not shown.
 
+### Fixed
+
+- **A lane takes its changed stack file at its next start.** `devstack down`
+  in a worktree stops the lane's services but keeps the lane in the daemon,
+  and the `up` that followed ran with the stack file the lane had read the
+  first time: a new variable or service in the worktree's `devstack.toml`
+  took no effect, without a word, until the main tree's daemon ended (#487).
+  Now the `up` after a `down` reads the file again (a file that does not
+  load is the answer, and the lane stays as it was); while the lane runs,
+  `devstack status` and the dashboard say the file changed. For the main
+  tree, `status` now says that its daemon stays while lanes run.
+
 ## [0.42.0] - 2026-11-06
 
 A pool's skill can now speak at the end of the work: a `lane-stop`

@@ -18,7 +18,9 @@ commands people and agents can trigger. Schema version 1 ([ADR-0017](adr/0017-st
   editor's TOML extension at it (Taplo: `#:schema ./devstack.schema.json` as
   the first line).
 - **A running daemon does not reload the file.** `devstack status` says when it
-  changed since the start; it applies with `devstack down` + `devstack up`.
+  changed since the start; it applies with `devstack down` + `devstack up`. A
+  lane reads its worktree's file again at the `up` after its `down`; the main
+  tree's daemon stays while lanes run (`devstack down --all` stops them too).
 - **No file yet?** `devstack init` writes a first draft from what the repository
   shows (Compose files, .NET web projects, Node dev servers, Go main packages,
   Django, FastAPI and Flask apps, Spring Boot through Maven or Gradle), every guess marked
