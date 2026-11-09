@@ -18,7 +18,15 @@ const LABEL_W = 96;
 const AXIS_H = 20;
 const BAR_H = 8;
 const CTX_H = 56;
-const SUM_H = 72;
+/** A row of the tokens summed up, one per kind. */
+const SUM_H = 36;
+/** The kinds of tokens, the largest last: output first, what is read from the cache at the bottom. */
+const KINDS = [
+  { key: 'output', label: 'Output', cls: 'l-output' },
+  { key: 'input', label: 'Input', cls: 'l-input' },
+  { key: 'cache_write', label: 'Cache write', cls: 'l-write' },
+  { key: 'cache_read', label: 'Cache read', cls: 'l-read' },
+] as const;
 
 // The width of the plot follows the card; the zoom widens it (it scrolls then).
 const box = ref<HTMLElement | null>(null);
@@ -67,7 +75,9 @@ const layout = computed(() => {
     y += 10;
     add('context', 'Context', CTX_H);
     y += 6;
-    add('sum', 'Tokens', SUM_H);
+    // One row per kind, each on its own scale: what is read from the cache
+    // is a hundred times the output, and one scale left the others flat.
+    for (const k of KINDS) add(`sum-${k.key}`, k.label, SUM_H);
   }
   return { rows, calls, plotH, height: y + 4 };
 });
@@ -88,24 +98,7 @@ const sums = computed(() => cumulative(t.value.turns));
 const ctx = computed(() => context(t.value.turns));
 const ctxMax = computed(() => Math.max(1, ...ctx.value.map((c) => c.tokens)));
 
-/** The tokens summed up, stacked: read from the cache at the bottom, then written to it, input, output. */
-const LAYERS = [
-  { key: 'cache_read', label: 'Cache read', cls: 'l-read' },
-  { key: 'cache_write', label: 'Cache written', cls: 'l-write' },
-  { key: 'input', label: 'Input', cls: 'l-input' },
-  { key: 'output', label: 'Output', cls: 'l-output' },
-] as const;
-type LayerKey = (typeof LAYERS)[number]['key'];
-/** Layers left out of the chart (a click on the legend): what is read from the cache dwarfs the rest, so it starts hidden. */
-const hidden = ref<Set<LayerKey>>(new Set(['cache_read']));
-function toggle(k: LayerKey) {
-  const next = new Set(hidden.value);
-  if (!next.delete(k)) next.add(k);
-  hidden.value = next;
-}
-const layers = computed(() => LAYERS.filter((l) => !hidden.value.has(l.key)));
-const sumMax = computed(() => Math.max(1, ...sums.value.map((s) => layers.value.reduce((n, l) => n + s[l.key], 0))));
-
+const total0 = computed(() => sums.value[sums.value.length - 1]);
 /** A step line through the points, from the axis' start to its end (or now). */
 function steps(pts: { at: number; v: number }[], max: number, r: Row, base = 0): string {
   if (!pts.length) return '';
@@ -122,28 +115,16 @@ const ctxPath = computed(() => {
   return { line, area: `${line} V${r.y + r.h} H${ax.value.x(ctx.value[0]?.at ?? 0).toFixed(1)} Z` };
 });
 
-const sumPaths = computed(() => {
-  const r = row('sum');
-  if (!r || !sums.value.length) return [];
-  const LS = layers.value;
-  const x0 = ax.value.x(sums.value[0].at);
-  const y = (v: number) => r.y + r.h - (v / sumMax.value) * (r.h - 4);
-  return LS.map((l, i) => {
-    const top = (s: (typeof sums.value)[number]) => LS.slice(0, i + 1).reduce((n, k) => n + s[k.key], 0);
-    const bottom = (s: (typeof sums.value)[number]) => LS.slice(0, i).reduce((n, k) => n + s[k.key], 0);
-    let up = `M${x0.toFixed(1)} ${y(0).toFixed(1)}`;
-    for (const s of sums.value) up += ` H${ax.value.x(s.at).toFixed(1)} V${y(top(s)).toFixed(1)}`;
-    up += ` H${W.value}`;
-    // Back along the layer below.
-    const last = sums.value[sums.value.length - 1];
-    let down = ` V${y(bottom(last)).toFixed(1)}`;
-    for (let k = sums.value.length - 1; k >= 0; k--) {
-      const s = sums.value[k];
-      down += ` H${ax.value.x(s.at).toFixed(1)} V${y(k > 0 ? bottom(sums.value[k - 1]) : 0).toFixed(1)}`;
-    }
-    return { ...l, d: `${up}${down} H${x0.toFixed(1)} Z` };
-  });
-});
+/** The tokens summed up per kind, each as a step area on its own scale. */
+const sumPaths = computed(() =>
+  KINDS.map((k) => {
+    const r = row(`sum-${k.key}`);
+    if (!r || !sums.value.length) return null;
+    const max = Math.max(1, sums.value[sums.value.length - 1][k.key]);
+    const line = steps(sums.value.map((x) => ({ at: x.at, v: x[k.key] })), max, r);
+    return { ...k, line, area: `${line} V${r.y + r.h} H${ax.value.x(sums.value[0].at).toFixed(1)} Z` };
+  }).filter((p) => p !== null),
+);
 
 const prompts = computed(() => t.value.marks.filter((m) => m.kind === 'prompt'));
 const others = computed(() => t.value.marks.filter((m) => m.kind !== 'prompt'));
@@ -236,7 +217,7 @@ const crossInfo = computed(() => {
         <span v-for="r in layout.rows" :key="r.id" class="label small" :style="{ top: `${r.y}px`, height: `${r.h}px` }">
           {{ r.label }}
           <small v-if="r.id === 'context'" class="faint">max {{ tokens(ctxMax) }}</small>
-          <small v-if="r.id === 'sum'" class="faint">{{ tokens(sumMax) }}{{ hidden.size ? ' shown' : '' }}</small>
+          <small v-if="r.id.startsWith('sum-') && total0" class="faint tabular">{{ tokens(total0[r.id.slice(4) as (typeof KINDS)[number]['key']]) }}</small>
         </span>
       </div>
       <div ref="box" class="plot" @mouseleave="(tip = null), (cross = null)">
@@ -314,7 +295,10 @@ const crossInfo = computed(() => {
             <path :d="ctxPath.line" class="line" />
           </g>
           <g v-if="sumPaths.length" class="sums" data-testid="session-timeline-tokens">
-            <path v-for="p in sumPaths" :key="p.key" :d="p.d" :class="p.cls" />
+            <g v-for="p in sumPaths" :key="p.key" :class="p.cls" :data-testid="`session-timeline-tokens-${p.key}`">
+              <path :d="p.area" class="area" />
+              <path :d="p.line" class="line" />
+            </g>
           </g>
           <!-- Crosshair -->
           <line v-if="cross !== null" class="cross" :x1="cross" :x2="cross" :y1="AXIS_H" :y2="layout.height" />
@@ -330,11 +314,11 @@ const crossInfo = computed(() => {
 
     <div v-if="t.turns.length" class="legend small" data-testid="session-timeline-legend">
       <span class="lg-static"><i class="sw ctx-sw" /> Context: what the model read in per turn</span>
-      <span class="faint">Tokens summed up:</span>
-      <button v-for="l in [...LAYERS].reverse()" :key="l.key" type="button" class="lg" :class="{ off: hidden.has(l.key) }" :aria-pressed="!hidden.has(l.key)" :data-testid="`session-timeline-layer-${l.key}`" :title="hidden.has(l.key) ? 'Show in the chart' : 'Leave out of the chart'" @click="toggle(l.key)">
-        <i class="sw" :class="l.cls" /> {{ l.label }}
-        <b v-if="crossInfo" class="tabular">{{ tokens(crossInfo.s[l.key]) }}</b>
-      </button>
+      <span class="faint">Tokens summed up, each on its own scale:</span>
+      <span v-for="k in KINDS" :key="k.key" class="lg-static" :data-testid="`session-timeline-layer-${k.key}`">
+        <i class="sw" :class="k.cls" /> {{ k.label }}
+        <b v-if="crossInfo" class="tabular">{{ tokens(crossInfo.s[k.key]) }}</b>
+      </span>
       <span v-if="crossInfo" class="faint tabular">at {{ new Date(crossInfo.at).toLocaleTimeString() }} · context {{ tokens(crossInfo.c) }}</span>
     </div>
   </div>
@@ -509,21 +493,26 @@ svg {
   stroke: var(--accent);
   stroke-width: 1.5;
 }
-.l-read {
-  fill: var(--neutral-soft);
-}
-.l-write {
-  fill: var(--info-soft);
+.l-output {
+  --c: var(--accent);
 }
 .l-input {
-  fill: var(--info);
+  --c: var(--info);
 }
-.l-output {
-  fill: var(--accent);
+.l-write {
+  --c: var(--ok);
 }
-.sums path {
-  stroke: var(--bg);
-  stroke-width: 1;
+.l-read {
+  --c: var(--neutral-text);
+}
+.sums .area {
+  fill: var(--c);
+  fill-opacity: 0.22;
+}
+.sums .line {
+  fill: none;
+  stroke: var(--c);
+  stroke-width: 1.5;
 }
 .cross {
   stroke: var(--text-muted);
@@ -557,31 +546,12 @@ svg {
   align-items: center;
   color: var(--text-muted);
 }
-.lg {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: 0;
-  padding: 2px 4px;
-  border-radius: 4px;
-  background: none;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-.lg:hover {
-  background: var(--surface-hover);
-}
-.lg.off {
-  opacity: 0.5;
-  text-decoration: line-through;
-}
 .lg-static {
   display: inline-flex;
   align-items: center;
   gap: 5px;
 }
-.lg b {
+.lg-static b {
   color: var(--text);
   font-weight: 600;
 }
@@ -591,17 +561,8 @@ svg {
   border-radius: 2px;
   display: inline-block;
 }
-.sw.l-read {
-  background: var(--neutral-soft);
-}
-.sw.l-write {
-  background: var(--info-soft);
-}
-.sw.l-input {
-  background: var(--info);
-}
-.sw.l-output {
-  background: var(--accent);
+.sw[class*='l-'] {
+  background: var(--c);
 }
 .ctx-sw {
   background: var(--accent-soft);

@@ -25,6 +25,14 @@ describe('the session timeline', () => {
     expect(el.querySelector('[data-testid="session-timeline-calls-builtin"]')).not.toBeNull();
     expect(el.querySelector('[data-testid="session-timeline-tokens"]')).not.toBeNull();
     expect(el.querySelector('[data-testid="session-timeline-total"]')!.textContent).toMatch(/Tokens\s+\d/);
+    // Each kind of token on its own row and scale: the output reaches the top of
+    // its row, however much more is read from the cache.
+    const tops = ['output', 'cache_read'].map((k) => {
+      const d = el.querySelector(`[data-testid="session-timeline-tokens-${k}"] .line`)!.getAttribute('d')!;
+      const ys = [...d.matchAll(/V([\d.]+)/g)].map((m) => Number(m[1]));
+      return { min: Math.min(...ys), max: Math.max(...ys) };
+    });
+    for (const t of tops) expect(t.max - t.min).toBeGreaterThan(20);
     // The wait between the prompts is pushed together.
     expect(el.querySelectorAll('[data-testid="session-timeline-gap"]').length).toBeGreaterThan(0);
     unmount();
