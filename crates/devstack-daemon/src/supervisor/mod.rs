@@ -332,6 +332,26 @@ fn start_fields(
     Some(m)
 }
 
+/// A stop followed by a start under way ([`Supervisor::switching`]).
+pub(crate) struct Switching<'a> {
+    sup: &'a Supervisor,
+    name: String,
+}
+
+impl Drop for Switching<'_> {
+    fn drop(&mut self) {
+        if let Some(n) = self
+            .sup
+            .restarts_under_way
+            .lock()
+            .unwrap()
+            .get_mut(&self.name)
+        {
+            *n = n.saturating_sub(1);
+        }
+    }
+}
+
 /// Hash of the stack file, line endings ignored (a checkout may flip them).
 fn stack_file_hash(path: &Path) -> Option<blake3::Hash> {
     let bytes = std::fs::read(path).ok()?;
@@ -1191,6 +1211,24 @@ impl Supervisor {
             .unwrap()
             .get(name)
             .is_some_and(|s| s.view.status.is_active())
+    }
+
+    /// `name` is stopped to be started again (a restart, a candidate that
+    /// takes over in place, a relaunch): until the guard is dropped it counts
+    /// as running, so the daemon does not end in the gap between the stop
+    /// and the start (ADR-0095; #481 for `restart`, the others since), and a
+    /// change seen meanwhile waits for it (#233).
+    pub(crate) fn switching(&self, name: &str) -> Switching<'_> {
+        *self
+            .restarts_under_way
+            .lock()
+            .unwrap()
+            .entry(name.to_string())
+            .or_default() += 1;
+        Switching {
+            sup: self,
+            name: name.to_string(),
+        }
     }
 
     /// Is a `restart` of `name` under way (stopping, starting, or running

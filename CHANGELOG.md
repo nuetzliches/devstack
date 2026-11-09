@@ -49,6 +49,16 @@ and listed with their assets on the
   `devstack status` and the dashboard say the file changed. For the main
   tree, `status` now says that its daemon stays while lanes run.
 
+### Fixed
+
+- **A candidate taking over no longer ends the daemon.** A service without
+  a proxy takes a new build by a stop and a start; when the daemon looked
+  whether anything still ran in the gap between the two, it ended, and the
+  start ran in a daemon on its way out (the same gap as the restart fixed
+  in 0.42.0, seen on Windows in CI). Every stop followed by a start now
+  holds the daemon: a restart, a candidate taking over, a relaunch, hot
+  reload switched on or off.
+
 ## [0.42.0] - 2026-11-06
 
 A pool's skill can now speak at the end of the work: a `lane-stop`
