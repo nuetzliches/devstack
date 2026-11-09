@@ -11,6 +11,14 @@ and listed with their assets on the
 
 ### Fixed
 
+- **Every kind of token shows in the timeline.** The tokens summed up were
+  one stacked area on one scale, where what is read from the cache (often a
+  hundred times the rest) left output and input as hairlines. Each kind has
+  its own row and scale now, its total beside it; the crosshair reads all
+  four.
+
+### Fixed
+
 - **The timeline's tooltips show whole.** A tooltip near the bottom or the
   right edge of the chart was cut off by the chart's frame; it now sits on
   the page and turns to the other side of the pointer where the window ends.

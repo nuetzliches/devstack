@@ -66,8 +66,9 @@ As built:
    other, a failed one red), what changed the lane (its journal and the
    daemon's events), the hooks given. Below, the context per turn (what the
    model read in: a compaction shows as a drop) and the tokens summed up,
-   stacked (cache read, written, input, output; cache read starts hidden,
-   it dwarfs the rest). A pause longer than two minutes is pushed together.
+   one row per kind (output, input, cache written, cache read), each on its
+   own scale: stacked on one, what is read from the cache left the rest as
+   hairlines. A pause longer than two minutes is pushed together.
    Hovering a call says how long it took and the tokens until then; a
    crosshair reads the charts. Zoom 1× to 8×. A running session is read
    again every five seconds.
