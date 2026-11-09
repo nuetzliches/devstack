@@ -197,6 +197,53 @@ export type ActivitySession = { agent: string; session: string; tree: string; st
 
 export type ActivityView = { sessions: ActivitySession[]; records: ActivityRecord[] };
 
+/** An answer of the model in a session: when, which model, the tokens it took. */
+export type TimelineTurn = {
+  at: number;
+  model?: string;
+  /** Input not from the cache, written to the cache, read from it; output. */
+  input: number;
+  cache_write: number;
+  cache_read: number;
+  output: number;
+  /** A sub-agent's: its tokens count, the context is its own. */
+  sidechain?: boolean;
+};
+
+/** Where a call went: devstack's own tool, a pool upstream's through it, another MCP server, the agent's built-in tool, a sub-agent. */
+export type TimelineCallKind = 'devstack' | 'upstream' | 'mcp' | 'builtin' | 'agent';
+
+/** A tool call: its name and how long it took, never its arguments or answer. */
+export type TimelineCall = {
+  at: number;
+  /** null: it has no answer yet (still running, or the session ended first). */
+  ms: number | null;
+  tool: string;
+  kind: TimelineCallKind;
+  ok: boolean;
+  /** `upstream`: which; `mcp`: the server. */
+  upstream?: string;
+};
+
+/** A moment in a session: a prompt sent (never its text), an interruption, the context compacted or cleared, an error of the model's API. */
+export type TimelineMark = { at: number; kind: 'prompt' | 'interrupt' | 'compact' | 'clear' | 'error' };
+
+/** A session in time (`GET /hub/activity/timeline`). */
+export type SessionTimeline = ActivitySession & {
+  /** Where the turns and calls come from: the agent's transcript, or devstack's records only. */
+  source: 'transcript' | 'activity';
+  /** Why the transcript was not read: `off` (not switched on), `agent` (no reader for this agent), `missing` (not found). */
+  why?: 'off' | 'agent' | 'missing';
+  turns: TimelineTurn[];
+  calls: TimelineCall[];
+  marks: TimelineMark[];
+  /** The hooks devstack gave in it. */
+  hooks: Extract<ActivityRecord, { kind: 'hook' }>[];
+};
+
+/** Whether the hub reads the agents' transcripts for the timeline (`/hub/activity/transcripts`); off by default. */
+export type TranscriptSetting = { enabled: boolean };
+
 /** A pool's skill set as an admin names it (`/hub/pool/skills`). */
 export type PoolSkillSet = {
   name: string;

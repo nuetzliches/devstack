@@ -1,5 +1,5 @@
 // The Skills page's flow (#482): hooks as nodes with their tooltip, a hook
-// that is not given greyed with why, a click narrowing the activity.
+// that is not given greyed with why.
 import { describe, expect, it } from 'vitest';
 import { createApp, h, nextTick } from 'vue';
 import type { PoolSkillsState } from '@/api/types';
@@ -16,7 +16,7 @@ const state: PoolSkillsState = {
 async function mount(s: PoolSkillsState = state) {
   const el = document.createElement('div');
   document.body.appendChild(el);
-  const app = createApp({ render: () => h(SkillsFlow, { state: s, activity: mockActivity(), session: '', now: Date.now() }) });
+  const app = createApp({ render: () => h(SkillsFlow, { state: s, activity: mockActivity(), now: Date.now() }) });
   app.mount(el);
   await nextTick();
   return { el, unmount: () => (app.unmount(), el.remove()) };
@@ -41,19 +41,6 @@ describe('the flow tab', () => {
     const end = el.querySelector<HTMLElement>('[data-key="default/core/session-end#1"]')!;
     expect(end.classList.contains('off')).toBe(true);
     expect(end.querySelector('[data-testid="skills-flow-tip"]')!.textContent).toContain('neither accepted nor set up');
-    unmount();
-  });
-
-  it('narrows the activity to a hook on a click, and back', async () => {
-    const { el, unmount } = await mount();
-    const count = () => el.querySelectorAll('[data-testid="skills-flow-record"]').length;
-    const all = count();
-    el.querySelector<HTMLElement>('[data-key="default/core/work-issue#0"]')!.click();
-    await nextTick();
-    expect(count()).toBe(2);
-    el.querySelector<HTMLElement>('[data-testid="skills-flow-all"]')!.click();
-    await nextTick();
-    expect(count()).toBe(all);
     unmount();
   });
 

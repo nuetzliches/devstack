@@ -56,6 +56,7 @@ mod share;
 mod shared;
 mod stdio;
 mod summary;
+mod transcript;
 pub mod tray;
 pub mod upstreams;
 mod watchdog;
@@ -664,6 +665,11 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/pool/skills/{name}", delete(pool::skill_remove))
         .route("/hub/skills", get(poolskills::get))
         .route("/hub/activity", get(activity_get))
+        .route("/hub/activity/timeline", get(timeline_get))
+        .route(
+            "/hub/activity/transcripts",
+            get(transcripts_get).put(transcripts_put),
+        )
         .route("/hub/skills/sync", post(poolskills::sync))
         .route("/hub/skills/agents/{id}", put(poolskills::agent))
         .route("/hub/skills/sets/{pool}/{set}", put(poolskills::auto))
@@ -2914,9 +2920,14 @@ async fn activity_get(State(s): State<AppState>, Query(q): Query<ActivityQuery>)
             .filter_map(|v| v.pool.map(|p| (p.pool, p.name, v.prefix)))
             .collect();
         let index = agenthooks::read_index(&state);
+        // A tree as the records write it, whatever separators or case the page used.
+        let tree = q
+            .tree
+            .as_deref()
+            .map(|t| activity::tree_of(std::path::Path::new(t)));
         activity::view(
             &records,
-            q.tree.as_deref(),
+            tree.as_deref(),
             q.session.as_deref(),
             q.since,
             &prefixes,
@@ -2927,6 +2938,62 @@ async fn activity_get(State(s): State<AppState>, Query(q): Query<ActivityQuery>)
     match got {
         Ok(v) => Json(v).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct TimelineQuery {
+    session: String,
+    #[serde(default)]
+    agent: Option<String>,
+}
+
+/// `GET /hub/activity/timeline?session=&agent=`: a session in time, from
+/// devstack's records and, when switched on, the agent's transcript.
+async fn timeline_get(State(s): State<AppState>, Query(q): Query<TimelineQuery>) -> Response {
+    let ups = s.upstreams.clone();
+    let got = tokio::task::spawn_blocking(move || {
+        let state = activity::state();
+        let records = activity::read(&state);
+        let prefixes: activity::Prefixes = ups
+            .views()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|v| v.pool.map(|p| (p.pool, p.name, v.prefix)))
+            .collect();
+        let index = agenthooks::read_index(&state);
+        let enabled = transcript::Setting::load(&state).enabled;
+        transcript::timeline(
+            &records,
+            &q.session,
+            q.agent.as_deref(),
+            &prefixes,
+            &index,
+            enabled,
+        )
+    })
+    .await;
+    match got {
+        Ok(Some(v)) => Json(v).into_response(),
+        Ok(None) => err(StatusCode::NOT_FOUND, "no such session"),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `GET /hub/activity/transcripts`: whether the hub reads the agents'
+/// transcripts for the timeline (off until switched on).
+async fn transcripts_get() -> Response {
+    Json(transcript::Setting::load(&activity::state())).into_response()
+}
+
+/// `PUT /hub/activity/transcripts {enabled}`: switch it on or off.
+async fn transcripts_put(Json(b): Json<transcript::Setting>) -> Response {
+    match transcript::Setting::save(b, &activity::state()) {
+        Ok(()) => {
+            devstack_daemon::diag::info("transcripts", serde_json::json!({ "enabled": b.enabled }));
+            Json(b).into_response()
+        }
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
 }
 

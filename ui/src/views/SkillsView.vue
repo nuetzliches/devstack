@@ -10,8 +10,8 @@
 // by hand, stays and is shown as a conflict. The user switches each agent
 // found on. The state arrives on `/hub/events`.
 // The tab Flow (#482) shows when the hooks of the skills switched on give
-// their text, and what devstack did for the agents (`GET /hub/activity`,
-// read again on each `activity` event).
+// their text, and when each was given last (`GET /hub/activity`, read again
+// on each `activity` event); the sessions in time are on a lane's Activity.
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { api, paths } from '@/api';
@@ -41,17 +41,16 @@ const flowCount = computed(() => (state.value?.sets ?? []).filter((s) => s.state
 
 // The agents' activity, while the flow shows; again on each `activity` event.
 const activity = ref<ActivityView | null>(null);
-const session = ref('');
 async function readActivity() {
   if (tab.value !== 'flow') return;
   try {
-    const r = await api().request<ActivityView>('GET', paths.activity({ session: session.value || undefined }));
+    const r = await api().request<ActivityView>('GET', paths.activity());
     if (r.ok && r.body && typeof r.body === 'object') activity.value = r.body;
   } catch {
     // The hub's state shows elsewhere; the list keeps what it had.
   }
 }
-watch([tab, session, () => hub.activityAt], () => void readActivity(), { immediate: true });
+watch([tab, () => hub.activityAt], () => void readActivity(), { immediate: true });
 
 // Read when the page opens: the hub looks again which agents are on this
 // machine (one installed since shows) and tells every dashboard.
@@ -217,7 +216,7 @@ const hookAgents = computed(() => (state.value?.agents ?? []).filter((a) => a.en
       </button>
     </nav>
 
-    <SkillsFlow v-if="state && tab === 'flow'" :state="state" :activity="activity" :session="session" :now="now" @session="session = $event" />
+    <SkillsFlow v-if="state && tab === 'flow'" :state="state" :activity="activity" :now="now" />
 
     <template v-if="state && tab === 'sets'">
       <section class="card" data-testid="skills-agents-card">

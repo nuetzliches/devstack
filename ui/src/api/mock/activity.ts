@@ -65,8 +65,8 @@ export const mockHookDetails: Record<string, HookDetail[]> = {
 export function mockActivity(session?: string): ActivityView {
   const now = Date.now();
   const min = 60_000;
-  const main = '~/src/shop';
-  const lane = '~/src/shop-feat-cart';
+  const main = 'c:/work/shop';
+  const lane = 'c:/work/shop-agent-login-fix';
   const at = (m: number) => now - m * min;
   const records: ActivityRecord[] = [
     { kind: 'hook', at: at(95), event: 'session-start', agent: 'claude-code', session: 'a1f3', tree: main, hooks: [ref('work-session', 0)] },
@@ -80,6 +80,7 @@ export function mockActivity(session?: string): ActivityView {
     { kind: 'tool', at: at(24), tool: 'timetrack__start_timer', client: 'claude-code', tree: lane, pid: 5200, ms: 210, ok: true, session: 'b7c2', agent: 'claude-code', upstream: 'timetrack', skills: ['work-session', 'session-end'] },
     { kind: 'hook', at: at(23), event: 'prompt-submit', agent: 'claude-code', session: 'b7c2', tree: lane, hooks: [ref('work-issue', 0)] },
     { kind: 'tool', at: at(18), tool: 'up', client: 'claude-code', tree: lane, pid: 5200, ms: 41_000, ok: true, session: 'b7c2', agent: 'claude-code' },
+    { kind: 'hook', at: at(11), event: 'prompt-submit', agent: 'claude-code', session: 'b7c2', tree: lane, hooks: [ref('work-issue', 0)] },
     { kind: 'tool', at: at(9), tool: 'logs', client: 'claude-code', tree: lane, pid: 5200, ms: 60, ok: true, session: 'b7c2', agent: 'claude-code' },
     { kind: 'tool', at: at(6), tool: 'lane_stop', client: 'claude-code', tree: lane, pid: 5200, ms: 2_300, ok: false, session: 'b7c2', agent: 'claude-code' },
     { kind: 'tool', at: at(4), tool: 'lane_stop', client: 'claude-code', tree: lane, pid: 5200, ms: 2_100, ok: true, session: 'b7c2', agent: 'claude-code' },

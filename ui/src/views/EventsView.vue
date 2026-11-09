@@ -1,15 +1,26 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import type { Client, JournalEntry } from '@/api/types';
 import { clock, shortBuild } from '@/lib/format';
 import { clientLabel, journalLabel, journalSubject, viaText } from '@/lib/journal';
 import { candidateLook, candidateSummary, rebuildLook, rebuildSummary, statusLook, type Tone } from '@/lib/status';
 import { useStack, type TimelineEvent } from '@/stores/stack';
 import Icon from '@/components/icons/Icon.vue';
+import AgentTimeline from '@/components/AgentTimeline.vue';
+import type { LaneMark } from '@/components/SessionTimeline.vue';
 import type { IconName } from '@/components/icons/icons';
 
 type Live = Exclude<TimelineEvent['type'], 'snapshot'>;
 const stack = useStack();
+
+// Views: the journal (a list, newest first), or the coding agents' sessions in time (`?view=timeline`).
+const route = useRoute();
+const router = useRouter();
+const view = computed<'journal' | 'timeline'>(() => (route.query.view === 'timeline' ? 'timeline' : 'journal'));
+function showView(v: 'journal' | 'timeline') {
+  void router.replace({ query: { ...route.query, view: v === 'timeline' ? 'timeline' : undefined } });
+}
 /** What the daemon did, live since this page connected. */
 const live: { v: Live; label: string }[] = [
   { v: 'service', label: 'Service' },
@@ -86,6 +97,17 @@ const shown = computed(() =>
   }),
 );
 
+/** What changed the lane and what the daemon did, as marks on the agents' timeline. */
+const laneMarks = computed<LaneMark[]>(() =>
+  rows.value
+    .filter((r) => !(r.kind === 'event' && r.e.type === 'snapshot'))
+    .map((r) => {
+      const d = describe(r);
+      const who = subjectOf(r);
+      return { at: r.at, title: who ? `${who}: ${d.title}` : d.title, text: d.text, tone: d.tone };
+    }),
+);
+
 type Desc = { icon: IconName; tone: Tone; title: string; text: string; detail?: string | null };
 
 function describeJournal(j: JournalEntry): Desc {
@@ -149,11 +171,19 @@ function describe(r: Row): Desc {
     <header class="page-header">
       <div>
         <h1>Activity</h1>
-        <p class="subtitle">What changed this lane and through which client (its journal, kept across restarts), and what the daemon did since this page connected; newest first.</p>
+        <p v-if="view === 'journal'" class="subtitle">What changed this lane and through which client (its journal, kept across restarts), and what the daemon did since this page connected; newest first.</p>
+        <p v-else class="subtitle">The coding agents' sessions in this working tree in time: their prompts, turns, tool calls and tokens, beside what changed the lane. Pauses are pushed together.</p>
+      </div>
+      <div class="btn-group" role="group" aria-label="View">
+        <button type="button" class="chip-toggle" :aria-pressed="view === 'journal'" data-testid="events-view-journal" @click="showView('journal')">Journal</button>
+        <button type="button" class="chip-toggle" :aria-pressed="view === 'timeline'" data-testid="events-view-timeline" @click="showView('timeline')">Timeline</button>
       </div>
     </header>
 
-    <section class="card">
+    <AgentTimeline v-if="view === 'timeline' && stack.shownLane?.path" :tree="stack.shownLane.path" :lane="laneMarks" />
+    <p v-else-if="view === 'timeline'" class="muted">This lane's working tree is not known here.</p>
+
+    <section v-if="view === 'journal'" class="card">
       <header class="card-header filters">
         <div class="btn-group" role="group" aria-label="Changes">
           <button type="button" class="chip-toggle" :aria-pressed="changes" data-testid="events-filter-journal" title="Who changed the lane, through which client; kept across restarts" @click="changes = !changes">Changes</button>

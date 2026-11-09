@@ -24,6 +24,18 @@ and listed with their assets on the
   prompt, a hook's text, a tool's arguments or its answer, on this machine,
   for a week (ADR-0098). The agent's own tools (its shell, its edits) do
   not pass devstack and are not shown.
+- **A lane shows its agents' sessions in time.** The lane's Activity has a
+  second view, Timeline: per session, the prompts (when, never what), the
+  model's turns, every tool call by where it went (devstack, an upstream,
+  another MCP server, the agent's own tools, sub-agents) with how long it
+  took, what changed the lane and the hooks given; below, how full the
+  context was and the tokens summed up (cache read, written, input, output).
+  Pauses longer than two minutes are pushed together; hovering a call says
+  the tokens used until then. The turns, tokens and the agent's own tools
+  come from the agent's transcript, which the hub reads only once
+  **Read transcripts** is switched on (off by default), for Claude Code and
+  Codex, taking only times, counts and names (ADR-0099). The activity list
+  of the Skills page moved here.
 
 ## [0.42.0] - 2026-11-06
 
