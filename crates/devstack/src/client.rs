@@ -507,7 +507,25 @@ pub fn ensure_daemon(stack_file: &Path, state_dir: &Path) -> Result<Client> {
     // A daemon that runs but does not answer is an error: a second one would
     // only fail on its state lock.
     if let Some(c) = Client::probe(state_dir)? {
-        return Ok(c);
+        if !stale_and_idle(&c) {
+            return Ok(c);
+        }
+        // It read the stack file before it changed and runs nothing: a
+        // `down` that only stopped the tree (the MCP tool, the dashboard)
+        // leaves it for a few seconds before it ends by itself, and an `up`
+        // then ran with the old file (#490). Ended here, unless a lane
+        // started meanwhile; the new one reads the file as it is.
+        match c.post("/v1/shutdown?unless_lanes=true", None) {
+            Ok((409, _)) => return Ok(c),
+            _ => {
+                let t0 = Instant::now();
+                while devstack_daemon::read_info(state_dir).is_some()
+                    && t0.elapsed() < Duration::from_secs(30)
+                {
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            }
+        }
     }
     wait_for_stopping(state_dir);
     std::fs::create_dir_all(state_dir)?;
@@ -606,6 +624,40 @@ fn wait_for_stopping(state_dir: &Path) {
         }
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+/// The daemon `c` reaches read the main tree's stack file before it changed,
+/// and nothing runs in it: no service of the main tree, no lane. Asked from
+/// the main working tree only; a lane reads its own file at its start
+/// (#487).
+fn stale_and_idle(c: &Client) -> bool {
+    if worktree().is_some() {
+        return false;
+    }
+    let Ok(stack) = c
+        .get("/v1/stack")
+        .map(|b| serde_json::from_str::<Value>(&b))
+    else {
+        return false;
+    };
+    let Ok(stack) = stack else { return false };
+    if stack["config_changed"] != true {
+        return false;
+    }
+    let idle = stack["services"].as_array().is_some_and(|s| {
+        s.iter().all(|svc| {
+            matches!(
+                svc["status"]["state"].as_str(),
+                Some("stopped" | "completed")
+            )
+        })
+    });
+    let lanes = c
+        .get("/v1/lanes")
+        .ok()
+        .and_then(|b| serde_json::from_str::<Vec<Value>>(&b).ok())
+        .unwrap_or_default();
+    idle && !lanes.iter().any(|l| l["active"] != false)
 }
 
 /// How long `ensure_daemon` still looks for a daemon after its own exited.
