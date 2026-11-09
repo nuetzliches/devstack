@@ -479,6 +479,7 @@ impl Supervisor {
             "hot_reload",
             serde_json::json!({ "service": name, "on": on }),
         );
+        let _switching = self.switching(name);
         self.stop(name)?;
         self.start(name)
     }
@@ -508,6 +509,7 @@ impl Supervisor {
             .map(|id| (self.layout.artifact(name, &id), id))
             .filter(|(dir, _)| dir.is_dir())
             .map(|(dir, id)| (id, dir));
+        let _switching = self.switching(name);
         self.stop(name)?;
         self.start_with(name, artifact)
     }
