@@ -54,9 +54,12 @@ As built:
    server is named `devstack`, or one of devstack's records has the same
    tool within two seconds; then it is devstack's own tool or an upstream's
    by its prefix, like the activity.
-4. **A file read once per change.** The hub keeps what it read of a file
-   until its size or time changes (at most sixteen files); a transcript of
-   47 MB reads in about 130 ms.
+4. **A file read on, not again.** The hub keeps, per file, how far it read
+   and the reader's state there, and reads only the lines added since
+   (whole lines: one being written waits for the next look); a file shorter
+   than that was written anew and is read from its start. A transcript of
+   47 MB reads in about 130 ms the first time; a running session's look
+   every five seconds reads only its new lines. At most 64 files are kept.
 5. **The view.** Rows: prompts (numbered, no text), the model's turns (as
    tall as their output), the calls by where they went (devstack, upstreams,
    other MCP servers, built-in, sub-agents; overlapping calls one below the

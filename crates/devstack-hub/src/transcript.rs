@@ -21,7 +21,6 @@ use std::collections::HashMap;
 use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::SystemTime;
 
 /// The setting's file in the hub's state.
 const SETTING: &str = "transcripts.json";
@@ -117,14 +116,127 @@ pub struct Parsed {
     pub marks: Vec<Mark>,
 }
 
-/// A reader of an agent's transcripts, by the agent's id; None: devstack
+/// The format of an agent's transcripts, by the agent's id; None: devstack
 /// cannot read this agent's.
-fn reader(agent: &str) -> Option<fn(&Path) -> Parsed> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Format {
+    Claude,
+    Codex,
+}
+
+fn format(agent: &str) -> Option<Format> {
     match agent {
-        "claude-code" | "claude" => Some(claude),
-        "codex" => Some(codex),
+        "claude-code" | "claude" => Some(Format::Claude),
+        "codex" => Some(Format::Codex),
         _ => None,
     }
+}
+
+/// A reader's state after the lines it was fed.
+#[derive(Debug, Clone)]
+enum State {
+    Claude(Claude),
+    Codex(Codex),
+}
+
+impl State {
+    fn line(&mut self, l: &Value) {
+        match self {
+            State::Claude(c) => c.line(l),
+            State::Codex(c) => c.line(l),
+        }
+    }
+
+    fn parsed(&self) -> Parsed {
+        match self {
+            State::Claude(c) => c.out.clone(),
+            State::Codex(c) => c.parsed(),
+        }
+    }
+}
+
+/// A file followed: how far it was read, and the reader's state there. A
+/// transcript only grows while its session runs, so it is read once and
+/// then only what was added.
+#[derive(Debug, Clone)]
+struct Followed {
+    format: Format,
+    sidechain: bool,
+    offset: u64,
+    state: State,
+}
+
+impl Followed {
+    fn new(format: Format, sidechain: bool) -> Self {
+        let state = match format {
+            Format::Claude => State::Claude(Claude {
+                sidechain,
+                ..Claude::default()
+            }),
+            Format::Codex => State::Codex(Codex::default()),
+        };
+        Followed {
+            format,
+            sidechain,
+            offset: 0,
+            state,
+        }
+    }
+
+    /// Read what was added since the last time: whole lines only (one being
+    /// written is read the next time). A file shorter than what was read
+    /// was written anew: from its start.
+    fn read(&mut self, path: &Path) -> std::io::Result<()> {
+        use std::io::{Seek as _, SeekFrom};
+        let mut file = std::fs::File::open(path)?;
+        if file.metadata()?.len() < self.offset {
+            *self = Followed::new(self.format, self.sidechain);
+        }
+        file.seek(SeekFrom::Start(self.offset))?;
+        let mut r = std::io::BufReader::new(file);
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            let n = r.read_until(b'\n', &mut buf)?;
+            if n == 0 || buf.last() != Some(&b'\n') {
+                return Ok(());
+            }
+            self.offset += n as u64;
+            // A line that is not JSON is skipped.
+            if let Ok(v) = serde_json::from_slice::<Value>(&buf) {
+                self.state.line(&v);
+            }
+        }
+    }
+}
+
+/// A session's transcript at `path` read on from where `files` left it; a
+/// Claude Code session with its sub-agents' files beside it
+/// (`<session>/subagents/*.jsonl`). None: the transcript cannot be read.
+fn session(format: Format, path: &Path, files: &mut HashMap<PathBuf, Followed>) -> Option<Parsed> {
+    let main = files
+        .entry(path.to_path_buf())
+        .or_insert_with(|| Followed::new(format, false));
+    main.read(path).ok()?;
+    let mut out = main.state.parsed();
+    if format == Format::Claude
+        && let Ok(rd) = std::fs::read_dir(path.with_extension("").join("subagents"))
+    {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().is_none_or(|x| x != "jsonl") {
+                continue;
+            }
+            let f = files
+                .entry(p.clone())
+                .or_insert_with(|| Followed::new(format, true));
+            if f.read(&p).is_ok() {
+                out.turns.extend(f.state.parsed().turns);
+            }
+        }
+        out.turns.sort_by_key(|t| t.at);
+    }
+    Some(out)
 }
 
 /// An ISO 8601 time as Unix ms.
@@ -137,16 +249,6 @@ fn num(v: &Value) -> u64 {
     v.as_u64().unwrap_or(0)
 }
 
-/// The lines of a JSONL file as values; a line that is not JSON is skipped.
-fn lines(path: &Path) -> impl Iterator<Item = Value> {
-    std::fs::File::open(path)
-        .ok()
-        .map(std::io::BufReader::new)
-        .into_iter()
-        .flat_map(|r| r.lines().map_while(Result::ok))
-        .filter_map(|l| serde_json::from_str::<Value>(&l).ok())
-}
-
 /// A tool's name as the agent calls it: an MCP server's `mcp__<server>__<tool>`.
 fn split_mcp(name: &str) -> Option<(&str, &str)> {
     name.strip_prefix("mcp__")?.split_once("__")
@@ -157,50 +259,41 @@ fn split_mcp(name: &str) -> Option<(&str, &str)> {
 /// a `tool_use` part, its answer a `tool_result` in a later user line; a
 /// prompt is a user line with text; a compaction a `compact_boundary`. A
 /// sub-agent's turns are marked `isSidechain`, or kept beside the transcript
-/// (`<session>/subagents/*.jsonl`).
-pub fn claude(path: &Path) -> Parsed {
-    let mut out = claude_file(path, false);
-    let side = path.with_extension("").join("subagents");
-    if let Ok(rd) = std::fs::read_dir(side) {
-        for e in rd.flatten() {
-            if e.path().extension().is_some_and(|x| x == "jsonl") {
-                let p = claude_file(&e.path(), true);
-                out.turns.extend(p.turns);
-            }
-        }
-        out.turns.sort_by_key(|t| t.at);
-    }
-    out
+/// (`<session>/subagents/*.jsonl`). Fed line by line.
+#[derive(Debug, Clone, Default)]
+struct Claude {
+    out: Parsed,
+    /// A message's turn, by its id: the first line's time, the last line's usage.
+    turns: HashMap<String, usize>,
+    /// A call waiting for its answer, by the tool_use id.
+    open: HashMap<String, usize>,
+    /// A sub-agent's file: every turn is its.
+    sidechain: bool,
 }
 
-fn claude_file(path: &Path, sidechain: bool) -> Parsed {
-    let mut out = Parsed::default();
-    // A message's turn, by its id: the first line's time, the last line's usage.
-    let mut turns: HashMap<String, usize> = HashMap::new();
-    // A call waiting for its answer, by the tool_use id.
-    let mut open: HashMap<String, usize> = HashMap::new();
-    for l in lines(path) {
+impl Claude {
+    fn line(&mut self, l: &Value) {
         let Some(at) = ms(&l["timestamp"]) else {
             if l["type"] == "system" && l["subtype"] == "compact_boundary" {
                 // Without a time of its own: right after the last thing seen.
-                let at = out.turns.last().map_or(0, |t| t.at + 1);
-                out.marks.push(Mark {
+                let at = self.out.turns.last().map_or(0, |t| t.at + 1);
+                self.out.marks.push(Mark {
                     at,
                     kind: MarkKind::Compact,
                 });
             }
-            continue;
+            return;
         };
-        let side = sidechain || l["isSidechain"] == true;
+        let side = self.sidechain || l["isSidechain"] == true;
         match l["type"].as_str() {
             Some("assistant") => {
                 let m = &l["message"];
                 if l["isApiErrorMessage"] == true {
-                    out.marks.push(Mark {
+                    self.out.marks.push(Mark {
                         at,
                         kind: MarkKind::Error,
                     });
-                    continue;
+                    return;
                 }
                 let u = &m["usage"];
                 let turn = Turn {
@@ -216,25 +309,25 @@ fn claude_file(path: &Path, sidechain: bool) -> Parsed {
                     sidechain: side,
                 };
                 let id = m["id"].as_str().unwrap_or_default().to_string();
-                match turns.get(&id).filter(|_| !id.is_empty()) {
+                match self.turns.get(&id).filter(|_| !id.is_empty()) {
                     Some(&i) => {
-                        let t = &mut out.turns[i];
+                        let t = &mut self.out.turns[i];
                         t.input = t.input.max(turn.input);
                         t.cache_write = t.cache_write.max(turn.cache_write);
                         t.cache_read = t.cache_read.max(turn.cache_read);
                         t.output = t.output.max(turn.output);
                     }
                     None => {
-                        turns.insert(id, out.turns.len());
-                        out.turns.push(turn);
+                        self.turns.insert(id, self.out.turns.len());
+                        self.out.turns.push(turn);
                     }
                 }
                 if side {
-                    continue;
+                    return;
                 }
                 for c in m["content"].as_array().into_iter().flatten() {
                     if c["type"] != "tool_use" {
-                        continue;
+                        return;
                     }
                     let name = c["name"].as_str().unwrap_or("?");
                     let (tool, kind, upstream) = match split_mcp(name) {
@@ -247,9 +340,9 @@ fn claude_file(path: &Path, sidechain: bool) -> Parsed {
                         None => (name.to_string(), Kind::Builtin, None),
                     };
                     if let Some(id) = c["id"].as_str() {
-                        open.insert(id.to_string(), out.calls.len());
+                        self.open.insert(id.to_string(), self.out.calls.len());
                     }
-                    out.calls.push(Call {
+                    self.out.calls.push(Call {
                         at,
                         ms: None,
                         tool,
@@ -265,9 +358,10 @@ fn claude_file(path: &Path, sidechain: bool) -> Parsed {
                 for c in content.as_array().into_iter().flatten() {
                     match c["type"].as_str() {
                         Some("tool_result") => {
-                            if let Some(&i) = c["tool_use_id"].as_str().and_then(|id| open.get(id))
+                            if let Some(&i) =
+                                c["tool_use_id"].as_str().and_then(|id| self.open.get(id))
                             {
-                                let call = &mut out.calls[i];
+                                let call = &mut self.out.calls[i];
                                 call.ms = Some(at.saturating_sub(call.at));
                                 call.ok = c["is_error"] != true;
                             }
@@ -279,20 +373,20 @@ fn claude_file(path: &Path, sidechain: bool) -> Parsed {
                     }
                 }
                 // Read only to tell what the line is, never kept.
-                let Some(text) = text else { continue };
+                let Some(text) = text else { return };
                 // Not the user's: text the agent added, a summary, a
                 // background task's notice (`origin`).
                 if l["isMeta"] == true || l["isCompactSummary"] == true || l["origin"].is_object() {
-                    continue;
+                    return;
                 }
                 let t = text.trim_start();
                 if t.starts_with("[Request interrupted") {
-                    out.marks.push(Mark {
+                    self.out.marks.push(Mark {
                         at,
                         kind: MarkKind::Interrupt,
                     });
                 } else if t.starts_with("<command-name>/clear") {
-                    out.marks.push(Mark {
+                    self.out.marks.push(Mark {
                         at,
                         kind: MarkKind::Clear,
                     });
@@ -301,20 +395,19 @@ fn claude_file(path: &Path, sidechain: bool) -> Parsed {
                     || t.starts_with("<task-notification")
                     || t.starts_with("Caveat:"))
                 {
-                    out.marks.push(Mark {
+                    self.out.marks.push(Mark {
                         at,
                         kind: MarkKind::Prompt,
                     });
                 }
             }
-            Some("system") if l["subtype"] == "compact_boundary" => out.marks.push(Mark {
+            Some("system") if l["subtype"] == "compact_boundary" => self.out.marks.push(Mark {
                 at,
                 kind: MarkKind::Compact,
             }),
             _ => {}
         }
     }
-    out
 }
 
 /// Codex: a rollout of events. `token_count` carries the last turn's usage
@@ -322,57 +415,64 @@ fn claude_file(path: &Path, sidechain: bool) -> Parsed {
 /// `user_message` a prompt (an older rollout has none: `task_started`
 /// instead), `turn_aborted` an interruption; a call is a `function_call` (or `custom_tool_call`) with
 /// its output by `call_id`, an MCP server's tool an `mcp_tool_call_end` with
-/// its server and duration; `turn_context` names the model.
-pub fn codex(path: &Path) -> Parsed {
-    let mut out = Parsed::default();
-    let mut model: Option<String> = None;
-    let mut open: HashMap<String, usize> = HashMap::new();
-    let mut mcp_ids: Vec<String> = Vec::new();
-    let mut total: Option<u64> = None;
-    let mut tasks: Vec<Mark> = Vec::new();
-    for l in lines(path) {
+/// its server and duration; `turn_context` names the model. Fed line by
+/// line.
+#[derive(Debug, Clone, Default)]
+struct Codex {
+    out: Parsed,
+    model: Option<String>,
+    open: HashMap<String, usize>,
+    mcp_ids: Vec<String>,
+    /// The total of the last `token_count`: the same again is no new turn.
+    total: Option<u64>,
+    /// `task_started`: the prompts of a rollout without `user_message`.
+    tasks: Vec<Mark>,
+}
+
+impl Codex {
+    fn line(&mut self, l: &Value) {
         let Some(at) = ms(&l["timestamp"]) else {
-            continue;
+            return;
         };
         let p = &l["payload"];
         match (l["type"].as_str(), p["type"].as_str()) {
             (Some("turn_context"), _) => {
-                model = p["model"].as_str().map(String::from).or(model);
+                self.model = p["model"].as_str().map(String::from).or(self.model.take());
             }
-            (Some("event_msg"), Some("user_message")) => out.marks.push(Mark {
+            (Some("event_msg"), Some("user_message")) => self.out.marks.push(Mark {
                 at,
                 kind: MarkKind::Prompt,
             }),
-            (Some("event_msg"), Some("task_started")) => tasks.push(Mark {
+            (Some("event_msg"), Some("task_started")) => self.tasks.push(Mark {
                 at,
                 kind: MarkKind::Prompt,
             }),
-            (Some("event_msg"), Some("turn_aborted")) => out.marks.push(Mark {
+            (Some("event_msg"), Some("turn_aborted")) => self.out.marks.push(Mark {
                 at,
                 kind: MarkKind::Interrupt,
             }),
             (Some("event_msg"), Some("context_compacted")) | (Some("compacted"), _) => {
-                out.marks.push(Mark {
+                self.out.marks.push(Mark {
                     at,
                     kind: MarkKind::Compact,
                 });
             }
-            (Some("event_msg"), Some("stream_error" | "error")) => out.marks.push(Mark {
+            (Some("event_msg"), Some("stream_error" | "error")) => self.out.marks.push(Mark {
                 at,
                 kind: MarkKind::Error,
             }),
             (Some("event_msg"), Some("token_count")) => {
                 let u = &p["info"]["last_token_usage"];
                 let sum = p["info"]["total_token_usage"]["total_tokens"].as_u64();
-                if u.is_null() || (sum.is_some() && sum == total) {
-                    continue;
+                if u.is_null() || (sum.is_some() && sum == self.total) {
+                    return;
                 }
-                total = sum;
+                self.total = sum;
                 let cached = num(&u["cached_input_tokens"]);
                 let written = num(&u["cache_write_input_tokens"]);
-                out.turns.push(Turn {
+                self.out.turns.push(Turn {
                     at,
-                    model: model.clone(),
+                    model: self.model.clone(),
                     input: num(&u["input_tokens"]).saturating_sub(cached + written),
                     cache_write: written,
                     cache_read: cached,
@@ -384,9 +484,9 @@ pub fn codex(path: &Path) -> Parsed {
                 let inv = &p["invocation"];
                 let took = codex_duration(&p["duration"]);
                 if let Some(id) = p["call_id"].as_str() {
-                    mcp_ids.push(id.to_string());
+                    self.mcp_ids.push(id.to_string());
                 }
-                out.calls.push(Call {
+                self.out.calls.push(Call {
                     at: took.map_or(at, |d| at.saturating_sub(d)),
                     ms: took,
                     tool: inv["tool"].as_str().unwrap_or("?").to_string(),
@@ -397,9 +497,9 @@ pub fn codex(path: &Path) -> Parsed {
             }
             (Some("response_item"), Some("function_call" | "custom_tool_call")) => {
                 if let Some(id) = p["call_id"].as_str() {
-                    open.insert(id.to_string(), out.calls.len());
+                    self.open.insert(id.to_string(), self.out.calls.len());
                 }
-                out.calls.push(Call {
+                self.out.calls.push(Call {
                     at,
                     ms: None,
                     tool: p["name"].as_str().unwrap_or("?").to_string(),
@@ -409,30 +509,46 @@ pub fn codex(path: &Path) -> Parsed {
                 });
             }
             (Some("response_item"), Some("function_call_output" | "custom_tool_call_output")) => {
-                if let Some(&i) = p["call_id"].as_str().and_then(|id| open.get(id)) {
-                    let c = &mut out.calls[i];
+                if let Some(&i) = p["call_id"].as_str().and_then(|id| self.open.get(id)) {
+                    let c = &mut self.out.calls[i];
                     c.ms = Some(at.saturating_sub(c.at));
                 }
             }
             _ => {}
         }
     }
-    if !out.marks.iter().any(|m| m.kind == MarkKind::Prompt) {
-        out.marks.extend(tasks);
-        out.marks.sort_by_key(|m| m.at);
+
+    fn parsed(&self) -> Parsed {
+        let mut out = self.out.clone();
+        if !out.marks.iter().any(|m| m.kind == MarkKind::Prompt) {
+            out.marks.extend(self.tasks.iter().copied());
+            out.marks.sort_by_key(|m| m.at);
+        }
+        // An MCP tool's call shows once: as the MCP event, which names its server.
+        let mcp: Vec<usize> = self
+            .mcp_ids
+            .iter()
+            .filter_map(|id| self.open.get(id).copied())
+            .collect();
+        let mut i = 0;
+        out.calls.retain(|_| {
+            i += 1;
+            !mcp.contains(&(i - 1))
+        });
+        out.calls.sort_by_key(|c| c.at);
+        out
     }
-    // An MCP tool's call shows once: as the MCP event, which names its server.
-    let mcp: Vec<usize> = mcp_ids
-        .iter()
-        .filter_map(|id| open.get(id).copied())
-        .collect();
-    let mut i = 0;
-    out.calls.retain(|_| {
-        i += 1;
-        !mcp.contains(&(i - 1))
-    });
-    out.calls.sort_by_key(|c| c.at);
-    out
+}
+
+/// A whole file, as one look reads it.
+#[cfg(test)]
+fn claude(path: &Path) -> Parsed {
+    session(Format::Claude, path, &mut HashMap::new()).unwrap_or_default()
+}
+
+#[cfg(test)]
+fn codex(path: &Path) -> Parsed {
+    session(Format::Codex, path, &mut HashMap::new()).unwrap_or_default()
 }
 
 /// Codex's duration: `{secs, nanos}`, or a string such as `1.2s`.
@@ -478,28 +594,18 @@ fn classify(calls: &mut [Call], own: &[(u64, String)], prefixes: &Prefixes) {
     }
 }
 
-/// A file read already: its print and what it held.
-type Cached = ((SystemTime, u64), Parsed);
-static CACHE: Mutex<Option<HashMap<PathBuf, Cached>>> = Mutex::new(None);
+/// The transcripts followed, by path.
+static FILES: Mutex<Option<HashMap<PathBuf, Followed>>> = Mutex::new(None);
 
-/// What `read` makes of `path`, read again only when the file changed.
-fn cached(path: &Path, read: fn(&Path) -> Parsed) -> Option<Parsed> {
-    let m = std::fs::metadata(path).ok()?;
-    let print = (m.modified().ok()?, m.len());
-    let mut g = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    let map = g.get_or_insert_with(HashMap::new);
-    if let Some((p, parsed)) = map.get(path)
-        && *p == print
-    {
-        return Some(parsed.clone());
+/// A session's transcript, read on from where the last look left it.
+fn cached(format: Format, path: &Path) -> Option<Parsed> {
+    let mut g = FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let files = g.get_or_insert_with(HashMap::new);
+    // A handful of sessions (and their sub-agents) are looked at; the rest go.
+    if files.len() > 64 {
+        files.clear();
     }
-    let parsed = read(path);
-    // A handful of sessions are looked at; the rest go.
-    if map.len() > 16 {
-        map.clear();
-    }
-    map.insert(path.to_path_buf(), (print, parsed.clone()));
-    Some(parsed)
+    session(format, path, files)
 }
 
 /// `agent`'s session `session` in time: devstack's records of it and, with
@@ -552,11 +658,11 @@ pub fn timeline(
         } if id == session && a == &s.agent => Some(PathBuf::from(t)),
         _ => None,
     });
-    let (source, why, parsed) = match (enabled, reader(&s.agent), path) {
+    let (source, why, parsed) = match (enabled, format(&s.agent), path) {
         (false, ..) => ("activity", Some("off"), None),
         (true, None, _) => ("activity", Some("agent"), None),
         (true, Some(_), None) => ("activity", Some("missing"), None),
-        (true, Some(read), Some(p)) => match cached(&p, read) {
+        (true, Some(f), Some(p)) => match cached(f, &p) {
             Some(parsed) => ("transcript", None, Some(parsed)),
             None => ("activity", Some("missing"), None),
         },
@@ -809,6 +915,39 @@ mod tests {
             timeline(&[r], "s", None, &Vec::new(), &index, true).unwrap()["why"],
             "agent"
         );
+    }
+
+    #[test]
+    fn a_growing_transcript_is_read_on_from_where_it_was_left() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("s.jsonl");
+        let turn = |id: &str, s: u64, out: u64| {
+            serde_json::json!({"type":"assistant","timestamp":at(s),"message":{"id":id,"content":[],"usage":{"output_tokens":out}}}).to_string()
+        };
+        let mut files = HashMap::new();
+        // The second line is being written: not read yet.
+        let half = turn("b", 2, 7);
+        std::fs::write(&path, format!("{}\n{}", turn("a", 1, 5), &half[..10])).unwrap();
+        let p = session(Format::Claude, &path, &mut files).unwrap();
+        assert_eq!(p.turns.iter().map(|t| t.output).collect::<Vec<_>>(), [5]);
+        let first = files[&path].offset;
+        // Written on: only what was added is read, the turn of `a` grows.
+        std::fs::write(
+            &path,
+            format!("{}\n{half}\n{}\n", turn("a", 1, 5), turn("a", 1, 9)),
+        )
+        .unwrap();
+        let p = session(Format::Claude, &path, &mut files).unwrap();
+        assert!(files[&path].offset > first);
+        assert_eq!(p.turns.iter().map(|t| t.output).collect::<Vec<_>>(), [9, 7]);
+        assert_eq!(p, claude(&path));
+        // Written anew (shorter): from its start.
+        std::fs::write(&path, format!("{}\n", turn("c", 3, 1))).unwrap();
+        let p = session(Format::Claude, &path, &mut files).unwrap();
+        assert_eq!(p.turns.iter().map(|t| t.output).collect::<Vec<_>>(), [1]);
+        // Gone: not read.
+        std::fs::remove_file(&path).unwrap();
+        assert!(session(Format::Claude, &path, &mut files).is_none());
     }
 
     #[test]
