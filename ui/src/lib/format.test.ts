@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bytes, duration, percent, serviceUrl, webUrl } from './format';
+import { bytes, duration, linkLabel, percent, serviceUrl, webUrl } from './format';
 import { paths } from '@/api/transport';
 
 describe('webUrl (H-12)', () => {
@@ -18,6 +18,20 @@ describe('webUrl (H-12)', () => {
     expect(serviceUrl({ url: 'https://localhost:5001', port: 5001 })).toBe('https://localhost:5001');
     expect(serviceUrl({ url: 'javascript:alert(1)', port: 5001 })).toBe('http://localhost:5001');
     expect(serviceUrl({ port: 8080 })).toBe('http://localhost:8080');
+  });
+
+  it("prefers the link the service printed, if it is a web address", () => {
+    expect(serviceUrl({ link: 'http://localhost:8888/lab?token=a', url: 'http://localhost:8888', port: 8888 })).toBe('http://localhost:8888/lab?token=a');
+    expect(serviceUrl({ link: 'javascript:alert(1)', url: 'http://localhost:8888', port: 8888 })).toBe('http://localhost:8888');
+    expect(serviceUrl({ link: 'http://localhost:9000/#token=a', port: null })).toBe('http://localhost:9000/#token=a');
+  });
+});
+
+describe('linkLabel', () => {
+  it('shows no token on the page', () => {
+    expect(linkLabel('http://localhost:8888/lab?token=abc')).toBe('localhost:8888/lab…');
+    expect(linkLabel('http://localhost:7000/admin#token=abc')).toBe('localhost:7000/admin…');
+    expect(linkLabel('https://localhost:5001/x')).toBe('localhost:5001/x');
   });
 });
 

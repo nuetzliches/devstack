@@ -2130,6 +2130,7 @@ impl Lanes {
         });
         let watcher = crate::watch::start(sup.clone());
         sup.follow_rebuilds();
+        sup.follow_links();
         Ok(Arc::new(Lane {
             entry: entry.clone(),
             sup,

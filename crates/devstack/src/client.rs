@@ -942,6 +942,19 @@ pub fn status_text(stack: &Value) -> String {
             );
         }
     }
+    // A service's own link, as its running instance printed it (`link =
+    // { from_log }`, ADR-0101): whole, since a token in it is what makes it work.
+    let links: Vec<(&str, &str)> = services
+        .into_iter()
+        .flatten()
+        .filter_map(|s| Some((s["name"].as_str()?, s["link"].as_str()?)))
+        .collect();
+    if !links.is_empty() {
+        let _ = writeln!(out, "\nLINK (printed by the service; it may hold a token)");
+        for (name, link) in links {
+            let _ = writeln!(out, "{name:<22} {link}");
+        }
+    }
     if groups.is_some() {
         if services.is_some() {
             out.push('\n');
@@ -3147,6 +3160,23 @@ data: {\"type\":\"line\",\"text\":\"c\"}\n\n";
         assert!(s < api && api < c, "{both}");
         // Neither: the empty service table.
         assert!(status_text(&serde_json::json!({ "services": [] })).starts_with("SERVICE "));
+        assert!(!both.contains("LINK"), "{both}");
+    }
+
+    #[test]
+    fn a_services_own_link_follows_the_table() {
+        let text = status_text(&serde_json::json!({ "services": [
+            { "name": "api", "status": { "state": "healthy" }, "port": 5000 },
+            { "name": "lab", "status": { "state": "healthy" }, "port": 8888,
+              "link": "http://localhost:8888/lab?token=abc" }
+        ] }));
+        assert!(
+            text.ends_with(
+                "\nLINK (printed by the service; it may hold a token)\n\
+                 lab                    http://localhost:8888/lab?token=abc\n"
+            ),
+            "{text}"
+        );
     }
 
     #[test]

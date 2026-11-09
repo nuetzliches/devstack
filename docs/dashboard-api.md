@@ -267,6 +267,8 @@ type ServiceView = {
   public_link?: { state: "starting" | "open" | "failed"; url?: string; since: number; error?: string };
                                          // its public link (a Cloudflare Quick Tunnel to its fixed port), while one is open or failed
   public_link_available: boolean;        // one may be opened: it has a `port`, and no `tunnel = false`
+  link?: string;                         // the running instance's own link, from its output (`link = { from_log }`, ADR-0101); may hold a token,
+                                         // so apart from `url`; absent until printed. Since 0.44.0
                                          // (StackView.public_link_domain: the named tunnel's domain, when one is set up (ADR-0091);
                                          //  links then answer at https://{service}-{lane}-{stack}.<domain>, and open once the hub's connector carries them)
   singleton?: boolean;                   // it runs once per machine, in the main working tree only (`singleton = true`, or the deprecated `lanes = false`, ADR-0080); the dashboard's stack page lists it (ADR-0081). Since 0.33.0; older daemons omit it
@@ -340,6 +342,7 @@ type Event = { seq: number; at: number } & (
   | { type: "candidate"; service: string; candidate: Candidate | null }
   | { type: "devserver_rebuild"; service: string; rebuild: Rebuild | null } // started, over, or gone from the view (ADR-0042)
   | { type: "public_link"; service: string; link: ServiceView["public_link"] | null } // opened, registered, failed, or closed (null)
+  | { type: "service_link"; service: string; link: string | null } // the running instance's own link, or gone (null); never in the diagnostic log
   | { type: "infra"; group: string; message: string }        // a container changed: fetch /v1/stack once
   | { type: "command"; command: string; run: number; status: "running" | "succeeded" | "failed" }
   | { type: "config"; changed: boolean }   // the stack file changed since start (true) or back (false); a stack file gone is neither

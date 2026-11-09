@@ -491,6 +491,34 @@ server reloads itself).
 | `timeout = "10m"` | `kind = "job"` only: how long it may run before it counts as failed and is stopped; default 30 minutes. `devstack stop <job>` ends it at once |
 | `tunnel = false` | offers no public link to it (below); for a service with a `port` only. A file with it should say `requires = "0.37.0"` |
 | `stop = "docker rm -f api{lane_suffix}-{port}"` | ends what `run` started outside its process tree, a container ([ADR-0059](adr/0059-a-services-stop-command-ends-what-its-run-started.md), below); not for `kind = "static"` |
+| `link = { from_log = 'ui: (http://\S+)' }` | its dashboard link, from its output (below); not for `kind = "static"`. A file with it should say `requires = "0.44.0"` |
+
+### A link from the output (`link`)
+
+A service whose page needs more than its port, such as a token or a path
+printed at start (Jupyter's `?token=…`, an admin UI's one-time login link),
+gets its link from its output:
+
+```toml
+[services.lab]
+kind = "tool"
+run  = "jupyter lab --no-browser --port {port}"
+port = 8888
+link = { from_log = '(http://127\.0\.0\.1:\d+/lab\?token=\S+)' }
+```
+
+- `from_log` is a regular expression over the instance's output lines; the
+  first capture group of the first match is the link, an `http://` or
+  `https://` address. `devstack check` compiles it and wants a group.
+- The link belongs to the running instance: a candidate's line does not
+  replace it until the candidate takes the main slot, and a restart shows
+  the plain port link until the new instance printed its own.
+- A link to the instance's internal port (behind the proxy) is moved to the
+  service's `port`; `0.0.0.0` becomes `localhost`.
+- The dashboard opens it (and shows it without its query or fragment), and
+  `devstack status` lists it under the service table. It may hold a secret:
+  it stays on this machine, apart from public links, the pool, the
+  diagnostic log and the browser's storage.
 
 ### Public links (`devstack tunnel`)
 

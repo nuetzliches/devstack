@@ -114,6 +114,13 @@ pub struct ServiceView {
     /// A public link may be opened to it: it has a `port`, and the stack
     /// file does not say `tunnel = false`. Older daemons omit it.
     pub public_link_available: bool,
+    /// The running instance's own link, read from its output (`link =
+    /// { from_log }`, ADR-0101): it may hold a token, so it has a field of its
+    /// own, apart from `url`, which the public links and the pool read. It
+    /// is served to this machine's clients only, never to the diagnostic
+    /// log. `None` until the instance printed it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
 }
 
 /// A service's public link (`POST /v1/services/{name}/public-link`).
@@ -416,6 +423,13 @@ pub enum EventBody {
     DevserverRebuild {
         service: String,
         rebuild: Option<crate::rebuild::RebuildView>,
+    },
+    /// The running instance's link from its output is known, or gone
+    /// (`None`: another instance runs, or none). Never recorded: it may hold
+    /// a token (ADR-0101).
+    ServiceLink {
+        service: String,
+        link: Option<String>,
     },
     /// The stack file changed since the daemon started (`true`), or was changed back.
     Config {

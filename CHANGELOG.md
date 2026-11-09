@@ -9,6 +9,15 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **A service's link from its output.** `link = { from_log = '…(http://\S+)' }`
+  gives a native service the link its instance prints at start, with a
+  token or a path (Jupyter, an admin UI's one-time login link), instead of
+  the bare port: the dashboard opens it, `devstack status` lists it. It
+  belongs to the running instance, follows a promotion, and stays on this
+  machine (ADR-0101, #496).
+
 ### Fixed
 
 - **The timeline's tooltips show whole.** A tooltip near the bottom or the

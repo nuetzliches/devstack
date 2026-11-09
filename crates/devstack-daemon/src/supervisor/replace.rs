@@ -284,6 +284,9 @@ The running instance was left as it was."
         // A new instance is a new "since", even when the status stays healthy.
         slot.view.since = now_ms();
         slot.view.log = Some(inst.log.clone());
+        // The old instance's link goes with it; the new one's is read from
+        // its own output (`follow_links`).
+        slot.view.link = None;
         slot.view.build_id = inst.build_id.clone();
         slot.view.instance_port = inst.port;
         let old = slot.main.replace(inst);
