@@ -9,6 +9,12 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **The timeline's tooltips show whole.** A tooltip near the bottom or the
+  right edge of the chart was cut off by the chart's frame; it now sits on
+  the page and turns to the other side of the pointer where the window ends.
+
 ## [0.43.0] - 2026-11-09
 
 A lane's Activity shows its coding agents' sessions in time: when a
