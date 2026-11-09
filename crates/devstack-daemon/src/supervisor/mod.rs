@@ -727,10 +727,16 @@ impl Supervisor {
         if !self.stack_file.is_file() {
             return;
         }
-        let changed = stack_file_hash(&self.stack_file) != self.stack_file_hash;
+        let changed = self.stack_file_changed();
         if self.config_changed.swap(changed, Ordering::SeqCst) != changed {
             self.emit(EventBody::Config { changed });
         }
+    }
+
+    /// The stack file differs from what this tree read when it started
+    /// (line endings aside); a file that is gone is no change.
+    pub fn stack_file_changed(&self) -> bool {
+        self.stack_file.is_file() && stack_file_hash(&self.stack_file) != self.stack_file_hash
     }
 
     pub(crate) fn emit(&self, body: EventBody) {

@@ -786,9 +786,17 @@ pub fn status_text(stack: &Value) -> String {
         );
     }
     if stack["config_changed"].as_bool() == Some(true) {
+        // A lane reads its file again at the `up` after a `down` (#487);
+        // the main tree's daemon only when it starts, and lanes that run
+        // keep it (ADR-0024).
         let _ = writeln!(
             out,
-            "! the stack file changed since the daemon started; it applies with `devstack down` + `devstack up`\n"
+            "{}\n",
+            if stack["lane"].is_string() {
+                "! the stack file changed since this lane started; it applies with `devstack down` + `devstack up` here"
+            } else {
+                "! the stack file changed since the daemon started; it applies with `devstack down` + `devstack up` (while lanes run, the daemon stays: `devstack down --all` stops them too)"
+            }
         );
     }
     if let Some(e) = stack["watcher_error"].as_str() {

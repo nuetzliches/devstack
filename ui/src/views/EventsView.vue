@@ -152,7 +152,7 @@ function describe(r: Row): Desc {
       return { icon: 'terminal', tone: e.status === 'failed' ? 'danger' : e.status === 'succeeded' ? 'ok' : 'accent', title: `run #${e.run}`, text: e.status };
     case 'config':
       return e.changed
-        ? { icon: 'file', tone: 'warn', title: 'Stack file', text: 'Changed since the daemon started; applies with the next start' }
+        ? { icon: 'file', tone: 'warn', title: 'Stack file', text: stack.lane ? 'Changed since this lane started; applies with its next start' : 'Changed since the daemon started; applies with the next start' }
         : { icon: 'file', tone: 'ok', title: 'Stack file', text: 'Back to what the daemon runs with' };
     case 'watcher':
       return e.error
