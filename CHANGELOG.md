@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-11-09
+
+A service whose page needs a token or a path printed at start (Jupyter, an
+admin UI's one-time login link) gets that link instead of the bare port:
+`link = { from_log = '<regex>' }` reads it from the running instance's
+output, the dashboard opens it and `devstack status` lists it. It belongs
+to the instance, follows a promotion and stays on this machine
+(ADR-0101). Fixed: the timeline's tooltips are no longer cut off, and
+every kind of token shows on a scale of its own.
+
 ### Added
 
 - **A service's link from its output.** `link = { from_log = '…(http://\S+)' }`
@@ -25,9 +35,6 @@ and listed with their assets on the
   hundred times the rest) left output and input as hairlines. Each kind has
   its own row and scale now, its total beside it; the crosshair reads all
   four.
-
-### Fixed
-
 - **The timeline's tooltips show whole.** A tooltip near the bottom or the
   right edge of the chart was cut off by the chart's frame; it now sits on
   the page and turns to the other side of the pointer where the window ends.
@@ -3224,7 +3231,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.43.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.44.0...HEAD
+[0.44.0]: https://github.com/nuetzliches/devstack/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/nuetzliches/devstack/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/nuetzliches/devstack/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/nuetzliches/devstack/compare/v0.40.0...v0.41.0
