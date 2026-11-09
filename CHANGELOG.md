@@ -9,6 +9,21 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-11-09
+
+A lane's Activity shows its coding agents' sessions in time: when a
+prompt came, the model's turns, every tool call by where it went with how
+long it took, what changed the lane and the hooks devstack gave, with the
+context and the tokens summed up below. The turns, tokens and the agent's
+own tools come from its transcript (Claude Code, Codex), read on this
+machine only once switched on, taking only times, counts and names
+(ADR-0099). The Skills page draws the flow of the hooks (ADR-0098), and
+devstack's MCP server can be registered for every folder, repositories
+without a stack included (ADR-0100). Fixed: a changed stack file applies
+with `down` + `up`, in a lane (#487) and right after the MCP tool's
+`down` (#490); a candidate taking over in place no longer ends the
+daemon.
+
 ### Added
 
 - **devstack's MCP server for every folder.** The MCP upstreams page has a
@@ -26,14 +41,11 @@ and listed with their assets on the
   session starts, a prompt matches, a lane stops, a session ends. Hovering a
   hook says when it applies, on what condition, how often, for which agents,
   and how its text begins; a hook that is not given is greyed and says why
-  (an upstream neither accepted nor set up in the agent). Beside it is what
-  devstack did for the agent, by session: each hook it gave and each tool
-  call through `devstack mcp`, with how long it took and whether it failed;
-  a click on a hook narrows the list to it, and the tool calls show under
-  the skill whose upstream they use. Only what happened is kept, never a
-  prompt, a hook's text, a tool's arguments or its answer, on this machine,
-  for a week (ADR-0098). The agent's own tools (its shell, its edits) do
-  not pass devstack and are not shown.
+  (an upstream neither accepted nor set up in the agent). Each hook says
+  when it was given last, and the tool calls through `devstack mcp` show
+  under the skill whose upstream they use. Only what happened is kept,
+  never a prompt, a hook's text, a tool's arguments or its answer, on this
+  machine, for a week (ADR-0098).
 - **A lane shows its agents' sessions in time.** The lane's Activity has a
   second view, Timeline: per session, the prompts (when, never what), the
   model's turns, every tool call by where it went (devstack, an upstream,
@@ -3189,7 +3201,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.42.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.43.0...HEAD
+[0.43.0]: https://github.com/nuetzliches/devstack/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/nuetzliches/devstack/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/nuetzliches/devstack/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/nuetzliches/devstack/compare/v0.39.0...v0.40.0
