@@ -49,6 +49,13 @@ and listed with their assets on the
   `devstack status` and the dashboard say the file changed. For the main
   tree, `status` now says that its daemon stays while lanes run.
 
+- **`up` right after `down` takes a changed stack file.** The MCP tool
+  `down` (and the dashboard's stop) stops the tree and leaves the daemon a
+  few seconds before it ends by itself; an `up` in that time ran in the old
+  daemon, with the stack file it read at its start, and the change stayed
+  unapplied (#490). An `up` now ends a daemon that runs nothing and read an
+  older stack file, and starts a new one; one in which something runs, or
+  lanes, stays.
 - **A candidate taking over no longer ends the daemon.** A service without
   a proxy takes a new build by a stop and a start; when the daemon looked
   whether anything still ran in the gap between the two, it ended, and the

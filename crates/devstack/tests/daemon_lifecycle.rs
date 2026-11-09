@@ -1702,6 +1702,80 @@ run = "{brief}"
     s.ok(&["down"]);
 }
 
+/// The main tree's `up` right after a `down` that only stopped it (the MCP
+/// tool's `POST /v1/down`): the daemon, in its few seconds before it ends by
+/// itself, still held the stack file it read at its start, and the `up` ran
+/// with that (#490). A daemon that runs nothing and read an older file is
+/// ended at the `up`, and a new one reads the file as it is.
+#[test]
+fn an_up_after_a_down_reads_the_changed_stack_file() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    let out = tempfile::tempdir().unwrap();
+    let mark = out.path().join("mark.txt");
+    let file = |value: &str| {
+        let run = if cfg!(windows) {
+            format!("echo %MARK%>\"%MARK_FILE%\" & {}", runs_for(600))
+        } else {
+            format!("echo $MARK > \"$MARK_FILE\"; {}", runs_for(600))
+        };
+        format!(
+            "version = 1\n[stack]\nname = \"stale\"\n[services.dev]\nkind = \"devserver\"\nrun = '{run}'\nenv = {{ MARK = \"{value}\", MARK_FILE = '{}' }}\n",
+            mark.display()
+        )
+    };
+    let marked = |value: &str| {
+        wait_for(
+            || std::fs::read_to_string(&mark).is_ok_and(|t| t.trim() == value),
+            Duration::from_secs(30),
+        )
+    };
+    std::fs::write(s.file(), file("one")).unwrap();
+    s.ok(&["up"]);
+    assert!(marked("one"), "{}", s.diag());
+    std::fs::write(s.file(), file("two")).unwrap();
+    assert!(
+        wait_for(
+            || s.ok(&["status"]).contains("stack file changed"),
+            Duration::from_secs(15)
+        ),
+        "{}",
+        s.ok(&["status"])
+    );
+    // What the MCP tool `down` does: the tree stops, the daemon stays a moment.
+    assert!(s.daemon_post("/v1/down?infra=true") < 300);
+    std::fs::remove_file(&mark).unwrap();
+    s.ok(&["up"]);
+    assert!(
+        marked("two"),
+        "mark: {:?}\n{}",
+        std::fs::read_to_string(&mark),
+        s.diag()
+    );
+    assert!(!s.ok(&["status"]).contains("stack file changed"));
+    // While something runs in it, an `up` keeps the daemon: what runs stays.
+    let pid = || {
+        serde_json::from_slice::<Value>(
+            &std::fs::read(s.dir.path().join(".devstack/daemon.json")).unwrap(),
+        )
+        .unwrap()["pid"]
+            .clone()
+    };
+    let before = pid();
+    std::fs::write(s.file(), file("three")).unwrap();
+    assert!(wait_for(
+        || s.ok(&["status"]).contains("stack file changed"),
+        Duration::from_secs(15)
+    ));
+    s.ok(&["up"]);
+    assert_eq!(pid(), before, "{}", s.diag());
+    assert!(marked("two"));
+    s.ok(&["down"]);
+}
+
 /// A lane takes its worktree's stack file as it is when it starts again:
 /// `devstack down` in the worktree stops the lane's services but keeps the
 /// lane in the daemon, and the `up` after an edit of the file ran with what
