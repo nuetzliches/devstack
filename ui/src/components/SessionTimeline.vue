@@ -174,11 +174,20 @@ function tokensLine(at: number): string {
   const s = sumAt(sums.value, at);
   return `until then ${tokens(total(s))} tokens (out ${tokens(s.output)})`;
 }
+/** At the pointer, in the window: the plot scrolls and clips what is inside it, so the tooltip lives on the page's body. */
 function show(e: MouseEvent, title: string, lines: string[], tone?: string) {
-  const r = box.value?.getBoundingClientRect();
-  if (!r) return;
-  tip.value = { x: e.clientX - r.left + (box.value?.scrollLeft ?? 0), y: e.clientY - r.top, title, lines, tone };
+  tip.value = { x: e.clientX, y: e.clientY, title, lines, tone };
 }
+const TIP_W = 250;
+/** Right of and below the pointer; left of it or above it where the window ends. */
+const tipStyle = computed(() => {
+  const t = tip.value;
+  if (!t) return {};
+  const tall = 40 + t.lines.length * 18;
+  const left = t.x + 14 + TIP_W > window.innerWidth ? t.x - 14 - TIP_W : t.x + 14;
+  const top = t.y + 16 + tall > window.innerHeight ? t.y - 10 - tall : t.y + 16;
+  return { left: `${Math.max(4, left)}px`, top: `${Math.max(4, top)}px`, width: `${TIP_W}px` };
+});
 function callTip(e: MouseEvent, c: TimelineCall) {
   const u = turnOf(t.value.turns, c.at);
   const took = c.ms === null ? (t.value.ended ? 'no answer' : 'running') : c.ms < 1000 ? `${c.ms} ms` : duration(c.ms);
@@ -310,10 +319,12 @@ const crossInfo = computed(() => {
           <!-- Crosshair -->
           <line v-if="cross !== null" class="cross" :x1="cross" :x2="cross" :y1="AXIS_H" :y2="layout.height" />
         </svg>
-        <div v-if="tip" class="tip" :class="tip.tone ? `tip-${tip.tone}` : ''" :style="{ left: `${Math.min(tip.x + 12, W - 250)}px`, top: `${tip.y + 14}px` }" role="tooltip" data-testid="session-timeline-tip">
-          <strong>{{ tip.title }}</strong>
-          <span v-for="(l, i) in tip.lines" :key="i">{{ l }}</span>
-        </div>
+        <Teleport to="body">
+          <div v-if="tip" class="tl-tip" :class="tip.tone ? `tip-${tip.tone}` : ''" :style="tipStyle" role="tooltip" data-testid="session-timeline-tip">
+            <strong>{{ tip.title }}</strong>
+            <span v-for="(l, i) in tip.lines" :key="i">{{ l }}</span>
+          </div>
+        </Teleport>
       </div>
     </div>
 
@@ -519,10 +530,9 @@ svg {
   stroke-width: 1;
   pointer-events: none;
 }
-.tip {
-  position: absolute;
-  z-index: 20;
-  width: 240px;
+.tl-tip {
+  position: fixed;
+  z-index: 1000;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -534,7 +544,7 @@ svg {
   font-size: 12px;
   pointer-events: none;
 }
-.tip span {
+.tl-tip span {
   color: var(--text-muted);
 }
 .tip-danger strong {

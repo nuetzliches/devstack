@@ -30,6 +30,20 @@ describe('the session timeline', () => {
     unmount();
   });
 
+  it('puts the tooltip on the page, outside the plot that clips what it holds', async () => {
+    mockTranscripts.enabled = true;
+    const { el, unmount } = await mount('b7c2');
+    const call = el.querySelector('[data-testid="session-timeline-calls-devstack"] g')!;
+    call.dispatchEvent(new MouseEvent('mouseenter', { clientX: 100, clientY: 100 }));
+    await nextTick();
+    const tip = document.body.querySelector<HTMLElement>('[data-testid="session-timeline-tip"]')!;
+    expect(tip).not.toBeNull();
+    expect(el.contains(tip)).toBe(false);
+    expect(tip.style.left).toBe('114px');
+    unmount();
+    expect(document.body.querySelector('[data-testid="session-timeline-tip"]')).toBeNull();
+  });
+
   it('shows only what devstack recorded while transcripts are not read', async () => {
     mockTranscripts.enabled = false;
     const { el, timeline, unmount } = await mount('b7c2');
