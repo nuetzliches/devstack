@@ -123,6 +123,17 @@ export const paths = {
   poolSkill: (name: string) => `/hub/pool/skills/${enc(name)}`,
   poolSkillsRefresh: '/hub/pool/skills/refresh',
   hubSkills: '/hub/skills',
+  activity: (q: { tree?: string; session?: string } = {}) => {
+    const p = new URLSearchParams();
+    if (q.tree) p.set('tree', q.tree);
+    if (q.session) p.set('session', q.session);
+    const s = p.toString();
+    return `/hub/activity${s ? `?${s}` : ''}`;
+  },
+  /** A session in time: its turns, calls and marks. */
+  timeline: (session: string, agent: string) => `/hub/activity/timeline?${new URLSearchParams({ session, agent }).toString()}`,
+  /** Whether the hub reads the agents' transcripts (off by default). */
+  transcripts: '/hub/activity/transcripts',
   /** Every registered stack's ports and their overlaps (ADR-0082). */
   hubPorts: '/hub/ports',
   skillsSync: '/hub/skills/sync',

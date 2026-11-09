@@ -300,6 +300,9 @@ impl Supervisor {
             return self.replace(name, svc, Some(artifact));
         }
         self.set_candidate(name, None);
+        // From the watcher, not a request: nothing else holds the daemon
+        // between the stop and the start.
+        let _switching = self.switching(name);
         self.stop(name)?;
         self.start_with(name, Some(artifact))
     }
@@ -595,20 +598,24 @@ mod tests {
         panic!("late past the deadline at every try: {tries:?}");
     }
 
-    /// A restart under way keeps the daemon: between its stop and its start
-    /// nothing of the service runs, and the daemon must not end there.
+    /// A stop followed by a start keeps the daemon: in the gap nothing of
+    /// the service runs, and the daemon must not end there (#481 for a
+    /// restart; a candidate taking over in place ended it the same way).
     #[test]
-    fn a_restart_under_way_counts_as_running() {
+    fn a_switch_under_way_counts_as_running() {
         let (_d, _rt, sup) = two_after_a_job();
         assert!(!sup.runs_anything(), "nothing started");
-        *sup.restarts_under_way
-            .lock()
-            .unwrap()
-            .entry("a".into())
-            .or_default() += 1;
-        assert!(sup.runs_anything(), "a restart between its stop and start");
-        *sup.restarts_under_way.lock().unwrap().get_mut("a").unwrap() -= 1;
+        {
+            let _outer = sup.switching("a");
+            {
+                let _inner = sup.switching("a");
+                assert!(sup.runs_anything(), "between its stop and start");
+            }
+            assert!(sup.runs_anything(), "the outer one still");
+            assert!(sup.restart_under_way("a"));
+        }
         assert!(!sup.runs_anything());
+        assert!(!sup.restart_under_way("a"));
     }
 
     /// A change reported after a restart began waits for the restart, past

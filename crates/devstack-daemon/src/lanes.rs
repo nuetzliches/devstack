@@ -2063,7 +2063,12 @@ impl Lanes {
         })
     }
 
-    fn open(&self, entry: &LaneEntry) -> Result<Arc<Lane>, String> {
+    /// What a lane runs: its worktree, its stack file, the stack read from
+    /// it (with its profile, ports moved by its offset), and the offset.
+    fn read_stack(
+        &self,
+        entry: &LaneEntry,
+    ) -> Result<(PathBuf, PathBuf, devstack_config::Stack, u16), String> {
         let repo = devstack_proc::long_path(&entry.path);
         if !repo.is_dir() {
             return Err(format!("{} is gone", repo.display()));
@@ -2088,6 +2093,11 @@ impl Lanes {
             .files_offset(entry.number)
             .ok_or_else(|| format!("lane number {} is beyond the port range", entry.number))?;
         let stack = lane_stack(&stack, offset)?;
+        Ok((repo, file, stack, offset))
+    }
+
+    fn open(&self, entry: &LaneEntry) -> Result<Arc<Lane>, String> {
+        let (repo, file, stack, offset) = self.read_stack(entry)?;
         let state = self.state_dir(&entry.name);
         std::fs::create_dir_all(&state).map_err(|e| e.to_string())?;
         let sup = Supervisor::new_lane(
@@ -2139,6 +2149,35 @@ impl Lanes {
     }
 
     /// A started lane.
+    /// A started lane whose worktree's stack file changed since the lane
+    /// read it, and of which nothing runs (`devstack down` in it): opened
+    /// again from the file as it is now, so the `up` that follows runs that
+    /// (#487). `down` keeps a lane in the daemon, which read its file once.
+    /// One that runs, or serves the main ports, keeps what it read (its
+    /// status says the file changed). A file that does not load now is the
+    /// answer, and the lane stays as it was.
+    pub fn reread(&self, name: &str) -> Result<(), String> {
+        let Some(old) = self.map.lock().unwrap().get(name).cloned() else {
+            return Ok(());
+        };
+        if !old.sup.stack_file_changed() || old.sup.runs_anything() || old.sup.owns_main() {
+            return Ok(());
+        }
+        self.read_stack(&old.entry)?;
+        let workers = old.sup.lane_workers();
+        self.map.lock().unwrap().remove(name);
+        old.sup.close();
+        let lane = self.open(&old.entry)?;
+        lane.sup.set_lane_workers(workers);
+        self.map.lock().unwrap().insert(name.to_string(), lane);
+        crate::diag::info(
+            "lane_reread",
+            serde_json::json!({ "lane": name, "worktree": old.entry.path }),
+        );
+        self.announce();
+        Ok(())
+    }
+
     pub fn get(&self, name: &str) -> Result<Arc<Lane>, String> {
         if let Some(l) = self.map.lock().unwrap().get(name) {
             return Ok(l.clone());
@@ -2290,6 +2329,8 @@ impl Lanes {
                 )
             })?;
         let name = entry.name.clone();
+        // Started, stopped by `down`, its stack file changed: read again.
+        self.reread(&name)?;
         if let Some(l) = self.map.lock().unwrap().get(&name) {
             let stack = l.sup.stack();
             let runs = stack.profile.as_ref().map(|p| p.name.as_str());

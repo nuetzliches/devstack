@@ -9,6 +9,54 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **The Skills page shows what happens for your agent.** A new tab, Flow,
+  draws the hooks of the skills switched on by when they give their text: a
+  session starts, a prompt matches, a lane stops, a session ends. Hovering a
+  hook says when it applies, on what condition, how often, for which agents,
+  and how its text begins; a hook that is not given is greyed and says why
+  (an upstream neither accepted nor set up in the agent). Beside it is what
+  devstack did for the agent, by session: each hook it gave and each tool
+  call through `devstack mcp`, with how long it took and whether it failed;
+  a click on a hook narrows the list to it, and the tool calls show under
+  the skill whose upstream they use. Only what happened is kept, never a
+  prompt, a hook's text, a tool's arguments or its answer, on this machine,
+  for a week (ADR-0098). The agent's own tools (its shell, its edits) do
+  not pass devstack and are not shown.
+- **A lane shows its agents' sessions in time.** The lane's Activity has a
+  second view, Timeline: per session, the prompts (when, never what), the
+  model's turns, every tool call by where it went (devstack, an upstream,
+  another MCP server, the agent's own tools, sub-agents) with how long it
+  took, what changed the lane and the hooks given; below, how full the
+  context was and the tokens summed up (cache read, written, input, output).
+  Pauses longer than two minutes are pushed together; hovering a call says
+  the tokens used until then. The turns, tokens and the agent's own tools
+  come from the agent's transcript, which the hub reads only once
+  **Read transcripts** is switched on (off by default), for Claude Code and
+  Codex, taking only times, counts and names (ADR-0099). The activity list
+  of the Skills page moved here.
+
+### Fixed
+
+- **A lane takes its changed stack file at its next start.** `devstack down`
+  in a worktree stops the lane's services but keeps the lane in the daemon,
+  and the `up` that followed ran with the stack file the lane had read the
+  first time: a new variable or service in the worktree's `devstack.toml`
+  took no effect, without a word, until the main tree's daemon ended (#487).
+  Now the `up` after a `down` reads the file again (a file that does not
+  load is the answer, and the lane stays as it was); while the lane runs,
+  `devstack status` and the dashboard say the file changed. For the main
+  tree, `status` now says that its daemon stays while lanes run.
+
+- **A candidate taking over no longer ends the daemon.** A service without
+  a proxy takes a new build by a stop and a start; when the daemon looked
+  whether anything still ran in the gap between the two, it ended, and the
+  start ran in a daemon on its way out (the same gap as the restart fixed
+  in 0.42.0, seen on Windows in CI). Every stop followed by a start now
+  holds the daemon: a restart, a candidate taking over, a relaunch, hot
+  reload switched on or off.
+
 ## [0.42.0] - 2026-11-06
 
 A pool's skill can now speak at the end of the work: a `lane-stop`

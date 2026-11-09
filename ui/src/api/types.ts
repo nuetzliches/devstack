@@ -55,6 +55,8 @@ export type HubEvent =
   | { type: 'skills'; skills: PoolSkillsState }
   /** A version of each stack's worktrees (ADR-0078): read a stack's lanes again when its version changes. Older hubs never send it. */
   | { type: 'worktrees'; worktrees: Record<string, string> }
+  /** A record was added to the agents' activity (`GET /hub/activity`): read it again. Older hubs never send it. */
+  | { type: 'activity'; at: number }
   /** What needs attention in every stack (ADR-0097), first and on every change; older hubs never send it. */
   | { type: 'attention'; items: AttentionItem[] }
   /** Something happened once in the hub that no request reports (ADR-0050): a toast. */
@@ -139,7 +141,108 @@ export type SkillState = {
   trees?: string[];
   /** How many hooks its `hooks.toml` has (ADR-0094): texts given to the agents at a session's start or on a matching prompt. */
   hooks?: number;
+  /** Its hooks as they are given, for the flow (#482); only a skill switched on, and newer hubs. */
+  hook_details?: HookDetail[];
 };
+
+/** When a hook gives its text. */
+export type HookEvent = 'session-start' | 'prompt-submit' | 'lane-stop' | 'session-end';
+
+/** A hook of a skill as the hub gives it (#482). */
+export type HookDetail = {
+  /** Its place in the skill's `hooks.toml`. */
+  index: number;
+  event: HookEvent;
+  /** A regex on the prompt (`prompt-submit`). */
+  pattern?: string;
+  /** Once a session, or once per match. */
+  once: 'session' | 'match';
+  /** The pool's MCP upstream it is bound to. */
+  upstream?: string;
+  /** The start of its text. */
+  preview: string;
+  /** The agents that get it, by name. */
+  agents: string[];
+  /** Its upstream is there (accepted, or set up in an agent). */
+  applies: boolean;
+  why?: string;
+};
+
+/** A hook given, by where it is. */
+export type HookRef = { pool: string; set: string; skill: string; index: number };
+
+/** A record of the agents' activity (`GET /hub/activity`, #482): never a prompt, text, argument or answer. */
+export type ActivityRecord =
+  | { kind: 'hook'; at: number; event: HookEvent; agent: string; session?: string; tree: string; hooks: HookRef[]; recorded?: boolean }
+  | {
+      kind: 'tool';
+      at: number;
+      /** With its upstream's prefix (`<prefix>__<tool>`), or one of devstack's own. */
+      tool: string;
+      client?: string;
+      tree: string;
+      pid: number;
+      ms: number;
+      ok: boolean;
+      /** The session it is put to: the latest that started in its working tree before it. */
+      session?: string;
+      agent?: string;
+      /** A pool's upstream's tool: the upstream, and the skills whose hooks name it. */
+      upstream?: string;
+      skills?: string[];
+    };
+
+/** An agent's session, from its hooks' records. */
+export type ActivitySession = { agent: string; session: string; tree: string; started: number; last: number; ended: boolean };
+
+export type ActivityView = { sessions: ActivitySession[]; records: ActivityRecord[] };
+
+/** An answer of the model in a session: when, which model, the tokens it took. */
+export type TimelineTurn = {
+  at: number;
+  model?: string;
+  /** Input not from the cache, written to the cache, read from it; output. */
+  input: number;
+  cache_write: number;
+  cache_read: number;
+  output: number;
+  /** A sub-agent's: its tokens count, the context is its own. */
+  sidechain?: boolean;
+};
+
+/** Where a call went: devstack's own tool, a pool upstream's through it, another MCP server, the agent's built-in tool, a sub-agent. */
+export type TimelineCallKind = 'devstack' | 'upstream' | 'mcp' | 'builtin' | 'agent';
+
+/** A tool call: its name and how long it took, never its arguments or answer. */
+export type TimelineCall = {
+  at: number;
+  /** null: it has no answer yet (still running, or the session ended first). */
+  ms: number | null;
+  tool: string;
+  kind: TimelineCallKind;
+  ok: boolean;
+  /** `upstream`: which; `mcp`: the server. */
+  upstream?: string;
+};
+
+/** A moment in a session: a prompt sent (never its text), an interruption, the context compacted or cleared, an error of the model's API. */
+export type TimelineMark = { at: number; kind: 'prompt' | 'interrupt' | 'compact' | 'clear' | 'error' };
+
+/** A session in time (`GET /hub/activity/timeline`). */
+export type SessionTimeline = ActivitySession & {
+  /** Where the turns and calls come from: the agent's transcript, or devstack's records only. */
+  source: 'transcript' | 'activity';
+  /** Why the transcript was not read: `off` (not switched on), `agent` (no reader for this agent), `missing` (not found). */
+  why?: 'off' | 'agent' | 'missing';
+  turns: TimelineTurn[];
+  calls: TimelineCall[];
+  marks: TimelineMark[];
+  /** The hooks devstack gave in it. */
+  hooks: Extract<ActivityRecord, { kind: 'hook' }>[];
+};
+
+/** Whether the hub reads the agents' transcripts for the timeline (`/hub/activity/transcripts`); off by default. */
+export type TranscriptSetting = { enabled: boolean };
 
 /** A pool's skill set as an admin names it (`/hub/pool/skills`). */
 export type PoolSkillSet = {

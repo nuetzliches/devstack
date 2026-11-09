@@ -20,6 +20,8 @@ import { persist } from '@/lib/persist';
 import { crmSeed, docsSeed, failedReason, shopSeed, stamp } from './data';
 import { Abort, MockStack, sleep, type Listener } from './stack';
 import { MockPool } from './pool';
+import { mockActivity, mockHookDetails } from './activity';
+import { mockTimeline, mockTranscripts } from './timeline';
 import { autoShift, daemonPorts, hubPorts, refusal, type MockLane } from './ports';
 import { runningHolders } from '@/lib/shift';
 
@@ -128,9 +130,12 @@ class MockHub {
         fetched: Math.floor(Date.now() / 1000) - 600,
         commit: 'a1b2c3d',
         skills: [
-          { name: 'work-issue', description: 'Work on an issue from the tracker to a pull request', sha256: 'aa11', installed: true, pending: false, enabled: true, group: 'Development', tags: ['git', 'tracker'], updated: Date.now() - 3_600_000, agents: ['Claude Code'] },
+          { name: 'work-issue', description: 'Work on an issue from the tracker to a pull request', sha256: 'aa11', installed: true, pending: false, enabled: true, group: 'Development', tags: ['git', 'tracker'], updated: Date.now() - 3_600_000, agents: ['Claude Code'], hooks: 1, hook_details: mockHookDetails['work-issue'] },
+          // Hooks (ADR-0094) and the flow they make (#482).
+          { name: 'work-session', description: 'Run every work session with a timer, from its start to its review', sha256: 'aa12', installed: true, pending: false, enabled: true, group: 'Development', updated: Date.now() - 3_600_000, agents: ['Claude Code'], hooks: 2, hook_details: mockHookDetails['work-session'] },
+          { name: 'session-end', description: 'Remind the agent of the timer when a lane stops or a session ended', sha256: 'aa13', installed: true, pending: false, enabled: true, group: 'Development', updated: Date.now() - 600_000, agents: ['Claude Code'], hooks: 2, hook_details: mockHookDetails['session-end'] },
           { name: 'push-tag', description: 'Tag a release and push it', sha256: 'bb22', installed: true, pending: false, enabled: true, group: 'Development', tags: ['release'], updated: Date.now() - 3_600_000, agents: ['Claude Code'] },
-          { name: 'timetrack', description: 'Book time entries from the commits of a day', sha256: 'cc33', installed: true, pending: false, enabled: true, group: 'Time', updated: Date.now() - 600_000, agents: ['Claude Code'], hooks: 1 },
+          { name: 'timetrack', description: 'Book time entries from the commits of a day', sha256: 'cc33', installed: true, pending: false, enabled: true, group: 'Time', updated: Date.now() - 600_000, agents: ['Claude Code'] },
           { name: 'idea-validate', description: 'Validate a business idea in six phases, as an HTML report', sha256: 'dd44', installed: false, pending: false, enabled: false, group: 'Business', tags: ['html'] },
           { name: 'idea-overview', description: 'A one-page overview of a business idea', sha256: 'ee55', installed: false, pending: false, enabled: false, group: 'Business', tags: ['html'] },
           // Bound to a repository (ADR-0079): in the working trees of shop only; crm's is no stack here.
@@ -655,6 +660,16 @@ export class MockTransport implements Transport {
     }
     // Skill sets (ADR-0074).
     if (p === '/hub/skills' && method === 'GET') return json(200, this.hub.poolSkillState);
+    if (p === '/hub/activity' && method === 'GET') return json(200, mockActivity(url.searchParams.get('session') ?? undefined));
+    if (p === '/hub/activity/timeline' && method === 'GET') {
+      const t = mockTimeline(url.searchParams.get('session') ?? '');
+      return t ? json(200, t) : json(404, { error: 'no such session' });
+    }
+    if (p === '/hub/activity/transcripts' && method === 'GET') return json(200, mockTranscripts);
+    if (p === '/hub/activity/transcripts' && method === 'PUT') {
+      mockTranscripts.enabled = Boolean(body?.enabled);
+      return json(200, mockTranscripts);
+    }
     if (p === '/hub/skills/sync' && method === 'POST') return json(200, this.hub.poolSkillState);
     const sa = /^\/hub\/skills\/agents\/([^/]+)$/.exec(p);
     if (sa && method === 'PUT') {

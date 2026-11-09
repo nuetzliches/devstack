@@ -1388,11 +1388,21 @@ async fn lane_forward(
         }
         return r.forward(out).await;
     }
+    // `up` in a lane stopped by `down`: its stack file as it is now (#487).
+    let up = req.method() == axum::http::Method::POST && rest == "up";
     let l = {
         let lanes = lanes.clone();
-        match tokio::task::spawn_blocking(move || lanes.get(&lane)).await {
+        match tokio::task::spawn_blocking(move || {
+            if up {
+                // A stack file that does not load now: the lane stays as it was.
+                lanes.reread(&lane).map_err(|e| (StatusCode::CONFLICT, e))?;
+            }
+            lanes.get(&lane).map_err(|e| (StatusCode::NOT_FOUND, e))
+        })
+        .await
+        {
             Ok(Ok(l)) => l,
-            Ok(Err(e)) => return err(StatusCode::NOT_FOUND, e),
+            Ok(Err((status, e))) => return err(status, e),
             Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         }
     };
