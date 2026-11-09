@@ -16,7 +16,8 @@ const MAX_EVENTS = 500;
 const HISTORY_WINDOW_MS = 10 * 60_000;
 
 /** An entry of the events timeline (usage ticks are left out). */
-export type TimelineEvent = Exclude<StackEvent, { type: 'usage' } | { type: 'lanes' } | { type: 'notices' } | { type: 'journal' }>;
+// A service's own link may hold a token: it updates the service, not the timeline.
+export type TimelineEvent = Exclude<StackEvent, { type: 'usage' } | { type: 'lanes' } | { type: 'notices' } | { type: 'journal' } | { type: 'service_link' }>;
 
 /** How long a lane start asked for holds its lane's start page at most, when nothing reports its end. */
 const START_GIVE_UP_MS = 20 * 60_000;
@@ -969,6 +970,15 @@ export const useStack = defineStore('stack', () => {
         save();
         break;
       }
+      case 'service_link': {
+        const s = svc(ev.service);
+        if (s) {
+          if (ev.link) s.link = ev.link;
+          else delete s.link;
+        } else scheduleRefetch();
+        save();
+        return; // may hold a token: not part of the timeline
+      }
       case 'public_link': {
         const s = svc(ev.service);
         if (s) {
@@ -1087,7 +1097,9 @@ export const useStack = defineStore('stack', () => {
     if (saveTimer) return;
     saveTimer = setTimeout(() => {
       saveTimer = null;
-      if (id.value && view.value && !lane.value) persist.saveStack(id.value, { view: view.value, at: Date.now() });
+      // A service's own link may hold a token, valid for its instance only:
+      // it stays out of the browser's storage.
+      if (id.value && view.value && !lane.value) persist.saveStack(id.value, { view: { ...view.value, services: view.value.services.map(({ link: _, ...s }) => s) }, at: Date.now() });
       if (id.value && view.value && lane.value) laneViews.set(`${id.value}#${lane.value}`, { view: view.value, at: Date.now() });
     }, 500);
   }

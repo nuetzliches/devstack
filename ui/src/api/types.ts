@@ -456,6 +456,8 @@ export type ServiceView = {
   public_link?: PublicLink;
   /** A public link may be opened to it (a `port`, no `tunnel = false`). Older daemons omit it. */
   public_link_available?: boolean;
+  /** Its running instance's own link, as it printed it (`link = { from_log }`): may hold a token. Absent until printed, and from older daemons. */
+  link?: string;
 };
 
 /** A service's public link: reachable from the internet by anyone with `url`. */
@@ -689,6 +691,8 @@ export type StackEventBody =
   | { type: 'candidate'; service: string; candidate: Candidate | null }
   | { type: 'devserver_rebuild'; service: string; rebuild: Rebuild | null }
   | { type: 'public_link'; service: string; link: PublicLink | null }
+  /** The running instance's own link is known, or gone (`null`). */
+  | { type: 'service_link'; service: string; link: string | null }
   | { type: 'infra'; group: string; message: string }
   | { type: 'command'; command: string; run: number; status: RunStatus }
   | { type: 'config'; changed: boolean }

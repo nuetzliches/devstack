@@ -834,6 +834,7 @@ impl Supervisor {
             let v = &mut slots.get_mut(name).unwrap().view;
             v.pid = Some(inst.tree.root_pid());
             v.log = Some(inst.log.clone());
+            v.link = None;
             v.build_id = inst.build_id.clone();
             v.instance_port = inst.port;
         }

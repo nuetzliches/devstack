@@ -781,6 +781,23 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
                 "a public link goes to the service's `port`: without one there is nothing to offer",
             );
         }
+        if let Some(link) = &svc.link {
+            let lp = format!("{p}.link.from_log");
+            if svc.kind == Kind::Static {
+                c.err(
+                    &lp,
+                    "a static service has no output of its own: devstack serves its files",
+                );
+            }
+            match regex::Regex::new(&link.from_log) {
+                Err(e) => c.err(&lp, format!("not a regular expression: {e}")),
+                Ok(re) if re.captures_len() < 2 => c.err(
+                    &lp,
+                    "needs a capture group: its first one is the link, e.g. `ui: (http://\\S+)`",
+                ),
+                Ok(_) => {}
+            }
+        }
         if svc.health.as_ref().is_some_and(|h| h.timeout.is_zero()) {
             c.err(format!("{p}.health.timeout"), "must be more than 0");
         }
@@ -1091,7 +1108,7 @@ const FIRST_LANES: u32 = 3;
 
 /// What a valid stack file may want changed (`devstack check` prints them):
 /// a newer key (`[stack] reviewed`, `announced_ports`, a service's `stop`,
-/// `singleton` and `tunnel`, `prepare.outputs` and `prepare.version`)
+/// `singleton`, `tunnel` and `link`, `prepare.outputs` and `prepare.version`)
 /// without the `requires` that keeps an older devstack from failing on it;
 /// two services whose ports differ by one of the first
 /// few multiples of `[lanes] port_step`, so that one of the first lanes
@@ -1269,6 +1286,28 @@ pub fn warnings(stack: &Stack) -> Vec<Issue> {
                 message: format!(
                     "a devstack before {v} does not know this key and fails on it with \"unknown field\": `requires = \"{v}\"` makes it ask to be updated instead",
                     v = crate::TUNNEL_SINCE
+                ),
+            });
+        }
+    }
+    let link = crate::version_order(crate::LINK_SINCE);
+    if stack
+        .stack
+        .requires
+        .as_deref()
+        .is_none_or(|r| crate::version_order(r) < link)
+    {
+        for name in stack
+            .services
+            .iter()
+            .filter(|(_, s)| s.link.is_some())
+            .map(|(n, _)| n)
+        {
+            out.push(Issue {
+                path: format!("services.{name}.link"),
+                message: format!(
+                    "a devstack before {v} does not know this key and fails on it with \"unknown field\": `requires = \"{v}\"` makes it ask to be updated instead",
+                    v = crate::LINK_SINCE
                 ),
             });
         }

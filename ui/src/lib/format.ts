@@ -69,11 +69,23 @@ export function useNow() {
 }
 
 /**
- * Where a browser opens a service: the daemon's `url`, or plain http for
+ * Where a browser opens a service: the link its running instance printed
+ * (`link = { from_log }`, ADR-0101), else the daemon's `url`, or plain http for
  * daemons before 0.2.1 (and for a `url` that is no web address, see `webUrl`).
  */
-export function serviceUrl(s: { url?: string | null; port: number | null }): string {
-  return webUrl(s.url) ?? `http://localhost:${s.port}`;
+export function serviceUrl(s: { link?: string | null; url?: string | null; port: number | null }): string {
+  return webUrl(s.link) ?? webUrl(s.url) ?? `http://localhost:${s.port}`;
+}
+
+/**
+ * A link as text on the page: without its scheme, and without its query or
+ * fragment, where a printed link carries its token (ADR-0101); the link itself
+ * keeps them.
+ */
+export function linkLabel(url: string): string {
+  const bare = url.replace(/^https?:\/\//, '');
+  const cut = bare.search(/[?#]/);
+  return cut < 0 ? bare : `${bare.slice(0, cut)}…`;
 }
 
 /**

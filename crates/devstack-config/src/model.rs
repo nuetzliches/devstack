@@ -993,6 +993,19 @@ pub struct Service {
     /// for every service with a `port`; a link is only ever opened by
     /// hand, never by the stack file.
     pub tunnel: Option<bool>,
+    /// The dashboard link of an instance, where the bare port is not enough
+    /// (a token or path printed at start, ADR-0101): read from its output.
+    pub link: Option<Link>,
+}
+
+/// `link` of a service: where its dashboard link comes from (ADR-0101).
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Link {
+    /// A regular expression over the instance's output lines; the first
+    /// capture group of the first match is the link (`http://` or
+    /// `https://`). Until it matches, the link is the plain port.
+    pub from_log: String,
 }
 
 /// `prepare` of a service: a command run in a copy of the source.

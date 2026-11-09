@@ -1296,6 +1296,45 @@ tunnel = false
 }
 
 #[test]
+fn link_from_log_takes_the_first_capture_group() {
+    use devstack_config::{LINK_SINCE, model::Link, validate::warnings};
+    let text = format!(
+        r#"{MINIMAL}[services.lab]
+run = "x"
+kind = "tool"
+link = {{ from_log = 'ui: (http://\S+)' }}
+"#
+    );
+    let mut s = from_str(&text, Path::new("t")).unwrap();
+    assert_eq!(
+        s.services["lab"].link,
+        Some(Link {
+            from_log: r"ui: (http://\S+)".into()
+        })
+    );
+    let w = warnings(&s);
+    assert!(
+        w.iter()
+            .any(|i| i.path == "services.lab.link" && i.message.contains(LINK_SINCE)),
+        "{w:?}"
+    );
+    s.stack.requires = Some(LINK_SINCE.into());
+    assert!(warnings(&s).is_empty());
+
+    let bad =
+        |link: &str| invalid(&format!("{MINIMAL}[services.lab]\nrun = \"x\"\n{link}\n")).join("\n");
+    let all = bad(r"link = { from_log = 'ui: http://\S+' }");
+    assert!(
+        all.contains("services.lab.link.from_log") && all.contains("capture group"),
+        "{all}"
+    );
+    let all = bad("link = { from_log = '(unclosed' }");
+    assert!(all.contains("not a regular expression"), "{all}");
+    let all = bad("kind = \"static\"\noutput = \"dist\"\nlink = { from_log = '(x)' }");
+    assert!(all.contains("static service has no output"), "{all}");
+}
+
+#[test]
 fn singleton_and_the_older_lanes_false_mean_the_same() {
     let svc = |extra: &str| {
         let s = from_str(

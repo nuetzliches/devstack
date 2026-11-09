@@ -160,7 +160,8 @@ export function shopSeed(now: number): MockStackSeed {
 export function crmSeed(now: number): MockStackSeed {
   const repo = '/home/dev/src/crm';
   const services: ServiceView[] = [
-    service({ name: 'gateway', kind: 'service', groups: ['edge'], port: 7000 }, repo, now),
+    // Its admin page's link with a token per start, from its output (`link = { from_log }`).
+    service({ name: 'gateway', kind: 'service', groups: ['edge'], port: 7000, link: 'http://localhost:7000/admin#token=4f1c9e07' }, repo, now),
     service({ name: 'contacts', kind: 'service', groups: ['core'], port: 7010 }, repo, now),
     service(
       {

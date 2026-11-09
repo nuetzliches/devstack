@@ -2140,6 +2140,82 @@ port = {port}
     s.ok(&["down"]);
 }
 
+/// A link the instance prints (`link = { from_log }`, ADR-0101) is its
+/// link: on its view and in `status`, moved from the instance's internal
+/// port to the service's, replaced when a new build takes the main slot,
+/// and never in the diagnostic log.
+#[test]
+fn a_services_link_comes_from_its_output_and_follows_the_instance() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    let port = free_port();
+    // The artifact's path differs per build: a token per instance.
+    std::fs::write(
+        s.file(),
+        format!(
+            r#"version = 1
+[stack]
+name = "linked"
+[services.app]
+{SITE_BUILD}run = "echo app ui: http://127.0.0.1:{{port}}/#token={{artifact}} && {long}"
+port = {port}
+link = {{ from_log = 'app ui: (http://\S+)' }}
+"#,
+            long = runs_for(600)
+        ),
+    )
+    .unwrap();
+    s.ok(&["up"]);
+    let link = || {
+        s.service_view("app")["link"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    };
+    let first = s.build_of("app");
+    assert!(
+        wait_for(|| link().contains(&first), Duration::from_secs(15)),
+        "{}\n{}",
+        link(),
+        s.diag()
+    );
+    let prefix = format!("http://127.0.0.1:{port}/#token=");
+    assert!(
+        link().starts_with(&prefix),
+        "on the service's port: {}",
+        link()
+    );
+    let status = s.ok(&["status"]);
+    assert!(
+        status.contains("LINK (printed by the service") && status.contains(&link()),
+        "{status}"
+    );
+
+    s.edit_site("<p>a new build, a new token</p>");
+    assert!(
+        wait_for(
+            || {
+                let b = s.build_of("app");
+                b != first && !b.is_empty() && link().contains(&b)
+            },
+            Duration::from_secs(60)
+        ),
+        "the new instance's link: {}\n{}",
+        link(),
+        s.diag()
+    );
+    assert!(link().starts_with(&prefix), "{}", link());
+    assert!(
+        !s.daemon_log().contains("#token="),
+        "the link stays out of the diagnostic log\n{}",
+        s.daemon_log()
+    );
+    s.ok(&["down"]);
+}
+
 /// A command that runs for about `s` seconds.
 fn runs_for(s: u32) -> String {
     if cfg!(windows) {

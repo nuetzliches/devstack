@@ -337,6 +337,8 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     let _watcher = watch::start(sup.clone());
     // A dev server's rebuilds, from its output (ADR-0042).
     sup.follow_rebuilds();
+    // A service's own link, from its output (ADR-0101).
+    sup.follow_links();
     // A warm lease on a node runs `prepare` only (ADR-0065 point 5).
     if warm::warm_lease() {
         warm::run_lane(sup.clone());

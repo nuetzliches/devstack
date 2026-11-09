@@ -33,6 +33,7 @@ mod handover;
 mod infra;
 pub use infra::ContainerTarget;
 mod lifecycle;
+mod links;
 mod ports;
 mod publiclink;
 mod rebuilds;
@@ -267,9 +268,13 @@ pub(crate) type LanePins = Box<dyn Fn(&str) -> Vec<String> + Send + Sync>;
 /// `extra` joins the line (a start's duration, its result and restarts).
 fn record(body: &EventBody, lane: &str, extra: Option<serde_json::Map<String, serde_json::Value>>) {
     // Lanes have log lines of their own (`lane_found`, `lane_started`, ...).
+    // A service's link may hold a token: it never leaves this machine (ADR-0101).
     if matches!(
         body,
-        EventBody::Snapshot { .. } | EventBody::Usage(_) | EventBody::Lanes { .. }
+        EventBody::Snapshot { .. }
+            | EventBody::Usage(_)
+            | EventBody::Lanes { .. }
+            | EventBody::ServiceLink { .. }
     ) {
         return;
     }
@@ -466,6 +471,7 @@ impl Supervisor {
                         last_action: None,
                         public_link: None,
                         public_link_available: svc.port.is_some() && svc.tunnel != Some(false),
+                        link: None,
                     },
                     main: None,
                     previous: None,

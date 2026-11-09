@@ -240,7 +240,7 @@ impl Supervisor {
 
 /// The complete lines `log` got since `pos`, at most [`CHUNK`] of it; a
 /// line not yet ended waits in `partial`.
-fn new_lines(log: &PathBuf, pos: &mut u64, partial: &mut String) -> Vec<String> {
+pub(super) fn new_lines(log: &PathBuf, pos: &mut u64, partial: &mut String) -> Vec<String> {
     let Ok(mut f) = std::fs::File::open(log) else {
         return Vec::new();
     };
