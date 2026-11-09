@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PoolSkillsState } from '@/api/types';
 import { mockActivity, mockHookDetails } from '@/api/mock/activity';
-import { firings, flowNodes, phases, recordsFor, recordText, refKey, toolsByUpstream } from './flow';
+import { firings, flowNodes, phases, recordText, refKey, toolsByUpstream } from './flow';
 
 const skill = (name: string, extra: Record<string, unknown> = {}) => ({
   name,
@@ -46,19 +46,11 @@ describe('the flow', () => {
     expect(prompt.groups.every((g) => g.pattern)).toBe(true);
   });
 
-  it('ties a hook to its firings and to the tool calls of its upstream', () => {
+  it('ties a hook to its firings', () => {
     const { records } = mockActivity();
     const nodes = flowNodes(state);
     const start = nodes.find((n) => n.key === 'default/core/work-session#0')!;
     expect(firings(records, start.key)).toHaveLength(2);
-    const mine = recordsFor(records, start);
-    expect(mine.some((r) => r.kind === 'tool' && r.tool === 'timetrack__start_timer')).toBe(true);
-    expect(mine.some((r) => r.kind === 'tool' && r.tool === 'status')).toBe(false);
-    // A lane's stop belongs to the lane-stop hook, its failed try too.
-    const laneStop = nodes.find((n) => n.hook.event === 'lane-stop')!;
-    const stops = recordsFor(records, laneStop).filter((r) => r.kind === 'tool' && r.tool === 'lane_stop');
-    expect(stops.map((r) => (r.kind === 'tool' ? r.ok : null))).toEqual([true, false]);
-    expect(recordsFor(records, null)).toHaveLength(records.length);
   });
 
   it('groups the tool calls by upstream, each call once however many skills name it, the rest last', () => {

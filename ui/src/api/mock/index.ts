@@ -21,6 +21,7 @@ import { crmSeed, docsSeed, failedReason, shopSeed, stamp } from './data';
 import { Abort, MockStack, sleep, type Listener } from './stack';
 import { MockPool } from './pool';
 import { mockActivity, mockHookDetails } from './activity';
+import { mockTimeline, mockTranscripts } from './timeline';
 import { autoShift, daemonPorts, hubPorts, refusal, type MockLane } from './ports';
 import { runningHolders } from '@/lib/shift';
 
@@ -660,6 +661,15 @@ export class MockTransport implements Transport {
     // Skill sets (ADR-0074).
     if (p === '/hub/skills' && method === 'GET') return json(200, this.hub.poolSkillState);
     if (p === '/hub/activity' && method === 'GET') return json(200, mockActivity(url.searchParams.get('session') ?? undefined));
+    if (p === '/hub/activity/timeline' && method === 'GET') {
+      const t = mockTimeline(url.searchParams.get('session') ?? '');
+      return t ? json(200, t) : json(404, { error: 'no such session' });
+    }
+    if (p === '/hub/activity/transcripts' && method === 'GET') return json(200, mockTranscripts);
+    if (p === '/hub/activity/transcripts' && method === 'PUT') {
+      mockTranscripts.enabled = Boolean(body?.enabled);
+      return json(200, mockTranscripts);
+    }
     if (p === '/hub/skills/sync' && method === 'POST') return json(200, this.hub.poolSkillState);
     const sa = /^\/hub\/skills\/agents\/([^/]+)$/.exec(p);
     if (sa && method === 'PUT') {

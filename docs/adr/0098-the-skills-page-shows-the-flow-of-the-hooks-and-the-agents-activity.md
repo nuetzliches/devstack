@@ -1,6 +1,6 @@
 # ADR-0098: The Skills page shows the flow of the hooks and the agents' activity; devstack keeps only what happened, on this machine, for a week
 
-- **Status:** Accepted (card in the pull request); built
+- **Status:** Accepted (card in the pull request); built; its activity list moved to a lane's timeline ([ADR-0099](0099-a-lane-shows-its-agents-sessions-in-time-from-their-transcripts-when-switched-on.md))
 - **Date:** 2026-11-06
 - **Deciders:** project owner
 - **Related:** [ADR-0094](0094-a-skill-carries-hooks-that-give-text-to-the-agents.md) (hooks, and its addenda: `lane-stop`, `session-end`, an upstream set up in the agent), [ADR-0069](0069-devstack-mcp-can-carry-the-tools-of-upstream-mcp-servers.md) (upstreams through `devstack mcp`), [ADR-0037](0037-pool-telemetry.md) (the pool's telemetry, which this is not part of); issue #482
@@ -94,3 +94,12 @@ event), `crates/devstack-hub/src/agenthooks.rs` (`record`),
 (`activity_get`, the `activity` event), `crates/devstack-hub/src/poolskills.rs`
 (`hook_details`), `ui/src/lib/flow.ts`, `ui/src/components/SkillsFlow.vue`,
 `ui/src/views/SkillsView.vue`, `docs/dashboard-api.md`.
+
+## Addendum 2026-11-09: the activity list moved to a lane
+
+[ADR-0099](0099-a-lane-shows-its-agents-sessions-in-time-from-their-transcripts-when-switched-on.md)
+shows a session in time on a lane's Activity (view Timeline), with the
+hooks and tool calls recorded here. The list beside the flow went there;
+the flow keeps, per hook, when it was given last, and the tool calls by
+skill. A hook's record now also keeps the path of the session's transcript
+(never its content), left out of `GET /hub/activity`.

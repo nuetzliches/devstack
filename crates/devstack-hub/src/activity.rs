@@ -56,6 +56,11 @@ pub enum Record {
         /// `session-end`: the end was kept for the next start.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         recorded: bool,
+        /// Where the agent keeps the session's transcript, as its hook's
+        /// input names it: the path only, never what is in it. The
+        /// timeline reads it when switched on (`transcript`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        transcript: Option<String>,
     },
     /// A tool call through `devstack mcp`.
     Tool {
@@ -251,6 +256,10 @@ pub fn view(
     let mut out = Vec::new();
     for r in records {
         let mut v = serde_json::to_value(r).expect("serialises");
+        // The transcript's path is the timeline's, not the page's.
+        if let Some(o) = v.as_object_mut() {
+            o.remove("transcript");
+        }
         // A record without a session of its own (a tool call, a lane's
         // stop): the latest session that started in its tree before it.
         let own = matches!(
@@ -298,6 +307,9 @@ pub fn view(
     }
     if out.len() > MAX {
         out.drain(..out.len() - MAX);
+    }
+    if let Some(t) = tree {
+        sessions.retain(|s| s.tree == t);
     }
     sessions.sort_by_key(|s| std::cmp::Reverse(s.last));
     View {
@@ -361,6 +373,7 @@ mod tests {
             tree: tree.into(),
             hooks: Vec::new(),
             recorded: event == "session-end",
+            transcript: None,
         }
     }
 
@@ -441,6 +454,7 @@ mod tests {
                 tree: "/a".into(),
                 hooks: Vec::new(),
                 recorded: false,
+                transcript: None,
             },
         ];
         let v = view(&records, None, None, None, &prefixes, &index);

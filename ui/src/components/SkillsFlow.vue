@@ -1,31 +1,23 @@
 <script setup lang="ts">
 // The Skills page's flow (#482): when the hooks of the skills switched on give
-// their text to the agents, and beside it what devstack did for the agent
-// (each hook it gave, each tool call through `devstack mcp`). A click on a
-// hook narrows the activity to it. The activity holds no prompt, text,
-// argument or answer: only what happened.
-import { computed, ref } from 'vue';
+// their text to the agents, when each was given last, and the tool calls
+// through `devstack mcp` by the skill whose upstream they use. The sessions
+// themselves, in time, are on a lane's Activity (view Timeline).
+import { computed } from 'vue';
 import type { ActivityRecord, ActivityView, PoolSkillsState } from '@/api/types';
-import { conditionText, firings, refKey, flowNodes, onceText, phases, recordsFor, recordText, sessionLabel, toolsByUpstream, type FlowNode } from '@/lib/flow';
+import { conditionText, firings, flowNodes, onceText, phases, toolsByUpstream, type FlowNode } from '@/lib/flow';
 import { ago } from '@/lib/format';
 
 const props = defineProps<{
   state: PoolSkillsState | null;
   activity: ActivityView | null;
-  /** The session shown (`''`: every one). */
-  session: string;
   now: number;
 }>();
-const emit = defineEmits<{ (e: 'session', id: string): void }>();
 
 const nodes = computed(() => flowNodes(props.state));
 const flow = computed(() => phases(nodes.value));
 const records = computed<ActivityRecord[]>(() => props.activity?.records ?? []);
-const selected = ref<string | null>(null);
-const picked = computed<FlowNode | null>(() => nodes.value.find((n) => n.key === selected.value) ?? null);
-const shown = computed(() => recordsFor(records.value, picked.value).slice(0, 200));
 const tools = computed(() => toolsByUpstream(records.value));
-const skillOf = (key: string) => nodes.value.find((n) => n.key === key)?.skill;
 const colorOf = (skill: string | null | undefined) => nodes.value.find((n) => n.skill === skill)?.color;
 /** Skills with hooks that are off or whose set is not accepted: not in the flow. */
 const left = computed(() => (props.state?.sets ?? []).flatMap((s) => s.skills.filter((k) => k.hooks && (s.state !== 'accepted' || k.enabled === false)).map((k) => k.name)));
@@ -37,15 +29,6 @@ const noDetails = computed(() =>
 function last(n: FlowNode): string {
   const f = firings(records.value, n.key)[0];
   return f ? `given ${ago(f.at, props.now)}` : 'not given yet';
-}
-/** A hook record in its skill's colour; a tool call square. */
-function dotClass(r: ActivityRecord): string {
-  if (r.kind === 'tool') return 'tool';
-  const c = r.hooks[0] ? colorOf(skillOf(refKey(r.hooks[0]))) : undefined;
-  return c === undefined ? '' : `c${c}`;
-}
-function pick(n: FlowNode) {
-  selected.value = selected.value === n.key ? null : n.key;
 }
 const eventWords: Record<FlowNode['hook']['event'], string> = {
   'session-start': 'at the start of a session',
@@ -78,12 +61,10 @@ const eventWords: Record<FlowNode['hook']['event'], string> = {
                   :key="n.key"
                   type="button"
                   class="node"
-                  :class="[`c${n.color}`, { off: !n.hook.applies, picked: selected === n.key }]"
-                  :aria-pressed="selected === n.key"
+                  :class="[`c${n.color}`, { off: !n.hook.applies }]"
                   :aria-describedby="`tip-${n.key}`"
                   data-testid="skills-flow-node"
                   :data-key="n.key"
-                  @click="pick(n)"
                 >
                   <strong>{{ n.skill }}</strong>
                   <span class="faint small">{{ n.hook.upstream ? `needs ${n.hook.upstream}` : 'always' }}</span>
@@ -101,6 +82,7 @@ const eventWords: Record<FlowNode['hook']['event'], string> = {
               </div>
             </div>
           </div>
+          <p class="faint small left">The agents' sessions in time, with what devstack gave and the calls through it: a lane's Activity, view Timeline.</p>
           <p v-if="left.length" class="faint small left">Off, or in a set not accepted, and so not in the flow: {{ left.join(', ') }}.</p>
 
           <div v-if="tools.length" class="tools" data-testid="skills-flow-tools">
@@ -121,31 +103,6 @@ const eventWords: Record<FlowNode['hook']['event'], string> = {
         </div>
       </section>
 
-      <section class="card activity">
-        <header class="card-header">
-          <h2>Activity</h2>
-          <button v-if="picked" type="button" class="btn btn-ghost btn-sm" data-testid="skills-flow-all" @click="selected = null">all</button>
-        </header>
-        <div class="card-body">
-          <select class="input input-sm" :value="session" data-testid="skills-flow-session" @change="emit('session', ($event.target as HTMLSelectElement).value)">
-            <option value="">Every session</option>
-            <option v-for="s in activity?.sessions ?? []" :key="`${s.agent}/${s.session}`" :value="s.session">{{ sessionLabel(s) }}{{ s.ended ? ' (ended)' : '' }}</option>
-          </select>
-          <p v-if="picked" class="small picked-note">Only {{ picked.skill }}, hook {{ picked.hook.index + 1 }}</p>
-          <p v-if="!shown.length" class="faint small" data-testid="skills-flow-quiet">Nothing recorded{{ picked ? ' for this hook' : '' }} yet.</p>
-          <ol class="records">
-            <li v-for="(r, i) in shown" :key="i" class="record" :class="{ failed: r.kind === 'tool' && !r.ok }" data-testid="skills-flow-record">
-              <span class="t faint small" :title="new Date(r.at).toLocaleString()">{{ new Date(r.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
-              <span class="dot" :class="dotClass(r)" />
-              <span class="what">
-                <span>{{ recordText(r, skillOf).title }}</span>
-                <span class="faint small">{{ recordText(r, skillOf).detail }}</span>
-              </span>
-            </li>
-          </ol>
-          <p class="faint small foot">Only what happened: never a prompt, a hook's text, a tool's arguments or its answer. Kept on this machine for a week.</p>
-        </div>
-      </section>
     </div>
   </div>
 </template>
@@ -153,14 +110,9 @@ const eventWords: Record<FlowNode['hook']['event'], string> = {
 <style scoped>
 .flow-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   align-items: start;
-}
-@media (max-width: 1100px) {
-  .flow-grid {
-    grid-template-columns: 1fr;
-  }
 }
 .phases {
   display: grid;
@@ -223,9 +175,6 @@ const eventWords: Record<FlowNode['hook']['event'], string> = {
 .node:hover,
 .node:focus-visible {
   border-color: var(--c);
-}
-.node.picked {
-  box-shadow: 0 0 0 1px var(--c);
 }
 /* Dimmed by its parts, not `opacity` on the node: the tooltip inside it
    would take the opacity too and let the page show through. */
@@ -333,53 +282,5 @@ const eventWords: Record<FlowNode['hook']['event'], string> = {
 }
 .warn-text {
   color: var(--warn-text);
-}
-.activity select {
-  width: 100%;
-  margin-bottom: 6px;
-}
-.picked-note {
-  margin: 0 0 6px;
-}
-.records {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  max-height: 560px;
-  overflow: auto;
-}
-.record {
-  display: grid;
-  grid-template-columns: 40px 12px 1fr;
-  gap: 6px;
-  align-items: start;
-  padding: 5px 4px;
-  border-radius: 6px;
-}
-.record:hover {
-  background: var(--surface-hover);
-}
-.record.failed .what {
-  color: var(--danger-text);
-}
-.dot {
-  width: 9px;
-  height: 9px;
-  margin-top: 4px;
-  border-radius: 50%;
-  background: var(--c, var(--text-faint));
-}
-.dot.tool {
-  background: var(--warn);
-  border-radius: 2px;
-}
-.what {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.foot {
-  margin: 10px 0 0;
 }
 </style>

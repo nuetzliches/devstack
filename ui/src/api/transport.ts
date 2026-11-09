@@ -130,6 +130,10 @@ export const paths = {
     const s = p.toString();
     return `/hub/activity${s ? `?${s}` : ''}`;
   },
+  /** A session in time: its turns, calls and marks. */
+  timeline: (session: string, agent: string) => `/hub/activity/timeline?${new URLSearchParams({ session, agent }).toString()}`,
+  /** Whether the hub reads the agents' transcripts (off by default). */
+  transcripts: '/hub/activity/transcripts',
   /** Every registered stack's ports and their overlaps (ADR-0082). */
   hubPorts: '/hub/ports',
   skillsSync: '/hub/skills/sync',

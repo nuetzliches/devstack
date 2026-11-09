@@ -93,17 +93,6 @@ export function firings(records: ActivityRecord[], key: string): Extract<Activit
   return records.filter((r): r is Extract<ActivityRecord, { kind: 'hook' }> => r.kind === 'hook' && r.hooks.some((h) => refKey(h) === key)).sort((a, b) => b.at - a.at);
 }
 
-/** The records that belong to a hook: its firings, and the tool calls of its skill's upstream (or a lane's stop, for `lane-stop`). All without one. Newest first. */
-export function recordsFor(records: ActivityRecord[], node: FlowNode | null): ActivityRecord[] {
-  const all = [...records].sort((a, b) => b.at - a.at);
-  if (!node) return all;
-  return all.filter((r) => {
-    if (r.kind === 'hook') return r.hooks.some((h) => refKey(h) === node.key);
-    if (node.hook.event === 'lane-stop' && r.tool === 'lane_stop') return true;
-    return !!r.skills?.includes(node.skill);
-  });
-}
-
 export type ToolGroup = {
   /** The pool's upstream the tools belong to; `null`: devstack's own, or an upstream no skill names. */
   upstream: string | null;

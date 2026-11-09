@@ -312,7 +312,8 @@ struct Input {
     /// Why a session starts: `startup`, `resume`, `clear`, `compact`.
     #[serde(default)]
     source: Option<String>,
-    /// The session's transcript (`session-end`): named at the next start.
+    /// The session's transcript: named at the next start (`session-end`),
+    /// and recorded for the timeline (its path only).
     #[serde(default, alias = "transcriptPath")]
     transcript_path: Option<String>,
 }
@@ -483,6 +484,7 @@ fn record(
         tree: cwd.map(tree_of).unwrap_or_default(),
         hooks,
         recorded,
+        transcript: input.transcript_path.clone().filter(|s| !s.is_empty()),
     };
     if let Err(e) = crate::activity::write(at.state, &r) {
         (at.warn)(e);
