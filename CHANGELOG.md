@@ -11,6 +11,16 @@ and listed with their assets on the
 
 ### Added
 
+- **devstack's MCP server for every folder.** The MCP upstreams page has a
+  setting per coding agent: devstack's MCP server per repository (as
+  before) or for you, in every folder. Then the hub writes one entry
+  `devstack` into the agent's own configuration (Claude Code, Codex,
+  Cursor), so its tools and the upstreams' are there in repositories
+  without a stack too, and takes it out when you switch back; the rest of
+  the file stays as it was (ADR-0100). A repository whose agent loads the
+  server twice, under two names, shows "MCP twice", and `devstack doctor`
+  says in any folder whether the server is registered there (#492).
+
 - **The Skills page shows what happens for your agent.** A new tab, Flow,
   draws the hooks of the skills switched on by when they give their text: a
   session starts, a prompt matches, a lane stops, a session ends. Hovering a

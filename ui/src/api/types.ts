@@ -575,7 +575,29 @@ export type UpgradeState = {
  * `GET /hub/stacks/{id}/mcp`: the agent configuration files (the project's,
  * then the user's) that register `devstack mcp` for the repository.
  */
-export type McpState = { registered: boolean; files: string[] };
+/** An entry that runs `devstack mcp` beside another one of the same agent under another name: its tools load twice. */
+export type McpDouble = { agent: string; file: string; name: string };
+
+export type McpState = { registered: boolean; files: string[]; doubles?: McpDouble[] };
+
+/** Where devstack's MCP server is registered for a coding agent (`/hub/mcp/scope`). */
+export type McpScope = 'repository' | 'user';
+
+export type McpScopeAgent = {
+  id: string;
+  name: string;
+  scope: McpScope;
+  /** Its user configuration. */
+  file: string | null;
+  /** Its configuration's folder is there. */
+  installed: boolean;
+  /** Its user configuration registers `devstack mcp`, by the hub or not. */
+  registered: boolean;
+  /** Why the entry could not be written or removed. */
+  error?: string;
+};
+
+export type McpScopeView = { agents: McpScopeAgent[] };
 
 export type CommandView = { name: string; description: string; confirm: string | null; requires: string[] };
 

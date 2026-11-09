@@ -74,6 +74,8 @@ export const paths = {
   fetch: (stack: string) => `/hub/stacks/${enc(stack)}/fetch`,
   upgrade: (stack: string) => `/hub/stacks/${enc(stack)}/upgrade`,
   mcp: (stack: string) => `/hub/stacks/${enc(stack)}/mcp`,
+  /** Where devstack's MCP server is registered for each coding agent. */
+  mcpScope: '/hub/mcp/scope',
   pool: '/hub/pool',
   upstreams: '/hub/upstreams',
   upstream: (name: string) => `/hub/upstreams/${enc(name)}`,

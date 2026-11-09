@@ -1,7 +1,10 @@
 //! Whether a coding agent finds devstack's MCP server (`devstack mcp`) for a
 //! repository: an entry in the project's agent configuration, or in the
 //! user's. Read only: the dashboard offers a prompt where none is found, and
-//! the agent writes the entry (`Prompt::Mcp`).
+//! the agent writes the entry (`Prompt::Mcp`); the user entry for every
+//! folder is the hub's to write once the user chose so (`crate::mcpscope`).
+//! Two entries that run `devstack mcp` under different names load it twice
+//! ([`doubles`]).
 
 use std::path::{Path, PathBuf};
 
@@ -14,20 +17,20 @@ enum Format {
     CodexToml,
 }
 
-/// The project's files, relative to the repository: Claude Code, VS Code,
-/// Cursor, Codex.
-const PROJECT: &[(&str, Format)] = &[
-    (".mcp.json", Format::Json("mcpServers")),
-    (".vscode/mcp.json", Format::Json("servers")),
-    (".cursor/mcp.json", Format::Json("mcpServers")),
-    (".codex/config.toml", Format::CodexToml),
+/// The project's files, relative to the repository, and the agent that
+/// reads each: Claude Code, VS Code, Cursor, Codex.
+const PROJECT: &[(&str, Format, &str)] = &[
+    (".mcp.json", Format::Json("mcpServers"), "Claude Code"),
+    (".vscode/mcp.json", Format::Json("servers"), "VS Code"),
+    (".cursor/mcp.json", Format::Json("mcpServers"), "Cursor"),
+    (".codex/config.toml", Format::CodexToml, "Codex"),
 ];
 
 /// The user's files, relative to the home folder.
-const USER: &[(&str, Format)] = &[
-    (".claude.json", Format::Json("mcpServers")),
-    (".cursor/mcp.json", Format::Json("mcpServers")),
-    (".codex/config.toml", Format::CodexToml),
+const USER: &[(&str, Format, &str)] = &[
+    (".claude.json", Format::Json("mcpServers"), "Claude Code"),
+    (".cursor/mcp.json", Format::Json("mcpServers"), "Cursor"),
+    (".codex/config.toml", Format::CodexToml, "Codex"),
 ];
 
 /// The files that register `devstack mcp` for `repo`: the project's first,
@@ -40,19 +43,85 @@ pub fn registered(repo: &Path) -> Vec<PathBuf> {
 fn registered_with(repo: &Path, home: Option<&Path>) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = PROJECT
         .iter()
-        .map(|(rel, f)| (repo.join(rel), *f))
+        .map(|(rel, f, _)| (repo.join(rel), *f))
         .filter(|(p, f)| in_file(p, *f, None))
         .map(|(p, _)| p)
         .collect();
     if let Some(home) = home {
         found.extend(
             USER.iter()
-                .map(|(rel, f)| (home.join(rel), *f))
+                .map(|(rel, f, _)| (home.join(rel), *f))
                 .filter(|(p, f)| in_file(p, *f, Some(repo)))
                 .map(|(p, _)| p),
         );
     }
     found
+}
+
+/// The user's own files that register `devstack mcp` for every folder
+/// (their top-level servers, not one project's).
+#[cfg(test)]
+fn for_every_folder_in(home: &Path) -> Vec<PathBuf> {
+    USER.iter()
+        .map(|(rel, f, _)| (home.join(rel), *f))
+        .filter(|(p, f)| !names_in(p, *f, None).is_empty())
+        .map(|(p, _)| p)
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn registered_in_home(home: &Path) -> bool {
+    !for_every_folder_in(home).is_empty()
+}
+
+/// An entry that runs `devstack mcp` beside another one for the same agent
+/// under a different name: the agent loads the server twice, every tool
+/// doubled.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Double {
+    pub agent: &'static str,
+    pub file: PathBuf,
+    pub name: String,
+}
+
+/// The entries that double `devstack mcp` for an agent in `repo`: per agent,
+/// when its files name it under more than one name, every one not named
+/// `devstack` (the name the hub writes).
+pub fn doubles(repo: &Path) -> Vec<Double> {
+    doubles_with(repo, home().as_deref())
+}
+
+fn doubles_with(repo: &Path, home: Option<&Path>) -> Vec<Double> {
+    let mut all: Vec<Double> = Vec::new();
+    let mut add = |agent: &'static str, file: PathBuf, format: Format, repo: Option<&Path>| {
+        for name in names_in(&file, format, repo) {
+            all.push(Double {
+                agent,
+                file: file.clone(),
+                name,
+            });
+        }
+    };
+    for (rel, f, agent) in PROJECT {
+        add(agent, repo.join(rel), *f, None);
+    }
+    if let Some(home) = home {
+        for (rel, f, agent) in USER {
+            add(agent, home.join(rel), *f, Some(repo));
+        }
+    }
+    let mut out = Vec::new();
+    for d in &all {
+        let names: std::collections::BTreeSet<&str> = all
+            .iter()
+            .filter(|x| x.agent == d.agent)
+            .map(|x| x.name.as_str())
+            .collect();
+        if names.len() > 1 && d.name != crate::mcpscope::NAME && !out.contains(d) {
+            out.push(d.clone());
+        }
+    }
+    out
 }
 
 fn home() -> Option<PathBuf> {
@@ -70,46 +139,68 @@ fn in_file(file: &Path, format: Format, repo: Option<&Path>) -> bool {
     let Ok(text) = std::fs::read_to_string(file) else {
         return false;
     };
+    let parses = match format {
+        Format::Json(_) => serde_json::from_str::<serde_json::Value>(&text).is_ok(),
+        Format::CodexToml => text.parse::<toml::Table>().is_ok(),
+    };
+    if !parses {
+        return text.contains("devstack");
+    }
+    !names_in(file, format, repo).is_empty()
+}
+
+/// The names under which `file` runs `devstack mcp`: its servers, and with
+/// `repo` Claude Code's entries for that project. A file that does not
+/// parse names none.
+fn names_in(file: &Path, format: Format, repo: Option<&Path>) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(file) else {
+        return Vec::new();
+    };
     match format {
-        Format::Json(key) => match serde_json::from_str::<serde_json::Value>(&text) {
-            Ok(v) => {
-                let mut tables = vec![v.get(key)];
-                if let (Some(repo), Some(projects)) =
-                    (repo, v.get("projects").and_then(|p| p.as_object()))
-                {
-                    tables.extend(
-                        projects
-                            .iter()
-                            .filter(|(k, _)| same_path(k, repo))
-                            .map(|(_, p)| p.get(key)),
-                    );
-                }
-                tables
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|t| t.as_object())
-                    .flat_map(|t| t.values())
-                    .any(|s| runs_devstack_mcp(s.get("command"), s.get("args")))
+        Format::Json(key) => {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+                return Vec::new();
+            };
+            let mut tables = vec![v.get(key)];
+            if let (Some(repo), Some(projects)) =
+                (repo, v.get("projects").and_then(|p| p.as_object()))
+            {
+                tables.extend(
+                    projects
+                        .iter()
+                        .filter(|(k, _)| same_path(k, repo))
+                        .map(|(_, p)| p.get(key)),
+                );
             }
-            Err(_) => text.contains("devstack"),
-        },
-        Format::CodexToml => match text.parse::<toml::Table>() {
-            Ok(t) => t
-                .get("mcp_servers")
+            tables
+                .into_iter()
+                .flatten()
+                .filter_map(|t| t.as_object())
+                .flat_map(|t| t.iter())
+                .filter(|(_, s)| runs_devstack_mcp(s.get("command"), s.get("args")))
+                .map(|(n, _)| n.clone())
+                .collect()
+        }
+        Format::CodexToml => {
+            let Ok(t) = text.parse::<toml::Table>() else {
+                return Vec::new();
+            };
+            t.get("mcp_servers")
                 .and_then(|s| s.as_table())
-                .is_some_and(|s| {
-                    s.values().any(|v| {
-                        let json = |k| v.get(k).and_then(|x| serde_json::to_value(x).ok());
-                        runs_devstack_mcp(json("command").as_ref(), json("args").as_ref())
-                    })
-                }),
-            Err(_) => text.contains("devstack"),
-        },
+                .into_iter()
+                .flat_map(|s| s.iter())
+                .filter(|(_, v)| {
+                    let json = |k| v.get(k).and_then(|x| serde_json::to_value(x).ok());
+                    runs_devstack_mcp(json("command").as_ref(), json("args").as_ref())
+                })
+                .map(|(n, _)| n.clone())
+                .collect()
+        }
     }
 }
 
 /// `command` is devstack (a path to it, `.exe` or not), `args` start with `mcp`.
-fn runs_devstack_mcp(
+pub(crate) fn runs_devstack_mcp(
     command: Option<&serde_json::Value>,
     args: Option<&serde_json::Value>,
 ) -> bool {
@@ -209,6 +300,37 @@ mod tests {
             &format!(r#"{{ "mcpServers": {{ "devstack": {entry} }} }}"#),
         );
         assert_eq!(registered_with(repo.path(), Some(home.path())), [claude]);
+    }
+
+    #[test]
+    fn two_names_for_one_agent_are_a_double() {
+        let repo = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let entry = r#"{ "command": "devstack", "args": ["mcp"] }"#;
+        write(
+            &home.path().join(".claude.json"),
+            &format!(r#"{{ "mcpServers": {{ "devstack": {entry} }} }}"#),
+        );
+        assert!(doubles_with(repo.path(), Some(home.path())).is_empty());
+        // The same name in the project: one server.
+        write(
+            &repo.path().join(".mcp.json"),
+            &format!(r#"{{ "mcpServers": {{ "devstack": {entry} }} }}"#),
+        );
+        assert!(doubles_with(repo.path(), Some(home.path())).is_empty());
+        // Another name: loaded twice. Another agent's file is no double.
+        write(
+            &repo.path().join(".mcp.json"),
+            &format!(r#"{{ "mcpServers": {{ "ds": {entry} }} }}"#),
+        );
+        write(
+            &repo.path().join(".vscode/mcp.json"),
+            &format!(r#"{{ "servers": {{ "ds2": {entry} }} }}"#),
+        );
+        let d = doubles_with(repo.path(), Some(home.path()));
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!((d[0].agent, d[0].name.as_str()), ("Claude Code", "ds"));
+        assert_eq!(for_every_folder_in(home.path()).len(), 1);
     }
 
     #[test]

@@ -22,6 +22,16 @@ import { Abort, MockStack, sleep, type Listener } from './stack';
 import { MockPool } from './pool';
 import { mockActivity, mockHookDetails } from './activity';
 import { mockTimeline, mockTranscripts } from './timeline';
+import type { McpScope, McpScopeView } from '../types';
+
+/** The agents and where devstack's MCP server is registered for them: Cursor is not installed here. */
+const mockMcpScope: McpScopeView = {
+  agents: [
+    { id: 'claude-code', name: 'Claude Code', scope: 'repository', file: 'C:\\Users\\dev\\.claude.json', installed: true, registered: false },
+    { id: 'codex', name: 'Codex', scope: 'repository', file: 'C:\\Users\\dev\\.codex\\config.toml', installed: true, registered: false },
+    { id: 'cursor', name: 'Cursor', scope: 'repository', file: 'C:\\Users\\dev\\.cursor\\mcp.json', installed: false, registered: false },
+  ],
+};
 import { autoShift, daemonPorts, hubPorts, refusal, type MockLane } from './ports';
 import { runningHolders } from '@/lib/shift';
 
@@ -661,6 +671,16 @@ export class MockTransport implements Transport {
     // Skill sets (ADR-0074).
     if (p === '/hub/skills' && method === 'GET') return json(200, this.hub.poolSkillState);
     if (p === '/hub/activity' && method === 'GET') return json(200, mockActivity(url.searchParams.get('session') ?? undefined));
+    if (p === '/hub/mcp/scope' && method === 'GET') return json(200, mockMcpScope);
+    if (p === '/hub/mcp/scope' && method === 'PUT') {
+      const asked = (body?.agents ?? {}) as Record<string, McpScope>;
+      for (const a of mockMcpScope.agents) {
+        if (!(a.id in asked)) continue;
+        a.scope = asked[a.id];
+        a.registered = a.scope === 'user';
+      }
+      return json(200, mockMcpScope);
+    }
     if (p === '/hub/activity/timeline' && method === 'GET') {
       const t = mockTimeline(url.searchParams.get('session') ?? '');
       return t ? json(200, t) : json(404, { error: 'no such session' });
@@ -924,8 +944,10 @@ export class MockTransport implements Transport {
     }
     // The first stack registers devstack's MCP server, the others do not.
     if (rest === '/mcp' && method === 'GET') {
-      const registered = stack === hub.stacks[0];
-      return json(200, { registered, files: registered ? [`${stack.entry.repo}\\.mcp.json`] : [] });
+      const registered = stack === hub.stacks[0] || mockMcpScope.agents.some((a) => a.scope === 'user');
+      // The first stack's agent has it a second time, under another name.
+      const doubles = stack === hub.stacks[0] ? [{ agent: 'Claude Code', file: `${stack.entry.repo}\\.mcp.json`, name: 'ds' }] : [];
+      return json(200, { registered, files: registered ? [`${stack.entry.repo}\\.mcp.json`] : [], doubles });
     }
     if (rest === '/up' && method === 'POST') {
       if (stack.running) return empty(202);

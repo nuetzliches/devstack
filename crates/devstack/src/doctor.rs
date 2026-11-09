@@ -86,6 +86,7 @@ pub fn run(stack_file: &Path) -> Vec<Finding> {
     out.extend(path_entry());
     out.extend(agent_hooks());
     out.extend(upstreams_direct());
+    out.extend(mcp_registration(stack_file));
     #[cfg(windows)]
     out.extend(dev_drive(stack_file));
     out
@@ -660,6 +661,51 @@ fn agent_hooks() -> Vec<Finding> {
             "agent hooks: the agents run `devstack hook`, but `devstack` is not on PATH",
         ));
     }
+    out
+}
+
+/// Whether coding agents find devstack's MCP server in this folder (the
+/// stack's repository, or the folder `doctor` runs in without one, #492),
+/// and an entry that doubles it under another name.
+fn mcp_registration(stack_file: &Path) -> Vec<Finding> {
+    let folder = stack_file
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::current_dir().ok());
+    let Some(folder) = folder else {
+        return Vec::new();
+    };
+    let files = devstack_hub::mcp::registered(&folder);
+    let mut out = vec![if let Some(first) = files.first() {
+        f(
+            Level::Ok,
+            format!(
+                "devstack's MCP server is registered for {} ({})",
+                folder.display(),
+                first.display()
+            ),
+        )
+    } else {
+        f(
+            Level::Info,
+            format!(
+                "devstack's MCP server is not registered for {}: agents here have no devstack tools (no pool upstreams, no hooks bound to them); register it for every folder in the dashboard (MCP upstreams), or add {{ \"devstack\": {{ \"command\": \"devstack\", \"args\": [\"mcp\"] }} }} to the repository's .mcp.json",
+                folder.display()
+            ),
+        )
+    }];
+    out.extend(devstack_hub::mcp::doubles(&folder).into_iter().map(|d| {
+        f(
+            Level::Warn,
+            format!(
+                "{} loads devstack's MCP server twice: the entry `{}` in {} runs it under another name than `devstack`; remove one, or name it `devstack`",
+                d.agent,
+                d.name,
+                d.file.display()
+            ),
+        )
+    }));
     out
 }
 
