@@ -39,8 +39,9 @@ pub mod agenthooks;
 pub mod agentmcp;
 mod branches;
 mod guests;
-mod mcp;
+pub mod mcp;
 mod mcpclient;
+pub mod mcpscope;
 mod notice;
 mod notify;
 mod open;
@@ -665,6 +666,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/pool/skills/{name}", delete(pool::skill_remove))
         .route("/hub/skills", get(poolskills::get))
         .route("/hub/activity", get(activity_get))
+        .route("/hub/mcp/scope", get(mcp_scope_get).put(mcp_scope_put))
         .route("/hub/activity/timeline", get(timeline_get))
         .route(
             "/hub/activity/transcripts",
@@ -1920,14 +1922,62 @@ async fn stack_mcp(State(s): State<AppState>, Path(id): Path<String>) -> Respons
     let Some(e) = entry(&s, &id) else {
         return err(StatusCode::NOT_FOUND, "no such stack");
     };
-    match tokio::task::spawn_blocking(move || mcp::registered(&e.repo)).await {
-        Ok(files) => Json(serde_json::json!({
+    match tokio::task::spawn_blocking(move || (mcp::registered(&e.repo), mcp::doubles(&e.repo)))
+        .await
+    {
+        Ok((files, doubles)) => Json(serde_json::json!({
             "registered": !files.is_empty(),
             "files": files,
+            "doubles": doubles,
         }))
         .into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
+}
+
+/// `GET /hub/mcp/scope`: where devstack's MCP server is registered for
+/// each coding agent: per repository, or for the user in every folder
+/// (#492).
+async fn mcp_scope_get() -> Response {
+    match tokio::task::spawn_blocking(|| mcpscope::view(&state_dir())).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct McpScopeBody {
+    agents: std::collections::BTreeMap<String, mcpscope::Scope>,
+}
+
+/// `PUT /hub/mcp/scope {agents: {<id>: "repository"|"user"}}`: write or
+/// remove the user entry of those agents; the agents and why one failed.
+async fn mcp_scope_put(Json(b): Json<McpScopeBody>) -> Response {
+    match tokio::task::spawn_blocking(move || mcpscope::set(&state_dir(), &b.agents)).await {
+        Ok(Ok(v)) => {
+            devstack_daemon::diag::info(
+                "mcp_scope",
+                serde_json::json!({ "agents": scopes_of(&v) }),
+            );
+            Json(v).into_response()
+        }
+        Ok(Err(e)) => err(StatusCode::BAD_REQUEST, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// The agents' scopes, for the diagnostic log.
+fn scopes_of(v: &mcpscope::View) -> serde_json::Value {
+    v.agents
+        .iter()
+        .map(|a| {
+            (
+                a.id.to_string(),
+                serde_json::to_value(a.scope).expect("serialises"),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into()
 }
 
 #[derive(Deserialize)]

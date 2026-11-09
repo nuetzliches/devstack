@@ -16,6 +16,7 @@ import { line, words } from '@/lib/commandLine';
 import { ownServerAdvice, ownServerWhere } from '@/lib/upstreams';
 import { useUi } from '@/stores/ui';
 import Icon from '@/components/icons/Icon.vue';
+import McpScope from '@/components/McpScope.vue';
 
 const ui = useUi();
 const state = ref<McpUpstreams | null>(null);
@@ -409,6 +410,7 @@ function how(u: McpUpstream): string {
         </ul>
       </div>
     </section>
+    <McpScope />
   </div>
 </template>
 

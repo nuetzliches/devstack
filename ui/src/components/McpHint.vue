@@ -29,6 +29,11 @@ const hidden = computed(() => {
 });
 // Without a stack file the setup comes first; its prompt asks about MCP too.
 const shown = computed(() => stack.mcp?.registered === false && !hidden.value && !stack.readOnly && !stack.sharedLane && !stack.fileProblem);
+// An entry under another name than `devstack` beside it: every tool twice.
+const doubles = computed(() => (stack.readOnly ? [] : (stack.mcp?.doubles ?? [])));
+const doublesText = computed(() =>
+  doubles.value.map((d) => `${d.agent} loads devstack's MCP server twice: the entry "${d.name}" in ${d.file} runs it under another name than "devstack". Remove one, or name it "devstack".`).join('\n'),
+);
 
 const root = ref<HTMLElement | null>(null);
 const trigger = ref<HTMLButtonElement | null>(null);
@@ -48,6 +53,7 @@ function dismiss() {
 </script>
 
 <template>
+  <span v-if="doubles.length" class="pill hint warn" :title="doublesText" data-testid="mcp-double"><Icon name="alert" :size="12" /> MCP twice</span>
   <div v-if="shown" ref="root" class="picker" data-testid="mcp-hint">
     <button
       ref="trigger"
@@ -65,6 +71,10 @@ function dismiss() {
         <strong>Coding agents do not find devstack's MCP server here.</strong>
         With it they read the stack's status and logs and restart services through tools, not the CLI: an entry such as
         <code>{ "devstack": { "command": "devstack", "args": ["mcp"] } }</code> in <code>.mcp.json</code> (or VS Code's, Cursor's, Codex's file).
+      </p>
+      <p class="muted">
+        Or register it once for every folder, repositories without a stack included:
+        <RouterLink :to="{ name: 'upstreams' }" data-testid="mcp-hint-scope" @click="close">MCP upstreams</RouterLink>.
       </p>
       <p class="muted">A coding agent adds it next to what is there, for the agents you use:</p>
       <AgentPrompt v-if="stack.id" kind="mcp" :target="{ stack: stack.id }" />
@@ -89,6 +99,12 @@ function dismiss() {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+.hint.warn {
+  border-style: solid;
+  border-color: var(--warn);
+  color: var(--warn-text);
+  cursor: help;
 }
 .hint:hover,
 .hint[aria-expanded='true'] {

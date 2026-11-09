@@ -165,7 +165,9 @@ devstack passes their instructions on in its own, within what the client keeps
 (4096 characters); one shortened or left out there says so, and the tool
 `instructions` with its `prefix` returns its full text.
 Register it once (project `.mcp.json` or user configuration; the dashboard
-shows *no MCP* in the stack's head while neither has it):
+shows *no MCP* in the stack's head while neither has it, and on *MCP
+upstreams* the user can have the hub register it for every folder; `devstack
+doctor` says whether it is registered where you are):
 
 ```json
 { "mcpServers": { "devstack": { "command": "devstack", "args": ["mcp"] } } }

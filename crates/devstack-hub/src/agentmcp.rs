@@ -243,11 +243,11 @@ pub fn codex(config: &Path) -> Vec<Direct> {
         .collect()
 }
 
-fn claude_file() -> Option<PathBuf> {
+pub(crate) fn claude_file() -> Option<PathBuf> {
     devstack_skills::agents::resolve(CLAUDE_FILE)
 }
 
-fn codex_file() -> Option<PathBuf> {
+pub(crate) fn codex_file() -> Option<PathBuf> {
     devstack_skills::agents::resolve(CODEX_FILE)
 }
 
