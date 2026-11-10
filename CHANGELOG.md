@@ -9,6 +9,50 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-10
+
+An upstream tool's result can go through a command on your machine before
+an agent reads it: a filter such as `veilq mark -` redacts a ticket's
+description, and its redacted text is stored back through the same
+upstream, so the next read needs no second pass. Filters are yours alone,
+set on the *MCP upstreams* page, and fail closed (ADR-0069). Fixed: a dev
+server on Linux (a lane on a pool node) sees edits in directories the
+lane's copy made; the hub's last lines reach the pool, and a hung hub is
+logged; the update check names GitHub's rate limit and waits for its end.
+
+### Added
+
+- **A filter on an upstream tool's result.** The hub runs a local command
+  on fields of a tool's result (`description`, `issues[*].description`)
+  before `devstack mcp` gets it, and hands the agent the command's `text`;
+  when the command answers with `write`, the hub stores that back through
+  a tool of the same upstream (`save_issue`). A command that is missing,
+  fails or answers something else makes the call fail: the field is never
+  passed on. Set per user on the *MCP upstreams* page, with a preset for
+  veilq on Linear and a field to try a filter on a text; a pool hands out
+  none (ADR-0069 addendum, #502).
+
+### Fixed
+
+- **A dev server on Linux sees edits in new nested directories.** A lane
+  runs from a copy of its worktree, which made a new directory with
+  another new one inside in one go; Angular's dev server (`@parcel/watcher`)
+  then never watched the inner one, and edits to a file created there
+  reached the copy without a rebuild. The copy makes new directories one
+  depth at a time now (#507).
+- **The hub's last lines reach the pool.** The hub ended itself before
+  sending the minute's telemetry, so `hub_stop` before an update and the
+  watchdog's `hub_stuck` never left the machine; it sends them first now.
+  `hub_hung`, written by the start that ends a hung hub, is logged by the
+  hub it starts instead of being dropped (#398).
+- **The update check names GitHub's rate limit.** "GitHub answered 403"
+  now says that the 60 requests an hour, shared by every program behind
+  the same address, are used up and until when; the hub asks again when
+  the limit ends (#501).
+- **The stack file reference names the shell of a command's `exec` step**
+  (`cmd /d /s /c` on Windows, `sh -c` elsewhere) and the portable way to
+  pass a variable (#503).
+
 ## [0.44.0] - 2026-11-09
 
 A service whose page needs a token or a path printed at start (Jupyter, an
@@ -3231,7 +3275,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.44.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/nuetzliches/devstack/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/nuetzliches/devstack/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/nuetzliches/devstack/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/nuetzliches/devstack/compare/v0.41.0...v0.42.0
