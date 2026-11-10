@@ -991,6 +991,22 @@ published address of a Compose service's port, as for services, and
 `{compose.<group>.project}`) and `${VAR}`; `{port}`, `{artifact}` and
 `{is_main}` have no value in a command.
 
+An `exec` line is run by the platform shell: `cmd /d /s /c` on Windows,
+`sh -c` on Linux and macOS (as a service's `run` and `build`). devstack
+expands the placeholders before the shell sees the line; everything else
+is the shell's syntax, and that is not portable. Handing a variable to the
+step's program, say the address a test suite runs against:
+
+```toml
+{ exec = 'E2E_URL={service.web.url} npx playwright test' }          # sh: Linux, macOS
+{ exec = 'set "E2E_URL={service.web.url}" && npx playwright test' }  # cmd: Windows
+```
+
+Each line fails under the other shell. A file used on both needs no shell
+syntax for it: a profile's `env` reaches every `exec` step
+(`[profiles.<name>]`, below), or the step runs a script that takes
+`{service.web.url}` as an argument (`node e2e/run.mjs {service.web.url}`).
+
 Name a Compose project with `{compose.<group>.project}`, never literally:
 the same command runs in a lane, whose containers are the project
 `<project>-<lane>`. With `-p shop-dev` written out, the example above would
