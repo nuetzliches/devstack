@@ -48,6 +48,11 @@ pub struct Snapshot {
 /// project does not ignore them: devstack's own state.
 const EXCLUDED_PREFIXES: [&str; 1] = [".devstack/"];
 
+/// How long a sync waits after making new directories of one depth, before
+/// it makes or writes anything inside them: a dev server's watcher takes a
+/// new directory in when it sees it made (on the node, 10 ms were enough).
+const NEW_DIR_SETTLE: Duration = Duration::from_millis(50);
+
 impl Snapshot {
     pub fn open(source: &Path, lane_dir: &Path) -> Result<Self> {
         let manifest_path = lane_dir.join("manifest.json");
@@ -96,6 +101,14 @@ impl Snapshot {
             let _ = fs::remove_file(self.dir.join(gone));
             removed += 1;
         }
+        // A first sync has no watcher to wait for: nothing runs from the
+        // copy yet.
+        let settle = if self.manifest.files.is_empty() {
+            Duration::ZERO
+        } else {
+            NEW_DIR_SETTLE
+        };
+        self.make_new_dirs(&files, settle)?;
         let mut next = BTreeMap::new();
         let now = SystemTime::now();
         for rel in &files {
@@ -162,6 +175,55 @@ impl Snapshot {
     /// Clear the way for the copy of `rel`: a file where one of its parent
     /// directories goes, or a directory where the file goes, is what an
     /// earlier sync left of a path that changed its type.
+    /// Make the directories `files` need that the copy lacks, one depth at a
+    /// time, waiting `settle` after each (#507). A watcher on Linux that
+    /// watches each directory and takes a new one in when it sees it made
+    /// (`@parcel/watcher`, Angular's dev server) misses one made inside a new
+    /// directory before it got there: made in one go (`create_dir_all`),
+    /// `a/b/` left `b` unwatched, and edits to the files in it never reached
+    /// the dev server. A file or link in the way is [`Self::make_room`]'s.
+    fn make_new_dirs(&self, files: &[String], settle: Duration) -> Result<()> {
+        fs::create_dir_all(&self.dir)
+            .map_err(|e| BuildError::io(format!("create {}", self.dir.display()), e))?;
+        let mut known: BTreeSet<PathBuf> = BTreeSet::new();
+        let mut missing: BTreeMap<usize, BTreeSet<PathBuf>> = BTreeMap::new();
+        for rel in files {
+            let parts: Vec<&str> = rel.split('/').collect();
+            let mut dir = self.dir.clone();
+            for (depth, part) in parts[..parts.len().saturating_sub(1)].iter().enumerate() {
+                dir.push(part);
+                if known.contains(&dir) {
+                    continue;
+                }
+                if missing.values().any(|m| m.contains(&dir)) {
+                    continue;
+                }
+                match fs::symlink_metadata(&dir) {
+                    Ok(m) if m.is_dir() => {
+                        known.insert(dir.clone());
+                    }
+                    Ok(_) => break,
+                    Err(_) => {
+                        missing.entry(depth).or_default().insert(dir.clone());
+                    }
+                }
+            }
+        }
+        for dirs in missing.values() {
+            for d in dirs {
+                match fs::create_dir(d) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(e) => return Err(BuildError::io(format!("create {}", d.display()), e)),
+                }
+            }
+            if !settle.is_zero() {
+                std::thread::sleep(settle);
+            }
+        }
+        Ok(())
+    }
+
     fn make_room(&self, rel: &str) -> Result<()> {
         let dst = self.dir.join(rel);
         let mut dir = self.dir.clone();
@@ -300,5 +362,103 @@ mod tests {
         let state = tempfile::tempdir().unwrap();
         let snap = super::Snapshot::open(d.path(), state.path()).unwrap();
         assert_eq!(snap.list().unwrap(), vec!["devstack.toml", "src/a/x.cs"]);
+    }
+
+    /// A watcher like `@parcel/watcher` on Linux (Angular's dev server,
+    /// #507): inotify on each directory, a new directory watched when its
+    /// creation is seen in a watched one, never by reading it. Every
+    /// directory the copy makes while a dev server runs has to be seen.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_watcher_that_follows_new_directories_sees_every_one_the_copy_makes() {
+        use std::collections::HashMap;
+        use std::ffi::{CString, OsStr};
+        use std::os::unix::ffi::OsStrExt;
+        use std::path::PathBuf;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        let src = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(src.path().join("app/lib")).unwrap();
+        std::fs::write(src.path().join("app/lib/keep.ts"), "1").unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let mut snap = super::Snapshot::open(src.path(), state.path()).unwrap();
+        snap.sync().unwrap();
+
+        let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+        assert!(fd >= 0);
+        let mask = libc::IN_CREATE | libc::IN_MOVED_TO | libc::IN_MODIFY;
+        let add = move |p: &std::path::Path| {
+            let c = CString::new(p.as_os_str().as_bytes()).unwrap();
+            unsafe { libc::inotify_add_watch(fd, c.as_ptr(), mask) }
+        };
+        let mut dirs: HashMap<i32, PathBuf> = HashMap::new();
+        for d in [
+            snap.dir.clone(),
+            snap.dir.join("app"),
+            snap.dir.join("app/lib"),
+        ] {
+            dirs.insert(add(&d), d);
+        }
+        let seen: Arc<Mutex<Vec<PathBuf>>> = Arc::default();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (seen2, stop2) = (seen.clone(), stop.clone());
+        let watcher = std::thread::spawn(move || {
+            let mut buf = vec![0u8; 64 * 1024];
+            while !stop2.load(Ordering::SeqCst) {
+                let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+                if n <= 0 {
+                    std::thread::sleep(std::time::Duration::from_micros(200));
+                    continue;
+                }
+                // A dev server's watcher hands events on through its own
+                // loop: on the node, `mkdir -p` (a process per level) was
+                // already too fast for Angular's.
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                let mut at = 0usize;
+                while at < n as usize {
+                    let ev = unsafe { &*(buf.as_ptr().add(at) as *const libc::inotify_event) };
+                    let name_at = at + std::mem::size_of::<libc::inotify_event>();
+                    let raw = &buf[name_at..name_at + ev.len as usize];
+                    let name = OsStr::from_bytes(
+                        &raw[..raw.iter().position(|b| *b == 0).unwrap_or(raw.len())],
+                    );
+                    if ev.mask & libc::IN_ISDIR != 0
+                        && ev.mask & (libc::IN_CREATE | libc::IN_MOVED_TO) != 0
+                        && let Some(parent) = dirs.get(&ev.wd).cloned()
+                    {
+                        let p = parent.join(name);
+                        dirs.insert(add(&p), p.clone());
+                        seen2.lock().unwrap().push(p);
+                    }
+                    at = name_at + ev.len as usize;
+                }
+            }
+            unsafe { libc::close(fd) };
+        });
+
+        for f in ["app/lib/new/inner/deep/a.ts", "app/fresh/b.ts", "top/c.ts"] {
+            let p = src.path().join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "2").unwrap();
+        }
+        snap.sync().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        stop.store(true, Ordering::SeqCst);
+        watcher.join().unwrap();
+
+        let seen = seen.lock().unwrap();
+        for d in [
+            "app/lib/new",
+            "app/lib/new/inner",
+            "app/lib/new/inner/deep",
+            "app/fresh",
+            "top",
+        ] {
+            assert!(
+                seen.contains(&snap.dir.join(d)),
+                "`{d}` was made where no watch saw it: {seen:?}"
+            );
+        }
     }
 }
