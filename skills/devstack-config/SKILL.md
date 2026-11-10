@@ -167,6 +167,10 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   sets `timeout = "…"`; give a long seed or migration one.
 - **Commands with side effects** (deleting data, resetting state) get a
   `confirm` text. Steps run in order; one action per step.
+- **`exec` runs in the platform shell**: `cmd /d /s /c` on Windows, `sh -c`
+  elsewhere. `VAR=x cmd` works only under `sh`, `set "VAR=x" && cmd` only
+  under `cmd`; for a file used on both, pass the value through a profile's
+  `env` or as an argument to a script.
 - **Secrets** do not belong in the stack file. Use `${VAR}` and an env file that
   is not committed (`stack.env_files`), with a committed `.env.example` beside it.
 
