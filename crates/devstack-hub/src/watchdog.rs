@@ -55,7 +55,7 @@ fn watch(port: u16, dir: &Path) {
         prune(dir);
         successor();
         let _ = std::fs::remove_file(dir.join("hub.json"));
-        std::process::exit(1);
+        crate::exit::exit(1);
     }
 }
 

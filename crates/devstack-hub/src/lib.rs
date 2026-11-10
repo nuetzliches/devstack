@@ -38,6 +38,7 @@ pub mod activity;
 pub mod agenthooks;
 pub mod agentmcp;
 mod branches;
+mod exit;
 pub mod filters;
 mod guests;
 pub mod mcp;
@@ -402,6 +403,9 @@ pub fn serve() -> Result<(), String> {
         }
     };
     diag::init(log_path());
+    if let Some(hung) = take_hung(&dir) {
+        diag::warn("hub_hung", hung);
+    }
     let token = devstack_daemon::token::load_or_create().map_err(|e| format!("token: {e}"))?;
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     rt.block_on(async move {
@@ -528,7 +532,7 @@ pub fn serve() -> Result<(), String> {
             std::thread::spawn(move || {
                 std::thread::sleep(SHUTDOWN_GRACE);
                 let _ = std::fs::remove_file(hub_json);
-                std::process::exit(0);
+                exit::exit(0);
             });
         };
         let served = axum::serve(v4, app)
@@ -3749,18 +3753,43 @@ fn end_hung_hub(port: u16) {
     if devstack_proc::StateLock::acquire(&state_dir()).is_ok() {
         return;
     }
-    diag::warn(
-        "hub_hung",
-        serde_json::json!({ "pid": info.pid, "port": port, "version": info.version }),
-    );
     if devstack_proc::end_pid(info.pid).is_err() {
         return;
     }
+    // This process (the CLI, the MCP server) has no log: the hub started
+    // next says it (#398).
+    note_hung(&state_dir(), &info);
     let t0 = Instant::now();
     while devstack_proc::pid_alive(info.pid) && t0.elapsed() < Duration::from_secs(10) {
         std::thread::sleep(Duration::from_millis(100));
     }
     let _ = std::fs::remove_file(state_dir().join("hub.json"));
+}
+
+/// Where a start that ended a hung hub leaves its note for the next hub.
+const HUNG_NOTE: &str = "hub-hung.json";
+
+/// Leave a note in `dir` that the hub `info` names was ended as hung.
+fn note_hung(dir: &std::path::Path, info: &HubInfo) {
+    let ended_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or_default();
+    let note = serde_json::json!({
+        "pid": info.pid,
+        "port": info.port,
+        "version": info.version,
+        "ended_at": ended_at,
+    });
+    let _ = std::fs::write(dir.join(HUNG_NOTE), note.to_string());
+}
+
+/// The note [`note_hung`] left in `dir`, taken away: the hub logs it once.
+fn take_hung(dir: &std::path::Path) -> Option<serde_json::Value> {
+    let path = dir.join(HUNG_NOTE);
+    let text = std::fs::read_to_string(&path).ok()?;
+    let _ = std::fs::remove_file(&path);
+    serde_json::from_str(&text).ok()
 }
 
 /// Whether the hub `info` names counts as hung: it runs, it said it listens
@@ -4431,6 +4460,27 @@ mod hung_hub_tests {
         // Gone, or a hub of another port.
         assert!(!is_hung(&info, 4250, at(61), false));
         assert!(!is_hung(&info, 4251, at(61), true));
+    }
+
+    /// The start that ends a hung hub (the CLI, the MCP server) keeps no log
+    /// of its own: it leaves a note, and the hub it starts logs it.
+    #[test]
+    fn the_next_hub_logs_the_hung_one() {
+        let d = tempfile::tempdir().unwrap();
+        let info = HubInfo {
+            pid: 42,
+            port: 4250,
+            version: "0.32.0".into(),
+            started: 1_000_000,
+        };
+        assert!(take_hung(d.path()).is_none());
+        note_hung(d.path(), &info);
+        let got = take_hung(d.path()).expect("the note");
+        assert_eq!(got["pid"], 42);
+        assert_eq!(got["port"], 4250);
+        assert_eq!(got["version"], "0.32.0");
+        assert!(got["ended_at"].as_u64().unwrap() > 0);
+        assert!(take_hung(d.path()).is_none(), "logged once");
     }
 }
 
