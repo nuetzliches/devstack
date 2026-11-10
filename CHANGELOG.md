@@ -9,6 +9,21 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.45.1] - 2026-11-10
+
+Fixed: `devstack doctor` no longer reports a shell's own command as a
+program missing from PATH. The line the stack file reference gives for
+Windows, `set "VAR=…" && npx …`, failed its check with `not on PATH: set`.
+
+### Fixed
+
+- **`devstack doctor` knows the shell's own commands.** Its PATH check took
+  the first word of each `build`, `run` and `exec` line as its program; it
+  now checks the first word of each command between `&&`, `||`, `;`, `|`
+  and `&`, leaves out what the step's shell runs itself (`cmd`: `set`, `cd`,
+  `call`, …; `sh`: `export`, `cd`, `.`, …) and, in `sh`, the assignments
+  before a command, so `npx` is what gets checked (#510).
+
 ## [0.45.0] - 2026-11-10
 
 An upstream tool's result can go through a command on your machine before
@@ -3275,7 +3290,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.45.1...HEAD
+[0.45.1]: https://github.com/nuetzliches/devstack/compare/v0.45.0...v0.45.1
 [0.45.0]: https://github.com/nuetzliches/devstack/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/nuetzliches/devstack/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/nuetzliches/devstack/compare/v0.42.0...v0.43.0
