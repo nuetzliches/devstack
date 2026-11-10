@@ -1,6 +1,6 @@
 # ADR-0069: `devstack mcp` can carry the tools of upstream MCP servers, logged in once by the hub
 
-- **Status:** Accepted (2026-10-27, [card](https://github.com/nuetzliches/devstack/issues/316#issuecomment-6452598449)); amended 2026-10-27 (the keychain spike: `keyring`, a file on Linux without a Secret Service); addendum 2026-10-28 (option B: a pool names upstreams, card approved 2026-10-28); addendum 2026-10-30 (an OAuth app's client secret, card approved 2026-10-30); addendum 2026-11-04 (the upstreams' instructions in `initialize`, card approved 2026-11-04); addendum 2026-11-06 (a pool's upstream an agent has set up itself, card approved 2026-11-06)
+- **Status:** Accepted (2026-10-27, [card](https://github.com/nuetzliches/devstack/issues/316#issuecomment-6452598449)); amended 2026-10-27 (the keychain spike: `keyring`, a file on Linux without a Secret Service); addendum 2026-10-28 (option B: a pool names upstreams, card approved 2026-10-28); addendum 2026-10-30 (an OAuth app's client secret, card approved 2026-10-30); addendum 2026-11-04 (the upstreams' instructions in `initialize`, card approved 2026-11-04); addendum 2026-11-06 (a pool's upstream an agent has set up itself, card approved 2026-11-06); addendum 2026-11-10 (a filter on a tool's result, card approved 2026-11-10)
 - **Date:** 2026-10-27
 - **Deciders:** project owner
 - **Related:** [#316](https://github.com/nuetzliches/devstack/issues/316), [ADR-0007](0007-one-http-api-is-the-control-surface.md), [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md), [ADR-0054](0054-macos-is-a-developer-platform-in-preview.md), [ADR-0060](0060-the-tray-is-a-client-of-the-hub.md), [ADR-0067](0067-a-change-at-runtime-says-who-made-it.md)
@@ -360,3 +360,55 @@ file.
 Decided while building: the page reads the agents' files when it lists the
 upstreams, and only when a pool offers any; Claude Code's local scope counts
 for a working tree in that folder or below it; Codex has a user scope only.
+
+## Addendum 2026-11-10: a filter on a tool's result
+
+Agents read tickets through upstreams, and a ticket's description often
+holds the personal data of the people it is about. What a tool returns is
+in the model's context; the only place to redact it **before** an agent
+reads it is between the upstream and the agent, in the hub (#502). veilq
+0.1.0 has the piece that decides (`veilq mark`, its ADR-0024): it reads a
+body, redacts it unless its first line is a matching marker, and returns
+the marked body to store back. The context above left rewriting content
+out of scope; this addendum takes that back for filters.
+
+The owner approved these points of the card in the conversation on
+**2026-11-10** (all six):
+
+| # | Category | Point | Beats | Reversing costs |
+|---|---|---|---|---|
+| 1 | trust | The hub may replace part of an upstream tool's result with the output of a local command before `devstack mcp` gets it. If wrong: a filter misconfigured to pass content through looks like protection. | Asking the agent to run veilq itself (it has read the content by then) | Medium: an addendum; filters users configured |
+| 2 | trust | Filters are configured per user only, on the user's upstream or an accepted pool upstream in `upstreams.toml` and the *MCP upstreams* page, never by a pool or a stack file: a filter runs a command, and a pool runs no command on a member's machine (ADR-0094). | A pool handing out filters | Low: a pool could offer one for acceptance later |
+| 3 | contract | A filter names the tool, one or more paths into the result's JSON (the text content parsed as JSON, and `structuredContent` alike; `[*]` steps through arrays, e.g. `issues[*].description`) and the command. The command gets the field's string on stdin and answers JSON with `text` (required) and `write` (optional); exit 0 or 1 count as an answer. | A veilq-specific switch | Medium: the format has users |
+| 4 | contract | Optional write-back: a tool of the same upstream and its arguments, built from the call's arguments and the command's `write` (`save_issue`, `{id: "$args.id", description: "$write"}`), only for a path without `[*]`; the hub calls it with the user's login. | Writing back from list results (needs each item's id) | Low: additive |
+| 5 | concept | Fail closed: the command missing, failing (another exit code, a timeout), or answering without `text`, or a result that is not JSON where a filter applies, turns the tool call into an error; the raw content is never returned. A path that is absent (the agent did not ask for the field) means nothing to filter. A failed write-back still returns the filtered text and is logged. | Passing the raw result on an error | Low |
+| 6 | concept | Images behind URLs and keeping an agent away from other connectors to the tracker are out of scope; comments can be filtered by the same format, only not written back. | Doing everything at once | Low: additive |
+
+As built: `crates/devstack-hub/src/filters.rs` (the filter, its check, the
+paths, running the command, applying it to a `CallToolResult`);
+`upstreams.rs` keeps them as `[[filter]]` in `upstreams.toml` beside the
+upstreams and runs them in `call()`, so they hold for every harness behind
+`devstack mcp` and for `devstack mcp` without a hub (`DEVSTACK_NO_HUB`),
+which calls the upstreams through the same code. The routes
+`GET`/`PUT /hub/upstreams/filters` and `POST /hub/upstreams/filters/test`
+in `lib.rs`; the section *Filters on results* on the *MCP upstreams* page
+(`ui/src/components/UpstreamFilters.vue`, `ui/src/lib/filters.ts`), with a
+preset for veilq on Linear and a field to try a filter on a text.
+
+Decided while building: a command gets 30 s per field and the hub's
+environment (it is the user's own command, unlike an upstream that is one,
+which gets a base); it runs as a call of its own process tree, ended on the
+timeout. Every item of the result's content must be text holding JSON, or
+the call fails: an image or a resource could carry the field where no path
+reaches it. A field that is `null` is left alone; one that is an object or a
+number where a text is expected fails the call. An upstream's error result
+is handed on unfiltered: it says why the call failed, not what a ticket
+holds. The same text in the content and in `structuredContent` runs the
+command once. The write-back runs before the hub answers, once per call and
+distinct `write`; a write-back whose `$args.<name>` the call did not have is
+skipped. Its tool does not need to be in the upstream's allowlist: the user
+named it in the filter. `upstreams/filters.log` notes each write-back and
+each refusal with the command's exit and stderr, never the field. A filter
+names an upstream that exists when it is saved; removing the user's own
+upstream removes its filters. A file of filters that cannot be read fails
+every call of the upstreams instead of passing results through.

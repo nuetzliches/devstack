@@ -160,7 +160,10 @@ Tools named `<prefix>__<tool>` are not devstack's: they are the user's MCP
 upstreams, which the hub logs in to (the dashboard's *MCP upstreams*), some
 of them named by the user's pool and accepted there. One that answers it is
 not logged in needs the user, in the dashboard; tell them, do not look for
-another way in.
+another way in. The user can set a filter on a tool's result there (such as
+veilq on a ticket's description): what you read is already filtered, and a
+call that answers that the filter refused the result is withheld on
+purpose; tell the user, do not read the content another way.
 devstack passes their instructions on in its own, within what the client keeps
 (4096 characters); one shortened or left out there says so, and the tool
 `instructions` with its `prefix` returns its full text.

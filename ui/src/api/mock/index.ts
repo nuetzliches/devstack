@@ -13,7 +13,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { AttentionItem, DockerEngine, Guest, HubEvent, PoolFeed, PoolNode, PoolSkillsAdmin, PoolSkillsState, LaneView, McpUpstream, NotifySettings, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry, StackView, PoolPublicLinksAdmin, PublicLinksState } from '../types';
+import type { AttentionItem, DockerEngine, Guest, HubEvent, PoolFeed, PoolNode, PoolSkillsAdmin, PoolSkillsState, LaneView, McpUpstream, NotifySettings, UpstreamFilter, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry, StackView, PoolPublicLinksAdmin, PublicLinksState } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -108,6 +108,11 @@ const mockUpstreams: McpUpstream[] = [
   // Named by the pool (ADR-0069 option B): one accepted, one offered.
   { name: 'default:docs', url: 'https://docs.example.com/mcp', prefix: 'docs', auth: { kind: 'oauth' }, logged_in: true, pool: { pool: 'default', name: 'docs', status: 'accepted', pool_prefix: 'docs' } },
   { name: 'default:crm', url: 'https://crm.example.com/mcp', prefix: 'crm', auth: { kind: 'oauth' }, logged_in: false, pool: { pool: 'default', name: 'crm', status: 'offered', pool_prefix: 'crm', direct: [{ agent: 'claude-code', agent_name: 'Claude Code', scope: 'user', name: 'crm', url: 'https://crm.example.com/mcp', file: '~/.claude.json', remove: 'claude mcp remove --scope user crm' }] } },
+];
+
+/** The filters on the upstreams' results in the mock. */
+const mockFilters: UpstreamFilter[] = [
+  { upstream: 'tracker', tool: 'get_issue', paths: ['description'], command: ['veilq', 'mark', '-'], write: { tool: 'save_issue', arguments: { id: '$args.id', description: '$write' } } },
 ];
 
 /** The MCP upstreams the mock pool names. */
@@ -659,6 +664,22 @@ export class MockTransport implements Transport {
       if (at >= 0) mockUpstreams[at] = next;
       else mockUpstreams.push(next);
       return empty(204);
+    }
+    // Filters on the upstreams' results (ADR-0069, addendum 2026-11-10).
+    if (p === '/hub/upstreams/filters' && method === 'GET') return json(200, { filters: mockFilters });
+    if (p === '/hub/upstreams/filters' && method === 'PUT') {
+      const next = ((body as { filters?: UpstreamFilter[] })?.filters ?? []) as UpstreamFilter[];
+      const bad = next.find((f) => !f.tool || !f.paths.length || !f.command.length);
+      if (bad) return json(400, { error: `filter on \`${bad.upstream}\` \`${bad.tool}\`: a filter names its tool, its paths and its command` });
+      mockFilters.splice(0, mockFilters.length, ...next);
+      return empty(204);
+    }
+    if (p === '/hub/upstreams/filters/test' && method === 'POST') {
+      const text = String((body as { text?: string })?.text ?? '');
+      // As veilq would: a name replaced, the body marked.
+      const clean = text.replace(/\b[A-Z][a-z]+ [A-Z][a-z]+\b/g, '\\<PERSON\\>');
+      const marked = `veilq: cleaned 0a755c45\n${clean}`;
+      return json(200, clean === text ? { text } : { text: marked, write: marked });
     }
     const ua = /^\/hub\/upstreams\/pool\/([^/]+)\/([^/]+)\/(accept|decline)$/.exec(p);
     if (ua && method === 'POST') {

@@ -78,6 +78,8 @@ export const paths = {
   mcpScope: '/hub/mcp/scope',
   pool: '/hub/pool',
   upstreams: '/hub/upstreams',
+  upstreamFilters: '/hub/upstreams/filters',
+  upstreamFilterTest: '/hub/upstreams/filters/test',
   upstream: (name: string) => `/hub/upstreams/${enc(name)}`,
   upstreamLogin: (name: string) => `/hub/upstreams/${enc(name)}/login`,
   upstreamToken: (name: string) => `/hub/upstreams/${enc(name)}/token`,

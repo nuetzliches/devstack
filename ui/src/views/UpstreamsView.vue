@@ -17,6 +17,7 @@ import { ownServerAdvice, ownServerWhere } from '@/lib/upstreams';
 import { useUi } from '@/stores/ui';
 import Icon from '@/components/icons/Icon.vue';
 import McpScope from '@/components/McpScope.vue';
+import UpstreamFilters from '@/components/UpstreamFilters.vue';
 
 const ui = useUi();
 const state = ref<McpUpstreams | null>(null);
@@ -410,6 +411,7 @@ function how(u: McpUpstream): string {
         </ul>
       </div>
     </section>
+    <UpstreamFilters v-if="state?.upstreams.length" :upstreams="state.upstreams" />
     <McpScope />
   </div>
 </template>
