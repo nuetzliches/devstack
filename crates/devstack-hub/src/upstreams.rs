@@ -261,7 +261,13 @@ struct File {
     /// What the user decided about a pool's upstreams.
     #[serde(default, rename = "pool", skip_serializing_if = "Vec::is_empty")]
     decisions: Vec<Decision>,
+    /// The filters on the upstreams' results (ADR-0069, addendum
+    /// 2026-11-10): the user's alone, never a pool's.
+    #[serde(default, rename = "filter", skip_serializing_if = "Vec::is_empty")]
+    filters: Vec<Filter>,
 }
+
+pub use crate::filters::Filter;
 
 /// The user's answer to an upstream a pool names.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -934,8 +940,126 @@ impl Upstreams {
         self.note(name, "", None);
         self.secrets.delete(name)?;
         self.secrets.delete(&client_key(name))?;
-        self.save(&all)?;
+        let mut f = self.read()?;
+        f.upstreams = all;
+        f.filters.retain(|x| x.upstream != name);
+        self.write(&f)?;
         Ok(true)
+    }
+
+    /// The filters on the upstreams' results.
+    pub fn filters(&self) -> Result<Vec<Filter>, String> {
+        self.read().map(|f| f.filters)
+    }
+
+    /// Keep `filters` as the filters, each on an upstream the user has or a
+    /// pool names.
+    pub fn set_filters(&self, filters: Vec<Filter>) -> Result<(), String> {
+        crate::filters::check_all(&filters)?;
+        let _one = self.write.lock().unwrap();
+        let mut f = self.read()?;
+        let known: Vec<String> = f
+            .upstreams
+            .iter()
+            .map(|u| u.name.clone())
+            .chain(self.pooled(&f).into_iter().map(|(u, _)| u.name))
+            .collect();
+        if let Some(x) = filters.iter().find(|x| !known.contains(&x.upstream)) {
+            return Err(format!(
+                "a filter is on `{}`, which is no upstream",
+                x.upstream
+            ));
+        }
+        f.filters = filters;
+        self.write(&f)
+    }
+
+    /// Run `f`'s command on `text`, as a filter would: for the dashboard's
+    /// test of a filter.
+    pub fn try_filter(&self, f: &Filter, text: &str) -> Result<crate::filters::Answer, String> {
+        f.check()?;
+        crate::filters::run(&f.command, text, crate::filters::TIMEOUT).map_err(|e| {
+            self.filter_log(&f.upstream, &f.tool, &e.log);
+            e.said
+        })
+    }
+
+    /// Note in `upstreams/filters.log` what became of a filter: never the
+    /// content it filtered.
+    fn filter_log(&self, upstream: &str, tool: &str, line: &str) {
+        if self.logs.as_os_str().is_empty() {
+            return;
+        }
+        let _ = std::fs::create_dir_all(&self.logs);
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.logs.join("filters.log"))
+        {
+            use std::io::Write as _;
+            let _ = writeln!(file, "{} {upstream} {tool}: {line}", jiff::Timestamp::now());
+        }
+    }
+
+    /// Run the filters of `u`'s `tool` on `result`, and make the write-backs
+    /// they ask for: the result for the agent, or why there is none (fail
+    /// closed). A failed write-back is logged; the agent still gets the
+    /// filtered result.
+    fn filtered(
+        &self,
+        http: &ureq::Agent,
+        u: &Upstream,
+        tool: &str,
+        arguments: &Value,
+        result: Value,
+        filters: &[Filter],
+    ) -> Result<Value, String> {
+        let mine: Vec<&Filter> = filters
+            .iter()
+            .filter(|f| f.upstream == u.name && f.tool == tool)
+            .collect();
+        if mine.is_empty() {
+            return Ok(result);
+        }
+        let out = crate::filters::apply(&mine, result, arguments, &mut |c, s| {
+            crate::filters::run(c, s, crate::filters::TIMEOUT)
+        })
+        .map_err(|e| {
+            self.filter_log(&u.name, tool, &e.log);
+            format!(
+                "the filter on `{tool}` of `{}` refused the result: {}",
+                u.name, e.said
+            )
+        })?;
+        for s in out.stores {
+            let r = self.ask(
+                http,
+                u,
+                "tools/call",
+                json!({ "name": s.tool, "arguments": s.arguments }),
+            );
+            let why = match r {
+                Ok(r) if r["isError"] == json!(true) => Some(
+                    r["content"][0]["text"]
+                        .as_str()
+                        .unwrap_or("an error")
+                        .chars()
+                        .take(500)
+                        .collect::<String>(),
+                ),
+                Ok(_) => None,
+                Err(e) => Some(e),
+            };
+            match why {
+                Some(w) => self.filter_log(
+                    &u.name,
+                    tool,
+                    &format!("write-back `{}` failed: {w}", s.tool),
+                ),
+                None => self.filter_log(&u.name, tool, &format!("written back with `{}`", s.tool)),
+            }
+        }
+        Ok(out.result)
     }
 
     fn get(&self, name: &str) -> Result<Upstream, String> {
@@ -1405,6 +1529,11 @@ impl Upstreams {
         let Ok(all) = self.list() else {
             return failed("the hub cannot read its upstreams".into());
         };
+        // Read before the call: a file that cannot be read must not let a
+        // result through unfiltered.
+        let Ok(filters) = self.filters() else {
+            return failed("the hub cannot read its filters".into());
+        };
         let Some((u, tool)) = all.iter().find_map(|u| {
             name.strip_prefix(&format!("{}__", u.prefix()))
                 .map(|t| (u, t))
@@ -1433,9 +1562,12 @@ impl Upstreams {
             http,
             u,
             "tools/call",
-            json!({ "name": tool, "arguments": arguments }),
+            json!({ "name": tool, "arguments": arguments.clone() }),
         ) {
-            Ok(r) => r,
+            Ok(r) => match self.filtered(http, u, tool, &arguments, r, &filters) {
+                Ok(r) => r,
+                Err(e) => failed(e),
+            },
             Err(e) => failed(e),
         }
     }
@@ -2278,6 +2410,24 @@ mod tests {
                         ] } }).to_string();
                         reply(&mut c, 200, "application/json", "", &text);
                     }
+                    "tools/call" if m["params"]["name"] == "get_issue" => {
+                        let doc = serde_json::json!({ "id": m["params"]["arguments"]["id"], "title": "Login fails", "description": "Please call Lena Vogt" });
+                        let text = serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": doc.to_string() }], "structuredContent": doc } }).to_string();
+                        reply(&mut c, 200, "application/json", "", &text);
+                    }
+                    "tools/call" if m["params"]["name"] == "save_issue" => {
+                        let a = &m["params"]["arguments"];
+                        s.lock().unwrap().push((
+                            format!(
+                                "save_issue {} {}",
+                                a["id"].as_str().unwrap_or(""),
+                                a["description"].as_str().unwrap_or("")
+                            ),
+                            session.clone(),
+                        ));
+                        let text = serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": "saved" }] } }).to_string();
+                        reply(&mut c, 200, "application/json", "", &text);
+                    }
                     "tools/call" => {
                         let q = m["params"]["arguments"]["q"].as_str().unwrap_or("");
                         let answer = serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": format!("found {q}") }] } });
@@ -2369,6 +2519,95 @@ mod tests {
             "{r}"
         );
         let _ = ups.remove(&name);
+    }
+
+    #[test]
+    fn a_filter_replaces_a_field_before_the_agent_reads_it_and_writes_it_back() {
+        use crate::filters::{Filter, WriteBack, tests::shell};
+        let (base, seen) = fake_mcp();
+        let d = tempfile::tempdir().unwrap();
+        let ups = Upstreams::for_test(d.path().to_path_buf(), Vec::new);
+        let name = format!("f{}", std::process::id());
+        ups.put(Upstream {
+            name: name.clone(),
+            url: format!("{base}/mcp"),
+            prefix: Some("tk".into()),
+            auth: Auth::Token { env: None },
+            ..Default::default()
+        })
+        .unwrap();
+        ups.set_token(&name, "good").unwrap();
+        let http = http();
+        let mark = if cfg!(windows) {
+            shell(
+                "$null = [Console]::In.ReadToEnd(); ConvertTo-Json -Compress @{text='Please call <PERSON>'; write='veilq: pass 1'}; exit 1",
+            )
+        } else {
+            shell(
+                "cat >/dev/null; printf '{\"text\":\"Please call <PERSON>\",\"write\":\"veilq: pass 1\"}'; exit 1",
+            )
+        };
+        let filter = Filter {
+            upstream: name.clone(),
+            tool: "get_issue".into(),
+            paths: vec!["description".into()],
+            command: mark,
+            write: Some(WriteBack {
+                tool: "save_issue".into(),
+                arguments: [
+                    ("id".to_string(), "$args.id".to_string()),
+                    ("description".to_string(), "$write".to_string()),
+                ]
+                .into(),
+            }),
+        };
+        assert!(
+            ups.set_filters(vec![Filter {
+                upstream: "nobody".into(),
+                ..filter.clone()
+            }])
+            .is_err(),
+            "a filter on no upstream"
+        );
+        ups.set_filters(vec![filter.clone()]).unwrap();
+
+        let r = ups.call(&http, "tk__get_issue", json!({ "id": "X-1" }));
+        assert!(r["isError"] != true, "{r}");
+        let text = r["content"][0]["text"].as_str().unwrap();
+        assert!(!text.contains("Lena"), "{text}");
+        assert!(text.contains("Please call <PERSON>"), "{text}");
+        assert!(text.contains("Login fails"), "the rest stays: {text}");
+        assert_eq!(
+            r["structuredContent"]["description"],
+            "Please call <PERSON>"
+        );
+        let sent = seen.lock().unwrap().clone();
+        assert!(
+            sent.iter()
+                .any(|(m, _)| m == "save_issue X-1 veilq: pass 1"),
+            "{sent:?}"
+        );
+        let log = std::fs::read_to_string(d.path().join("upstreams").join("filters.log")).unwrap();
+        assert!(log.contains("written back with `save_issue`"), "{log}");
+        assert!(!log.contains("Lena"), "the log keeps no content: {log}");
+
+        // Fail closed: a command that fails gives an error, never the text.
+        ups.set_filters(vec![Filter {
+            command: shell("exit 2"),
+            write: None,
+            ..filter.clone()
+        }])
+        .unwrap();
+        let r = ups.call(&http, "tk__get_issue", json!({ "id": "X-1" }));
+        assert!(r["isError"] == true, "{r}");
+        assert!(!r.to_string().contains("Lena"), "{r}");
+        // Another tool of the upstream is not filtered.
+        let r = ups.call(&http, "tk__search", json!({ "q": "x" }));
+        assert_eq!(r["content"][0]["text"], "found x", "{r}");
+
+        // Removing the upstream takes its filters with it.
+        assert!(ups.remove(&name).unwrap());
+        assert!(ups.filters().unwrap().is_empty());
     }
 
     #[test]

@@ -38,6 +38,7 @@ pub mod activity;
 pub mod agenthooks;
 pub mod agentmcp;
 mod branches;
+pub mod filters;
 mod guests;
 pub mod mcp;
 mod mcpclient;
@@ -547,6 +548,11 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/upstreams/tools", get(upstream_tools))
         .route("/hub/upstreams/instructions", get(upstream_instructions))
         .route("/hub/upstreams/call", post(upstream_call))
+        .route(
+            "/hub/upstreams/filters",
+            get(upstream_filters).put(upstream_filters_put),
+        )
+        .route("/hub/upstreams/filters/test", post(upstream_filter_test))
         .route("/hub/upstreams/{name}", delete(upstream_remove))
         .route("/hub/upstreams/{name}/login", post(upstream_login))
         .route("/hub/upstreams/{name}/token", post(upstream_token))
@@ -2951,6 +2957,54 @@ async fn upstream_call(State(s): State<AppState>, Json(b): Json<CallBody>) -> Re
             );
             Json(r).into_response()
         }
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `GET /hub/upstreams/filters`: the filters on the upstreams' results
+/// (ADR-0069, addendum 2026-11-10).
+async fn upstream_filters(State(s): State<AppState>) -> Response {
+    let ups = s.upstreams.clone();
+    match tokio::task::spawn_blocking(move || ups.filters()).await {
+        Ok(Ok(f)) => Json(serde_json::json!({ "filters": f })).into_response(),
+        Ok(Err(e)) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct FiltersBody {
+    filters: Vec<upstreams::Filter>,
+}
+
+/// `PUT /hub/upstreams/filters {filters}`: keep these as the filters; `400`
+/// with why when one is wrong.
+async fn upstream_filters_put(State(s): State<AppState>, Json(b): Json<FiltersBody>) -> Response {
+    let n = b.filters.len();
+    let r = on_upstreams(&s, move |ups| ups.set_filters(b.filters)).await;
+    if r.status().is_success() {
+        diag::info("upstream_filters_put", serde_json::json!({ "filters": n }));
+    }
+    r
+}
+
+#[derive(Deserialize)]
+struct FilterTestBody {
+    filter: upstreams::Filter,
+    text: String,
+}
+
+/// `POST /hub/upstreams/filters/test {filter, text}`: run the filter's
+/// command on `text` as a tool call would: `{text, write?}`, or `400` with
+/// why it gave no answer.
+async fn upstream_filter_test(
+    State(s): State<AppState>,
+    Json(b): Json<FilterTestBody>,
+) -> Response {
+    let ups = s.upstreams.clone();
+    match tokio::task::spawn_blocking(move || ups.try_filter(&b.filter, &b.text)).await {
+        Ok(Ok(a)) => Json(a).into_response(),
+        Ok(Err(e)) => err(StatusCode::BAD_REQUEST, e),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }

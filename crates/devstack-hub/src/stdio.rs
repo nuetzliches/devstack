@@ -71,7 +71,7 @@ impl Drop for Process {
 
 /// `program` on PATH, with the extensions of PATHEXT on Windows (`npx` is
 /// `npx.cmd` there); a path is taken as it is.
-fn resolve(program: &str) -> PathBuf {
+pub(crate) fn resolve(program: &str) -> PathBuf {
     let p = Path::new(program);
     if p.components().count() > 1 || p.is_absolute() {
         return p.to_path_buf();

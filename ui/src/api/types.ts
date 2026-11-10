@@ -1067,6 +1067,25 @@ export type PoolUpstream = {
   auth: { kind: 'none' } | { kind: 'token' } | { kind: 'oauth'; client_id?: string; client_secret?: OauthClientSecret; scopes?: string[] };
 };
 
+/**
+ * A filter on an upstream tool's result (`GET /hub/upstreams/filters`): the
+ * hub runs `command` on each field at `paths` before an agent reads the
+ * result, and stores the command's `write` back through `write.tool`.
+ */
+export type UpstreamFilter = {
+  /** The upstream's name: the user's own, or `<pool>:<name>`. */
+  upstream: string;
+  tool: string;
+  /** Names joined by `.`, `[*]` for an array's items. */
+  paths: string[];
+  command: string[];
+  /** Arguments are a text, `$write`, or `$args.<name>`. */
+  write?: { tool: string; arguments: Record<string, string> };
+};
+
+/** What a filter's command answered (`POST /hub/upstreams/filters/test`). */
+export type FilterAnswer = { text: string; write?: string };
+
 /** `GET /hub/upstreams`. `file`: no keychain on this machine (Linux without a Secret Service). */
 export type McpUpstreams = { store: 'keychain' | 'file'; upstreams: McpUpstream[] };
 
