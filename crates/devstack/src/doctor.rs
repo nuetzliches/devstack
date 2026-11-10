@@ -490,7 +490,7 @@ fn release() -> Option<Finding> {
             Level::Ok,
             format!("devstack {current} is the latest release"),
         ),
-        Err(e) => release_error(&e),
+        Err(e) => release_error(&e.message),
     })
 }
 

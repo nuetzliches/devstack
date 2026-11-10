@@ -1207,8 +1207,9 @@ enum Poke {
 /// Not with a 12-hour sleep: on Windows a sleeping thread's time stands still
 /// while the machine is in standby, so a hub from last night would not look
 /// again until well into the day. A failed check is tried again after an
-/// hour, and its error is told until one is not. `DEVSTACK_NO_UPDATE_CHECK`
-/// turns it off.
+/// hour, or when GitHub's rate limit ends if it said so (asking before that
+/// only counts against the limit again), and its error is told until one is
+/// not. `DEVSTACK_NO_UPDATE_CHECK` turns it off.
 fn watch_release() -> (watch::Receiver<Release>, std::sync::mpsc::Sender<Poke>) {
     use std::sync::mpsc::RecvTimeoutError;
     use std::time::SystemTime;
@@ -1227,6 +1228,7 @@ fn watch_release() -> (watch::Receiver<Release>, std::sync::mpsc::Sender<Poke>) 
         let mut last: Option<SystemTime> = None;
         let mut answer: Option<Result<Option<String>, String>> = None;
         let mut next = SystemTime::now();
+        let mut limited_until: Option<SystemTime> = None;
         loop {
             // The first look at once, then once a minute or when poked.
             let wait = if last.is_none() {
@@ -1244,9 +1246,10 @@ fn watch_release() -> (watch::Receiver<Release>, std::sync::mpsc::Sender<Poke>) 
             let older = |t: Option<SystemTime>, than: Duration| {
                 t.is_none_or(|t| now.duration_since(t).unwrap_or(than) >= than)
             };
+            let limited = limited_until.is_some_and(|t| now < t);
             let due = now >= next
-                || (poked && older(last, FRESH))
-                || (reply.is_some() && older(last, AGAIN));
+                || (!limited && poked && older(last, FRESH))
+                || (!limited && reply.is_some() && older(last, AGAIN));
             if !due {
                 if let (Some(reply), Some(a)) = (reply, &answer) {
                     let _ = reply.send(a.clone());
@@ -1256,11 +1259,18 @@ fn watch_release() -> (watch::Receiver<Release>, std::sync::mpsc::Sender<Poke>) 
             last = Some(now);
             let got = match release::latest() {
                 Ok(latest) => {
+                    limited_until = None;
                     next = now + EVERY;
                     Ok(release::newer(&latest, VERSION).then_some(latest))
                 }
                 Err(e) => {
-                    next = now + RETRY;
+                    // Not sooner than a minute (a clock that is off), not
+                    // later than the usual retry.
+                    limited_until = e
+                        .retry_at
+                        .map(|t| t.clamp(now + Duration::from_secs(60), now + RETRY));
+                    next = limited_until.unwrap_or(now + RETRY);
+                    let e = e.to_string();
                     diag::warn("release_check", serde_json::json!({ "error": e }));
                     Err(e)
                 }
