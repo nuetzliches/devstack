@@ -205,15 +205,12 @@ pub(crate) fn output_within(cmd: &mut Command, limit: Duration) -> Option<std::p
     }
 }
 
-/// The programs the stack file runs (first word of `build`, `run` and `exec`),
-/// found on PATH or not.
+/// The programs the stack file runs (each command of `build`, `run` and
+/// `exec`, the shell's own commands left out), found on PATH or not.
 fn tools(stack: &devstack_config::Stack) -> Finding {
     let mut names = BTreeSet::new();
-    let mut add = |cmd: &str| {
-        if let Some(p) = program(cmd) {
-            names.insert(p);
-        }
-    };
+    let shell = if cfg!(windows) { Shell::Cmd } else { Shell::Sh };
+    let mut add = |cmd: &str| names.extend(programs(cmd, shell));
     let platform = devstack_config::model::Platform::current();
     for s in stack.services.values() {
         if !s.platforms.is_empty() && !s.platforms.contains(&platform) {
@@ -280,6 +277,96 @@ fn cloudflared(stack: &devstack_config::Stack) -> Option<Finding> {
 
 /// `dotnet build x.csproj` -> `dotnet`; placeholders and paths are skipped
 /// (`dotnet {artifact}/X.dll` -> `dotnet`, `{artifact}/x` -> none).
+/// The shell a line runs in: `cmd /d /s /c` on Windows, `sh -c` elsewhere.
+#[derive(Debug, Clone, Copy)]
+enum Shell {
+    Cmd,
+    Sh,
+}
+
+/// What `cmd` runs itself (case does not matter there).
+const CMD_BUILTINS: &[&str] = &[
+    "assoc", "break", "call", "cd", "chdir", "cls", "color", "copy", "date", "del", "dir", "echo",
+    "endlocal", "erase", "exit", "for", "ftype", "goto", "if", "md", "mkdir", "mklink", "move",
+    "path", "pause", "popd", "prompt", "pushd", "rd", "rem", "ren", "rename", "rmdir", "set",
+    "setlocal", "shift", "start", "time", "title", "type", "ver", "verify", "vol",
+];
+
+/// What `sh` runs itself (POSIX, and `source`, `local` of the common ones).
+const SH_BUILTINS: &[&str] = &[
+    ".", ":", "[", "alias", "bg", "break", "cd", "command", "continue", "echo", "eval", "exec",
+    "exit", "export", "false", "fg", "getopts", "hash", "jobs", "kill", "local", "printf", "pwd",
+    "read", "readonly", "return", "set", "shift", "source", "test", "times", "trap", "true",
+    "type", "ulimit", "umask", "unalias", "unset", "wait",
+];
+
+/// The programs a command line runs: the first word of each command between
+/// `&&`, `||`, `;`, `|` and `&` (outside quotes; `2>&1` is a redirection),
+/// leaving out what the shell runs itself (`set` of `cmd`, `export` of `sh`,
+/// #510) and, in `sh`, the assignments before a command (`X=1 npx …`).
+fn programs(line: &str, shell: Shell) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = line.chars().peekable();
+    let mut prev = ' ';
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), _) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"') => quote = Some('"'),
+            (None, '\'') if matches!(shell, Shell::Sh) => quote = Some('\''),
+            (None, '&') if prev == '>' || prev == '<' => {}
+            (None, '&' | '|' | ';') => {
+                if chars.peek() == Some(&c) {
+                    chars.next();
+                }
+                parts.push(std::mem::take(&mut cur));
+                prev = ' ';
+                continue;
+            }
+            _ => {}
+        }
+        cur.push(c);
+        prev = c;
+    }
+    parts.push(cur);
+    let mut out = Vec::new();
+    for part in parts {
+        let mut words = part
+            .split_whitespace()
+            .map(|w| w.trim_start_matches('(').trim_end_matches(')'))
+            .filter(|w| !w.is_empty());
+        let first = match shell {
+            Shell::Sh => words.find(|w| !is_assignment(w)),
+            Shell::Cmd => words.next(),
+        };
+        let Some(first) = first else { continue };
+        let builtin = match shell {
+            Shell::Cmd => CMD_BUILTINS.contains(&first.to_ascii_lowercase().as_str()),
+            Shell::Sh => SH_BUILTINS.contains(&first),
+        };
+        if builtin {
+            continue;
+        }
+        if let Some(p) = program(first)
+            && !out.contains(&p)
+        {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// `NAME=value` before a command in `sh`.
+fn is_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty()
+            && !name.starts_with(|c: char| c.is_ascii_digit())
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
 fn program(cmd: &str) -> Option<String> {
     let first = cmd.split_whitespace().next()?.trim_matches(['"', '\'']);
     if first.contains(['{', '$', '/', '\\']) || first.is_empty() {
@@ -889,6 +976,32 @@ mod tests {
         assert_eq!(program("{artifact}/api").as_deref(), None);
         assert_eq!(program("./scripts/x.sh").as_deref(), None);
         assert_eq!(program("${NODE} x.js").as_deref(), None);
+    }
+
+    /// What the shell runs itself is no program on PATH (#510); the
+    /// programs after `&&`, `||`, `;` and `|` are.
+    #[test]
+    fn the_programs_of_a_line_leave_out_the_shells_builtins() {
+        let cmd = |l: &str| programs(l, Shell::Cmd);
+        let sh = |l: &str| programs(l, Shell::Sh);
+        // The line the stack file reference gives for each shell.
+        assert_eq!(
+            cmd(r#"set "E2E_URL={service.web.url}" && npx playwright test"#),
+            ["npx"]
+        );
+        assert_eq!(sh("E2E_URL={service.web.url} npx playwright test"), ["npx"]);
+        assert_eq!(sh("export E2E_URL=x && npx playwright test"), ["npx"]);
+        assert_eq!(cmd("cd web && npm start"), ["npm"]);
+        assert_eq!(cmd("SET X=1& CALL build.cmd"), Vec::<String>::new());
+        assert_eq!(cmd("(cd web && npm ci) || echo failed"), ["npm"]);
+        assert_eq!(sh("cd web; npm ci | tee log.txt"), ["npm", "tee"]);
+        assert_eq!(sh(". ./env.sh && dotnet run 2>&1"), ["dotnet"]);
+        assert_eq!(cmd("dotnet build 2>&1"), ["dotnet"]);
+        // Quoted separators are text.
+        assert_eq!(cmd(r#"node -e "a && b" && npm test"#), ["node", "npm"]);
+        // A builtin of the other shell is a program here.
+        assert_eq!(sh("set -e && echo ok && cargo build"), ["cargo"]);
+        assert_eq!(cmd("export X=1"), ["export"]);
     }
 
     #[test]
