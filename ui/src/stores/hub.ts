@@ -181,9 +181,10 @@ export const useHub = defineStore('hub', () => {
         save();
       },
       onState(s) {
-        // Back after a break (error, then connecting, then open): the hub may
-        // have been updated meanwhile.
-        if (s === 'error') hadBreak = true;
+        // Back after a break (an error, or a drop the transport reconnected
+        // at once: open, connecting, open): the hub may have been updated
+        // meanwhile.
+        if (s === 'error' || (s === 'connecting' && stream.value === 'open')) hadBreak = true;
         if (s === 'open' && hadBreak) {
           hadBreak = false;
           checkForAppUpdate();
