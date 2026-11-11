@@ -253,7 +253,8 @@ type StackView = {
 };
 // A condition, listed while it holds (ADR-0050). Ids so far: `copy` (a lane's copy not brought
 // up to date), `prepare.<service>.<path>` (not linked into the worktree), `worktree_missing`
-// (a lane's, which goes after 10 min), `no_ports.<worktree>` (in the main tree: a worktree without a lane).
+// (a lane's, which goes after 10 min), `no_ports.<worktree>` (in the main tree: a worktree without a lane),
+// `waits.<service>` (it failed, and a change to its files waits for a restart).
 type Notice = { id: string; level: "warn" | "error"; text: string; since: number };
 type ServiceView = {
   name: string; kind: "service" | "job" | "devserver" | "tool" | "static";

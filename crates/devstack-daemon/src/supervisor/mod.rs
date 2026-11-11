@@ -830,6 +830,7 @@ impl Supervisor {
             };
             (slot.view.build_id.clone(), start)
         };
+        let failed = matches!(status, Status::Failed { .. });
         self.emit_with(
             EventBody::Service {
                 service: name.into(),
@@ -839,6 +840,10 @@ impl Supervisor {
             start,
         );
         drop(slots);
+        // A change waits for a restart only while the service failed.
+        if !failed {
+            self.clear_notice(&format!("waits.{name}"));
+        }
     }
 
     fn set_candidate(&self, name: &str, candidate: Option<Candidate>) {
