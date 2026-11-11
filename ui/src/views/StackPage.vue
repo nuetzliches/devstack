@@ -275,10 +275,10 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
       <div v-if="changes" class="actions">
         <!-- No start of the stack: each tree starts on its own card, main too; the daemon comes with the first (ADR-0095). -->
         <template v-if="stack.running">
-          <button type="button" class="btn" :disabled="!!stack.busy.stack" title="Start its daemon again with the installed devstack and the current stack file; the lanes are carried over" data-testid="action-restart-stack" @click="stack.restartStack()">
+          <button type="button" class="btn" :disabled="!!stack.busy.stack" title="Start its daemon again with the installed devstack and the current stack file; the lanes are carried over. Shift-click skips the confirmation." data-testid="action-restart-stack" @click="stack.restartStack()">
             <span v-if="stack.busy.stack === 'restart'" class="spinner" /><Icon v-else name="restart" :size="14" /> Reload
           </button>
-          <button type="button" class="btn btn-stop" :disabled="!!stack.busy.stack" title="Every tree stops, main and each lane, with its services and containers; the daemon ends with the last" data-testid="action-stack-stop" @click="stack.stopStack()">
+          <button type="button" class="btn btn-stop" :disabled="!!stack.busy.stack" title="Every tree stops, main and each lane, with its services and containers; the daemon ends with the last. Shift-click skips the confirmation." data-testid="action-stack-stop" @click="stack.stopStack()">
             <span v-if="stack.busy.stack === 'stop'" class="spinner" /><Icon v-else name="power" :size="14" /> Stop all
           </button>
         </template>
