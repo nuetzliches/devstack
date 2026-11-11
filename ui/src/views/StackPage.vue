@@ -22,6 +22,7 @@ import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import AgentPrompt from '@/components/AgentPrompt.vue';
 import Icon from '@/components/icons/Icon.vue';
+import PathMenu from '@/components/PathMenu.vue';
 import PortGraph from '@/components/PortGraph.vue';
 import RestartBanner from '@/components/RestartBanner.vue';
 import StackFileBanner from '@/components/StackFileBanner.vue';
@@ -252,7 +253,8 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
     <header class="page-header">
       <div class="head">
         <h1 class="truncate">{{ name }}</h1>
-        <p class="subtitle mono truncate" :title="repo">{{ repo }}</p>
+        <!-- The same path menu as a lane's header (ADR-0046): copy, or open the main tree. -->
+        <PathMenu v-if="repo" class="repo-path" :path="repo" :stack-id="stack.id" :can-open="!hubDown && !!stack.id && !stack.foreign" />
         <p class="daemon small">
           <span class="pill" :class="state.tone" :title="state.title" data-testid="stack-state"><span class="dot" />{{ state.label }}</span>
           <span v-if="mainState" class="pill" :class="mainState.tone" :title="mainState.title" data-testid="stack-main-state"><span class="dot" />{{ mainState.label }}</span>
@@ -469,6 +471,10 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
 h1 {
   font-size: 20px;
   margin: 0;
+}
+.repo-path {
+  align-self: flex-start;
+  margin-top: 4px;
 }
 .daemon {
   display: flex;

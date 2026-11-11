@@ -14,7 +14,6 @@ import type { Opener } from '@/api/types';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import { connectedTo, usePool } from '@/stores/pool';
-import { useUi } from '@/stores/ui';
 import { useOpenerPrefs } from '@/lib/openers';
 import { laneActions, NOT_FOR_MAIN, type LaneAction } from '@/lib/laneActions';
 import { MAIN, samePath } from '@/lib/lanes';
@@ -24,6 +23,7 @@ import SplitButton from './SplitButton.vue';
 import Icon from './icons/Icon.vue';
 import McpHint from './McpHint.vue';
 import OpenersDialog from './OpenersDialog.vue';
+import PathMenu from './PathMenu.vue';
 
 const hub = useHub();
 const stack = useStack();
@@ -69,11 +69,6 @@ const liveState = computed(() => {
 
 /** Where the shown tree lives and which branch it has. */
 const path = computed(() => current.value?.path ?? view.value?.repo ?? stack.entry?.repo ?? '');
-/** The path's folder and its last part: a long path is cut in the folder, the worktree's name stays. */
-const pathParts = computed(() => {
-  const m = /^(.*[\\/])([^\\/]+)[\\/]?$/.exec(path.value);
-  return m ? { dir: m[1], leaf: m[2] } : { dir: '', leaf: path.value };
-});
 
 // Where a started lane can move (ADR-0025 point 10): this machine, and the
 // pool's nodes that are online and run lanes.
@@ -153,36 +148,14 @@ function moveTo(to: string) {
   if (current.value) void stack.moveLane(current.value.name, to);
 }
 
-// The path's menu (ADR-0046): copy it, or open the tree with a program the
-// hub found. A lane shared with us lives on another machine: copy only.
-const ui = useUi();
-const pathRoot = ref<HTMLElement | null>(null);
-const pathTrigger = ref<HTMLButtonElement | null>(null);
-const { open: pathOpen, close: pathClose } = usePopover(pathRoot, pathTrigger);
+// The path's menu (ADR-0046, PathMenu): copy it, or open the tree with a
+// program the hub found. A lane shared with us lives on another machine:
+// copy only. The branch's sync menu below offers the git clients of it.
 const canOpen = computed(() => !hubAway.value && !stack.sharedLane && !stack.ending && !!stack.id);
 const openerPrefs = useOpenerPrefs();
 const openers = computed(() => (canOpen.value ? openerPrefs.shown(hub.openers ?? []) : []));
 const managing = ref(false);
-function manage() {
-  pathClose();
-  managing.value = true;
-}
-const openerIcon = { files: 'folder', terminal: 'terminal', editor: 'file', git: 'gitBranch', agent: 'zap' } as const;
-function togglePath() {
-  pathOpen.value = !pathOpen.value;
-  if (pathOpen.value && canOpen.value) void hub.loadOpeners();
-}
-async function copyPath() {
-  pathClose();
-  try {
-    await navigator.clipboard.writeText(path.value);
-    ui.toast('info', 'Copied', path.value);
-  } catch {
-    ui.toast('info', path.value, 'Copying is not allowed here.');
-  }
-}
 function openWith(o: Opener) {
-  pathClose();
   syncClose();
   if (stack.id) void hub.openWith(stack.id, path.value, o);
 }
@@ -373,49 +346,7 @@ function manageFromSync() {
       </template>
     </div>
     <div class="line2">
-      <div v-if="path" ref="pathRoot" class="picker path-picker">
-        <button
-          ref="pathTrigger"
-          type="button"
-          class="path-btn mono"
-          :aria-expanded="pathOpen"
-          aria-haspopup="menu"
-          :title="`${path}: copy, or open in another program`"
-          data-testid="path-menu"
-          @click="togglePath"
-        >
-          <Icon name="folder" :size="13" class="muted" />
-          <span class="where"><span class="dir">{{ pathParts.dir }}</span><span class="leaf">{{ pathParts.leaf }}</span></span>
-          <Icon name="chevronDown" :size="13" class="muted" />
-        </button>
-        <div v-if="pathOpen" class="menu" role="menu" aria-label="Open the folder" data-testid="path-menu-list">
-          <button type="button" class="opt" role="menuitem" data-testid="path-copy" @click="copyPath">
-            <Icon name="copy" :size="14" class="muted" /><span class="grow">Copy path</span>
-          </button>
-          <template v-if="canOpen">
-            <div class="sep" />
-            <span v-if="!hub.openers" class="faint small menu-note"><span class="spinner" /> Looking for programs…</span>
-            <span v-else-if="!hub.openers.length" class="faint small menu-note">No program to open it with on this machine.</span>
-            <span v-else-if="!openers.length" class="faint small menu-note">All programs are hidden.</span>
-            <button
-              v-for="(o, i) in openers"
-              :key="o.id"
-              type="button"
-              class="opt"
-              :class="{ 'group-start': i > 0 && openers[i - 1].kind !== o.kind }"
-              role="menuitem"
-              data-testid="path-open"
-              @click="openWith(o)"
-            >
-              <Icon :name="openerIcon[o.kind] ?? 'external'" :size="14" class="muted" /><span class="grow">{{ o.label }}</span>
-            </button>
-            <div v-if="hub.openers?.length" class="menu-foot">
-              <button type="button" class="link-btn" role="menuitem" data-testid="path-manage" @click="manage">Manage programs…</button>
-            </div>
-          </template>
-        </div>
-        <OpenersDialog :open="managing" :openers="hub.openers ?? []" @close="managing = false" />
-      </div>
+      <PathMenu v-if="path" :path="path" :stack-id="stack.id" :can-open="canOpen" />
       <BranchPicker />
       <div v-if="sync" ref="syncRoot" class="picker">
         <button ref="syncTrigger" type="button" class="sync-btn mono" :aria-expanded="syncOpen" aria-haspopup="menu" :title="syncTitle" data-testid="branch-sync" @click="toggleSync">
@@ -433,6 +364,7 @@ function manageFromSync() {
             <button type="button" class="link-btn" role="menuitem" data-testid="branch-sync-manage" @click="manageFromSync">Manage programs…</button>
           </div>
         </div>
+        <OpenersDialog :open="managing" :openers="hub.openers ?? []" @close="managing = false" />
       </div>
       <span v-if="moving" class="muted small move-line" data-testid="lane-moving" :title="moving.what">
         <span class="bar"><span :style="{ width: `${(100 * moving.step) / moving.steps}%` }" /></span>
@@ -509,50 +441,6 @@ h1 {
   margin: 0;
   min-width: 0;
 }
-.path-picker {
-  min-width: 0;
-  max-width: 48ch;
-}
-.path-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  padding: 3px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--text-2);
-  font-size: 12.5px;
-  cursor: pointer;
-}
-.path-btn:hover,
-.path-btn[aria-expanded='true'] {
-  border-color: var(--border-strong);
-  color: var(--text);
-}
-.where {
-  display: flex;
-  min-width: 0;
-}
-.path-btn .dir {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.path-btn .leaf {
-  flex: none;
-  max-width: 24ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text);
-  font-weight: 600;
-}
-.path-picker .menu {
-  min-width: 220px;
-}
 .sync-btn {
   display: inline-flex;
   align-items: center;
@@ -572,25 +460,6 @@ h1 {
 }
 .sync-menu {
   min-width: 220px;
-}
-.sep {
-  height: 1px;
-  margin: 4px 2px;
-  background: var(--border);
-}
-.group-start {
-  margin-top: 5px;
-  position: relative;
-}
-.group-start::before {
-  content: '';
-  position: absolute;
-  top: -3px;
-  left: 8px;
-  right: 8px;
-  height: 1px;
-  background: var(--border);
-  opacity: 0.6;
 }
 .menu-foot {
   margin: 4px -6px -6px;
